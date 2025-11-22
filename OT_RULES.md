@@ -79,16 +79,23 @@ Checklist antes de ejecutar mainRunPlanner()
 - [ ] No hay colisiones TRABAJO→ID sin resolución.
 - [ ] Los CT (centros de trabajo) en Operaciones están mapeados en BALANCE DE CARGAS para asignar operadores.
 
-Sincronización con la hoja PM_Guía (en el Spreadsheet)
-- Existe una hoja llamada "PM_Guía" dentro del Spreadsheet que contiene la versión viva de estas reglas.
-- El script `pm_rules_sheet.gs` (en el proyecto de Apps Script) permite: initPMGuia(), appendRule(title,content,author) y promptAppendRule() para mantener la guía actualizada desde el UI.
-- Recomendación: cada cambio relevante de reglas debe registrarse tanto en OT_RULES.md como en la hoja PM_Guía (una es la versión canonical en repo; la otra es la versión práctica en el spreadsheet).
+Política: NO usar hoja "PM_Guía" en el Spreadsheet
+- Decisión tomada: la fuente de verdad para las reglas es este archivo del repositorio (OT_RULES.md). No se creará ni se mantendrá la hoja "PM_Guía" en el Spreadsheet.
+- Cualquier copia en el Spreadsheet será considerada temporal. Los mantenimientos y cambios deben hacerse aquí en OT_RULES.md y versionarse en Git.
+
+Cambio reciente (log de cambios)
+- 2025-11-22 22:01:14 UTC — Se añadió la política "NO usar hoja PM_Guía" y se agregó esta sección de cambios y notificación.
+
+Notificaciones de cambios por el asistente
+- A partir de ahora, cuando yo (Copilot) aplique cambios o agregue reglas en OT_RULES.md por petición tuya, te avisaré en el chat con:
+  - Un resumen corto de lo agregado/cambiado.
+  - El commit SHA y mensaje de commit.
+  - El diff textual mínimo (qué líneas se añadieron/editaron).
 
 Cómo contribuir nuevas reglas (procedimiento)
-1. Añadir la regla en la hoja PM_Guía usando el menú "PM Guía" o appendRule(...).
-2. Probar el cambio si afecta parsers/modelo mediante runDryRun() y revisar PM_Modelo_Debug.
-3. Actualizar OT_RULES.md en el repo con la nueva regla y un breve motivo.
-4. Crear un commit en la rama main (o PR si trabajas con revisión).
+1. Editar OT_RULES.md en el repo (branch/PR si se desea revisión).
+2. Ejecutar pruebas si la regla afecta parsers/modelo (runDryRun()).
+3. Documentar cambios en la sección "Cambio reciente" y push al repo.
 
 Formato recomendado para nuevas reglas en el repo
 - Título (una línea)
@@ -104,10 +111,5 @@ Ejemplo de entrada nueva:
 
 Si la columna "ID Interno" está vacía pero la celda "Folio de trabajo (link)" contiene una URL con patrón /workorder/{id}, extraer {id} y usarlo como ID Interno. Esto ayuda cuando NetSuite no llena ID Interno pero la URL contiene referencia.
 
-Notas de sincronización automática
-- No existe actualmente un proceso completamente automático para sincronizar PM_Guía → OT_RULES.md; las actualizaciones requieren intervención manual (copiar/commit).
-- Se recomienda que la persona responsable de control de producción resuma cambios críticos y los confirme en el repo.
-
-Dónde guardar este documento
-- El archivo OT_RULES.md en la raíz del repo es la versión autorizada para políticas y reglas.
-- La hoja PM_Guía en el Spreadsheet es la versión operativa y debe mantenerse sincronizada por el responsable del plan maestro.
+Notas finales
+- OT_RULES.md en la raíz del repo es la versión autorizada y fuente de verdad. No crear hojas adicionales en el Spreadsheet como fuente principal.
