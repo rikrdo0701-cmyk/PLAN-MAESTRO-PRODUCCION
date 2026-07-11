@@ -13,6 +13,7 @@
   const CLIENT_SOURCE = "pp-github-client";
   const BRIDGE_SOURCE = "pp-appscript-bridge";
   const ALLOWED_ORIGIN = <?!= JSON.stringify(frontendOrigin) ?>;
+  const CLIENT_WINDOW = window.top !== window ? window.top : window.parent;
   const ALLOWED_METHODS = Object.freeze({
     getAppState: true,
     getAppRevision: true,
@@ -47,7 +48,7 @@
   }
 
   function send(message, targetOrigin) {
-    window.parent.postMessage(Object.assign({ source: BRIDGE_SOURCE }, message), targetOrigin || parentOrigin || "*");
+    CLIENT_WINDOW.postMessage(Object.assign({ source: BRIDGE_SOURCE }, message), targetOrigin || parentOrigin || "*");
   }
 
   function errorMessage(error) {
@@ -55,7 +56,7 @@
   }
 
   window.addEventListener("message", function(event) {
-    if (event.source !== window.parent) return;
+    if (event.source !== CLIENT_WINDOW) return;
     const message = event.data || {};
     if (message.source !== CLIENT_SOURCE) return;
 
