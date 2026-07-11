@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>Apps Script Bridge</title>
+</head>
+<body>
+<script>
+(function initBridge() {
+  "use strict";
+
+  const CLIENT_SOURCE = "pp-github-client";
+  const BRIDGE_SOURCE = "pp-appscript-bridge";
+  const ALLOWED_ORIGIN = <?!= JSON.stringify(frontendOrigin) ?>;
+  const ALLOWED_METHODS = Object.freeze({
+    getAppState: true,
+    getAppRevision: true,
+    getAppStateIfChanged: true,
+    getMaterialsForOt: true,
+    savePlanningStateOptimized: true,
+    saveAppState: true,
+    saveCatalogState: true,
+    saveSkillState: true,
+    savePlanSnapshot: true,
+    listPlanSnapshots: true,
+    getPlanSnapshot: true,
+    syncNetSuitePlant: true,
+    syncNetSuiteWorkOrders: true,
+    syncNetSuiteWorkOrdersLite: true,
+    syncNetSuitePlanningData: true,
+    publishDraftPlan: true,
+    getDeploymentStatus: true,
+    getPhotoSourceStatus: true,
+    PP_getActiveOperatorPlan: true,
+    PP_completeOperation: true,
+    PP_registerSubassemblyPicking: true,
+    PP_saveSkillMatrix: true
+  });
+
+  let parentOrigin = "";
+  let channel = "";
+
+  function originAllowed(origin) {
+    if (origin === ALLOWED_ORIGIN) return true;
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  }
+
+  function send(message, targetOrigin) {
+    window.parent.postMessage(Object.assign({ source: BRIDGE_SOURCE }, message), targetOrigin || parentOrigin || "*");
+  }
+
+  function errorMessage(error) {
+    return error && error.message ? error.message : String(error || "Error desconocido");
+  }
+
+  window.addEventListener("message", function(event) {
+    if (event.source !== window.parent) return;
+    const message = event.data || {};
+    if (message.source !== CLIENT_SOURCE) return;
+
+    if (message.type === "init") {
+      if (!originAllowed(event.origin)) {
+        send({ type: "denied", error: "Origen no autorizado" }, event.origin);
+        return;
+      }
+      parentOrigin = event.origin;
+      channel = String(message.channel || "");
+      send({ type: "ready", channel: channel }, parentOrigin);
+      return;
+    }
+
+    if (!parentOrigin || event.origin !== parentOrigin || message.channel !== channel) return;
+    if (message.type !== "call" || !message.id) return;
+
+    const method = String(message.method || "");
+    if (!ALLOWED_METHODS[method]) {
+      send({ type: "result", channel: channel, id: message.id, ok: false, error: "Metodo no permitido: " + method });
+      return;
+    }
+
+    const runner = google.script.run
+      .withSuccessHandler(function(result) {
+        send({ type: "result", channel: channel, id: message.id, ok: true, result: result });
+      })
+      .withFailureHandler(function(error) {
+        send({ type: "result", channel: channel, id: message.id, ok: false, error: errorMessage(error) });
+      });
+
+    try {
+      runner[method](...(Array.isArray(message.args) ? message.args : []));
+    } catch (error) {
+      send({ type: "result", channel: channel, id: message.id, ok: false, error: errorMessage(error) });
+    }
+  });
+
+  send({ type: "hello" }, "*");
+})();
+</script>
+</body>
+</html>

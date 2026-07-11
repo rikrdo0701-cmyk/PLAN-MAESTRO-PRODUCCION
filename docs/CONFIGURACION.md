@@ -8,23 +8,48 @@ Ejecuta en Apps Script:
 setProductionPlanningSpreadsheet('SPREADSHEET_ID');
 ```
 
-La función crea o valida las hojas requeridas y guarda el ID en `PLANNING_SPREADSHEET_ID`.
+## 2. Autorizar el frontend de GitHub Pages
 
-## 2. Fotografías
+El origen predeterminado ya es el correspondiente al propietario del repositorio:
+
+```javascript
+setProductionPlanningFrontendOrigin('https://rikrdo0701-cmyk.github.io');
+```
+
+La propiedad guardada es `FRONTEND_ORIGIN`. Debe contener únicamente esquema y dominio, sin la ruta del repositorio.
+
+## 3. Fotografías
 
 ```javascript
 setProductionPlanningPhotoFolder('DRIVE_FOLDER_ID');
 ```
 
-Los archivos se relacionan por el nombre del artículo o número de parte.
+## 4. NetSuite
 
-## 3. NetSuite
+Agrega las propiedades `NS_ACCOUNT_ID`, `NS_CONSUMER_KEY`, `NS_CONSUMER_SECRET`, `NS_TOKEN` y `NS_TOKEN_SECRET` desde la configuración de Apps Script. No las incluyas en GitHub.
 
-Agrega las propiedades `NS_ACCOUNT_ID`, `NS_CONSUMER_KEY`, `NS_CONSUMER_SECRET`, `NS_TOKEN` y `NS_TOKEN_SECRET` desde la configuración de Apps Script. No las incluyas en archivos del repositorio.
+## 5. Desplegar backend
 
-## 4. Verificación
+```powershell
+npm run check
+clasp push
+```
 
-Ejecuta:
+Después actualiza la implementación web existente para que la URL `/exec` incluya `Bridge.html` y el nuevo `doGet`.
+
+## 6. Activar GitHub Pages
+
+En el repositorio abre **Settings → Pages → Build and deployment** y selecciona **GitHub Actions**. El workflow `Desplegar frontend en GitHub Pages` publicará `site/` con cada push a `main`.
+
+La URL esperada es:
+
+```text
+https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/
+```
+
+## 7. Verificación
+
+Ejecuta en Apps Script:
 
 ```javascript
 getDeploymentStatus();
@@ -32,3 +57,5 @@ runProductionReadinessCheck({});
 verifyProductionPlanningDatabase();
 getPhotoSourceStatus();
 ```
+
+`getDeploymentStatus()` debe mostrar `frontendOrigin: "https://rikrdo0701-cmyk.github.io"`.

@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import { buildProject } from "./build-appscript.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { distDir } = await buildProject();
+const { distDir, siteDir } = await buildProject();
 const files = await readdir(distDir);
-const required = ["Index.html", "IndexOperator.html", "IndexSkills.html", "appsscript.json"];
+const required = ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html", "appsscript.json"];
 for (const file of required) {
   if (!files.includes(file)) throw new Error(`Falta ${file} en dist`);
 }
@@ -15,14 +15,33 @@ for (const file of required) {
 for (const file of files.filter((name) => name.endsWith(".js"))) {
   execFileSync(process.execPath, ["--check", path.join(distDir, file)], { stdio: "inherit" });
 }
+execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/apps-script-bridge-client.js")], { stdio: "inherit" });
+execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/performance-client.js")], { stdio: "inherit" });
 
-const index = await readFile(path.join(distDir, "Index.html"), "utf8");
-if (!index.includes("google.script.run")) throw new Error("Index.html no contiene el puente google.script.run");
+const [index, bridge, pagesIndex] = await Promise.all([
+  readFile(path.join(distDir, "Index.html"), "utf8"),
+  readFile(path.join(distDir, "Bridge.html"), "utf8"),
+  readFile(path.join(siteDir, "index.html"), "utf8"),
+]);
+if (!index.includes("google.script.run")) throw new Error("Index.html no contiene compatibilidad con google.script.run");
+if (!index.includes("PPAppsScriptBridge")) throw new Error("Index.html no contiene el cliente del puente remoto");
 if (!index.includes("PlannerCore")) throw new Error("Index.html no contiene PlannerCore");
-if (index.includes("{{PLANNING_")) throw new Error("Index.html contiene marcadores de build");
+if (!index.includes("getAppStateIfChanged")) throw new Error("Index.html no contiene carga incremental por revision");
+if (!index.includes("savePlanningStateOptimized")) throw new Error("Index.html no contiene guardado parcial optimizado");
+if (!bridge.includes("ALLOWED_ORIGIN")) throw new Error("Bridge.html no valida el origen del frontend");
+if (!bridge.includes("google.script.run")) throw new Error("Bridge.html no contiene google.script.run");
+if (!pagesIndex.includes("AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw")) {
+  throw new Error("El frontend de Pages no contiene la URL del backend configurada");
+}
+if (!pagesIndex.includes("manifest.webmanifest") || !pagesIndex.includes("serviceWorker.register")) {
+  throw new Error("El frontend de Pages no contiene PWA/cache estatico");
+}
+if (/{{[A-Z0-9_]+}}/.test(index) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(pagesIndex)) {
+  throw new Error("El build contiene marcadores sin reemplazar");
+}
 
 const manifest = JSON.parse(await readFile(path.join(distDir, "appsscript.json"), "utf8"));
 if (manifest.runtimeVersion !== "V8") throw new Error("El manifest no usa V8");
 
 const size = (await stat(path.join(distDir, "Index.html"))).size;
-console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; archivos: ${files.length}.`);
+console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo.`);

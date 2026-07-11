@@ -1,124 +1,105 @@
-# Plan Maestro de Producción — GitHub + Google Apps Script
+# Plan Maestro de Producción — GitHub Pages + Google Apps Script
 
-Proyecto reorganizado para que **GitHub sea la fuente de verdad** y Google Apps Script reciba únicamente los archivos generados en `dist/`.
+El proyecto usa **GitHub Pages para alojar el frontend** y **Google Apps Script como backend** para Google Sheets, NetSuite y Drive.
+
+## URLs
+
+Frontend público:
+
+```text
+https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/
+```
+
+Backend de Apps Script:
+
+```text
+https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec
+```
+
+El backend no expone credenciales. El navegador se comunica con un iframe oculto de Apps Script mediante `postMessage`; dentro de ese iframe se utiliza `google.script.run`.
 
 ## Estructura
 
 ```text
 src/
-├─ server/                   # Backend de Apps Script
+├─ server/                    # Backend de Apps Script
 └─ web/
-   ├─ planning/              # HTML, CSS, motor y aplicación principal separados
-   ├─ operator/              # Vista de operador
-   └─ skills/                # Matriz de habilidades
-scripts/                     # Build y validaciones
-tests/                       # Pruebas del motor y del build
-dist/                        # Generado; no se versiona
-legacy/                      # Prototipo anterior no desplegado
-.github/workflows/           # Validación y despliegue manual
+   ├─ planning/               # Interfaz principal
+   ├─ operator/               # Vista de operador
+   ├─ skills/                 # Matriz de habilidades
+   ├─ shared/                 # Cliente del puente remoto
+   └─ bridge/                 # HTML mínimo servido por Apps Script
+scripts/                      # Build y validaciones
+tests/                        # Pruebas
+site/                         # Generado para GitHub Pages; no se versiona
+dist/                         # Generado para clasp; no se versiona
 ```
 
-La ruta principal sirve `Index.html`. También están disponibles:
-
-- `?app=operator` — plan de operador.
-- `?app=skills` — matriz de habilidades.
-
-## Requisitos
-
-- Node.js 20 o superior.
-- Git.
-- `clasp`: `npm install -g @google/clasp`.
-- Apps Script API habilitada en la cuenta de Google.
-
-## Preparación local
+## Instalación
 
 ```powershell
+npm install
 npm run check
 npm test
-clasp login
-Copy-Item .clasp.json.example .clasp.json
 ```
 
-Edita `.clasp.json` y sustituye `REEMPLAZA_CON_TU_SCRIPT_ID` por el ID del proyecto de Apps Script.
-
-## Configuración de Apps Script
-
-Los IDs y credenciales no se guardan en GitHub. En **Configuración del proyecto → Propiedades del script**, agrega:
-
-| Propiedad | Uso |
-|---|---|
-| `PLANNING_SPREADSHEET_ID` | ID del Google Sheets usado como base de datos |
-| `PHOTO_FOLDER_ID` | Carpeta de Drive con fotografías, opcional |
-| `NS_ACCOUNT_ID` | Cuenta de NetSuite |
-| `NS_CONSUMER_KEY` | Consumer key de NetSuite |
-| `NS_CONSUMER_SECRET` | Consumer secret de NetSuite |
-| `NS_TOKEN` | Token de NetSuite |
-| `NS_TOKEN_SECRET` | Token secret de NetSuite |
-
-También puedes ejecutar una vez desde el editor:
-
-```javascript
-setProductionPlanningSpreadsheet('ID_DE_TU_GOOGLE_SHEETS');
-setProductionPlanningPhotoFolder('ID_DE_LA_CARPETA');
-```
-
-## Compilar y subir
+## Actualizar Apps Script
 
 ```powershell
 npm run build
 clasp push
-clasp open-script
 ```
 
-`npm run build` combina:
+Después actualiza la implementación web existente en Apps Script. La misma URL `/exec` puede conservarse.
 
-- `src/web/planning/index.template.html`
-- `src/web/planning/styles.css`
-- `src/web/planning/planner-core.js`
-- `src/web/planning/app.js`
+## Publicar el frontend
 
-El resultado es el `dist/Index.html` compatible con Apps Script.
+El workflow `.github/workflows/deploy-pages.yml` construye y publica el frontend automáticamente cuando hay un push a `main`.
 
-## Publicar como aplicación web
+La primera vez, configura el repositorio en:
 
-En Apps Script:
+**Settings → Pages → Build and deployment → Source: GitHub Actions**
 
-1. **Implementar → Nueva implementación**.
-2. Tipo: **Aplicación web**.
-3. Ejecutar como: el propietario del proyecto.
-4. Seleccionar el nivel de acceso permitido por la cuenta o dominio.
-5. Implementar y conservar la URL `/exec`.
-
-Después de cambiar código:
+También puedes generar y probar localmente:
 
 ```powershell
-npm run push
+npm run build:pages
+npm run preview:pages
 ```
 
-Actualiza la implementación desde Apps Script o crea una nueva versión con `clasp version` y `clasp deploy`.
+Abre `http://localhost:4173`. El puente permite `localhost` para desarrollo.
 
-## Flujo de GitHub
+## Configuración de Apps Script
+
+En **Propiedades del script**:
+
+| Propiedad | Uso |
+|---|---|
+| `PLANNING_SPREADSHEET_ID` | Google Sheets de la aplicación |
+| `PHOTO_FOLDER_ID` | Carpeta de fotografías |
+| `FRONTEND_ORIGIN` | `https://rikrdo0701-cmyk.github.io` |
+| `NS_ACCOUNT_ID` | Cuenta NetSuite |
+| `NS_CONSUMER_KEY` | Consumer key |
+| `NS_CONSUMER_SECRET` | Consumer secret |
+| `NS_TOKEN` | Token |
+| `NS_TOKEN_SECRET` | Token secret |
+
+Puedes configurar el origen ejecutando:
+
+```javascript
+setProductionPlanningFrontendOrigin('https://rikrdo0701-cmyk.github.io');
+```
+
+## Flujo normal de cambios
 
 ```powershell
-git init
+npm run check
+npm test
+clasp push
+
 git add .
-git commit -m "Convertir plan maestro a GitHub y Apps Script"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/TU_REPOSITORIO.git
-git push -u origin main
+git commit -m "Descripcion del cambio"
+git push
 ```
 
-El workflow `Validar proyecto` ejecuta el build, revisa sintaxis y corre pruebas en cada push o pull request.
-
-### Despliegue manual desde GitHub Actions
-
-El workflow `Desplegar a Apps Script` requiere dos secretos del repositorio:
-
-- `CLASPRC_JSON`: contenido de `~/.clasprc.json`.
-- `CLASP_JSON`: contenido de `.clasp.json`.
-
-No publiques estos archivos ni sus tokens.
-
-## Archivos que no deben editarse
-
-No edites `dist/` ni los HTML directamente dentro de Apps Script. Modifica `src/`, ejecuta `npm run check` y después `clasp push`.
+`clasp push` actualiza el backend. `git push` activa el despliegue del frontend en GitHub Pages.

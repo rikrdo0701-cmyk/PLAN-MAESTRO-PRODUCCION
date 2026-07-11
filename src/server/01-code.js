@@ -1,8 +1,9 @@
-const PP_APP_VERSION = '2.39.0';
+const PP_APP_VERSION = '2.41.0';
 const PP_SCHEMA_VERSION = 29;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
 function doGet(e) {
+  if (PP_isBridgeRequest_(e)) return PP_createBridgeOutput_();
   const appName = PP_appNameFromRequest_(e);
   return HtmlService.createHtmlOutputFromFile(PP_appHtmlFile_(appName))
     .setTitle(PP_appTitle_(appName))
