@@ -8,6 +8,7 @@
   const CALL_TIMEOUT_MS = 120000;
 
   let iframe = null;
+  let bridgeWindow = null;
   let channel = "";
   let readyPromise = null;
   let resolveReady = null;
@@ -31,7 +32,7 @@
   function bridgeUrl() {
     const url = new URL(configuredUrl());
     url.searchParams.set("app", "bridge");
-    url.searchParams.set("v", "2.41.0");
+    url.searchParams.set("v", "2.41.1");
     return url.toString();
   }
 
@@ -69,22 +70,34 @@
     return readyPromise;
   }
 
-  function postInit() {
-    if (!iframe || !iframe.contentWindow) return;
-    iframe.contentWindow.postMessage({
+  function postInit(targetWindow) {
+    const destination = targetWindow || bridgeWindow;
+    if (!destination) return;
+    destination.postMessage({
       source: CLIENT_SOURCE,
       type: "init",
       channel,
     }, "*");
   }
 
+  function isTrustedBridgeOrigin(origin) {
+    try {
+      const host = new URL(origin).hostname;
+      return host === "script.google.com" || host.endsWith(".googleusercontent.com");
+    } catch (_) {
+      return false;
+    }
+  }
+
   root.addEventListener("message", (event) => {
-    if (!iframe || event.source !== iframe.contentWindow) return;
+    if (!iframe) return;
     const message = event.data || {};
     if (message.source !== BRIDGE_SOURCE) return;
 
     if (message.type === "hello") {
-      postInit();
+      if (!isTrustedBridgeOrigin(event.origin)) return;
+      bridgeWindow = event.source;
+      postInit(bridgeWindow);
       return;
     }
 
@@ -117,12 +130,16 @@
     await ensureBridge();
     const id = `rpc-${Date.now()}-${++sequence}`;
     return new Promise((resolve, reject) => {
+      if (!bridgeWindow) {
+        reject(new Error("El puente de Apps Script no esta disponible"));
+        return;
+      }
       const timer = root.setTimeout(() => {
         pending.delete(id);
         reject(new Error(`Tiempo agotado al ejecutar ${method}`));
       }, CALL_TIMEOUT_MS);
       pending.set(id, { resolve, reject, timer });
-      iframe.contentWindow.postMessage({
+      bridgeWindow.postMessage({
         source: CLIENT_SOURCE,
         type: "call",
         channel,
