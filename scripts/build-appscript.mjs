@@ -31,6 +31,20 @@ function renderPlanningPage(template, styles, backendBridge, plannerCore, app, p
   return index;
 }
 
+function patchPlanningApp(app) {
+  const marker = "  if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;";
+  const replacement = `${marker}
+  if (Array.isArray(imported.workOrders)) state.workOrders = imported.workOrders;
+  if (Array.isArray(imported.otTypes)) state.otTypes = imported.otTypes;
+  if (imported.operationPlanStatuses) state.operationPlanStatuses = imported.operationPlanStatuses;
+  if (Array.isArray(imported.machineToolHistory)) state.machineToolHistory = imported.machineToolHistory;
+  if (imported.invoicePriceWindow) state.invoicePriceWindow = imported.invoicePriceWindow;
+  if (imported.syncedAt) state.syncedAt = imported.syncedAt;`;
+  const patched = app.replace(marker, replacement);
+  if (patched === app) throw new Error("No se encontro el punto de importacion de colecciones del backend");
+  return patched;
+}
+
 export async function buildProject() {
   await Promise.all([
     rm(distDir, { recursive: true, force: true }),
@@ -41,7 +55,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, app, performanceClient] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, appSource, performanceClient] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -50,6 +64,7 @@ export async function buildProject() {
     read("src/web/shared/performance-client.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
+  const app = patchPlanningApp(appSource);
 
   const appsScriptIndex = renderPlanningPage(
     template,
@@ -87,7 +102,7 @@ export async function buildProject() {
       theme_color: "#087f7a",
       lang: "es-MX"
     }, null, 2), "utf8"),
-    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.1";
+    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.2";
 const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./manifest.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
