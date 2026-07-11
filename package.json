@@ -1,0 +1,20 @@
+{
+  "name": "plan-maestro-produccion-appscript",
+  "version": "2.39.0",
+  "private": true,
+  "description": "Plan maestro de producción administrado en GitHub y desplegado en Google Apps Script.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build-appscript.mjs",
+    "check": "node scripts/check-project.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "push": "npm run check && clasp push",
+    "pull": "clasp pull",
+    "open": "clasp open-script",
+    "versions": "clasp versions",
+    "deploy": "npm run check && clasp deploy"
+  }
+}

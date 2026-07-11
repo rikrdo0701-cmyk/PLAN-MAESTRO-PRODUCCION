@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <!-- Generado por npm run build:appscript. No editar directamente. -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planeacion de Produccion</title>
+  <style>
+:root {
+  --ink: #172026;
+  --muted: #5b6d76;
+  --line: #d5dee4;
+  --panel: #ffffff;
+  --soft: #f5f7f8;
+  --teal: #087f78;
+  --teal-dark: #0f3b46;
+  --purple: #6f43b8;
+  --orange: #ce6b11;
+  --green: #17865d;
+  --yellow: #d99a12;
+  --red: #c73535;
+  color: var(--ink);
+  background: #eef2f4;
+  font-family: Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #95a7b1;
+}
+
+.planning-shell {
+  min-height: 100vh;
+}
+
+.planning-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.app-kicker {
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.planning-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.planning-actions button {
+  padding: 0 14px;
+}
+
+.primary-action {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+
+.more-menu {
+  position: relative;
+}
+
+.more-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 220px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgb(23 32 38 / 18%);
+}
+
+.more-menu-list button {
+  display: block;
+  width: 100%;
+  border: 0;
+  text-align: left;
+  font-weight: 500;
+}
+
+.metrics-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.metrics-strip article {
+  min-height: 54px;
+  padding: 10px 16px;
+  border-right: 1px solid var(--line);
+}
+
+.metrics-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.metrics-strip strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+}
+
+.planning-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(300px, 380px) minmax(520px, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 10px;
+}
+
+.queue-panel,
+.gantt-panel,
+.ot-drawer {
+  min-height: 620px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.ot-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 30;
+  width: min(420px, 100vw);
+  height: 100vh;
+  border-radius: 0;
+  box-shadow: -16px 0 36px rgb(23 32 38 / 20%);
+}
+
+.panel-heading,
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.search-field {
+  display: block;
+  padding: 10px 12px 8px;
+}
+
+.search-field span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.search-field input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.helper-text {
+  padding: 0 12px 8px;
+}
+
+.job-list {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  padding: 10px 12px 14px;
+  overflow: auto;
+  background: var(--soft);
+}
+
+.job-card {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 144px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.job-card.pending-schedule {
+  background: #fffbe8;
+  border-color: #e6cd61;
+}
+
+.job-photo {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7f9fa;
+  color: #73838c;
+  font-size: 10px;
+}
+
+.job-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.job-main {
+  min-width: 0;
+}
+
+.job-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.link-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--teal-dark);
+}
+
+.status-pill {
+  padding: 2px 6px;
+  border: 1px solid #b7d2d4;
+  border-radius: 5px;
+  color: var(--teal-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.job-main > strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.job-main p {
+  margin-top: 3px;
+  min-height: 30px;
+}
+
+.job-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.job-meta span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.job-meta strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 12px;
+  text-transform: none;
+}
+
+.job-type-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-top: 8px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.job-type-tag--prototype {
+  background: #efe8fb;
+  color: var(--purple);
+}
+
+.job-type-tag--urgent {
+  background: #fff0df;
+  color: var(--orange);
+}
+
+.job-type-tag--line {
+  background: #edf3f5;
+  color: #425560;
+}
+
+.risk-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 1px rgb(23 32 38 / 12%);
+}
+
+.risk-dot--critical {
+  background: var(--red);
+}
+
+.risk-dot--warning {
+  background: var(--yellow);
+}
+
+.risk-dot--ok {
+  background: var(--green);
+}
+
+.gantt-heading {
+  align-items: flex-start;
+}
+
+.segmented {
+  display: inline-flex;
+}
+
+.segmented button {
+  min-width: 86px;
+  border-radius: 0;
+}
+
+.segmented button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.segmented button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.segmented .active {
+  background: var(--teal);
+  color: #fff;
+}
+
+.gantt-canvas {
+  min-width: 760px;
+  overflow: auto;
+}
+
+.gantt-scale {
+  display: grid;
+  grid-template-columns: 150px repeat(5, minmax(160px, 1fr));
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f9fa;
+}
+
+.gantt-scale span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid var(--line);
+  color: #384953;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gantt-scale::before {
+  content: "Recurso";
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  color: #384953;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gantt-row {
+  display: grid;
+  grid-template-columns: 150px minmax(800px, 1fr);
+  min-height: 70px;
+  border-bottom: 1px solid var(--line);
+}
+
+.gantt-resource {
+  padding: 14px 12px;
+  border-right: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gantt-track {
+  position: relative;
+  min-height: 70px;
+  background-image: linear-gradient(to right, #dfe7eb 1px, transparent 1px);
+  background-size: 20% 100%;
+}
+
+.gantt-bar {
+  position: absolute;
+  top: 20px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 0;
+  border-left: 4px solid transparent;
+  border-radius: 5px;
+  background: #6f7d43;
+  color: #fff;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.gantt-bar.job-type-tag--prototype {
+  background: #7156a8;
+}
+
+.gantt-bar.job-type-tag--urgent {
+  background: #b86724;
+}
+
+.gantt-bar.risk-dot--critical {
+  border-left-color: var(--red);
+}
+
+.gantt-bar.risk-dot--warning {
+  border-left-color: var(--yellow);
+}
+
+.gantt-bar.risk-dot--ok {
+  border-left-color: var(--green);
+}
+
+.drawer-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.drawer-body dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.drawer-body div {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-body dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.drawer-body dd {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.empty-state {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+}
+
+@media (max-width: 1180px) {
+  .planning-workspace {
+    grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+  }
+
+  .gantt-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .planning-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-actions {
+    justify-content: flex-start;
+  }
+
+  .metrics-strip,
+  .planning-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .gantt-panel {
+    grid-column: auto;
+  }
+}
+
+</style>
+</head>
+<body>
+  <main id="app" class="planning-shell" data-app="planning">
+    <header class="planning-header">
+      <div>
+        <span class="app-kicker">Planeacion</span>
+        <h1>Planeacion de Produccion</h1>
+        <p>Planta MM del Llano · ultima instantanea guardada</p>
+      </div>
+      <div class="planning-actions" aria-label="Acciones del plan">
+        <button id="generatePlanBtn" class="primary-action" type="button">Programar plan</button>
+        <button id="publishPlanBtn" type="button">Publicar plan</button>
+        <button id="syncBtn" type="button">Sincronizar</button>
+        <button id="saveBtn" type="button">Guardar</button>
+        <button id="pdfBtn" type="button">Generar PDF</button>
+        <div class="more-menu">
+          <button id="moreBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Mas opciones">...</button>
+          <div id="moreMenu" class="more-menu-list" role="menu" hidden>
+            <button type="button" role="menuitem">Recargar datos guardados</button>
+            <button type="button" role="menuitem">Exportar respaldo JSON</button>
+            <button type="button" role="menuitem">Importar respaldo JSON</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section class="metrics-strip" aria-label="Indicadores del plan">
+      <article>
+        <span>OTs en el plan</span>
+        <strong data-metric="plannedOts">0</strong>
+      </article>
+      <article>
+        <span>Operaciones</span>
+        <strong data-metric="operations">0</strong>
+      </article>
+      <article>
+        <span>Horas programadas</span>
+        <strong data-metric="hours">0 h</strong>
+      </article>
+      <article>
+        <span>Riesgo alto</span>
+        <strong data-metric="risk">0</strong>
+      </article>
+    </section>
+
+    <section class="planning-workspace">
+      <aside class="queue-panel backlog-panel" aria-label="Backlog">
+        <div class="panel-heading">
+          <div>
+            <h2>Backlog</h2>
+            <p data-count="backlog">0 trabajos en espera</p>
+          </div>
+        </div>
+        <label class="search-field">
+          <span>Buscar</span>
+          <input id="backlogSearchInput" type="search" placeholder="Articulo, OT o descripcion">
+        </label>
+        <div id="backlogList" class="job-list"></div>
+      </aside>
+
+      <aside class="queue-panel planned-panel" aria-label="Planeado por planear">
+        <div class="panel-heading">
+          <div>
+            <h2>Planeado / Por planear</h2>
+            <p data-count="planned">0 en el plan</p>
+          </div>
+          <button id="sendAllBacklogBtn" type="button" title="Enviar no programadas al backlog">Enviar todo</button>
+        </div>
+        <label class="search-field">
+          <span>Buscar</span>
+          <input id="plannedSearchInput" type="search" placeholder="Articulo, OT o descripcion">
+        </label>
+        <p class="helper-text">Arrastra para definir el orden de ingreso a proceso</p>
+        <div id="plannedList" class="job-list"></div>
+      </aside>
+
+      <section class="gantt-panel" aria-label="Programa semanal">
+        <div class="panel-heading gantt-heading">
+          <div>
+            <h2>Programa semanal</h2>
+            <p>Vista de borrador por maquina</p>
+          </div>
+          <div class="segmented" role="tablist" aria-label="Vista Gantt">
+            <button type="button" class="active">OT</button>
+            <button type="button">Operacion</button>
+            <button type="button">Operador</button>
+            <button type="button">Maquina</button>
+          </div>
+        </div>
+        <div id="ganttCanvas" class="gantt-canvas"></div>
+      </section>
+
+      <aside id="otDrawer" class="ot-drawer" hidden aria-label="Detalle de OT"></aside>
+    </section>
+  </main>
+  <script>
+"use strict";
+
+document.documentElement.dataset.app = "planning";
+
+const sampleState = {
+  backlog: [
+    {
+      ot: "1886",
+      item: "PROTOTIPO",
+      description: "Prototipos",
+      quantity: 1,
+      hours: 0.7,
+      status: "LIBERADA",
+      type: "PROTOTIPO",
+      risk: "warning",
+      photoUrl: "",
+      dueDate: "2026-07-13",
+    },
+    {
+      ot: "1462",
+      item: "BRIDA-0543",
+      description: "Brida para desarrollo",
+      quantity: 4,
+      hours: 3.3,
+      status: "EN CURSO",
+      type: "LINEA",
+      risk: "ok",
+      photoUrl: "",
+      dueDate: "2026-07-14",
+    },
+  ],
+  plannedQueue: [
+    {
+      ot: "1325",
+      item: "CCA 519 CM",
+      description: "Cola cuadrada de avante 5X19 cromada",
+      quantity: 30,
+      hours: 3.8,
+      status: "EN CURSO",
+      type: "URGENTE",
+      risk: "critical",
+      photoUrl: "",
+      dueDate: "2026-07-06",
+    },
+    {
+      ot: "1864",
+      item: "CCA 519 AM",
+      description: "Cola cuadrada de avante 5X19 aluminizada",
+      quantity: 16,
+      hours: 1.9,
+      status: "EN CURSO",
+      type: "PROTOTIPO",
+      risk: "warning",
+      photoUrl: "",
+      dueDate: "2026-07-07",
+    },
+  ],
+  operations: [
+    { ot: "1325", label: "Corte", machine: "1", startPct: 3, widthPct: 14, risk: "critical", type: "URGENTE" },
+    { ot: "1325", label: "Subcontrato", machine: "1", startPct: 20, widthPct: 18, risk: "critical", type: "URGENTE" },
+    { ot: "1864", label: "Corte", machine: "Dobladora 209", startPct: 41, widthPct: 12, risk: "warning", type: "PROTOTIPO" },
+    { ot: "1864", label: "Doblez", machine: "Dobladora 209", startPct: 57, widthPct: 20, risk: "warning", type: "PROTOTIPO" },
+  ],
+};
+
+const els = {
+  backlogList: document.getElementById("backlogList"),
+  plannedList: document.getElementById("plannedList"),
+  ganttCanvas: document.getElementById("ganttCanvas"),
+  drawer: document.getElementById("otDrawer"),
+  moreBtn: document.getElementById("moreBtn"),
+  moreMenu: document.getElementById("moreMenu"),
+  backlogSearchInput: document.getElementById("backlogSearchInput"),
+  plannedSearchInput: document.getElementById("plannedSearchInput"),
+};
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function normalize(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function jobTypeClass(type) {
+  const key = normalize(type);
+  if (key === "PROTOTIPO") return "job-type-tag--prototype";
+  if (key === "URGENTE" || key === "EXPEDITACION") return "job-type-tag--urgent";
+  return "job-type-tag--line";
+}
+
+function riskClass(risk) {
+  const key = normalize(risk);
+  if (key === "CRITICAL" || key === "ROJO") return "risk-dot--critical";
+  if (key === "WARNING" || key === "AMARILLO") return "risk-dot--warning";
+  return "risk-dot--ok";
+}
+
+function jobMatches(job, query) {
+  const text = [job.ot, job.item, job.description].map(normalize).join(" ");
+  return text.includes(normalize(query));
+}
+
+function cardMarkup(job, zone) {
+  const photo = job.photoUrl
+    ? `<img src="${escapeHtml(job.photoUrl)}" alt="${escapeHtml(job.item)}">`
+    : `<span>Sin foto</span>`;
+  const pending = zone === "planned" ? " pending-schedule" : "";
+  return `
+    <article class="job-card${pending}" data-ot="${escapeHtml(job.ot)}">
+      <div class="job-photo">${photo}</div>
+      <div class="job-main">
+        <div class="job-title-row">
+          <button class="link-button" type="button" data-open-ot="${escapeHtml(job.ot)}">OT ${escapeHtml(job.ot)}</button>
+          <span class="status-pill">${escapeHtml(job.status)}</span>
+          <span class="risk-dot ${riskClass(job.risk)}" title="Riesgo ${escapeHtml(job.risk)}"></span>
+        </div>
+        <strong>${escapeHtml(job.item)}</strong>
+        <p>${escapeHtml(job.description)}</p>
+        <div class="job-meta">
+          <span>Entrega <strong>${escapeHtml(job.dueDate)}</strong></span>
+          <span>Cantidad <strong>${escapeHtml(job.quantity)} pzas</strong></span>
+          <span>Carga <strong>${escapeHtml(job.hours)} h</strong></span>
+        </div>
+        <span class="job-type-tag ${jobTypeClass(job.type)}">${escapeHtml(job.type)}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderQueue(list, container, query, zone) {
+  const visible = list.filter((job) => jobMatches(job, query));
+  container.innerHTML = visible.length
+    ? visible.map((job) => cardMarkup(job, zone)).join("")
+    : `<p class="empty-state">Sin trabajos para mostrar</p>`;
+}
+
+function renderGantt() {
+  const machines = [...new Set(sampleState.operations.map((op) => op.machine))];
+  els.ganttCanvas.innerHTML = `
+    <div class="gantt-scale">
+      <span>lun 06 jul</span>
+      <span>mar 07 jul</span>
+      <span>mie 08 jul</span>
+      <span>jue 09 jul</span>
+      <span>vie 10 jul</span>
+    </div>
+    ${machines.map((machine) => `
+      <div class="gantt-row">
+        <div class="gantt-resource">${escapeHtml(machine)}</div>
+        <div class="gantt-track">
+          ${sampleState.operations.filter((op) => op.machine === machine).map((op) => `
+            <button class="gantt-bar ${jobTypeClass(op.type)} ${riskClass(op.risk)}"
+              type="button"
+              data-open-ot="${escapeHtml(op.ot)}"
+              style="left:${op.startPct}%;width:${op.widthPct}%">
+              OT ${escapeHtml(op.ot)} · ${escapeHtml(op.label)}
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    `).join("")}
+  `;
+}
+
+function allJobs() {
+  return [...sampleState.backlog, ...sampleState.plannedQueue];
+}
+
+function openDrawer(ot) {
+  const job = allJobs().find((item) => String(item.ot) === String(ot));
+  if (!job) return;
+  els.drawer.hidden = false;
+  els.drawer.innerHTML = `
+    <div class="drawer-header">
+      <div>
+        <span class="app-kicker">Detalle de OT</span>
+        <h2>OT ${escapeHtml(job.ot)}</h2>
+      </div>
+      <button id="closeDrawerBtn" type="button" aria-label="Cerrar detalle">Cerrar</button>
+    </div>
+    <div class="drawer-body">
+      <span class="job-type-tag ${jobTypeClass(job.type)}">${escapeHtml(job.type)}</span>
+      <span class="risk-dot ${riskClass(job.risk)}" title="Riesgo ${escapeHtml(job.risk)}"></span>
+      <dl>
+        <div><dt>Articulo</dt><dd>${escapeHtml(job.item)}</dd></div>
+        <div><dt>Descripcion</dt><dd>${escapeHtml(job.description)}</dd></div>
+        <div><dt>Cantidad</dt><dd>${escapeHtml(job.quantity)} pzas</dd></div>
+        <div><dt>Entrega</dt><dd>${escapeHtml(job.dueDate)}</dd></div>
+        <div><dt>Carga</dt><dd>${escapeHtml(job.hours)} h</dd></div>
+      </dl>
+    </div>
+  `;
+  document.getElementById("closeDrawerBtn").addEventListener("click", () => {
+    els.drawer.hidden = true;
+  });
+}
+
+function renderMetrics() {
+  document.querySelector('[data-metric="plannedOts"]').textContent = String(sampleState.plannedQueue.length);
+  document.querySelector('[data-metric="operations"]').textContent = String(sampleState.operations.length);
+  document.querySelector('[data-metric="hours"]').textContent = `${sampleState.plannedQueue.reduce((sum, job) => sum + job.hours, 0).toFixed(1)} h`;
+  document.querySelector('[data-metric="risk"]').textContent = String(sampleState.plannedQueue.filter((job) => job.risk === "critical").length);
+  document.querySelector('[data-count="backlog"]').textContent = `${sampleState.backlog.length} trabajos en espera`;
+  document.querySelector('[data-count="planned"]').textContent = `${sampleState.plannedQueue.length} en el plan`;
+}
+
+function render() {
+  renderMetrics();
+  renderQueue(sampleState.backlog, els.backlogList, els.backlogSearchInput.value, "backlog");
+  renderQueue(sampleState.plannedQueue, els.plannedList, els.plannedSearchInput.value, "planned");
+  renderGantt();
+}
+
+document.addEventListener("click", (event) => {
+  const opener = event.target.closest("[data-open-ot]");
+  if (opener) openDrawer(opener.dataset.openOt);
+});
+
+els.moreBtn.addEventListener("click", () => {
+  const isHidden = els.moreMenu.hidden;
+  els.moreMenu.hidden = !isHidden;
+  els.moreBtn.setAttribute("aria-expanded", String(isHidden));
+});
+
+els.backlogSearchInput.addEventListener("input", render);
+els.plannedSearchInput.addEventListener("input", render);
+
+render();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <!-- Fuente de la matriz de habilidades. -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Matriz de habilidades</title>
+  <style>
+:root {
+  color: #172026;
+  background: #f4f6f7;
+  font-family: Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  padding: 24px;
+}
+
+.app-kicker {
+  color: #087f78;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 8px 0 4px;
+  font-size: 24px;
+}
+
+p {
+  margin: 0;
+  color: #566873;
+}
+
+.skills-table {
+  border-collapse: collapse;
+  margin-top: 20px;
+  width: 100%;
+}
+
+.skills-table th,
+.skills-table td {
+  border: 1px solid #d8e0e4;
+  padding: 10px;
+  text-align: left;
+}
+
+.skills-table th {
+  background: #eaf0f2;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+</style>
+</head>
+<body>
+  <main id="app" class="app-shell" data-app="skills">
+    <span class="app-kicker">Capacidades</span>
+    <h1>Matriz de habilidades</h1>
+    <p>Cargando operadores, operaciones y habilidades...</p>
+  </main>
+  <script>
+"use strict";
+
+document.documentElement.dataset.app = "skills";
+
+const SKILLS_COLUMNS = [
+  "Operacion / CT",
+  "Capacidad",
+  "Solapamiento %",
+  "Eficiencia %",
+  "Operadores habilitados",
+];
+
+function renderSkillsColumns() {
+  const app = document.getElementById("app");
+  if (!app) return;
+  const table = document.createElement("table");
+  table.className = "skills-table";
+  table.innerHTML = `<thead><tr>${SKILLS_COLUMNS.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody><tr><td colspan="${SKILLS_COLUMNS.length}">Sin matriz cargada</td></tr></tbody>`;
+  app.appendChild(table);
+}
+
+renderSkillsColumns();
+
+</script>
+</body>
+</html>

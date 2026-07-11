@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <!-- Archivo generado. Edita src/web/planning y ejecuta npm run build. -->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Planeacion de Produccion</title>
+    <style>
+{{PLANNING_STYLES}}
+</style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navegacion principal">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 3v3M19 3v3M4 8h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg>
+          </div>
+          <div>
+            <strong>Planeacion de Produccion</strong>
+            <span>Control de planta</span>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <a href="#plan-semanal" class="nav-item active" data-section="plan-semanal">
+            <svg viewBox="0 0 24 24"><path d="M5 3v3M19 3v3M4 8h16M4 5h16v15H4zM8 12h3M8 16h5"/></svg>
+            <span>Plan semanal</span>
+          </a>
+          <a href="#matriz" class="nav-item" data-section="matriz">
+            <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>
+            <span>Capacidades</span>
+          </a>
+          <a href="#calendario" class="nav-item" data-section="calendario">
+            <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/></svg>
+            <span>Calendario</span>
+          </a>
+          <a href="#herramentales" class="nav-item" data-section="herramentales">
+            <svg viewBox="0 0 24 24"><path d="M14 6a4 4 0 0 0-5 5L3 17l4 4 6-6a4 4 0 0 0 5-5l-3 3-4-4 3-3Z"/></svg>
+            <span>Catalogos</span>
+          </a>
+          <a href="#cargas" class="nav-item" data-section="cargas">
+            <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+            <span>Cargas</span>
+          </a>
+          <a href="#reportes" class="nav-item" data-section="reportes" data-tab="week">
+            <svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 11h6M9 15h6"/></svg>
+            <span>Reportes</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-status">
+          <div><span>Planificadas</span><strong id="metricPlanned">0</strong></div>
+          <div><span>Sobrecargas</span><strong id="metricOverload">0</strong></div>
+        </div>
+        <div class="user-row">
+          <span class="user-avatar">PL</span>
+          <span>Planner</span>
+        </div>
+      </aside>
+
+      <main class="workspace" data-view="plan">
+        <header class="topbar">
+          <div class="topbar-title">
+            <h1 id="workspaceTitle">Planeacion de Produccion</h1>
+            <p id="planWindow">Semana operativa</p>
+          </div>
+          <div class="actions">
+            <button id="generatePlanBtn" class="button primary" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg></span>
+              <span data-schedule-label>Generar plan</span>
+            </button>
+            <button id="publishPlanBtn" class="button" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+              Publicar plan
+            </button>
+            <button id="undoBtn" class="icon-button" type="button" aria-label="Deshacer ultimo cambio" title="Deshacer">
+              <svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M5 12h8a6 6 0 0 1 6 6"/></svg>
+            </button>
+            <button id="syncBtn" class="button" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9A7 7 0 0 1 18.5 6.5L20 11M4 13l1.5 4.5A7 7 0 0 0 17.9 15"/></svg></span>
+              <span data-sync-label>Sincronizar</span>
+            </button>
+            <button id="saveBtn" class="button" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8M8 17h8"/></svg></span>
+              Guardar
+            </button>
+            <button id="pdfBtn" class="button" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h10v6h2a2 2 0 0 1 2 2v5h-4v5H7v-5H3v-5a2 2 0 0 1 2-2h2zM9 17h6M9 13h6"/></svg></span>
+              Generar PDF
+            </button>
+            <button id="exportCsvBtn" class="button" type="button">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg></span>
+              Exportar
+            </button>
+          </div>
+        </header>
+
+        <section class="summary-strip" aria-label="Resumen del plan">
+          <div class="summary-item"><span>OTs en el plan</span><strong id="kpiSelected">0</strong></div>
+          <div class="summary-item"><span>Operaciones</span><strong id="kpiOps">0</strong></div>
+          <div class="summary-item"><span>Horas programadas</span><strong><span id="kpiHours">0</span> h</strong></div>
+          <div class="summary-item"><span>OTs con fecha de entrega</span><strong id="kpiDue">0</strong></div>
+          <div class="summary-item"><span>Cambios de herramental</span><strong id="kpiChanges">0</strong></div>
+          <div class="summary-item"><span>Alertas</span><strong id="kpiAlerts">0</strong></div>
+        </section>
+
+        <section id="planAlerts" class="plan-alerts" aria-label="Alertas del plan" hidden></section>
+
+        <section id="draftExecutiveSummary" class="draft-executive" aria-label="Resumen">
+          <header>
+            <div>
+              <h2>Resumen</h2>
+            </div>
+          </header>
+          <div id="draftExecutiveBody" class="draft-executive-body"></div>
+        </section>
+        <section class="planner-grid" id="plan-semanal">
+          <section class="panel priorities-panel" id="prioridades">
+            <div class="panel-header">
+              <div><h2>Backlog</h2><span id="priorityCount">0 OTs</span></div>
+            </div>
+            <div class="filter-stack">
+              <div class="search-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                <input id="searchInput" type="search" placeholder="Buscar articulo, OT o descripcion" />
+              </div>
+              <select id="statusFilter" aria-label="Filtro estatus">
+                <option value="TODOS">Todo el backlog</option>
+                <option value="ASIGNABLES">Solo movibles</option>
+              </select>
+            </div>
+            <div class="priority-table-head" aria-hidden="true">
+              <span>OT / Articulo</span><span>Carga</span>
+            </div>
+            <div id="priorityList" class="priority-list"></div>
+          </section>
+
+          <section class="panel queue-panel" aria-label="OTs en el plan">
+            <div class="panel-header">
+              <div><h2>Planeado / Por planear</h2><span id="selectedJobCount">0 en el plan</span></div>
+              <div class="queue-actions">
+                <button id="lockAllBtn" class="icon-button" type="button" aria-label="Bloquear todos los trabajos" title="Bloquear todos">
+                  <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                </button>
+                <button id="unlockAllBtn" class="icon-button" type="button" aria-label="Desbloquear todos los trabajos" title="Desbloquear todos">
+                  <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 7.4-2"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="queue-filter">
+              <div class="search-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                <input id="queueSearchInput" type="search" placeholder="Buscar articulo, OT o descripcion" aria-label="Buscar en Planeado o Por planear" />
+              </div>
+            </div>
+            <p class="queue-help">Arrastra para definir el orden del plan</p>
+            <div id="priorityQueue" class="priority-queue" aria-label="Trabajos planeados en orden manual"></div>
+          </section>
+
+          <section class="panel gantt-panel" id="gantt">
+            <div class="panel-header gantt-toolbar">
+              <div><h2>Programa semanal</h2><span>Secuencias por orden de trabajo</span></div>
+              <div class="gantt-controls">
+                <label class="compact-control"><span>Inicio</span><input id="planStartInput" type="date" /></label>
+                <label class="compact-control"><span>Horizonte</span><select id="horizonSelect"><option value="5">5 dias</option><option value="10">10 dias</option><option value="15">15 dias</option><option value="30">30 dias</option></select></label>
+                <div class="segmented" role="tablist" aria-label="Vista Gantt">
+                  <button class="segmented-active" data-view="job" type="button">OT</button>
+                  <button data-view="operator" type="button">Operador</button>
+                  <button data-view="machine" type="button">Maquina</button>
+                  <button data-view="ct" type="button">CT</button>
+                </div>
+                <div class="gantt-zoom" role="group" aria-label="Resolucion del Gantt">
+                  <button id="ganttZoomOut" class="icon-button gantt-tool-button" type="button" aria-label="Reducir resolucion del Gantt" title="Reducir resolucion">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M8 11h6m6 9-4-4"/></svg>
+                  </button>
+                  <output id="ganttZoomValue" class="gantt-zoom-value" aria-live="polite">5 h</output>
+                  <button id="ganttZoomIn" class="icon-button gantt-tool-button" type="button" aria-label="Aumentar resolucion del Gantt" title="Aumentar resolucion">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M8 11h6m-3-3v6m9 6-4-4"/></svg>
+                  </button>
+                </div>
+                <button id="ganttFullscreenBtn" class="icon-button gantt-tool-button" type="button" aria-label="Mostrar Gantt en pantalla completa" aria-pressed="false" title="Pantalla completa">
+                  <svg class="fullscreen-enter-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M8 21H3v-5m18 0v5h-5"/></svg>
+                  <svg class="fullscreen-exit-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v5H3m13-5v5h5M8 21v-5H3m13 5v-5h5"/></svg>
+                </button>
+              </div>
+            </div>
+            <div id="ganttCanvas" class="gantt" tabindex="0" aria-label="Gantt editable"></div>
+          </section>
+
+          <aside class="panel detail-panel" aria-label="Detalle de la orden seleccionada" hidden>
+            <div class="panel-header">
+              <div><h2>Detalle de OT</h2><span>Secuencia y recursos</span></div>
+              <button id="closeDetailPanelBtn" class="icon-button" type="button" aria-label="Cerrar detalle" title="Cerrar detalle">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div id="selectedJobPanel" class="selected-job-panel"></div>
+          </aside>
+        </section>
+
+        <section class="panel operator-load-screen" id="cargas" aria-labelledby="operatorLoadTitle">
+          <div class="load-screen-heading">
+            <div><h2 id="operatorLoadTitle">Cargas de operadores</h2><span id="loadWeekRange">Semana seleccionada</span></div>
+            <div class="load-screen-actions">
+              <label class="compact-control"><span>Semana</span><input id="loadWeekInput" type="date" /></label>
+              <button id="balanceBtn" class="button small" type="button">
+                <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M8 7l-3 7h6L8 7Zm8 0-3 7h6l-3-7ZM12 4v17"/></svg></span>
+                Balancear
+              </button>
+            </div>
+          </div>
+          <div class="operator-load-wrap">
+            <table id="loadList" class="operator-load-table"></table>
+          </div>
+        </section>
+
+        <section class="bottom-panel config-panel config-view matrix-view" id="matriz">
+          <div class="config-view-heading"><div><h2>Matriz de habilidades</h2><span>Operaciones, capacidad, solapamiento, eficiencia y operadores habilitados</span></div></div>
+          <div class="config-view-body">
+            <div class="matrix-toolbar">
+              <div class="inline-form">
+                <input id="newOperatorInput" type="text" placeholder="Operador nuevo" />
+                <button id="addOperatorBtn" class="button small" type="button">Agregar operador</button>
+              </div>
+              <div class="inline-form">
+                <select id="newCtInput" aria-label="Operacion existente de NetSuite"><option value="">Selecciona una operacion de NetSuite</option></select>
+                <button id="addCtBtn" class="button small" type="button">Agregar operacion</button>
+              </div>
+            </div>
+            <div id="matrixWrap" class="matrix-wrap"></div>
+          </div>
+        </section>
+
+        <section class="bottom-panel config-panel config-view catalogs-view" id="herramentales">
+          <div class="config-view-heading"><div><h2>Catalogos</h2><span>Maquinas, herramentales, kits, subcontratos y tipos de OT</span></div></div>
+          <div class="config-view-body">
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Herramentales y kits</h2><span>Articulos de ensamble de las OTs sincronizadas con NetSuite</span></div></div>
+              <div class="config-form tool-form">
+                <label><span>Numero de parte</span><select id="toolPartInput" required><option value="">Selecciona un ensamble</option></select></label>
+                <label><span>Herramental</span><select id="toolHerrInput" required><option value="">Selecciona un herramental</option></select><input id="toolHerrNewInput" type="text" placeholder="Nombre del nuevo herramental" hidden disabled /></label>
+                <label><span>Kit <small>opcional</small></span><select id="toolKitInput"><option value="">Sin kit</option></select><input id="toolKitNewInput" type="text" placeholder="Nombre del nuevo kit" hidden disabled /></label>
+                <label><span>Cambio herr. (min)</span><input id="toolSetupInput" type="number" min="0" step="1" placeholder="Minutos" required /></label>
+                <label><span>Cambio kit (min)</span><input id="kitSetupInput" type="number" min="0" step="1" placeholder="Minutos" required /></label>
+                <button id="addToolBtn" class="button small" type="button">Agregar</button>
+              </div>
+              <div class="table-wrap config-table"><table id="toolCatalogTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Maquinas</h2><span>Listado disponible para operaciones de doblado</span></div></div>
+              <div class="config-form machine-form">
+                <input id="machineNameInput" type="text" placeholder="Maquina" />
+                <button id="addMachineBtn" class="button small" type="button">Agregar</button>
+              </div>
+              <div class="table-wrap config-table"><table id="machineTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Subcontratos</h2><span>Tipos y dias por articulo; la operacion de NetSuite determina cuando aplica</span></div></div>
+              <div class="config-form subcontract-form">
+                <input id="subcontractPartInput" type="text" value="*" placeholder="Parte, * para general" />
+                <input id="subcontractNameInput" type="text" placeholder="Tipo, ej. Galvanizado" />
+                <input id="subcontractDaysInput" type="number" min="1" step="1" value="3" />
+                <button id="addSubcontractBtn" class="button small" type="button">Agregar</button>
+              </div>
+              <div class="table-wrap config-table"><table id="subcontractTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Tipos de OT</h2><span>Clasificacion obligatoria antes de programar</span></div></div>
+              <div class="config-form ot-type-form">
+                <input id="otTypeNameInput" type="text" placeholder="Tipo de OT" />
+                <button id="addOtTypeBtn" class="button small" type="button">Agregar</button>
+              </div>
+              <div class="table-wrap config-table"><table id="otTypeTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Configuracion de articulos</h2><span>Tipo comercial, tipo de trabajo y precio temporal por articulo</span></div></div>
+              <div class="config-form article-config-form">
+                <label><span>Articulo</span><select id="articleConfigPartInput"><option value="">Selecciona un articulo</option></select></label>
+                <label><span>Tipo comercial</span><select id="articleConfigJobTypeInput"><option value="">Selecciona</option></select></label>
+                <label><span>Tipo de trabajo</span><select id="articleConfigPlanningTypeInput"><option value="">Selecciona</option></select></label>
+                <label><span>Precio unitario temporal</span><input id="articleConfigPriceInput" type="number" min="0" step="0.01" placeholder="Solo si no hay promedio" /></label>
+                <button id="saveArticleConfigBtn" class="button small" type="button">Guardar articulo</button>
+              </div>
+              <div class="table-wrap config-table"><table id="articleConfigTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Objetivo semanal</h2><span>Meta de liberacion de produccion en valor monetario</span></div></div>
+              <div class="config-form target-form">
+                <label><span>Meta semanal ($)</span><input id="weeklyReleaseTargetInput" type="text" inputmode="numeric" /></label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="bottom-panel config-panel config-view calendar-view" id="calendario">
+          <div class="config-view-heading"><div><h2>Calendario de capacidad</h2><span>Horarios laborales, pausas y periodos no laborables</span></div></div>
+          <div class="config-view-body">
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Horario laboral</h2><span>Turno base por dia de la semana</span></div></div>
+              <div class="table-wrap config-table"><table id="workScheduleTable"></table></div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Pausas diarias</h2><span>Comida y pausa de produccion para toda la planta</span></div></div>
+              <div class="table-wrap config-table daily-breaks-table"><table id="dailyBreaksTable"></table></div>
+            </div>
+            <div class="config-section">
+            <div class="section-heading"><div><h2>Dias y periodos no laborales</h2><span>Paros generales, maquinas, asuetos y vacaciones</span></div></div>
+            <div class="config-form calendar-form">
+              <label><span>Concepto</span><select id="calendarConceptInput"><option value="GENERAL">General</option><option value="MAQUINA">Maquina</option><option value="ASUETO">Asueto</option><option value="VACACIONES">Periodo vacacional</option></select></label>
+              <label id="calendarMachineField" hidden><span>Maquina</span><select id="calendarMachineInput"><option value="">Selecciona una maquina</option></select></label>
+              <label class="calendar-reason-field"><span>Motivo</span><input id="calendarReasonInput" type="text" placeholder="Motivo del paro" required /></label>
+              <label><span>Fecha inicial</span><input id="calendarStartDateInput" type="date" required /></label>
+              <label id="calendarEndDateField" hidden><span>Fecha final</span><input id="calendarEndDateInput" type="date" /></label>
+              <label><span>Hora inicial</span><input id="calendarStartInput" type="time" /></label>
+              <label><span>Hora final</span><input id="calendarEndInput" type="time" /></label>
+              <button id="addCalendarBtn" class="button small" type="button">Agregar periodo</button>
+            </div>
+            <p id="calendarFormHint" class="calendar-form-hint"></p>
+            <div class="table-wrap config-table"><table id="calendarTable"></table></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="bottom-panel reports-panel" id="reportes">
+          <div class="tabs report-tabs" role="tablist" aria-label="Reportes de produccion">
+            <button class="tab-active" data-tab="week" type="button">Plan de la semana</button>
+            <button data-tab="operator" type="button">Plan por operador</button>
+            <button data-tab="adjuster" type="button">Ajustador</button>
+            <button data-tab="subcontractReport" type="button">Subcontratos</button>
+          </div>
+          <section id="weekTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Plan de la semana</h2><span id="reportSnapshotMeta">Plan vigente</span></div>
+              <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan guardado</span><select id="planSnapshotSelect"><option value="">Plan vigente</option></select></label>
+                <button id="refreshSnapshotsBtn" class="icon-button" type="button" aria-label="Actualizar planes guardados" title="Actualizar planes guardados"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 18 15"/></svg></button>
+                <label class="compact-control"><span>Semana</span><input id="weekReportStartInput" type="date" /></label>
+                <button id="printWeekBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
+              </div>
+            </div>
+            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="weekPrintContext" class="report-print-context"></div></div>
+            <section id="weekExecutiveSummary" class="executive-summary" aria-label="Resumen ejecutivo del plan"></section>
+            <div id="weekReport" class="weekly-job-reports"></div>
+          </section>
+
+          <section id="operatorTab" class="tab-panel">
+            <div class="report-toolbar">
+              <h2>Plan por operador</h2>
+              <div class="report-actions">
+                <label class="compact-control"><span>Dia</span><input id="operatorReportStartInput" type="date" /></label>
+                <select id="operatorReportSelect" aria-label="Operador reporte"></select>
+                <select id="operatorReportStatus" aria-label="Estado del plan"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
+                <label class="report-show-all"><input id="operatorReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <output id="operatorReportCount" class="report-row-count"></output>
+                <button id="printOperatorBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
+              </div>
+            </div>
+            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="operatorPrintContext" class="report-print-context"></div></div>
+            <div class="table-wrap"><table id="operatorReport" class="production-report-table report-page-table"></table></div>
+          </section>
+
+          <section id="adjusterTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Cambios de herramental - Ajustador</h2><span>Solo actividades generadas por cambio de herramental o kit</span></div>
+              <div class="report-actions">
+                <label class="compact-control"><span>Dia</span><input id="adjusterReportStartInput" type="date" /></label>
+                <select id="adjusterReportStatus" aria-label="Estado del ajuste"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
+                <label class="report-show-all"><input id="adjusterReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <output id="adjusterReportCount" class="report-row-count"></output>
+                <button id="printAdjusterBtn" class="button small" type="button">Imprimir</button>
+              </div>
+            </div>
+            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="adjusterPrintContext" class="report-print-context"></div></div>
+            <div class="table-wrap"><table id="adjusterReport" class="specialized-report-table report-page-table"></table></div>
+          </section>
+
+          <section id="subcontractReportTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Subcontratos por OT</h2><span>Tipo y dias configurados en CONFIGURACION_OT</span></div>
+              <div class="report-actions">
+                <label class="compact-control"><span>Dia</span><input id="subcontractReportStartInput" type="date" /></label>
+                <label class="report-show-all"><input id="subcontractReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <output id="subcontractReportCount" class="report-row-count"></output>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="subcontractReport" class="specialized-report-table report-page-table"></table></div>
+          </section>
+        </section>
+
+        <dialog id="planningDialog" class="planning-dialog" aria-labelledby="planningDialogTitle">
+          <form id="planningDialogForm" method="dialog">
+            <header>
+              <div>
+                <h2 id="planningDialogTitle">Preparar trabajo</h2>
+                <p id="planningDialogSummary"></p>
+              </div>
+              <button id="planningDialogClose" class="dialog-close" type="button" aria-label="Cerrar" title="Cerrar">&times;</button>
+            </header>
+            <div id="planningDialogBody" class="planning-dialog-body"></div>
+            <footer>
+              <button id="planningDialogCancel" class="button secondary" type="button">Cancelar</button>
+              <button id="planningDialogConfirm" class="button" type="submit">Agregar al plan</button>
+            </footer>
+          </form>
+        </dialog>
+
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      </main>
+    </div>
+    <script>
+{{PLANNER_CORE}}
+</script>
+    <script>
+{{PLANNING_APP}}
+</script>
+  </body>
+</html>
