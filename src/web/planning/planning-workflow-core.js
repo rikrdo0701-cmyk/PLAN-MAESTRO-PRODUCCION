@@ -12,7 +12,7 @@
   function withTimeout(promise, milliseconds) {
     let timer;
     const timeout = new Promise((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(`NetSuite no respondio en ${milliseconds} segundos`)), milliseconds);
+      timer = setTimeout(() => reject(new Error(`NetSuite no respondio en ${Number(milliseconds) / 1000} segundos`)), milliseconds);
     });
     return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
   }

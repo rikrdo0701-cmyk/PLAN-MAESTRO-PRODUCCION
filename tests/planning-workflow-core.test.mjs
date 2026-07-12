@@ -11,7 +11,7 @@ const core = context.globalThis.PlanningWorkflowCore;
 
 test("withTimeout resuelve la promesa y rechaza al vencer el limite", async () => {
   assert.equal(await core.withTimeout(Promise.resolve("ok"), 15), "ok");
-  await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /15 segundos/);
+  await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /0\.015 segundos/);
 });
 
 test("hasPlanningData exige operaciones de las OTs solicitadas", () => {
