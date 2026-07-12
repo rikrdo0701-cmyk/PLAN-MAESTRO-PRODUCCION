@@ -26,7 +26,7 @@ const [index, bridge, pagesIndex] = await Promise.all([
 if (!index.includes("google.script.run")) throw new Error("Index.html no contiene compatibilidad con google.script.run");
 if (!index.includes("PPAppsScriptBridge")) throw new Error("Index.html no contiene el cliente del puente remoto");
 if (!index.includes("PlannerCore")) throw new Error("Index.html no contiene PlannerCore");
-if (!index.includes("getAppStateIfChanged")) throw new Error("Index.html no contiene carga incremental por revision");
+if (!index.includes("getAppState")) throw new Error("Index.html no contiene carga del estado de la aplicacion");
 if (!index.includes("savePlanningStateOptimized")) throw new Error("Index.html no contiene guardado parcial optimizado");
 if (!bridge.includes("ALLOWED_ORIGIN")) throw new Error("Bridge.html no valida el origen del frontend");
 if (!bridge.includes("google.script.run")) throw new Error("Bridge.html no contiene google.script.run");

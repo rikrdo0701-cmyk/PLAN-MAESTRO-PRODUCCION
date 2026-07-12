@@ -27,8 +27,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
       - run: npm run build
+      - name: Verificar frontend generado
+        run: |
+          test -f site/index.html
+          grep -q "PlannerCore" site/index.html
+          grep -q "scheduleCurrentPlan" site/index.html
+          grep -q "subcontractWindowEnd" site/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
