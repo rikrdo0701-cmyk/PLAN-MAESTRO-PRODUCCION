@@ -32,17 +32,114 @@ function renderPlanningPage(template, styles, backendBridge, plannerCore, app, p
 }
 
 function patchPlanningApp(app) {
-  const marker = "  if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;";
-  const replacement = `${marker}
+  const collectionMarker = "  if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;";
+  const collectionReplacement = `${collectionMarker}
   if (Array.isArray(imported.workOrders)) state.workOrders = imported.workOrders;
   if (Array.isArray(imported.otTypes)) state.otTypes = imported.otTypes;
   if (imported.operationPlanStatuses) state.operationPlanStatuses = imported.operationPlanStatuses;
   if (Array.isArray(imported.machineToolHistory)) state.machineToolHistory = imported.machineToolHistory;
   if (imported.invoicePriceWindow) state.invoicePriceWindow = imported.invoicePriceWindow;
   if (imported.syncedAt) state.syncedAt = imported.syncedAt;`;
-  const patched = app.replace(marker, replacement);
+  let patched = app.replace(collectionMarker, collectionReplacement);
   if (patched === app) throw new Error("No se encontro el punto de importacion de colecciones del backend");
-  return patched;
+
+  const sharedStateMarker = "    applyImported(imported, { preserveLocalPlanning: true });";
+  const sharedStateReplacement = "    applyImported(imported, { preserveLocalPlanning: false });";
+  const sharedStatePatched = patched.replace(sharedStateMarker, sharedStateReplacement);
+  if (sharedStatePatched === patched) throw new Error("No se encontro la carga inicial del estado compartido");
+  patched = sharedStatePatched;
+
+  const startupMarker = `async function loadAppStateInBackground() {
+  const loaded = await loadAppSheetIfAvailable(false);
+  if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  state.selectedOperationId = "";
+  saveState("ui");
+  render();
+  applyInitialWorkspaceView();
+  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+  loadPlanSnapshots(false);
+}`;
+  const startupReplacement = `async function loadAppStateInBackground() {
+  const loaded = await loadAppSheetIfAvailable(false);
+  if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  await loadPlanSnapshots(false);
+  const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
+  state.selectedOperationId = "";
+  saveState("ui");
+  render();
+  applyInitialWorkspaceView();
+  if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
+  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+}
+
+async function restoreDraftPlanFromSharedState() {
+  if (Array.isArray(state.selectedOts) && state.selectedOts.length) return false;
+
+  const scheduledFromSharedState = uniq([
+    ...((state.lastSchedule && Array.isArray(state.lastSchedule.scheduledOts)) ? state.lastSchedule.scheduledOts : []),
+    ...(state.operations || [])
+      .filter((op) => op.fechaInicio && op.horaInicio && op.fechaFin && op.horaFin && !isPlanCompletedOperation(op))
+      .map((op) => op.ot),
+  ].map((ot) => String(ot || "").trim()).filter(Boolean));
+
+  if (scheduledFromSharedState.length) {
+    state.selectedOts = scheduledFromSharedState;
+    return true;
+  }
+
+  const availableSnapshots = (Array.isArray(planSnapshots) ? planSnapshots : [])
+    .slice()
+    .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+  if (!availableSnapshots.length) return false;
+
+  const publishedIds = publishedSnapshotIds();
+  const preferredSnapshot =
+    availableSnapshots.find((item) => item.snapshotId === state.draftVersionId) ||
+    availableSnapshots.find((item) => !publishedIds.has(item.snapshotId)) ||
+    availableSnapshots[0];
+  if (!preferredSnapshot?.snapshotId) return false;
+
+  try {
+    const snapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", preferredSnapshot.snapshotId)
+      : await fetchJson(PLAN_SNAPSHOTS_API + "/" + encodeURIComponent(preferredSnapshot.snapshotId));
+    const snapshotOperations = (snapshot.operations || []).map((op, index) => normalizeOperation({
+      ...op,
+      id: op.id || ("snapshot-" + preferredSnapshot.snapshotId + "-" + (index + 1)),
+    }, index));
+    const draftOts = uniq(snapshotOperations.map((op) => String(op.ot || "").trim()).filter(Boolean));
+    if (!draftOts.length) return false;
+
+    const draftKeys = new Set(draftOts.map(normalizeKey));
+    state.operations = [
+      ...(state.operations || []).filter((op) => !draftKeys.has(normalizeKey(op.ot))),
+      ...snapshotOperations,
+    ];
+    state.selectedOts = draftOts;
+    state.lockedOts = uniq([
+      ...(state.lockedOts || []),
+      ...snapshotOperations.filter((op) => op.locked === true).map((op) => op.ot),
+    ].filter(Boolean));
+    state.expandedOts = uniq([...(state.expandedOts || []), ...draftOts]);
+    state.draftVersionId = preferredSnapshot.snapshotId;
+    state.lastSchedule = {
+      ...(state.lastSchedule || {}),
+      generatedAt: snapshot.generatedAt || preferredSnapshot.generatedAt || "",
+      scheduled: snapshotOperations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").length,
+      scheduledOts: draftOts,
+      changes: snapshotOperations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL").length,
+      unscheduled: 0,
+      restoredFromSnapshot: true,
+    };
+    return true;
+  } catch (error) {
+    console.warn("No se pudo recuperar el borrador guardado", error);
+    return false;
+  }
+}`;
+  const startupPatched = patched.replace(startupMarker, startupReplacement);
+  if (startupPatched === patched) throw new Error("No se encontro la carga inicial para recuperar el borrador");
+  return startupPatched;
 }
 
 export async function buildProject() {
@@ -102,7 +199,7 @@ export async function buildProject() {
       theme_color: "#087f7a",
       lang: "es-MX"
     }, null, 2), "utf8"),
-    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.2";
+    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.3";
 const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./manifest.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
