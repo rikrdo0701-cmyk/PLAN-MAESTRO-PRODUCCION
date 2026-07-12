@@ -429,6 +429,7 @@ let appSheetSavePending = false;
 let appSheetDirtyScopes = new Set();
 let netSuiteSyncInFlight = false;
 let netSuitePlanningSyncInFlight = false;
+let planningActionsBusy = "";
 let stateHistory = [];
 let queuePointerDrag = null;
 let backlogPointerDrag = null;
@@ -664,7 +665,6 @@ function bindEvents() {
   els.exportCsvBtn.addEventListener("click", exportCsv);
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
-  els.balanceBtn.addEventListener("click", balanceOperators);
   els.loadWeekInput.addEventListener("change", () => {
     state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
     saveAndRender("Semana de cargas actualizada");
@@ -1842,7 +1842,8 @@ async function prepareJobForPlanning(job) {
   const requirements = buildPlanningRequirements(issues, operations);
   const commercial = commercialPlanningRequirement(job);
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
-  const mustConfirmPlanning = (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
+  const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
+  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
   if (!mustConfirmPlanning) {
     return true;
   }
@@ -1880,7 +1881,7 @@ function applyCommercialPlanningRequirement(job, values, commercial) {
   if (selectedPlanningType) configuration.planningType = selectedPlanningType;
   if (!(commercial.invoicePrice > 0)) {
     const manualPrice = Number(values.ot_manual_price || commercial.manualPrice || 0);
-    if (manualPrice > 0) configuration.manualUnitPrice = manualPrice;
+    if (manualPrice >= 0) configuration.manualUnitPrice = manualPrice;
   }
   configuration.updatedAt = new Date().toISOString();
 }
@@ -1902,10 +1903,7 @@ function buildPlanningRequirements(issues, operations) {
       if (!String(op.maquina || "").trim() || op.maquina === "SIN_MAQUINA") {
         requirement.codes.add("MISSING_MACHINE");
       }
-      if (!cleanToolValue(op.herramental)) {
-        const catalog = toolCatalogForAppOperation(op);
-        if (!cleanToolValue(catalog?.herramental)) requirement.codes.add("OT_TOOL");
-      }
+      requirement.codes.add("OT_TOOL");
       requirement.codes.add("OPTIONAL_KIT");
     }
     if (isSubcontractAppOperation(op) && (!String(op.subcontractType || "").trim() || !(Number(op.subcontractDays) > 0))) {
@@ -1974,7 +1972,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const subcontractCatalog = subcontractRequirement ? subcontractCatalogForAppOperation(subcontractRequirement.op) : null;
   const currentSubcontractType = configuration.subcontractType || registeredSubcontract?.name || subcontractCatalog?.name || "";
   const currentSubcontractDays = Number(configuration.subcontractDays || registeredSubcontract?.days || subcontractCatalog?.days || 0);
-  const currentKit = getOtKitValue(job.ops) || requirements.map((item) => cleanToolValue(toolCatalogForAppOperation(item.op)?.kitHerramental)).find(Boolean) || "";
+  const currentKit = cleanToolValue(configuration.kitHerramental) || getOtKitValue(job.ops) || requirements.map((item) => cleanToolValue(toolCatalogForAppOperation(item.op)?.kitHerramental)).find(Boolean) || "";
   const currentPlanningType = commercial.currentPlanningType || suggestedPlanningTypeForJob(job) || "NORMAL";
   const planningTypeOptions = DEFAULT_PLANNING_TYPES
     .map((type) => `<option value="${escapeHtml(type)}"${type === currentPlanningType ? " selected" : ""}>${escapeHtml(type)}</option>`)
@@ -1983,8 +1981,6 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     .filter((item) => item.active !== false || normalizeStatus(item.name) === normalizeStatus(commercial.currentType))
     .map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(commercial.currentType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`)
     .join("");
-  const unitPrice = commercial.invoicePrice > 0 ? commercial.invoicePrice : commercial.manualPrice;
-  const priceSource = commercial.invoicePrice > 0 ? "Promedio facturado movil de seis meses" : "Precio temporal guardado por articulo";
   const planningTypeField = commercial.needsPlanningType
     ? `<label>Tipo de trabajo<select name="ot_planning_type" required><option value="">Selecciona normal, prototipo o expeditado</option>${planningTypeOptions}</select></label>`
     : `<label>Tipo de trabajo<input type="text" value="${escapeHtml(commercial.currentPlanningType || currentPlanningType || "")}" readonly></label>`;
@@ -1992,7 +1988,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona OEM, especial o linea</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="0.01" step="0.01" value="${escapeHtml(commercial.manualPrice || "")}" required><small>Se usara solo mientras NetSuite no tenga facturacion</small></label>`
+    ? `<label>Precio unitario temporal (opcional)<input name="ot_manual_price" type="number" min="0" step="0.01" value="${escapeHtml(commercial.manualPrice || "")}"><small>Puede quedar vacio o ser cero</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -2000,11 +1996,9 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
       ${planningTypeField}
       ${jobTypeField}
       ${priceField}
-      <div class="planning-static-field"><span>Piezas pendientes</span><strong>${escapeHtml(formatMaterialQuantity(commercial.pendingPieces))}</strong></div>
-      <div class="planning-static-field"><span>Monto estimado</span><strong>${escapeHtml(formatCurrency(unitPrice * commercial.pendingPieces))}</strong><small>${escapeHtml(priceSource)}</small></div>
     </div>
   </section>` : "";
-  const machineField = bendingRequirements.length ? `<label>Maquina de la OT
+  const machineField = bendingOps.length ? `<label>Maquina de la OT
     <select name="ot_machine" required>
       <option value="">${compatibleMachines.length ? "Selecciona una maquina" : "No hay maquinas configuradas"}</option>
       ${compatibleMachines.map((machine) => `<option value="${escapeHtml(machine)}"${machine === currentMachine ? " selected" : ""}>${escapeHtml(machine)}</option>`).join("")}
@@ -2017,7 +2011,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
          ${subcontractTypes.map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(currentSubcontractType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
        </select>`
     : `<input name="ot_subcontract_type" type="text" value="${escapeHtml(currentSubcontractType)}" placeholder="Tipo de subcontrato" required>`;
-  const commonFields = bendingRequirements.length || needsOtKit || needsSubcontract ? `<section class="planning-requirement planning-requirement-ot">
+  const commonFields = bendingOps.length || needsOtKit || needsSubcontract ? `<section class="planning-requirement planning-requirement-ot">
     <div class="planning-requirement-title"><strong>Datos generales de la OT ${escapeHtml(job.ot)}</strong><span>Una asignacion para toda la orden</span></div>
     <div class="planning-requirement-fields">
       ${machineField}
@@ -2032,7 +2026,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const operationFields = requirements.map((requirement) => {
     const { op, codes, index } = requirement;
     const catalog = toolCatalogForAppOperation(op);
-    const currentTool = cleanToolValue(op.herramental) || cleanToolValue(catalog?.herramental);
+    const currentTool = cleanToolValue(configuration.herramental) || cleanToolValue(op.herramental) || cleanToolValue(catalog?.herramental);
     const toolFields = codes.has("MISSING_TOOL") || codes.has("OT_TOOL")
       ? `<label>Herramental requerido${planningCatalogSelectMarkup(`tool_${index}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>`
       : "";
@@ -2087,7 +2081,7 @@ function applyPlanningRequirements(requirements, values, operations) {
     }
   }
 
-  if (requirements.some((item) => item.codes.has("MISSING_MACHINE"))) {
+  if (operations.some(isBendingAppOperation)) {
     const machine = String(values.ot_machine || "").trim().toUpperCase();
     applyMachineToJob(operations[0]?.ot, machine);
   }
@@ -3315,6 +3309,16 @@ function updateArticleConfigForm() {
 }
 
 async function scheduleCurrentPlan() {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("schedule", true);
+  try {
+    return await scheduleCurrentPlanImpl();
+  } finally {
+    setPlanningActionsBusy("schedule", false);
+  }
+}
+
+async function scheduleCurrentPlanImpl() {
   if (!window.PlannerCore?.schedulePlan) {
     showToast("El motor de programacion no esta disponible");
     return;
@@ -4793,6 +4797,16 @@ function balanceOperators() {
 }
 
 async function loadNetSuiteExercise() {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("sync", true);
+  try {
+    return await loadNetSuiteExerciseImpl();
+  } finally {
+    setPlanningActionsBusy("sync", false);
+  }
+}
+
+async function loadNetSuiteExerciseImpl() {
   const result = await ensurePlanningDataLoaded(true, { force: true });
   if (result.source === "none") return;
   saveState("plan");
@@ -4919,16 +4933,31 @@ async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
 
 function setNetSuiteSyncState(inProgress) {
   if (!els.loadNsExerciseBtn) return;
-  els.loadNsExerciseBtn.disabled = inProgress;
+  els.loadNsExerciseBtn.disabled = inProgress || Boolean(planningActionsBusy);
   if (inProgress) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
   else els.loadNsExerciseBtn.removeAttribute("aria-busy");
   const label = els.loadNsExerciseBtn.querySelector("[data-sync-label]");
   if (label) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
 }
 
+function setPlanningActionsBusy(action, inProgress) {
+  planningActionsBusy = inProgress ? action : "";
+  const busy = Boolean(planningActionsBusy);
+  if (els.scheduleBtn) {
+    els.scheduleBtn.disabled = busy;
+    if (busy) els.scheduleBtn.setAttribute("aria-busy", "true");
+    else els.scheduleBtn.removeAttribute("aria-busy");
+  }
+  if (els.loadNsExerciseBtn) {
+    els.loadNsExerciseBtn.disabled = busy;
+    if (busy) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
+    else els.loadNsExerciseBtn.removeAttribute("aria-busy");
+  }
+}
+
 function setNetSuitePlanningSyncState(inProgress) {
   if (!els.scheduleBtn) return;
-  els.scheduleBtn.disabled = inProgress;
+  els.scheduleBtn.disabled = inProgress || Boolean(planningActionsBusy);
   els.scheduleBtn.classList.toggle("is-running", inProgress);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
   if (label) label.textContent = inProgress ? "Cargando operaciones..." : "Generar plan";

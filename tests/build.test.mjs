@@ -29,5 +29,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /return \{ ready: hasData\(\), source: "fresh", warning: "" \}/);
   assert.match(pagesIndex, /if \(result\.source === "none"\) return/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
+  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);
+  assert.doesNotMatch(pagesIndex, /Piezas pendientes/);
+  assert.doesNotMatch(pagesIndex, /Monto estimado/);
+  assert.match(pagesIndex, /configuration\.subcontractType \|\| registeredSubcontract/);
+  assert.match(pagesIndex, /configuration\.machine/);
+  assert.match(pagesIndex, /function setPlanningActionsBusy/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
+  assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
+  assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
 });
