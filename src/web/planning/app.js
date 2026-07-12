@@ -631,6 +631,9 @@ function debounce(fn, ms) {
 }
 
 function bindEvents() {
+  document.querySelectorAll(".segmented button").forEach((button) => {
+    button.onclick = () => setGanttView(button.dataset.view);
+  });
   els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
   els.statusFilter.addEventListener("change", renderPriorityList);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
@@ -744,10 +747,6 @@ function bindEvents() {
   document.addEventListener("mouseup", () => finishBacklogDrag(true));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && els.gantt.classList.contains("gantt-fullscreen")) toggleGanttFullscreen(false);
-  });
-
-  document.querySelectorAll(".segmented button").forEach((button) => {
-    button.onclick = () => setGanttView(button.dataset.view);
   });
 
   document.querySelectorAll(".tabs button").forEach((button) => {
