@@ -74,11 +74,14 @@
   function removeOtFromDraft(state, ot) {
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
+    const preparedPlanningByOt = { ...(state?.preparedPlanningByOt || {}) };
+    delete preparedPlanningByOt[ot];
     return {
       ...(state || {}),
       selectedOts: without(state?.selectedOts),
       lockedOts: without(state?.lockedOts),
       expandedOts: without(state?.expandedOts),
+      preparedPlanningByOt,
       operations: (state?.operations || []).map((operation) => normalize(operation?.ot) === key
         ? { ...operation, locked: false }
         : operation),
@@ -110,7 +113,20 @@
   function draftExportOperations(state) {
     const selected = new Set((state?.selectedOts || []).map(normalize));
     return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
-      isPendingDraftOperation(operation) && Boolean(operation?.fechaInicio && operation?.fechaFin));
+      isPendingDraftOperation(operation) && !isHistorical(operation) &&
+      Boolean(operation?.fechaInicio && operation?.fechaFin));
+  }
+
+  function needsPlanningPreparation(state, ot, signature) {
+    if (!isOtEligibleForDraft(state, ot)) return false;
+    return String(state?.preparedPlanningByOt?.[ot] || "") !== String(signature || "");
+  }
+
+  function markPlanningPrepared(state, ot, signature) {
+    return {
+      ...(state || {}),
+      preparedPlanningByOt: { ...(state?.preparedPlanningByOt || {}), [ot]: String(signature || "") },
+    };
   }
 
   function reportCategories(operation) {
@@ -188,5 +204,6 @@
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
+    needsPlanningPreparation, markPlanningPrepared,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });

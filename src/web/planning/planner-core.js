@@ -142,7 +142,10 @@
         if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
         op.log = appendLog(op.log, "WARN_SIN_HUECO_EN_HORIZONTE");
         unscheduled.push(op);
-        diagnostics.push({ level: "WARN", code: "UNSCHEDULED", operationId: op.id, ot: op.ot, sequence: op.secuencia });
+        diagnostics.push({
+          level: "WARN", code: "UNSCHEDULED", operationId: op.id, ot: op.ot, sequence: op.secuencia,
+          cause: unscheduledCause(state, op),
+        });
       }
     }
 
@@ -766,6 +769,13 @@
       (!active.size || active.has(normalizeKey(name)))
     );
     return unique(candidates).filter((name) => name && normalizeKey(name) !== "SIN_OPERADOR");
+  }
+
+  function unscheduledCause(state, op) {
+    if (!operatorCandidates(state, op, isFiniteOperation(state, op)).length) return "SIN_OPERADOR_CONFIGURADO";
+    if (isBendingOperation(op) && !machineCandidates(state, op).length) return "SIN_MAQUINA_O_HERRAMENTAL_VALIDO";
+    if (isBendingOperation(op) && operationToolKey(op) && !toolChangeOperator(state, state.settings || {})) return "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL";
+    return "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO";
   }
 
   function toolChangeOperator(state, settings) {

@@ -459,13 +459,16 @@ window.addEventListener("beforeunload", () => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 });
 
-document.addEventListener("DOMContentLoaded", () => {
+function initializePlanningApp() {
   bindElements();
   bindEvents();
   render();
   saveState("ui");
   loadAppStateInBackground();
-});
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializePlanningApp, { once: true });
+else initializePlanningApp();
 
 async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
@@ -744,14 +747,14 @@ function bindEvents() {
   });
 
   document.querySelectorAll(".segmented button").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.onclick = () => {
       state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(button.dataset.view);
       invalidateGanttGroupsCache();
       renderGantt();
       renderGanttDisplayControls();
       saveState("ui");
       showToast(ganttViewMessage(state.ganttView));
-    });
+    };
   });
 
   document.querySelectorAll(".tabs button").forEach((button) => {
@@ -818,6 +821,7 @@ function normalizeState() {
   state.draftVersionId = String(state.draftVersionId || "");
   state.activePublishedVersionId = String(state.activePublishedVersionId || "");
   state.publishedVersions = Array.isArray(state.publishedVersions) ? state.publishedVersions : [];
+  state.preparedPlanningByOt = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? state.preparedPlanningByOt : {};
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
   state.workSchedule = { ...deepClone(DEFAULT_WORK_SCHEDULE), ...(state.workSchedule || {}) };
   state.dailyBreaks = Object.keys(DEFAULT_DAILY_BREAKS).reduce((out, key) => {
@@ -1416,7 +1420,9 @@ function renderTop() {
   els.undoBtn.disabled = stateHistory.length === 0;
 
   document.querySelectorAll(".segmented button").forEach((button) => {
-    button.classList.toggle("segmented-active", window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view));
+    const active = window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view);
+    button.classList.toggle("segmented-active", active);
+    button.setAttribute("aria-selected", String(active));
   });
 }
 
@@ -1792,7 +1798,7 @@ async function selectJob(ot, selected) {
   if (selected && !alreadySelected) {
     state._pendingAddOt = ot;
     state._pendingAddOtSnapshot = [...state.selectedOts];
-    const prepared = await prepareJobForPlanning(job);
+    const prepared = await prepareJobForPlanning(job, { forceConfirm: true });
     if (!prepared) {
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
@@ -1826,7 +1832,7 @@ async function selectJob(ot, selected) {
   saveState("plan");
 }
 
-async function prepareJobForPlanning(job) {
+async function prepareJobForPlanning(job, options = {}) {
   if (!job) return false;
   const operations = job.ops.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
   const issues = window.PlannerCore?.planningConfigurationIssues
@@ -1840,10 +1846,13 @@ async function prepareJobForPlanning(job) {
 
   const requirements = buildPlanningRequirements(issues, operations);
   const commercial = commercialPlanningRequirement(job);
+  const signature = planningPreparationSignature(job, operations, commercial);
+  if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) return true;
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
   const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
   const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType;
   if (!mustConfirmPlanning) {
+    Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
     return true;
   }
   const values = await showPlanningRequirements(job, requirements, commercial);
@@ -1852,7 +1861,22 @@ async function prepareJobForPlanning(job) {
   applyPlanningRequirements(requirements, values, operations);
   applyCommercialPlanningRequirement(job, values, commercial);
   assignPlanningOperators(operations);
+  Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(
+    state, job.ot, planningPreparationSignature(job, operations, commercialPlanningRequirement(job))
+  ));
   return true;
+}
+
+function planningPreparationSignature(job, operations, commercial) {
+  return JSON.stringify({
+    ot: job?.ot || "",
+    operations: (operations || []).map((op) => ({
+      id: op.id, secuencia: op.secuencia, ct: op.ct, tipo: op.tipoInsercion,
+      maquina: op.maquina, herramental: op.herramental, kit: op.kitHerramental,
+      subcontractType: op.subcontractType, subcontractDays: Number(op.subcontractDays || 0),
+    })),
+    commercial: { type: commercial?.currentType || "", planningType: commercial?.currentPlanningType || "" },
+  });
 }
 
 function commercialPlanningRequirement(job) {
@@ -2343,9 +2367,7 @@ function renderSelectedJobPanel() {
           const completed = isPlanCompletedOperation(op);
           const key = operationCompletionKey(op);
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : completed
-              ? "<span class=\"op-status completed-label\">Completada</span>"
-              : `<button class="plan-status-action complete" type="button" data-plan-status-key="${escapeHtml(key)}">Completar</button>`;
+            : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
@@ -3932,14 +3954,18 @@ function renderPlanSnapshotSelect() {
   if (!els.planSnapshotSelect) return;
   const selectedId = reportSnapshot?.snapshotId || "";
   const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.map((snapshot) => {
+  const allowedSnapshots = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
+    ...snapshot,
+    id: snapshot.snapshotId,
+    status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
+  }))).filter((item) => item.id !== "draft");
+  const options = allowedSnapshots.map((snapshot) => {
     const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
-    const type = publishedIds.has(snapshot.snapshotId) ? "Publicado" : "Guardado";
-    const label = `${type} - ${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
+    const label = `Publicado - ${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
-  els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option><option value="">Ultima publicada</option>${options}`;
-  els.planSnapshotSelect.value = selectedId === "draft" ? "draft" : (planSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "");
+  els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
+  els.planSnapshotSelect.value = selectedId === "draft" ? "draft" : (allowedSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "draft");
 }
 
 function publishedSnapshotIds() {
@@ -5076,6 +5102,7 @@ function captureLocalPlanningState() {
     "subcontracts",
     "otTypes",
     "operationPlanStatuses",
+    "preparedPlanningByOt",
     "workSchedule",
     "dailyBreaks",
     "settings",

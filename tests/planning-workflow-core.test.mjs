@@ -71,7 +71,7 @@ test("retirar una OT limpia solo su pertenencia al borrador", () => {
   const state = {
     selectedOts: ["1325", "1400"], lockedOts: ["1325"], expandedOts: ["1325"],
     operations: [operation], lastSchedule: { scheduledOts: ["1325", "1400"] },
-    planningConfigByOt: { 1325: { subcontractDays: 15 } },
+    planningConfigByOt: { 1325: { subcontractDays: 15 } }, preparedPlanningByOt: { 1325: "firma" },
   };
   const result = core.removeOtFromDraft(state, "1325");
   assert.deepEqual(result.selectedOts, ["1400"]);
@@ -80,6 +80,7 @@ test("retirar una OT limpia solo su pertenencia al borrador", () => {
   assert.equal(result.operations.length, 1);
   assert.equal(result.operations[0].locked, false);
   assert.equal(result.planningConfigByOt[1325].subcontractDays, 15);
+  assert.equal(result.preparedPlanningByOt[1325], undefined);
   assert.equal(core.isOtEligibleForDraft(result, "1325"), false);
 });
 
@@ -106,8 +107,18 @@ test("selector operativo y exportacion usan solo borrador pendiente programado",
     { id: "done", ot: "1325", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
     { id: "backlog", ot: "1400", planStatus: "PENDIENTE", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
     { id: "unscheduled", ot: "1325", planStatus: "PENDIENTE", fechaInicio: "", fechaFin: "" },
+    { id: "historical", ot: "1325", historical: true, planStatus: "PENDIENTE", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
   ] };
   assert.deepEqual(structuredClone(core.draftExportOperations(state).map((op) => op.id)), ["ok"]);
+});
+
+test("la preparacion es idempotente hasta que cambia su firma", () => {
+  const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
+  assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);
+  assert.equal(core.needsPlanningPreparation(state, "1325", "firma-b"), true);
+  assert.equal(core.needsPlanningPreparation({ selectedOts: [] }, "1325", "firma-a"), false);
+  const marked = core.markPlanningPrepared(state, "1325", "firma-b");
+  assert.equal(marked.preparedPlanningByOt[1325], "firma-b");
 });
 
 test("clasifica operaciones de reporte en una categoria exclusiva", () => {

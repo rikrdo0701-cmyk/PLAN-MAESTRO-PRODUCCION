@@ -128,3 +128,15 @@ test("dos doblados en la misma maquina conservan operaciones y generan cambio de
   const changedProduct = productive.find((op) => op.herramental === transition.toolChangeToHerramental);
   assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
 });
+
+test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{ id: "missing", ot: "300", secuencia: 7, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", tiempoProd: 20 }],
+    workOrders: [{ ot: "300" }], matrix: { "CORTE::CORTE": [] }, operators: [], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const diagnostic = result.lastSchedule.diagnostics.find((item) => item.code === "UNSCHEDULED");
+  assert.equal(diagnostic.ot, "300");
+  assert.equal(diagnostic.sequence, 7);
+  assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
+});
