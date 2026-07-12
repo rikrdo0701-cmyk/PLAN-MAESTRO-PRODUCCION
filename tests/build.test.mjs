@@ -19,6 +19,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /manifest\.webmanifest/);
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
+  assert.match(pagesIndex, /PlanningWorkflowCore/);
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);

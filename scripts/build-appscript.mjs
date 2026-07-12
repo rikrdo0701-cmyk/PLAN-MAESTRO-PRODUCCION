@@ -12,7 +12,7 @@ async function read(relativePath) {
   return content.replace(/\r\n/g, "\n");
 }
 
-function renderPlanningPage(template, styles, backendBridge, plannerCore, app, performanceClient, generatedComment, pwaHead = "") {
+function renderPlanningPage(template, styles, backendBridge, plannerCore, workflowCore, app, performanceClient, generatedComment, pwaHead = "") {
   const templateWithHead = pwaHead
     ? template.replace('    <link rel="icon" href="data:," />', '    <link rel="icon" href="data:," />\n' + pwaHead)
     : template;
@@ -25,6 +25,7 @@ function renderPlanningPage(template, styles, backendBridge, plannerCore, app, p
   const index = templateWithBridge
     .replace("{{PLANNING_STYLES}}", styles.trimEnd())
     .replace("{{PLANNER_CORE}}", plannerCore.trimEnd())
+    .replace("{{PLANNING_WORKFLOW_CORE}}", workflowCore.trimEnd())
     .replace("{{PLANNING_APP}}", `${app.trimEnd()}\n</script>\n    <script>\n${performanceClient.trimEnd()}`)
     .replace("<!-- Archivo generado. Edita src/web/planning y ejecuta npm run build. -->", generatedComment);
 
@@ -153,11 +154,12 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, appSource, performanceClient, fluidClient] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, appSource, performanceClient, fluidClient] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
     read("src/web/planning/planner-core.js"),
+    read("src/web/planning/planning-workflow-core.js"),
     read("src/web/planning/app.js"),
     read("src/web/shared/performance-client.js"),
     read("src/web/shared/fluid-client.js"),
@@ -171,6 +173,7 @@ export async function buildProject() {
     styles,
     backendBridge,
     plannerCore,
+    workflowCore,
     app,
     runtimeClients,
     "<!-- Generado para Apps Script por npm run build. No editar directamente. -->",
@@ -181,6 +184,7 @@ export async function buildProject() {
     styles,
     backendBridge,
     plannerCore,
+    workflowCore,
     app,
     runtimeClients,
     "<!-- Generado para GitHub Pages por npm run build. No editar directamente. -->",
