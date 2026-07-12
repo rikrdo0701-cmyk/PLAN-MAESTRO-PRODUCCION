@@ -2,6 +2,7 @@
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.PlanningWorkflowCore = api;
+  if (typeof window !== "undefined") window.PlanningWorkflowCore = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createPlanningWorkflowCore() {
   "use strict";
 
