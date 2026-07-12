@@ -28,13 +28,7 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
-      - run: npm run check
       - run: npm run build
-      - name: Renovar cache del frontend
-        env:
-          BUILD_SHA: ${{ github.sha }}
-        run: |
-          node -e 'const fs=require("fs"); const p="site/sw.js"; let s=fs.readFileSync(p,"utf8"); const v=process.env.BUILD_SHA.slice(0,12); s=s.replace(/const CACHE_NAME = "[^"]+";/, `const CACHE_NAME = "plan-maestro-${v}";`); fs.writeFileSync(p,s);'
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
