@@ -26,6 +26,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
+  assert.match(pagesIndex, /return \{ ready: hasData\(\), source: "fresh", warning: "" \}/);
+  assert.match(pagesIndex, /if \(result\.source === "none"\) return/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
 });
