@@ -8,7 +8,8 @@ const siteDir = path.join(projectRoot, "site");
 const appsScriptWebAppUrl = "https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec";
 
 async function read(relativePath) {
-  return readFile(path.join(projectRoot, relativePath), "utf8");
+  const content = await readFile(path.join(projectRoot, relativePath), "utf8");
+  return content.replace(/\r\n/g, "\n");
 }
 
 function renderPlanningPage(template, styles, backendBridge, plannerCore, app, performanceClient, generatedComment, pwaHead = "") {

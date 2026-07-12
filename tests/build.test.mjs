@@ -12,10 +12,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);
-  assert.match(index, /getAppStateIfChanged/);
+  assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   assert.match(pagesIndex, /script\.google\.com\/macros\/s\//);
   assert.match(pagesIndex, /manifest\.webmanifest/);
   assert.match(pagesIndex, /serviceWorker\.register/);
+  assert.match(pagesIndex, /PlannerCore/);
+  assert.match(pagesIndex, /scheduleCurrentPlan/);
+  assert.match(pagesIndex, /subcontractWindowEnd/);
+  assert.doesNotMatch(pagesIndex, /El proyecto usa .*GitHub Pages.*Google Apps Script/);
 });
