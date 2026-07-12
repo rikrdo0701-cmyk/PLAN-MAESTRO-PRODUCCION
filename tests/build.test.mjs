@@ -39,5 +39,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
+  assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
+  assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
+  assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz"\)/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
 });

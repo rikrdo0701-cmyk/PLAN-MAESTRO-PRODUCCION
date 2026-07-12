@@ -1906,9 +1906,7 @@ function buildPlanningRequirements(issues, operations) {
       requirement.codes.add("OT_TOOL");
       requirement.codes.add("OPTIONAL_KIT");
     }
-    if (isSubcontractAppOperation(op) && (!String(op.subcontractType || "").trim() || !(Number(op.subcontractDays) > 0))) {
-      requirement.codes.add("OT_SUBCONTRACT");
-    }
+    if (isSubcontractAppOperation(op)) requirement.codes.add("OT_SUBCONTRACT");
     if (requirement.codes.size) grouped.set(op.id, requirement);
   }
   return [...grouped.values()].map((item, index) => ({ ...item, index }));
@@ -1922,14 +1920,14 @@ async function showPlanningBlockers(job, blockers) {
     if (issue.code === "MISSING_CAPABILITY") return `<li>Falta agregar <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}) a la matriz de habilidades.</li>`;
     return `<li>Falta habilitar al menos un operador para <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}).</li>`;
   }).join("");
-  await openPlanningDialog({
+  const result = await openPlanningDialog({
     title: `OT ${job.ot} no puede agregarse al plan`,
     summary: "Completa la configuracion antes de programar este trabajo.",
     body: `<div class="planning-error"><ul>${items}</ul></div>`,
     confirmLabel: "Ir a matriz",
     cancelVisible: false,
   });
-  showWorkspaceView("matriz");
+  if (result) showWorkspaceView("matriz");
 }
 
 function planningCatalogSelectMarkup(name, field, currentValue, options = {}) {
