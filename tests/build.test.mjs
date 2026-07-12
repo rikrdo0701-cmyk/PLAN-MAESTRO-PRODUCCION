@@ -23,6 +23,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
+  assert.doesNotMatch(pagesIndex, /createPlanningWorkflowCore[\s\S]*?<\/script>\s*<script>\s*"use strict";\s*const STORAGE_KEY/);
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
