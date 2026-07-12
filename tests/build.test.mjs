@@ -51,7 +51,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportStatus"/);
-  assert.match(pagesIndex, /reportCoverageIssues\(reportOperationsSource\(\)\)/);
+  assert.match(pagesIndex, /reportCoverageDiagnostics\(reportOperationsSource\(\)\)/);
+  assert.match(pagesIndex, /weekPrintContext\.textContent = `Plan de la semana[\s\S]*Impreso/);
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
 });

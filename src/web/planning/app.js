@@ -3984,15 +3984,15 @@ function renderReports() {
   renderOperatorReport();
   renderAdjusterReport();
   renderSubcontractReport();
-  const coverageIssues = window.PlanningWorkflowCore.reportCoverageIssues(reportOperationsSource());
-  els.reportSnapshotMeta.title = coverageIssues.map((issue) => `${issue.id || issue.ot || "Operacion"}: ${issue.diagnostic}`).join("\n");
+  const coverageIssues = window.PlanningWorkflowCore.reportCoverageDiagnostics(reportOperationsSource());
+  els.reportSnapshotMeta.title = coverageIssues.map((issue) => issue.text).join("\n");
   if (coverageIssues.length) els.reportSnapshotMeta.textContent = `${reportSourceLabel()} · ${coverageIssues.length} diagnostico(s) de cobertura`;
 }
 
 function renderWeekReport() {
   els.weekReportStartInput.value = state.reportWeekStart;
   els.reportSnapshotMeta.textContent = reportSourceLabel();
-  els.weekPrintContext.textContent = `Plan de la semana | ${reportWeekLabel()} | ${reportSourceLabel()}`;
+  els.weekPrintContext.textContent = `Plan de la semana | ${reportWeekLabel()} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
   els.weekExecutiveSummary.innerHTML = reportOps.length

@@ -78,6 +78,16 @@ test("reportCoverageIssues diagnostica operaciones sin categoria o ambiguas", ()
   assert.match(issues[1].diagnostic, /ambigua/i);
 });
 
+test("reportCoverageDiagnostics solo informa programadas pendientes con contexto completo", () => {
+  const issues = core.reportCoverageDiagnostics([
+    { id: "visible", ot: "1325", secuencia: 7, descripcion: "DOBLEZ", fechaInicio: "2026-07-12", fechaFin: "2026-07-12", operador: "", planStatus: "PENDIENTE" },
+    { id: "completed", fechaInicio: "2026-07-12", fechaFin: "2026-07-12", operador: "", planStatus: "COMPLETADA_PLAN" },
+    { id: "unscheduled", operador: "", planStatus: "PENDIENTE" },
+  ]);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0].text, /OT 1325.*Secuencia 7.*DOBLEZ.*Categorias: ninguna/i);
+});
+
 test("reportDateRange acepta solamente de uno a cinco dias futuros", () => {
   assert.deepEqual(structuredClone(core.reportDateRange("2026-07-12", 3)), { start: "2026-07-12", end: "2026-07-15", futureDays: 3 });
   assert.equal(core.reportDateRange("2026-07-12", 0).futureDays, 1);

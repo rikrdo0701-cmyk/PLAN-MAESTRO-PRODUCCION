@@ -87,6 +87,16 @@
     });
   }
 
+  function reportCoverageDiagnostics(operations) {
+    return reportCoverageIssues((operations || []).filter((operation) => {
+      const completed = normalize(operation?.planStatus) === "COMPLETADA_PLAN";
+      return !completed && Boolean(operation?.fechaInicio && operation?.fechaFin);
+    })).map((issue) => ({
+      ...issue,
+      text: `OT ${issue.ot || "sin OT"} · Secuencia ${issue.secuencia ?? "sin secuencia"} · ${issue.descripcion || "sin descripcion"} · Categorias: ${issue.categories.length ? issue.categories.join(", ") : "ninguna"} · ${issue.diagnostic}`,
+    }));
+  }
+
   function isoDate(value) {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) return "";
@@ -117,5 +127,5 @@
     return { rows: selected.slice(0, limit), total: selected.length, range };
   }
 
-  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus, classifyReportOperation, reportCoverageIssues, reportDateRange, selectReportRows };
+  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus, classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });
