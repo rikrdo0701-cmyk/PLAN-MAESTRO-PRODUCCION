@@ -4848,15 +4848,64 @@ async function loadNetSuiteExercise() {
   try {
     return await loadNetSuiteExerciseImpl();
   } finally {
+    setNetSuiteSyncPhaseLabel("");
     setPlanningActionsBusy("sync", false);
   }
 }
 
 async function loadNetSuiteExerciseImpl() {
-  const result = await ensurePlanningDataLoaded(true, { force: true });
-  if (result.source === "none") return;
-  saveState("plan");
-  render();
+  const outcome = await syncNetSuiteTwoPhase();
+  showToast(outcome.message, outcome.status === "complete" ? 3500 : 9000);
+  return outcome;
+}
+
+async function syncNetSuiteTwoPhase() {
+  let workOrdersResult;
+  setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
+  try {
+    const payload = await callAppsScript("syncNetSuiteWorkOrdersLite");
+    validateNetSuiteImportedData(payload, "workOrders");
+    state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
+    if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
+    if (payload.plant) state.plant = payload.plant;
+    state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
+    workOrdersResult = { ok: true };
+    saveState("ui");
+    render();
+  } catch (error) {
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error: error.message }, null);
+  }
+
+  setNetSuiteSyncPhaseLabel("Sincronizando operaciones...");
+  try {
+    const planningPayload = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("syncNetSuitePlanningData"),
+      NETSUITE_PLANNING_TIMEOUT_MS * 4
+    );
+    applyNetSuitePlanningPayload(planningPayload);
+    saveState("plan");
+    render();
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: true });
+  } catch (error) {
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: false, error: error.message });
+  } finally {
+    setNetSuiteSyncPhaseLabel("");
+  }
+}
+
+function applyNetSuitePlanningPayload(payload) {
+  const selected = new Set((state.selectedOts || []).map(normalizeKey));
+  const preservedDraft = state.operations.filter((op) => selected.has(normalizeKey(op.ot)));
+  const refreshed = (payload?.operations || []).filter((op) => !selected.has(normalizeKey(op.ot)));
+  if (Array.isArray(payload?.operations)) state.operations = [...preservedDraft, ...refreshed];
+  if (Array.isArray(payload?.materials)) state.materials = payload.materials;
+  if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
+  if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
+}
+
+function setNetSuiteSyncPhaseLabel(message) {
+  const label = els.loadNsExerciseBtn?.querySelector("[data-sync-label]");
+  if (label) label.textContent = message || "Sincronizar";
 }
 
 function syncNetSuiteInBackground(options = {}) {

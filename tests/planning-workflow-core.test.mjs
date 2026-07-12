@@ -141,6 +141,18 @@ test("los planes diarios prefieren el ultimo publicado y usan borrador como resp
   assert.deepEqual(structuredClone(source), { type: "published", snapshotId: "new" });
 });
 
+test("describe resultados completos, parciales y fallidos de sincronizacion NetSuite", () => {
+  assert.deepEqual(structuredClone(core.netSuiteSyncOutcome({ ok: true }, { ok: true })), {
+    status: "complete", message: "OTs y operaciones actualizadas",
+  });
+  assert.deepEqual(structuredClone(core.netSuiteSyncOutcome({ ok: true }, { ok: false, error: "timeout" })), {
+    status: "partial", message: "OTs actualizadas; operaciones pendientes de sincronizar",
+  });
+  assert.deepEqual(structuredClone(core.netSuiteSyncOutcome({ ok: false, error: "sin credenciales" }, null)), {
+    status: "failed", message: "No se pudieron sincronizar las OTs: sin credenciales",
+  });
+});
+
 test("clasifica operaciones de reporte en una categoria exclusiva", () => {
   const productive = { id: "p", tipoInsercion: "OPERACION", operador: "DOBLADOR 1" };
   const toolChange = { id: "a", tipoInsercion: "CAMBIO_HERRAMENTAL", operador: "AJUSTADOR" };

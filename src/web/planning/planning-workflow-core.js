@@ -150,6 +150,18 @@
       : { type: "draft", snapshotId: "draft" };
   }
 
+  function netSuiteSyncOutcome(workOrdersResult, planningResult) {
+    if (!workOrdersResult?.ok) return {
+      status: "failed",
+      message: `No se pudieron sincronizar las OTs: ${workOrdersResult?.error || "error desconocido"}`,
+    };
+    if (!planningResult?.ok) return {
+      status: "partial",
+      message: "OTs actualizadas; operaciones pendientes de sincronizar",
+    };
+    return { status: "complete", message: "OTs y operaciones actualizadas" };
+  }
+
   function reportCategories(operation) {
     const type = normalize(operation?.tipoInsercion);
     const operator = normalize(operation?.operador);
@@ -227,5 +239,6 @@
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     needsPlanningPreparation, markPlanningPrepared,
     isCoherentDraft, selectNewestCoherentDraft, defaultDailyPlanSource,
+    netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });

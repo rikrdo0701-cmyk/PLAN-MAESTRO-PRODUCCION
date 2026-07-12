@@ -30,7 +30,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
   assert.match(pagesIndex, /return \{ ready: hasData\(\), source: "fresh", warning: "" \}/);
-  assert.match(pagesIndex, /if \(result\.source === "none"\) return/);
+  assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);
   assert.doesNotMatch(pagesIndex, /Piezas pendientes/);
@@ -67,4 +67,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function setGanttView\(view\)/);
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
   assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
+  assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(\)/);
+  assert.match(pagesIndex, /callAppsScript\("syncNetSuiteWorkOrdersLite"\)/);
+  assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
+  assert.match(pagesIndex, /Sincronizando OTs/);
+  assert.match(pagesIndex, /Sincronizando operaciones/);
 });
