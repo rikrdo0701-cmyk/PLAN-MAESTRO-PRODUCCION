@@ -104,3 +104,27 @@ test("una completada conserva fechas y no consume capacidad pendiente", () => {
   assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"]);
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
+
+test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1", tiempoProd: 20 },
+    { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H2", kitHerramental: "K2", tiempoProd: 20 },
+  ];
+  const result = core.schedulePlan({
+    operations, workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["DOBLADOR", "AJUSTADOR"],
+    matrix: { "5459::DOBLADO": ["DOBLADOR"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLADO", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const productive = result.operations.filter((op) => ["bend-a", "bend-b"].includes(op.id));
+  const changes = result.operations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  assert.equal(productive.length, 2);
+  assert.ok(productive.every((op) => op.fechaInicio && op.fechaFin), "ambos doblados deben quedar programados");
+  assert.ok(changes.length >= 1);
+  assert.ok(changes.every((change) => change.operador === "AJUSTADOR" && change.maquina === "DOBLADORA 2"));
+  const transition = changes.find((change) => change.toolChangeFromHerramental && change.toolChangeToHerramental && change.toolChangeFromHerramental !== change.toolChangeToHerramental);
+  assert.ok(transition, "debe existir la transicion real entre H1 y H2");
+  const changedProduct = productive.find((op) => op.herramental === transition.toolChangeToHerramental);
+  assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
+});

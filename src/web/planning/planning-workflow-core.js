@@ -55,6 +55,64 @@
     return (rows || []).filter((row) => (normalize(row?.planStatus) === "COMPLETADA_PLAN") === completed);
   }
 
+  const GANTT_VIEWS = ["job", "ct", "machine", "operator"];
+
+  function normalizeGanttView(view) {
+    const value = String(view || "").trim().toLowerCase();
+    return GANTT_VIEWS.includes(value) ? value : "job";
+  }
+
+  function isActiveGanttView(current, candidate) {
+    return normalizeGanttView(current) === candidate;
+  }
+
+  function isOtEligibleForDraft(state, ot) {
+    const key = normalize(ot);
+    return (state?.selectedOts || []).some((item) => normalize(item) === key);
+  }
+
+  function removeOtFromDraft(state, ot) {
+    const key = normalize(ot);
+    const without = (items) => (items || []).filter((item) => normalize(item) !== key);
+    return {
+      ...(state || {}),
+      selectedOts: without(state?.selectedOts),
+      lockedOts: without(state?.lockedOts),
+      expandedOts: without(state?.expandedOts),
+      operations: (state?.operations || []).map((operation) => normalize(operation?.ot) === key
+        ? { ...operation, locked: false }
+        : operation),
+      lastSchedule: state?.lastSchedule ? {
+        ...state.lastSchedule,
+        scheduledOts: without(state.lastSchedule.scheduledOts),
+      } : state?.lastSchedule,
+    };
+  }
+
+  function setDraftOperationCompletion(operation, completed, timestamp = "") {
+    const next = { ...(operation || {}), planStatus: completed ? "COMPLETADA_PLAN" : "PENDIENTE" };
+    if (completed) next.completedAt = timestamp || new Date().toISOString();
+    else delete next.completedAt;
+    return next;
+  }
+
+  function isPendingDraftOperation(operation) {
+    return normalize(operation?.planStatus) !== "COMPLETADA_PLAN";
+  }
+
+  function operationalPlanOptions(snapshots) {
+    return [
+      { id: "draft", name: "Borrador", status: "BORRADOR" },
+      ...(snapshots || []).filter((snapshot) => normalize(snapshot?.status || snapshot?.planStatus) === "PUBLICADO"),
+    ];
+  }
+
+  function draftExportOperations(state) {
+    const selected = new Set((state?.selectedOts || []).map(normalize));
+    return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
+      isPendingDraftOperation(operation) && Boolean(operation?.fechaInicio && operation?.fechaFin));
+  }
+
   function reportCategories(operation) {
     const type = normalize(operation?.tipoInsercion);
     const operator = normalize(operation?.operador);
@@ -127,5 +185,8 @@
     return { rows: selected.slice(0, limit), total: selected.length, range };
   }
 
-  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus, classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
+  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
+    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
+    setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
+    classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });

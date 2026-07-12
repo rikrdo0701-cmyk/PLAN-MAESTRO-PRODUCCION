@@ -745,7 +745,7 @@ function bindEvents() {
 
   document.querySelectorAll(".segmented button").forEach((button) => {
     button.addEventListener("click", () => {
-      state.ganttView = button.dataset.view;
+      state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(button.dataset.view);
       invalidateGanttGroupsCache();
       renderGantt();
       renderGanttDisplayControls();
@@ -809,7 +809,7 @@ function loadState() {
 function normalizeState() {
   state.schemaVersion = APP_SCHEMA_VERSION;
   state.revision = Number(state.revision || 0);
-  if (!GANTT_VIEWS.includes(state.ganttView)) state.ganttView = "job";
+  state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(state.ganttView);
   state.ganttDayWidth = nearestGanttDayWidth(state.ganttDayWidth);
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   state.horizonDays = Math.max(1, Math.min(45, Number(state.horizonDays || DEFAULT_HORIZON_DAYS)));
@@ -1416,7 +1416,7 @@ function renderTop() {
   els.undoBtn.disabled = stateHistory.length === 0;
 
   document.querySelectorAll(".segmented button").forEach((button) => {
-    button.classList.toggle("segmented-active", button.dataset.view === state.ganttView);
+    button.classList.toggle("segmented-active", window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view));
   });
 }
 
@@ -1804,13 +1804,7 @@ async function selectJob(ot, selected) {
   }
   if (selected && !alreadySelected) state.selectedOts.push(ot);
   if (!selected && alreadySelected) {
-    state.selectedOts = state.selectedOts.filter((item) => item !== ot);
-    state.lockedOts = state.lockedOts.filter((item) => item !== ot);
-    if (Array.isArray(state.lastSchedule?.scheduledOts)) {
-      state.lastSchedule.scheduledOts = state.lastSchedule.scheduledOts.filter((item) => item !== ot);
-    }
-    state.expandedOts = state.expandedOts.filter((item) => item !== ot);
-    state.operations.filter((op) => op.ot === ot).forEach((op) => { op.locked = false; });
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
   }
   applyQueuePriorities();
   if (!selected && alreadySelected) {
@@ -3401,6 +3395,7 @@ async function scheduleCurrentPlanImpl() {
 async function ensureSelectedJobsReadyForScheduling(ots) {
   const jobs = new Map(getPriorityJobs().map((job) => [job.ot, job]));
   for (const ot of ots) {
+    if (!window.PlanningWorkflowCore.isOtEligibleForDraft(state, ot)) continue;
     const job = jobs.get(ot);
     if (!job) continue;
     if (!job.ops.length) {
@@ -3409,6 +3404,7 @@ async function ensureSelectedJobsReadyForScheduling(ots) {
     }
     const prepared = await prepareJobForPlanning(job);
     if (!prepared) return false;
+    if (!window.PlanningWorkflowCore.isOtEligibleForDraft(state, ot)) continue;
   }
   return true;
 }
@@ -5172,7 +5168,8 @@ function importCsv(text) {
 }
 
 function exportCsv() {
-  const rows = [PLAN_HEADERS, ...state.operations.map(operationToRow)];
+  const operations = window.PlanningWorkflowCore.draftExportOperations(state);
+  const rows = [PLAN_HEADERS, ...operations.map(operationToRow)];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
 }

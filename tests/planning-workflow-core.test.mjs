@@ -57,6 +57,59 @@ test("filterOperationsByPlanStatus filtra pendientes, completadas y todas", () =
   assert.deepEqual(core.filterOperationsByPlanStatus(rows, "TODAS"), rows);
 });
 
+test("normaliza la vista Gantt y mantiene un unico control activo", () => {
+  for (const view of ["job", "ct", "machine", "operator"]) {
+    assert.equal(core.normalizeGanttView(view), view);
+    assert.equal(core.isActiveGanttView(view, view), true);
+  }
+  assert.equal(core.normalizeGanttView("desconocida"), "job");
+  assert.equal(["job", "ct", "machine", "operator"].filter((view) => core.isActiveGanttView("ct", view)).length, 1);
+});
+
+test("retirar una OT limpia solo su pertenencia al borrador", () => {
+  const operation = { id: "op-1", ot: "1325", locked: true };
+  const state = {
+    selectedOts: ["1325", "1400"], lockedOts: ["1325"], expandedOts: ["1325"],
+    operations: [operation], lastSchedule: { scheduledOts: ["1325", "1400"] },
+    planningConfigByOt: { 1325: { subcontractDays: 15 } },
+  };
+  const result = core.removeOtFromDraft(state, "1325");
+  assert.deepEqual(result.selectedOts, ["1400"]);
+  assert.deepEqual(result.lockedOts, []);
+  assert.deepEqual(result.lastSchedule.scheduledOts, ["1400"]);
+  assert.equal(result.operations.length, 1);
+  assert.equal(result.operations[0].locked, false);
+  assert.equal(result.planningConfigByOt[1325].subcontractDays, 15);
+  assert.equal(core.isOtEligibleForDraft(result, "1325"), false);
+});
+
+test("completar y reabrir conserva la programacion historica", () => {
+  const operation = { id: "op", fechaInicio: "2026-07-13", horaInicio: "07:00", operador: "OP 1" };
+  const completed = core.setDraftOperationCompletion(operation, true, "2026-07-12T18:00:00Z");
+  assert.equal(completed.planStatus, "COMPLETADA_PLAN");
+  assert.equal(completed.fechaInicio, operation.fechaInicio);
+  assert.equal(completed.operador, operation.operador);
+  assert.equal(core.isPendingDraftOperation(completed), false);
+  const reopened = core.setDraftOperationCompletion(completed, false);
+  assert.equal(reopened.planStatus, "PENDIENTE");
+  assert.equal(core.isPendingDraftOperation(reopened), true);
+});
+
+test("selector operativo y exportacion usan solo borrador pendiente programado", () => {
+  const options = core.operationalPlanOptions([
+    { id: "p", status: "PUBLICADO", name: "Plan publicado" },
+    { id: "g", status: "GUARDADO", name: "Guardado" },
+  ]);
+  assert.deepEqual(structuredClone(options.map((option) => option.id)), ["draft", "p"]);
+  const state = { selectedOts: ["1325"], operations: [
+    { id: "ok", ot: "1325", planStatus: "PENDIENTE", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
+    { id: "done", ot: "1325", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
+    { id: "backlog", ot: "1400", planStatus: "PENDIENTE", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
+    { id: "unscheduled", ot: "1325", planStatus: "PENDIENTE", fechaInicio: "", fechaFin: "" },
+  ] };
+  assert.deepEqual(structuredClone(core.draftExportOperations(state).map((op) => op.id)), ["ok"]);
+});
+
 test("clasifica operaciones de reporte en una categoria exclusiva", () => {
   const productive = { id: "p", tipoInsercion: "OPERACION", operador: "DOBLADOR 1" };
   const toolChange = { id: "a", tipoInsercion: "CAMBIO_HERRAMENTAL", operador: "AJUSTADOR" };
