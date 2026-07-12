@@ -21,5 +21,5 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
-  assert.doesNotMatch(pagesIndex, /El proyecto usa .*GitHub Pages.*Google Apps Script/);
+  assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
 });
