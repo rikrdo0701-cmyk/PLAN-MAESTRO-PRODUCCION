@@ -71,6 +71,7 @@ test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte
     workOrders: [{ ot: "1325", item: "CCA 519 CM" }],
     otConfigurations: { 1325: { ot: "1325", subcontractType: "MAKA", subcontractDays: 15 } },
     matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    operationRules: { 519: { overlap: 0.25 } },
     settings: { optimizationPasses: 1, finiteCapacity: false },
     workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
@@ -80,8 +81,8 @@ test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte
   const subcontractEnd = new Date(`${subcontract.fechaFin}T${subcontract.horaFin}:00`);
   const successorStart = successor.fechaInicio && new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`);
   assert.ok(subcontractEnd > new Date("2026-07-18T07:00:00"));
-  assert.ok(!successorStart || successorStart >= subcontractEnd);
-  assert.ok(!successor.fechaInicio, "fuera del horizonte debe quedar sin programar, no volver al inicio");
+  assert.ok(successorStart, "el horizonte visual no debe impedir programar la sucesora");
+  assert.ok(successorStart >= subcontractEnd, "un subcontrato exige precedencia completa aunque configure overlap menor a 1");
 });
 
 test("una completada conserva fechas y no consume capacidad pendiente", () => {

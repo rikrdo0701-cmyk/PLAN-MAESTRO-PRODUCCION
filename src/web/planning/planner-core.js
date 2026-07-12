@@ -11,6 +11,7 @@
   const DEFAULT_START_MINUTE = 7 * 60;
   const DEFAULT_END_MINUTE = 17 * 60;
   const DEFAULT_HORIZON_DAYS = 15;
+  const MAX_SCHEDULING_DAYS = 366;
   const GENERATED_BY = "PLANNER_CORE_V2";
   const TOOL_CHANGE_CAPABILITY = {
     key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
@@ -52,7 +53,7 @@
     const requestedStart = atMinute(planStart, DEFAULT_START_MINUTE);
     const executionTime = parseExecutionTime(options?.executionTime);
     const windowStart = executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart;
-    const windowEnd = atMinute(addDays(startOfDay(windowStart), horizonDays), DEFAULT_START_MINUTE);
+    const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
     state.__workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
@@ -625,7 +626,9 @@
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
       const milestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-      const predecessorLimit = milestone || (ratio >= 1 ? previous.end : null);
+      const predecessorLimit = isSubcontractOperation(context.state, previous.operation)
+        ? previous.end
+        : (milestone || (ratio >= 1 ? previous.end : null));
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 
