@@ -21,6 +21,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
   assert.match(pagesIndex, /scheduleCurrentPlan/);
+  assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
+  assert.match(pagesIndex, /prepareDraftForReschedule/);
+  assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
+  assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
 });

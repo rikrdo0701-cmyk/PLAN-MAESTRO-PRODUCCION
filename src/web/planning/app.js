@@ -3,6 +3,8 @@
 const STORAGE_KEY = "plan-produccion-app-v1";
 const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
+const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
+const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
@@ -3322,7 +3324,8 @@ async function scheduleCurrentPlan() {
     showToast("No hay OTs desbloqueadas para programar");
     return;
   }
-  if (!await ensurePlanningDataLoaded(true)) return;
+  const planningData = await ensurePlanningDataLoaded(true, { force: false });
+  if (!planningData.ready) return;
   const readyOts = state.selectedOts.filter((ot) =>
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot))
   );
@@ -3341,6 +3344,7 @@ async function scheduleCurrentPlan() {
     return;
   }
   checkpointState();
+  state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
@@ -3366,9 +3370,12 @@ async function scheduleCurrentPlan() {
     const summary = state.lastSchedule || {};
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    const snapshot = await persistPlanSnapshot();
-    if (snapshot?.snapshotId) state.draftVersionId = snapshot.snapshotId;
     saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; ${strategy} en ${seconds}s`);
+    void persistPlanSnapshot().then((snapshot) => {
+      if (!snapshot?.snapshotId) return;
+      state.draftVersionId = snapshot.snapshotId;
+      saveState("ui");
+    }).catch((error) => showToast(`El plan se calculo, pero no se pudo guardar: ${error.message}`, 9000));
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
   } finally {
@@ -4758,7 +4765,10 @@ function balanceOperators() {
 }
 
 async function loadNetSuiteExercise() {
-  await syncNetSuiteData(true, { mode: "full" });
+  const result = await ensurePlanningDataLoaded(true, { force: true });
+  if (result.source === "none") return;
+  saveState("plan");
+  render();
 }
 
 function syncNetSuiteInBackground(options = {}) {
@@ -4845,22 +4855,34 @@ function normalizeNetSuiteSyncAlert(alert) {
   return { message, updatedAt: String(alert.updatedAt || alert.fecha || "") };
 }
 
-async function ensurePlanningDataLoaded(showMessage) {
-  if (!isAppsScriptRuntime()) return true;
+async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
+  const hasData = () => window.PlanningWorkflowCore.hasPlanningData(state, state.selectedOts);
+  if (!isAppsScriptRuntime()) return { ready: hasData(), source: hasData() ? "cached" : "none", warning: "" };
+  const syncedAt = Date.parse(state.syncedAt || "");
+  if (!force && Number.isFinite(syncedAt) && Date.now() - syncedAt < NETSUITE_PLANNING_FRESH_MS && hasData()) {
+    return { ready: true, source: "fresh", warning: "" };
+  }
   if (netSuitePlanningSyncInFlight) {
     if (showMessage) showToast("La carga de operaciones ya esta en curso");
-    return false;
+    return { ready: hasData(), source: hasData() ? "cached" : "none", warning: "Sincronizacion en curso" };
   }
   netSuitePlanningSyncInFlight = true;
   setNetSuitePlanningSyncState(true);
   try {
     if (showMessage) showToast("Cargando operaciones y materiales de NetSuite...");
-    const imported = await callAppsScript("syncNetSuitePlanningData");
+    const imported = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("syncNetSuitePlanningData"),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
     applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    return true;
+    return { ready: hasData(), source: "fresh", warning: "" };
   } catch (error) {
-    if (showMessage) showToast(`No se pudieron cargar operaciones: ${error.message}`);
-    return false;
+    const ready = hasData();
+    const warning = ready
+      ? "NetSuite no respondio; se programara con los datos ya cargados"
+      : `No se pudieron cargar operaciones: ${error.message}`;
+    if (showMessage) showToast(warning, 9000);
+    return { ready, source: ready ? "cached" : "none", warning };
   } finally {
     netSuitePlanningSyncInFlight = false;
     setNetSuitePlanningSyncState(false);

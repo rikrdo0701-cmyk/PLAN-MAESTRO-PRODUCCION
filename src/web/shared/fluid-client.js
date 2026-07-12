@@ -158,9 +158,9 @@
   };
 
   const originalEnsurePlanningDataLoaded = ensurePlanningDataLoaded;
-  ensurePlanningDataLoaded = async function indexedEnsurePlanningDataLoaded(showMessage) {
-    const loaded = await originalEnsurePlanningDataLoaded(showMessage);
-    if (loaded) invalidateFastCaches();
+  ensurePlanningDataLoaded = async function indexedEnsurePlanningDataLoaded(showMessage, options) {
+    const loaded = await originalEnsurePlanningDataLoaded(showMessage, options);
+    if (loaded?.ready) invalidateFastCaches();
     return loaded;
   };
 

@@ -486,9 +486,9 @@
   };
 
   const originalEnsurePlanningDataLoaded = ensurePlanningDataLoaded;
-  ensurePlanningDataLoaded = async function optimizedEnsurePlanningDataLoaded(showMessage) {
-    const loaded = await originalEnsurePlanningDataLoaded(showMessage);
-    if (loaded && Array.isArray(state.materials)) {
+  ensurePlanningDataLoaded = async function optimizedEnsurePlanningDataLoaded(showMessage, options) {
+    const loaded = await originalEnsurePlanningDataLoaded(showMessage, options);
+    if (loaded?.ready && Array.isArray(state.materials)) {
       deferredMaterials = false;
       loadedMaterialOts.clear();
       state.materials.forEach((item) => loadedMaterialOts.add(materialOtKey(item.ot)));
