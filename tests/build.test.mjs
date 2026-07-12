@@ -66,4 +66,5 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
+  assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
 });

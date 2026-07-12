@@ -167,10 +167,10 @@
                 <label class="compact-control"><span>Inicio</span><input id="planStartInput" type="date" /></label>
                 <label class="compact-control"><span>Horizonte</span><select id="horizonSelect"><option value="5">5 dias</option><option value="10">10 dias</option><option value="15">15 dias</option><option value="30">30 dias</option></select></label>
                 <div class="segmented" role="tablist" aria-label="Vista Gantt">
-                  <button class="segmented-active" aria-selected="true" data-view="job" type="button">OT</button>
-                  <button aria-selected="false" data-view="operator" type="button">Operador</button>
-                  <button aria-selected="false" data-view="machine" type="button">Maquina</button>
-                  <button aria-selected="false" data-view="ct" type="button">CT</button>
+                  <button class="segmented-active" aria-selected="true" data-view="job" type="button" onclick="setGanttView('job')">OT</button>
+                  <button aria-selected="false" data-view="operator" type="button" onclick="setGanttView('operator')">Operador</button>
+                  <button aria-selected="false" data-view="machine" type="button" onclick="setGanttView('machine')">Maquina</button>
+                  <button aria-selected="false" data-view="ct" type="button" onclick="setGanttView('ct')">CT</button>
                 </div>
                 <div class="gantt-zoom" role="group" aria-label="Resolucion del Gantt">
                   <button id="ganttZoomOut" class="icon-button gantt-tool-button" type="button" aria-label="Reducir resolucion del Gantt" title="Reducir resolucion">
