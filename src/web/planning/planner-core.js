@@ -415,7 +415,8 @@
     const configuredDays = op.subcontractDays;
     if (!Number.isFinite(Number(configuredDays)) || Number(configuredDays) <= 0) return null;
     const days = clampInteger(configuredDays, 1, 90);
-    const end = addWorkingDays(context.state, earliest, days, context.windowEnd);
+    const subcontractWindowEnd = addDays(startOfDay(earliest), 366);
+    const end = addWorkingDays(context.state, earliest, days, subcontractWindowEnd);
     if (!end) return null;
     return {
       start: earliest,
