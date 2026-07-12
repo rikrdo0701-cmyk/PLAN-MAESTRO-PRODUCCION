@@ -349,7 +349,7 @@
                 <label class="compact-control"><span>Dia</span><input id="operatorReportStartInput" type="date" /></label>
                 <select id="operatorReportSelect" aria-label="Operador reporte"></select>
                 <select id="operatorReportStatus" aria-label="Estado del plan"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
-                <label class="report-show-all"><input id="operatorReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="operatorReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
                 <output id="operatorReportCount" class="report-row-count"></output>
                 <button id="printOperatorBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
               </div>
@@ -364,7 +364,7 @@
               <div class="report-actions">
                 <label class="compact-control"><span>Dia</span><input id="adjusterReportStartInput" type="date" /></label>
                 <select id="adjusterReportStatus" aria-label="Estado del ajuste"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
-                <label class="report-show-all"><input id="adjusterReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="adjusterReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
                 <output id="adjusterReportCount" class="report-row-count"></output>
                 <button id="printAdjusterBtn" class="button small" type="button">Imprimir</button>
               </div>
@@ -378,10 +378,13 @@
               <div><h2>Subcontratos por OT</h2><span>Tipo y dias configurados en CONFIGURACION_OT</span></div>
               <div class="report-actions">
                 <label class="compact-control"><span>Dia</span><input id="subcontractReportStartInput" type="date" /></label>
-                <label class="report-show-all"><input id="subcontractReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="subcontractReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+                <select id="subcontractReportStatus" aria-label="Estado del subcontrato"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
                 <output id="subcontractReportCount" class="report-row-count"></output>
+                <button id="printSubcontractBtn" class="button small" type="button">Imprimir</button>
               </div>
             </div>
+            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="subcontractPrintContext" class="report-print-context"></div></div>
             <div class="table-wrap"><table id="subcontractReport" class="specialized-report-table report-page-table"></table></div>
           </section>
         </section>

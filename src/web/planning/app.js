@@ -533,18 +533,21 @@ function bindElements() {
     "operatorReportSelect",
     "operatorReportStatus",
     "operatorReportStartInput",
-    "operatorReportShowAll",
+    "operatorReportFutureDays",
     "operatorReportCount",
     "printOperatorBtn",
     "adjusterReport",
     "adjusterReportStartInput",
     "adjusterReportStatus",
-    "adjusterReportShowAll",
+    "adjusterReportFutureDays",
     "adjusterReportCount",
     "printAdjusterBtn",
     "subcontractReport",
     "subcontractReportStartInput",
-    "subcontractReportShowAll",
+    "subcontractReportFutureDays",
+    "subcontractReportStatus",
+    "printSubcontractBtn",
+    "subcontractPrintContext",
     "subcontractReportCount",
     "planSnapshotSelect",
     "refreshSnapshotsBtn",
@@ -678,17 +681,19 @@ function bindEvents() {
   els.operatorReportStartInput.addEventListener("change", () => {
     updateReportFilter("operator", { date: els.operatorReportStartInput.value });
   });
-  els.operatorReportShowAll.addEventListener("change", () => updateReportFilter("operator", { showAll: els.operatorReportShowAll.checked }));
+  els.operatorReportFutureDays.addEventListener("change", () => updateReportFilter("operator", { futureDays: Number(els.operatorReportFutureDays.value) }));
   els.operatorReportStatus.addEventListener("change", () => updateReportFilter("operator", { status: els.operatorReportStatus.value }));
   els.adjusterReportStartInput.addEventListener("change", () => {
     updateReportFilter("adjuster", { date: els.adjusterReportStartInput.value });
   });
-  els.adjusterReportShowAll.addEventListener("change", () => updateReportFilter("adjuster", { showAll: els.adjusterReportShowAll.checked }));
+  els.adjusterReportFutureDays.addEventListener("change", () => updateReportFilter("adjuster", { futureDays: Number(els.adjusterReportFutureDays.value) }));
   els.adjusterReportStatus.addEventListener("change", () => updateReportFilter("adjuster", { status: els.adjusterReportStatus.value }));
   els.subcontractReportStartInput.addEventListener("change", () => {
     updateReportFilter("subcontract", { date: els.subcontractReportStartInput.value });
   });
-  els.subcontractReportShowAll.addEventListener("change", () => updateReportFilter("subcontract", { showAll: els.subcontractReportShowAll.checked }));
+  els.subcontractReportFutureDays.addEventListener("change", () => updateReportFilter("subcontract", { futureDays: Number(els.subcontractReportFutureDays.value) }));
+  els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
+  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); window.print(); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
   els.planSnapshotSelect.addEventListener("change", loadSelectedPlanSnapshot);
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
@@ -3493,8 +3498,9 @@ async function generatePlanPdf() {
     const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
-  let snapshotId = reportSnapshot?.snapshotId;
-  if (!snapshotId && planSnapshots.length > 0) {
+    const usingDraft = reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft";
+    let snapshotId = usingDraft ? "" : reportSnapshot?.snapshotId;
+  if (!usingDraft && !snapshotId && planSnapshots.length > 0) {
     const publishedIds = publishedSnapshotIds();
     const draftSnapshots = planSnapshots.filter((s) => !publishedIds.has(s.snapshotId));
     const publishedSnapshots = planSnapshots.filter((s) => publishedIds.has(s.snapshotId));
@@ -3520,7 +3526,7 @@ async function generatePlanPdf() {
       snapshotId = result.snapshot_id;
     }
   }
-  if (!snapshotId) {
+  if (!usingDraft && !snapshotId) {
     const scheduled = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
     if (!scheduled.length) {
       showToast("Genera el plan antes de crear el PDF");
@@ -3529,7 +3535,9 @@ async function generatePlanPdf() {
     const snapshot = await persistPlanSnapshot();
     if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
   }
-  if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
+  if (usingDraft) {
+    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
+  } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   if (!reportSnapshot?.operations?.length) {
     reportSnapshot = { operations: state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
@@ -3540,7 +3548,8 @@ async function generatePlanPdf() {
   renderReports();
   document.body.dataset.printContext = "plan";
   showToast("Usa Guardar como PDF en la ventana de impresion");
-  window.setTimeout(() => window.print(), 50);
+  await new Promise((resolve) => window.setTimeout(resolve, 50));
+  window.print();
   } catch (error) {
     showToast(`No se pudo generar el PDF: ${error.message}`);
   } finally {
@@ -3934,7 +3943,7 @@ function renderPlanSnapshotSelect() {
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
   els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option><option value="">Ultima publicada</option>${options}`;
-  els.planSnapshotSelect.value = planSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "";
+  els.planSnapshotSelect.value = selectedId === "draft" ? "draft" : (planSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "");
 }
 
 function publishedSnapshotIds() {
@@ -3958,6 +3967,7 @@ function reportOperationsSource() {
 
 function reportSourceLabel() {
   if (!reportSnapshot) return "Sin plan publicado";
+  if (reportSnapshot.snapshotId === "draft") return "Borrador actual";
   const generated = reportSnapshot.generatedAt ? formatDateTime(new Date(reportSnapshot.generatedAt)) : "Sin fecha";
   return `Plan guardado ${generated}`;
 }
@@ -3974,6 +3984,9 @@ function renderReports() {
   renderOperatorReport();
   renderAdjusterReport();
   renderSubcontractReport();
+  const coverageIssues = window.PlanningWorkflowCore.reportCoverageIssues(reportOperationsSource());
+  els.reportSnapshotMeta.title = coverageIssues.map((issue) => `${issue.id || issue.ot || "Operacion"}: ${issue.diagnostic}`).join("\n");
+  if (coverageIssues.length) els.reportSnapshotMeta.textContent = `${reportSourceLabel()} · ${coverageIssues.length} diagnostico(s) de cobertura`;
 }
 
 function renderWeekReport() {
@@ -4257,8 +4270,8 @@ function renderOperatorReport() {
   const filter = reportFilter("operator");
   const selection = filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
   els.operatorReportStatus.value = filter.status;
-  renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportShowAll, els.operatorReportCount, selection);
-  els.operatorPrintContext.textContent = `Plan por operador | ${operator || "Sin operador"} | ${reportSelectionLabel(selection)} | ${reportSourceLabel()}`;
+  renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
+  els.operatorPrintContext.textContent = `Plan por operador | ${operator || "Sin operador"} | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
   els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: !reportSnapshot });
   bindReportCommentInputs(els.operatorReport);
@@ -4273,8 +4286,8 @@ function renderAdjusterReport() {
     opStart
   );
   els.adjusterReportStatus.value = filter.status;
-  renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportShowAll, els.adjusterReportCount, selection);
-  els.adjusterPrintContext.textContent = `Cambios de herramental | ${reportSelectionLabel(selection)} | ${reportSourceLabel()}`;
+  renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
+  els.adjusterPrintContext.textContent = `Cambios de herramental | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
   const body = selection.rows.map((op) => {
@@ -4305,7 +4318,9 @@ function renderAdjusterReport() {
 function renderSubcontractReport() {
   const filter = reportFilter("subcontract");
   const selection = filteredReportRows(subcontractRowsForReportWeek(filter.date), "subcontract", (row) => row.start);
-  renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportShowAll, els.subcontractReportCount, selection);
+  els.subcontractReportStatus.value = filter.status;
+  renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportFutureDays, els.subcontractReportCount, selection);
+  els.subcontractPrintContext.textContent = `Subcontratos | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
   els.subcontractReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Tipo de subcontrato", "Dias", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
   const body = selection.rows.map((row) => {
@@ -4328,19 +4343,19 @@ function renderSubcontractReport() {
 }
 
 function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
-  const range = selectedWeekRange(weekDate);
   const grouped = new Map();
   for (const op of reportOperationsSource()) {
     if (!reportSnapshot && !isJobScheduled(op.ot)) continue;
     if (!isSubcontractAppOperation(op) && !op.subcontractType && !(Number(op.subcontractDays) > 0)) continue;
     const start = opStart(op);
     const end = opEnd(op);
-    if (!start || !end || start >= range.end || end <= range.start) continue;
-    const current = grouped.get(op.ot) || { ot: op.ot, starts: [], ends: [], operations: [], operationIds: [], comments: [], types: [], days: [] };
+    if (!start || !end) continue;
+    const current = grouped.get(op.ot) || { ot: op.ot, starts: [], ends: [], operations: [], operationIds: [], comments: [], types: [], days: [], statuses: [] };
     current.starts.push(start);
     current.ends.push(end);
     current.operations.push(op.descripcion || `CT ${op.ct}`);
     current.operationIds.push(op.id);
+    current.statuses.push(isPlanCompletedOperation(op));
     if (op.comentario) current.comments.push(op.comentario);
     if (op.subcontractType) current.types.push(op.subcontractType);
     if (Number(op.subcontractDays) > 0) current.days.push(Number(op.subcontractDays));
@@ -4359,6 +4374,7 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
       operations: uniq(group.operations),
       operationIds: uniq(group.operationIds),
       comment: group.comments[0] || "",
+      planStatus: group.statuses.every(Boolean) ? "COMPLETADA_PLAN" : "PENDIENTE",
     };
   }).sort((a, b) => a.start - b.start || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }));
 }
@@ -4401,9 +4417,8 @@ function toolChangeReportComment(op) {
 }
 
 function reportSelectionLabel(selection) {
-  return selection.showAll
-    ? `Semana ${reportWeekLabelForDate(selection.date)} | Ver todo`
-    : `Dia ${formatShortDate(parseDateOnlyValue(selection.date))}`;
+  const range = window.PlanningWorkflowCore.reportDateRange(selection.date, selection.futureDays);
+  return `Rango ${formatShortDate(parseDateOnlyValue(range.start))} - ${formatShortDate(parseDateOnlyValue(range.end))}`;
 }
 
 function reportWeekLabelForDate(value) {
@@ -5579,6 +5594,7 @@ function normalizeReportFilters(filters, fallbackDate) {
     out[type] = {
       date: parsed ? formatDate(new Date(parsed.year, parsed.month - 1, parsed.day)) : fallbackDate,
       showAll: current.showAll === true,
+      futureDays: Math.max(1, Math.min(5, Number(current.futureDays) || 1)),
       status: ["PENDIENTES", "COMPLETADAS", "TODAS"].includes(String(current.status || "").toUpperCase())
         ? String(current.status).toUpperCase()
         : "PENDIENTES",
@@ -5608,29 +5624,28 @@ function syncReportFilterDates(date) {
 
 function filteredReportRows(rows, type, dateGetter) {
   const filter = reportFilter(type);
-  const statusRows = type === "subcontract"
-    ? rows
-    : window.PlanningWorkflowCore.filterOperationsByPlanStatus(rows, filter.status);
-  const dailyRows = statusRows.filter((row) => {
+  const statusRows = window.PlanningWorkflowCore.filterOperationsByPlanStatus(rows, filter.status);
+  const range = window.PlanningWorkflowCore.reportDateRange(filter.date, filter.futureDays);
+  const rangeRows = statusRows.filter((row) => {
     const date = dateGetter(row);
-    return date && formatDate(date) === filter.date;
+    const value = date && formatDate(date);
+    return value && value >= range.start && value <= range.end;
   });
-  const source = (filter.showAll ? statusRows : dailyRows).slice().sort((a, b) => Number(dateGetter(a)) - Number(dateGetter(b)));
+  const source = rangeRows.slice().sort((a, b) => Number(dateGetter(a)) - Number(dateGetter(b)));
   return {
     rows: source.slice(0, REPORT_ROW_LIMIT),
     total: source.length,
-    showAll: filter.showAll,
+    showAll: false,
     date: filter.date,
+    futureDays: filter.futureDays,
   };
 }
 
-function renderReportFilterStatus(type, input, checkbox, output, selection) {
+function renderReportFilterStatus(type, input, futureDaysSelect, output, selection) {
   input.value = selection.date;
-  checkbox.checked = selection.showAll;
-  output.textContent = selection.showAll
-    ? `${selection.rows.length} filas`
-    : `${selection.rows.length} de ${selection.total} · max. ${REPORT_ROW_LIMIT}`;
-  output.title = selection.showAll ? "Lista completa de la semana" : `Limitado a ${REPORT_ROW_LIMIT} filas para impresion`;
+  futureDaysSelect.value = String(selection.futureDays);
+  output.textContent = `${selection.rows.length} de ${selection.total} · max. ${REPORT_ROW_LIMIT}`;
+  output.title = `Limitado a ${REPORT_ROW_LIMIT} filas para impresion`;
 }
 
 function selectedWeekRange(value) {

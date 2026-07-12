@@ -46,4 +46,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: A4 landscape/);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
+  assert.match(pagesIndex, /id="operatorReportFutureDays"/);
+  assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
+  assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
+  assert.match(pagesIndex, /id="subcontractReportStatus"/);
+  assert.match(pagesIndex, /reportCoverageIssues\(reportOperationsSource\(\)\)/);
+  assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
+  assert.doesNotMatch(pagesIndex, /ReportShowAll/);
 });
