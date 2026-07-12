@@ -152,16 +152,18 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, appSource, performanceClient] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, appSource, performanceClient, fluidClient] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
     read("src/web/planning/planner-core.js"),
     read("src/web/planning/app.js"),
     read("src/web/shared/performance-client.js"),
+    read("src/web/shared/fluid-client.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   const app = patchPlanningApp(appSource);
+  const runtimeClients = `${performanceClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,
@@ -169,7 +171,7 @@ export async function buildProject() {
     backendBridge,
     plannerCore,
     app,
-    performanceClient,
+    runtimeClients,
     "<!-- Generado para Apps Script por npm run build. No editar directamente. -->",
     "",
   );
@@ -179,7 +181,7 @@ export async function buildProject() {
     backendBridge,
     plannerCore,
     app,
-    performanceClient,
+    runtimeClients,
     "<!-- Generado para GitHub Pages por npm run build. No editar directamente. -->",
     '    <link rel="manifest" href="./manifest.webmanifest" />',
   );
@@ -199,7 +201,7 @@ export async function buildProject() {
       theme_color: "#087f7a",
       lang: "es-MX"
     }, null, 2), "utf8"),
-    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.3";
+    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.4";
 const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./manifest.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -208,7 +210,16 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET" || new URL(event.request.url).origin !== self.location.origin) return;
+  const url = new URL(event.request.url);
+  if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
+  const navigation = event.request.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("/index.html");
+  if (navigation) {
+    event.respondWith(fetch(event.request, { cache: "no-store" }).then((response) => {
+      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", response.clone()));
+      return response;
+    }).catch(() => caches.match("./index.html").then((cached) => cached || caches.match("./"))));
+    return;
+  }
   event.respondWith(caches.match(event.request).then((cached) => {
     const network = fetch(event.request).then((response) => {
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
