@@ -692,8 +692,14 @@ function bindEvents() {
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
   els.planSnapshotSelect.addEventListener("change", loadSelectedPlanSnapshot);
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
-  els.printOperatorBtn.addEventListener("click", () => window.print());
-  els.printAdjusterBtn.addEventListener("click", () => window.print());
+  els.printOperatorBtn.addEventListener("click", () => {
+    renderOperatorReport();
+    window.print();
+  });
+  els.printAdjusterBtn.addEventListener("click", () => {
+    renderAdjusterReport();
+    window.print();
+  });
   els.addToolBtn.addEventListener("click", addToolCatalogItem);
   els.toolHerrInput.addEventListener("change", () => updateCatalogCustomInput(els.toolHerrInput, els.toolHerrNewInput));
   els.toolKitInput.addEventListener("change", () => updateCatalogCustomInput(els.toolKitInput, els.toolKitNewInput));
@@ -4453,11 +4459,13 @@ function bindPlanStatusActions(container) {
   });
 }
 
-function toggleOperationPlanStatus(key) {
+async function toggleOperationPlanStatus(key) {
   const operation = state.operations.find((op) => operationCompletionKey(op) === key);
   const current = state.operationPlanStatuses?.[key];
   const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
   if (!operation && !current) return showToast("No se encontro la operacion");
+  const previousStatus = current ? deepClone(current) : undefined;
+  const previousOperation = operation ? deepClone(operation) : undefined;
   checkpointState();
   if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
   if (completed) {
@@ -4472,8 +4480,8 @@ function toggleOperationPlanStatus(key) {
       operation.horaFin = "";
       operation.log = appendLog(operation.log, "REABIERTA_PLAN_APP");
     }
-    saveAndRender("Operacion reabierta; se incluira en la siguiente reprogramacion");
-    return;
+    return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,
+      "Operacion reabierta; se incluira en la siguiente reprogramacion");
   }
 
   const type = isToolChangeReportOperation(operation) ? "TOOL_CHANGE" : "OPERATION";
@@ -4509,7 +4517,27 @@ function toggleOperationPlanStatus(key) {
     operation.needsReschedule = false;
     operation.log = appendLog(operation.log, "COMPLETADA_PLAN_APP");
   }
-  saveAndRender(type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
+  return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,
+    type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
+}
+
+async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, message) {
+  invalidateGanttCache();
+  render();
+  showToast(message);
+  scheduleLocalStorageFlush();
+  if (!appSheetAvailable) return true;
+  appSheetMarkDirtyScope("plan");
+  const saved = await saveAppSheet(false);
+  if (saved) return true;
+  if (previousStatus) state.operationPlanStatuses[key] = previousStatus;
+  else delete state.operationPlanStatuses[key];
+  if (operation && previousOperation) Object.assign(operation, previousOperation);
+  invalidateGanttCache();
+  render();
+  scheduleLocalStorageFlush();
+  showToast("No se pudo guardar el estado; se restauro el valor anterior");
+  return false;
 }
 
 function renderProductionReportTable(operations, options = {}) {
@@ -5535,11 +5563,9 @@ function syncReportFilterDates(date) {
 
 function filteredReportRows(rows, type, dateGetter) {
   const filter = reportFilter(type);
-  const statusRows = type === "subcontract" ? rows : rows.filter((row) => {
-    if (filter.status === "TODAS") return true;
-    const completed = isPlanCompletedOperation(row);
-    return filter.status === "COMPLETADAS" ? completed : !completed;
-  });
+  const statusRows = type === "subcontract"
+    ? rows
+    : window.PlanningWorkflowCore.filterOperationsByPlanStatus(rows, filter.status);
   const dailyRows = statusRows.filter((row) => {
     const date = dateGetter(row);
     return date && formatDate(date) === filter.date;

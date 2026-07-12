@@ -625,7 +625,8 @@
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
       const milestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-      if (milestone && milestone > earliest) earliest = milestone;
+      const predecessorLimit = milestone || (ratio >= 1 ? previous.end : null);
+      if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 
     return nextAvailableMoment(context.state, earliest, "", "", context.windowEnd);

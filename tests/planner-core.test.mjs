@@ -60,3 +60,46 @@ test("un subcontrato puede terminar despues del horizonte visible", () => {
   assert.equal(operation.fechaFin, "2026-08-03");
   assert.equal(operation.horaFin, "07:00");
 });
+
+test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [
+      { id: "sub", ot: "1325", secuencia: 1, ct: "519", descripcion: "MAKA", tipoInsercion: "SUBCONTRATO", estatus: "PLAN" },
+      { id: "prod", ot: "1325", secuencia: 2, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoCiclo: 1, cantidadPendiente: 1 },
+    ],
+    workOrders: [{ ot: "1325", item: "CCA 519 CM" }],
+    otConfigurations: { 1325: { ot: "1325", subcontractType: "MAKA", subcontractDays: 15 } },
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1, finiteCapacity: false },
+    workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const subcontract = result.operations.find((item) => item.id === "sub");
+  const successor = result.operations.find((item) => item.id === "prod");
+  const subcontractEnd = new Date(`${subcontract.fechaFin}T${subcontract.horaFin}:00`);
+  const successorStart = successor.fechaInicio && new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`);
+  assert.ok(subcontractEnd > new Date("2026-07-18T07:00:00"));
+  assert.ok(!successorStart || successorStart >= subcontractEnd);
+  assert.ok(!successor.fechaInicio, "fuera del horizonte debe quedar sin programar, no volver al inicio");
+});
+
+test("una completada conserva fechas y no consume capacidad pendiente", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [
+      { id: "done", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoCiclo: 1, cantidadPendiente: 300 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1", tiempoSetup: 0, tiempoCiclo: 1, cantidadPendiente: 1 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const done = result.operations.find((item) => item.id === "done");
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.deepEqual([done.fechaInicio, done.horaInicio, done.fechaFin, done.horaFin], ["2026-07-13", "07:00", "2026-07-13", "12:00"]);
+  assert.equal(result.lastSchedule.scheduled, 1);
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"]);
+  assert.equal(result.lastSchedule.operatorConflicts, 0);
+});
