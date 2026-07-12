@@ -1863,9 +1863,18 @@ function setGanttView(view) {
   state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(view);
   invalidateGanttGroupsCache();
   renderGantt();
+  renderGanttViewSelection();
   renderGanttDisplayControls();
   saveState("ui");
   showToast(ganttViewMessage(state.ganttView));
+}
+
+function renderGanttViewSelection() {
+  document.querySelectorAll(".segmented button").forEach((button) => {
+    const active = window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view);
+    button.classList.toggle("segmented-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
 }
 
 function planningPreparationSignature(job, operations, commercial) {
