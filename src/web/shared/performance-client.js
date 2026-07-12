@@ -80,23 +80,17 @@
     let loaded = false;
     try {
       await root.PPAppsScriptBridge.ensureReady();
-      const metadata = await callAppsScript("getAppRevision");
-      deferredRevision = Number(metadata.revision || state.revision || 0);
-      const sameRevision = Number(state.revision || 0) > 0
-        && Number(state.revision) === Number(metadata.revision)
-        && Number(state.schemaVersion || 0) === Number(metadata.schemaVersion || state.schemaVersion || 0);
 
-      if (!sameRevision) {
-        const imported = await callAppsScript("getAppStateIfChanged", state.revision || 0, { includeMaterials: false });
-        if (!imported?.unchanged) {
-          applyImported(imported, { preserveLocalPlanning: true });
-          loaded = true;
-        }
-      }
+      // Google Sheets es la fuente principal. La carga completa evita que una
+      // revision igual deje visibles catalogos o matriz antiguos del navegador.
+      const imported = await callAppsScript("getAppState");
+      applyImported(imported, { preserveLocalPlanning: false });
+      loaded = true;
       appSheetAvailable = true;
-      state.savedAt = metadata.savedAt || state.savedAt;
-      state.syncedAt = metadata.syncedAt || state.syncedAt;
-      state.revision = Number(metadata.revision || state.revision || 0);
+      deferredRevision = Number(imported.revision || state.revision || 0);
+      state.savedAt = imported.savedAt || state.savedAt;
+      state.syncedAt = imported.syncedAt || state.syncedAt;
+      state.revision = Number(imported.revision || state.revision || 0);
       writeMeta({ revision: state.revision, syncedAt: state.syncedAt || "" });
     } catch (error) {
       appSheetAvailable = false;
@@ -104,6 +98,15 @@
     }
 
     if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+    try {
+      await loadPlanSnapshots(false);
+      if (typeof restoreDraftPlanFromSharedState === "function") {
+        const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
+        if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
+      }
+    } catch (error) {
+      console.warn("No se pudieron cargar los borradores compartidos:", error);
+    }
     state.selectedOperationId = "";
     saveState("ui");
     render();
