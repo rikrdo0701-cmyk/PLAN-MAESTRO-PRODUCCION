@@ -7,3 +7,4 @@ site/
 *.log
 .DS_Store
 Thumbs.db
+.worktrees/
