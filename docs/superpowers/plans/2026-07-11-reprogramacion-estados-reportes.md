@@ -16,6 +16,8 @@
 - Una operación completada conserva fechas históricas, no se reprograma y no consume carga pendiente.
 - Cada operación pendiente programada pertenece exactamente a operador, ajustador o subcontrato.
 - Sin dependencias nuevas ni cambios al contrato de NetSuite.
+- El horizonte solo controla la vista del Gantt, nunca la precedencia ni el fin de una operación.
+- Reportes operativos: rangos de 1 a 5 días y máximo 25 filas en una hoja A4 horizontal.
 
 ---
 
@@ -154,9 +156,13 @@ git commit -m "Evitar bloqueo al sincronizar NetSuite"
 - Consumes: `filterOperationsByPlanStatus` y `classifyReportOperation`.
 - Produces: planes de operador y ajustador con acciones `Completar`/`Reabrir`, filtros coherentes y operaciones completadas excluidas del cálculo de capacidad pendiente.
 
+- Consumes adicional: una sucesora de subcontrato debe usar el fin real de su predecesora como inicio mínimo.
+
 - [ ] **Step 1: Escribir prueba RED del motor**
 
 Añadir a `tests/planner-core.test.mjs` una operación `COMPLETADA_PLAN` con fechas y otra pendiente. Afirmar que la completada conserva fechas, no aparece en `lastSchedule.scheduled`, no ocupa operador/máquina y la pendiente puede iniciar al comienzo de la ventana.
+
+Añadir una OT con subcontrato de 15 días seguido de una operación productiva y horizonte de 5 días. Afirmar que el subcontrato termina fuera del horizonte y que la sucesora nunca inicia antes de ese fin. La sucesora puede quedar fuera del Gantt/sin programar dentro del horizonte, pero jamás regresar al inicio de la ventana.
 
 - [ ] **Step 2: Escribir prueba RED de filtros**
 
@@ -220,9 +226,51 @@ Expected: FAIL por integración PDF ausente.
 
 Al renderizar reportes, calcular cobertura sobre operaciones pendientes programadas. Añadir diagnósticos a alertas del plan con OT, secuencia, descripción y categorías. No duplicar operaciones entre tablas.
 
+Actualizar selectores de fuente: `Plan` debe incluir `Borrador`; el plan semanal usa la fuente seleccionada y conserva semana. Operador, ajustador y subcontrato usan fecha inicial más un selector limitado a `1..5` días, ordenan cronológicamente y recortan a 25 filas sin aviso adicional.
+
 - [ ] **Step 4: Implementar estado del PDF**
 
 En el handler, capturar texto original, deshabilitar el botón, establecer `aria-busy="true"` y texto `Generando...`; envolver snapshot, render y apertura en `try/finally`; en `finally` restaurar texto, habilitación y quitar `aria-busy`.
+
+Añadir encabezado de impresión con plan, rango/filtro y fecha/hora actual. Aplicar `@page { size: A4 landscape; }`, márgenes compactos, encabezado repetible, máximo 25 filas y `break-inside: avoid` para que cada reporte operativo quepa en una hoja.
+
+### Task 4A: Preparación de OT y bloqueo mutuo
+
+**Files:**
+- Modify: `src/web/planning/app.js`
+- Modify: `src/web/planning/index.template.html`
+- Modify: `tests/build.test.mjs`
+
+**Interfaces:**
+- Consumes: catálogo del artículo y `otConfigurations`.
+- Produces: modal precargado al agregar al plan y controles Generar/Sincronizar mutuamente excluyentes.
+
+- [ ] **Step 1: Pruebas RED**
+
+Comprobar en el build los nuevos contratos: precio opcional con `min="0"`, ausencia de piezas/monto en el modal, precarga de subcontrato y doblado, `Cancelar` sin navegación, y funciones compartidas que actualicen ambos botones ocupados.
+
+- [ ] **Step 2: Implementar preparación**
+
+Forzar confirmación al agregar si la OT contiene subcontrato o doblado, aunque exista configuración completa. Precargar desde la configuración de OT y luego desde el último catálogo del artículo. Precio vacío o cero es válido. Eliminar piezas pendientes/monto estimado. Separar callbacks `Cancelar` e `Ir a matriz`.
+
+- [ ] **Step 3: Implementar exclusión mutua**
+
+Centralizar el estado ocupado de planificación/sincronización; al programar deshabilitar Sincronizar, y al sincronizar deshabilitar Generar. Restaurar en `finally` y evitar doble solicitud.
+
+- [ ] **Step 4: Eliminar Balancear**
+
+Retirar el botón de la plantilla y cualquier binding inaccesible asociado, sin alterar cálculos de carga.
+
+- [ ] **Step 5: Verificar y commit**
+
+Run: `npm.cmd test`, `npm.cmd run check`, `npm.cmd run build`, `git diff --check`.
+
+Commit:
+
+```bash
+git add src/web/planning/app.js src/web/planning/index.template.html tests/build.test.mjs
+git commit -m "Preparar OTs y coordinar acciones del plan"
+```
 
 - [ ] **Step 5: Verificar suite y build**
 

@@ -113,3 +113,44 @@ La implementación incluirá pruebas que demuestren:
 - cobertura exactamente una vez en operador, ajustador o subcontrato;
 - estado `Generando…` restaurado tanto en éxito como en error;
 - ausencia de errores relevantes en consola durante el flujo validado en navegador.
+
+## Reglas adicionales aprobadas
+
+### Exclusión mutua de acciones
+
+`Generar plan` y `Sincronizar` son mutuamente excluyentes. Mientras uno esté activo, el otro permanecerá deshabilitado y con estado accesible de ocupado. Todos los caminos de éxito, error y timeout restaurarán ambos controles.
+
+### Precedencia y horizonte
+
+El horizonte configura únicamente el rango visible del Gantt. No limita la fecha final calculada de operaciones ni subcontratos.
+
+La capacidad no finita permite ejecutar el mismo tipo de recurso para varias OTs al mismo tiempo, pero nunca elimina la precedencia dentro de una OT. Si una operación es un subcontrato, su sucesora comenzará como mínimo en la fecha y hora real de regreso del material (`fechaFin`/`horaFin` del subcontrato), independientemente del porcentaje de solapamiento.
+
+### Preparación al agregar una OT
+
+El modal `Preparar OT` se abrirá únicamente al agregar una OT del backlog al plan. Al devolverla al backlog no se abrirá ni se borrará su configuración.
+
+El modal precargará el último valor guardado para el artículo y permitirá confirmarlo o cambiarlo para la OT:
+
+- tipo comercial y tipo de trabajo;
+- tipo y días de subcontrato;
+- máquina, herramental, kit o kit pendiente para doblado.
+
+El precio podrá ser `0` o quedar vacío y nunca bloqueará la preparación. El modal no mostrará piezas pendientes ni monto estimado.
+
+Si faltan operaciones, `Ir a matriz` navegará a la matriz. `Cancelar` cerrará el diálogo y conservará la vista actual.
+
+### Selección y rango de reportes
+
+El selector `Plan guardado` se llamará `Plan` e incluirá `Borrador` además de las versiones guardadas o publicadas.
+
+- El plan semanal conserva su rango semanal y solo cambia la fuente seleccionada.
+- Los planes de operador, ajustador y subcontrato ignoran la semana. Usan una fecha inicial y un selector de `1`, `2`, `3`, `4` o `5` días futuros.
+- Los reportes operativos muestran e imprimen como máximo los primeros 25 registros después de ordenar cronológicamente y aplicar el filtro de estado.
+- No se mostrará aviso por registros posteriores al límite.
+- Cada impresión incluirá nombre del reporte, plan, rango, filtro, fecha y hora de impresión.
+- Encabezado y máximo 25 filas deben caber en una sola hoja A4 horizontal, sin dividir filas.
+
+### Cargas
+
+La vista de cargas no tendrá botón `Balancear`.
