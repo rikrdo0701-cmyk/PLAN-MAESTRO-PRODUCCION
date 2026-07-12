@@ -44,6 +44,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz"\)/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
+  assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
+  assert.match(pagesIndex, /statusActions: isReportSnapshotEditable\(\)/);
+  assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
+  assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
+  assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType\) continue/);
+  assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: A4 landscape/);
   assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);

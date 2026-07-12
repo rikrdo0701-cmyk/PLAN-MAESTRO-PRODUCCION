@@ -1848,7 +1848,7 @@ async function prepareJobForPlanning(job) {
   const commercial = commercialPlanningRequirement(job);
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
   const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
-  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
+  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType;
   if (!mustConfirmPlanning) {
     return true;
   }
@@ -3419,7 +3419,7 @@ async function ensureCommercialDataForPlan(ots) {
     const job = jobs.get(ot);
     if (!job) continue;
     const commercial = commercialPlanningRequirement(job);
-    if (!commercial.needsType && !commercial.needsPlanningType && !commercial.needsManualPrice) continue;
+    if (!commercial.needsType && !commercial.needsPlanningType) continue;
     const values = await showPlanningRequirements(job, [], commercial);
     if (!values) return false;
     checkpointState();
@@ -4273,7 +4273,7 @@ function renderOperatorReport() {
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
   els.operatorPrintContext.textContent = `Plan por operador | ${operator || "Sin operador"} | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
-  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: !reportSnapshot });
+  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: isReportSnapshotEditable() });
   bindReportCommentInputs(els.operatorReport);
   bindPlanStatusActions(els.operatorReport);
 }
@@ -4481,8 +4481,12 @@ function bindReportCommentInputs(container) {
   });
 }
 
+function isReportSnapshotEditable() {
+  return !reportSnapshot || reportSnapshot.snapshotId === "draft";
+}
+
 function planStatusActionCell(op) {
-  if (reportSnapshot) return escapeHtml(isPlanCompletedOperation(op) ? "Completada" : "Pendiente");
+  if (!isReportSnapshotEditable()) return escapeHtml(isPlanCompletedOperation(op) ? "Completada" : "Pendiente");
   const completed = isPlanCompletedOperation(op);
   const key = operationCompletionKey(op);
   return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}">${completed ? "Reabrir" : "Completar"}</button>`;
@@ -4799,32 +4803,6 @@ function toggleMatrix(key, operator, checked, capability) {
 function operatorPerformanceForOperator(operator) {
   const performance = Number(state.operatorPerformance?.[operator]);
   return Number.isFinite(performance) && performance > 0 ? performance : 100;
-}
-
-function balanceOperators() {
-  const loads = getOperatorLoads();
-  const byOperator = new Map(loads.map((item) => [item.operator, item.minutes]));
-  const movable = [...state.operations]
-    .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && !isJobLocked(op.ot) && op.tipoInsercion === "OPERACION")
-    .sort((a, b) => Number(a.prioridad) - Number(b.prioridad));
-
-  let moves = 0;
-  for (const op of movable) {
-    const allowed = getAllowedOperatorsForOperation(op);
-    if (allowed.length < 2) continue;
-    const currentLoad = byOperator.get(op.operador) || 0;
-    const best = allowed
-      .map((operator) => ({ operator, minutes: byOperator.get(operator) || 0 }))
-      .sort((a, b) => a.minutes - b.minutes)[0];
-    if (best && best.operator !== op.operador && currentLoad - best.minutes > operationDuration(op)) {
-      byOperator.set(op.operador, currentLoad - operationDuration(op));
-      byOperator.set(best.operator, best.minutes + operationDuration(op));
-      op.operador = best.operator;
-      op.log = appendLog(op.log, "BALANCE_APP");
-      moves++;
-    }
-  }
-  saveAndRender(moves ? `${moves} operaciones reasignadas` : "Sin cambios de balance");
 }
 
 async function loadNetSuiteExercise() {
