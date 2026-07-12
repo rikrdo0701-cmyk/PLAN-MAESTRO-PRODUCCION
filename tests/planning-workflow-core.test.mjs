@@ -112,6 +112,16 @@ test("selector operativo y exportacion usan solo borrador pendiente programado",
   assert.deepEqual(structuredClone(core.draftExportOperations(state).map((op) => op.id)), ["ok"]);
 });
 
+test("las vistas del borrador incluyen solo OTs seleccionadas programadas", () => {
+  const state = { selectedOts: ["1325"], operations: [
+    { id: "selected", ot: "1325", fechaInicio: "2026-07-13", fechaFin: "2026-07-13", planStatus: "PENDIENTE" },
+    { id: "backlog", ot: "1424", fechaInicio: "2026-07-13", fechaFin: "2026-07-13", planStatus: "PENDIENTE" },
+    { id: "unscheduled", ot: "1325", fechaInicio: "", fechaFin: "", planStatus: "PENDIENTE" },
+    { id: "historical", ot: "1325", historical: true, fechaInicio: "2026-07-13", fechaFin: "2026-07-13" },
+  ] };
+  assert.deepEqual(structuredClone(core.draftScheduledOperations(state).map((op) => op.id)), ["selected"]);
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);

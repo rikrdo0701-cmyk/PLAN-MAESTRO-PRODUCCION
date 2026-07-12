@@ -129,6 +129,24 @@ test("dos doblados en la misma maquina conservan operaciones y generan cambio de
   assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
 });
 
+test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", () => {
+  const core = loadPlannerCore();
+  const operation = {
+    id: "ct-5459-real", ot: "2159", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBO",
+    parte: "C 490 UND", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "", herramental: "", kitHerramental: "",
+  };
+  const issues = core.planningConfigurationIssues({
+    operations: [operation], operators: ["OPERADOR 2"],
+    matrix: { "5459::DOBLEZ_DE_TUBO": ["OPERADOR 2"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBO"], machines: [], toolCatalog: [],
+  }, [operation]);
+  assert.equal(operation.id, "ct-5459-real");
+  assert.equal(operation.ot, "2159");
+  assert.equal(operation.secuencia, 10);
+  assert.ok(issues.some((issue) => issue.code === "MISSING_MACHINE" && issue.operationId === operation.id));
+  assert.ok(issues.some((issue) => issue.code === "MISSING_TOOL" && issue.operationId === operation.id));
+});
+
 test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

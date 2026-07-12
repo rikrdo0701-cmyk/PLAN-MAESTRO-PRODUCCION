@@ -3559,7 +3559,7 @@ async function generatePlanPdf() {
     if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
   }
   if (usingDraft) {
-    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
+    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
   } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   if (!reportSnapshot?.operations?.length) {
     reportSnapshot = { operations: state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
@@ -3891,7 +3891,7 @@ async function loadPlanSnapshots(showMessage) {
         status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
       })), state);
       if (source.type === "published") await loadPlanSnapshotById(source.snapshotId, { render: false, silent: true });
-      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
+      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
@@ -3905,7 +3905,7 @@ async function loadPlanSnapshots(showMessage) {
 async function loadSelectedPlanSnapshot() {
   const snapshotId = els.planSnapshotSelect.value;
   if (snapshotId === "draft") {
-    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
+    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
     renderReports();
     return;
   }
@@ -4340,10 +4340,10 @@ function renderAdjusterReport() {
       <td>${escapeHtml(end ? formatDate(end) : "")}</td>
       <td>${escapeHtml(end ? formatTime(end) : "")}</td>
       <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
-      <td>${planStatusActionCell(op)}</td>
+      <td class="report-status-action-column">${planStatusActionCell(op)}</td>
     </tr>`;
   }).join("");
-  els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
+  els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
   bindPlanStatusActions(els.adjusterReport);
 }
 
@@ -4493,7 +4493,7 @@ function reportOperationCommentCell(op) {
 
 function reportCommentEditor(operationIds, value) {
   const comment = String(value || "").trim();
-  if (reportSnapshot) return escapeHtml(comment);
+  if (!isReportSnapshotEditable()) return escapeHtml(comment);
   return `<input class="report-comment-input" type="text" maxlength="250" data-operation-ids="${escapeHtml((operationIds || []).join("|"))}" value="${escapeHtml(comment)}" placeholder="Comentario opcional" aria-label="Comentario opcional">`;
 }
 
@@ -4635,10 +4635,10 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${escapeHtml(end ? formatDate(end) : "")}</td>
       <td>${escapeHtml(end ? formatTime(end) : "")}</td>
       <td>${reportOperationCommentCell(op)}</td>
-      ${options.statusActions ? `<td>${planStatusActionCell(op)}</td>` : ""}
+      ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
     </tr>`;
   }).join("");
-  return `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin operaciones programadas en esta semana")}</tbody>`;
+  return `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin operaciones programadas en esta semana")}</tbody>`;
 }
 
 function formatReportNumber(value) {

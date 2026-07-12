@@ -118,6 +118,14 @@
       Boolean(operation?.fechaInicio && operation?.fechaFin));
   }
 
+  function draftScheduledOperations(state) {
+    const selected = new Set((state?.selectedOts || []).map(normalize).filter(Boolean));
+    return (state?.operations || []).filter((operation) =>
+      selected.has(normalize(operation?.ot)) &&
+      !isHistorical(operation) &&
+      Boolean(operation?.fechaInicio && operation?.fechaFin));
+  }
+
   function needsPlanningPreparation(state, ot, signature) {
     if (!isOtEligibleForDraft(state, ot)) return false;
     return String(state?.preparedPlanningByOt?.[ot] || "") !== String(signature || "");
@@ -238,6 +246,7 @@
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
+    draftScheduledOperations,
     needsPlanningPreparation, markPlanningPrepared,
     isCoherentDraft, selectNewestCoherentDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
