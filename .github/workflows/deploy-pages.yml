@@ -5,15 +5,13 @@ on:
     branches: [main]
     paths:
       - "src/web/**"
+      - "tests/**"
       - "scripts/build-appscript.mjs"
+      - "scripts/check-project.mjs"
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: github-pages
@@ -21,6 +19,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +43,9 @@ jobs:
           path: site
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
