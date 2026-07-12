@@ -3481,11 +3481,16 @@ async function publishCurrentPlan() {
 }
 
 async function generatePlanPdf() {
-  const showLoadingToast = (message) => {
+  const originalLabel = els.pdfBtn.innerHTML;
+  els.pdfBtn.disabled = true;
+  els.pdfBtn.setAttribute("aria-busy", "true");
+  els.pdfBtn.textContent = "Generando...";
+  try {
+    const showLoadingToast = (message) => {
     showToast(message);
     document.querySelector("#toast")?.classList.add("toast-loading");
   };
-  const hideLoadingToast = () => {
+    const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
   let snapshotId = reportSnapshot?.snapshotId;
@@ -3536,6 +3541,13 @@ async function generatePlanPdf() {
   document.body.dataset.printContext = "plan";
   showToast("Usa Guardar como PDF en la ventana de impresion");
   window.setTimeout(() => window.print(), 50);
+  } catch (error) {
+    showToast(`No se pudo generar el PDF: ${error.message}`);
+  } finally {
+    els.pdfBtn.disabled = false;
+    els.pdfBtn.removeAttribute("aria-busy");
+    els.pdfBtn.innerHTML = originalLabel;
+  }
 }
 
 function validateScheduleConfiguration(executionTime) {
@@ -3855,6 +3867,11 @@ async function loadPlanSnapshots(showMessage) {
 
 async function loadSelectedPlanSnapshot() {
   const snapshotId = els.planSnapshotSelect.value;
+  if (snapshotId === "draft") {
+    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
+    renderReports();
+    return;
+  }
   if (!snapshotId) {
     const activeId = activePublishedSnapshotId();
     if (activeId) {
@@ -3910,12 +3927,13 @@ function renderPlanSnapshotSelect() {
   if (!els.planSnapshotSelect) return;
   const selectedId = reportSnapshot?.snapshotId || "";
   const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+  const options = planSnapshots.map((snapshot) => {
     const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
-    const label = `${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
+    const type = publishedIds.has(snapshot.snapshotId) ? "Publicado" : "Guardado";
+    const label = `${type} - ${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
-  els.planSnapshotSelect.innerHTML = `<option value="">Ultima publicada</option>${options}`;
+  els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option><option value="">Ultima publicada</option>${options}`;
   els.planSnapshotSelect.value = planSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "";
 }
 
@@ -5597,9 +5615,9 @@ function filteredReportRows(rows, type, dateGetter) {
     const date = dateGetter(row);
     return date && formatDate(date) === filter.date;
   });
-  const source = filter.showAll ? statusRows : dailyRows;
+  const source = (filter.showAll ? statusRows : dailyRows).slice().sort((a, b) => Number(dateGetter(a)) - Number(dateGetter(b)));
   return {
-    rows: filter.showAll ? source : source.slice(0, REPORT_ROW_LIMIT),
+    rows: source.slice(0, REPORT_ROW_LIMIT),
     total: source.length,
     showAll: filter.showAll,
     date: filter.date,

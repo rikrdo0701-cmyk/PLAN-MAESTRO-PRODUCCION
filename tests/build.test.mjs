@@ -43,4 +43,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
   assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz"\)/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
+  assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
+  assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(pagesIndex, /@page \{ size: A4 landscape/);
 });

@@ -87,5 +87,35 @@
     });
   }
 
-  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus, classifyReportOperation, reportCoverageIssues };
+  function isoDate(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return "";
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.toISOString().slice(0, 10);
+  }
+
+  function reportDateRange(startDate, futureDays) {
+    const start = isoDate(startDate);
+    const days = Math.max(1, Math.min(5, Number(futureDays) || 1));
+    const endDate = new Date(`${start}T00:00:00Z`);
+    endDate.setUTCDate(endDate.getUTCDate() + days);
+    return { start, end: endDate.toISOString().slice(0, 10), futureDays: days };
+  }
+
+  function selectReportRows(rows, options = {}) {
+    const range = reportDateRange(options.startDate, options.futureDays);
+    const statusRows = filterOperationsByPlanStatus(rows, options.status || "PENDIENTES");
+    const selected = statusRows.filter((row) => {
+      const date = isoDate(row?.fechaInicio || row?.startDate || row?.date);
+      return date >= range.start && date <= range.end;
+    }).sort((left, right) => {
+      const a = `${left?.fechaInicio || left?.startDate || left?.date || ""}T${left?.horaInicio || left?.startTime || "00:00"}`;
+      const b = `${right?.fechaInicio || right?.startDate || right?.date || ""}T${right?.horaInicio || right?.startTime || "00:00"}`;
+      return a.localeCompare(b) || String(left?.id || "").localeCompare(String(right?.id || ""));
+    });
+    const limit = Math.max(1, Number(options.limit) || 25);
+    return { rows: selected.slice(0, limit), total: selected.length, range };
+  }
+
+  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus, classifyReportOperation, reportCoverageIssues, reportDateRange, selectReportRows };
 });

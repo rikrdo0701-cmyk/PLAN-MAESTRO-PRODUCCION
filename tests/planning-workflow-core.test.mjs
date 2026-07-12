@@ -77,3 +77,21 @@ test("reportCoverageIssues diagnostica operaciones sin categoria o ambiguas", ()
   assert.match(issues[0].diagnostic, /sin categoria/i);
   assert.match(issues[1].diagnostic, /ambigua/i);
 });
+
+test("reportDateRange acepta solamente de uno a cinco dias futuros", () => {
+  assert.deepEqual(structuredClone(core.reportDateRange("2026-07-12", 3)), { start: "2026-07-12", end: "2026-07-15", futureDays: 3 });
+  assert.equal(core.reportDateRange("2026-07-12", 0).futureDays, 1);
+  assert.equal(core.reportDateRange("2026-07-12", 9).futureDays, 5);
+});
+
+test("selectReportRows ordena, filtra estado y rango, y limita siempre a 25", () => {
+  const rows = Array.from({ length: 31 }, (_, index) => ({
+    id: String(index), fechaInicio: index === 30 ? "2026-07-20" : "2026-07-12",
+    horaInicio: `${String(29 - Math.min(index, 29)).padStart(2, "0")}:00`,
+    planStatus: index === 0 ? "COMPLETADA_PLAN" : "PENDIENTE",
+  }));
+  const selection = core.selectReportRows(rows, { startDate: "2026-07-12", futureDays: 1, status: "PENDIENTES", limit: 25 });
+  assert.equal(selection.total, 29);
+  assert.equal(selection.rows.length, 25);
+  assert.deepEqual(selection.rows.map((row) => row.id), Array.from({ length: 25 }, (_, index) => String(29 - index)));
+});
