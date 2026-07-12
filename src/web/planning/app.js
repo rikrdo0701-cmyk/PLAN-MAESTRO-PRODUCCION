@@ -1410,12 +1410,7 @@ function renderTop() {
   els.horizonSelect.value = String(state.horizonDays);
   renderGanttDisplayControls();
   els.undoBtn.disabled = stateHistory.length === 0;
-
-  document.querySelectorAll(".segmented button").forEach((button) => {
-    const active = window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view);
-    button.classList.toggle("segmented-active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
+  renderGanttViewSelection();
 }
 
 function renderPlanAlerts() {
