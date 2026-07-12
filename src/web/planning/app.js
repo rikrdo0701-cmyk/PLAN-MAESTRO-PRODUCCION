@@ -747,14 +747,7 @@ function bindEvents() {
   });
 
   document.querySelectorAll(".segmented button").forEach((button) => {
-    button.onclick = () => {
-      state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(button.dataset.view);
-      invalidateGanttGroupsCache();
-      renderGantt();
-      renderGanttDisplayControls();
-      saveState("ui");
-      showToast(ganttViewMessage(state.ganttView));
-    };
+    button.onclick = () => setGanttView(button.dataset.view);
   });
 
   document.querySelectorAll(".tabs button").forEach((button) => {
@@ -1865,6 +1858,15 @@ async function prepareJobForPlanning(job, options = {}) {
     state, job.ot, planningPreparationSignature(job, operations, commercialPlanningRequirement(job))
   ));
   return true;
+}
+
+function setGanttView(view) {
+  state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(view);
+  invalidateGanttGroupsCache();
+  renderGantt();
+  renderGanttDisplayControls();
+  saveState("ui");
+  showToast(ganttViewMessage(state.ganttView));
 }
 
 function planningPreparationSignature(job, operations, commercial) {
@@ -3880,8 +3882,13 @@ async function loadPlanSnapshots(showMessage) {
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     if (!reportSnapshot) {
-      const activeId = activePublishedSnapshotId();
-      if (activeId) await loadPlanSnapshotById(activeId, { render: false, silent: true });
+      const publishedIds = publishedSnapshotIds();
+      const source = window.PlanningWorkflowCore.defaultDailyPlanSource(planSnapshots.map((snapshot) => ({
+        ...snapshot,
+        status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
+      })), state);
+      if (source.type === "published") await loadPlanSnapshotById(source.snapshotId, { render: false, silent: true });
+      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: state.operations.map((op) => ({ ...op })) };
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
@@ -5071,13 +5078,21 @@ function applyImported(imported, options = {}) {
   if (Array.isArray(imported.subcontracts)) state.subcontracts = imported.subcontracts;
   if (Array.isArray(imported.netSuiteChangeAlerts)) state.netSuiteChangeAlerts = imported.netSuiteChangeAlerts;
   if (imported.lastSchedule) state.lastSchedule = imported.lastSchedule;
-  if (preservedLocalPlanning) restoreLocalPlanningState(preservedLocalPlanning);
+  if (preservedLocalPlanning) {
+    const remotePlanning = captureLocalPlanningState();
+    const coherent = window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
+    restoreLocalPlanningState(coherent || preservedLocalPlanning);
+  }
   invalidateGanttCache();
   normalizeState();
 }
 
 function captureLocalPlanningState() {
   const keys = [
+    "revision",
+    "savedAt",
+    "operations",
+    "workOrders",
     "operators",
     "operatorProfiles",
     "operatorPerformance",

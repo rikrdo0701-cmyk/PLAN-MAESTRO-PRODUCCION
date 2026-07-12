@@ -15,6 +15,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
+  const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
+  assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);
+  assert.doesNotMatch(serviceWorker, /plan-maestro-v2\.41\.4/);
   assert.match(pagesIndex, /script\.google\.com\/macros\/s\//);
   assert.match(pagesIndex, /manifest\.webmanifest/);
   assert.match(pagesIndex, /serviceWorker\.register/);
@@ -61,4 +64,6 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /weekPrintContext\.textContent = `Plan de la semana[\s\S]*Impreso/);
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
+  assert.match(pagesIndex, /function setGanttView\(view\)/);
+  assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
 });

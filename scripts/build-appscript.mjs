@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(projectRoot, "dist");
@@ -190,6 +191,7 @@ export async function buildProject() {
     "<!-- Generado para GitHub Pages por npm run build. No editar directamente. -->",
     '    <link rel="manifest" href="./manifest.webmanifest" />',
   );
+  const pagesBuildId = createHash("sha256").update(pagesIndex).digest("hex").slice(0, 12);
 
   await Promise.all([
     writeFile(path.join(distDir, "Index.html"), appsScriptIndex, "utf8"),
@@ -206,7 +208,7 @@ export async function buildProject() {
       theme_color: "#087f7a",
       lang: "es-MX"
     }, null, 2), "utf8"),
-    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-v2.41.4";
+    writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-${pagesBuildId}";
 const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./manifest.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

@@ -121,6 +121,26 @@ test("la preparacion es idempotente hasta que cambia su firma", () => {
   assert.equal(marked.preparedPlanningByOt[1325], "firma-b");
 });
 
+test("selecciona el borrador coherente mas reciente sin mezclar colecciones", () => {
+  const older = { revision: 2, savedAt: "2026-07-12T10:00:00Z", selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  const newer = { revision: 3, savedAt: "2026-07-12T11:00:00Z", selectedOts: ["200"], workOrders: [{ ot: "200" }], operations: [{ ot: "200" }] };
+  const mixed = { revision: 4, selectedOts: ["300"], workOrders: [], operations: [{ ot: "200" }] };
+  assert.equal(core.isCoherentDraft(older), true);
+  assert.equal(core.isCoherentDraft(mixed), false);
+  assert.equal(core.selectNewestCoherentDraft(older, newer).revision, 3);
+  assert.equal(core.selectNewestCoherentDraft(mixed, older).revision, 2);
+});
+
+test("los planes diarios prefieren el ultimo publicado y usan borrador como respaldo", () => {
+  assert.deepEqual(structuredClone(core.defaultDailyPlanSource([], { operations: [{ id: "d" }] })), { type: "draft", snapshotId: "draft" });
+  const source = core.defaultDailyPlanSource([
+    { snapshotId: "saved", status: "GUARDADO", generatedAt: "2026-07-12T15:00:00Z" },
+    { snapshotId: "old", status: "PUBLICADO", publishedAt: "2026-07-12T10:00:00Z" },
+    { snapshotId: "new", planStatus: "PUBLICADO", publishedAt: "2026-07-12T12:00:00Z" },
+  ], { operations: [] });
+  assert.deepEqual(structuredClone(source), { type: "published", snapshotId: "new" });
+});
+
 test("clasifica operaciones de reporte en una categoria exclusiva", () => {
   const productive = { id: "p", tipoInsercion: "OPERACION", operador: "DOBLADOR 1" };
   const toolChange = { id: "a", tipoInsercion: "CAMBIO_HERRAMENTAL", operador: "AJUSTADOR" };

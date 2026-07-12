@@ -129,6 +129,27 @@
     };
   }
 
+  function isCoherentDraft(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.workOrders) || !Array.isArray(snapshot.selectedOts)) return false;
+    const operationOts = new Set(snapshot.operations.map((item) => normalize(item?.ot)).filter(Boolean));
+    const workOrderOts = new Set(snapshot.workOrders.map((item) => normalize(item?.ot)).filter(Boolean));
+    return snapshot.selectedOts.every((ot) => operationOts.has(normalize(ot)) && workOrderOts.has(normalize(ot)));
+  }
+
+  function selectNewestCoherentDraft(localDraft, remoteDraft) {
+    const candidates = [localDraft, remoteDraft].filter(isCoherentDraft);
+    return candidates.sort((left, right) => Number(right?.revision || 0) - Number(left?.revision || 0) ||
+      String(right?.savedAt || "").localeCompare(String(left?.savedAt || "")))[0] || null;
+  }
+
+  function defaultDailyPlanSource(snapshots, draft) {
+    const published = (snapshots || []).filter((item) => normalize(item?.status || item?.planStatus) === "PUBLICADO")
+      .sort((left, right) => String(right?.publishedAt || right?.generatedAt || "").localeCompare(String(left?.publishedAt || left?.generatedAt || "")));
+    return published.length
+      ? { type: "published", snapshotId: String(published[0].snapshotId || published[0].id || "") }
+      : { type: "draft", snapshotId: "draft" };
+  }
+
   function reportCategories(operation) {
     const type = normalize(operation?.tipoInsercion);
     const operator = normalize(operation?.operador);
@@ -205,5 +226,6 @@
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     needsPlanningPreparation, markPlanningPrepared,
+    isCoherentDraft, selectNewestCoherentDraft, defaultDailyPlanSource,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });
