@@ -1844,7 +1844,7 @@ async function prepareJobForPlanning(job, options = {}) {
   }
 
   const requirements = buildPlanningRequirements(issues, operations);
-  const commercial = commercialPlanningRequirement(job);
+  const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
   const signature = planningPreparationSignature(job, operations, commercial);
   if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) return true;
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
@@ -1900,7 +1900,7 @@ function planningPreparationSignature(job, operations, commercial) {
   });
 }
 
-function commercialPlanningRequirement(job) {
+function commercialPlanningRequirement(job, options = {}) {
   const configuration = articleConfigurationValue(job.parte);
   const invoicePrice = invoiceUnitPriceForOt(job.ot);
   const manualPrice = Math.max(0, Number(configuration.manualUnitPrice || 0));
@@ -1912,7 +1912,7 @@ function commercialPlanningRequirement(job) {
     manualPrice,
     pendingPieces: pendingPiecesForWorkOrder(workOrderForOt(job.ot)),
     needsType: !String(configuration.jobType || "").trim(),
-    needsPlanningType: !planningType,
+    needsPlanningType: options.alwaysPlanningType === true || !planningType,
     needsManualPrice: !(invoicePrice > 0) && !(manualPrice > 0),
   };
 }
