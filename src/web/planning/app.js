@@ -3474,7 +3474,7 @@ async function scheduleCurrentPlanImpl() {
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
-    const result = window.PlannerCore.schedulePlan(state, {
+    const result = window.PlannerCore.schedulePlan({ ...state, selectedOts: readyOts }, {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
