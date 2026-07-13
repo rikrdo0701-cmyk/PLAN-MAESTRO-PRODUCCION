@@ -178,6 +178,23 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   assert.equal(change.tiempoSetup, 30);
 });
 
+test("un cambio sin tiempo configurado usa el estandar de 120 minutos", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "a", ot: "1", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", maquina: "211", herramental: "H1", tiempoCiclo: 1, cantidadPendiente: 1 },
+    { id: "b", ot: "2", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "B", estatus: "PLAN", maquina: "211", herramental: "H2", tiempoCiclo: 1, cantidadPendiente: 1 },
+  ];
+  const result = core.schedulePlan({
+    selectedOts: ["1", "2"], operations, workOrders: [{ ot: "1" }, { ot: "2" }], operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    toolCatalog: [{ part: "A", herramental: "H1", toolSetupMinutes: 0 }, { part: "B", herramental: "H2", toolSetupMinutes: 0 }],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 0 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const change = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeFromHerramental === "H1" && op.toolChangeToHerramental === "H2");
+  assert.equal(change?.tiempoSetup, 120);
+});
+
 test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", () => {
   const core = loadPlannerCore();
   const operation = {

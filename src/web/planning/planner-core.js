@@ -675,7 +675,9 @@
 
   function toolChangeMinutesForTransition(state, op, fromKey, toKey, settings) {
     const catalog = toolCatalogForOperation(state, op);
-    if (!catalog) return Math.max(SNAP_MINUTES, numberOr(settings?.toolChangeMinutes, 120));
+    const generalMinutes = Number(settings?.toolChangeMinutes);
+    const fallbackMinutes = Number.isFinite(generalMinutes) && generalMinutes > 0 ? generalMinutes : 120;
+    if (!catalog) return fallbackMinutes;
     const [fromHerramental, fromKit] = splitToolKey(fromKey);
     const [toHerramental, toKit] = splitToolKey(toKey);
     const noAntecedent = normalizeKey(fromKey) === "SIN_ANTECEDENTE";
@@ -689,7 +691,7 @@
     );
     if (configuredMinutes > 0) return configuredMinutes;
     if (!noAntecedent && (toolChanged || kitChanged)) {
-      return Math.max(SNAP_MINUTES, numberOr(settings?.toolChangeMinutes, 120));
+      return fallbackMinutes;
     }
     return 0;
   }
