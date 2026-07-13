@@ -339,6 +339,75 @@
     };
   }
 
+  function reconcilePublishedPlan(snapshot, currentState) {
+    const published = snapshot?.fullState || snapshot || {};
+    const current = currentState || {};
+    const publishedOts = new Set((published.selectedOts || published.operations?.map((item) => item?.ot) || [])
+      .map(normalize).filter(Boolean));
+    const workOrders = new Map((current.workOrders || []).map((item) => [normalize(item?.ot), item]));
+    const isOpen = (workOrder) => workOrder && workOrder.exists !== false &&
+      !["CERRADA", "CERRADO", "CLOSED", "CANCELADA", "CANCELADO"].includes(normalize(workOrder.status || workOrder.estatus));
+    const restored = new Set([...publishedOts].filter((ot) => isOpen(workOrders.get(ot))));
+    const operationKey = (operation) => [normalize(operation?.ot), normalize(operation?.secuencia), normalize(operation?.ct)].join("|");
+    const isGeneratedToolChange = (operation) => normalize(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL" &&
+      Boolean(operation?.generatedBy || normalize(operation?.ct) === "TOOL_CHANGE");
+    const publishedOperations = (published.operations || []).filter((operation) => restored.has(normalize(operation?.ot)) && !isGeneratedToolChange(operation));
+    const publishedByKey = new Map(publishedOperations.map((operation) => [operationKey(operation), operation]));
+    const currentRestored = (current.operations || []).filter((operation) => restored.has(normalize(operation?.ot)) && !isGeneratedToolChange(operation));
+    let completedOperations = 0;
+    let newOperations = 0;
+    const reconciled = currentRestored.map((operation) => {
+      const historical = publishedByKey.get(operationKey(operation));
+      if (!historical) {
+        newOperations += 1;
+        return {
+          ...operation, planStatus: "PENDIENTE", completedAt: undefined,
+          fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "", locked: false,
+        };
+      }
+      if (normalize(operation?.planStatus) === "COMPLETADA_PLAN") {
+        completedOperations += 1;
+        return { ...operation };
+      }
+      const next = { ...operation, ...historical, id: operation.id, ot: operation.ot, secuencia: operation.secuencia, ct: operation.ct };
+      ["maquina", "machine", "herramental", "kitHerramental", "subcontractType", "subcontractDays"].forEach((field) => {
+        if (operation[field] !== undefined && operation[field] !== null && operation[field] !== "") next[field] = operation[field];
+      });
+      next.planStatus = "PENDIENTE";
+      delete next.completedAt;
+      return next;
+    });
+    const untouched = (current.operations || []).filter((operation) => !restored.has(normalize(operation?.ot)));
+    const publishedConfigurations = published.otConfigurations || {};
+    const currentConfigurations = current.otConfigurations || {};
+    const otConfigurations = { ...currentConfigurations };
+    let preservedConfigurations = 0;
+    restored.forEach((ot) => {
+      const publishedKey = Object.keys(publishedConfigurations).find((key) => normalize(key) === ot);
+      const currentKey = Object.keys(currentConfigurations).find((key) => normalize(key) === ot);
+      const previous = publishedKey ? publishedConfigurations[publishedKey] || {} : {};
+      const active = currentKey ? currentConfigurations[currentKey] || {} : {};
+      if (Object.values(active).some((value) => value !== undefined && value !== null && value !== "")) preservedConfigurations += 1;
+      const merged = { ...previous };
+      Object.keys(active).forEach((field) => {
+        if (active[field] !== undefined && active[field] !== null && active[field] !== "") merged[field] = active[field];
+      });
+      otConfigurations[currentKey || publishedKey || ot] = merged;
+    });
+    const currentKeys = new Set(currentRestored.map(operationKey));
+    return {
+      state: { ...current, selectedOts: [...restored], operations: [...reconciled, ...untouched], otConfigurations },
+      summary: {
+        restoredOts: restored.size,
+        closedOts: publishedOts.size - restored.size,
+        completedOperations,
+        removedOperations: publishedOperations.filter((operation) => !currentKeys.has(operationKey(operation))).length,
+        newOperations,
+        preservedConfigurations,
+      },
+    };
+  }
+
   function applyDraftToolSelection(operations, ot, tool, bendingCts) {
     const targetOt = normalize(ot);
     const allowed = new Set((bendingCts || []).map((ct) => normalize(ct)));
@@ -474,7 +543,7 @@
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
-    buildDraftSnapshot, applyDraftToolSelection,
+    buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,

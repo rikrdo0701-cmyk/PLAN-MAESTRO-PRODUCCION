@@ -11,6 +11,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
+  const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
@@ -138,6 +139,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, />Inicio NetSuite</);
   assert.doesNotMatch(pagesIndex, />Fin NetSuite</);
   assert.match(bridge, /saveDraftSnapshot: true/);
+  assert.match(bridge, /restorePublishedPlanAsDraft: true/);
+  assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
+  assert.match(storageService, /fullState/);
+  assert.match(codeService, /function restorePublishedPlanAsDraft\(snapshotId, currentPayload\)/);
+  const publishingService = await readFile(path.join(result.distDir, "05-publishing-service.js"), "utf8");
+  assert.match(publishingService, /PP_acquireScriptLock_\('restaurar publicado'/);
+  assert.match(publishingService, /catch \(error\)[\s\S]*PP_writeState_\([\s\S]*PP_replaceDraftSnapshot_\([\s\S]*throw error/);
+  assert.match(publishingService, /snapshotId: 'draft'[\s\S]*backupId: backupId[\s\S]*summary:/);
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);

@@ -664,6 +664,55 @@ function PP_cleanSnapshotUserComment_(value) {
   return /(?:_APP\b|PLANNER_CORE|WARN_|NETSUITE_APPS_SCRIPT|PRIORIDAD_COLA)/i.test(comment) ? '' : comment;
 }
 
+function PP_planSnapshotPayloadKey_(snapshotId) {
+  return 'PLAN_SNAPSHOT_PAYLOAD::' + String(snapshotId || '').trim();
+}
+
+function PP_storePlanSnapshotPayload_(snapshotId, payload) {
+  const properties = PropertiesService.getScriptProperties();
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const previous = properties.getProperty(key);
+  if (previous) {
+    try {
+      const manifest = JSON.parse(previous);
+      for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) properties.deleteProperty(key + '::' + index);
+    } catch (ignored) {}
+  }
+  const serialized = JSON.stringify(payload || {});
+  const chunks = [];
+  for (let offset = 0; offset < serialized.length; offset += 8000) chunks.push(serialized.slice(offset, offset + 8000));
+  chunks.forEach(function(chunk, index) { properties.setProperty(key + '::' + index, chunk); });
+  properties.setProperty(key, JSON.stringify({ chunks: chunks.length }));
+}
+
+function PP_readPlanSnapshotPayload_(snapshotId) {
+  const value = PropertiesService.getScriptProperties().getProperty(PP_planSnapshotPayloadKey_(snapshotId));
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || !parsed.chunks) return parsed;
+    let serialized = '';
+    for (let index = 0; index < Number(parsed.chunks); index += 1) serialized += PropertiesService.getScriptProperties().getProperty(PP_planSnapshotPayloadKey_(snapshotId) + '::' + index) || '';
+    return JSON.parse(serialized);
+  } catch (error) { throw new Error('El payload completo de la instantanea esta corrupto'); }
+}
+
+function PP_clearDraftSnapshot_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.BORRADOR_PLAN.length).clearContent();
+  const properties = PropertiesService.getScriptProperties();
+  const key = PP_planSnapshotPayloadKey_('draft');
+  const value = properties.getProperty(key);
+  if (value) {
+    try {
+      const manifest = JSON.parse(value);
+      for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) properties.deleteProperty(key + '::' + index);
+    } catch (ignored) {}
+  }
+  properties.deleteProperty(key);
+}
+
 function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
   const sheetName = String(options && options.sheetName || 'PLANES_HISTORICOS');
   const sheet = spreadsheet.getSheetByName(sheetName);
@@ -700,6 +749,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
       pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
     ];
   });
+  PP_storePlanSnapshotPayload_(snapshotId, payload);
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
@@ -777,7 +827,7 @@ function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
   });
   if (!rows.length) throw new Error('Plan guardado no encontrado');
   const first = rows[0];
-  return {
+  const result = {
     snapshotId: key,
     generatedAt: String(first.FECHA_GENERACION || ''),
     user: String(first.USUARIO || ''),
@@ -822,6 +872,9 @@ function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
       };
     })
   };
+  const fullState = PP_readPlanSnapshotPayload_(key);
+  if (fullState) result.fullState = fullState;
+  return result;
 }
 
 function PP_readConfig_(sheet) {

@@ -283,6 +283,50 @@ test("la instantanea draft contiene solo seleccion pendiente programada", () => 
   assert.deepEqual(structuredClone(snapshot.operations.map((op) => op.id)), ["ok"]);
 });
 
+test("reconcilia un publicado con el estado vigente sin revivir datos obsoletos", () => {
+  const snapshot = { fullState: {
+    selectedOts: ["100", "200"],
+    otConfigurations: {
+      100: { machine: "PUBLICADA", herramental: "H-PUB", kitHerramental: "K-PUB", subcontractType: "CROMADO" },
+      200: { machine: "CERRADA" },
+    },
+    operations: [
+      { id: "pub-cut", ot: "100", secuencia: 10, ct: "CORTE", maquina: "PUBLICADA", herramental: "H-PUB", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "pub-old", ot: "100", secuencia: 20, ct: "SOLDADURA", fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+      { id: "pub-tool", ot: "100", secuencia: 0, ct: "TOOL_CHANGE", tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "PLANNER_CORE_V2" },
+      { id: "pub-closed", ot: "200", secuencia: 10, ct: "CORTE", fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    ],
+  } };
+  const current = {
+    selectedOts: ["999"],
+    workOrders: [
+      { ot: "100", status: "ABIERTA", exists: true },
+      { ot: "200", status: "CERRADA", exists: true },
+    ],
+    otConfigurations: { 100: { machine: "ACTUAL", herramental: "H-ACT", kitHerramental: "", subcontractType: "" } },
+    operations: [
+      { id: "current-cut", ot: "100", secuencia: 10, ct: "CORTE", maquina: "ACTUAL", herramental: "H-ACT", planStatus: "COMPLETADA_PLAN", completedAt: "2026-07-13T08:02:00Z" },
+      { id: "current-new", ot: "100", secuencia: 30, ct: "PINTURA", fechaInicio: "2026-07-14", horaInicio: "07:00", fechaFin: "2026-07-14", horaFin: "08:00" },
+      { id: "other", ot: "999", secuencia: 1, ct: "CORTE" },
+    ],
+  };
+
+  const result = core.reconcilePublishedPlan(snapshot, current);
+  assert.deepEqual(structuredClone(result.summary), {
+    restoredOts: 1, closedOts: 1, completedOperations: 1,
+    removedOperations: 1, newOperations: 1, preservedConfigurations: 1,
+  });
+  assert.deepEqual(structuredClone(result.state.selectedOts), ["100"]);
+  assert.deepEqual(structuredClone(result.state.operations.map((op) => op.id)), ["current-cut", "current-new", "other"]);
+  assert.equal(result.state.operations[0].planStatus, "COMPLETADA_PLAN");
+  assert.equal(result.state.operations[0].completedAt, "2026-07-13T08:02:00Z");
+  assert.equal(result.state.operations[1].planStatus, "PENDIENTE");
+  assert.equal(result.state.operations[1].fechaInicio, "");
+  assert.deepEqual(structuredClone(result.state.otConfigurations[100]), {
+    machine: "ACTUAL", herramental: "H-ACT", kitHerramental: "K-PUB", subcontractType: "CROMADO",
+  });
+});
+
 test("cambiar herramental en una tarjeta actualiza solo sus operaciones de doblado", () => {
   const operations = [
     { id: "bend", ot: "100", ct: "5459", herramental: "H1" },

@@ -155,6 +155,10 @@ function getPlanSnapshot(snapshotId) {
   return PP_getPlanSnapshot_(spreadsheet, snapshotId);
 }
 
+function restorePublishedPlanAsDraft(snapshotId, currentPayload) {
+  return PP_restorePublishedPlanAsDraft_(snapshotId, currentPayload);
+}
+
 function syncNetSuitePlant() {
   const snapshot = PP_fetchNetSuitePlantData_();
   const lock = PP_acquireScriptLock_('sincronizar', 60000);
