@@ -3466,8 +3466,8 @@ async function ensureCommercialDataForPlan(ots) {
 }
 
 async function persistPlanSnapshot() {
+  const payload = window.PlanningWorkflowCore.buildDraftSnapshot(createAppSheetPayload(), new Date().toISOString());
   try {
-    const payload = window.PlanningWorkflowCore.buildDraftSnapshot(createAppSheetPayload(), new Date().toISOString());
     let saved;
     if (isAppsScriptRuntime()) {
       saved = await callAppsScript("saveDraftSnapshot", payload);
@@ -3483,6 +3483,9 @@ async function persistPlanSnapshot() {
     await loadPlanSnapshots(false);
     return saved;
   } catch (error) {
+    if (window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(error)) {
+      return payload;
+    }
     showToast(`Plan generado; no se pudo guardar la instantanea: ${error.message}`);
     return null;
   }

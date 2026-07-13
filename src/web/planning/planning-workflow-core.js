@@ -305,6 +305,10 @@
     return { rows: selected.slice(0, limit), total: selected.length, range };
   }
 
+  function isUnsupportedDraftSnapshotError(error) {
+    return /metodo no permitido:\s*saveDraftSnapshot/i.test(String(error?.message || error || ""));
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
@@ -313,5 +317,6 @@
     buildDraftSnapshot, applyDraftToolSelection,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
-    classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
+    classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
+    isUnsupportedDraftSnapshotError };
 });

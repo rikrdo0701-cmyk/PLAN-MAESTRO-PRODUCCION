@@ -265,3 +265,8 @@ test("selectReportRows ordena, filtra estado y rango, y limita siempre a 25", ()
   assert.equal(selection.rows.length, 25);
   assert.deepEqual(selection.rows.map((row) => row.id), Array.from({ length: 25 }, (_, index) => String(29 - index)));
 });
+
+test("detecta un backend anterior que no permite guardar la instantanea del borrador", () => {
+  assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Metodo no permitido: saveDraftSnapshot")), true);
+  assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Tiempo agotado al ejecutar saveDraftSnapshot")), false);
+});
