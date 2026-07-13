@@ -142,6 +142,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(bridge, /restorePublishedPlanAsDraft: true/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
   assert.match(storageService, /fullState/);
+  assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);
+  assert.match(storageService, /snapshotId\.indexOf\('technical-'\) === 0/);
+  assert.match(storageService, /const fullState = PP_readPlanSnapshotPayload_\(key\);[\s\S]*if \(!rows\.length && !fullState\)/);
+  assert.match(storageService, /stagingKey[\s\S]*setProperties\([\s\S]*setProperty\(key, JSON\.stringify\(manifest\)\)/);
+  assert.match(storageService, /catch \(error\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_/);
+  assert.match(storageService, /const previousPayload = PP_readPlanSnapshotPayload_\('draft'\)/);
+  assert.match(storageService, /catch \(error\)[\s\S]*PP_storePlanSnapshotPayload_\('draft', previousPayload\)/);
   assert.match(codeService, /function restorePublishedPlanAsDraft\(snapshotId, currentPayload\)/);
   const publishingService = await readFile(path.join(result.distDir, "05-publishing-service.js"), "utf8");
   assert.match(publishingService, /PP_acquireScriptLock_\('restaurar publicado'/);

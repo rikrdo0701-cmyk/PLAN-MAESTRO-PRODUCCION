@@ -10,6 +10,8 @@ Implementada la restauración de un publicado como borrador sin cambios de UI. S
 - GREEN core: el mismo comando pasó tras implementar reconciliación por identidad OT/secuencia/CT.
 - RED build: `node --test tests/build.test.mjs` falló al no encontrar `restorePublishedPlanAsDraft: true` en el bridge.
 - GREEN build: las aserciones verifican wrapper, allowlist, clave full-state, lock, rollback y respuesta.
+- RED P1: las nuevas aserciones de build fallaron al no encontrar enumeración de manifiestos ni staging transaccional.
+- GREEN P1: las aserciones verifican recuperación sin filas, exclusión de backups, commit de manifiesto después de chunks, limpieza de staging y restauración del payload del draft.
 
 ## Implementación
 
@@ -17,6 +19,8 @@ Implementada la restauración de un publicado como borrador sin cambios de UI. S
 - Los payloads completos se guardan mediante manifiesto fragmentado bajo `PLAN_SNAPSHOT_PAYLOAD::<snapshotId>`; `PP_getPlanSnapshot_` agrega `fullState` cuando existe y conserva lectura por filas para históricos anteriores.
 - `restorePublishedPlanAsDraft(snapshotId, currentPayload)` se expone públicamente y en el bridge. El servicio valida el snapshot, adquiere script lock, crea backup técnico fuera de `listPlanSnapshots`, reconcilia, escribe draft/estado y compensa ambos ante error antes de relanzar.
 - `PLANES_HISTORICOS` sólo recibe las filas normales de publicación; la restauración no modifica el histórico.
+- Corrección P1: snapshots y drafts con cero filas programadas se listan desde su manifiesto y se recuperan desde `fullState`; los IDs técnicos se excluyen explícitamente.
+- Corrección P1: la escritura de payload usa una generación de staging. Los chunks nuevos se completan antes de cambiar el manifiesto base; ante error se elimina staging y el manifiesto anterior permanece legible. El reemplazo/rollback del draft restaura también el payload anterior, incluyendo drafts legacy de sólo filas.
 
 ## Verificación
 

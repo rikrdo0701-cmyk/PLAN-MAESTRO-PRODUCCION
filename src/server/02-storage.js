@@ -668,21 +668,41 @@ function PP_planSnapshotPayloadKey_(snapshotId) {
   return 'PLAN_SNAPSHOT_PAYLOAD::' + String(snapshotId || '').trim();
 }
 
-function PP_storePlanSnapshotPayload_(snapshotId, payload) {
+function PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest) {
+  const generation = String(manifest && manifest.generation || '');
+  for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) {
+    properties.deleteProperty(generation ? key + '::' + generation + '::' + index : key + '::' + index);
+  }
+}
+
+function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata) {
   const properties = PropertiesService.getScriptProperties();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
-  const previous = properties.getProperty(key);
-  if (previous) {
-    try {
-      const manifest = JSON.parse(previous);
-      for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) properties.deleteProperty(key + '::' + index);
-    } catch (ignored) {}
-  }
+  const previousValue = properties.getProperty(key);
+  let previousManifest = null;
+  try { previousManifest = previousValue ? JSON.parse(previousValue) : null; } catch (ignored) {}
   const serialized = JSON.stringify(payload || {});
   const chunks = [];
   for (let offset = 0; offset < serialized.length; offset += 8000) chunks.push(serialized.slice(offset, offset + 8000));
-  chunks.forEach(function(chunk, index) { properties.setProperty(key + '::' + index, chunk); });
-  properties.setProperty(key, JSON.stringify({ chunks: chunks.length }));
+  const generation = Utilities.getUuid();
+  const stagingKey = key + '::' + generation + '::';
+  const staged = {};
+  chunks.forEach(function(chunk, index) { staged[stagingKey + index] = chunk; });
+  const details = metadata || {};
+  const manifest = {
+    chunks: chunks.length, generation: generation,
+    generatedAt: String(details.generatedAt || payload.generatedAt || payload.savedAt || ''),
+    user: String(details.user || ''), planStart: String(payload.planStart || ''),
+    horizonDays: Number(payload.horizonDays || 0), operations: Number(details.operations != null ? details.operations : (payload.operations || []).length)
+  };
+  try {
+    properties.setProperties(staged, false);
+    properties.setProperty(key, JSON.stringify(manifest));
+  } catch (error) {
+    PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
+    throw error;
+  }
+  try { if (previousManifest) PP_deletePlanSnapshotPayloadGeneration_(properties, key, previousManifest); } catch (ignored) {}
 }
 
 function PP_readPlanSnapshotPayload_(snapshotId) {
@@ -692,25 +712,28 @@ function PP_readPlanSnapshotPayload_(snapshotId) {
     const parsed = JSON.parse(value);
     if (!parsed || !parsed.chunks) return parsed;
     let serialized = '';
-    for (let index = 0; index < Number(parsed.chunks); index += 1) serialized += PropertiesService.getScriptProperties().getProperty(PP_planSnapshotPayloadKey_(snapshotId) + '::' + index) || '';
+    const generation = String(parsed.generation || '');
+    for (let index = 0; index < Number(parsed.chunks); index += 1) {
+      const chunkKey = PP_planSnapshotPayloadKey_(snapshotId) + (generation ? '::' + generation : '') + '::' + index;
+      serialized += PropertiesService.getScriptProperties().getProperty(chunkKey) || '';
+    }
     return JSON.parse(serialized);
   } catch (error) { throw new Error('El payload completo de la instantanea esta corrupto'); }
+}
+
+function PP_deletePlanSnapshotPayload_(snapshotId) {
+  const properties = PropertiesService.getScriptProperties();
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const value = properties.getProperty(key);
+  try { if (value) PP_deletePlanSnapshotPayloadGeneration_(properties, key, JSON.parse(value)); } catch (ignored) {}
+  properties.deleteProperty(key);
 }
 
 function PP_clearDraftSnapshot_(spreadsheet) {
   const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.BORRADOR_PLAN.length).clearContent();
-  const properties = PropertiesService.getScriptProperties();
-  const key = PP_planSnapshotPayloadKey_('draft');
-  const value = properties.getProperty(key);
-  if (value) {
-    try {
-      const manifest = JSON.parse(value);
-      for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) properties.deleteProperty(key + '::' + index);
-    } catch (ignored) {}
-  }
-  properties.deleteProperty(key);
+  PP_deletePlanSnapshotPayload_('draft');
 }
 
 function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
@@ -749,7 +772,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
       pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
     ];
   });
-  PP_storePlanSnapshotPayload_(snapshotId, payload);
+  PP_storePlanSnapshotPayload_(snapshotId, payload, { generatedAt: generatedAt, user: user, operations: rows.length });
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
@@ -761,6 +784,7 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
   const lastRow = sheet.getLastRow();
   const width = PP_SHEETS.PLANES_HISTORICOS.length;
   const previous = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
+  const previousPayload = PP_readPlanSnapshotPayload_('draft');
   try {
     if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
     return PP_appendPlanSnapshot_(spreadsheet, payload, user, { snapshotId: 'draft', sheetName: 'BORRADOR_PLAN' });
@@ -768,6 +792,8 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
     const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);
     if (restoreRows > 0) sheet.getRange(2, 1, restoreRows, width).clearContent();
     if (previous.length) sheet.getRange(2, 1, previous.length, width).setValues(previous);
+    if (previousPayload) PP_storePlanSnapshotPayload_('draft', previousPayload);
+    else PP_deletePlanSnapshotPayload_('draft');
     throw error;
   }
 }
@@ -789,6 +815,20 @@ function PP_listPlanSnapshots_(spreadsheet) {
       };
     }
     grouped[snapshotId].operations += 1;
+  });
+  const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+  const properties = PropertiesService.getScriptProperties().getProperties();
+  Object.keys(properties).forEach(function(propertyKey) {
+    if (propertyKey.indexOf(prefix) !== 0) return;
+    const snapshotId = propertyKey.slice(prefix.length);
+    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0 || grouped[snapshotId]) return;
+    let manifest = null;
+    try { manifest = JSON.parse(properties[propertyKey]); } catch (ignored) {}
+    if (!manifest || !manifest.chunks) return;
+    grouped[snapshotId] = {
+      snapshotId: snapshotId, generatedAt: String(manifest.generatedAt || ''), user: String(manifest.user || ''),
+      planStart: String(manifest.planStart || ''), horizonDays: Number(manifest.horizonDays || 0), operations: Number(manifest.operations || 0)
+    };
   });
   return Object.keys(grouped).map(function(key) { return grouped[key]; }).sort(function(a, b) {
     return String(b.generatedAt).localeCompare(String(a.generatedAt));
@@ -825,15 +865,16 @@ function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
   const rows = PP_readRows_(spreadsheet.getSheetByName(sourceSheet)).filter(function(row) {
     return String(row.SNAPSHOT_ID || '').trim() === key;
   });
-  if (!rows.length) throw new Error('Plan guardado no encontrado');
-  const first = rows[0];
+  const fullState = PP_readPlanSnapshotPayload_(key);
+  if (!rows.length && !fullState) throw new Error('Plan guardado no encontrado');
+  const first = rows[0] || {};
   const result = {
     snapshotId: key,
-    generatedAt: String(first.FECHA_GENERACION || ''),
+    generatedAt: String(first.FECHA_GENERACION || fullState && (fullState.generatedAt || fullState.savedAt) || ''),
     user: String(first.USUARIO || ''),
-    planStart: String(first.PLAN_INICIO || ''),
-    horizonDays: Number(first.HORIZONTE_DIAS || 0),
-    operations: rows.map(function(row, index) {
+    planStart: String(first.PLAN_INICIO || fullState && fullState.planStart || ''),
+    horizonDays: Number(first.HORIZONTE_DIAS || fullState && fullState.horizonDays || 0),
+    operations: rows.length ? rows.map(function(row, index) {
       const description = String(row.OP || '');
       const comments = String(row.COMENTARIOS || '');
       const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
@@ -870,9 +911,8 @@ function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
         unitPrice: Number(row.PRECIO_UNITARIO || 0),
         amount: Number(row.MONTO || 0)
       };
-    })
+    }) : (fullState.operations || []).map(function(operation) { return Object.assign({}, operation); })
   };
-  const fullState = PP_readPlanSnapshotPayload_(key);
   if (fullState) result.fullState = fullState;
   return result;
 }
