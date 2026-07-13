@@ -1492,6 +1492,7 @@ function renderPriorityList() {
     const article = job.parte || "SIN ARTICULO";
     const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
     const quantityLabel = quantity ? `${formatMaterialQuantity(quantity)} pzas` : "Sin dato";
+    const toolMini = jobToolMiniHtml(job);
     const photoMarkup = job.photoUrl
       ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
@@ -1509,6 +1510,7 @@ function renderPriorityList() {
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
+          ${toolMini}
           ${jobTypeTagHtml(job)}
         </div>
       </div>
@@ -1621,6 +1623,7 @@ function renderPriorityQueue() {
     const article = job.parte || "SIN ARTICULO";
     const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
     const quantityLabel = quantity ? formatMaterialQuantity(quantity) : "Sin dato";
+    const toolMini = jobToolMiniHtml(job);
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const photoMarkup = job.photoUrl
@@ -1636,6 +1639,7 @@ function renderPriorityQueue() {
           <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
           <div class="queue-article" title="Articulo ${escapeHtml(article)}"><span>Articulo</span><strong>${escapeHtml(article)}</strong></div>
           <div class="queue-description">${escapeHtml(job.descripcion || "Sin descripcion")}</div>
+          ${toolMini}
           ${jobTypeTagHtml(job)}
           <label class="queue-delivery"><span>Entrega</span><input class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" data-queue-due-date="${escapeHtml(job.ot)}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(workOrder?.dueDate))}"></label>
           <div class="queue-meta"><span>Cantidad <strong>${escapeHtml(quantityLabel)}</strong></span><span>${formatHours(job.minutes)}</span></div>
@@ -2140,7 +2144,7 @@ function applyPlanningRequirements(requirements, values, operations) {
     if (codes.has("MISSING_TOOL") || codes.has("OT_TOOL")) {
       const currentCatalog = toolCatalogForAppOperation(op);
       const tool = planningCatalogValue(values, `tool_${index}`) || cleanToolValue(currentCatalog?.herramental);
-      op.herramental = tool;
+      applyToolToJob(op.ot, tool);
       if (tool && !state.toolCatalog.some((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(op.parte) && cleanToolValue(item.herramental) === tool && cleanToolValue(item.kitHerramental) === op.kitHerramental)) {
         state.toolCatalog.push({
           id: uid("tool"), part: op.parte,
@@ -4644,7 +4648,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
 }
 
 function renderProductionReportTable(operations, options = {}) {
-  const headers = ["Num", "O.T.", "Parte", "OP", "Piezas", "Maq/Area", "TC (min)", "Tiempo setup", "Tiempo prod.", "F. inicio", "H. inicio", "F. fin", "H. fin", "Comentarios"];
+  const headers = ["Num", "O.T.", "Parte", "OP", "Piezas", "Maq/Area", "Herramental", "TC (min)", "Tiempo setup", "Tiempo prod.", "F. inicio", "H. inicio", "F. fin", "H. fin", "Comentarios"];
   if (options.statusActions) headers.push("Estado");
   const body = operations.map((op, index) => {
     const start = opStart(op);
@@ -4659,6 +4663,7 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
       <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
       <td>${escapeHtml(machineArea)}</td>
+      <td>${escapeHtml(cleanToolValue(op.herramental))}</td>
       <td>${formatReportNumber(op.tiempoCiclo)}</td>
       <td>${formatReportNumber(op.tiempoSetup)}</td>
       <td>${formatReportNumber(scheduledProductionMinutesForExport(op))}</td>
@@ -6362,6 +6367,16 @@ function toolLabel(op) {
   const kit = cleanToolValue(op.kitHerramental);
   if (!herr && !kit) return "SIN HERRAMENTAL";
   return `${herr || "SIN_HERR"} / ${kit || (op.kitPending ? "KIT_PENDIENTE" : "SIN_KIT")}`;
+}
+
+function jobToolMiniHtml(job) {
+  const configuration = state.otConfigurations?.[String(job?.ot || "").trim()] || {};
+  const bendingOps = (job?.ops || []).filter(isBendingAppOperation);
+  if (!bendingOps.length) return "";
+  const tool = cleanToolValue(configuration.herramental) || bendingOps.map((op) => cleanToolValue(op.herramental)).find(Boolean)
+    || bendingOps.map((op) => cleanToolValue(toolCatalogForAppOperation(op)?.herramental)).find(Boolean) || "";
+  if (!tool) return "";
+  return `<span class="queue-tool-mini" title="Herramental seleccionado: ${escapeHtml(tool)}">Herr. <strong>${escapeHtml(tool)}</strong></span>`;
 }
 
 function cleanToolValue(value) {

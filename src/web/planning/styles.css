@@ -651,6 +651,22 @@ summary:focus-visible,
 }
 .job-status.blocked { border-color: #d8b6ba; background: #f7eaec; color: #8d2835; }
 .priority-card.included .job-status { border-color: rgba(255,255,255,0.45); background: rgba(255,255,255,0.14); color: #fff; }
+.queue-tool-mini {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 5px;
+  border: 1px solid #c8d6d9;
+  border-radius: 3px;
+  background: #eef5f4;
+  color: #315c5a !important;
+  font-size: 8px !important;
+  line-height: 1.1;
+}
+.queue-tool-mini strong { display: inline; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 
 .netsuite-change-badge {
   width: fit-content;
