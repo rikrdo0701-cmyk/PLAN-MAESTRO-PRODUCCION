@@ -3462,6 +3462,7 @@ async function scheduleCurrentPlanImpl() {
     showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz");
     return;
   }
+  const originalSelectedOts = [...state.selectedOts];
   checkpointState();
   state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
   applyQueuePriorities();
@@ -3485,7 +3486,7 @@ async function scheduleCurrentPlanImpl() {
       const conflict = operatorConflicts[0];
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
-    state = result;
+    state = { ...result, selectedOts: originalSelectedOts };
     const summary = state.lastSchedule || {};
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);

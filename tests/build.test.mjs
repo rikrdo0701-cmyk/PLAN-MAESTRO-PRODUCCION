@@ -34,7 +34,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
   assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)[\s\S]{0,1200}PlanningWorkflowCore\.removeOtFromDraft/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
-  assert.match(pagesIndex, /PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: readyOts \}, \{/);
+  assert.match(pagesIndex, /const originalSelectedOts = \[\.\.\.state\.selectedOts\];[\s\S]{0,900}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: readyOts \}, \{/);
+  assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
   assert.match(pagesIndex, /return \{ ready: hasData\(\), source: "fresh", warning: "" \}/);

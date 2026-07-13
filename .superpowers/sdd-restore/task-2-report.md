@@ -34,7 +34,7 @@
 - No se reasignan masivamente OTs entre Backlog y Planeado/Por planear.
 - Se corrigió el conteo de retiradas para no contar OTs cerradas que el usuario decidió conservar.
 - Las advertencias reconciliadas se sustituyen en vez de acumular duplicados.
-- Corrección de revisión: el motor recibe una copia efímera con `selectedOts: readyOts`; la selección persistida y las tarjetas no se podan ni se mueven.
+- Correcciones de revisión: el motor recibe una copia efímera con `selectedOts: readyOts` y, al terminar, el resultado recupera `originalSelectedOts`; una `CLOSED_KEPT` permanece visible sin entrar al motor ni podarse al persistir.
 
 ## Commit
 
