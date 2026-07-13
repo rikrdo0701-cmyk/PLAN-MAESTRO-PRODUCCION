@@ -124,6 +124,45 @@ test("una operacion fantasma no seleccionada no reserva capacidad", () => {
   assert.ok(result.operations.some((item) => item.id === "ghost"));
 });
 
+test("un cambio antiguo pendiente desaparece y no reserva capacidad", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["200"],
+    operations: [
+      { id: "old-change", ot: "200", secuencia: 0, ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL", estatus: "PLAN", planStatus: "PENDIENTE", generatedBy: "PLANNER_CORE_V2", locked: true, operador: "AJUSTADOR", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoSetup: 120 },
+      { id: "selected", ot: "200", secuencia: 1, ct: "AJUSTE", descripcion: "AJUSTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "AJUSTADOR", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { AJUSTE: ["AJUSTADOR"] }, operators: ["AJUSTADOR"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const selected = result.operations.find((item) => item.id === "selected");
+  assert.equal(result.operations.some((item) => item.id === "old-change"), false);
+  assert.deepEqual([selected.fechaInicio, selected.horaInicio], ["2026-07-13", "07:00"]);
+});
+
+test("un cambio antiguo completado permanece pero no reserva capacidad", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["200"],
+    operations: [
+      { id: "old-completed-change", ot: "100", secuencia: 1, ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", generatedBy: "PLANNER_CORE_V2", operador: "AJUSTADOR", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoSetup: 120 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "AJUSTE", descripcion: "AJUSTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "PENDIENTE", operador: "AJUSTADOR", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { AJUSTE: ["AJUSTADOR"] }, operators: ["AJUSTADOR"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const completed = result.operations.find((item) => item.id === "old-completed-change");
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.ok(completed);
+  assert.deepEqual([completed.fechaInicio, completed.horaInicio, completed.fechaFin, completed.horaFin], ["2026-07-13", "07:00", "2026-07-13", "09:00"]);
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"]);
+  assert.equal(result.lastSchedule.operatorConflicts, 0);
+});
+
 test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
