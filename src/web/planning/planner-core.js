@@ -1468,7 +1468,7 @@
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
     };
-    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next)) {
+    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next) && !isFixedOperation(next)) {
       next.maquina = "";
       next.herramental = "";
       next.kitHerramental = "";
@@ -1486,7 +1486,7 @@
       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
       op.kitPending = configuration.kitPending === true;
-    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") {
+    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(op)) {
       op.maquina = "";
     }
     if (isSubcontractOperation(state, op)) {

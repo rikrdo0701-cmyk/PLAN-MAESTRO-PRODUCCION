@@ -72,6 +72,14 @@
     return (state?.selectedOts || []).some((item) => normalize(item) === key);
   }
 
+  function canRemoveSelectedOt(state, ot) {
+    const key = normalize(ot);
+    const locked = new Set((state?.lockedOts || []).map(normalize).filter(Boolean));
+    return locked.has(key)
+      ? { allowed: false, reason: "Desbloquea la OT antes de retirarla del plan" }
+      : { allowed: true, reason: "" };
+  }
+
   function removeOtFromDraft(state, ot) {
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
@@ -317,7 +325,7 @@
   }
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
-    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
+    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,

@@ -124,6 +124,33 @@ test("una operacion fantasma no seleccionada no reserva capacidad", () => {
   assert.ok(result.operations.some((item) => item.id === "ghost"));
 });
 
+test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"],
+    lockedOts: ["100"],
+    operations: [
+      { id: "locked", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", locked: true, operador: "OP 1", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 60 },
+      { id: "movable", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T08:00:00" });
+
+  const locked = result.operations.find((item) => item.id === "locked");
+  const movable = result.operations.find((item) => item.id === "movable");
+  assert.deepEqual(
+    [locked.fechaInicio, locked.horaInicio, locked.fechaFin, locked.horaFin, locked.operador, locked.maquina],
+    ["2026-07-13", "08:00", "2026-07-13", "09:00", "OP 1", "M1"],
+  );
+  const lockedStart = new Date(`${locked.fechaInicio}T${locked.horaInicio}:00`);
+  const lockedEnd = new Date(`${locked.fechaFin}T${locked.horaFin}:00`);
+  const movableStart = new Date(`${movable.fechaInicio}T${movable.horaInicio}:00`);
+  const movableEnd = new Date(`${movable.fechaFin}T${movable.horaFin}:00`);
+  assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con el bloqueo");
+});
+
 test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
   const core = loadPlannerCore();
   const operation = {

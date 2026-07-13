@@ -57,6 +57,18 @@ test("filterOperationsByPlanStatus filtra pendientes, completadas y todas", () =
   assert.deepEqual(core.filterOperationsByPlanStatus(rows, "TODAS"), rows);
 });
 
+test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloqueada", () => {
+  const state = { lockedOts: ["100"] };
+  assert.deepEqual(structuredClone(core.canRemoveSelectedOt(state, 100)), {
+    allowed: false,
+    reason: "Desbloquea la OT antes de retirarla del plan",
+  });
+  assert.deepEqual(structuredClone(core.canRemoveSelectedOt(state, "200")), {
+    allowed: true,
+    reason: "",
+  });
+});
+
 test("normaliza la vista Gantt y mantiene un unico control activo", () => {
   for (const view of ["job", "ct", "machine", "operator"]) {
     assert.equal(core.normalizeGanttView(view), view);

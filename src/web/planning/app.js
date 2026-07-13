@@ -1812,9 +1812,12 @@ async function selectJob(ot, selected) {
     showToast(`OT ${ot} esta programada y debe permanecer en el plan`);
     return;
   }
-  if (!selected && isJobLocked(ot)) {
-    showToast(`Desbloquea la OT ${ot} antes de devolverla al backlog`);
-    return;
+  if (!selected) {
+    const removal = window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot);
+    if (!removal.allowed) {
+      showToast(removal.reason);
+      return;
+    }
   }
   const alreadySelected = state.selectedOts.includes(ot);
   if (selected && !alreadySelected) {
