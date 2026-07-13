@@ -42,7 +42,7 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado sin
   assert.deepEqual(structuredClone(result.operations[0]), {
     ...movable,
     fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
-    operador: "", maquina: "", herramental: "", kitHerramental: "",
+    operador: "",
     needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
   });
   assert.deepEqual(structuredClone(result.operations.slice(1)), original.operations.slice(1));

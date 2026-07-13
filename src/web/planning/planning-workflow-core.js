@@ -42,7 +42,7 @@
         return {
           ...operation,
           fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
-          operador: "", maquina: "", herramental: "", kitHerramental: "",
+          operador: "",
           needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
         };
       }),
