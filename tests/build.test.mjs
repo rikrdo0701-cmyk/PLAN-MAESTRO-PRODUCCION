@@ -95,6 +95,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Minutos productivos/);
   assert.match(pagesIndex, /Minutos no operativos/);
   assert.match(pagesIndex, /Causa de espera/);
+  assert.match(pagesIndex, /window\.PlannerCore\?\.productionMinutes\?\.\(op\)/);
+  const operationDurationSource = pagesIndex.slice(pagesIndex.indexOf("function operationDuration(op)"), pagesIndex.indexOf("const OPERATION_DURATION_CACHE"));
+  assert.match(
+    operationDurationSource,
+    /const explicit[\s\S]*if \(explicit > 0\) return explicit;[\s\S]*if \(start && end\)/,
+    "operationDuration debe preferir la duracion productiva al intervalo calendario salvo subcontratos",
+  );
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
   assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
   assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(\)/);

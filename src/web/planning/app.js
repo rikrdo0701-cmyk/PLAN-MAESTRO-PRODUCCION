@@ -5664,9 +5664,9 @@ function operationDuration(op) {
     if (days > 0) return Math.max(MIN_OPERATION_MINUTES, days * WORK_DAY_MINUTES);
     return MIN_OPERATION_MINUTES;
   }
-  if (start && end) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
   const explicit = Number(op.tiempoSetup || 0) + adjustedProductionMinutes(op);
   if (explicit > 0) return explicit;
+  if (start && end) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
   return MIN_OPERATION_MINUTES;
 }
 
@@ -5693,7 +5693,8 @@ function adjustedProductionMinutes(op) {
   const capability = capabilityFromOperation(op);
   const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
   const efficiency = Math.max(1, Math.min(100, Number(rule.efficiency ?? rule.eficiencia) || 100));
-  return Math.ceil(Number(op.tiempoProd || 0) * (2 - efficiency / 100) * 100 / performance);
+  const production = window.PlannerCore?.productionMinutes?.(op) ?? Number(op.tiempoProd || 0);
+  return Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
 }
 
 function opStart(op) {

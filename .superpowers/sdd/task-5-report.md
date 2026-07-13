@@ -17,6 +17,8 @@ Resultado inicial: 2 aprobadas y 2 fallidas. El motor ya conservaba correctament
 ## Cambios
 
 - `ganttOperationTiming` calcula de forma pura minutos productivos, transcurridos y no operativos.
+- La duración productiva reutiliza `PlannerCore.productionMinutes`, por lo que prioriza TC × cantidad pendiente sobre un `tiempoProd` obsoleto y aplica los mismos ajustes de desempeño y eficiencia.
+- Cargas, reportes y resúmenes usan duración productiva aun cuando la operación tenga un intervalo calendario que atraviese pausas o días no laborables; el intervalo solo queda como respaldo para datos históricos sin duración explícita.
 - La posición y anchura siguen usando los extremos reales de inicio y fin.
 - La etiqueta de la barra muestra minutos productivos.
 - El tooltip muestra inicio, fin, minutos productivos y no operativos.
