@@ -135,6 +135,24 @@ Al cancelar, esas OTs permanecen visibles en Planeado/Por planear con una advert
 
 Las OTs bloqueadas también requerirán confirmación. Confirmar la depuración por cierre de NetSuite tendrá precedencia sobre el bloqueo manual, pues una OT cerrada no puede seguir consumiendo capacidad; el diálogo deberá indicarlo expresamente.
 
+### Cambios de cantidad en OTs planeadas
+
+Una diferencia en cantidad total, fabricada o pendiente de una OT que permanezca en Backlog se aplicará directamente. La misma diferencia en una OT de Planeado/Por planear requerirá confirmación porque cambia la duración productiva y puede invalidar el horario del borrador.
+
+La confirmación mostrará OT, artículo, valores anteriores y nuevos, e indicará que será necesario volver a generar el plan. Por ejemplo: `La OT 2433 cambió de 30 a 45 piezas pendientes. Este cambio afecta la duración de sus operaciones y requiere volver a generar el plan.`
+
+Al aceptar una diferencia de cantidad:
+
+- se actualizan cantidad total, fabricada y pendiente;
+- las operaciones pendientes no bloqueadas de esa OT pierden sus fechas y horas calculadas;
+- las operaciones completadas conservan estado y fechas históricas;
+- el borrador se marca `Requiere reprogramación`; y
+- el motor no se ejecuta automáticamente.
+
+Si la OT está bloqueada, se actualizan sus cantidades pero se conservan inicialmente sus fechas, horas y recursos bloqueados. El borrador queda marcado con una incompatibilidad explícita entre cantidad y programación bloqueada; el usuario deberá desbloquear y volver a generar para recalcularla. El motor nunca moverá silenciosamente una operación bloqueada.
+
+Al cancelar, el borrador conserva las cantidades anteriores y la tarjeta muestra una advertencia con las cantidades distintas reportadas por NetSuite. Una sincronización posterior volverá a ofrecer la actualización mientras persista la diferencia.
+
 ## Costo por pieza semanal
 
 ### Universo de cálculo
@@ -203,6 +221,11 @@ El resumen mostrará `Costo P/P` con formato monetario. Las agrupaciones por tip
 - Una OT nueva se agrega únicamente al Backlog.
 - Un cambio de cantidades actualiza la tarjeta sin cambiarla de columna.
 - Una OT cerrada desaparece del Backlog.
+- Un cambio de cantidad en Backlog se aplica sin confirmación.
+- Un cambio de cantidad en Planeado/Por planear requiere confirmación y no ejecuta automáticamente el motor.
+- Aceptar el cambio limpia horarios pendientes no bloqueados y marca el borrador para reprogramar.
+- Una OT bloqueada conserva horarios y muestra incompatibilidad hasta ser desbloqueada y reprogramada.
+- Cancelar conserva la cantidad del borrador y muestra la diferencia reportada por NetSuite.
 - Una OT planeada cerrada solicita confirmación antes de retirarse.
 - Cancelar conserva la OT planeada con advertencia y la excluye de la siguiente programación.
 - Confirmar retira la OT planeada, limpia su capacidad pendiente y conserva el historial completado.
