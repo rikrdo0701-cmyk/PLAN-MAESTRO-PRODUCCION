@@ -82,6 +82,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
   assert.match(pagesIndex, /id="jobToolInput"/);
   assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value\)/);
+  const detailBinding = pagesIndex.slice(pagesIndex.indexOf('const toolInput = els.selectedJobPanel.querySelector("#jobToolInput")'), pagesIndex.indexOf("function renderGantt()"));
+  assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
   assert.match(pagesIndex, /<details class="job-resource-section/);
   assert.doesNotMatch(pagesIndex, /class="job-photo/);
   assert.doesNotMatch(pagesIndex, />Inicio NetSuite</);

@@ -105,6 +105,32 @@ test("una completada conserva fechas y no consume capacidad pendiente", () => {
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
+test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
+  const core = loadPlannerCore();
+  const operation = {
+    tiempoCiclo: 1.5,
+    cantidadPendiente: 30,
+    tiempoSetup: 15,
+    tiempoProd: 15,
+  };
+  assert.equal(core.productionMinutes(operation), 45);
+  assert.equal(core.operationDuration(operation, 100, 100), 60);
+});
+
+test("el motor toma el herramental guardado en la configuracion de la OT", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["2433"],
+    operations: [{ id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "211", herramental: "5 x 6", tiempoCiclo: 1, cantidadPendiente: 1 }],
+    workOrders: [{ ot: "2433" }],
+    otConfigurations: { "2433": { ot: "2433", machine: "211", herramental: "4 x 5" } },
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA"], operators: ["OPERADOR 2"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  assert.equal(result.operations.find((op) => op.id === "bend-2433").herramental, "4 x 5");
+});
+
 test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", () => {
   const core = loadPlannerCore();
   const operations = [

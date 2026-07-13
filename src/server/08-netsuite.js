@@ -496,7 +496,7 @@ function PP_mapNetSuiteOperation_(row, index, current) {
     cantPendiente: pending,
     tiempoCiclo: rate,
     tiempoSetup: setup,
-    tiempoProd: remaining || estimated || Math.max(30, Math.round(rate * pending)),
+    tiempoProd: rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0),
     fechaInicio: existing.fechaInicio || '', horaInicio: existing.horaInicio || '', fechaFin: existing.fechaFin || '', horaFin: existing.horaFin || '',
     tipoInsercion: 'OPERACION',
     estatus: String(PP_pick_(row, ['Estado', 'Status', 'status_op']) || 'No iniciado').trim(),

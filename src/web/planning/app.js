@@ -2404,6 +2404,12 @@ function renderSelectedJobPanel() {
   });
   const dueDateInput = els.selectedJobPanel.querySelector("#jobDueDateInput");
   if (dueDateInput) dueDateInput.addEventListener("change", () => updateWorkOrderDueDate(job.ot, dueDateInput.value));
+  const toolInput = els.selectedJobPanel.querySelector("#jobToolInput");
+  if (toolInput) toolInput.addEventListener("change", () => {
+    checkpointState();
+    applyToolToJob(job.ot, toolInput.value);
+    saveAndRender("Herramental de OT actualizado", "ot-config");
+  });
   const bulkSelect = els.selectedJobPanel.querySelector("#jobMachineSelect");
   if (bulkSelect) {
     bulkSelect.addEventListener("change", (event) => {
@@ -4872,12 +4878,6 @@ async function loadNetSuiteExercise() {
     setNetSuiteSyncPhaseLabel("");
     setPlanningActionsBusy("sync", false);
   }
-  const toolInput = els.selectedJobPanel.querySelector("#jobToolInput");
-  if (toolInput) toolInput.addEventListener("change", () => {
-    checkpointState();
-    applyToolToJob(job.ot, toolInput.value);
-    saveAndRender("Herramental de OT actualizado", "ot-config");
-  });
 }
 
 async function loadNetSuiteExerciseImpl() {
@@ -5313,13 +5313,7 @@ function operationToRow(op) {
 }
 
 function scheduledProductionMinutesForExport(op) {
-  const start = opStart(op);
-  const end = opEnd(op);
-  if (start && end) {
-    const scheduledMinutes = Math.max(0, diffMinutes(start, end));
-    const setupMinutes = Math.max(0, Number(op.tiempoSetup || 0));
-    return Math.max(0, Math.round((scheduledMinutes - setupMinutes) * 100) / 100);
-  }
+  if (window.PlannerCore?.productionMinutes) return window.PlannerCore.productionMinutes(op);
   return adjustedProductionMinutes(op);
 }
 
@@ -6020,6 +6014,9 @@ function applyMachineToJob(ot, machine) {
 
 function applyToolToJob(ot, tool) {
   const normalized = cleanToolValue(tool);
+  const configuration = otConfigurationFor(ot);
+  configuration.herramental = normalized;
+  configuration.updatedAt = new Date().toISOString();
   state.operations = window.PlanningWorkflowCore.applyDraftToolSelection(state.operations, ot, normalized, ["5459", "5527"]);
   const bendingOps = state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item));
   const part = String(bendingOps[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
@@ -6070,6 +6067,7 @@ function otConfigurationFor(ot) {
     state.otConfigurations[key] = {
       ot: key,
       machine: "",
+      herramental: "",
       kitHerramental: "",
       kitPending: false,
       subcontractType: "",
@@ -6214,6 +6212,7 @@ function normalizeOtResourceAssignments() {
     const configuration = {
       ot,
       machine: stored ? normalizeMachineValue(stored.machine || stored.maquina) : derivedMachine,
+      herramental: stored ? cleanToolValue(stored.herramental || stored.tool) : (bendingOps.map((op) => cleanToolValue(op.herramental)).find(Boolean) || ""),
       kitHerramental: stored ? cleanToolValue(stored.kitHerramental || stored.kit) : derivedKit,
       kitPending: stored ? stored.kitPending === true : derivedPending,
       subcontractType: stored
@@ -6227,6 +6226,7 @@ function normalizeOtResourceAssignments() {
     if (configuration.kitPending) configuration.kitHerramental = "";
     nextConfigurations[ot] = configuration;
     bendingOps.forEach((op) => { op.maquina = normalizeMachineValue(configuration.machine, op); });
+    bendingOps.forEach((op) => { op.herramental = configuration.herramental; });
     kitOps.forEach((op) => {
       op.kitHerramental = configuration.kitHerramental;
       op.kitPending = configuration.kitPending;

@@ -1357,7 +1357,7 @@
 
   function operationDuration(op, performancePercent, efficiencyPercent) {
     const setup = numberOr(op.tiempoSetup, 0);
-    const production = numberOr(op.tiempoProd, 0);
+    const production = productionMinutes(op);
     const performance = Math.max(1, numberOr(performancePercent, 100));
     const efficiency = Math.max(1, Math.min(100, numberOr(efficiencyPercent, 100)));
     const adjustedProduction = Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
@@ -1366,6 +1366,13 @@
     const start = operationStart(op);
     const end = operationEnd(op);
     return start && end ? Math.max(SNAP_MINUTES, diffMinutes(start, end)) : SNAP_MINUTES;
+  }
+
+  function productionMinutes(op) {
+    const cycle = numberOr(op?.tiempoCiclo, 0);
+    const pieces = numberOr(op?.cantidadPendiente ?? op?.cantPendiente ?? op?.cantTotal, 0);
+    if (cycle > 0 && pieces > 0) return Math.round(cycle * pieces * 100) / 100;
+    return numberOr(op?.tiempoProd, 0);
   }
 
   function operationStart(op) {
@@ -1461,6 +1468,7 @@
     const configuration = match?.[1] || {};
     if (match && isBendingOperation(op)) {
       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
+      op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
       op.kitPending = configuration.kitPending === true;
     } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") {
@@ -1658,6 +1666,7 @@
     isFiniteOperation,
     isSubcontractOperation,
     operationDuration,
+    productionMinutes,
     operationToolKey,
     operationCompletionKey,
     isPlanCompletedOperation,
