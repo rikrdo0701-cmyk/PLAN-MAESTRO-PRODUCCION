@@ -309,6 +309,13 @@
     return /metodo no permitido:\s*saveDraftSnapshot/i.test(String(error?.message || error || ""));
   }
 
+  function weeklyPlanningTypeClass(value) {
+    const type = normalize(value);
+    if (type === "PROTOTIPO") return "weekly-row--prototype";
+    if (type === "EXPEDITADO") return "weekly-row--expedited";
+    return "";
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
@@ -318,5 +325,5 @@
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
-    isUnsupportedDraftSnapshotError };
+    isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass };
 });

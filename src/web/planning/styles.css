@@ -1539,6 +1539,9 @@ tr:last-child td { border-bottom: 0; }
 .weekly-job-panel.finish .weekly-day-table table { min-width: 540px; }
 .weekly-day-table th { position: static; background: #4c6179; color: #fff; text-align: center; }
 .weekly-day-table td { height: 28px; padding: 4px 6px; background: #fff; text-align: center; }
+.weekly-day-table .weekly-row--prototype td { background: #eee5ff; border-color: #8b5cf6; }
+.weekly-day-table .weekly-row--expedited td { background: #fff0dd; border-color: #f28c28; }
+.article-temporary-price-input { width: 100%; min-width: 88px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 3px; }
 .weekly-day-table th:nth-child(3), .weekly-day-table td:nth-child(3) { width: 36%; text-align: left; }
 .weekly-day-table tfoot td { background: #eef2f4; font-weight: 700; }
 .weekly-job-empty { min-height: 170px; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
@@ -1907,6 +1910,7 @@ tr:last-child td { border-bottom: 0; }
   .weekly-day-block { grid-template-columns: 22mm minmax(0, 1fr); min-height: 30mm; break-inside: avoid; }
   .weekly-day-table table, .weekly-job-panel.finish .weekly-day-table table { min-width: 0; font-size: 6.5pt; }
   .weekly-day-table th, .weekly-day-table td { padding: 1mm; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .weekly-row--prototype td, .weekly-row--expedited td { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 
 @media (prefers-reduced-motion: reduce) {

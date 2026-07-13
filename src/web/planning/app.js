@@ -3329,10 +3329,21 @@ function renderArticleConfigurations() {
       <td><strong>${escapeHtml(item.article)}</strong></td>
       <td>${escapeHtml(item.jobType || "")}</td>
       <td>${escapeHtml(item.planningType || "")}</td>
-      <td>${escapeHtml(item.manualUnitPrice > 0 ? formatCurrency(item.manualUnitPrice) : "")}</td>
+      <td><input class="article-temporary-price-input" data-article-price="${escapeHtml(item.article)}" type="number" min="0" step="0.01" value="${item.manualUnitPrice > 0 ? escapeHtml(item.manualUnitPrice) : ""}" aria-label="Precio temporal ${escapeHtml(item.article)}"></td>
       <td>${escapeHtml(item.updatedAt ? formatDateTime(new Date(item.updatedAt)) : "")}</td>
     </tr>`).join("");
   els.articleConfigTable.innerHTML = `<thead><tr><th>Articulo</th><th>Tipo comercial</th><th>Tipo trabajo</th><th>Precio temporal</th><th>Actualizado</th></tr></thead><tbody>${rows || emptyTableRow(5, "Sin configuracion de articulos")}</tbody>`;
+  els.articleConfigTable.querySelectorAll("[data-article-price]").forEach((input) => {
+    input.addEventListener("change", () => updateTemporaryArticlePrice(input.dataset.articlePrice, input.value));
+  });
+}
+
+function updateTemporaryArticlePrice(article, value) {
+  const config = articleConfigurationFor(article);
+  const numeric = Number(value);
+  config.manualUnitPrice = Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+  config.updatedAt = new Date().toISOString();
+  saveAndRender(config.manualUnitPrice > 0 ? "Precio temporal actualizado" : "Precio temporal eliminado", "catalogs");
 }
 
 function renderArticleTypeOptions() {
@@ -4281,7 +4292,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const start = opStart(first);
     const finish = opEnd(last);
     const workOrder = workOrderForOt(ot);
-    const configuration = reportSnapshot ? {} : articleConfigurationValue(first.parte || workOrder?.item || "");
+    const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
     const pendingPieces = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
     const unitPrice = Number(first.unitPrice ?? last.unitPrice ?? effectiveUnitPriceForOt(ot));
     const row = {
@@ -4289,6 +4300,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       part: first.parte || workOrder?.item || "",
       pendingPieces: Math.max(0, pendingPieces),
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
+      planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
       unitPrice: Math.max(0, unitPrice),
       amount: Math.max(0, Number(first.amount ?? last.amount ?? unitPrice * pendingPieces)),
     };
@@ -4312,7 +4324,7 @@ function renderWeeklyJobDays(rows, finishing) {
     const columns = finishing
       ? ["No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"]
       : ["No.", "ORD", "PARTE", "PZAS"];
-    const body = dayRows.map((row, index) => `<tr>
+    const body = dayRows.map((row, index) => `<tr class="${window.PlanningWorkflowCore.weeklyPlanningTypeClass(row.planningType)}">
       <td>${index + 1}</td><td>${escapeHtml(row.ot)}</td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
       ${finishing ? `<td>${escapeHtml(formatCurrency(row.amount))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
     </tr>`).join("");

@@ -59,6 +59,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
+  assert.match(pagesIndex, /class="article-temporary-price-input"/);
+  assert.match(pagesIndex, /function updateTemporaryArticlePrice\(article, value\)/);
+  assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--prototype td/);
+  assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--expedited td/);
   assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);

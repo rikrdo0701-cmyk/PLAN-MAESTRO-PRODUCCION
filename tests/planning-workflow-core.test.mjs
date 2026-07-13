@@ -270,3 +270,9 @@ test("detecta un backend anterior que no permite guardar la instantanea del borr
   assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Metodo no permitido: saveDraftSnapshot")), true);
   assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Tiempo agotado al ejecutar saveDraftSnapshot")), false);
 });
+
+test("clasifica el tipo de trabajo para resaltado semanal", () => {
+  assert.equal(core.weeklyPlanningTypeClass("PROTOTIPO"), "weekly-row--prototype");
+  assert.equal(core.weeklyPlanningTypeClass("EXPEDITADO"), "weekly-row--expedited");
+  assert.equal(core.weeklyPlanningTypeClass("NORMAL"), "");
+});
