@@ -97,6 +97,44 @@ El tooltip mostrará OT asociada, máquina, herramental/kit origen, herramental/
 
 Los cambios históricos pendientes de ejecuciones anteriores seguirán excluidos. Los cambios completados permanecerán solo como historial y no consumirán capacidad ni aparecerán como pendientes.
 
+## Sincronización ligera de OTs en Backlog
+
+### Alcance
+
+El encabezado de Backlog tendrá una acción `Sincronizar OTs`. Esta consulta será independiente de la sincronización completa y obtendrá únicamente:
+
+- número de OT;
+- artículo;
+- cantidad total;
+- cantidad fabricada;
+- cantidad pendiente; y
+- existencia o estado abierto/cerrado de la OT.
+
+No leerá ni modificará operaciones, materiales, catálogos, máquinas, herramentales, kits, subcontratos ni configuraciones del motor.
+
+### Reglas de actualización
+
+- Una OT nueva y abierta se agregará al Backlog.
+- Una OT abierta ya conocida actualizará artículo y cantidades sin cambiar su pertenencia actual a Backlog o Planeado/Por planear.
+- Una OT cerrada o eliminada desaparecerá del Backlog.
+- La consulta nunca moverá masivamente OTs del Backlog a Planeado/Por planear ni en sentido contrario.
+- La sincronización ligera no podrá ejecutarse mientras el motor esté generando, mientras se sincronice el conjunto completo ni mientras se restaure un borrador.
+
+### OTs planeadas que fueron cerradas o eliminadas
+
+Si una OT cerrada o eliminada está en Planeado/Por planear, la sincronización no la retirará silenciosamente. Mostrará una confirmación con las OTs afectadas y el efecto de retirarlas del borrador.
+
+Al confirmar:
+
+- se retiran de `selectedOts` y de la prioridad del plan;
+- sus operaciones pendientes dejan de aparecer en el Gantt, cargas y reportes del borrador;
+- sus marcadores de operaciones completadas se conservan como historial; y
+- se reemplaza la instantánea `draft` con el estado coherente resultante.
+
+Al cancelar, esas OTs permanecen visibles en Planeado/Por planear con una advertencia `Cerrada o no encontrada en NetSuite` y el motor no podrá volver a programarlas. La advertencia persistirá hasta que el usuario las retire o una sincronización posterior las reporte abiertas.
+
+Las OTs bloqueadas también requerirán confirmación. Confirmar la depuración por cierre de NetSuite tendrá precedencia sobre el bloqueo manual, pues una OT cerrada no puede seguir consumiendo capacidad; el diálogo deberá indicarlo expresamente.
+
 ## Costo por pieza semanal
 
 ### Universo de cálculo
@@ -130,6 +168,7 @@ El resumen mostrará `Costo P/P` con formato monetario. Las agrupaciones por tip
 - Restaurar no reabrirá operaciones automáticamente.
 - Restaurar no publicará ni generará automáticamente un plan.
 - No se alterará la regla de 25 registros por reporte impreso.
+- La sincronización ligera de Backlog no sustituye la sincronización completa necesaria para obtener operaciones y recursos.
 
 ## Pruebas de aceptación
 
@@ -158,3 +197,13 @@ El resumen mostrará `Costo P/P` con formato monetario. Las agrupaciones por tip
 - Un precio explícito de cero produce monto cero y no activa otro fallback.
 - Sin piezas terminadas, `Costo P/P` muestra `$0.00`.
 - La suma general y las agrupaciones por tipo son consistentes.
+
+### Sincronización ligera
+
+- Una OT nueva se agrega únicamente al Backlog.
+- Un cambio de cantidades actualiza la tarjeta sin cambiarla de columna.
+- Una OT cerrada desaparece del Backlog.
+- Una OT planeada cerrada solicita confirmación antes de retirarse.
+- Cancelar conserva la OT planeada con advertencia y la excluye de la siguiente programación.
+- Confirmar retira la OT planeada, limpia su capacidad pendiente y conserva el historial completado.
+- La consulta no modifica operaciones, materiales ni configuraciones del motor.
