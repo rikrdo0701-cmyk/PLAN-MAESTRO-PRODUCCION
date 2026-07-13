@@ -192,6 +192,7 @@ svg {
 .workspace[data-view="reports"] .planner-grid,
 .workspace[data-view="reports"] #cargas,
 .workspace[data-view="reports"] .config-panel { display: none; }
+.workspace:not([data-view="plan"]) .restore-draft-action { display: none; }
 
 .reports-panel { display: none; }
 .workspace[data-view="reports"] .reports-panel { display: block; }
@@ -1740,6 +1741,12 @@ tr:last-child td { border-bottom: 0; }
 .dialog-close { width: 30px; height: 30px; min-height: 30px; padding: 0; border: 0; background: transparent; color: #59676e; font-size: 22px; line-height: 1; }
 .dialog-close:hover { background: #eef2f3; }
 .planning-dialog-body { overflow: auto; padding: 4px 18px; }
+.restore-draft-list { display: grid; gap: 7px; margin: 10px 0 14px; }
+.restore-draft-option { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 4px; }
+.restore-draft-option small { display: block; margin-top: 3px; color: var(--muted); }
+.restore-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+.restore-preview-grid div { padding: 8px; border: 1px solid var(--line); background: var(--surface-subtle); }
+.restore-preview-grid strong { display: block; margin-top: 3px; font-size: 16px; }
 .planning-requirement { padding: 14px 0; border-bottom: 1px solid var(--line); }
 .planning-requirement:last-child { border-bottom: 0; }
 .planning-requirement-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

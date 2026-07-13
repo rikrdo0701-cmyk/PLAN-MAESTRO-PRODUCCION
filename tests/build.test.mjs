@@ -56,6 +56,20 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlanningWorkflowCore\.applyConfirmedWorkOrderChanges\(state, comparison, decisions\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", false\)/);
+  assert.match(pagesIndex, /id="restoreDraftBtn"[^>]*>Restaurar borrador<\/button>/);
+  assert.equal((pagesIndex.match(/id="restoreDraftBtn"/g) || []).length, 1);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)/);
+  assert.match(pagesIndex, /async function previewDraftRestore\(snapshotId, syncBeforeRestore\)/);
+  assert.match(pagesIndex, /async function confirmDraftRestore\(snapshotId\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.reconcilePublishedPlan\(snapshot, state\)/);
+  assert.match(pagesIndex, /restoredOts[\s\S]*closedOts[\s\S]*completedOperations[\s\S]*removedOperations[\s\S]*newOperations[\s\S]*preservedConfigurations/);
+  assert.match(pagesIndex, /Sincronizar antes de restaurar/);
+  assert.match(pagesIndex, /Continuar con datos cargados/);
+  assert.match(pagesIndex, /reemplaza el borrador[\s\S]*conserva un respaldo[\s\S]*publicado permanece intacto/i);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("restore", true\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("restore", false\)/);
+  assert.match(pagesIndex, /callAppsScript\("restorePublishedPlanAsDraft", snapshotId, createAppSheetPayload\(\)\)/);
+  assert.match(pagesIndex, /reportSnapshot = null;[\s\S]*Borrador restaurado; revisa y genera nuevamente el plan/);
   assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
   assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
   const backlogSyncSource = pagesIndex.slice(

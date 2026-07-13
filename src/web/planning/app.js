@@ -499,6 +499,7 @@ function bindElements() {
     "generatePlanBtn",
     "publishPlanBtn",
     "pdfBtn",
+    "restoreDraftBtn",
     "planAlerts",
     "scheduleBtn",
     "undoBtn",
@@ -669,6 +670,7 @@ function bindEvents() {
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
+  els.restoreDraftBtn.addEventListener("click", openRestoreDraftDialog);
   els.pdfBtn.addEventListener("click", generatePlanPdf);
   els.undoBtn.addEventListener("click", undoLastChange);
   els.planStartInput.addEventListener("change", () => {
@@ -3970,6 +3972,78 @@ function emptyTableRow(columns, message) {
   return `<tr><td colspan="${columns}" class="status-note">${escapeHtml(message)}</td></tr>`;
 }
 
+async function openRestoreDraftDialog() {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("restore", true);
+  try {
+    const snapshots = isAppsScriptRuntime()
+      ? await callAppsScript("listPlanSnapshots")
+      : await fetchJson(PLAN_SNAPSHOTS_API);
+    planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
+      .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+  } catch (error) {
+    showToast(`No se pudieron leer los planes publicados: ${error.message}`);
+    return;
+  } finally {
+    setPlanningActionsBusy("restore", false);
+  }
+  const publishedIds = publishedSnapshotIds();
+  const published = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId));
+  if (!published.length) return showToast("No hay planes publicados historicos para restaurar");
+  const options = published.map((snapshot, index) => {
+    const when = snapshot.publishedAt || snapshot.generatedAt;
+    const user = snapshot.publishedBy || snapshot.createdBy || snapshot.user || "usuario";
+    const operations = Array.isArray(snapshot.operations) ? snapshot.operations.length : Number(snapshot.operations || 0);
+    return `<label class="restore-draft-option"><input type="radio" name="snapshot_id" value="${escapeHtml(snapshot.snapshotId)}" ${index === 0 ? "checked" : ""} required><span><strong>${escapeHtml(when ? formatDateTime(new Date(when)) : "Sin fecha")}</strong><small>${escapeHtml(user)} · Inicio ${escapeHtml(snapshot.planStart || "sin fecha")} · ${operations} operaciones</small></span></label>`;
+  }).join("");
+  const synced = state.syncedAt ? formatDateTime(new Date(state.syncedAt)) : "Sin sincronizacion registrada";
+  const choice = await openPlanningDialog({
+    title: "Restaurar borrador desde publicado",
+    summary: `Ultima sincronizacion: ${synced}`,
+    body: `<div class="restore-draft-list">${options}</div><fieldset><legend>Datos de NetSuite</legend><label><input type="radio" name="sync_choice" value="sync" checked> Sincronizar antes de restaurar</label><label><input type="radio" name="sync_choice" value="loaded"> Continuar con datos cargados</label></fieldset>`,
+    confirmLabel: "Ver vista previa",
+  });
+  if (!choice) return;
+  await previewDraftRestore(choice.snapshot_id, choice.sync_choice === "sync");
+}
+
+async function previewDraftRestore(snapshotId, syncBeforeRestore) {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("restore", true);
+  try {
+    if (syncBeforeRestore) {
+      const outcome = await syncNetSuiteTwoPhase();
+      if (!outcome?.ready) throw new Error(outcome?.warning || "No se pudo sincronizar NetSuite");
+    }
+    const snapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    const preview = window.PlanningWorkflowCore.reconcilePublishedPlan(snapshot, state);
+    const summary = preview.summary;
+    const confirmed = await openPlanningDialog({
+      title: "Vista previa de restauracion",
+      summary: "Confirma el reemplazo del borrador editable",
+      body: `<div class="restore-preview-grid"><div>OTs restauradas<strong>${summary.restoredOts}</strong></div><div>OTs cerradas omitidas<strong>${summary.closedOts}</strong></div><div>Operaciones completadas<strong>${summary.completedOperations}</strong></div><div>Operaciones retiradas<strong>${summary.removedOperations}</strong></div><div>Operaciones nuevas<strong>${summary.newOperations}</strong></div><div>Configuraciones conservadas<strong>${summary.preservedConfigurations}</strong></div></div><p><strong>Confirmacion explicita:</strong> esta accion reemplaza el borrador actual, conserva un respaldo tecnico y el plan publicado permanece intacto. No programa ni publica automaticamente.</p>`,
+      confirmLabel: "Restaurar borrador",
+    });
+    if (confirmed) await confirmDraftRestore(snapshotId);
+  } catch (error) {
+    showToast(`No se pudo preparar la restauracion: ${error.message}`, 9000);
+  } finally {
+    setPlanningActionsBusy("restore", false);
+  }
+}
+
+async function confirmDraftRestore(snapshotId) {
+  const result = await callAppsScript("restorePublishedPlanAsDraft", snapshotId, createAppSheetPayload());
+  if (!result?.state) throw new Error("El servidor no devolvio el borrador restaurado");
+  state = result.state;
+  normalizeState();
+  reportSnapshot = null;
+  saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
+  await loadPlanSnapshots(false);
+}
+
 async function loadPlanSnapshots(showMessage) {
   try {
     const snapshots = isAppsScriptRuntime()
@@ -5210,6 +5284,11 @@ function setPlanningActionsBusy(action, inProgress) {
     els.syncBacklogOtsBtn.disabled = busy;
     if (busy) els.syncBacklogOtsBtn.setAttribute("aria-busy", "true");
     else els.syncBacklogOtsBtn.removeAttribute("aria-busy");
+  }
+  if (els.restoreDraftBtn) {
+    els.restoreDraftBtn.disabled = busy;
+    if (busy) els.restoreDraftBtn.setAttribute("aria-busy", "true");
+    else els.restoreDraftBtn.removeAttribute("aria-busy");
   }
 }
 
