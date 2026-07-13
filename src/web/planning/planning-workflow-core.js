@@ -159,6 +159,22 @@
     return markPlanningPrepared({ ...(state || {}), selectedOts }, String(ot), signature);
   }
 
+  function planningPreparationSignature(input) {
+    const value = input || {};
+    return JSON.stringify({
+      ot: normalize(value.ot),
+      machine: normalize(value.machine),
+      tool: normalize(value.tool),
+      kit: normalize(value.kit),
+      kitPending: value.kitPending === true,
+      subcontractType: normalize(value.subcontractType),
+      subcontractDays: Number(value.subcontractDays || 0),
+      commercialType: normalize(value.commercialType),
+      planningType: normalize(value.planningType),
+      operationVersion: String(value.operationVersion || ""),
+    });
+  }
+
   function isCoherentDraft(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.workOrders) || !Array.isArray(snapshot.selectedOts)) return false;
     const operationOts = new Set(snapshot.operations.map((item) => normalize(item?.ot)).filter(Boolean));
@@ -272,7 +288,7 @@
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
-    needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection,
+    needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };

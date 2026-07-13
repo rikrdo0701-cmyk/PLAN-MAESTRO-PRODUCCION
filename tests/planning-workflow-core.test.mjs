@@ -140,6 +140,14 @@ test("confirmar preparacion selecciona la OT y conserva su firma en una transici
   assert.equal(next.preparedPlanningByOt[1095], "machine=39");
 });
 
+test("la firma preparada es estable y cambia solamente con configuracion relevante", () => {
+  const a = core.planningPreparationSignature({ ot: "1095", machine: "39", tool: "H1", kit: "", kitPending: true, operationVersion: "7|5459" });
+  const b = core.planningPreparationSignature({ operationVersion: "7|5459", kitPending: true, kit: "", tool: "H1", machine: "39", ot: "1095" });
+  const changed = core.planningPreparationSignature({ ot: "1095", machine: "40", tool: "H1", kit: "", kitPending: true, operationVersion: "7|5459" });
+  assert.equal(a, b);
+  assert.notEqual(a, changed);
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);

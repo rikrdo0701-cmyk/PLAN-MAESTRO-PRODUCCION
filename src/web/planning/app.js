@@ -1878,14 +1878,18 @@ function renderGanttViewSelection() {
 }
 
 function planningPreparationSignature(job, operations, commercial) {
-  return JSON.stringify({
+  const productive = operations || [];
+  return window.PlanningWorkflowCore.planningPreparationSignature({
     ot: job?.ot || "",
-    operations: (operations || []).map((op) => ({
-      id: op.id, secuencia: op.secuencia, ct: op.ct, tipo: op.tipoInsercion,
-      maquina: op.maquina, herramental: op.herramental, kit: op.kitHerramental,
-      subcontractType: op.subcontractType, subcontractDays: Number(op.subcontractDays || 0),
-    })),
-    commercial: { type: commercial?.currentType || "", planningType: commercial?.currentPlanningType || "" },
+    machine: productive.map((op) => op.maquina || "").join("|"),
+    tool: productive.map((op) => op.herramental || "").join("|"),
+    kit: productive.map((op) => op.kitHerramental || "").join("|"),
+    kitPending: productive.some((op) => op.kitPending === true),
+    subcontractType: productive.map((op) => op.subcontractType || "").join("|"),
+    subcontractDays: Math.max(0, ...productive.map((op) => Number(op.subcontractDays || 0))),
+    commercialType: commercial?.currentType || "",
+    planningType: commercial?.currentPlanningType || "",
+    operationVersion: productive.map((op) => [op.id, op.secuencia, op.ct, op.tipoInsercion].join("|")).join(";")
   });
 }
 
