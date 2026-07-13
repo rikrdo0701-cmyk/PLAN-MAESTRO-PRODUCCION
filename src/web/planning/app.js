@@ -4861,6 +4861,7 @@ async function syncNetSuiteTwoPhase() {
     const payload = await callAppsScript("syncNetSuiteWorkOrdersLite");
     validateNetSuiteImportedData(payload, "workOrders");
     state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
+    Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
     if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
     if (payload.plant) state.plant = payload.plant;
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
@@ -5068,7 +5069,7 @@ async function loadAppSheetIfAvailable(showMessage) {
     const imported = isAppsScriptRuntime()
       ? await callAppsScript("getAppState")
       : importJson(await fetchAppSheetText());
-    applyImported(imported, { preserveLocalPlanning: true });
+    applyImported(imported, { preserveLocalPlanning: true, preferRemotePlanning: true });
     appSheetAvailable = true;
     if (showMessage) showToast(`Hoja app cargada: ${state.operations.length} operaciones`);
     return true;
@@ -5132,7 +5133,9 @@ function applyImported(imported, options = {}) {
   if (imported.lastSchedule) state.lastSchedule = imported.lastSchedule;
   if (preservedLocalPlanning) {
     const remotePlanning = captureLocalPlanningState();
-    const coherent = window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
+    const coherent = options.preferRemotePlanning
+      ? window.PlanningWorkflowCore.selectAuthoritativeRemoteDraft(preservedLocalPlanning, remotePlanning)
+      : window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
     restoreLocalPlanningState(coherent || preservedLocalPlanning);
   }
   invalidateGanttCache();

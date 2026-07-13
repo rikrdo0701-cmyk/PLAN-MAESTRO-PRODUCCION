@@ -122,6 +122,18 @@ test("las vistas del borrador incluyen solo OTs seleccionadas programadas", () =
   assert.deepEqual(structuredClone(core.draftScheduledOperations(state).map((op) => op.id)), ["selected"]);
 });
 
+test("la sincronizacion conserva en el borrador solo OTs que NetSuite sigue reportando abiertas", () => {
+  const state = {
+    selectedOts: ["100", "200"], lockedOts: ["100", "200"], expandedOts: ["100", "200"],
+    lastSchedule: { scheduledOts: ["100", "200"] },
+  };
+  const next = core.pruneDraftToOpenWorkOrders(state, [{ ot: "200" }, { ot: "300" }]);
+  assert.deepEqual(structuredClone(next.selectedOts), ["200"]);
+  assert.deepEqual(structuredClone(next.lockedOts), ["200"]);
+  assert.deepEqual(structuredClone(next.expandedOts), ["200"]);
+  assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["200"]);
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);
@@ -139,6 +151,13 @@ test("selecciona el borrador coherente mas reciente sin mezclar colecciones", ()
   assert.equal(core.isCoherentDraft(mixed), false);
   assert.equal(core.selectNewestCoherentDraft(older, newer).revision, 3);
   assert.equal(core.selectNewestCoherentDraft(mixed, older).revision, 2);
+});
+
+test("PLANDATA prevalece sobre una copia local coherente pero obsoleta", () => {
+  const local = { revision: 99, selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  const remote = { revision: 10, selectedOts: [], workOrders: [{ ot: "200" }], operations: [] };
+  assert.equal(core.selectAuthoritativeRemoteDraft(local, remote), remote);
+  assert.equal(core.selectAuthoritativeRemoteDraft(local, { selectedOts: ["X"], workOrders: [], operations: [] }), local);
 });
 
 test("los planes diarios prefieren el ultimo publicado y usan borrador como respaldo", () => {

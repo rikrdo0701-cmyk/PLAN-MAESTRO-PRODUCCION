@@ -46,7 +46,7 @@ function patchPlanningApp(app) {
   let patched = app.replace(collectionMarker, collectionReplacement);
   if (patched === app) throw new Error("No se encontro el punto de importacion de colecciones del backend");
 
-  const sharedStateMarker = "    applyImported(imported, { preserveLocalPlanning: true });";
+  const sharedStateMarker = "    applyImported(imported, { preserveLocalPlanning: true, preferRemotePlanning: true });";
   const sharedStateReplacement = "    applyImported(imported, { preserveLocalPlanning: false });";
   const sharedStatePatched = patched.replace(sharedStateMarker, sharedStateReplacement);
   if (sharedStatePatched === patched) throw new Error("No se encontro la carga inicial del estado compartido");

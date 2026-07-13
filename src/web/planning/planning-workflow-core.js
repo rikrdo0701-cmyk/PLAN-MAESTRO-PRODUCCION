@@ -126,6 +126,21 @@
       Boolean(operation?.fechaInicio && operation?.fechaFin));
   }
 
+  function pruneDraftToOpenWorkOrders(state, workOrders) {
+    const open = new Set((workOrders || []).map((item) => normalize(item?.ot)).filter(Boolean));
+    const keep = (items) => (items || []).filter((ot) => open.has(normalize(ot)));
+    return {
+      ...(state || {}),
+      selectedOts: keep(state?.selectedOts),
+      lockedOts: keep(state?.lockedOts),
+      expandedOts: keep(state?.expandedOts),
+      lastSchedule: state?.lastSchedule ? {
+        ...state.lastSchedule,
+        scheduledOts: keep(state.lastSchedule.scheduledOts),
+      } : state?.lastSchedule,
+    };
+  }
+
   function needsPlanningPreparation(state, ot, signature) {
     if (!isOtEligibleForDraft(state, ot)) return false;
     return String(state?.preparedPlanningByOt?.[ot] || "") !== String(signature || "");
@@ -149,6 +164,10 @@
     const candidates = [localDraft, remoteDraft].filter(isCoherentDraft);
     return candidates.sort((left, right) => Number(right?.revision || 0) - Number(left?.revision || 0) ||
       String(right?.savedAt || "").localeCompare(String(left?.savedAt || "")))[0] || null;
+  }
+
+  function selectAuthoritativeRemoteDraft(localDraft, remoteDraft) {
+    return isCoherentDraft(remoteDraft) ? remoteDraft : (isCoherentDraft(localDraft) ? localDraft : null);
   }
 
   function defaultDailyPlanSource(snapshots, draft) {
@@ -246,9 +265,9 @@
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
-    draftScheduledOperations,
+    draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared,
-    isCoherentDraft, selectNewestCoherentDraft, defaultDailyPlanSource,
+    isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };
 });
