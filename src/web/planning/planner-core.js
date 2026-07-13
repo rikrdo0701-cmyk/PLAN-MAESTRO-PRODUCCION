@@ -683,10 +683,15 @@
     const kitChanged = noAntecedent
       ? normalizeKey(toKit) !== "SIN_KIT"
       : normalizeKey(fromKit) !== normalizeKey(toKit);
-    return Math.max(0,
+    const configuredMinutes = Math.max(0,
       (toolChanged ? numberOr(catalog.toolSetupMinutes, 0) : 0) +
       (kitChanged ? numberOr(catalog.kitSetupMinutes, 0) : 0)
     );
+    if (configuredMinutes > 0) return configuredMinutes;
+    if (!noAntecedent && (toolChanged || kitChanged)) {
+      return Math.max(SNAP_MINUTES, numberOr(settings?.toolChangeMinutes, 120));
+    }
+    return 0;
   }
 
   function firstEventAfter(events, time) {

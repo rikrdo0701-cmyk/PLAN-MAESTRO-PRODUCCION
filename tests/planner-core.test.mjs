@@ -156,6 +156,28 @@ test("dos doblados en la misma maquina conservan operaciones y generan cambio de
   assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
 });
 
+test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion cero", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "AM M66-2843", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "4 x 5", tiempoCiclo: 1.5, cantidadPendiente: 30, tiempoSetup: 15 },
+    { id: "bend-2436", ot: "2436", secuencia: 2, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "AM 17123-002", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "5 x 6", tiempoCiclo: 4, cantidadPendiente: 48, tiempoSetup: 12 },
+  ];
+  const result = core.schedulePlan({
+    selectedOts: ["2433", "2436"], operations, workOrders: [{ ot: "2433" }, { ot: "2436" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    toolCatalog: [
+      { part: "AM M66-2843", herramental: "4 x 5", toolSetupMinutes: 0, active: true },
+      { part: "AM 17123-002", herramental: "5 x 6", toolSetupMinutes: 0, active: true },
+    ],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const change = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeFromHerramental === "4 x 5" && op.toolChangeToHerramental === "5 x 6");
+  assert.ok(change, "debe proyectar el cambio 4 x 5 a 5 x 6");
+  assert.equal(change.tiempoSetup, 30);
+});
+
 test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", () => {
   const core = loadPlannerCore();
   const operation = {
