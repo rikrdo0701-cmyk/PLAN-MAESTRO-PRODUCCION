@@ -675,7 +675,19 @@ function PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest) {
   }
 }
 
-function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata) {
+function PP_finalizePlanSnapshotPayload_(transaction) {
+  if (!transaction || !transaction.previousManifest) return;
+  try { PP_deletePlanSnapshotPayloadGeneration_(transaction.properties, transaction.key, transaction.previousManifest); } catch (ignored) {}
+}
+
+function PP_rollbackPlanSnapshotPayload_(transaction) {
+  if (!transaction) return;
+  if (transaction.previousValue == null) transaction.properties.deleteProperty(transaction.key);
+  else transaction.properties.setProperty(transaction.key, transaction.previousValue);
+  PP_deletePlanSnapshotPayloadGeneration_(transaction.properties, transaction.key, transaction.newManifest);
+}
+
+function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
   const properties = PropertiesService.getScriptProperties();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
   const previousValue = properties.getProperty(key);
@@ -702,7 +714,12 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata) {
     PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
     throw error;
   }
-  try { if (previousManifest) PP_deletePlanSnapshotPayloadGeneration_(properties, key, previousManifest); } catch (ignored) {}
+  const transaction = {
+    properties: properties, key: key, previousValue: previousValue,
+    previousManifest: previousManifest, newManifest: manifest
+  };
+  if (!(options && options.keepPrevious)) PP_finalizePlanSnapshotPayload_(transaction);
+  return transaction;
 }
 
 function PP_readPlanSnapshotPayload_(snapshotId) {
@@ -772,10 +789,14 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
       pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
     ];
   });
-  PP_storePlanSnapshotPayload_(snapshotId, payload, { generatedAt: generatedAt, user: user, operations: rows.length });
+  const payloadTransaction = PP_storePlanSnapshotPayload_(snapshotId, payload,
+    { generatedAt: generatedAt, user: user, operations: rows.length },
+    { keepPrevious: Boolean(options && options.keepPreviousPayload) });
+  if (options && options.payloadTransaction) options.payloadTransaction.value = payloadTransaction;
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
+  if (options && options.keepPreviousPayload) PP_finalizePlanSnapshotPayload_(payloadTransaction);
   return { ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt };
 }
 
@@ -784,16 +805,17 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
   const lastRow = sheet.getLastRow();
   const width = PP_SHEETS.PLANES_HISTORICOS.length;
   const previous = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
-  const previousPayload = PP_readPlanSnapshotPayload_('draft');
+  const payloadTransaction = { value: null };
   try {
     if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
-    return PP_appendPlanSnapshot_(spreadsheet, payload, user, { snapshotId: 'draft', sheetName: 'BORRADOR_PLAN' });
+    return PP_appendPlanSnapshot_(spreadsheet, payload, user, {
+      snapshotId: 'draft', sheetName: 'BORRADOR_PLAN', keepPreviousPayload: true, payloadTransaction: payloadTransaction
+    });
   } catch (error) {
     const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);
     if (restoreRows > 0) sheet.getRange(2, 1, restoreRows, width).clearContent();
     if (previous.length) sheet.getRange(2, 1, previous.length, width).setValues(previous);
-    if (previousPayload) PP_storePlanSnapshotPayload_('draft', previousPayload);
-    else PP_deletePlanSnapshotPayload_('draft');
+    PP_rollbackPlanSnapshotPayload_(payloadTransaction.value);
     throw error;
   }
 }

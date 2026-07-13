@@ -12,6 +12,8 @@ Implementada la restauración de un publicado como borrador sin cambios de UI. S
 - GREEN build: las aserciones verifican wrapper, allowlist, clave full-state, lock, rollback y respuesta.
 - RED P1: las nuevas aserciones de build fallaron al no encontrar enumeración de manifiestos ni staging transaccional.
 - GREEN P1: las aserciones verifican recuperación sin filas, exclusión de backups, commit de manifiesto después de chunks, limpieza de staging y restauración del payload del draft.
+- RED P1 rollback: la aserción sensible al orden falló porque la generación anterior se eliminaba antes de persistir filas/auditoría.
+- GREEN P1 rollback: el reemplazo draft difiere la limpieza hasta después de `SpreadsheetApp.flush()`; el catch restaura el manifiesto anterior y elimina la generación nueva sin reserializar.
 
 ## Implementación
 
@@ -21,6 +23,7 @@ Implementada la restauración de un publicado como borrador sin cambios de UI. S
 - `PLANES_HISTORICOS` sólo recibe las filas normales de publicación; la restauración no modifica el histórico.
 - Corrección P1: snapshots y drafts con cero filas programadas se listan desde su manifiesto y se recuperan desde `fullState`; los IDs técnicos se excluyen explícitamente.
 - Corrección P1: la escritura de payload usa una generación de staging. Los chunks nuevos se completan antes de cambiar el manifiesto base; ante error se elimina staging y el manifiesto anterior permanece legible. El reemplazo/rollback del draft restaura también el payload anterior, incluyendo drafts legacy de sólo filas.
+- Corrección P1 final: `PP_storePlanSnapshotPayload_` devuelve un token de transacción y acepta limpieza diferida. En draft, la generación previa vive hasta completar filas, auditoría y flush; rollback repone atómicamente su manifiesto y limpia sólo la generación fallida.
 
 ## Verificación
 
