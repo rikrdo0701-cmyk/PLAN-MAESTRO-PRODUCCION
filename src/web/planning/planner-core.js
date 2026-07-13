@@ -1215,6 +1215,11 @@
     if (assignment.finite && hasMachineResource(assignment.machine)) collect(context.machineBusy.get(assignment.machine), "MAQUINA", assignment.machine);
     candidates.sort((left, right) => right.interval.end - left.interval.end || (left.cause === "OPERADOR" ? -1 : 1));
     const blocker = candidates[0];
+    const calendarProbe = blocker?.interval.end || earliest;
+    const resourceCalendarStart = nextAvailableMoment(context.state, calendarProbe, assignment.operator, assignment.machine, context.windowEnd);
+    if (resourceCalendarStart > calendarProbe && resourceCalendarStart >= assignment.operationStart) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CALENDARIO", recursoEspera: [assignment.operator, assignment.machine].filter(Boolean).join(" / ") || "CALENDARIO GENERAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
     if (blocker) return {
       esperaMinutos: waitMinutes,
       causaEspera: blocker.cause,
@@ -1223,7 +1228,6 @@
       secuenciaBloqueadora: blocker.interval.secuencia ?? "",
     };
 
-    const resourceCalendarStart = nextAvailableMoment(context.state, earliest, assignment.operator, assignment.machine, context.windowEnd);
     if (resourceCalendarStart > earliest) {
       return { esperaMinutos: waitMinutes, causaEspera: "CALENDARIO", recursoEspera: [assignment.operator, assignment.machine].filter(Boolean).join(" / ") || "CALENDARIO GENERAL", otBloqueadora: "", secuenciaBloqueadora: "" };
     }

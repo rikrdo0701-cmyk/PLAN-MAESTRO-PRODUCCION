@@ -226,6 +226,72 @@ test("sin espera registra diagnostico vacio", () => {
   assert.equal(pending.causaEspera, "");
 });
 
+test("un limite de calendario posterior al conflicto corto determina la espera", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"], lockedOts: ["100"],
+    operations: [
+      { id: "short", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"], settings: { optimizationPasses: 1 }, workSchedule: {},
+    calendarExceptions: [{ date: "2026-07-13", concept: "OPERADOR", resource: "OP 1", start: "07:00", end: "09:00" }],
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.equal(pending.horaInicio, "09:00");
+  assert.equal(pending.causaEspera, "CALENDARIO");
+  assert.equal(pending.otBloqueadora, "");
+  assert.equal(pending.secuenciaBloqueadora, "");
+});
+
+test("registra una maquina como causa de espera", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"], lockedOts: ["100"],
+    operations: [
+      { id: "machine-lock", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H1", tiempoProd: 20 },
+    ], workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP A", "OP B", "AJUSTADOR"], matrix: { "5459::DOBLEZ": ["OP A", "OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.ok(pending?.fechaInicio, JSON.stringify({ operations: result.operations, diagnostics: result.lastSchedule.diagnostics }));
+  assert.equal(pending.causaEspera, "MAQUINA");
+  assert.equal(pending.recursoEspera, "M1");
+  assert.equal(pending.otBloqueadora, "100");
+});
+
+test("un cambio requerido determina la espera antes de produccion", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"], lockedOts: ["100"],
+    operations: [
+      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H2", tiempoProd: 20 },
+    ], workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP B", "AJUSTADOR"], matrix: { "5459::DOBLEZ": ["OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.equal(pending.esperaMinutos, 30);
+  assert.equal(pending.causaEspera, "CAMBIO_HERRAMENTAL");
+  assert.equal(pending.otBloqueadora, "");
+});
+
+test("entre bloqueadores simultaneos elige el que determina el inicio", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "101", "200"], lockedOts: ["100", "101"],
+    operations: [
+      { id: "operator-lock", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP B", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "machine-lock", ot: "101", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H1", tiempoProd: 20 },
+    ], workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }], operators: ["OP A", "OP B", "AJUSTADOR"], matrix: { CORTE: ["OP B"], "5459::DOBLEZ": ["OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["CORTE::CORTE", "5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.ok(pending?.fechaInicio, JSON.stringify({ operations: result.operations, diagnostics: result.lastSchedule.diagnostics }));
+  assert.equal(pending.causaEspera, "MAQUINA");
+  assert.equal(pending.otBloqueadora, "101");
+  assert.equal(pending.secuenciaBloqueadora, 2);
+});
+
 test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
   const core = loadPlannerCore();
   const operation = {
