@@ -108,19 +108,20 @@ test("una completada conserva fechas y no consume capacidad pendiente", () => {
 test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", () => {
   const core = loadPlannerCore();
   const operations = [
-    { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1", tiempoProd: 20 },
-    { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H2", kitHerramental: "K2", tiempoProd: 20 },
+    { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO A", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1", tiempoProd: 20 },
+    { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO B", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H2", kitHerramental: "K2", tiempoProd: 20 },
   ];
   const result = core.schedulePlan({
-    operations, workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["DOBLADOR", "AJUSTADOR"],
-    matrix: { "5459::DOBLADO": ["DOBLADOR"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
-    configuredCapabilities: ["5459::DOBLADO", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    operations, workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OPERADOR 1", "OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLADO_A": ["OPERADOR 1"], "5459::DOBLADO_B": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLADO_A", "5459::DOBLADO_B", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
     settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
   const productive = result.operations.filter((op) => ["bend-a", "bend-b"].includes(op.id));
   const changes = result.operations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
   assert.equal(productive.length, 2);
   assert.ok(productive.every((op) => op.fechaInicio && op.fechaFin), "ambos doblados deben quedar programados");
+  assert.deepEqual(new Set(productive.map((op) => op.operador)), new Set(["OPERADOR 1", "OPERADOR 2"]));
   assert.ok(changes.length >= 1);
   assert.ok(changes.every((change) => change.operador === "AJUSTADOR" && change.maquina === "DOBLADORA 2"));
   const transition = changes.find((change) => change.toolChangeFromHerramental && change.toolChangeToHerramental && change.toolChangeFromHerramental !== change.toolChangeToHerramental);

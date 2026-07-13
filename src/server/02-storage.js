@@ -22,6 +22,7 @@ const PP_SHEETS = {
   TIPOS_OT: ['ID', 'NOMBRE', 'ACTIVO'],
   ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA'],
   PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
+  BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
 
@@ -664,7 +665,8 @@ function PP_cleanSnapshotUserComment_(value) {
 }
 
 function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
-  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  const sheetName = String(options && options.sheetName || 'PLANES_HISTORICOS');
+  const sheet = spreadsheet.getSheetByName(sheetName);
   const snapshotId = String(options && options.snapshotId || '').trim() || Utilities.getUuid();
   const generatedAt = new Date().toISOString();
   const scheduledOts = (payload.lastSchedule && Array.isArray(payload.lastSchedule.scheduledOts))
@@ -705,15 +707,13 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
 }
 
 function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
-  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
   const lastRow = sheet.getLastRow();
   const width = PP_SHEETS.PLANES_HISTORICOS.length;
   const previous = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
-  const preserved = previous.filter(function(row) { return String(row[0] || '').trim() !== 'draft'; });
   try {
     if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
-    if (preserved.length) sheet.getRange(2, 1, preserved.length, width).setValues(preserved);
-    return PP_appendPlanSnapshot_(spreadsheet, payload, user, { snapshotId: 'draft' });
+    return PP_appendPlanSnapshot_(spreadsheet, payload, user, { snapshotId: 'draft', sheetName: 'BORRADOR_PLAN' });
   } catch (error) {
     const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);
     if (restoreRows > 0) sheet.getRange(2, 1, restoreRows, width).clearContent();
@@ -723,7 +723,7 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
 }
 
 function PP_listPlanSnapshots_(spreadsheet) {
-  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS'));
+  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).concat(PP_readRows_(spreadsheet.getSheetByName('BORRADOR_PLAN')));
   const grouped = {};
   rows.forEach(function(row) {
     const snapshotId = String(row.SNAPSHOT_ID || '').trim();
@@ -771,7 +771,8 @@ function PP_readMachineToolHistory_(spreadsheet) {
 
 function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
   const key = String(snapshotId || '').trim();
-  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).filter(function(row) {
+  const sourceSheet = key === 'draft' ? 'BORRADOR_PLAN' : 'PLANES_HISTORICOS';
+  const rows = PP_readRows_(spreadsheet.getSheetByName(sourceSheet)).filter(function(row) {
     return String(row.SNAPSHOT_ID || '').trim() === key;
   });
   if (!rows.length) throw new Error('Plan guardado no encontrado');

@@ -346,6 +346,7 @@
             <div class="report-toolbar">
               <h2>Plan por operador</h2>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para operador"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="operatorReportStartInput" type="date" /></label>
                 <select id="operatorReportSelect" aria-label="Operador reporte"></select>
                 <select id="operatorReportStatus" aria-label="Estado del plan"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
@@ -362,6 +363,7 @@
             <div class="report-toolbar">
               <div><h2>Cambios de herramental - Ajustador</h2><span>Solo actividades generadas por cambio de herramental o kit</span></div>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para ajustador"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="adjusterReportStartInput" type="date" /></label>
                 <select id="adjusterReportStatus" aria-label="Estado del ajuste"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
                 <label class="compact-control"><span>Dias futuros</span><select id="adjusterReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
@@ -377,6 +379,7 @@
             <div class="report-toolbar">
               <div><h2>Subcontratos por OT</h2><span>Tipo y dias configurados en CONFIGURACION_OT</span></div>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para subcontratos"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="subcontractReportStartInput" type="date" /></label>
                 <label class="compact-control"><span>Dias futuros</span><select id="subcontractReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
                 <select id="subcontractReportStatus" aria-label="Estado del subcontrato"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>

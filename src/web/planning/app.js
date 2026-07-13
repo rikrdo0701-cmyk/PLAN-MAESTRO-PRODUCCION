@@ -701,7 +701,10 @@ function bindEvents() {
   els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
   els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); window.print(); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
-  els.planSnapshotSelect.addEventListener("change", loadSelectedPlanSnapshot);
+  els.planSnapshotSelect.addEventListener("change", () => loadSelectedPlanSnapshot(els.planSnapshotSelect.value));
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => {
+    select.addEventListener("change", () => loadSelectedPlanSnapshot(select.value));
+  });
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
   els.printOperatorBtn.addEventListener("click", () => {
     renderOperatorReport();
@@ -3410,6 +3413,9 @@ async function scheduleCurrentPlanImpl() {
     void persistPlanSnapshot().then((snapshot) => {
       if (!snapshot?.snapshotId) return;
       state.draftVersionId = snapshot.snapshotId;
+      reportSnapshot = window.PlanningWorkflowCore.buildDraftSnapshot(state, snapshot.generatedAt || new Date().toISOString());
+      renderPlanSnapshotSelect();
+      renderReports();
       saveState("ui");
     }).catch((error) => showToast(`El plan se calculo, pero no se pudo guardar: ${error.message}`, 9000));
   } catch (error) {
@@ -3906,8 +3912,8 @@ async function loadPlanSnapshots(showMessage) {
   }
 }
 
-async function loadSelectedPlanSnapshot() {
-  const snapshotId = els.planSnapshotSelect.value;
+async function loadSelectedPlanSnapshot(selectedSnapshotId) {
+  const snapshotId = String(selectedSnapshotId ?? els.planSnapshotSelect.value);
   if (snapshotId === "draft") {
     if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft");
     else {
@@ -3983,6 +3989,10 @@ function renderPlanSnapshotSelect() {
   }).join("");
   els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
   els.planSnapshotSelect.value = selectedId === "draft" ? "draft" : (allowedSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "draft");
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => {
+    select.innerHTML = els.planSnapshotSelect.innerHTML;
+    select.value = els.planSnapshotSelect.value;
+  });
 }
 
 function publishedSnapshotIds() {

@@ -52,7 +52,7 @@ function initializeProductionPlanningDatabase(spreadsheetId) {
 function verifyProductionPlanningDatabase() {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);
-  const required = ['CONFIGURACION_OT', 'CONFIGURACION_ARTICULO', 'HERRAMENTALES', 'SUBCONTRATOS', 'TIPOS_OT', 'ESTADOS_OPERACION_PLAN', 'PLANES_HISTORICOS'];
+  const required = ['CONFIGURACION_OT', 'CONFIGURACION_ARTICULO', 'HERRAMENTALES', 'SUBCONTRATOS', 'TIPOS_OT', 'ESTADOS_OPERACION_PLAN', 'PLANES_HISTORICOS', 'BORRADOR_PLAN'];
   return {
     ok: true,
     spreadsheetId: spreadsheet.getId(),
