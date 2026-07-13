@@ -69,6 +69,93 @@ test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloq
   });
 });
 
+test("compareWorkOrderLite separa cambios directos y planeados sin mutar entradas", () => {
+  const state = {
+    selectedOts: [" 200 ", "400"],
+    workOrders: [
+      { ot: "100", item: "A", quantity: 10, builtQuantity: 2, pendingQuantity: 8, status: "ABIERTA", description: "UI", dueDateOverride: "2026-08-01" },
+      { ot: "200", item: "B", quantity: 10, builtQuantity: 1, pendingQuantity: 9, status: "ABIERTA", customer: "Cliente UI" },
+      { ot: "400", item: "D", quantity: 5, builtQuantity: 0, pendingQuantity: 5, status: "ABIERTA" },
+    ],
+    operations: [{ id: "op", ot: "200" }], otConfigurations: { 200: { machine: "M1" } },
+  };
+  const incoming = [
+    { ot: "100", item: "A2", quantity: 12, builtQuantity: 3, pendingQuantity: 9, status: "LIBERADA", exists: true },
+    { ot: 200, item: "B", quantity: 20, builtQuantity: 1, pendingQuantity: 19, status: "LIBERADA", exists: true },
+    { ot: "300", item: "C", quantity: 7, builtQuantity: 0, pendingQuantity: 7, status: "ABIERTA", exists: true },
+  ];
+  const originalState = structuredClone(state);
+  const originalIncoming = structuredClone(incoming);
+
+  const comparison = core.compareWorkOrderLite(state, incoming);
+
+  assert.deepEqual(state, originalState);
+  assert.deepEqual(incoming, originalIncoming);
+  assert.deepEqual(structuredClone(comparison.direct.map((item) => item.ot)), ["100", "300"]);
+  assert.deepEqual(structuredClone(comparison.plannedQuantityChanges.map((item) => item.ot)), ["200"]);
+  assert.deepEqual(structuredClone(comparison.plannedClosed.map((item) => item.ot)), ["400"]);
+  const merged100 = comparison.nextWorkOrders.find((item) => item.ot === "100");
+  assert.equal(merged100.item, "A2");
+  assert.equal(merged100.quantity, 12);
+  assert.equal(merged100.description, "UI");
+  assert.equal(merged100.dueDateOverride, "2026-08-01");
+});
+
+test("applyConfirmedWorkOrderChanges acepta cantidades y conserva bloqueadas y completadas", () => {
+  const state = {
+    selectedOts: ["200"], lockedOts: ["200"], workOrders: [{ ot: "200", item: "B", quantity: 10, builtQuantity: 0, pendingQuantity: 10 }],
+    operations: [
+      { id: "pending", ot: "200", planStatus: "PENDIENTE", fechaInicio: "2026-07-20", horaInicio: "07:00", fechaFin: "2026-07-20", horaFin: "08:00" },
+      { id: "locked", ot: "200", planStatus: "PENDIENTE", locked: true, fechaInicio: "2026-07-20", horaInicio: "08:00", fechaFin: "2026-07-20", horaFin: "09:00" },
+      { id: "done", ot: "200", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-19", horaInicio: "07:00", fechaFin: "2026-07-19", horaFin: "08:00" },
+    ],
+  };
+  const comparison = core.compareWorkOrderLite(state, [{ ot: "200", item: "B", quantity: 20, builtQuantity: 2, pendingQuantity: 18, status: "ABIERTA" }]);
+
+  const result = core.applyConfirmedWorkOrderChanges(state, comparison, { acceptQuantityOts: ["200"], removeClosedOts: [], keepClosedOts: [] });
+
+  assert.equal(result.workOrders[0].quantity, 20);
+  assert.equal(result.draftNeedsReschedule, true);
+  assert.deepEqual([result.operations[0].fechaInicio, result.operations[0].horaInicio, result.operations[0].fechaFin, result.operations[0].horaFin], ["", "", "", ""]);
+  assert.equal(result.operations[1].fechaInicio, "2026-07-20");
+  assert.equal(result.operations[2].fechaInicio, "2026-07-19");
+  assert.ok(result.workOrderSyncWarnings.some((warning) => warning.ot === "200" && warning.type === "LOCKED_INCOMPATIBILITY"));
+});
+
+test("applyConfirmedWorkOrderChanges conserva rechazos y retira cerradas incluso bloqueadas", () => {
+  const state = {
+    selectedOts: ["200", "400", "500"], lockedOts: ["400"], expandedOts: ["400"],
+    workOrders: [
+      { ot: "200", quantity: 10, builtQuantity: 0, pendingQuantity: 10 },
+      { ot: "400", quantity: 5, builtQuantity: 0, pendingQuantity: 5 },
+      { ot: "500", quantity: 6, builtQuantity: 0, pendingQuantity: 6 },
+    ],
+    operations: [
+      { id: "400-p", ot: "400", planStatus: "PENDIENTE", locked: true, prioridad: 1 },
+      { id: "400-c", ot: "400", planStatus: "COMPLETADA_PLAN", prioridad: 1 },
+      { id: "500-p", ot: "500", planStatus: "PENDIENTE", prioridad: 2 },
+    ],
+    lastSchedule: { scheduledOts: ["400", "500"] },
+  };
+  const comparison = core.compareWorkOrderLite(state, [{ ot: "200", quantity: 20, builtQuantity: 0, pendingQuantity: 20 }]);
+  const original = structuredClone(state);
+
+  const result = core.applyConfirmedWorkOrderChanges(state, comparison, {
+    acceptQuantityOts: [], removeClosedOts: ["400"], keepClosedOts: ["500"],
+  });
+
+  assert.deepEqual(state, original);
+  assert.deepEqual(result.selectedOts, ["200", "500"]);
+  assert.deepEqual(result.lockedOts, []);
+  assert.deepEqual(result.lastSchedule.scheduledOts, ["500"]);
+  assert.equal(result.operations.some((operation) => operation.id === "400-p"), false);
+  assert.equal(result.operations.some((operation) => operation.id === "400-c"), true);
+  assert.equal(result.workOrders.find((item) => item.ot === "200").quantity, 10);
+  assert.ok(result.workOrders.some((item) => item.ot === "500"));
+  assert.ok(result.workOrderSyncWarnings.some((warning) => warning.ot === "200" && warning.type === "QUANTITY_REJECTED"));
+  assert.ok(result.workOrderSyncWarnings.some((warning) => warning.ot === "500" && warning.type === "CLOSED_KEPT"));
+});
+
 test("ganttOperationTiming separa minutos productivos y no operativos", () => {
   assert.deepEqual(structuredClone(core.ganttOperationTiming(20, new Date("2026-07-13T14:50:00"), new Date("2026-07-13T15:15:00"))), {
     productiveMinutes: 20,

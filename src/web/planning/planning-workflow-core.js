@@ -94,6 +94,136 @@
     };
   }
 
+  const WORK_ORDER_LITE_FIELDS = ["item", "quantity", "builtQuantity", "pendingQuantity", "status", "exists"];
+
+  function normalizedLiteWorkOrder(workOrder) {
+    const source = workOrder || {};
+    return {
+      ...source,
+      ot: String(source.ot || source.woFolio || "").trim(),
+      item: String(source.item || source.article || source.parte || "").trim(),
+      quantity: Number(source.quantity ?? source.cantidad ?? 0),
+      builtQuantity: Math.max(0, Number(source.builtQuantity ?? source.quantityBuilt ?? source.cantidadEnsamblada ?? 0)),
+      pendingQuantity: Math.max(0, Number(source.pendingQuantity ?? source.cantidadPendiente ?? Math.max(0,
+        Number(source.quantity ?? source.cantidad ?? 0) - Number(source.builtQuantity ?? source.quantityBuilt ?? source.cantidadEnsamblada ?? 0)))),
+      status: String(source.status || source.estatus || "").trim(),
+      exists: source.exists ?? source.existence ?? source.existe ?? true,
+    };
+  }
+
+  function mergeLiteWorkOrder(current, incoming) {
+    const normalizedIncoming = normalizedLiteWorkOrder(incoming);
+    const merged = { ...(current || {}), ot: normalizedIncoming.ot };
+    for (const field of WORK_ORDER_LITE_FIELDS) merged[field] = normalizedIncoming[field];
+    return merged;
+  }
+
+  function liteWorkOrderChanged(current, incoming) {
+    if (!current) return true;
+    const normalizedCurrent = normalizedLiteWorkOrder(current);
+    const normalizedIncoming = normalizedLiteWorkOrder(incoming);
+    return WORK_ORDER_LITE_FIELDS.some((field) => normalizedCurrent[field] !== normalizedIncoming[field]);
+  }
+
+  function liteQuantityChanged(current, incoming) {
+    if (!current) return false;
+    const left = normalizedLiteWorkOrder(current);
+    const right = normalizedLiteWorkOrder(incoming);
+    return ["quantity", "builtQuantity", "pendingQuantity"].some((field) => left[field] !== right[field]);
+  }
+
+  function compareWorkOrderLite(currentState, incomingWorkOrders) {
+    const state = currentState || {};
+    const selected = new Set((state.selectedOts || []).map(normalize).filter(Boolean));
+    const currentByOt = new Map((state.workOrders || []).map((item) => [normalize(item?.ot), item]));
+    const incoming = (incomingWorkOrders || []).map(normalizedLiteWorkOrder).filter((item) => normalize(item.ot));
+    const incomingKeys = new Set(incoming.map((item) => normalize(item.ot)));
+    const direct = [];
+    const plannedQuantityChanges = [];
+    const nextWorkOrders = [];
+
+    for (const item of incoming) {
+      const key = normalize(item.ot);
+      const current = currentByOt.get(key);
+      const merged = mergeLiteWorkOrder(current, item);
+      nextWorkOrders.push(merged);
+      if (!current || (!selected.has(key) && liteWorkOrderChanged(current, item))) {
+        direct.push({ ot: item.ot, current: current ? { ...current } : null, incoming: { ...merged } });
+      } else if (selected.has(key) && liteQuantityChanged(current, item)) {
+        plannedQuantityChanges.push({ ot: item.ot, current: { ...current }, incoming: { ...merged } });
+      }
+    }
+
+    const plannedClosed = (state.workOrders || [])
+      .filter((item) => selected.has(normalize(item?.ot)) && !incomingKeys.has(normalize(item?.ot)))
+      .map((item) => ({ ot: String(item.ot || "").trim(), current: { ...item }, incoming: null }));
+    return { direct, plannedQuantityChanges, plannedClosed, nextWorkOrders };
+  }
+
+  function applyConfirmedWorkOrderChanges(state, comparison, decisions) {
+    const source = state || {};
+    const result = {
+      ...source,
+      workOrders: (comparison?.nextWorkOrders || []).map((item) => ({ ...item })),
+      operations: (source.operations || []).map((item) => ({ ...item })),
+      workOrderSyncWarnings: (source.workOrderSyncWarnings || []).map((item) => ({ ...item })),
+    };
+    const accepted = new Set((decisions?.acceptQuantityOts || []).map(normalize));
+    const removed = new Set((decisions?.removeClosedOts || []).map(normalize));
+    const kept = new Set((decisions?.keepClosedOts || []).map(normalize));
+    const replaceWorkOrder = (workOrder) => {
+      const key = normalize(workOrder?.ot);
+      result.workOrders = result.workOrders.filter((item) => normalize(item?.ot) !== key);
+      result.workOrders.push({ ...workOrder });
+    };
+    const warn = (ot, type, details = {}) => result.workOrderSyncWarnings.push({
+      ot: String(ot || "").trim(), type, createdAt: new Date().toISOString(), ...details,
+    });
+
+    for (const change of comparison?.plannedQuantityChanges || []) {
+      const key = normalize(change.ot);
+      if (!accepted.has(key)) {
+        replaceWorkOrder(change.current);
+        warn(change.ot, "QUANTITY_REJECTED", { current: { ...change.current }, incoming: { ...change.incoming } });
+        continue;
+      }
+      replaceWorkOrder(change.incoming);
+      result.draftNeedsReschedule = true;
+      let lockedIncompatibility = false;
+      result.operations = result.operations.map((operation) => {
+        if (normalize(operation?.ot) !== key || !isPendingDraftOperation(operation)) return operation;
+        if (operation.locked === true) {
+          lockedIncompatibility = true;
+          return operation;
+        }
+        return {
+          ...operation,
+          fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
+          needsReschedule: true,
+        };
+      });
+      if (lockedIncompatibility) warn(change.ot, "LOCKED_INCOMPATIBILITY", { incoming: { ...change.incoming } });
+    }
+
+    for (const closed of comparison?.plannedClosed || []) {
+      const key = normalize(closed.ot);
+      if (!removed.has(key)) {
+        replaceWorkOrder(closed.current);
+        warn(closed.ot, "CLOSED_KEPT", { explicit: kept.has(key), current: { ...closed.current } });
+        continue;
+      }
+      const completed = result.operations.filter((operation) => normalize(operation?.ot) === key && !isPendingDraftOperation(operation));
+      Object.assign(result, removeOtFromDraft(result, closed.ot));
+      result.operations = [
+        ...result.operations.filter((operation) => normalize(operation?.ot) !== key),
+        ...completed,
+      ];
+      result.workOrders = result.workOrders.filter((item) => normalize(item?.ot) !== key);
+      result.draftNeedsReschedule = true;
+    }
+    return result;
+  }
+
   function removeOtFromDraft(state, ot) {
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
@@ -339,7 +469,8 @@
   }
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
-    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming, removeOtFromDraft,
+    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
+    compareWorkOrderLite, applyConfirmedWorkOrderChanges, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
