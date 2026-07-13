@@ -190,6 +190,42 @@ test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad
   assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con el bloqueo");
 });
 
+test("registra la operacion bloqueadora que causa la espera", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"],
+    lockedOts: ["100"],
+    operations: [
+      { id: "locked", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "09:00"]);
+  assert.equal(pending.esperaMinutos, 120);
+  assert.equal(pending.causaEspera, "OPERADOR");
+  assert.equal(pending.recursoEspera, "OP 1");
+  assert.equal(pending.otBloqueadora, "100");
+  assert.equal(pending.secuenciaBloqueadora, 1);
+});
+
+test("sin espera registra diagnostico vacio", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{ id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
+    workOrders: [{ ot: "200" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const pending = result.operations.find((item) => item.id === "pending");
+  assert.equal(pending.esperaMinutos, 0);
+  assert.equal(pending.causaEspera, "");
+});
+
 test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
   const core = loadPlannerCore();
   const operation = {

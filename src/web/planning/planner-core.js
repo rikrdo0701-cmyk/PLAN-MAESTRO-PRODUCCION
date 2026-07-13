@@ -277,7 +277,7 @@
     for (const operator of operators) {
       for (const machine of machines) {
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
-        if (assignment) assignments.push(assignment);
+        if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
       }
     }
 
@@ -460,6 +460,7 @@
     next.horaFin = formatTime(assignment.end);
     next.needsReschedule = false;
     next.planStatus = "PENDIENTE";
+    Object.assign(next, waitDiagnostic(context, assignment));
     next.log = appendLog(next.log, assignment.subcontractRule
       ? `SUBCONTRATO ${assignment.subcontractRule.name || "DEFAULT"}`
       : `PROGRAMADO_${GENERATED_BY}`);
@@ -469,12 +470,13 @@
     }
 
     const tracksOperator = isLoadBearingOperator(assignment.operator);
-    if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments);
+    const busyMetadata = { operationId: next.id, ot: next.ot, secuencia: next.secuencia };
+    if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments, { ...busyMetadata, resourceType: "OPERADOR" });
     if (isLoadBearingOperator(assignment.setupOperator) && assignment.setupSegments?.length) {
-      addBusySegments(context.operatorBusy, assignment.setupOperator, assignment.setupSegments);
+      addBusySegments(context.operatorBusy, assignment.setupOperator, assignment.setupSegments, { ...busyMetadata, resourceType: "OPERADOR" });
       context.operatorLoad.set(assignment.setupOperator, (context.operatorLoad.get(assignment.setupOperator) || 0) + assignment.setupMinutes);
     }
-    if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.segments);
+    if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.segments, { ...busyMetadata, resourceType: "MAQUINA" });
     if (tracksOperator) {
       context.operatorLoad.set(assignment.operator, (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes);
     }
@@ -485,8 +487,8 @@
       next.log = appendLog(next.log, `CAMBIO_HERR_KIT ${assignment.toolChange.fromLabel} -> ${assignment.toolChange.toLabel}`);
     }
     if (assignment.postToolChange?.required) {
-      addBusySegments(context.operatorBusy, assignment.postToolChange.operator, assignment.postToolChange.segments);
-      if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.postToolChange.segments);
+      addBusySegments(context.operatorBusy, assignment.postToolChange.operator, assignment.postToolChange.segments, { ...busyMetadata, resourceType: "OPERADOR" });
+      if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.postToolChange.segments, { ...busyMetadata, resourceType: "MAQUINA" });
       context.operatorLoad.set(
         assignment.postToolChange.operator,
         (context.operatorLoad.get(assignment.postToolChange.operator) || 0) + assignment.postToolChange.minutes
@@ -615,13 +617,19 @@
   }
 
   function commitFixedOperation(context, op) {
+    op.esperaMinutos = 0;
+    op.causaEspera = "";
+    op.recursoEspera = "";
+    op.otBloqueadora = "";
+    op.secuenciaBloqueadora = "";
     const start = operationStart(op);
     const end = operationEnd(op);
     if (start && end) {
       const segments = [{ start, end }];
       const tracksOperator = isLoadBearingOperator(op.operador);
-      if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments);
-      if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments);
+      const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia };
+      if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments, { ...busyMetadata, resourceType: "OPERADOR" });
+      if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments, { ...busyMetadata, resourceType: "MAQUINA" });
       if (tracksOperator) context.operatorLoad.set(op.operador, (context.operatorLoad.get(op.operador) || 0) + diffMinutes(start, end));
     }
     if (end && hasMachineResource(op.maquina) && operationToolKey(op)) {
@@ -1188,10 +1196,47 @@
     return conflicts;
   }
 
-  function addBusySegments(map, resource, segments) {
+  function waitDiagnostic(context, assignment) {
+    const earliest = assignment.earliest || assignment.operationStart;
+    const waitMinutes = Math.max(0, Math.round(diffMinutes(earliest, assignment.operationStart)));
+    if (!waitMinutes) return { esperaMinutos: 0, causaEspera: "", recursoEspera: "", otBloqueadora: "", secuenciaBloqueadora: "" };
+
+    if (assignment.toolChange?.required && assignment.setupMinutes > 0 && assignment.start < assignment.operationStart) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CAMBIO_HERRAMENTAL", recursoEspera: assignment.machine || assignment.setupOperator || "CAMBIO DE HERRAMENTAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
+
+    const candidates = [];
+    const collect = (intervals, cause, resource) => {
+      for (const interval of intervals || []) {
+        if (interval.end > earliest && interval.start < assignment.operationStart) candidates.push({ interval, cause, resource });
+      }
+    };
+    collect(context.operatorBusy.get(assignment.operator), "OPERADOR", assignment.operator);
+    if (assignment.finite && hasMachineResource(assignment.machine)) collect(context.machineBusy.get(assignment.machine), "MAQUINA", assignment.machine);
+    candidates.sort((left, right) => right.interval.end - left.interval.end || (left.cause === "OPERADOR" ? -1 : 1));
+    const blocker = candidates[0];
+    if (blocker) return {
+      esperaMinutos: waitMinutes,
+      causaEspera: blocker.cause,
+      recursoEspera: blocker.resource,
+      otBloqueadora: blocker.interval.ot == null ? "" : String(blocker.interval.ot),
+      secuenciaBloqueadora: blocker.interval.secuencia ?? "",
+    };
+
+    const resourceCalendarStart = nextAvailableMoment(context.state, earliest, assignment.operator, assignment.machine, context.windowEnd);
+    if (resourceCalendarStart > earliest) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CALENDARIO", recursoEspera: [assignment.operator, assignment.machine].filter(Boolean).join(" / ") || "CALENDARIO GENERAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
+    return { esperaMinutos: waitMinutes, causaEspera: "SIN_CAUSA", recursoEspera: "", otBloqueadora: "", secuenciaBloqueadora: "" };
+  }
+
+  function addBusySegments(map, resource, segments, metadata) {
     if (!resource || normalizeKey(resource) === "SIN_OPERADOR" || normalizeKey(resource) === "SIN_MAQUINA" || normalizeKey(resource) === "SUBCONTRATO") return;
     const current = map.get(resource) || [];
-    current.push(...segments.map((segment) => ({ start: new Date(segment.start), end: new Date(segment.end) })));
+    current.push(...segments.map((segment) => ({
+      start: new Date(segment.start), end: new Date(segment.end),
+      ...(metadata || {}), resource,
+    })));
     current.sort((a, b) => a.start - b.start);
     map.set(resource, current);
   }
