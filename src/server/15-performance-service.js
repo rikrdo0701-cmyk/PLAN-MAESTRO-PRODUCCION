@@ -138,6 +138,7 @@ function syncNetSuiteWorkOrdersLite() {
     const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
     const current = {
       revision: Number(config.revision || 0),
+      selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
       plant: config.plant || {},
       workOrders: PP_readRows_(spreadsheet.getSheetByName('ORDENES_TRABAJO')).map(PP_mapWorkOrder_),
       operationPlanStatuses: PP_buildOperationPlanStatuses_(
@@ -152,6 +153,7 @@ function syncNetSuiteWorkOrdersLite() {
     );
     return Object.assign({}, saved, {
       schemaVersion: PP_SCHEMA_VERSION,
+      selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
       workOrders: synced.workOrders || [],
       operationPlanStatuses: synced.operationPlanStatuses || {},
       plant: synced.plant || {},

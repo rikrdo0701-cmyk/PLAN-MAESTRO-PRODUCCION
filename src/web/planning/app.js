@@ -4861,6 +4861,7 @@ async function syncNetSuiteTwoPhase() {
     const payload = await callAppsScript("syncNetSuiteWorkOrdersLite");
     validateNetSuiteImportedData(payload, "workOrders");
     state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
+    state.selectedOts = Array.isArray(payload.selectedOts) ? payload.selectedOts : [];
     Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
     if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
     if (payload.plant) state.plant = payload.plant;
