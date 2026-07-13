@@ -2686,9 +2686,23 @@ function createGanttBar(op, window) {
   }
   if (op.ot === findOperation(state.selectedOperationId)?.ot) bar.classList.add("in-sequence");
   const materialBase = materialBaseForOt(op.ot);
-  const durationMinutes = Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
-  bar.title = `${op.ot} / Sec ${op.secuencia} - CT ${op.ct} - ${op.operador}${materialBase ? ` - Material ${materialBase}` : ""} - ${durationMinutes} min - ${formatDateTime(start)} a ${formatDateTime(end)}`;
-  bar.innerHTML = `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${durationMinutes} min</span>`;
+  const timing = globalThis.PlanningWorkflowCore.ganttOperationTiming(ganttProductiveMinutes(op, start, end), start, end);
+  const tooltip = [
+    `${op.ot} / Sec ${op.secuencia} - CT ${op.ct} - ${op.operador}${materialBase ? ` - Material ${materialBase}` : ""}`,
+    `Inicio: ${formatDateTime(start)}`,
+    `Fin: ${formatDateTime(end)}`,
+    `Minutos productivos: ${timing.productiveMinutes}`,
+    `Minutos no operativos: ${timing.nonOperatingMinutes}`,
+  ];
+  if (Number(op.esperaMinutos || 0) > 0 || op.causaEspera || op.recursoEspera || op.otBloqueadora || op.secuenciaBloqueadora !== "" && op.secuenciaBloqueadora != null) {
+    tooltip.push(`Espera: ${Math.max(0, Number(op.esperaMinutos) || 0)} min`);
+    if (op.causaEspera) tooltip.push(`Causa de espera: ${op.causaEspera}`);
+    if (op.recursoEspera) tooltip.push(`Recurso de espera: ${op.recursoEspera}`);
+    if (op.otBloqueadora) tooltip.push(`OT bloqueadora: ${op.otBloqueadora}`);
+    if (op.secuenciaBloqueadora !== "" && op.secuenciaBloqueadora != null) tooltip.push(`Secuencia bloqueadora: ${op.secuenciaBloqueadora}`);
+  }
+  bar.title = tooltip.join("\n");
+  bar.innerHTML = `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${timing.productiveMinutes} min productivos</span>`;
   bar.style.setProperty("--job-color", jobBarColor(op.ot));
   bar.style.left = `${left}%`;
   bar.style.width = `${width}%`;
@@ -3367,6 +3381,12 @@ function renderArticleConfigurations() {
   els.articleConfigTable.querySelectorAll("[data-article-price]").forEach((input) => {
     input.addEventListener("change", () => updateTemporaryArticlePrice(input.dataset.articlePrice, input.value));
   });
+}
+
+function ganttProductiveMinutes(op, start, end) {
+  if (isSubcontractAppOperation(op)) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
+  const configured = Number(op.tiempoSetup || 0) + adjustedProductionMinutes(op);
+  return configured > 0 ? configured : Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
 }
 
 function updateTemporaryArticlePrice(article, value) {

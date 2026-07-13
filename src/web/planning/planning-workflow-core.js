@@ -80,6 +80,20 @@
       : { allowed: true, reason: "" };
   }
 
+  function ganttOperationTiming(productiveMinutes, start, end) {
+    const productive = Math.max(0, Math.round(Number(productiveMinutes) || 0));
+    const startTime = start instanceof Date ? start.getTime() : new Date(start).getTime();
+    const endTime = end instanceof Date ? end.getTime() : new Date(end).getTime();
+    const elapsed = Number.isFinite(startTime) && Number.isFinite(endTime)
+      ? Math.max(0, Math.round((endTime - startTime) / 60000))
+      : 0;
+    return {
+      productiveMinutes: productive,
+      elapsedMinutes: elapsed,
+      nonOperatingMinutes: Math.max(0, elapsed - productive),
+    };
+  }
+
   function removeOtFromDraft(state, ot) {
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
@@ -325,7 +339,7 @@
   }
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
-    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, removeOtFromDraft,
+    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,

@@ -226,6 +226,37 @@ test("sin espera registra diagnostico vacio", () => {
   assert.equal(pending.causaEspera, "");
 });
 
+test("una pausa intermedia extiende el intervalo sin aumentar tiempo productivo", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{ id: "pause", ot: "500", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
+    workOrders: [{ ot: "500" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+    dailyBreaks: { pause: { enabled: true, start: "15:00", end: "15:05" } },
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T14:50:00" });
+
+  const operation = result.operations.find((item) => item.id === "pause");
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio, operation.fechaFin, operation.horaFin], ["2026-07-13", "14:50", "2026-07-13", "15:15"]);
+  assert.equal(core.operationDuration(operation, 100, 100), 20);
+});
+
+test("una operacion iniciada al cierre del viernes termina el lunes", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{ id: "weekend", ot: "600", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
+    workOrders: [{ ot: "600" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {
+      MON: { enabled: true, start: "07:00", end: "17:00" }, FRI: { enabled: true, start: "07:00", end: "17:00" },
+      SAT: { enabled: false, start: "07:00", end: "17:00" }, SUN: { enabled: false, start: "07:00", end: "17:00" },
+    },
+  }, { planStart: "2026-07-17", horizonDays: 5, executionTime: "2026-07-17T16:50:00" });
+
+  const operation = result.operations.find((item) => item.id === "weekend");
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio, operation.fechaFin, operation.horaFin], ["2026-07-17", "16:50", "2026-07-20", "07:10"]);
+  assert.equal(core.operationDuration(operation, 100, 100), 20);
+});
+
 test("un limite de calendario posterior al conflicto corto determina la espera", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

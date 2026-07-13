@@ -91,6 +91,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
+  assert.match(pagesIndex, /Minutos productivos/);
+  assert.match(pagesIndex, /Minutos no operativos/);
+  assert.match(pagesIndex, /Causa de espera/);
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
   assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
   assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(\)/);

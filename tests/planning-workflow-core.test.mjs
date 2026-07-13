@@ -69,6 +69,19 @@ test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloq
   });
 });
 
+test("ganttOperationTiming separa minutos productivos y no operativos", () => {
+  assert.deepEqual(structuredClone(core.ganttOperationTiming(20, new Date("2026-07-13T14:50:00"), new Date("2026-07-13T15:15:00"))), {
+    productiveMinutes: 20,
+    elapsedMinutes: 25,
+    nonOperatingMinutes: 5,
+  });
+  assert.deepEqual(structuredClone(core.ganttOperationTiming(20, new Date("2026-07-17T16:50:00"), new Date("2026-07-20T07:10:00"))), {
+    productiveMinutes: 20,
+    elapsedMinutes: 3740,
+    nonOperatingMinutes: 3720,
+  });
+});
+
 test("normaliza la vista Gantt y mantiene un unico control activo", () => {
   for (const view of ["job", "ct", "machine", "operator"]) {
     assert.equal(core.normalizeGanttView(view), view);
