@@ -2303,9 +2303,6 @@ function renderSelectedJobPanel() {
     <input id="jobSubcontractDays" type="number" min="1" max="90" step="1" value="${escapeHtml(currentSubcontractDays || "")}" placeholder="Dias" aria-label="Dias de subcontrato de OT ${escapeHtml(job.ot)}" />
   </div>` : "";
   const firstQuantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-  const photoMarkup = job.photoUrl
-    ? `<img src="${escapeHtml(job.photoUrl)}" alt="Articulo ${escapeHtml(job.parte || job.ot)}" data-job-photo />`
-    : "";
   const materialRows = job.materials.map((material) => `
     <div class="job-material-row" title="${escapeHtml(material.description || material.component)}">
       <span><strong>${escapeHtml(material.component)}</strong><small>${escapeHtml(material.description || "SIN DESCRIPCION")}</small></span>
@@ -2320,62 +2317,59 @@ function renderSelectedJobPanel() {
     <article class="job-detail">
       <div class="job-detail-head">
         <div class="job-identity">
-          <div class="job-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
           <div>
             <strong>OT ${escapeHtml(job.ot)}</strong>
-            <span title="${escapeHtml(job.descripcion || "SIN DESCRIPCION")}">${escapeHtml(job.descripcion || "SIN DESCRIPCION")}</span>
+            <span title="${escapeHtml(job.parte || "SIN ARTICULO")}">${escapeHtml(job.parte || "SIN ARTICULO")}</span>
           </div>
         </div>
         <div class="job-detail-actions">
-          <span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>
-          ${jobTypeTagHtml(job)}
-          ${jobRiskIndicatorHtml(job)}
-          ${netSuiteChangeBadgeHtml(job.ot)}
           <span class="pill ${priorityClass(job.prioridad)}">${escapeHtml(priorityLabel(job.prioridad))}</span>
           <button class="icon-button detail-lock${job.locked ? " locked" : ""}" type="button" data-detail-lock="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
             <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
           </button>
         </div>
       </div>
-      <div class="job-facts">
-        <div class="job-fact"><span>Articulo</span><strong>${escapeHtml(job.parte || "SIN ARTICULO")}</strong></div>
-        <div class="job-fact"><span>Inicio NetSuite</span><strong>${escapeHtml(formatOtDateValue(job.startDate))}</strong></div>
-        <div class="job-fact"><span>Fin NetSuite</span><strong>${escapeHtml(formatOtDateValue(job.endDate))}</strong></div>
+      <div class="job-facts job-detail-quick-facts">
         <div class="job-fact"><span>Cantidad</span><strong>${escapeHtml(firstQuantity)}</strong></div>
-        <label class="job-fact job-delivery-fact"><span>Fecha de entrega</span><input id="jobDueDateInput" class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(selectedWorkOrder?.dueDate))}"></label>
+        <label class="job-fact job-delivery-fact"><span>Entrega</span><input id="jobDueDateInput" class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(selectedWorkOrder?.dueDate))}"></label>
       </div>
-      ${hasBendingOperations ? `<div class="job-section">
-        <span class="job-section-title">Maquina asignada a la OT</span>
+      ${hasBendingOperations ? `<details class="job-resource-section">
+        <summary><span>Maquina</span><strong>${escapeHtml(bulkMachineValue === "__MULTIPLE__" ? "VARIAS" : machineLabel(bulkMachineValue || "SIN MAQUINA"))}</strong></summary>
+        <div class="job-section">
         <div class="job-machine-row">
           <select id="jobMachineSelect" class="job-machine-select" aria-label="Maquina de la OT ${escapeHtml(job.ot)}">
             ${bulkMachineValue === "__MULTIPLE__" ? `<option value="__MULTIPLE__">VARIAS MAQUINAS</option>` : ""}
             ${machineOptions.map((machine) => `<option value="${escapeHtml(machine)}"${machine === bulkMachineValue ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("")}
           </select>
           <span class="assignment-scope">${bendingOps.length} ops de doblado</span>
-        </div>
-      </div>` : ""}
-      ${hasBendingOperations ? `<div class="job-section">
-        <span class="job-section-title">Kit asignado a la OT</span>
+        </div></div>
+      </details>` : ""}
+      ${hasBendingOperations ? `<details class="job-resource-section">
+        <summary><span>Kit</span><strong>${escapeHtml(otKit || (otKitPending ? "REGISTRAR DESPUES" : "SIN KIT"))}</strong></summary>
+        <div class="job-section">
         <div class="job-kit-row">
           <input id="jobKitInput" type="text" value="${escapeHtml(otKit)}" placeholder="Kit opcional" aria-label="Kit de la OT ${escapeHtml(job.ot)}"${otKitPending ? " disabled" : ""}>
           <label><input id="jobKitPending" type="checkbox"${otKitPending ? " checked" : ""}> Registrar despues</label>
-        </div>
-      </div>
-      <div class="job-section">
-        <span class="job-section-title">Herramental requerido</span>
+        </div></div>
+      </details>
+      <details class="job-resource-section">
+        <summary><span>Herramental</span><strong>${toolGroups.length} grupos</strong></summary>
+        <div class="job-section">
         <div class="tool-chip-row">${toolSummary}</div>
-      </div>` : ""}
-      ${subcontractRows ? `<div class="job-section"><span class="job-section-title">Subcontrato de esta OT</span><div class="job-subcontract-list">${subcontractRows}</div></div>` : ""}
-      <details class="job-materials"${job.materials.length ? " open" : ""}>
+        </div>
+      </details>` : ""}
+      ${subcontractRows ? `<details class="job-resource-section"><summary><span>Subcontrato</span><strong>${escapeHtml(currentSubcontractType || "SIN TIPO")} · ${currentSubcontractDays || 0} dias</strong></summary><div class="job-section"><div class="job-subcontract-list">${subcontractRows}</div></div></details>` : ""}
+      <details class="job-materials job-resource-section">
         <summary><span>Materiales <small>${job.materials.length} componentes</small></span><strong>${escapeHtml(job.materialBase ? `Base ${job.materialBase}` : "SIN MATERIAL")}</strong></summary>
         ${job.materials.length ? `
           <div class="job-material-header"><span>Componente</span><span>UM</span><span>Req.</span><span>Emit.</span><span>Pend.</span></div>
           <div class="job-material-list">${materialRows}</div>
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
       </details>
-      <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
-      <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
-      <div class="job-op-list">
+      <div class="job-detail-operations-scroll">
+        <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
+        <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
+        <div class="job-op-list">
         ${job.ops.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
@@ -2385,12 +2379,13 @@ function renderSelectedJobPanel() {
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
-            <span class="op-name">${escapeHtml(op.descripcion || op.tipoInsercion || "Operacion")}</span>
+            <span class="op-name">${escapeHtml(op.descripcion || op.tipoInsercion || "Operacion")}<small>CT ${escapeHtml(op.ct)}</small></span>
             <span>${escapeHtml(op.ct)}</span>
             <span class="op-time">${formatMinutes(operationDuration(op))}</span>
             <span class="op-status-cell">${statusCell}</span>
           </div>`;
         }).join("")}
+        </div>
       </div>
     </article>
   `;
@@ -2398,8 +2393,6 @@ function renderSelectedJobPanel() {
   els.selectedJobPanel.querySelector("[data-detail-lock]").addEventListener("click", (event) => {
     toggleJobLock(event.currentTarget.dataset.detailLock);
   });
-  const jobPhoto = els.selectedJobPanel.querySelector("[data-job-photo]");
-  if (jobPhoto) jobPhoto.addEventListener("error", () => jobPhoto.parentElement.classList.remove("has-photo"));
   const dueDateInput = els.selectedJobPanel.querySelector("#jobDueDateInput");
   if (dueDateInput) dueDateInput.addEventListener("change", () => updateWorkOrderDueDate(job.ot, dueDateInput.value));
   const bulkSelect = els.selectedJobPanel.querySelector("#jobMachineSelect");
