@@ -63,6 +63,19 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function updateTemporaryArticlePrice\(article, value\)/);
   assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--prototype td/);
   assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--expedited td/);
+  assert.match(pagesIndex, /function printPlanHeader\(title\)/);
+  assert.match(pagesIndex, /class="individual-print-header"/);
+  assert.match(pagesIndex, /class="individual-print-logo">MALDONADO/);
+  assert.match(pagesIndex, /class="individual-print-code">MP CD 28-02 V02/);
+  assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N DIARIO INDIVIDUAL/);
+  assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N SEMANAL/);
+  assert.match(pagesIndex, /function prepareIndividualPrint\(target\)/);
+  assert.match(pagesIndex, /querySelector\("\.individual-print-date"\)/);
+  assert.match(pagesIndex, /document\.body\.classList\.add\("printing-individual-plan"\)/);
+  assert.match(pagesIndex, /document\.body\.classList\.remove\("printing-individual-plan"\)/);
+  assert.match(pagesIndex, /grid-template-columns:\s*1fr 2fr 1fr/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table th,[\s\S]*text-align:\s*center/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.executive-summary[\s\S]*display:\s*none !important/);
   assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
@@ -73,7 +86,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportStatus"/);
   assert.match(pagesIndex, /reportCoverageDiagnostics\(reportOperationsSource\(\)\)/);
-  assert.match(pagesIndex, /weekPrintContext\.textContent = `Plan de la semana[\s\S]*Impreso/);
+  assert.match(pagesIndex, /weekPrintContext\.textContent = formatDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);

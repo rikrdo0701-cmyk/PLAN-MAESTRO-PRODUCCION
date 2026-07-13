@@ -630,6 +630,34 @@ function debounce(fn, ms) {
   };
 }
 
+function printPlanHeader(title) {
+  return `<header class="individual-print-header">
+    <strong class="individual-print-logo">MALDONADO</strong>
+    <h2>${escapeHtml(title)}</h2>
+    <div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong class="individual-print-date"></strong></div>
+  </header>`;
+}
+
+function prepareIndividualPrint(target) {
+  if (!target) return;
+  if (!target.querySelector(".individual-print-header")) {
+    const title = target.id === "weekTab" ? "PLAN DE PRODUCCIÓN SEMANAL" : "PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL";
+    target.insertAdjacentHTML("afterbegin", printPlanHeader(title));
+  }
+  document.querySelectorAll(".print-target").forEach((node) => node.classList.remove("print-target"));
+  target.classList.add("print-target");
+  const date = target.querySelector(".individual-print-date");
+  if (date) date.textContent = formatDateTime(new Date());
+  document.body.classList.add("printing-individual-plan");
+  const cleanup = () => {
+    target.classList.remove("print-target");
+    document.body.classList.remove("printing-individual-plan");
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.print();
+}
+
 function bindEvents() {
   document.querySelectorAll(".segmented button").forEach((button) => {
     button.onclick = () => setGanttView(button.dataset.view);
@@ -678,7 +706,7 @@ function bindEvents() {
     state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
     saveAndRender("Semana de cargas actualizada");
   });
-  els.printWeekBtn.addEventListener("click", () => window.print());
+  els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
   els.weekReportStartInput.addEventListener("change", () => {
     state.reportWeekStart = normalizeWeekStartValue(els.weekReportStartInput.value);
     syncReportFilterDates(state.reportWeekStart);
@@ -699,7 +727,7 @@ function bindEvents() {
   });
   els.subcontractReportFutureDays.addEventListener("change", () => updateReportFilter("subcontract", { futureDays: Number(els.subcontractReportFutureDays.value) }));
   els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
-  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); window.print(); });
+  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); prepareIndividualPrint(els.subcontractReport.closest(".tab-panel")); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
   els.planSnapshotSelect.addEventListener("change", () => loadSelectedPlanSnapshot(els.planSnapshotSelect.value));
   document.querySelectorAll("[data-report-source-select]").forEach((select) => {
@@ -708,11 +736,11 @@ function bindEvents() {
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
   els.printOperatorBtn.addEventListener("click", () => {
     renderOperatorReport();
-    window.print();
+    prepareIndividualPrint(els.operatorReport.closest(".tab-panel"));
   });
   els.printAdjusterBtn.addEventListener("click", () => {
     renderAdjusterReport();
-    window.print();
+    prepareIndividualPrint(els.adjusterReport.closest(".tab-panel"));
   });
   els.addToolBtn.addEventListener("click", addToolCatalogItem);
   els.toolHerrInput.addEventListener("change", () => updateCatalogCustomInput(els.toolHerrInput, els.toolHerrNewInput));
@@ -4071,7 +4099,7 @@ function renderReports() {
 function renderWeekReport() {
   els.weekReportStartInput.value = state.reportWeekStart;
   els.reportSnapshotMeta.textContent = reportSourceLabel();
-  els.weekPrintContext.textContent = `Plan de la semana | ${reportWeekLabel()} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
+  els.weekPrintContext.textContent = formatDateTime(new Date());
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
   els.weekExecutiveSummary.innerHTML = reportOps.length
@@ -4351,7 +4379,7 @@ function renderOperatorReport() {
   const selection = filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
   els.operatorReportStatus.value = filter.status;
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
-  els.operatorPrintContext.textContent = `Plan por operador | ${operator || "Sin operador"} | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
+  els.operatorPrintContext.textContent = formatDateTime(new Date());
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
   els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: isReportSnapshotEditable() });
   bindReportCommentInputs(els.operatorReport);
@@ -4367,7 +4395,7 @@ function renderAdjusterReport() {
   );
   els.adjusterReportStatus.value = filter.status;
   renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
-  els.adjusterPrintContext.textContent = `Cambios de herramental | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
+  els.adjusterPrintContext.textContent = formatDateTime(new Date());
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
   const body = selection.rows.map((op) => {
@@ -4400,7 +4428,7 @@ function renderSubcontractReport() {
   const selection = filteredReportRows(subcontractRowsForReportWeek(filter.date), "subcontract", (row) => row.start);
   els.subcontractReportStatus.value = filter.status;
   renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportFutureDays, els.subcontractReportCount, selection);
-  els.subcontractPrintContext.textContent = `Subcontratos | ${reportSelectionLabel(selection)} | ${reportSourceLabel()} | Impreso ${formatDateTime(new Date())}`;
+  els.subcontractPrintContext.textContent = formatDateTime(new Date());
   els.subcontractReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Tipo de subcontrato", "Dias", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
   const body = selection.rows.map((row) => {

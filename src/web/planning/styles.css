@@ -1486,6 +1486,7 @@ tr:last-child td { border-bottom: 0; }
 .report-document-brand strong { padding: 5px 9px; border: 2px solid #c6423a; border-radius: 3px; color: #174a79; font-size: 12px; letter-spacing: 0; }
 .report-document-brand span { color: #1f2b31; font-size: 12px; }
 .report-print-context { color: var(--muted); font-size: 10px; font-weight: 650; text-align: right; }
+.individual-print-header { display: none; }
 .specialized-report-table .report-warning { background: #fff3d6; color: #7a4e00; font-weight: 700; }
 .report-comment-input { width: 100%; min-width: 190px; min-height: 27px; padding: 3px 6px; border: 1px solid #cbd4d9; border-radius: 3px; background: #fff; color: var(--text); font-size: 10px; }
 .report-comment-input:focus { border-color: var(--teal); outline: 2px solid rgba(8, 127, 122, 0.16); }
@@ -1873,6 +1874,31 @@ tr:last-child td { border-bottom: 0; }
   .reports-panel { display: block !important; margin: 0; border: 0; }
   .tab-panel { display: none !important; }
   .tab-panel.active { display: block !important; padding: 0; }
+  body.printing-individual-plan .tab-panel { display: none !important; }
+  body.printing-individual-plan .tab-panel.print-target { display: block !important; padding: 0; }
+  .individual-print-header {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    align-items: center;
+    gap: 5mm;
+    margin: 0 0 4mm;
+    padding: 0 0 3mm;
+    border-bottom: 1px solid #000;
+  }
+  .individual-print-header h2 { margin: 0; font-size: 12pt; text-align: center; }
+  .individual-print-logo { justify-self: start; padding: 2mm 3mm; border: 1.5px solid #c6423a; border-radius: 2px; color: #174a79; font-size: 10pt; }
+  .individual-print-meta { display: grid; justify-items: end; gap: 1.5mm; text-align: right; }
+  .individual-print-code { font-size: 6.5pt; }
+  .individual-print-date { font-size: 9pt; }
+  body.printing-individual-plan .summary-strip,
+  body.printing-individual-plan .plan-alerts,
+  body.printing-individual-plan .draft-executive,
+  body.printing-individual-plan .report-toolbar,
+  body.printing-individual-plan .executive-summary { display: none !important; }
+  body.printing-individual-plan .report-page-table th,
+  body.printing-individual-plan .report-page-table td,
+  body.printing-individual-plan .weekly-day-table th,
+  body.printing-individual-plan .weekly-day-table td { text-align: center; }
   .table-wrap { max-height: none; overflow: visible; border: 0; }
   .report-print-header { margin: 0 0 6mm; padding: 0 0 4mm; border: 0; border-bottom: 1px solid #000; }
   .production-report-table,
