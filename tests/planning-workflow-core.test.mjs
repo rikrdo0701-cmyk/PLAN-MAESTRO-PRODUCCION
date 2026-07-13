@@ -134,6 +134,12 @@ test("la sincronizacion conserva en el borrador solo OTs que NetSuite sigue repo
   assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["200"]);
 });
 
+test("confirmar preparacion selecciona la OT y conserva su firma en una transicion", () => {
+  const next = core.commitPreparedOtSelection({ selectedOts: [], preparedPlanningByOt: {} }, "1095", "machine=39");
+  assert.deepEqual(structuredClone(next.selectedOts), ["1095"]);
+  assert.equal(next.preparedPlanningByOt[1095], "machine=39");
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);

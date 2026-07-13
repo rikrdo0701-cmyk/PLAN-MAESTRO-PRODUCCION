@@ -1795,7 +1795,12 @@ async function selectJob(ot, selected) {
   } else {
     checkpointState();
   }
-  if (selected && !alreadySelected) state.selectedOts.push(ot);
+  if (selected && !alreadySelected) {
+    const signature = String(state.preparedPlanningByOt?.[ot] || "");
+    Object.assign(state, window.PlanningWorkflowCore.commitPreparedOtSelection(state, ot, signature));
+    delete state._pendingAddOt;
+    delete state._pendingAddOtSnapshot;
+  }
   if (!selected && alreadySelected) {
     Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
   }
