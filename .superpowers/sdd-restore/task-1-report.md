@@ -46,7 +46,8 @@ Resultado: sin errores.
 
 ## Commit
 
-Mensaje: `Agregar reconciliacion ligera de OTs`. El hash final se informa en la entrega del controlador.
+- Implementación inicial: `a1f8b9d98aea9790d20ac8d44fb968358d1cddf3` (`Agregar reconciliacion ligera de OTs`).
+- Corrección de revisión: cambio no cuantitativo de una OT planeada clasificado como directo, con regresión dedicada. Prueba enfocada: 4/4; suite completa: 57/57. El hash se registra en el commit de corrección.
 
 ## Auto-revisión y preocupaciones
 

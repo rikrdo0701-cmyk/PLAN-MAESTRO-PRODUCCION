@@ -101,6 +101,19 @@ test("compareWorkOrderLite separa cambios directos y planeados sin mutar entrada
   assert.equal(merged100.dueDateOverride, "2026-08-01");
 });
 
+test("compareWorkOrderLite clasifica cambios no cuantitativos de una OT planeada como directos", () => {
+  const state = {
+    selectedOts: ["700"],
+    workOrders: [{ ot: "700", item: "ART-A", quantity: 10, builtQuantity: 2, pendingQuantity: 8, status: "ABIERTA", exists: true }],
+  };
+  const comparison = core.compareWorkOrderLite(state, [
+    { ot: 700, item: "ART-B", quantity: 10, builtQuantity: 2, pendingQuantity: 8, status: "CERRADA", exists: false },
+  ]);
+
+  assert.deepEqual(structuredClone(comparison.direct.map((item) => item.ot)), ["700"]);
+  assert.deepEqual(structuredClone(comparison.plannedQuantityChanges), []);
+});
+
 test("applyConfirmedWorkOrderChanges acepta cantidades y conserva bloqueadas y completadas", () => {
   const state = {
     selectedOts: ["200"], lockedOts: ["200"], workOrders: [{ ot: "200", item: "B", quantity: 10, builtQuantity: 0, pendingQuantity: 10 }],

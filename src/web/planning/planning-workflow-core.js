@@ -147,10 +147,10 @@
       const current = currentByOt.get(key);
       const merged = mergeLiteWorkOrder(current, item);
       nextWorkOrders.push(merged);
-      if (!current || (!selected.has(key) && liteWorkOrderChanged(current, item))) {
-        direct.push({ ot: item.ot, current: current ? { ...current } : null, incoming: { ...merged } });
-      } else if (selected.has(key) && liteQuantityChanged(current, item)) {
+      if (current && selected.has(key) && liteQuantityChanged(current, item)) {
         plannedQuantityChanges.push({ ot: item.ot, current: { ...current }, incoming: { ...merged } });
+      } else if (!current || liteWorkOrderChanged(current, item)) {
+        direct.push({ ot: item.ot, current: current ? { ...current } : null, incoming: { ...merged } });
       }
     }
 
