@@ -510,6 +510,7 @@ function bindElements() {
     "ganttFullscreenBtn",
     "gantt",
     "priorityCount",
+    "syncBacklogOtsBtn",
     "searchInput",
     "statusFilter",
     "priorityList",
@@ -663,6 +664,7 @@ function bindEvents() {
     button.onclick = () => setGanttView(button.dataset.view);
   });
   els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
+  els.syncBacklogOtsBtn.addEventListener("click", syncBacklogWorkOrders);
   els.statusFilter.addEventListener("change", renderPriorityList);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
@@ -1539,7 +1541,7 @@ function renderPriorityList() {
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
           ${toolMini}
-          ${jobTypeTagHtml(job)}
+          ${jobTypeTagHtml(job)}${workOrderSyncWarningHtml(job.ot)}
         </div>
       </div>
       <div class="priority-program">
@@ -1664,7 +1666,7 @@ function renderPriorityQueue() {
       <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
         <div class="queue-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="queue-main">
-          <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
+          <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>${workOrderSyncWarningHtml(job.ot)}
           <div class="queue-article" title="Articulo ${escapeHtml(article)}"><span>Articulo</span><strong>${escapeHtml(article)}</strong></div>
           <div class="queue-description">${escapeHtml(job.descripcion || "Sin descripcion")}</div>
           ${toolMini}
@@ -3435,7 +3437,7 @@ async function scheduleCurrentPlanImpl() {
     return;
   }
   const replannableOts = state.selectedOts.filter((ot) =>
-    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot))
+    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!replannableOts.length) {
     showToast("No hay OTs desbloqueadas para programar");
@@ -3444,7 +3446,7 @@ async function scheduleCurrentPlanImpl() {
   const planningData = await ensurePlanningDataLoaded(true, { force: false });
   if (!planningData.ready) return;
   const readyOts = state.selectedOts.filter((ot) =>
-    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot))
+    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!readyOts.length) {
     showToast("No hay OTs desbloqueadas para programar");
@@ -4954,6 +4956,64 @@ async function loadNetSuiteExerciseImpl() {
   return outcome;
 }
 
+async function syncBacklogWorkOrders() {
+  if (planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight) {
+    return showToast("La planificacion, sincronizacion o restauracion ya esta en curso");
+  }
+  setPlanningActionsBusy("backlog-sync", true);
+  try {
+    const payload = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("syncNetSuiteWorkOrdersLite"),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    validateNetSuiteImportedData(payload, "workOrders");
+    const incomingWorkOrders = payload.workOrders;
+    const comparison = window.PlanningWorkflowCore.compareWorkOrderLite(state, incomingWorkOrders);
+    const planned = [...comparison.plannedQuantityChanges, ...comparison.plannedClosed];
+    let values = {};
+    if (planned.length) {
+      values = await openPlanningDialog({
+        title: "Confirmar cambios de OTs planeadas",
+        summary: `${comparison.plannedQuantityChanges.length} cantidades; ${comparison.plannedClosed.length} cerradas o ausentes`,
+        confirmLabel: "Aplicar decisiones",
+        body: `<div class="planning-fields">${comparison.plannedQuantityChanges.map((change, index) => `
+          <label><input type="checkbox" name="quantity_${index}" value="${escapeHtml(change.ot)}"> Aceptar cantidad de OT ${escapeHtml(change.ot)} (${escapeHtml(change.current.quantity)} → ${escapeHtml(change.incoming.quantity)})</label>`).join("")}
+          ${comparison.plannedClosed.map((change, index) => `
+          <label><input type="checkbox" name="closed_${index}" value="${escapeHtml(change.ot)}"> Retirar OT ${escapeHtml(change.ot)} cerrada o ausente</label>`).join("")}</div>`,
+      });
+      if (!values) return showToast("Sincronizacion cancelada; no se aplicaron cambios");
+    }
+    const decisions = {
+      acceptQuantityOts: Object.entries(values).filter(([key]) => key.startsWith("quantity_")).map(([, value]) => value),
+      removeClosedOts: Object.entries(values).filter(([key]) => key.startsWith("closed_")).map(([, value]) => value),
+      keepClosedOts: comparison.plannedClosed.map((item) => item.ot).filter((ot) => !Object.values(values).includes(ot)),
+    };
+    const currentKeys = new Set((state.workOrders || []).map((item) => normalizeKey(item.ot)));
+    const incomingKeys = new Set(incomingWorkOrders.map((item) => normalizeKey(item.ot)));
+    const newCount = comparison.direct.filter((item) => !item.current).length;
+    const updatedCount = comparison.direct.length - newCount + decisions.acceptQuantityOts.length;
+    const absentCount = [...currentKeys].filter((key) => !incomingKeys.has(key)).length;
+    const removedCount = absentCount - decisions.keepClosedOts.length;
+    const pendingCount = comparison.plannedQuantityChanges.length - decisions.acceptQuantityOts.length
+      + comparison.plannedClosed.length - decisions.removeClosedOts.length;
+    checkpointState();
+    const reconciledOts = new Set([
+      ...comparison.plannedQuantityChanges.map((item) => normalizeKey(item.ot)),
+      ...comparison.plannedClosed.map((item) => normalizeKey(item.ot)),
+    ]);
+    state.workOrderSyncWarnings = (state.workOrderSyncWarnings || [])
+      .filter((warning) => !reconciledOts.has(normalizeKey(warning.ot)));
+    state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
+    state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
+    saveAndRender(`${newCount} nuevas; ${updatedCount} actualizadas; ${removedCount} retiradas; ${pendingCount} pendientes`);
+    await persistPlanSnapshot();
+  } catch (error) {
+    showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
+  } finally {
+    setPlanningActionsBusy("backlog-sync", false);
+  }
+}
+
 async function syncNetSuiteTwoPhase() {
   let workOrdersResult;
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
@@ -5144,6 +5204,11 @@ function setPlanningActionsBusy(action, inProgress) {
     els.loadNsExerciseBtn.disabled = busy;
     if (busy) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
     else els.loadNsExerciseBtn.removeAttribute("aria-busy");
+  }
+  if (els.syncBacklogOtsBtn) {
+    els.syncBacklogOtsBtn.disabled = busy;
+    if (busy) els.syncBacklogOtsBtn.setAttribute("aria-busy", "true");
+    else els.syncBacklogOtsBtn.removeAttribute("aria-busy");
   }
 }
 
@@ -6612,6 +6677,24 @@ function netSuiteChangeBadgeHtml(ot) {
   if (!alert) return "";
   const high = normalizeStatus(alert.severity) === "ALTA";
   return `<span class="netsuite-change-badge${high ? " high" : ""}" title="${escapeHtml(alert.summary)}">Cambio NS</span>`;
+}
+
+function workOrderSyncWarningForOt(ot) {
+  const key = materialOtKey(ot);
+  return (state.workOrderSyncWarnings || []).find((warning) => materialOtKey(warning.ot) === key) || null;
+}
+
+function hasClosedWorkOrderSyncWarning(ot) {
+  return workOrderSyncWarningForOt(ot)?.type === "CLOSED_KEPT";
+}
+
+function workOrderSyncWarningHtml(ot) {
+  const warning = workOrderSyncWarningForOt(ot);
+  if (!warning) return "";
+  const message = warning.type === "QUANTITY_REJECTED"
+    ? "Cantidad diferente en NetSuite"
+    : warning.type === "CLOSED_KEPT" ? "Cerrada o no encontrada en NetSuite" : "";
+  return message ? `<span class="work-order-sync-warning">${message}</span>` : "";
 }
 
 function suggestedPlanningTypeForJob(job) {

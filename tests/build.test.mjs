@@ -47,6 +47,20 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function setPlanningActionsBusy/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
+  assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
+  assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.compareWorkOrderLite\(state, incomingWorkOrders\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.applyConfirmedWorkOrderChanges\(state, comparison, decisions\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", true\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", false\)/);
+  assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
+  assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
+  const backlogSyncSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
+    pagesIndex.indexOf("async function syncNetSuiteTwoPhase()"),
+  );
+  assert.match(backlogSyncSource, /callAppsScript\("syncNetSuiteWorkOrdersLite"\)/);
+  assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders"/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
