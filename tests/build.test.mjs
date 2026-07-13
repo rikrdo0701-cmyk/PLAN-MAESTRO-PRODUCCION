@@ -77,6 +77,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
   assert.match(pagesIndex, /callAppsScript\("saveDraftSnapshot", payload\)/);
   assert.match(pagesIndex, /snapshotId: "draft"/);
+  assert.match(pagesIndex, /planSnapshots\.some\(\(snapshot\) => snapshot\.snapshotId === "draft"\)/);
   assert.match(bridge, /saveDraftSnapshot: true/);
   assert.match(pagesIndex, /state\.selectedOts = Array\.isArray\(payload\.selectedOts\) \? payload\.selectedOts : \[\]/);
   assert.match(pagesIndex, /Sincronizando OTs/);

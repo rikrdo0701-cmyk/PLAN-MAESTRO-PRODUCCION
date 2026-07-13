@@ -3901,6 +3901,7 @@ async function loadPlanSnapshots(showMessage) {
         status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
       })), state);
       if (source.type === "published") await loadPlanSnapshotById(source.snapshotId, { render: false, silent: true });
+      else if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft", { render: false, silent: true });
       else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
     }
     renderPlanSnapshotSelect();
@@ -3915,8 +3916,11 @@ async function loadPlanSnapshots(showMessage) {
 async function loadSelectedPlanSnapshot() {
   const snapshotId = els.planSnapshotSelect.value;
   if (snapshotId === "draft") {
-    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
-    renderReports();
+    if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft");
+    else {
+      reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
+      renderReports();
+    }
     return;
   }
   if (!snapshotId) {
