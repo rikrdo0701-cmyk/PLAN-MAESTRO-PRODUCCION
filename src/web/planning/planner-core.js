@@ -91,10 +91,19 @@
       strategy: options?.strategy || "balanced",
     };
 
-    seedCompletedToolStates(context, state.operationPlanStatuses);
-    seedMachineToolHistory(context, state.machineToolHistory, sourceOperations);
+    const authorizedStatuses = selectionDefined
+      ? (Array.isArray(state.operationPlanStatuses) ? state.operationPlanStatuses : Object.values(state.operationPlanStatuses || {}))
+        .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
+      : state.operationPlanStatuses;
+    const authorizedToolHistory = selectionDefined
+      ? (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : [])
+        .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
+      : state.machineToolHistory;
+    const authorizedSourceOperations = sourceOperations.filter(isSelected);
+    seedCompletedToolStates(context, authorizedStatuses);
+    seedMachineToolHistory(context, authorizedToolHistory, authorizedSourceOperations);
 
-    const fixed = activeSourceOperations.filter(isFixedOperation);
+    const fixed = activeSourceOperations.filter((op) => isFixedOperation(op) && isSelected(op));
     const movable = activeSourceOperations.filter((op) =>
       !isFixedOperation(op) &&
       op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
@@ -102,9 +111,8 @@
       isAssignableOperation(state, op)
     );
     const excluded = activeSourceOperations.filter((op) =>
-      !isFixedOperation(op) &&
       op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      (!isSelected(op) || !isAssignableOperation(state, op))
+      (!isSelected(op) || (!isFixedOperation(op) && !isAssignableOperation(state, op)))
     );
     for (const op of fixed) commitFixedOperation(context, op);
 

@@ -105,6 +105,25 @@ test("una completada conserva fechas y no consume capacidad pendiente", () => {
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
+test("una operacion fantasma no seleccionada no reserva capacidad", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["200"],
+    operations: [
+      { id: "ghost", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoProd: 300 },
+      { id: "selected", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const selected = result.operations.find((item) => item.id === "selected");
+  assert.deepEqual([selected.fechaInicio, selected.horaInicio], ["2026-07-13", "07:00"]);
+  assert.deepEqual([...result.lastSchedule.scheduledOts], ["200"]);
+  assert.ok(result.operations.some((item) => item.id === "ghost"));
+});
+
 test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
   const core = loadPlannerCore();
   const operation = {
