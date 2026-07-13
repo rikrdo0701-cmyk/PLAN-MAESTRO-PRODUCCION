@@ -10,6 +10,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
+  const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);
@@ -74,6 +75,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(\)/);
   assert.match(pagesIndex, /callAppsScript\("syncNetSuiteWorkOrdersLite"\)/);
   assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
+  assert.match(pagesIndex, /callAppsScript\("saveDraftSnapshot", payload\)/);
+  assert.match(pagesIndex, /snapshotId: "draft"/);
+  assert.match(bridge, /saveDraftSnapshot: true/);
   assert.match(pagesIndex, /state\.selectedOts = Array\.isArray\(payload\.selectedOts\) \? payload\.selectedOts : \[\]/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);

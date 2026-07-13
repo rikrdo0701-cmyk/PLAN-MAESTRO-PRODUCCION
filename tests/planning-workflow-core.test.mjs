@@ -148,6 +148,16 @@ test("la firma preparada es estable y cambia solamente con configuracion relevan
   assert.notEqual(a, changed);
 });
 
+test("la instantanea draft contiene solo seleccion pendiente programada", () => {
+  const snapshot = core.buildDraftSnapshot({ selectedOts: ["100"], planStart: "2026-07-13", operations: [
+    { id: "ok", ot: "100", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:10", planStatus: "PENDIENTE" },
+    { id: "done", ot: "100", fechaInicio: "2026-07-13", horaInicio: "07:10", fechaFin: "2026-07-13", horaFin: "07:20", planStatus: "COMPLETADA_PLAN" },
+    { id: "backlog", ot: "200", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:10" },
+  ] }, "2026-07-13T07:00:00Z");
+  assert.equal(snapshot.snapshotId, "draft");
+  assert.deepEqual(structuredClone(snapshot.operations.map((op) => op.id)), ["ok"]);
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);

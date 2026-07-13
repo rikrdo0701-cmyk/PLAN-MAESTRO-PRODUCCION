@@ -663,9 +663,9 @@ function PP_cleanSnapshotUserComment_(value) {
   return /(?:_APP\b|PLANNER_CORE|WARN_|NETSUITE_APPS_SCRIPT|PRIORIDAD_COLA)/i.test(comment) ? '' : comment;
 }
 
-function PP_appendPlanSnapshot_(spreadsheet, payload, user) {
+function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
   const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
-  const snapshotId = Utilities.getUuid();
+  const snapshotId = String(options && options.snapshotId || '').trim() || Utilities.getUuid();
   const generatedAt = new Date().toISOString();
   const scheduledOts = (payload.lastSchedule && Array.isArray(payload.lastSchedule.scheduledOts))
     ? payload.lastSchedule.scheduledOts.map(PP_normalizeKey_)
@@ -702,6 +702,24 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user) {
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
   return { ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt };
+}
+
+function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
+  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  const lastRow = sheet.getLastRow();
+  const width = PP_SHEETS.PLANES_HISTORICOS.length;
+  const previous = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
+  const preserved = previous.filter(function(row) { return String(row[0] || '').trim() !== 'draft'; });
+  try {
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
+    if (preserved.length) sheet.getRange(2, 1, preserved.length, width).setValues(preserved);
+    return PP_appendPlanSnapshot_(spreadsheet, payload, user, { snapshotId: 'draft' });
+  } catch (error) {
+    const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);
+    if (restoreRows > 0) sheet.getRange(2, 1, restoreRows, width).clearContent();
+    if (previous.length) sheet.getRange(2, 1, previous.length, width).setValues(previous);
+    throw error;
+  }
 }
 
 function PP_listPlanSnapshots_(spreadsheet) {

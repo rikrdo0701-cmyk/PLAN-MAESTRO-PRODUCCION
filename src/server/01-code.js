@@ -130,6 +130,18 @@ function savePlanSnapshot(payload) {
   }
 }
 
+function saveDraftSnapshot(payload) {
+  if (!payload || !Array.isArray(payload.operations)) throw new Error('El borrador no contiene operations');
+  const lock = PP_acquireScriptLock_('guardar borrador', 30000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_replaceDraftSnapshot_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function listPlanSnapshots() {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);

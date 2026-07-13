@@ -175,6 +175,18 @@
     });
   }
 
+  function buildDraftSnapshot(state, generatedAt) {
+    return {
+      ...(state || {}),
+      snapshotId: "draft",
+      status: "BORRADOR",
+      generatedAt: String(generatedAt || ""),
+      planStart: state?.planStart || "",
+      selectedOts: [...(state?.selectedOts || [])],
+      operations: draftExportOperations(state).map((operation) => ({ ...operation })),
+    };
+  }
+
   function isCoherentDraft(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.workOrders) || !Array.isArray(snapshot.selectedOts)) return false;
     const operationOts = new Set(snapshot.operations.map((item) => normalize(item?.ot)).filter(Boolean));
@@ -289,6 +301,7 @@
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
+    buildDraftSnapshot,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows };

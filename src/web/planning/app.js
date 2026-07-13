@@ -3462,14 +3462,15 @@ async function ensureCommercialDataForPlan(ots) {
 
 async function persistPlanSnapshot() {
   try {
+    const payload = window.PlanningWorkflowCore.buildDraftSnapshot(createAppSheetPayload(), new Date().toISOString());
     let saved;
     if (isAppsScriptRuntime()) {
-      saved = await callAppsScript("savePlanSnapshot", createAppSheetPayload());
+      saved = await callAppsScript("saveDraftSnapshot", payload);
     } else {
       const response = await fetch(PLAN_SNAPSHOTS_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createAppSheetPayload()),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       saved = await response.json();
