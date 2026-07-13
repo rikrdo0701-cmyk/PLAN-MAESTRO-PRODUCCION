@@ -80,6 +80,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /snapshotId: "draft"/);
   assert.match(pagesIndex, /planSnapshots\.some\(\(snapshot\) => snapshot\.snapshotId === "draft"\)/);
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
+  assert.match(pagesIndex, /id="jobToolInput"/);
+  assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value\)/);
   assert.match(pagesIndex, /<details class="job-resource-section/);
   assert.doesNotMatch(pagesIndex, /class="job-photo/);
   assert.doesNotMatch(pagesIndex, />Inicio NetSuite</);

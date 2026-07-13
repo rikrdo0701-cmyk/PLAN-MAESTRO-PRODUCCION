@@ -1217,6 +1217,8 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .availability::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 .tool-chip-row { display: grid; gap: 4px; }
+.job-tool-editor { display: grid; gap: 4px; margin-bottom: 7px; color: var(--muted); font-size: 9px; }
+.job-tool-editor input { width: 100%; min-height: 30px; }
 .tool-chip {
   min-height: 30px;
   display: flex;

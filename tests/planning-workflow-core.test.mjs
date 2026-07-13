@@ -158,6 +158,17 @@ test("la instantanea draft contiene solo seleccion pendiente programada", () => 
   assert.deepEqual(structuredClone(snapshot.operations.map((op) => op.id)), ["ok"]);
 });
 
+test("cambiar herramental en una tarjeta actualiza solo sus operaciones de doblado", () => {
+  const operations = [
+    { id: "bend", ot: "100", ct: "5459", herramental: "H1" },
+    { id: "cut", ot: "100", ct: "5458", herramental: "" },
+    { id: "other", ot: "200", ct: "5459", herramental: "H3" },
+  ];
+  const next = core.applyDraftToolSelection(operations, "100", "H2", ["5459", "5527"]);
+  assert.deepEqual(structuredClone(next.map((op) => [op.id, op.herramental])), [["bend", "H2"], ["cut", ""], ["other", "H3"]]);
+  assert.equal(operations[0].herramental, "H1");
+});
+
 test("la preparacion es idempotente hasta que cambia su firma", () => {
   const state = { selectedOts: ["1325"], preparedPlanningByOt: { 1325: "firma-a" } };
   assert.equal(core.needsPlanningPreparation(state, "1325", "firma-a"), false);

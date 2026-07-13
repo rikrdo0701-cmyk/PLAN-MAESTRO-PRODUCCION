@@ -2292,6 +2292,11 @@ function renderSelectedJobPanel() {
   const toolSummary = toolGroups.length
     ? toolGroups.map((tool) => `<span class="tool-chip">${escapeHtml(tool.label)}<small>${tool.count} ops</small></span>`).join("")
     : `<span class="tool-chip empty">SIN HERRAMENTAL<small>${job.ops.length} ops</small></span>`;
+  const bendingToolValues = uniq(bendingOps.map((op) => cleanToolValue(op.herramental)).filter(Boolean));
+  const currentBendingTool = bendingToolValues.length === 1 ? bendingToolValues[0] : "";
+  const articleToolOptions = uniq(state.toolCatalog
+    .filter((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(job.parte))
+    .map((item) => cleanToolValue(item.herramental)).filter(Boolean));
   const subcontractOps = job.ops.filter(isSubcontractAppOperation);
   const otConfiguration = otConfigurationFor(job.ot);
   const catalogSubcontract = subcontractOps.map(subcontractCatalogForAppOperation).find(Boolean);
@@ -2358,6 +2363,7 @@ function renderSelectedJobPanel() {
       <details class="job-resource-section">
         <summary><span>Herramental</span><strong>${toolGroups.length} grupos</strong></summary>
         <div class="job-section">
+        <label class="job-tool-editor"><span>Herramental para doblado</span><input id="jobToolInput" list="jobToolOptions" type="text" value="${escapeHtml(currentBendingTool)}" placeholder="${bendingToolValues.length > 1 ? "VARIOS HERRAMENTALES" : "Selecciona o captura"}" autocomplete="off"><datalist id="jobToolOptions">${articleToolOptions.map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("")}</datalist></label>
         <div class="tool-chip-row">${toolSummary}</div>
         </div>
       </details>` : ""}
@@ -4863,6 +4869,12 @@ async function loadNetSuiteExercise() {
     setNetSuiteSyncPhaseLabel("");
     setPlanningActionsBusy("sync", false);
   }
+  const toolInput = els.selectedJobPanel.querySelector("#jobToolInput");
+  if (toolInput) toolInput.addEventListener("change", () => {
+    checkpointState();
+    applyToolToJob(job.ot, toolInput.value);
+    saveAndRender("Herramental de OT actualizado", "ot-config");
+  });
 }
 
 async function loadNetSuiteExerciseImpl() {
@@ -6001,6 +6013,22 @@ function applyMachineToJob(ot, machine) {
     op.maquina = normalizeMachineValue(normalized, op);
     op.log = appendLog(op.log, "MAQUINA_OT_APP");
   }
+}
+
+function applyToolToJob(ot, tool) {
+  const normalized = cleanToolValue(tool);
+  state.operations = window.PlanningWorkflowCore.applyDraftToolSelection(state.operations, ot, normalized, ["5459", "5527"]);
+  const bendingOps = state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item));
+  const part = String(bendingOps[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
+  if (part && normalized) {
+    const existing = state.toolCatalog.find((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === normalized);
+    if (!existing) state.toolCatalog.push({
+      id: uid("tool"), part, herramental: normalized, kitHerramental: getOtKitValue(bendingOps),
+      toolSetupMinutes: 0, kitSetupMinutes: 0, active: true,
+    });
+  }
+  if (state.preparedPlanningByOt) delete state.preparedPlanningByOt[ot];
+  for (const op of bendingOps) op.log = appendLog(op.log, "HERRAMENTAL_OT_APP");
 }
 
 function getOtKitValue(ops) {
