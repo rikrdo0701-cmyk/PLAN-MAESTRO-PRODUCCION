@@ -21,3 +21,9 @@
 - `npm.cmd run check`: validación correcta.
 - `npm.cmd run build`: Apps Script y GitHub Pages generados correctamente.
 - `git diff --check`: sin errores de whitespace (solo avisos de conversión LF/CRLF de Git).
+
+## Corrección P2 de revisión visual
+
+- Se verificó que las reglas posteriores de tipo de OT y riesgo tenían la misma especificidad y podían sobrescribir el fondo y borde de `gantt-bar--tool-change`.
+- La regla especializada ahora aparece después de ambas familias, conservando el fondo rayado y el borde distintivo incluso al coexistir con clases prototype, urgent o risk.
+- Se añadió una aserción de build sensible al orden de cascada y a la presencia del gradiente y borde; falló antes del ajuste y pasó después.

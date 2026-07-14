@@ -134,6 +134,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);
   assert.match(pagesIndex, /gantt-bar--tool-change/);
+  const toolChangeStyleIndex = pagesIndex.lastIndexOf(".gantt-bar.gantt-bar--tool-change {");
+  assert.ok(toolChangeStyleIndex > pagesIndex.lastIndexOf(".gantt-bar.job-type-tag--urgent,"), "el fondo de cambio debe prevalecer sobre los tipos de OT");
+  assert.ok(toolChangeStyleIndex > pagesIndex.lastIndexOf(".gantt-bar.risk-dot--ok,"), "el borde de cambio debe prevalecer sobre los niveles de riesgo");
+  const toolChangeStyle = pagesIndex.slice(toolChangeStyleIndex, pagesIndex.indexOf("}", toolChangeStyleIndex));
+  assert.match(toolChangeStyle, /repeating-linear-gradient/);
+  assert.match(toolChangeStyle, /border-left-color:/);
   assert.match(pagesIndex, /Cambio de herramental/);
   assert.match(pagesIndex, /Origen:/);
   assert.match(pagesIndex, /Destino:/);

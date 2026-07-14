@@ -1078,11 +1078,6 @@ summary:focus-visible,
 .gantt-bar.in-sequence { box-shadow: 0 0 0 2px rgba(8, 127, 122, 0.28); }
 .gantt-bar[data-priority-band="urgent"] { border-left-color: #8d2835; }
 .gantt-bar[data-priority-band="low"] { opacity: 0.82; }
-.gantt-bar.gantt-bar--tool-change {
-  border-left-color: #7a4b00;
-  background: repeating-linear-gradient(135deg, #c98212 0, #c98212 7px, #b46f08 7px, #b46f08 14px);
-  color: #fff;
-}
 .gantt-bar.job-type-tag--prototype,
 .gantt-summary-bar.job-type-tag--prototype { background: #7c4dc1; color: #fff; }
 .gantt-bar.job-type-tag--urgent,
@@ -1093,6 +1088,11 @@ summary:focus-visible,
 .gantt-summary-bar.risk-dot--warning { border-left-color: #f1c84c; box-shadow: inset 0 0 0 2px rgba(241,200,76,0.28); }
 .gantt-bar.risk-dot--ok,
 .gantt-summary-bar.risk-dot--ok { border-left-color: #218a60; }
+.gantt-bar.gantt-bar--tool-change {
+  border-left-color: #7a4b00;
+  background: repeating-linear-gradient(135deg, #c98212 0, #c98212 7px, #b46f08 7px, #b46f08 14px);
+  color: #fff;
+}
 .gantt-bar.dragging { z-index: 20; opacity: 0.78; }
 .gantt-bar.locked { cursor: not-allowed; box-shadow: inset 0 0 0 2px #d6b13d; }
 .gantt-row:not(.selected-operation) .gantt-bar { padding-right: 2px; padding-left: 2px; }
