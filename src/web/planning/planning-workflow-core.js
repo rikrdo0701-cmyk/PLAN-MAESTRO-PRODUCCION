@@ -548,25 +548,57 @@
     return "";
   }
 
-  function weeklyFinishingCost(rows) {
+  function finiteNonNegative(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, number) : 0;
+  }
+
+  function hasFinishingValue(value) {
+    return value !== null && value !== undefined && String(value).trim() !== "";
+  }
+
+  function uniqueFinishingRows(rows) {
     const seen = new Set();
-    let finishingPieces = 0;
-    let totalCost = 0;
-    (rows || []).forEach((row, index) => {
+    return (rows || []).filter((row, index) => {
       const normalizedOt = normalize(row?.ot);
       const key = normalizedOt || `__ROW_${index}`;
-      if (seen.has(key)) return;
+      if (seen.has(key)) return false;
       seen.add(key);
-      const pendingPieces = Math.max(0, Number(row?.pendingPieces) || 0);
-      const amountPresent = row?.amount !== null && row?.amount !== undefined && String(row.amount).trim() !== "";
-      const unitPricePresent = row?.unitPrice !== null && row?.unitPrice !== undefined && String(row.unitPrice).trim() !== "";
-      const rowCost = amountPresent
-        ? Math.max(0, Number(row.amount) || 0)
-        : unitPricePresent ? Math.max(0, Number(row.unitPrice) || 0) * pendingPieces : 0;
+      return true;
+    });
+  }
+
+  function effectiveFinishingAmount(row) {
+    const pendingPieces = finiteNonNegative(row?.pendingPieces);
+    if (hasFinishingValue(row?.amount)) return finiteNonNegative(row.amount);
+    return hasFinishingValue(row?.unitPrice) ? finiteNonNegative(row.unitPrice) * pendingPieces : 0;
+  }
+
+  function weeklyFinishingCost(rows) {
+    let finishingPieces = 0;
+    let totalCost = 0;
+    uniqueFinishingRows(rows).forEach((row) => {
+      const pendingPieces = finiteNonNegative(row?.pendingPieces);
       finishingPieces += pendingPieces;
-      totalCost += rowCost;
+      totalCost += effectiveFinishingAmount(row);
     });
     return { finishingPieces, totalCost, costPerPiece: finishingPieces ? totalCost / finishingPieces : 0 };
+  }
+
+  function weeklyFinishingRowsByType(rows) {
+    const grouped = new Map();
+    for (const row of uniqueFinishingRows(rows)) {
+      const type = normalize(row?.jobType) || "SIN TIPO";
+      const current = grouped.get(type) || [];
+      current.push(row);
+      grouped.set(type, current);
+    }
+    return [...grouped.entries()]
+      .map(([type, typeRows]) => {
+        const cost = weeklyFinishingCost(typeRows);
+        return { type, pieces: cost.finishingPieces, amount: cost.totalCost, costPerPiece: cost.costPerPiece };
+      })
+      .sort((a, b) => b.amount - a.amount || a.type.localeCompare(b.type, "es"));
   }
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
@@ -579,5 +611,6 @@
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
-    isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, weeklyFinishingCost };
+    isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
+    weeklyFinishingCost, weeklyFinishingRowsByType };
 });

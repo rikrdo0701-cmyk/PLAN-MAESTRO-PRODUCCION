@@ -4370,19 +4370,7 @@ function scheduledMaterialShortageCount() {
 }
 
 function groupFinishingRowsByType(rows) {
-  const grouped = new Map();
-  for (const row of rows) {
-    const type = String(row.jobType || "SIN TIPO").trim().toUpperCase() || "SIN TIPO";
-    const current = grouped.get(type) || { type, rows: [] };
-    current.rows.push(row);
-    grouped.set(type, current);
-  }
-  return [...grouped.values()]
-    .map((group) => {
-      const cost = window.PlanningWorkflowCore.weeklyFinishingCost(group.rows);
-      return { type: group.type, pieces: cost.finishingPieces, amount: cost.totalCost, costPerPiece: cost.costPerPiece };
-    })
-    .sort((a, b) => b.amount - a.amount || a.type.localeCompare(b.type, "es"));
+  return window.PlanningWorkflowCore.weeklyFinishingRowsByType(rows);
 }
 
 function workingDaysInRange(start, end) {
@@ -4440,19 +4428,22 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const finish = opEnd(last);
     const workOrder = workOrderForOt(ot);
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
-    const pendingPieces = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
+    const pendingPiecesValue = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
+    const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
     const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
     const unitPriceValue = [first.unitPrice, last.unitPrice, workOrder?.averageSalePrice, configuration.manualUnitPrice].find(hasValue);
-    const unitPrice = hasValue(unitPriceValue) ? Math.max(0, Number(unitPriceValue) || 0) : null;
+    const unitPriceNumber = Number(unitPriceValue);
+    const unitPrice = hasValue(unitPriceValue) ? (Number.isFinite(unitPriceNumber) ? Math.max(0, unitPriceNumber) : 0) : null;
     const amountValue = [first.amount, last.amount].find(hasValue);
+    const amountNumber = Number(amountValue);
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",
-      pendingPieces: Math.max(0, pendingPieces),
+      pendingPieces,
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
       planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
       unitPrice,
-      amount: amountValue == null ? null : Math.max(0, Number(amountValue) || 0),
+      amount: amountValue == null ? null : (Number.isFinite(amountNumber) ? Math.max(0, amountNumber) : 0),
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
@@ -4476,7 +4467,7 @@ function renderWeeklyJobDays(rows, finishing) {
       : ["No.", "ORD", "PARTE", "PZAS"];
     const body = dayRows.map((row, index) => `<tr class="${window.PlanningWorkflowCore.weeklyPlanningTypeClass(row.planningType)}">
       <td>${index + 1}</td><td>${escapeHtml(row.ot)}</td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
-      ${finishing ? `<td>${escapeHtml(formatCurrency(row.amount))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
+      ${finishing ? `<td>${escapeHtml(formatCurrency(window.PlanningWorkflowCore.effectiveFinishingAmount(row)))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
     </tr>`).join("");
     const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
     const amount = window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost;

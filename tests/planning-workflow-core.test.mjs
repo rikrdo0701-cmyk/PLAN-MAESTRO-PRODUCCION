@@ -488,3 +488,30 @@ test("weeklyFinishingCost devuelve costo por pieza cero cuando no hay piezas", (
     { ot: "1", pendingPieces: 0, amount: 25 },
   ])), { finishingPieces: 0, totalCost: 25, costPerPiece: 0 });
 });
+
+test("effectiveFinishingAmount muestra el fallback de precio cuando amount esta ausente", () => {
+  assert.equal(core.effectiveFinishingAmount({ pendingPieces: 3, amount: null, unitPrice: 7 }), 21);
+  assert.equal(core.effectiveFinishingAmount({ pendingPieces: 3, amount: 0, unitPrice: 7 }), 0);
+});
+
+test("weeklyFinishingCost sanitiza valores no finitos", () => {
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: "1", pendingPieces: Infinity, amount: Infinity, unitPrice: Infinity },
+    { ot: "2", pendingPieces: 2, amount: null, unitPrice: Infinity },
+    { ot: "3", pendingPieces: "NaN", amount: "NaN", unitPrice: 8 },
+  ])), { finishingPieces: 2, totalCost: 0, costPerPiece: 0 });
+});
+
+test("weeklyFinishingRowsByType deduplica globalmente y conserva el tipo del primer registro", () => {
+  const rows = [
+    { ot: " OT-1 ", jobType: "NORMAL", pendingPieces: 2, amount: null, unitPrice: 10 },
+    { ot: "ot-1", jobType: "PROTOTIPO", pendingPieces: 2, amount: 999 },
+    { ot: "OT-2", jobType: "PROTOTIPO", pendingPieces: 3, amount: 30 },
+  ];
+  const groups = structuredClone(core.weeklyFinishingRowsByType(rows));
+  assert.deepEqual(groups, [
+    { type: "PROTOTIPO", pieces: 3, amount: 30, costPerPiece: 10 },
+    { type: "NORMAL", pieces: 2, amount: 20, costPerPiece: 10 },
+  ]);
+  assert.equal(groups.reduce((sum, group) => sum + group.amount, 0), core.weeklyFinishingCost(rows).totalCost);
+});
