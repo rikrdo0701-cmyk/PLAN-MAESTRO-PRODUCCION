@@ -557,6 +557,10 @@
     return value !== null && value !== undefined && String(value).trim() !== "";
   }
 
+  function finiteResult(value) {
+    return Number.isFinite(value) ? value : 0;
+  }
+
   function uniqueFinishingRows(rows) {
     const seen = new Set();
     return (rows || []).filter((row, index) => {
@@ -571,7 +575,7 @@
   function effectiveFinishingAmount(row) {
     const pendingPieces = finiteNonNegative(row?.pendingPieces);
     if (hasFinishingValue(row?.amount)) return finiteNonNegative(row.amount);
-    return hasFinishingValue(row?.unitPrice) ? finiteNonNegative(row.unitPrice) * pendingPieces : 0;
+    return hasFinishingValue(row?.unitPrice) ? finiteResult(finiteNonNegative(row.unitPrice) * pendingPieces) : 0;
   }
 
   function weeklyFinishingCost(rows) {
@@ -579,10 +583,11 @@
     let totalCost = 0;
     uniqueFinishingRows(rows).forEach((row) => {
       const pendingPieces = finiteNonNegative(row?.pendingPieces);
-      finishingPieces += pendingPieces;
-      totalCost += effectiveFinishingAmount(row);
+      finishingPieces = finiteResult(finishingPieces + pendingPieces);
+      totalCost = finiteResult(totalCost + effectiveFinishingAmount(row));
     });
-    return { finishingPieces, totalCost, costPerPiece: finishingPieces ? totalCost / finishingPieces : 0 };
+    const costPerPiece = finishingPieces ? finiteResult(totalCost / finishingPieces) : 0;
+    return { finishingPieces, totalCost, costPerPiece };
   }
 
   function weeklyFinishingRowsByType(rows) {

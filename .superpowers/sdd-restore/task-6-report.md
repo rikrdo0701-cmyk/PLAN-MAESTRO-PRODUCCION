@@ -31,3 +31,11 @@ GREEN confirmado con las pruebas focalizadas: 39 pruebas aprobadas, 0 fallos.
 - RED de revision: 4 fallos esperados por render anterior, API ausente, contaminacion con infinitos y agrupamiento sin deduplicacion global.
 - GREEN focalizado: 42 aprobadas, 0 fallos.
 - Verificacion final posterior a la revision: `npm.cmd test` 66 aprobadas; `npm.cmd run check`, `npm.cmd run build` y `git diff --check` correctos.
+
+## Seguridad ante overflow
+
+- La politica para aritmetica desbordada es convertir el resultado no finito en `0`: aplica al producto precio por piezas, las sumas acumuladas y el costo por pieza.
+- Se agregaron regresiones con `Number.MAX_VALUE` para multiplicacion y suma; tambien se cubre la suma desbordada de piezas y su division.
+- RED: 2 pruebas fallaron mostrando `Infinity` en producto, total y costo por pieza.
+- GREEN focalizado: 43 aprobadas, 0 fallos.
+- Verificacion final: `npm.cmd test` 68 aprobadas; `npm.cmd run check`, `npm.cmd run build` y `git diff --check` correctos.

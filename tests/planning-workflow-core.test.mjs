@@ -515,3 +515,18 @@ test("weeklyFinishingRowsByType deduplica globalmente y conserva el tipo del pri
   ]);
   assert.equal(groups.reduce((sum, group) => sum + group.amount, 0), core.weeklyFinishingCost(rows).totalCost);
 });
+
+test("effectiveFinishingAmount convierte en cero un producto desbordado", () => {
+  assert.equal(core.effectiveFinishingAmount({ pendingPieces: 2, amount: null, unitPrice: Number.MAX_VALUE }), 0);
+});
+
+test("weeklyFinishingCost convierte en cero sumas y divisiones desbordadas", () => {
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: "1", pendingPieces: 1, amount: Number.MAX_VALUE },
+    { ot: "2", pendingPieces: 1, amount: Number.MAX_VALUE },
+  ])), { finishingPieces: 2, totalCost: 0, costPerPiece: 0 });
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: "3", pendingPieces: Number.MAX_VALUE, amount: 1 },
+    { ot: "4", pendingPieces: Number.MAX_VALUE, amount: 1 },
+  ])), { finishingPieces: 0, totalCost: 2, costPerPiece: 0 });
+});
