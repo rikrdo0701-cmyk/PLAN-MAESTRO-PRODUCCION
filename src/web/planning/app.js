@@ -3973,6 +3973,7 @@ function emptyTableRow(columns, message) {
 }
 
 async function openRestoreDraftDialog() {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
@@ -4008,6 +4009,7 @@ async function openRestoreDraftDialog() {
 }
 
 async function previewDraftRestore(snapshotId, syncBeforeRestore) {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
@@ -4035,13 +4037,15 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
 }
 
 async function confirmDraftRestore(snapshotId) {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
   const result = await callAppsScript("restorePublishedPlanAsDraft", snapshotId, createAppSheetPayload());
   if (!result?.state) throw new Error("El servidor no devolvio el borrador restaurado");
   state = result.state;
   normalizeState();
-  reportSnapshot = null;
-  saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
   await loadPlanSnapshots(false);
+  reportSnapshot = null;
+  showWorkspaceView("plan-semanal");
+  saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
 }
 
 async function loadPlanSnapshots(showMessage) {
@@ -5265,6 +5269,7 @@ function setNetSuiteSyncState(inProgress) {
   else els.loadNsExerciseBtn.removeAttribute("aria-busy");
   const label = els.loadNsExerciseBtn.querySelector("[data-sync-label]");
   if (label) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
+  if (els.restoreDraftBtn) els.restoreDraftBtn.disabled = inProgress || Boolean(planningActionsBusy);
 }
 
 function setPlanningActionsBusy(action, inProgress) {
