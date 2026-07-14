@@ -100,8 +100,11 @@
         .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
       : state.machineToolHistory;
     const authorizedSourceOperations = sourceOperations.filter(isSelected);
+    const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
+      isPlanCompletedOperation(state, op) || isFixedOperation(op)
+    );
     seedCompletedToolStates(context, authorizedStatuses);
-    seedMachineToolHistory(context, authorizedToolHistory, authorizedSourceOperations);
+    seedMachineToolHistory(context, authorizedToolHistory, authorizedHistoricalOperations);
 
     const fixed = activeSourceOperations.filter((op) => isFixedOperation(op) && isSelected(op));
     const movable = activeSourceOperations.filter((op) =>

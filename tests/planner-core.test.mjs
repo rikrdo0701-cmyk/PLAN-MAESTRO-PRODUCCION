@@ -478,6 +478,26 @@ test("el primer herramental sin antecedente usa el estandar de 120 minutos", () 
   assert.equal(change?.tiempoSetup, 120);
 });
 
+test("una fecha vieja del borrador movible no cuenta como antecedente de herramental", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["2159"],
+    operations: [
+      { id: "bend-2159", ot: "2159", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "C 490 UND", estatus: "PLAN", maquina: "211", herramental: "4 x 5", tiempoCiclo: 1.33, cantidadPendiente: 35, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:57" },
+    ],
+    workOrders: [{ ot: "2159", item: "C 490 UND" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    toolCatalog: [{ part: "C 490 UND", herramental: "4 x 5", toolSetupMinutes: 0 }],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 120 }, workSchedule: {},
+  }, { planStart: "2026-07-14", horizonDays: 5, executionTime: "2026-07-14T07:00:00" });
+
+  const initialChange = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" &&
+    !op.toolChangeFromHerramental && op.toolChangeToHerramental === "4 x 5");
+  assert.equal(initialChange?.tiempoSetup, 120);
+});
+
 test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", () => {
   const core = loadPlannerCore();
   const operation = {
