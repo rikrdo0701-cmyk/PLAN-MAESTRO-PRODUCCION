@@ -706,6 +706,7 @@
       (kitChanged ? numberOr(catalog.kitSetupMinutes, 0) : 0)
     );
     if (configuredMinutes > 0) return configuredMinutes;
+    if (noAntecedent) return fallbackMinutes;
     if (!noAntecedent && (toolChanged || kitChanged)) {
       return fallbackMinutes;
     }
