@@ -44,7 +44,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
   assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)[\s\S]{0,1200}PlanningWorkflowCore\.removeOtFromDraft/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
-  assert.match(pagesIndex, /const originalSelectedOts = \[\.\.\.state\.selectedOts\];[\s\S]{0,900}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: readyOts \}, \{/);
+  assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
   assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
@@ -85,6 +85,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   [restoreOpenSource, restorePreviewSource, restoreConfirmSource].forEach((source) => {
     assert.match(source, /netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight/);
   });
+  assert.match(restorePreviewSource, /if \(outcome\?\.status === "failed"\) throw new Error/);
+  assert.doesNotMatch(restorePreviewSource, /outcome\?\.ready/);
   assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*restoreDraftBtn\.disabled = inProgress \|\| Boolean\(planningActionsBusy\)/);
   assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
   assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal"\)/);
@@ -92,9 +94,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
   const backlogSyncSource = pagesIndex.slice(
     pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
-    pagesIndex.indexOf("async function syncNetSuiteTwoPhase()"),
+    pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
-  assert.match(backlogSyncSource, /callAppsScript\("syncNetSuiteWorkOrdersLite"\)/);
+  assert.match(backlogSyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
+  assert.match(backlogSyncSource, /if \(!values\) values = \{\};/);
+  assert.match(backlogSyncSource, /callAppsScript\("savePlanningStateOptimized", createAppSheetPayload\(\)\)/);
   assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders"/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
@@ -167,8 +171,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   );
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
   assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
-  assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(\)/);
-  assert.match(pagesIndex, /callAppsScript\("syncNetSuiteWorkOrdersLite"\)/);
+  assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(options = \{\}\)/);
+  assert.match(pagesIndex, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
   assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
   assert.match(pagesIndex, /callAppsScript\("saveDraftSnapshot", payload\)/);
   assert.match(pagesIndex, /snapshotId: "draft"/);
@@ -186,6 +190,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, />Fin NetSuite</);
   assert.match(bridge, /saveDraftSnapshot: true/);
   assert.match(bridge, /restorePublishedPlanAsDraft: true/);
+  assert.match(bridge, /fetchNetSuiteWorkOrdersLite: true/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
   assert.match(storageService, /fullState/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);
@@ -201,12 +206,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(codeService, /function restorePublishedPlanAsDraft\(snapshotId, currentPayload\)/);
   const publishingService = await readFile(path.join(result.distDir, "05-publishing-service.js"), "utf8");
   assert.match(publishingService, /PP_acquireScriptLock_\('restaurar publicado'/);
+  assert.match(publishingService, /PP_reconcilePublishedPlan_\(snapshot, currentState\)/);
+  assert.match(publishingService, /payloadRevision[\s\S]*currentRevision[\s\S]*stalePayload/);
+  assert.doesNotMatch(publishingService, /PP_reconcilePublishedPlan_\(snapshot, currentPayload\)/);
   assert.match(publishingService, /catch \(error\)[\s\S]*PP_writeState_\([\s\S]*PP_replaceDraftSnapshot_\([\s\S]*throw error/);
   assert.match(publishingService, /snapshotId: 'draft'[\s\S]*backupId: backupId[\s\S]*summary:/);
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);
-  assert.match(pagesIndex, /state\.selectedOts = Array\.isArray\(payload\.selectedOts\) \? payload\.selectedOts : \[\]/);
+  assert.match(pagesIndex, /if \(Array\.isArray\(payload\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);

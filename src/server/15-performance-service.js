@@ -164,3 +164,17 @@ function syncNetSuiteWorkOrdersLite() {
     lock.releaseLock();
   }
 }
+
+/** Lee OTs de NetSuite sin persistir ningun estado compartido. */
+function fetchNetSuiteWorkOrdersLite() {
+  const snapshot = PP_fetchNetSuiteWorkOrdersData_();
+  return {
+    schemaVersion: PP_SCHEMA_VERSION,
+    workOrders: snapshot.workOrders || [],
+    operationPlanStatuses: snapshot.operationPlanStatuses || {},
+    plant: snapshot.plant || {},
+    invoicePriceWindow: snapshot.invoicePriceWindow || null,
+    syncedAt: snapshot.syncedAt || new Date().toISOString(),
+    source: snapshot.source || 'NetSuite RESTlets / Apps Script (preview)'
+  };
+}

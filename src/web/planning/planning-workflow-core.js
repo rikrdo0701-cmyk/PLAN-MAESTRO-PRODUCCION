@@ -235,6 +235,13 @@
     return result;
   }
 
+  function schedulingSelectedOts(state) {
+    const closed = new Set((state?.workOrderSyncWarnings || [])
+      .filter((warning) => normalize(warning?.type) === "CLOSED_KEPT")
+      .map((warning) => normalize(warning?.ot)));
+    return (state?.selectedOts || []).filter((ot) => !closed.has(normalize(ot)));
+  }
+
   function removeOtFromDraft(state, ot) {
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
@@ -608,7 +615,7 @@
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
-    compareWorkOrderLite, applyConfirmedWorkOrderChanges, removeOtFromDraft,
+    compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,

@@ -103,15 +103,18 @@ function PP_restorePublishedPlanAsDraft_(snapshotId, currentPayload) {
     const snapshot = PP_getPlanSnapshot_(spreadsheet, key);
     if (!snapshot.fullState) throw new Error('La instantanea publicada no contiene estado completo');
     const currentState = PP_readState_(spreadsheet);
+    const payloadRevision = Number(currentPayload.revision || 0);
+    const currentRevision = Number(currentState.revision || 0);
+    const stalePayload = payloadRevision > 0 && payloadRevision !== currentRevision;
     let currentDraft = null;
     try { currentDraft = PP_getPlanSnapshot_(spreadsheet, 'draft'); } catch (ignored) {}
     const backupId = 'technical-' + Utilities.getUuid();
     PP_storePlanSnapshotPayload_(backupId, { state: currentState, draft: currentDraft });
-    const reconciled = PP_reconcilePublishedPlan_(snapshot, currentPayload);
+    const reconciled = PP_reconcilePublishedPlan_(snapshot, currentState);
     try {
       PP_replaceDraftSnapshot_(spreadsheet, reconciled.state, Session.getActiveUser().getEmail() || 'usuario');
       const state = PP_writeState_(spreadsheet, reconciled.state, Session.getActiveUser().getEmail() || 'usuario', true);
-      return { ok: true, snapshotId: 'draft', backupId: backupId, state: state, summary: reconciled.summary };
+      return { ok: true, snapshotId: 'draft', backupId: backupId, stalePayload: stalePayload, state: state, summary: reconciled.summary };
     } catch (error) {
       let rollbackError = null;
       try { PP_writeState_(spreadsheet, currentState, Session.getActiveUser().getEmail() || 'rollback', true); }

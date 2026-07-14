@@ -169,6 +169,14 @@ test("applyConfirmedWorkOrderChanges conserva rechazos y retira cerradas incluso
   assert.ok(result.workOrderSyncWarnings.some((warning) => warning.ot === "500" && warning.type === "CLOSED_KEPT"));
 });
 
+test("schedulingSelectedOts conserva bloqueadas y excluye solo CLOSED_KEPT", () => {
+  assert.deepEqual(core.schedulingSelectedOts({
+    selectedOts: ["100", "200", "300"],
+    operations: [{ ot: "200", locked: true }],
+    workOrderSyncWarnings: [{ ot: "300", type: "CLOSED_KEPT" }, { ot: "100", type: "QUANTITY_REJECTED" }],
+  }), ["100", "200"]);
+});
+
 test("ganttOperationTiming separa minutos productivos y no operativos", () => {
   assert.deepEqual(structuredClone(core.ganttOperationTiming(20, new Date("2026-07-13T14:50:00"), new Date("2026-07-13T15:15:00"))), {
     productiveMinutes: 20,

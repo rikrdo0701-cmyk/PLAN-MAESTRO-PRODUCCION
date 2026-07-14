@@ -3478,6 +3478,7 @@ async function scheduleCurrentPlanImpl() {
     return;
   }
   const originalSelectedOts = [...state.selectedOts];
+  const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
   checkpointState();
   state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
   applyQueuePriorities();
@@ -3490,7 +3491,7 @@ async function scheduleCurrentPlanImpl() {
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
-    const result = window.PlannerCore.schedulePlan({ ...state, selectedOts: readyOts }, {
+    const result = window.PlannerCore.schedulePlan({ ...state, selectedOts: engineSelectedOts }, {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
@@ -4027,8 +4028,8 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
   setPlanningActionsBusy("restore", true);
   try {
     if (syncBeforeRestore) {
-      const outcome = await syncNetSuiteTwoPhase();
-      if (!outcome?.ready) throw new Error(outcome?.warning || "No se pudo sincronizar NetSuite");
+      const outcome = await syncNetSuiteTwoPhase({ persist: false });
+      if (outcome?.status === "failed") throw new Error(outcome?.message || "No se pudo sincronizar NetSuite");
     }
     const snapshot = isAppsScriptRuntime()
       ? await callAppsScript("getPlanSnapshot", snapshotId)
@@ -5051,7 +5052,7 @@ async function syncBacklogWorkOrders() {
   setPlanningActionsBusy("backlog-sync", true);
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("syncNetSuiteWorkOrdersLite"),
+      callAppsScript("fetchNetSuiteWorkOrdersLite"),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
@@ -5069,7 +5070,7 @@ async function syncBacklogWorkOrders() {
           ${comparison.plannedClosed.map((change, index) => `
           <label><input type="checkbox" name="closed_${index}" value="${escapeHtml(change.ot)}"> Retirar OT ${escapeHtml(change.ot)} cerrada o ausente</label>`).join("")}</div>`,
       });
-      if (!values) return showToast("Sincronizacion cancelada; no se aplicaron cambios");
+      if (!values) values = {};
     }
     const decisions = {
       acceptQuantityOts: Object.entries(values).filter(([key]) => key.startsWith("quantity_")).map(([, value]) => value),
@@ -5093,6 +5094,8 @@ async function syncBacklogWorkOrders() {
       .filter((warning) => !reconciledOts.has(normalizeKey(warning.ot)));
     state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
+    const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
+    state.revision = Number(saved?.revision || state.revision);
     saveAndRender(`${newCount} nuevas; ${updatedCount} actualizadas; ${removedCount} retiradas; ${pendingCount} pendientes`);
     await persistPlanSnapshot();
   } catch (error) {
@@ -5102,14 +5105,14 @@ async function syncBacklogWorkOrders() {
   }
 }
 
-async function syncNetSuiteTwoPhase() {
+async function syncNetSuiteTwoPhase(options = {}) {
   let workOrdersResult;
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
   try {
-    const payload = await callAppsScript("syncNetSuiteWorkOrdersLite");
+    const payload = await callAppsScript("fetchNetSuiteWorkOrdersLite");
     validateNetSuiteImportedData(payload, "workOrders");
     state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
-    state.selectedOts = Array.isArray(payload.selectedOts) ? payload.selectedOts : [];
+    if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
     Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
     if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
     if (payload.plant) state.plant = payload.plant;
@@ -5130,6 +5133,10 @@ async function syncNetSuiteTwoPhase() {
     applyNetSuitePlanningPayload(planningPayload);
     saveState("plan");
     render();
+    if (options.persist !== false) {
+      const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
+      state.revision = Number(saved?.revision || state.revision);
+    }
     return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: true });
   } catch (error) {
     return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: false, error: error.message });
