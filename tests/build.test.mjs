@@ -13,11 +13,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
+  const appScriptWorkflow = await readFile(path.join(process.cwd(), ".github/workflows/deploy-appscript.yml"), "utf8");
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
+  assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
   assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);
@@ -112,10 +114,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
     pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
-  assert.match(backlogSyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
+  assert.match(backlogSyncSource, /fetchNetSuiteWorkOrdersLiteCompat\(true\)/);
   assert.match(backlogSyncSource, /if \(!values\) values = \{\};/);
   assert.match(backlogSyncSource, /callAppsScript\("savePlanningStateOptimized", createAppSheetPayload\(\)\)/);
   assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders"/);
+  assert.match(pagesIndex, /async function fetchNetSuiteWorkOrdersLiteCompat\(allowPersistedFallback = false\)[\s\S]*Metodo no permitido:[\s\S]*syncNetSuiteWorkOrdersLite/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);

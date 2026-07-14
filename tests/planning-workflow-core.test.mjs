@@ -496,6 +496,17 @@ test("selectReportRows ordena, filtra estado y rango, y limita siempre a 25", ()
   assert.deepEqual(selection.rows.map((row) => row.id), Array.from({ length: 25 }, (_, index) => String(29 - index)));
 });
 
+test("selectReportRows incluye pendientes anteriores al dia seleccionado", () => {
+  const rows = [
+    { id: "anterior", fechaInicio: "2026-07-10", horaInicio: "08:00", planStatus: "PENDIENTE" },
+    { id: "dia", fechaInicio: "2026-07-12", horaInicio: "08:00", planStatus: "PENDIENTE" },
+    { id: "futuro", fechaInicio: "2026-07-14", horaInicio: "08:00", planStatus: "PENDIENTE" },
+    { id: "fuera", fechaInicio: "2026-07-15", horaInicio: "08:00", planStatus: "PENDIENTE" },
+  ];
+  const selection = core.selectReportRows(rows, { startDate: "2026-07-12", futureDays: 2, status: "PENDIENTES", limit: 25 });
+  assert.deepEqual(selection.rows.map((row) => row.id), ["anterior", "dia", "futuro"]);
+});
+
 test("detecta un backend anterior que no permite guardar la instantanea del borrador", () => {
   assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Metodo no permitido: saveDraftSnapshot")), true);
   assert.equal(core.isUnsupportedDraftSnapshotError(new Error("Tiempo agotado al ejecutar saveDraftSnapshot")), false);

@@ -569,7 +569,7 @@
     const statusRows = filterOperationsByPlanStatus(rows, options.status || "PENDIENTES");
     const selected = statusRows.filter((row) => {
       const date = isoDate(row?.fechaInicio || row?.startDate || row?.date);
-      return date >= range.start && date <= range.end;
+      return Boolean(date) && date <= range.end;
     }).sort((left, right) => {
       const a = `${left?.fechaInicio || left?.startDate || left?.date || ""}T${left?.horaInicio || left?.startTime || "00:00"}`;
       const b = `${right?.fechaInicio || right?.startDate || right?.date || ""}T${right?.horaInicio || right?.startTime || "00:00"}`;

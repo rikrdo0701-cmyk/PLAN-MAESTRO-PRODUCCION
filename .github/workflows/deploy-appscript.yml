@@ -35,3 +35,7 @@ jobs:
           printf '%s' "$CLASP_JSON" > .clasp.json
       - name: Subir a Apps Script
         run: npx --yes @google/clasp push --force
+      - name: Actualizar implementacion web
+        env:
+          APPS_SCRIPT_DEPLOYMENT_ID: AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw
+        run: npx --yes @google/clasp deploy --deploymentId "$APPS_SCRIPT_DEPLOYMENT_ID" --description "GitHub $GITHUB_SHA"

@@ -5091,6 +5091,16 @@ async function loadNetSuiteExerciseImpl() {
   return outcome;
 }
 
+async function fetchNetSuiteWorkOrdersLiteCompat(allowPersistedFallback = false) {
+  try {
+    return await callAppsScript("fetchNetSuiteWorkOrdersLite");
+  } catch (error) {
+    const unsupported = /Metodo no permitido:\s*fetchNetSuiteWorkOrdersLite/i.test(String(error?.message || error || ""));
+    if (!allowPersistedFallback || !unsupported) throw error;
+    return callAppsScript("syncNetSuiteWorkOrdersLite");
+  }
+}
+
 async function syncBacklogWorkOrders() {
   if (planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight) {
     return showToast("La planificacion, sincronizacion o restauracion ya esta en curso");
@@ -5098,7 +5108,7 @@ async function syncBacklogWorkOrders() {
   setPlanningActionsBusy("backlog-sync", true);
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("fetchNetSuiteWorkOrdersLite"),
+      fetchNetSuiteWorkOrdersLiteCompat(true),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
@@ -5155,7 +5165,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
   let workOrdersResult;
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
   try {
-    const payload = await callAppsScript("fetchNetSuiteWorkOrdersLite");
+    const payload = await fetchNetSuiteWorkOrdersLiteCompat(true);
     validateNetSuiteImportedData(payload, "workOrders");
     state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
     if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
