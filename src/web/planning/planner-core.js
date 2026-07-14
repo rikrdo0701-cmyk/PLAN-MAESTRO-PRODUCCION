@@ -167,7 +167,7 @@
     state.horizonDays = horizonDays;
     const activeOperations = [...fixed.filter(isSelected), ...context.generatedChanges, ...scheduled]
       .filter((op) => operationStart(op) && operationEnd(op));
-    const operatorConflicts = operatorOverlapConflicts(activeOperations);
+    const operatorConflicts = operatorOverlapConflicts(activeOperations, state);
     for (const conflict of operatorConflicts) {
       diagnostics.push({
         level: "ERROR",
@@ -469,7 +469,7 @@
       context.gapFilled += 1;
     }
 
-    const tracksOperator = isLoadBearingOperator(assignment.operator);
+    const tracksOperator = assignment.finite && isLoadBearingOperator(assignment.operator);
     const busyMetadata = { operationId: next.id, ot: next.ot, secuencia: next.secuencia };
     if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments, { ...busyMetadata, resourceType: "OPERADOR" });
     if (isLoadBearingOperator(assignment.setupOperator) && assignment.setupSegments?.length) {
@@ -626,7 +626,7 @@
     const end = operationEnd(op);
     if (start && end) {
       const segments = [{ start, end }];
-      const tracksOperator = isLoadBearingOperator(op.operador);
+      const tracksOperator = isFiniteOperation(context.state, op) && isLoadBearingOperator(op.operador);
       const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia };
       if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments, { ...busyMetadata, resourceType: "OPERADOR" });
       if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments, { ...busyMetadata, resourceType: "MAQUINA" });
@@ -1155,18 +1155,19 @@
     return conflictEnd;
   }
 
-  function operatorOverlapConflicts(stateOrOperations) {
+  function operatorOverlapConflicts(stateOrOperations, stateContext = null) {
     const operations = Array.isArray(stateOrOperations)
       ? stateOrOperations
       : (Array.isArray(stateOrOperations?.operations)
         ? stateOrOperations.operations.filter((op) => !isPlanCompletedOperation(stateOrOperations, op))
         : []);
+    const capacityState = stateContext || (Array.isArray(stateOrOperations) ? null : stateOrOperations);
     const byOperator = new Map();
     for (const op of operations) {
       const operator = String(op.operador || "").trim();
       const start = operationStart(op);
       const end = operationEnd(op);
-      if (!isLoadBearingOperator(operator) || !start || !end || start >= end) continue;
+      if ((capacityState && !isFiniteOperation(capacityState, op)) || !isLoadBearingOperator(operator) || !start || !end || start >= end) continue;
       if (!byOperator.has(operator)) byOperator.set(operator, []);
       byOperator.get(operator).push({ op, start, end });
     }

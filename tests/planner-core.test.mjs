@@ -190,6 +190,27 @@ test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad
   assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con el bloqueo");
 });
 
+test("operaciones no finitas simultaneas no generan conflicto de operador", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["2159", "1325"],
+    operations: [
+      { id: "op-2159", ot: "2159", secuencia: 1, ct: "NOFIN", descripcion: "INSPECCION", estatus: "PLAN", operador: "OPERADOR 2", tiempoSetup: 0, tiempoProd: 20 },
+      { id: "op-1325", ot: "1325", secuencia: 1, ct: "NOFIN", descripcion: "INSPECCION", estatus: "PLAN", operador: "OPERADOR 2", tiempoSetup: 0, tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "2159" }, { ot: "1325" }],
+    matrix: { NOFIN: ["OPERADOR 2"] }, operators: ["OPERADOR 2"],
+    capacityModes: { NOFIN: "NO_FINITA" },
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const first = result.operations.find((item) => item.id === "op-2159");
+  const second = result.operations.find((item) => item.id === "op-1325");
+  assert.deepEqual([first.fechaInicio, first.horaInicio], ["2026-07-13", "07:00"]);
+  assert.deepEqual([second.fechaInicio, second.horaInicio], ["2026-07-13", "07:00"]);
+  assert.equal(result.lastSchedule.operatorConflicts, 0);
+});
+
 test("registra la operacion bloqueadora que causa la espera", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
