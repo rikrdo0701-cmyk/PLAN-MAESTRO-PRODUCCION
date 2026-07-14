@@ -4044,6 +4044,7 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
+    let previewState = createAppSheetPayload();
     if (syncBeforeRestore) {
       const outcome = await refreshRestorePreviewData();
       if (outcome?.status !== "complete") {
@@ -4057,19 +4058,19 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
         if (!continueWithLoaded) return;
       }
       if (outcome?.payload) {
-        state = {
-          ...state,
+        previewState = {
+          ...previewState,
           workOrders: outcome.payload.workOrders,
-          invoicePriceWindow: outcome.payload.invoicePriceWindow || state.invoicePriceWindow,
-          plant: outcome.payload.plant || state.plant,
-          syncedAt: outcome.payload.syncedAt || state.syncedAt,
+          invoicePriceWindow: outcome.payload.invoicePriceWindow || previewState.invoicePriceWindow,
+          plant: outcome.payload.plant || previewState.plant,
+          syncedAt: outcome.payload.syncedAt || previewState.syncedAt,
         };
       }
     }
     const snapshot = isAppsScriptRuntime()
       ? await callAppsScript("getPlanSnapshot", snapshotId)
       : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
-    const preview = window.PlanningWorkflowCore.reconcilePublishedPlan(snapshot, state);
+    const preview = window.PlanningWorkflowCore.reconcilePublishedPlan(snapshot, previewState);
     const summary = preview.summary;
     const confirmed = await openPlanningDialog({
       title: "Vista previa de restauracion",
@@ -4077,7 +4078,7 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
       body: `<div class="restore-preview-grid"><div>OTs restauradas<strong>${summary.restoredOts}</strong></div><div>OTs cerradas omitidas<strong>${summary.closedOts}</strong></div><div>Operaciones completadas<strong>${summary.completedOperations}</strong></div><div>Operaciones retiradas<strong>${summary.removedOperations}</strong></div><div>Operaciones nuevas<strong>${summary.newOperations}</strong></div><div>Configuraciones conservadas<strong>${summary.preservedConfigurations}</strong></div></div><p><strong>Confirmacion explicita:</strong> esta accion reemplaza el borrador actual, conserva un respaldo tecnico y el plan publicado permanece intacto. No programa ni publica automaticamente.</p>`,
       confirmLabel: "Restaurar borrador",
     });
-    if (confirmed) await confirmDraftRestore(snapshotId);
+    if (confirmed) await confirmDraftRestore(snapshotId, previewState);
   } catch (error) {
     showToast(`No se pudo preparar la restauracion: ${error.message}`, 9000);
   } finally {
@@ -4085,9 +4086,9 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
   }
 }
 
-async function confirmDraftRestore(snapshotId) {
+async function confirmDraftRestore(snapshotId, previewState) {
   if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
-  const result = await callAppsScript("restorePublishedPlanAsDraft", snapshotId, createAppSheetPayload());
+  const result = await callAppsScript("restorePublishedPlanAsDraft", snapshotId, previewState);
   if (!result?.state) throw new Error("El servidor no devolvio el borrador restaurado");
   state = result.state;
   normalizeState();

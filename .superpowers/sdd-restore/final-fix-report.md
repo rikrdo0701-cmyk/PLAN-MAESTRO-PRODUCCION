@@ -44,3 +44,11 @@
 - Como la lectura ligera solo refresca OTs, se clasifica como `partial` salvo que el contrato declare expresamente `previewComplete`; resultados `partial` o `failed` muestran un dialogo explicito con Cancelar y **Continuar con datos cargados**. Solo `complete` avanza sin ese paso.
 - RED: la prueba de build detecto la llamada a `syncNetSuiteTwoPhase({ persist: false })` dentro del preview.
 - GREEN: la prueba sensible verifica ausencia de `syncNetSuitePlanningData`, `saveState`, persistencias y render dentro del cuerpo read-only y del preview.
+
+## Regla definitiva de revision y estado staged
+
+- El navegador crea `previewState` desde el payload actual y mezcla ahi las OTs frescas. Nunca asigna el estado global durante preview; cancelar cualquiera de los dialogos deja `state` identico.
+- La confirmacion envia exactamente `previewState` a `restorePublishedPlanAsDraft`. El estado global solo se reemplaza con `result.state` despues de una respuesta exitosa del servidor.
+- Bajo lock, el servidor compara `Number(currentPayload.revision)` con `Number(currentState.revision)`. Si coinciden, el payload no es obsoleto y la reconciliacion usa `currentPayload`, incluyendo las OTs staged. Si difieren, se marca `stalePayload` y se reconcilia contra `currentState`, evitando sobrescribir cambios de otra pestana.
+- RED: el build detecto firma de confirmacion sin `previewState`, reconciliacion cliente contra `state` y reconciliacion servidor fija contra `currentState`.
+- GREEN: las pruebas de source verifican el orden y las fuentes de estado descritas arriba.

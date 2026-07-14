@@ -105,12 +105,13 @@ function PP_restorePublishedPlanAsDraft_(snapshotId, currentPayload) {
     const currentState = PP_readState_(spreadsheet);
     const payloadRevision = Number(currentPayload.revision || 0);
     const currentRevision = Number(currentState.revision || 0);
-    const stalePayload = payloadRevision > 0 && payloadRevision !== currentRevision;
+    const stalePayload = payloadRevision !== currentRevision;
+    const reconciliationState = stalePayload ? currentState : currentPayload;
     let currentDraft = null;
     try { currentDraft = PP_getPlanSnapshot_(spreadsheet, 'draft'); } catch (ignored) {}
     const backupId = 'technical-' + Utilities.getUuid();
     PP_storePlanSnapshotPayload_(backupId, { state: currentState, draft: currentDraft });
-    const reconciled = PP_reconcilePublishedPlan_(snapshot, currentState);
+    const reconciled = PP_reconcilePublishedPlan_(snapshot, reconciliationState);
     try {
       PP_replaceDraftSnapshot_(spreadsheet, reconciled.state, Session.getActiveUser().getEmail() || 'usuario');
       const state = PP_writeState_(spreadsheet, reconciled.state, Session.getActiveUser().getEmail() || 'usuario', true);
