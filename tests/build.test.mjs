@@ -58,6 +58,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /configuration\.machine/);
   assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL'\]/);
   assert.match(storageService, /herramental:\s*String\(row\.HERRAMENTAL \|\| ''\)\.trim\(\)/);
+  assert.match(storageService, /preparedPlanningByOt:\s*config\.preparedPlanningByOt \|\| \{\}/);
+  assert.match(storageService, /\['preparedPlanningByOt', JSON\.stringify\(payload\.preparedPlanningByOt \|\| \{\}\)\]/);
+  assert.match(performanceService, /preparedPlanningByOt:\s*payload\.preparedPlanningByOt \|\| \{\}/);
+  assert.match(performanceService, /CONFIGURACION_ARTICULO[\s\S]{0,180}PP_articleConfigurationRows_\(payload\)/);
+  assert.match(pagesIndex, /preparedPlanningByOt:\s*clone\(state\.preparedPlanningByOt \|\| \{\}\)/);
+  assert.match(pagesIndex, /articleConfigurations:\s*clone\(state\.articleConfigurations \|\| \{\}\)/);
+  assert.match(pagesIndex, /if \(imported\.preparedPlanningByOt\) state\.preparedPlanningByOt = imported\.preparedPlanningByOt;/);
   assert.match(pagesIndex, /function setPlanningActionsBusy/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);

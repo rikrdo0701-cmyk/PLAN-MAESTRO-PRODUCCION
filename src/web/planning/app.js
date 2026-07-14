@@ -5405,6 +5405,7 @@ function applyImported(imported, options = {}) {
   if (imported.operatorProfiles) state.operatorProfiles = imported.operatorProfiles;
   if (imported.otConfigurations) state.otConfigurations = imported.otConfigurations;
   if (imported.articleConfigurations) state.articleConfigurations = imported.articleConfigurations;
+  if (imported.preparedPlanningByOt) state.preparedPlanningByOt = imported.preparedPlanningByOt;
   if (imported.cts) state.cts = imported.cts;
   if (imported.plant) state.plant = imported.plant;
   if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;

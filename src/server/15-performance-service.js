@@ -96,6 +96,7 @@ function savePlanningStateOptimized(payload) {
       loadWeekStart: payload.loadWeekStart || '',
       reportWeekStart: payload.reportWeekStart || '',
       reportFilters: payload.reportFilters || {},
+      preparedPlanningByOt: payload.preparedPlanningByOt || {},
       selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
       lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
       expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
@@ -107,6 +108,7 @@ function savePlanningStateOptimized(payload) {
     PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
     PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
     PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
+    PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
     PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
     spreadsheet.getSheetByName('AUDITORIA').appendRow([
       savedAt,

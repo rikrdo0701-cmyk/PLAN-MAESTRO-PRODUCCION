@@ -230,6 +230,7 @@
       loadWeekStart: state.loadWeekStart,
       reportWeekStart: state.reportWeekStart,
       reportFilters: clone(state.reportFilters || {}),
+      preparedPlanningByOt: clone(state.preparedPlanningByOt || {}),
       selectedOts: [...(state.selectedOts || [])],
       lockedOts: [...(state.lockedOts || [])],
       expandedOts: [...(state.expandedOts || [])],
@@ -245,6 +246,7 @@
       operations: clone(state.operations || []),
       workOrders: clone(state.workOrders || []),
       otConfigurations: clone(state.otConfigurations || {}),
+      articleConfigurations: clone(state.articleConfigurations || {}),
       operationPlanStatuses: clone(state.operationPlanStatuses || {}),
     };
   }
