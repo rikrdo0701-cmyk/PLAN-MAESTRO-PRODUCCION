@@ -134,6 +134,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /statusActions: isReportSnapshotEditable\(\)/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
   assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
+  assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);
+  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*Seguro que desea dejar el precio unitario en \$0\.00/);
+  assert.match(pagesIndex, /if \(!confirmZeroManualPrice\(els\.planningDialogForm\)\) return;[\s\S]*closePlanningDialog/);
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
   assert.match(pagesIndex, /class="article-temporary-price-input"/);

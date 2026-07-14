@@ -773,6 +773,7 @@ function bindEvents() {
   els.planningDialogForm.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!els.planningDialogForm.reportValidity()) return;
+    if (!confirmZeroManualPrice(els.planningDialogForm)) return;
     closePlanningDialog(Object.fromEntries(new FormData(els.planningDialogForm).entries()));
   });
 
@@ -2038,13 +2039,6 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const compatibleMachines = compatibleMachineOptionsForOps(bendingOps);
   const configuration = otConfigurationFor(job.ot);
-  const configuredMachine = normalizeMachineValue(configuration.machine);
-  const configuredMachineValid = Boolean(configuredMachine) && !(configuredMachine === "1" && bendingOps.some((op) => String(op.ct) === "5459"));
-  const operationMachine = bendingOps.map((op) => normalizeMachineValue(op.maquina, op))
-    .find((machine) => machine && !(machine === "1" && bendingOps.some((op) => String(op.ct) === "5459"))) || "";
-  const currentMachine = compatibleMachines.includes(configuredMachine) && configuredMachineValid
-    ? configuredMachine
-    : (compatibleMachines.includes(operationMachine) ? operationMachine : "");
   const needsOtKit = requirements.some((item) => item.codes.has("OPTIONAL_KIT"));
   const needsSubcontract = requirements.some((item) => item.codes.has("MISSING_SUBCONTRACT_TYPE") || item.codes.has("MISSING_SUBCONTRACT_DAYS") || item.codes.has("OT_SUBCONTRACT"));
   const registeredSubcontract = subcontractRegistrationForJob(job.ot, job.ops);
@@ -2081,7 +2075,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const machineField = bendingOps.length ? `<label>Maquina de la OT
     <select name="ot_machine" required>
       <option value="">${compatibleMachines.length ? "Selecciona una maquina" : "No hay maquinas configuradas"}</option>
-      ${compatibleMachines.map((machine) => `<option value="${escapeHtml(machine)}"${machine === currentMachine ? " selected" : ""}>${escapeHtml(machine)}</option>`).join("")}
+      ${compatibleMachines.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}
     </select>
   </label>${compatibleMachines.length ? "" : `<p class="planning-inline-warning">Registra una maquina en Catalogos para poder guardar esta OT.</p>`}` : "";
   const subcontractTypes = subcontractTypesForPart(job.parte);
@@ -2217,6 +2211,12 @@ function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible,
   els.planningDialog.showModal();
   if (setup) setup();
   return promise;
+}
+
+function confirmZeroManualPrice(form) {
+  const input = form?.elements?.namedItem("ot_manual_price");
+  if (!input || Number(input.value || 0) > 0) return true;
+  return window.confirm("¿Seguro que desea dejar el precio unitario en $0.00?");
 }
 
 function closePlanningDialog(result) {
