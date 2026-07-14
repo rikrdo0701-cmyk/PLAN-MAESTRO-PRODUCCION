@@ -4852,6 +4852,9 @@ function renderProductionReportTable(operations, options = {}) {
     const end = opEnd(op);
     const workOrder = workOrderForOt(op.ot);
     const machineArea = cleanResourceValue(op.maquina);
+    const effectiveReportTool = isToolChangeReportOperation(op)
+      ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
+      : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
     const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
     return `<tr>
       <td>${index + 1}</td>
@@ -4860,7 +4863,7 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
       <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
       <td>${escapeHtml(machineArea)}</td>
-      <td>${escapeHtml(cleanToolValue(op.herramental))}</td>
+      <td>${escapeHtml(effectiveReportTool)}</td>
       <td>${formatReportNumber(op.tiempoCiclo)}</td>
       <td>${formatReportNumber(op.tiempoSetup)}</td>
       <td>${formatReportNumber(scheduledProductionMinutesForExport(op))}</td>

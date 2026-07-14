@@ -198,6 +198,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value\)/);
   assert.match(pagesIndex, /class="queue-tool-mini"/);
   assert.match(pagesIndex, /"Maq\/Area", "Herramental", "TC \(min\)"/);
+  assert.match(pagesIndex, /effectiveJobTool\(state, \{ ot: op\.ot, parte: op\.parte \|\| workOrder\?\.item \|\| "", ops: \[op\] \}, \["5459", "5527"\]\)/);
   const detailBinding = pagesIndex.slice(pagesIndex.indexOf('const toolInput = els.selectedJobPanel.querySelector("#jobToolInput")'), pagesIndex.indexOf("function renderGantt()"));
   assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
   assert.match(pagesIndex, /<details class="job-resource-section/);
