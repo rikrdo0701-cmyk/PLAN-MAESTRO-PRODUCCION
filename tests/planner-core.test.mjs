@@ -417,6 +417,30 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   assert.equal(change.tiempoSetup, 30);
 });
 
+test("un doblado sin parte en la operacion hereda el herramental usando el articulo de la OT", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["2159", "2436"],
+    operations: [
+      { id: "bend-2159", ot: "2159", secuencia: 2, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "", estatus: "PLAN", maquina: "211", tiempoCiclo: 1.33, cantidadPendiente: 35 },
+      { id: "bend-2436", ot: "2436", secuencia: 2, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "AM 17123-002", estatus: "PLAN", maquina: "211", herramental: "5 x 6", tiempoCiclo: 4, cantidadPendiente: 48 },
+    ],
+    workOrders: [{ ot: "2159", item: "C 490 UND" }, { ot: "2436", item: "AM 17123-002" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    toolCatalog: [
+      { part: "C 490 UND", herramental: "4 x 5", active: true },
+      { part: "AM 17123-002", herramental: "5 x 6", active: true },
+    ],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-14", horizonDays: 5, executionTime: "2026-07-14T07:00:00" });
+
+  assert.equal(result.operations.find((op) => op.id === "bend-2159").herramental, "4 x 5");
+  assert.ok(result.operations.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" &&
+    op.toolChangeFromHerramental === "4 x 5" && op.toolChangeToHerramental === "5 x 6"));
+});
+
 test("un cambio sin tiempo configurado usa el estandar de 120 minutos", () => {
   const core = loadPlannerCore();
   const operations = [

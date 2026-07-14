@@ -770,8 +770,9 @@
 
   function toolCatalogForOperation(state, op) {
     if (!isBendingOperation(op)) return null;
+    const part = String(op.parte || state.__workOrdersByOt?.get(normalizeKey(op.ot))?.item || "").trim();
     const candidates = (state.toolCatalog || []).filter((item) => {
-      return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(op.parte);
+      return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(part);
     });
     const herramental = cleanTool(op.herramental);
     const kit = cleanTool(op.kitHerramental);
