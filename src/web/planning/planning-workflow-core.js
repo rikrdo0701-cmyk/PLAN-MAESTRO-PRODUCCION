@@ -67,6 +67,17 @@
     return normalizeGanttView(current) === candidate;
   }
 
+  function isMachineGanttOperation(operation) {
+    if (!operation || !String(operation.maquina || operation.machine || "").trim()) return false;
+    if (!operation.fechaInicio || !operation.horaInicio || !operation.fechaFin || !operation.horaFin) return false;
+    const status = normalize(operation.planStatus || operation.estatus);
+    if (status === "COMPLETADA_PLAN" || isHistorical(operation)) return false;
+    const type = normalize(operation.tipoInsercion);
+    if (type === "CAMBIO_HERRAMENTAL") return normalize(operation.generatedBy) === "PLANNER_CORE_V2";
+    if (type && type !== "OPERACION") return false;
+    return ["5459", "5527"].includes(String(operation.ct || "").trim());
+  }
+
   function isOtEligibleForDraft(state, ot) {
     const key = normalize(ot);
     return (state?.selectedOts || []).some((item) => normalize(item) === key);
@@ -538,7 +549,7 @@
   }
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
-    normalizeGanttView, isActiveGanttView, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
+    normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,

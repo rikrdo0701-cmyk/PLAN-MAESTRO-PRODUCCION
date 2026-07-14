@@ -283,6 +283,27 @@ test("la instantanea draft contiene solo seleccion pendiente programada", () => 
   assert.deepEqual(structuredClone(snapshot.operations.map((op) => op.id)), ["ok"]);
 });
 
+test("incluye en Gantt por maquina solo doblados y cambios actuales programados con maquina", () => {
+  const scheduled = { fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", maquina: "M1" };
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, ct: "5459", descripcion: "DOBLADO" }), true);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, ot: "100", tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "PLANNER_CORE_V2", toolChangeFromHerramental: "H1", toolChangeToHerramental: "H2" }), true);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, ct: "5458", descripcion: "CORTE" }), false);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, ct: "5459", descripcion: "DOBLADO", maquina: "" }), false);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, ct: "5459", descripcion: "DOBLADO", planStatus: "COMPLETADA_PLAN" }), false);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "LEGACY" }), false);
+  assert.equal(core.isMachineGanttOperation({ ...scheduled, tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "PLANNER_CORE_V2", fechaInicio: "", horaInicio: "" }), false);
+});
+
+test("conserva dos OTs con herramientas distintas y su cambio en una misma maquina", () => {
+  const scheduled = { ct: "5459", descripcion: "DOBLADO", maquina: "DOBLADORA 2", fechaInicio: "2026-07-13", fechaFin: "2026-07-13" };
+  const operations = [
+    { ...scheduled, id: "bend-a", ot: "100", herramental: "H1", horaInicio: "07:00", horaFin: "08:00" },
+    { ...scheduled, id: "change", ot: "200", tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "PLANNER_CORE_V2", toolChangeFromHerramental: "H1", toolChangeToHerramental: "H2", horaInicio: "08:00", horaFin: "08:15" },
+    { ...scheduled, id: "bend-b", ot: "200", herramental: "H2", horaInicio: "08:15", horaFin: "09:00" },
+  ];
+  assert.deepEqual(operations.filter(core.isMachineGanttOperation).map((op) => op.id), ["bend-a", "change", "bend-b"]);
+});
+
 test("reconcilia un publicado con el estado vigente sin revivir datos obsoletos", () => {
   const snapshot = { fullState: {
     selectedOts: ["100", "200"],

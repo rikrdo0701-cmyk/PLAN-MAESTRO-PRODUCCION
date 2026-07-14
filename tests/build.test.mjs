@@ -132,6 +132,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);
+  assert.match(pagesIndex, /gantt-bar--tool-change/);
+  assert.match(pagesIndex, /Cambio de herramental/);
+  assert.match(pagesIndex, /Origen:/);
+  assert.match(pagesIndex, /Destino:/);
+  assert.match(pagesIndex, /Maquina:/);
+  assert.match(pagesIndex, /Ajustador:/);
+  assert.match(pagesIndex, /Duracion:/);
   assert.match(pagesIndex, /Minutos productivos/);
   assert.match(pagesIndex, /Minutos no operativos/);
   assert.match(pagesIndex, /Causa de espera/);

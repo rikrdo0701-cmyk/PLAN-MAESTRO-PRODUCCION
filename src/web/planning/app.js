@@ -2683,6 +2683,8 @@ function createGanttBar(op, window) {
   bar.dataset.id = op.id;
   bar.dataset.priorityBand = priorityClass(op.prioridad);
   bar.dataset.type = op.tipoInsercion;
+  const isToolChange = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL";
+  if (isToolChange) bar.classList.add("gantt-bar--tool-change");
   if (isJobLocked(op.ot)) bar.classList.add("locked");
   const job = getPriorityJobs().find((item) => item.ot === op.ot);
   if (job) {
@@ -2691,7 +2693,16 @@ function createGanttBar(op, window) {
   if (op.ot === findOperation(state.selectedOperationId)?.ot) bar.classList.add("in-sequence");
   const materialBase = materialBaseForOt(op.ot);
   const timing = globalThis.PlanningWorkflowCore.ganttOperationTiming(ganttProductiveMinutes(op, start, end), start, end);
-  const tooltip = [
+  const tooltip = isToolChange ? [
+    `Cambio de herramental - OT ${op.ot}`,
+    `Maquina: ${op.maquina || "SIN MAQUINA"}`,
+    `Origen: ${formatToolPair(op.toolChangeFromHerramental, op.toolChangeFromKit)}`,
+    `Destino: ${formatToolPair(op.toolChangeToHerramental || op.herramental, op.toolChangeToKit || op.kitHerramental)}`,
+    `Ajustador: ${op.operador || "SIN AJUSTADOR"}`,
+    `Inicio: ${formatDateTime(start)}`,
+    `Fin: ${formatDateTime(end)}`,
+    `Duracion: ${timing.elapsedMinutes} min`,
+  ] : [
     `${op.ot} / Sec ${op.secuencia} - CT ${op.ct} - ${op.operador}${materialBase ? ` - Material ${materialBase}` : ""}`,
     `Inicio: ${formatDateTime(start)}`,
     `Fin: ${formatDateTime(end)}`,
@@ -2706,7 +2717,9 @@ function createGanttBar(op, window) {
     if (op.secuenciaBloqueadora !== "" && op.secuenciaBloqueadora != null) tooltip.push(`Secuencia bloqueadora: ${op.secuenciaBloqueadora}`);
   }
   bar.title = tooltip.join("\n");
-  bar.innerHTML = `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${timing.productiveMinutes} min productivos</span>`;
+  bar.innerHTML = isToolChange
+    ? `<strong>Cambio de herramental</strong><span>OT ${escapeHtml(op.ot)} / ${timing.elapsedMinutes} min</span>`
+    : `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${timing.productiveMinutes} min productivos</span>`;
   bar.style.setProperty("--job-color", jobBarColor(op.ot));
   bar.style.left = `${left}%`;
   bar.style.width = `${width}%`;
@@ -5709,7 +5722,7 @@ function getGanttGroups() {
 }
 
 function ganttOperationHasMachine(op) {
-  return isBendingAppOperation(op) && Boolean(normalizeMachineValue(op.maquina, op));
+  return globalThis.PlanningWorkflowCore.isMachineGanttOperation(op);
 }
 
 function ganttGroupField() {

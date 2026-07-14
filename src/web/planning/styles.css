@@ -1078,7 +1078,11 @@ summary:focus-visible,
 .gantt-bar.in-sequence { box-shadow: 0 0 0 2px rgba(8, 127, 122, 0.28); }
 .gantt-bar[data-priority-band="urgent"] { border-left-color: #8d2835; }
 .gantt-bar[data-priority-band="low"] { opacity: 0.82; }
-.gantt-bar[data-type="CAMBIO_HERRAMENTAL"] { background: var(--amber); }
+.gantt-bar.gantt-bar--tool-change {
+  border-left-color: #7a4b00;
+  background: repeating-linear-gradient(135deg, #c98212 0, #c98212 7px, #b46f08 7px, #b46f08 14px);
+  color: #fff;
+}
 .gantt-bar.job-type-tag--prototype,
 .gantt-summary-bar.job-type-tag--prototype { background: #7c4dc1; color: #fff; }
 .gantt-bar.job-type-tag--urgent,
