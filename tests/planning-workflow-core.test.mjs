@@ -376,6 +376,26 @@ test("la preparacion es idempotente hasta que cambia su firma", () => {
   assert.equal(marked.preparedPlanningByOt[1325], "firma-b");
 });
 
+test("una preparacion confirmada se reutiliza al volver a generar si no faltan datos", () => {
+  const state = { selectedOts: ["2159"], preparedPlanningByOt: { 2159: "firma-confirmada" } };
+  assert.equal(core.canReusePlanningPreparation(state, "2159", false), true);
+  assert.equal(core.canReusePlanningPreparation(state, "2159", true), false);
+  assert.equal(core.canReusePlanningPreparation({ selectedOts: ["2159"], preparedPlanningByOt: {} }, "2159", false), false);
+});
+
+test("la instantanea del borrador completa el herramental desde la configuracion de la OT", () => {
+  const snapshot = core.buildDraftSnapshot({
+    selectedOts: ["2159"],
+    otConfigurations: { 2159: { machine: "211", herramental: "4 x 5", kitHerramental: "" } },
+    operations: [{
+      id: "bend-2159", ot: "2159", ct: "5459", descripcion: "DOBLEZ DE TUBERIA",
+      maquina: "211", herramental: "", fechaInicio: "2026-07-14", horaInicio: "07:59",
+      fechaFin: "2026-07-14", horaFin: "08:56", planStatus: "PENDIENTE",
+    }],
+  }, "2026-07-13T12:00:00Z");
+  assert.equal(snapshot.operations[0].herramental, "4 x 5");
+});
+
 test("selecciona el borrador coherente mas reciente sin mezclar colecciones", () => {
   const older = { revision: 2, savedAt: "2026-07-12T10:00:00Z", selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
   const newer = { revision: 3, savedAt: "2026-07-12T11:00:00Z", selectedOts: ["200"], workOrders: [{ ot: "200" }], operations: [{ ot: "200" }] };

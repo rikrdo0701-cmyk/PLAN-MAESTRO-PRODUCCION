@@ -1880,6 +1880,9 @@ async function prepareJobForPlanning(job, options = {}) {
 
   const requirements = buildPlanningRequirements(issues, operations);
   const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
+  const hasRequiredGaps = requirements.some((item) => ["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]
+    .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType;
+  if (options.reuseConfirmed === true && window.PlanningWorkflowCore.canReusePlanningPreparation(state, job.ot, hasRequiredGaps)) return true;
   const signature = planningPreparationSignature(job, operations, commercial);
   if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) return true;
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
@@ -3534,7 +3537,7 @@ async function ensureSelectedJobsReadyForScheduling(ots) {
       showToast(`No se encontraron operaciones NetSuite para OT ${ot}`);
       return false;
     }
-    const prepared = await prepareJobForPlanning(job);
+    const prepared = await prepareJobForPlanning(job, { reuseConfirmed: true });
     if (!prepared) return false;
     if (!window.PlanningWorkflowCore.isOtEligibleForDraft(state, ot)) continue;
   }

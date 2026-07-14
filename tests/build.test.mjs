@@ -56,6 +56,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /Monto estimado/);
   assert.match(pagesIndex, /configuration\.subcontractType \|\| registeredSubcontract/);
   assert.match(pagesIndex, /configuration\.machine/);
+  assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL'\]/);
+  assert.match(storageService, /herramental:\s*String\(row\.HERRAMENTAL \|\| ''\)\.trim\(\)/);
   assert.match(pagesIndex, /function setPlanningActionsBusy/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);

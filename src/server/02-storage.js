@@ -11,7 +11,7 @@ const PP_SHEETS = {
   CAPACIDADES: ['KEY', 'CT', 'OPERACION', 'ACTIVA', 'CAPACIDAD', 'SOLAPAMIENTO', 'PALABRAS_CLAVE', 'REQUIERE_HERRAMENTAL', 'REQUIERE_KIT', 'CUSTOM', 'EFICIENCIA_PCT'],
   CATALOGO_OPERACIONES: ['KEY', 'CT', 'OPERACION', 'ORIGEN', 'ACTIVA'],
   ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA'],
-  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO'],
+  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL'],
   CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
   MAQUINAS: ['ID', 'ACTIVA'],
@@ -427,7 +427,8 @@ function PP_otConfigurationRows_(payload) {
       item.kitPending === true,
       item.subcontractType || item.tipoSubcontrato || '',
       Number(item.subcontractDays || item.diasSubcontrato || 0),
-      item.updatedAt || item.actualizado || new Date().toISOString()
+      item.updatedAt || item.actualizado || new Date().toISOString(),
+      item.herramental || item.tool || ''
     ];
   });
 }
@@ -574,7 +575,8 @@ function PP_writeState_(spreadsheet, payload, user, force) {
         item.kitPending === true,
         item.subcontractType || item.tipoSubcontrato || '',
         Number(item.subcontractDays || item.diasSubcontrato || 0),
-        item.updatedAt || item.actualizado || new Date().toISOString()
+        item.updatedAt || item.actualizado || new Date().toISOString(),
+        item.herramental || item.tool || ''
       ];
     }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO,
@@ -1016,6 +1018,7 @@ function PP_buildOtConfigurations_(rows, operations) {
     configurations[ot] = {
       ot: ot,
       machine: PP_normalizeKey_(storedMachine) === 'SIN_MAQUINA' ? '' : storedMachine,
+      herramental: String(row.HERRAMENTAL || '').trim(),
       kitHerramental: String(row.KIT_HERRAMENTAL || '').trim(),
       kitPending: PP_bool_(row.KIT_PENDIENTE, false),
       subcontractType: String(row.TIPO_SUBCONTRATO || '').trim(),
@@ -1028,11 +1031,12 @@ function PP_buildOtConfigurations_(rows, operations) {
     const ot = String(op.ot || '').trim();
     if (!ot || explicit[PP_normalizeKey_(ot)]) return;
     if (!configurations[ot]) {
-      configurations[ot] = { ot: ot, machine: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '' };
+      configurations[ot] = { ot: ot, machine: '', herramental: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '' };
     }
     const item = configurations[ot];
     const bending = ['5459', '5527'].indexOf(String(op.ct || '').trim()) >= 0;
     if (bending && !item.machine && op.maquina && String(op.maquina) !== 'SIN_MAQUINA') item.machine = String(op.maquina);
+    if (bending && !item.herramental && op.herramental) item.herramental = String(op.herramental);
     if (bending && !item.kitHerramental && op.kitHerramental) item.kitHerramental = String(op.kitHerramental);
     if (bending && op.kitPending === true) item.kitPending = true;
     if (!item.subcontractType && op.subcontractType) item.subcontractType = String(op.subcontractType);

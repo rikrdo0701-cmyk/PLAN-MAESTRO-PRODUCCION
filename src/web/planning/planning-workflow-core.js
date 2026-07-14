@@ -316,6 +316,11 @@
     return String(state?.preparedPlanningByOt?.[ot] || "") !== String(signature || "");
   }
 
+  function canReusePlanningPreparation(state, ot, hasRequiredGaps) {
+    if (hasRequiredGaps === true || !isOtEligibleForDraft(state, ot)) return false;
+    return Boolean(String(state?.preparedPlanningByOt?.[ot] || "").trim());
+  }
+
   function markPlanningPrepared(state, ot, signature) {
     return {
       ...(state || {}),
@@ -346,6 +351,11 @@
   }
 
   function buildDraftSnapshot(state, generatedAt) {
+    const configurations = state?.otConfigurations || {};
+    const configurationForOt = (ot) => {
+      const key = Object.keys(configurations).find((item) => normalize(item) === normalize(ot));
+      return key ? configurations[key] || {} : {};
+    };
     return {
       ...(state || {}),
       snapshotId: "draft",
@@ -353,7 +363,16 @@
       generatedAt: String(generatedAt || ""),
       planStart: state?.planStart || "",
       selectedOts: [...(state?.selectedOts || [])],
-      operations: draftExportOperations(state).map((operation) => ({ ...operation })),
+      operations: draftExportOperations(state).map((operation) => {
+        const next = { ...operation };
+        if (["5459", "5527"].includes(String(next.ct || "").trim())) {
+          const configuration = configurationForOt(next.ot);
+          if (!String(next.maquina || "").trim()) next.maquina = String(configuration.machine || configuration.maquina || "").trim();
+          if (!String(next.herramental || "").trim()) next.herramental = String(configuration.herramental || configuration.tool || "").trim();
+          if (!String(next.kitHerramental || "").trim() && next.kitPending !== true) next.kitHerramental = String(configuration.kitHerramental || configuration.kit || "").trim();
+        }
+        return next;
+      }),
     };
   }
 
@@ -618,7 +637,7 @@
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
-    needsPlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
+    needsPlanningPreparation, canReusePlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
     buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
