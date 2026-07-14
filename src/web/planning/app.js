@@ -4022,14 +4022,49 @@ async function openRestoreDraftDialog() {
   await previewDraftRestore(choice.snapshot_id, choice.sync_choice === "sync");
 }
 
+async function refreshRestorePreviewData() {
+  try {
+    const payload = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("fetchNetSuiteWorkOrdersLite"),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    validateNetSuiteImportedData(payload, "workOrders");
+    return {
+      status: payload.previewComplete === true ? "complete" : "partial",
+      message: "OTs actualizadas para la vista previa; se conservaran las operaciones cargadas",
+      payload,
+    };
+  } catch (error) {
+    return { status: "failed", message: error.message, payload: null };
+  }
+}
+
 async function previewDraftRestore(snapshotId, syncBeforeRestore) {
   if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
     if (syncBeforeRestore) {
-      const outcome = await syncNetSuiteTwoPhase({ persist: false });
-      if (outcome?.status === "failed") throw new Error(outcome?.message || "No se pudo sincronizar NetSuite");
+      const outcome = await refreshRestorePreviewData();
+      if (outcome?.status !== "complete") {
+        const continueWithLoaded = await openPlanningDialog({
+          title: outcome?.status === "failed" ? "No se pudo actualizar NetSuite" : "Sincronizacion parcial",
+          summary: outcome?.message || "Se usaran los datos actualmente cargados",
+          body: "<p>La restauracion puede continuar con las operaciones y configuraciones ya cargadas. Revisa la vista previa antes de confirmar.</p>",
+          confirmLabel: "Continuar con datos cargados",
+          cancelVisible: true,
+        });
+        if (!continueWithLoaded) return;
+      }
+      if (outcome?.payload) {
+        state = {
+          ...state,
+          workOrders: outcome.payload.workOrders,
+          invoicePriceWindow: outcome.payload.invoicePriceWindow || state.invoicePriceWindow,
+          plant: outcome.payload.plant || state.plant,
+          syncedAt: outcome.payload.syncedAt || state.syncedAt,
+        };
+      }
     }
     const snapshot = isAppsScriptRuntime()
       ? await callAppsScript("getPlanSnapshot", snapshotId)

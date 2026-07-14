@@ -81,12 +81,16 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /reportSnapshot = null;[\s\S]*Borrador restaurado; revisa y genera nuevamente el plan/);
   const restoreOpenSource = pagesIndex.slice(pagesIndex.indexOf("async function openRestoreDraftDialog()"), pagesIndex.indexOf("async function previewDraftRestore("));
   const restorePreviewSource = pagesIndex.slice(pagesIndex.indexOf("async function previewDraftRestore("), pagesIndex.indexOf("async function confirmDraftRestore("));
+  const restoreReadOnlySyncSource = pagesIndex.slice(pagesIndex.indexOf("async function refreshRestorePreviewData("), pagesIndex.indexOf("async function previewDraftRestore("));
   const restoreConfirmSource = pagesIndex.slice(pagesIndex.indexOf("async function confirmDraftRestore("), pagesIndex.indexOf("async function loadPlanSnapshots("));
   [restoreOpenSource, restorePreviewSource, restoreConfirmSource].forEach((source) => {
     assert.match(source, /netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight/);
   });
-  assert.match(restorePreviewSource, /if \(outcome\?\.status === "failed"\) throw new Error/);
+  assert.match(restorePreviewSource, /if \(outcome\?\.status !== "complete"\)[\s\S]*Continuar con datos cargados[\s\S]*if \(!continueWithLoaded\) return/);
   assert.doesNotMatch(restorePreviewSource, /outcome\?\.ready/);
+  assert.match(restoreReadOnlySyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
+  assert.doesNotMatch(restoreReadOnlySyncSource, /syncNetSuitePlanningData|saveState|savePlanningStateOptimized|persistPlanSnapshot|render\(/);
+  assert.doesNotMatch(restorePreviewSource, /syncNetSuiteTwoPhase|syncNetSuitePlanningData|saveState/);
   assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*restoreDraftBtn\.disabled = inProgress \|\| Boolean\(planningActionsBusy\)/);
   assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
   assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal"\)/);

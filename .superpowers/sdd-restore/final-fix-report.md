@@ -36,3 +36,11 @@
 - `npm.cmd run build`: Apps Script y GitHub Pages generados correctamente.
 - `git diff --check`: sin errores.
 - No se creo commit; el worktree queda listo para revision/commit del integrador.
+
+## Aislamiento adicional del preview de restore
+
+- `refreshRestorePreviewData` consulta exclusivamente `fetchNetSuiteWorkOrdersLite`; no llama `syncNetSuitePlanningData`, no usa `saveState`, no renderiza y no persiste snapshots o estado backend.
+- La respuesta queda staged y solo se incorpora al estado en memoria si el usuario decide continuar; cancelar no altera los datos cargados.
+- Como la lectura ligera solo refresca OTs, se clasifica como `partial` salvo que el contrato declare expresamente `previewComplete`; resultados `partial` o `failed` muestran un dialogo explicito con Cancelar y **Continuar con datos cargados**. Solo `complete` avanza sin ese paso.
+- RED: la prueba de build detecto la llamada a `syncNetSuiteTwoPhase({ persist: false })` dentro del preview.
+- GREEN: la prueba sensible verifica ausencia de `syncNetSuitePlanningData`, `saveState`, persistencias y render dentro del cuerpo read-only y del preview.
