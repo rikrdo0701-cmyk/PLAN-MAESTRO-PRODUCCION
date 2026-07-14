@@ -548,6 +548,27 @@
     return "";
   }
 
+  function weeklyFinishingCost(rows) {
+    const seen = new Set();
+    let finishingPieces = 0;
+    let totalCost = 0;
+    (rows || []).forEach((row, index) => {
+      const normalizedOt = normalize(row?.ot);
+      const key = normalizedOt || `__ROW_${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const pendingPieces = Math.max(0, Number(row?.pendingPieces) || 0);
+      const amountPresent = row?.amount !== null && row?.amount !== undefined && String(row.amount).trim() !== "";
+      const unitPricePresent = row?.unitPrice !== null && row?.unitPrice !== undefined && String(row.unitPrice).trim() !== "";
+      const rowCost = amountPresent
+        ? Math.max(0, Number(row.amount) || 0)
+        : unitPricePresent ? Math.max(0, Number(row.unitPrice) || 0) * pendingPieces : 0;
+      finishingPieces += pendingPieces;
+      totalCost += rowCost;
+    });
+    return { finishingPieces, totalCost, costPerPiece: finishingPieces ? totalCost / finishingPieces : 0 };
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, removeOtFromDraft,
@@ -558,5 +579,5 @@
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
-    isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass };
+    isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, weeklyFinishingCost };
 });

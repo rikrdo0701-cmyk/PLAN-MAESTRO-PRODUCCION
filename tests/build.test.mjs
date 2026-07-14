@@ -27,6 +27,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
+  assert.match(pagesIndex, /const finishingRows = summary\.finishes \|\| \[\];/);
+  assert.doesNotMatch(pagesIndex, /const startingRows = summary\.starts \|\| \[\];/);
+  assert.doesNotMatch(pagesIndex, /Number\(row\.amount \|\| 0\)/);
+  assert.match(pagesIndex, /amount: amountValue == null \? null : Math\.max\(0, Number\(amountValue\) \|\| 0\)/);
   assert.match(pagesIndex, /window\.PlanningWorkflowCore = api/);
   assert.doesNotMatch(pagesIndex, /const window = getPlanWindow\(\);[\s\S]{0,1800}window\.PlanningWorkflowCore\.isActiveGanttView/);
   assert.doesNotMatch(pagesIndex, /createPlanningWorkflowCore[\s\S]*?<\/script>\s*<script>\s*"use strict";\s*const STORAGE_KEY/);

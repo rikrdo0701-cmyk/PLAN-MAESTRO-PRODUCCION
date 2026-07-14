@@ -4235,10 +4235,10 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
   const operations = allWeekOperations.filter((op) => !isToolChangeReportOperation(op));
   const toolChangeOps = allWeekOperations.filter(isToolChangeReportOperation);
   const finishingRows = summary.finishes || [];
-  const startingRows = summary.starts || [];
-  const finishingPieces = finishingRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-  const startingPieces = startingRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-  const releaseAmount = finishingRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const finishingCost = window.PlanningWorkflowCore.weeklyFinishingCost(finishingRows);
+  const finishingPieces = finishingCost.finishingPieces;
+  const startingPieces = 0;
+  const releaseAmount = finishingCost.totalCost;
   const releaseTarget = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   const releaseGap = Math.max(0, releaseTarget - releaseAmount);
   const laborDays = workingDaysInRange(range.start, range.end);
@@ -4267,7 +4267,7 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
     releaseGap,
     targetMet: releaseGap <= 0,
     targetFactors,
-    costPerPiece: finishingPieces ? releaseAmount / finishingPieces : 0,
+    costPerPiece: finishingCost.costPerPiece,
     peopleWithLoad: inPlanOperators.length,
     releasePerPerson: inPlanOperators.length ? releaseAmount / inPlanOperators.length : 0,
     startingPieces,
@@ -4373,13 +4373,15 @@ function groupFinishingRowsByType(rows) {
   const grouped = new Map();
   for (const row of rows) {
     const type = String(row.jobType || "SIN TIPO").trim().toUpperCase() || "SIN TIPO";
-    const current = grouped.get(type) || { type, pieces: 0, amount: 0 };
-    current.pieces += Number(row.pendingPieces || 0);
-    current.amount += Number(row.amount || 0);
+    const current = grouped.get(type) || { type, rows: [] };
+    current.rows.push(row);
     grouped.set(type, current);
   }
   return [...grouped.values()]
-    .map((row) => ({ ...row, costPerPiece: row.pieces ? row.amount / row.pieces : 0 }))
+    .map((group) => {
+      const cost = window.PlanningWorkflowCore.weeklyFinishingCost(group.rows);
+      return { type: group.type, pieces: cost.finishingPieces, amount: cost.totalCost, costPerPiece: cost.costPerPiece };
+    })
     .sort((a, b) => b.amount - a.amount || a.type.localeCompare(b.type, "es"));
 }
 
@@ -4439,15 +4441,18 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const workOrder = workOrderForOt(ot);
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
     const pendingPieces = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
-    const unitPrice = Number(first.unitPrice ?? last.unitPrice ?? effectiveUnitPriceForOt(ot));
+    const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
+    const unitPriceValue = [first.unitPrice, last.unitPrice, workOrder?.averageSalePrice, configuration.manualUnitPrice].find(hasValue);
+    const unitPrice = hasValue(unitPriceValue) ? Math.max(0, Number(unitPriceValue) || 0) : null;
+    const amountValue = [first.amount, last.amount].find(hasValue);
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",
       pendingPieces: Math.max(0, pendingPieces),
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
       planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
-      unitPrice: Math.max(0, unitPrice),
-      amount: Math.max(0, Number(first.amount ?? last.amount ?? unitPrice * pendingPieces)),
+      unitPrice,
+      amount: amountValue == null ? null : Math.max(0, Number(amountValue) || 0),
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
@@ -4474,7 +4479,7 @@ function renderWeeklyJobDays(rows, finishing) {
       ${finishing ? `<td>${escapeHtml(formatCurrency(row.amount))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
     </tr>`).join("");
     const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-    const amount = dayRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const amount = window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost;
     return `<article class="weekly-day-block day-${date.getDay()}">
       <div class="weekly-day-ribbon"><strong>${escapeHtml(formatDate(date))}</strong><span>${escapeHtml(date.toLocaleDateString("es-MX", { weekday: "long" }))}</span></div>
       <div class="weekly-day-table"><table><thead><tr>${columns.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="2">Total ${dayRows.length}</td><td></td><td>${escapeHtml(formatMaterialQuantity(pieces))}</td>${finishing ? `<td>${escapeHtml(formatCurrency(amount))}</td><td></td>` : ""}</tr></tfoot></table></div>

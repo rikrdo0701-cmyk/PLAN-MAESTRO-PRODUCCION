@@ -466,3 +466,25 @@ test("clasifica el tipo de trabajo para resaltado semanal", () => {
   assert.equal(core.weeklyPlanningTypeClass("EXPEDITADO"), "weekly-row--expedited");
   assert.equal(core.weeklyPlanningTypeClass("NORMAL"), "");
 });
+
+test("weeklyFinishingCost cuenta una sola fila por OT normalizada", () => {
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: " OT-10 ", pendingPieces: 4, amount: 80 },
+    { ot: "ot-10", pendingPieces: 4, amount: 80 },
+    { ot: "OT-11", pendingPieces: 6, amount: 120 },
+  ])), { finishingPieces: 10, totalCost: 200, costPerPiece: 20 });
+});
+
+test("weeklyFinishingCost respeta monto y precio cero explicitos", () => {
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: "1", pendingPieces: 5, amount: 0, unitPrice: 99 },
+    { ot: "2", pendingPieces: 3, amount: "", unitPrice: 0 },
+    { ot: "3", pendingPieces: 2, amount: null, unitPrice: 7 },
+  ])), { finishingPieces: 10, totalCost: 14, costPerPiece: 1.4 });
+});
+
+test("weeklyFinishingCost devuelve costo por pieza cero cuando no hay piezas", () => {
+  assert.deepEqual(structuredClone(core.weeklyFinishingCost([
+    { ot: "1", pendingPieces: 0, amount: 25 },
+  ])), { finishingPieces: 0, totalCost: 25, costPerPiece: 0 });
+});
