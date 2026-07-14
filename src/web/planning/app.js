@@ -462,6 +462,7 @@ window.addEventListener("beforeunload", () => {
 function initializePlanningApp() {
   bindElements();
   bindEvents();
+  resetDailyReportFiltersToToday();
   render();
   saveState("ui");
   loadAppStateInBackground();
@@ -473,6 +474,7 @@ else initializePlanningApp();
 async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
   saveState("ui");
   render();
@@ -649,7 +651,7 @@ function prepareIndividualPrint(target) {
   document.querySelectorAll(".print-target").forEach((node) => node.classList.remove("print-target"));
   target.classList.add("print-target");
   const date = target.querySelector(".individual-print-date");
-  if (date) date.textContent = formatDateTime(new Date());
+  if (date) date.textContent = formatReportDateTime(new Date());
   document.body.classList.add("printing-individual-plan");
   const cleanup = () => {
     target.classList.remove("print-target");
@@ -4260,7 +4262,7 @@ function renderReports() {
 function renderWeekReport() {
   els.weekReportStartInput.value = state.reportWeekStart;
   els.reportSnapshotMeta.textContent = reportSourceLabel();
-  els.weekPrintContext.textContent = formatDateTime(new Date());
+  els.weekPrintContext.textContent = formatReportDateTime(new Date());
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
   els.weekExecutiveSummary.innerHTML = reportOps.length
@@ -4516,7 +4518,7 @@ function renderWeeklyJobDays(rows, finishing) {
     const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
     const amount = window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost;
     return `<article class="weekly-day-block day-${date.getDay()}">
-      <div class="weekly-day-ribbon"><strong>${escapeHtml(formatDate(date))}</strong><span>${escapeHtml(date.toLocaleDateString("es-MX", { weekday: "long" }))}</span></div>
+      <div class="weekly-day-ribbon"><strong>${escapeHtml(formatReportDate(date))}</strong><span>${escapeHtml(date.toLocaleDateString("es-MX", { weekday: "long" }))}</span></div>
       <div class="weekly-day-table"><table><thead><tr>${columns.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="2">Total ${dayRows.length}</td><td></td><td>${escapeHtml(formatMaterialQuantity(pieces))}</td>${finishing ? `<td>${escapeHtml(formatCurrency(amount))}</td><td></td>` : ""}</tr></tfoot></table></div>
     </article>`;
   }).join("");
@@ -4536,7 +4538,7 @@ function renderOperatorReport() {
   const selection = filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
   els.operatorReportStatus.value = filter.status;
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
-  els.operatorPrintContext.textContent = formatDateTime(new Date());
+  els.operatorPrintContext.textContent = formatReportDateTime(new Date());
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
   els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: isReportSnapshotEditable() });
   bindReportCommentInputs(els.operatorReport);
@@ -4552,7 +4554,7 @@ function renderAdjusterReport() {
   );
   els.adjusterReportStatus.value = filter.status;
   renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
-  els.adjusterPrintContext.textContent = formatDateTime(new Date());
+  els.adjusterPrintContext.textContent = formatReportDateTime(new Date());
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
   const body = selection.rows.map((op) => {
@@ -4568,9 +4570,9 @@ function renderAdjusterReport() {
       <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
       <td>${escapeHtml(destinationHerramental)}</td>
       <td>${escapeHtml(destinationKit)}</td>
-      <td>${escapeHtml(start ? formatDate(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
       <td>${escapeHtml(start ? formatTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatDate(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
       <td>${escapeHtml(end ? formatTime(end) : "")}</td>
       <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
       <td class="report-status-action-column">${planStatusActionCell(op)}</td>
@@ -4585,7 +4587,7 @@ function renderSubcontractReport() {
   const selection = filteredReportRows(subcontractRowsForReportWeek(filter.date), "subcontract", (row) => row.start);
   els.subcontractReportStatus.value = filter.status;
   renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportFutureDays, els.subcontractReportCount, selection);
-  els.subcontractPrintContext.textContent = formatDateTime(new Date());
+  els.subcontractPrintContext.textContent = formatReportDateTime(new Date());
   els.subcontractReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Tipo de subcontrato", "Dias", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
   const body = selection.rows.map((row) => {
@@ -4596,9 +4598,9 @@ function renderSubcontractReport() {
       <td>${escapeHtml(row.article)}</td>
       <td class="${missingType ? "report-warning" : ""}">${escapeHtml(row.type || "FALTA CONFIGURAR")}</td>
       <td class="${missingDays ? "report-warning" : ""}">${missingDays ? "FALTA CONFIGURAR" : escapeHtml(row.days)}</td>
-      <td>${escapeHtml(formatDate(row.start))}</td>
+      <td>${escapeHtml(formatReportDate(row.start))}</td>
       <td>${escapeHtml(formatTime(row.start))}</td>
-      <td>${escapeHtml(formatDate(row.end))}</td>
+      <td>${escapeHtml(formatReportDate(row.end))}</td>
       <td>${escapeHtml(formatTime(row.end))}</td>
       <td>${reportCommentEditor(row.operationIds, row.comment)}</td>
     </tr>`;
@@ -4867,9 +4869,9 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${formatReportDuration(op.tiempoCiclo)}</td>
       <td>${formatReportDuration(op.tiempoSetup)}</td>
       <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
-      <td>${escapeHtml(start ? formatDate(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
       <td>${escapeHtml(start ? formatTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatDate(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
       <td>${escapeHtml(end ? formatTime(end) : "")}</td>
       <td>${reportOperationCommentCell(op)}</td>
       ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
@@ -6022,6 +6024,14 @@ function syncReportFilterDates(date) {
   }
 }
 
+function resetDailyReportFiltersToToday() {
+  state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
+  const today = formatDate(new Date());
+  for (const type of ["operator", "adjuster", "subcontract"]) {
+    state.reportFilters[type].date = today;
+  }
+}
+
 function filteredReportRows(rows, type, dateGetter) {
   const filter = reportFilter(type);
   const statusRows = window.PlanningWorkflowCore.filterOperationsByPlanStatus(rows, filter.status);
@@ -6029,7 +6039,7 @@ function filteredReportRows(rows, type, dateGetter) {
   const rangeRows = statusRows.filter((row) => {
     const date = dateGetter(row);
     const value = date && formatDate(date);
-    return value && value >= range.start && value <= range.end;
+    return value && value <= range.end;
   });
   const source = rangeRows.slice().sort((a, b) => Number(dateGetter(a)) - Number(dateGetter(b)));
   return {
@@ -6138,6 +6148,19 @@ function formatTime(date) {
 function formatDateTime(date) {
   if (!date) return "";
   return `${formatDate(date)} ${formatTime(date)}`;
+}
+
+function formatReportDate(date) {
+  if (!date) return "";
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${d}/${m}/${y}`;
+}
+
+function formatReportDateTime(date) {
+  if (!date) return "";
+  return `${formatReportDate(date)} ${formatTime(date)}`;
 }
 
 function formatMinutes(minutes) {

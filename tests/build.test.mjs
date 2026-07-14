@@ -31,6 +31,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlanningWorkflowCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
   assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);
+  assert.match(pagesIndex, /function formatReportDate\(date\)[\s\S]*\$\{d\}\/\$\{m\}\/\$\{y\}/);
+  assert.match(pagesIndex, /function resetDailyReportFiltersToToday\(\)[\s\S]*const today = formatDate\(new Date\(\)\)[\s\S]*operator[\s\S]*adjuster[\s\S]*subcontract/);
+  assert.match(pagesIndex, /function initializePlanningApp\(\)[\s\S]*resetDailyReportFiltersToToday\(\)[\s\S]*render\(\)/);
+  const dailyReportFilterSource = pagesIndex.slice(pagesIndex.indexOf("function filteredReportRows("), pagesIndex.indexOf("function renderReportFilterStatus("));
+  assert.match(dailyReportFilterSource, /value && value <= range\.end/);
+  assert.doesNotMatch(dailyReportFilterSource, /value >= range\.start/);
+  assert.match(pagesIndex, /operatorPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /adjusterPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /subcontractPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /<td>\$\{formatReportDuration\(op\.tiempoCiclo\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(op\.tiempoSetup\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
   assert.match(pagesIndex, /@media print[\s\S]*\.report-comment-input::placeholder\s*\{[^}]*opacity:\s*0/);
   assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*8mm/);
@@ -166,7 +175,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportStatus"/);
   assert.match(pagesIndex, /reportCoverageDiagnostics\(reportOperationsSource\(\)\)/);
-  assert.match(pagesIndex, /weekPrintContext\.textContent = formatDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /weekPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);

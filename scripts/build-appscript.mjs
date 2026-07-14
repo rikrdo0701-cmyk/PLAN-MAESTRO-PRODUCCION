@@ -55,6 +55,7 @@ function patchPlanningApp(app) {
   const startupMarker = `async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
   saveState("ui");
   render();
@@ -67,6 +68,7 @@ function patchPlanningApp(app) {
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   await loadPlanSnapshots(false);
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
+  resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
   saveState("ui");
   render();
