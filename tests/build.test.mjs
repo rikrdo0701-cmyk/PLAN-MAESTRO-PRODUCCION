@@ -30,6 +30,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
+  assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);
+  assert.match(pagesIndex, /<td>\$\{formatReportDuration\(op\.tiempoCiclo\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(op\.tiempoSetup\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.report-comment-input::placeholder\s*\{[^}]*opacity:\s*0/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*8mm/);
   assert.match(pagesIndex, /formatCurrency\(window\.PlanningWorkflowCore\.effectiveFinishingAmount\(row\)\)/);
   assert.match(pagesIndex, /return window\.PlanningWorkflowCore\.weeklyFinishingRowsByType\(rows\);/);
   assert.match(pagesIndex, /const finishingRows = summary\.finishes \|\| \[\];/);

@@ -1926,7 +1926,18 @@ tr:last-child td { border-bottom: 0; }
   .report-page-table tr { height: 17px; break-inside: avoid; page-break-inside: avoid; }
   .report-page-table:not(.report-show-all-table) th,
   .report-page-table:not(.report-show-all-table) td { max-height: 17px; padding: 1px 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .production-report-table th:nth-child(1),
+  .production-report-table td:nth-child(1) { width: 8mm; min-width: 8mm; overflow: visible; text-overflow: clip; }
+  .production-report-table th:nth-child(2),
+  .production-report-table td:nth-child(2) { width: 12mm; }
+  .production-report-table th:nth-child(3),
+  .production-report-table td:nth-child(3) { width: 25mm; }
+  .production-report-table th:nth-child(4),
+  .production-report-table td:nth-child(4) { width: 42mm; }
+  .production-report-table th:nth-child(15),
+  .production-report-table td:nth-child(15) { width: 28mm; }
   .report-comment-input { min-width: 0; min-height: 0; padding: 0; border: 0; background: transparent; font-size: inherit; outline: 0; }
+  .report-comment-input::placeholder { color: transparent; opacity: 0; }
   .report-comment-fixed { overflow: hidden; font-size: inherit; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
   .plan-status-action { display: none !important; }
   .report-status-action-column { display: none !important; }

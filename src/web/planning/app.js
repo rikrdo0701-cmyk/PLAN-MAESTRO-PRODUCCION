@@ -4864,9 +4864,9 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
       <td>${escapeHtml(machineArea)}</td>
       <td>${escapeHtml(effectiveReportTool)}</td>
-      <td>${formatReportNumber(op.tiempoCiclo)}</td>
-      <td>${formatReportNumber(op.tiempoSetup)}</td>
-      <td>${formatReportNumber(scheduledProductionMinutesForExport(op))}</td>
+      <td>${formatReportDuration(op.tiempoCiclo)}</td>
+      <td>${formatReportDuration(op.tiempoSetup)}</td>
+      <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
       <td>${escapeHtml(start ? formatDate(start) : "")}</td>
       <td>${escapeHtml(start ? formatTime(start) : "")}</td>
       <td>${escapeHtml(end ? formatDate(end) : "")}</td>
@@ -5089,6 +5089,15 @@ async function loadNetSuiteExerciseImpl() {
   const outcome = await syncNetSuiteTwoPhase();
   showToast(outcome.message, outcome.status === "complete" ? 3500 : 9000);
   return outcome;
+}
+
+function formatReportDuration(minutes) {
+  const totalSeconds = Math.max(0, Math.round(Number(minutes || 0) * 60));
+  const wholeMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (wholeMinutes && seconds) return `${wholeMinutes} min ${seconds} s`;
+  if (wholeMinutes) return `${wholeMinutes} min`;
+  return `${seconds} s`;
 }
 
 async function fetchNetSuiteWorkOrdersLiteCompat(allowPersistedFallback = false) {
