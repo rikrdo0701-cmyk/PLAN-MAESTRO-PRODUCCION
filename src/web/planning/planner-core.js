@@ -98,7 +98,8 @@
     const authorizedToolHistory = selectionDefined
       ? (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : [])
         .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
-      : state.machineToolHistory;
+        .filter(isCompletedToolHistory)
+      : (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : []).filter(isCompletedToolHistory);
     const authorizedSourceOperations = sourceOperations.filter(isSelected);
     const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
       isPlanCompletedOperation(state, op) || isFixedOperation(op)
@@ -220,6 +221,10 @@
       });
       context.machineTools.set(machine, events);
     }
+  }
+
+  function isCompletedToolHistory(item) {
+    return item?.completed === true || normalizeKey(item?.status || item?.planStatus) === "COMPLETADA_PLAN";
   }
 
   function seedMachineToolHistory(context, history, operations) {
