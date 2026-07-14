@@ -2324,9 +2324,13 @@ function renderSelectedJobPanel() {
   const selectedWorkOrder = workOrderForOt(job.ot);
   const dueDateOverridden = Boolean(selectedWorkOrder?.dueDateOverride);
 
-  const toolGroups = getJobToolGroups(job.ops);
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const hasBendingOperations = bendingOps.length > 0;
+  const effectiveTool = window.PlanningWorkflowCore.effectiveJobTool(state, job, ["5459", "5527"]);
+  const detailOps = effectiveTool
+    ? job.ops.map((op) => isBendingAppOperation(op) && !cleanToolValue(op.herramental) ? { ...op, herramental: effectiveTool } : op)
+    : job.ops;
+  const toolGroups = getJobToolGroups(detailOps);
   const bulkMachineValue = getBulkMachineValue(job.ops);
   const machineOptions = getMachineOptions(job.ops);
   const otKit = getOtKitValue(job.ops);
@@ -2334,7 +2338,7 @@ function renderSelectedJobPanel() {
   const toolSummary = toolGroups.length
     ? toolGroups.map((tool) => `<span class="tool-chip">${escapeHtml(tool.label)}<small>${tool.count} ops</small></span>`).join("")
     : `<span class="tool-chip empty">SIN HERRAMENTAL<small>${job.ops.length} ops</small></span>`;
-  const bendingToolValues = uniq(bendingOps.map((op) => cleanToolValue(op.herramental)).filter(Boolean));
+  const bendingToolValues = uniq(detailOps.filter(isBendingAppOperation).map((op) => cleanToolValue(op.herramental)).filter(Boolean));
   const currentBendingTool = bendingToolValues.length === 1 ? bendingToolValues[0] : "";
   const articleToolOptions = uniq(state.toolCatalog
     .filter((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(job.parte))
@@ -2421,7 +2425,7 @@ function renderSelectedJobPanel() {
         <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${job.ops.map((op) => {
+        ${detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
           const key = operationCompletionKey(op);
@@ -6640,11 +6644,9 @@ function toolLabel(op) {
 }
 
 function jobToolMiniHtml(job) {
-  const configuration = state.otConfigurations?.[String(job?.ot || "").trim()] || {};
   const bendingOps = (job?.ops || []).filter(isBendingAppOperation);
   if (!bendingOps.length) return "";
-  const tool = cleanToolValue(configuration.herramental) || bendingOps.map((op) => cleanToolValue(op.herramental)).find(Boolean)
-    || bendingOps.map((op) => cleanToolValue(toolCatalogForAppOperation(op)?.herramental)).find(Boolean) || "";
+  const tool = cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, job, ["5459", "5527"]));
   if (!tool) return "";
   return `<span class="queue-tool-mini" title="Herramental seleccionado: ${escapeHtml(tool)}">Herr. <strong>${escapeHtml(tool)}</strong></span>`;
 }

@@ -454,6 +454,22 @@
         : { ...operation });
   }
 
+  function effectiveJobTool(state, job, bendingCts) {
+    const cts = new Set((bendingCts || ["5459", "5527"]).map((value) => String(value || "").trim()));
+    const operations = (job?.ops || []).filter((operation) => cts.has(String(operation?.ct || "").trim()));
+    if (!operations.length) return "";
+    const configurations = state?.otConfigurations || {};
+    const configurationKey = Object.keys(configurations).find((key) => normalize(configurations[key]?.ot || key) === normalize(job?.ot));
+    const configured = configurationKey ? configurations[configurationKey] || {} : {};
+    const configuredTool = String(configured.herramental || configured.tool || "").trim();
+    if (configuredTool) return configuredTool;
+    const operationTool = operations.map((operation) => String(operation?.herramental || "").trim()).find(Boolean);
+    if (operationTool) return operationTool;
+    const article = normalize(job?.parte);
+    const catalog = (state?.toolCatalog || []).find((item) => item?.active !== false && normalize(item?.part || item?.parte) === article);
+    return String(catalog?.herramental || "").trim();
+  }
+
   function isCoherentDraft(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.workOrders) || !Array.isArray(snapshot.selectedOts)) return false;
     const operationOts = new Set(snapshot.operations.map((item) => normalize(item?.ot)).filter(Boolean));
@@ -638,7 +654,7 @@
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders,
     needsPlanningPreparation, canReusePlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
-    buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection,
+    buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection, effectiveJobTool,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,

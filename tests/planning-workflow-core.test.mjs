@@ -396,6 +396,18 @@ test("la instantanea del borrador completa el herramental desde la configuracion
   assert.equal(snapshot.operations[0].herramental, "4 x 5");
 });
 
+test("el detalle y la tarjeta resuelven el mismo herramental efectivo", () => {
+  const job = { ot: "2159", parte: "C 490 UND", ops: [{ ct: "5459", herramental: "" }] };
+  assert.equal(core.effectiveJobTool({
+    otConfigurations: { 2159: { herramental: "4 x 5" } },
+    toolCatalog: [{ part: "C 490 UND", herramental: "CATALOGO" }],
+  }, job, ["5459", "5527"]), "4 x 5");
+  assert.equal(core.effectiveJobTool({
+    otConfigurations: {},
+    toolCatalog: [{ part: "C 490 UND", herramental: "4 x 5" }],
+  }, job, ["5459", "5527"]), "4 x 5");
+});
+
 test("selecciona el borrador coherente mas reciente sin mezclar colecciones", () => {
   const older = { revision: 2, savedAt: "2026-07-12T10:00:00Z", selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
   const newer = { revision: 3, savedAt: "2026-07-12T11:00:00Z", selectedOts: ["200"], workOrders: [{ ot: "200" }], operations: [{ ot: "200" }] };
