@@ -3460,16 +3460,22 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
-  const replannableOts = state.selectedOts.filter((ot) =>
+  state.planStart = window.PlanningWorkflowCore.mondayIso(state.planStart || formatDate(new Date()));
+  const incrementalBase = await loadIncrementalPlanningBase(state.planStart);
+  const incrementalScope = incrementalBase
+    ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: state.planStart })
+    : { affectedOts: [...state.selectedOts] };
+  const affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
+  const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!replannableOts.length) {
-    showToast("No hay OTs desbloqueadas para programar");
+    showToast("No hay cambios pendientes para reprogramar");
     return;
   }
   const planningData = await ensurePlanningDataLoaded(true, { force: false });
   if (!planningData.ready) return;
-  const readyOts = state.selectedOts.filter((ot) =>
+  const readyOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!readyOts.length) {
@@ -3504,6 +3510,8 @@ async function scheduleCurrentPlanImpl() {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
+      baseSnapshot: incrementalBase,
+      affectedOts: readyOts,
     });
     const operatorConflicts = (result.lastSchedule?.diagnostics || [])
       .filter((item) => item.code === "OPERATOR_OVERLAP");
@@ -3530,6 +3538,21 @@ async function scheduleCurrentPlanImpl() {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
     if (label) label.textContent = originalLabel;
+  }
+}
+
+async function loadIncrementalPlanningBase(weekStart) {
+  const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
+  const candidate = window.PlanningWorkflowCore.selectIncrementalBase(planSnapshots, weekStart, draftMeta);
+  if (!candidate?.snapshotId) return null;
+  if (candidate.fullState || Array.isArray(candidate.operations)) return candidate;
+  try {
+    return isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", candidate.snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(candidate.snapshotId)}`);
+  } catch (error) {
+    console.warn("No se pudo cargar la base incremental", error);
+    return null;
   }
 }
 

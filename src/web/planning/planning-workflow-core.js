@@ -668,10 +668,14 @@
   }
 
   function incrementalOtSignature(source, ot) {
+    source = source?.fullState || source || {};
     const key = normalize(ot);
     const workOrder = (source?.workOrders || []).find((item) => normalize(item?.id || item?.ot || item?.tranid) === key) || {};
     const configKey = Object.keys(source?.otConfigurations || {}).find((item) => normalize(item) === key);
     const config = configKey ? source.otConfigurations[configKey] || {} : {};
+    const operationStates = (source.operations || []).filter((operation) => normalize(operation?.ot) === key)
+      .map((operation) => `${Number(operation?.secuencia || 0)}:${normalize(operation?.ct)}:${normalize(operation?.planStatus || operation?.operationState)}`)
+      .sort();
     return JSON.stringify({
       quantity: workOrder.pendingQuantity ?? workOrder.quantity ?? workOrder.cantidad ?? "",
       priority: config.priority ?? workOrder.priority ?? "",
@@ -681,10 +685,13 @@
       kit: config.kit ?? config.kitHerramental ?? "",
       subcontractType: config.subcontractType ?? "",
       subcontractDays: config.subcontractDays ?? "",
+      operationStates,
     });
   }
 
   function incrementalScope({ base = {}, current = {}, weekStart = "" } = {}) {
+    base = base?.fullState || base || {};
+    current = current?.fullState || current || {};
     const baseOts = new Map((base.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
     const currentOts = new Map((current.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
     const addedOts = [...currentOts].filter(([key]) => !baseOts.has(key)).map(([, ot]) => ot);

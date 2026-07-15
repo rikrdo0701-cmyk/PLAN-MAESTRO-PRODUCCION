@@ -29,6 +29,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
+  assert.match(pagesIndex, /state\.planStart = window\.PlanningWorkflowCore\.mondayIso/);
+  assert.match(pagesIndex, /loadIncrementalPlanningBase\(state\.planStart\)/);
+  assert.match(pagesIndex, /incrementalScope\(\{ base: incrementalBase, current: state/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
   assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);
   assert.match(pagesIndex, /function formatReportDate\(date\)[\s\S]*\$\{d\}\/\$\{m\}\/\$\{y\}/);
