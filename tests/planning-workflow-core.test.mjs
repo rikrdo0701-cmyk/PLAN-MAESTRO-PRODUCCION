@@ -9,6 +9,37 @@ const context = { globalThis: {}, setTimeout, clearTimeout };
 vm.runInNewContext(source, context, { filename: "planning-workflow-core.js" });
 const core = context.globalThis.PlanningWorkflowCore;
 
+test("normaliza el inicio semanal y elige publicado o borrador como base incremental", () => {
+  assert.equal(core.mondayIso("2026-07-23"), "2026-07-20");
+  const draft = { snapshotId: "draft", planStart: "2026-07-20" };
+  const snapshots = [
+    { snapshotId: "pub-v1", status: "PUBLICADO", planStart: "2026-07-20", publishedAt: "2026-07-20T09:00:00Z" },
+    { snapshotId: "pub-v2", status: "PUBLICADO", planStart: "2026-07-21", publishedAt: "2026-07-20T10:00:00Z" },
+    { snapshotId: "other", status: "PUBLICADO", planStart: "2026-07-27", publishedAt: "2026-07-27T10:00:00Z" },
+  ];
+  assert.equal(core.selectIncrementalBase(snapshots, "2026-07-20", draft).snapshotId, "pub-v2");
+  assert.equal(core.selectIncrementalBase([], "2026-07-20", draft).snapshotId, "draft");
+});
+
+test("detecta OTs agregadas modificadas y retiradas del alcance incremental", () => {
+  const base = {
+    selectedOts: ["1325", "2159"],
+    workOrders: [{ id: "1325", pendingQuantity: 30 }, { id: "2159", pendingQuantity: 35 }],
+    otConfigurations: { "2159": { priority: 2, machine: "211", tool: "4 x 5" } },
+  };
+  const current = {
+    selectedOts: ["2159", "2436"],
+    workOrders: [{ id: "2159", pendingQuantity: 40 }, { id: "2436", pendingQuantity: 48 }],
+    otConfigurations: { "2159": { priority: 2, machine: "211", tool: "4 x 5" } },
+  };
+  const scope = structuredClone(core.incrementalScope({ base, current, weekStart: "2026-07-23" }));
+  assert.deepEqual(scope.addedOts, ["2436"]);
+  assert.deepEqual(scope.changedOts, ["2159"]);
+  assert.deepEqual(scope.removedOts, ["1325"]);
+  assert.deepEqual(scope.affectedOts, ["1325", "2159", "2436"]);
+  assert.equal(scope.weekStart, "2026-07-20");
+});
+
 test("withTimeout resuelve la promesa y rechaza al vencer el limite", async () => {
   assert.equal(await core.withTimeout(Promise.resolve("ok"), 15), "ok");
   await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /0\.015 segundos/);
