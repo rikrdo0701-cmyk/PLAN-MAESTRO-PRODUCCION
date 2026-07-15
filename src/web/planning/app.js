@@ -439,6 +439,8 @@ let planningDialogResolve = null;
 let resourceCategoryDrag = null;
 let planSnapshots = [];
 let reportSnapshot = null;
+let loadSnapshot = null;
+let loadMode = "pending";
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -528,6 +530,8 @@ function bindElements() {
     "loadList",
     "loadWeekInput",
     "loadWeekRange",
+    "loadPlanSelect",
+    "loadModeSelect",
     "matrixWrap",
     "newOperatorInput",
     "addOperatorBtn",
@@ -711,6 +715,11 @@ function bindEvents() {
   els.loadWeekInput.addEventListener("change", () => {
     state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
     saveAndRender("Semana de cargas actualizada");
+  });
+  els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
+  els.loadModeSelect.addEventListener("change", () => {
+    loadMode = els.loadModeSelect.value;
+    renderLoads();
   });
   els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
   els.weekReportStartInput.addEventListener("change", () => {
@@ -2921,7 +2930,13 @@ function endDrag() {
 }
 
 function renderLoads() {
-  const loads = getOperatorLoads(state.loadWeekStart, 7);
+  renderLoadSourceSelect();
+  const source = window.PlanningWorkflowCore.loadOperationsForMode(
+    loadSnapshot || { operations: window.PlanningWorkflowCore.draftScheduledOperations(state) },
+    state.operations,
+    loadMode
+  );
+  const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
   els.loadWeekInput.value = state.loadWeekStart;
   const week = selectedWeekRange(state.loadWeekStart);
   els.loadWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
@@ -3538,6 +3553,41 @@ async function scheduleCurrentPlanImpl() {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
     if (label) label.textContent = originalLabel;
+  }
+}
+
+function renderLoadSourceSelect() {
+  if (!els.loadPlanSelect) return;
+  const selected = loadSnapshot?.snapshotId || "draft";
+  const publishedIds = publishedSnapshotIds();
+  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+    const week = snapshot.weekStart || snapshot.planStart;
+    return `<option value="${escapeHtml(snapshot.snapshotId)}">Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(snapshot.version || 1)}</option>`;
+  }).join("");
+  els.loadPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
+  els.loadPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
+  els.loadModeSelect.value = loadMode;
+}
+
+async function loadSelectedLoadPlan(snapshotId) {
+  if (!snapshotId || snapshotId === "draft") {
+    loadSnapshot = null;
+    renderLoads();
+    return;
+  }
+  els.loadPlanSelect.disabled = true;
+  try {
+    loadSnapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    loadSnapshot.snapshotId = snapshotId;
+    renderLoads();
+  } catch (error) {
+    loadSnapshot = null;
+    showToast(`No se pudo cargar la fuente de cargas: ${error.message}`);
+    renderLoads();
+  } finally {
+    els.loadPlanSelect.disabled = false;
   }
 }
 

@@ -63,6 +63,19 @@ test("versiona por semana y resume solamente cambios compactos", () => {
   assert.doesNotMatch(JSON.stringify(diff), /operador|carga|complet/i);
 });
 
+test("cargas historicas permiten pendiente completada y original", () => {
+  const snapshot = { operations: [
+    { ot: "1", secuencia: 1, ct: "A", planStatus: "PENDIENTE", fechaInicio: "2026-07-20" },
+    { ot: "1", secuencia: 2, ct: "B", planStatus: "PENDIENTE", fechaInicio: "2026-07-21" },
+  ] };
+  const overlay = [{ ot: "1", secuencia: 1, ct: "A", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-15" }];
+  assert.deepEqual(core.loadOperationsForMode(snapshot, overlay, "pending").map((op) => op.secuencia), [2]);
+  assert.deepEqual(core.loadOperationsForMode(snapshot, overlay, "completed").map((op) => op.secuencia), [1]);
+  const original = core.loadOperationsForMode(snapshot, overlay, "original");
+  assert.deepEqual(original.map((op) => op.secuencia), [1, 2]);
+  assert.equal(original[0].fechaInicio, "2026-07-20");
+});
+
 test("withTimeout resuelve la promesa y rechaza al vencer el limite", async () => {
   assert.equal(await core.withTimeout(Promise.resolve("ok"), 15), "ok");
   await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /0\.015 segundos/);

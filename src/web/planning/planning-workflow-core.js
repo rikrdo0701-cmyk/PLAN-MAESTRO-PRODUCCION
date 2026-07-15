@@ -750,6 +750,17 @@
     return { addedOts, removedOts, changedOts };
   }
 
+  function loadOperationsForMode(snapshot, statusOverlay, mode) {
+    const source = snapshot?.fullState || snapshot || {};
+    const operations = (source.operations || []).map((operation) => ({ ...operation }));
+    if (mode === "original") return operations;
+    const operationKey = (operation) => [operation?.ot, operation?.secuencia, operation?.ct].map(normalize).join("|");
+    const overlay = new Map((Array.isArray(statusOverlay) ? statusOverlay : [])
+      .map((operation) => [operationKey(operation), operation]));
+    const isCompleted = (operation) => normalize(overlay.get(operationKey(operation))?.planStatus || operation?.planStatus) === "COMPLETADA_PLAN";
+    return operations.filter((operation) => mode === "completed" ? isCompleted(operation) : !isCompleted(operation));
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
@@ -762,5 +773,5 @@
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, compactVersionDiff };
+    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, compactVersionDiff, loadOperationsForMode };
 });
