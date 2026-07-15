@@ -43,7 +43,17 @@ jobs:
           printf '%s' "$CLASP_JSON" > .clasp.json
           node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
       - name: Subir a Apps Script
-        run: npx --yes @google/clasp push --force
+        run: |
+          set +e
+          output=$(npx --yes @google/clasp push --force 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            reason=$(printf '%s\n' "$output" | tail -n 5 | tr '\n' ' ')
+            echo "::error title=clasp push::$reason"
+            exit "$status"
+          fi
       - name: Actualizar implementacion web
         env:
           APPS_SCRIPT_DEPLOYMENT_ID: AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw

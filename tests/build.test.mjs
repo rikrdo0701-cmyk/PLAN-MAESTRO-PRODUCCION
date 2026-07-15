@@ -26,6 +26,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /config\.rootDir = 'dist'/);
+  assert.match(appScriptWorkflow, /error title=clasp push/);
   assert.match(appScriptWorkflow, /JSON\.parse\(fs\.readFileSync/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
