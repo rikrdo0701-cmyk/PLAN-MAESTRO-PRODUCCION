@@ -186,6 +186,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
+  assert.match(pagesIndex, /id="hoja-inspeccion"/);
+  assert.match(pagesIndex, />Hoja de inspección</);
+  assert.match(pagesIndex, /Seleccionar operaciones/);
+  assert.match(pagesIndex, /InspectionCore\.printableOperations/);
   for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
     assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
   }

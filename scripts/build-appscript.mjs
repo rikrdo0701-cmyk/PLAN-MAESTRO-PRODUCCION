@@ -13,7 +13,7 @@ async function read(relativePath) {
   return content.replace(/\r\n/g, "\n");
 }
 
-function renderPlanningPage(template, styles, backendBridge, plannerCore, workflowCore, app, performanceClient, generatedComment, pwaHead = "") {
+function renderPlanningPage(template, styles, inspectionStyles, backendBridge, plannerCore, workflowCore, inspectionCore, app, inspectionApp, performanceClient, generatedComment, pwaHead = "") {
   const templateWithHead = pwaHead
     ? template.replace('    <link rel="icon" href="data:," />', '    <link rel="icon" href="data:," />\n' + pwaHead)
     : template;
@@ -25,9 +25,12 @@ function renderPlanningPage(template, styles, backendBridge, plannerCore, workfl
 
   const index = templateWithBridge
     .replace("{{PLANNING_STYLES}}", styles.trimEnd())
+    .replace("{{INSPECTION_STYLES}}", inspectionStyles.trimEnd())
     .replace("{{PLANNER_CORE}}", plannerCore.trimEnd())
     .replace("{{PLANNING_WORKFLOW_CORE}}", workflowCore.trimEnd())
+    .replace("{{INSPECTION_CORE}}", inspectionCore.trimEnd())
     .replace("{{PLANNING_APP}}", `${app.trimEnd()}\n</script>\n    <script>\n${performanceClient.trimEnd()}`)
+    .replace("{{INSPECTION_APP}}", inspectionApp.trimEnd())
     .replace("<!-- Archivo generado. Edita src/web/planning y ejecuta npm run build. -->", generatedComment);
 
   if (/{{[A-Z0-9_]+}}/.test(index)) throw new Error("Quedaron marcadores sin reemplazar en Index.html");
@@ -157,15 +160,18 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, appSource, performanceClient, fluidClient] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
     read("src/web/planning/planner-core.js"),
     read("src/web/planning/planning-workflow-core.js"),
+    read("src/web/inspection/inspection-core.js"),
     read("src/web/planning/app.js"),
+    read("src/web/inspection/inspection-app.js"),
     read("src/web/shared/performance-client.js"),
     read("src/web/shared/fluid-client.js"),
+    read("src/web/inspection/inspection.css"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   const app = patchPlanningApp(appSource);
@@ -174,10 +180,13 @@ export async function buildProject() {
   const appsScriptIndex = renderPlanningPage(
     template,
     styles,
+    inspectionStyles,
     backendBridge,
     plannerCore,
     workflowCore,
+    inspectionCore,
     app,
+    inspectionApp,
     runtimeClients,
     "<!-- Generado para Apps Script por npm run build. No editar directamente. -->",
     "",
@@ -185,10 +194,13 @@ export async function buildProject() {
   const pagesIndex = renderPlanningPage(
     template,
     styles,
+    inspectionStyles,
     backendBridge,
     plannerCore,
     workflowCore,
+    inspectionCore,
     app,
+    inspectionApp,
     runtimeClients,
     "<!-- Generado para GitHub Pages por npm run build. No editar directamente. -->",
     '    <link rel="manifest" href="./manifest.webmanifest" />',

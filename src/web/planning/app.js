@@ -124,6 +124,7 @@ const WORKSPACE_TITLES = {
   calendario: "Calendario de capacidad",
   herramentales: "Catalogos",
   cargas: "Cargas de operadores",
+  "hoja-inspeccion": "Hoja de inspección",
   reportes: "Reportes de produccion",
 };
 const DEFAULT_SUBCONTRACTS = [
@@ -822,7 +823,7 @@ function applyInitialWorkspaceView() {
 function showWorkspaceView(section, tab = "") {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
-  const view = section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config"));
+  const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config")));
   workspace.dataset.view = view;
   workspace.dataset.section = section;
   document.querySelectorAll(".nav-item").forEach((item) => {
