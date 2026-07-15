@@ -42,6 +42,9 @@ if (/{{[A-Z0-9_]+}}/.test(index) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(pagesI
 
 const manifest = JSON.parse(await readFile(path.join(distDir, "appsscript.json"), "utf8"));
 if (manifest.runtimeVersion !== "V8") throw new Error("El manifest no usa V8");
+if (manifest.webapp?.access !== "ANYONE_ANONYMOUS" || manifest.webapp?.executeAs !== "USER_DEPLOYING") {
+  throw new Error("El manifest no conserva la implementacion web publica");
+}
 
 const size = (await stat(path.join(distDir, "Index.html"))).size;
 console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo.`);
