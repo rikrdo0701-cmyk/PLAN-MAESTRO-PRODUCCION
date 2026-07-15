@@ -23,9 +23,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
-  assert.match(appScriptWorkflow, /if \[ -n "\$CLASP_JSON" \]/);
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
-  assert.match(appScriptWorkflow, /JSON\.parse\(require\('fs'\)\.readFileSync/);
+  assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
+  assert.match(appScriptWorkflow, /config\.rootDir = 'dist'/);
+  assert.match(appScriptWorkflow, /JSON\.parse\(fs\.readFileSync/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
   assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);

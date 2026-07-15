@@ -35,11 +35,13 @@ jobs:
             echo "::error::CLASPRC_JSON no esta configurado o esta vacio"
             exit 1
           fi
-          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
-          if [ -n "$CLASP_JSON" ]; then
-            printf '%s' "$CLASP_JSON" > .clasp.json
+          if [ -z "$CLASP_JSON" ]; then
+            echo "::error::CLASP_JSON no esta configurado o esta vacio"
+            exit 1
           fi
-          node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); JSON.parse(require('fs').readFileSync('.clasp.json', 'utf8'))"
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          printf '%s' "$CLASP_JSON" > .clasp.json
+          node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
       - name: Subir a Apps Script
         run: npx --yes @google/clasp push --force
       - name: Actualizar implementacion web
