@@ -403,24 +403,27 @@
 
         <section id="hoja-inspeccion" class="inspection-screen" aria-labelledby="inspectionTitle">
           <aside class="inspection-controls">
-            <h2 id="inspectionTitle">Hoja de inspección</h2>
-            <p>Selecciona una OT abierta para preparar su documento de inspección.</p>
-            <label><span>Buscar OT</span><input id="inspectionSearch" type="search" placeholder="Ej. 1325, CCA 519 CM"></label>
-            <label><span>Trabajo OT</span><select id="inspectionWorkOrder"></select></label>
-            <div id="inspectionStatus" class="inspection-status">Selecciona una OT</div>
-            <button id="inspectionReload" class="button" type="button">Cargar</button>
-            <button id="inspectionSelectOps" class="button secondary" type="button">Seleccionar operaciones</button>
+            <h2 id="inspectionTitle">Hoja Inspec</h2>
+            <p>Selecciona una WO para generar la hoja de inspección con materiales, tramos, operaciones y dibujo ligado.</p>
+            <label>TRABAJO WO<select id="inspectionWorkOrder"></select></label>
+            <label>BUSCAR WO<input id="inspectionSearch" type="search" placeholder="Ej. 28, CM 350"></label>
+            <section id="inspectionJobStatus" class="inspection-side-card inspection-status">Selecciona una WO</section>
+            <section id="inspectionHistory" class="inspection-side-card inspection-history"></section>
+            <section id="inspectionPrintCheck" class="inspection-side-card inspection-status"></section>
+            <div class="inspection-actions">
+              <button id="inspectionReload" class="button" type="button">Cargar</button>
+              <button id="inspectionDrawing" class="button" type="button">Ver dibujo</button>
+              <button id="inspectionEditLink" class="button" type="button">Editar liga</button>
+              <button id="inspectionPrint" class="button primary" type="button">Imprimir</button>
+              <button id="inspectionSelectOps" class="button secondary" type="button">Seleccionar operaciones</button>
+            </div>
             <div id="inspectionOperationChoices" class="inspection-operation-choices" hidden></div>
-            <button id="inspectionPrint" class="button primary" type="button">Imprimir</button>
-            <div id="inspectionHistory" class="inspection-history"></div>
           </aside>
           <div class="inspection-document-wrap">
-            <article id="inspectionDocument" class="inspection-document">
-              <header><strong class="inspection-logo">MALDONADO</strong><h2>HOJA DE INSPECCIÓN Y ESTADÍSTICAS DE TUBERÍA DOBLADA</h2><small>MP FO 08 V23</small></header>
-              <div id="inspectionJobHeader" class="inspection-job-header"></div>
-              <div id="inspectionMaterials" class="inspection-materials"></div>
-              <table class="inspection-operations-table"><thead><tr><th>OP</th><th>No. Operador</th><th>Fecha</th><th>No. Máquina</th><th>Setup inicio</th><th>Setup fin</th><th>Producción inicio</th><th>Producción fin</th><th>Cant. piezas</th></tr></thead><tbody id="inspectionOperations"></tbody></table>
-              <footer class="inspection-document-footer"><span>FTY</span><span>SELLO LIBERACIÓN</span><span>OBSERVACIONES</span><span>ENTREGA / RECIBE</span></footer>
+            <article id="inspectionDocument" class="inspection-sheet inspection-document">
+              <div class="inspection-grid" id="inspectionSheetGrid"></div>
+              <section id="inspectionSecondCapture"></section>
+              <footer id="inspectionReleaseFooter" class="inspection-document-footer"></footer>
             </article>
           </div>
         </section>
