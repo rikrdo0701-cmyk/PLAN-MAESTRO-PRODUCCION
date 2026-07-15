@@ -10,6 +10,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
+  const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
@@ -185,6 +186,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
+  for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
+    assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
+  }
+  assert.doesNotMatch(inspectionService, /credenciales\.txt|netsuiteauth\.txt/i);
   assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);
   assert.match(pagesIndex, /gantt-bar--tool-change/);
