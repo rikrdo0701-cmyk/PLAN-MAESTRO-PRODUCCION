@@ -14,9 +14,9 @@
 .inspection-operation-choices input { width: auto; }
 .inspection-document-wrap { padding: 14px; overflow: auto; }
 .inspection-document { width: 1280px; min-height: 780px; margin: 0 auto; background: #fff; border: 2px solid #111; color: #050505; font-family: Arial, sans-serif; }
-.inspection-document > header { display: grid; grid-template-columns: 220px 1fr 100px; align-items: center; padding: 8px 12px; border-bottom: 2px solid #111; }
-.inspection-document > header h2 { margin: 0; text-align: center; font-size: 22px; }
-.inspection-document > header small { align-self: start; text-align: right; font-weight: 700; }
+#inspectionSheetGrid > header { display: grid; grid-template-columns: 220px 1fr 100px; align-items: center; padding: 8px 12px; border-bottom: 2px solid #111; }
+#inspectionSheetGrid > header h2 { margin: 0; text-align: center; font-size: 22px; }
+#inspectionSheetGrid > header small { align-self: start; text-align: right; font-weight: 700; }
 .inspection-logo { color: #13528a; font-size: 26px; }
 .inspection-job-header { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 2px solid #111; }
 .inspection-job-header span { padding: 8px; border-right: 1px solid #111; text-align: center; font-weight: 700; }
