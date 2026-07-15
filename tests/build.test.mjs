@@ -15,12 +15,17 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
   const appScriptWorkflow = await readFile(path.join(process.cwd(), ".github/workflows/deploy-appscript.yml"), "utf8");
+  const claspConfig = JSON.parse(await readFile(path.join(process.cwd(), ".clasp.json"), "utf8"));
+  assert.equal(claspConfig.rootDir, "dist");
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
+  assert.match(appScriptWorkflow, /if \[ -n "\$CLASP_JSON" \]/);
+  assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
+  assert.match(appScriptWorkflow, /JSON\.parse\(require\('fs'\)\.readFileSync/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
   assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);

@@ -31,8 +31,15 @@ jobs:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           CLASP_JSON: ${{ secrets.CLASP_JSON }}
         run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::CLASPRC_JSON no esta configurado o esta vacio"
+            exit 1
+          fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
-          printf '%s' "$CLASP_JSON" > .clasp.json
+          if [ -n "$CLASP_JSON" ]; then
+            printf '%s' "$CLASP_JSON" > .clasp.json
+          fi
+          node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); JSON.parse(require('fs').readFileSync('.clasp.json', 'utf8'))"
       - name: Subir a Apps Script
         run: npx --yes @google/clasp push --force
       - name: Actualizar implementacion web
