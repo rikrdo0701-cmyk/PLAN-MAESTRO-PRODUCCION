@@ -30,7 +30,7 @@ if (!index.includes("getAppState")) throw new Error("Index.html no contiene carg
 if (!index.includes("savePlanningStateOptimized")) throw new Error("Index.html no contiene guardado parcial optimizado");
 if (!bridge.includes("ALLOWED_ORIGIN")) throw new Error("Bridge.html no valida el origen del frontend");
 if (!bridge.includes("google.script.run")) throw new Error("Bridge.html no contiene google.script.run");
-if (!pagesIndex.includes("AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw")) {
+if (!pagesIndex.includes("AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw")) {
   throw new Error("El frontend de Pages no contiene la URL del backend configurada");
 }
 if (!pagesIndex.includes("manifest.webmanifest") || !pagesIndex.includes("serviceWorker.register")) {

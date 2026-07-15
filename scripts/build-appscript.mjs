@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(projectRoot, "dist");
 const siteDir = path.join(projectRoot, "site");
-const appsScriptWebAppUrl = "https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec";
+const appsScriptWebAppUrl = "https://script.google.com/macros/s/AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/exec";
 
 async function read(relativePath) {
   const content = await readFile(path.join(projectRoot, relativePath), "utf8");
