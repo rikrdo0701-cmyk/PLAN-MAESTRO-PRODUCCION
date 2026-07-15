@@ -709,7 +709,10 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
     chunks: chunks.length, generation: generation,
     generatedAt: String(details.generatedAt || payload.generatedAt || payload.savedAt || ''),
     user: String(details.user || ''), planStart: String(payload.planStart || ''),
-    horizonDays: Number(payload.horizonDays || 0), operations: Number(details.operations != null ? details.operations : (payload.operations || []).length)
+    horizonDays: Number(payload.horizonDays || 0), operations: Number(details.operations != null ? details.operations : (payload.operations || []).length),
+    weekStart: String(payload.weekStart || payload.planStart || ''), version: Number(payload.version || 0),
+    publicationReason: String(payload.publicationReason || ''), changeSummary: payload.changeSummary || null,
+    publishedAt: String(payload.publishedAt || '')
   };
   try {
     properties.setProperties(staged, false);
@@ -801,7 +804,12 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
   if (options && options.keepPreviousPayload) PP_finalizePlanSnapshotPayload_(payloadTransaction);
-  return { ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt };
+  return {
+    ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt,
+    planStart: String(payload.planStart || ''), weekStart: String(payload.weekStart || payload.planStart || ''),
+    version: Number(payload.version || 0), publicationReason: String(payload.publicationReason || ''),
+    changeSummary: payload.changeSummary || null, publishedAt: String(payload.publishedAt || '')
+  };
 }
 
 function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
@@ -847,14 +855,21 @@ function PP_listPlanSnapshots_(spreadsheet) {
   Object.keys(properties).forEach(function(propertyKey) {
     if (propertyKey.indexOf(prefix) !== 0) return;
     const snapshotId = propertyKey.slice(prefix.length);
-    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0 || grouped[snapshotId]) return;
+    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0) return;
     let manifest = null;
     try { manifest = JSON.parse(properties[propertyKey]); } catch (ignored) {}
     if (!manifest || !manifest.chunks) return;
-    grouped[snapshotId] = {
+    const metadata = {
       snapshotId: snapshotId, generatedAt: String(manifest.generatedAt || ''), user: String(manifest.user || ''),
-      planStart: String(manifest.planStart || ''), horizonDays: Number(manifest.horizonDays || 0), operations: Number(manifest.operations || 0)
+      planStart: String(manifest.planStart || ''), horizonDays: Number(manifest.horizonDays || 0), operations: Number(manifest.operations || 0),
+      weekStart: String(manifest.weekStart || manifest.planStart || ''), version: Number(manifest.version || 0),
+      publicationReason: String(manifest.publicationReason || ''), changeSummary: manifest.changeSummary || null,
+      publishedAt: String(manifest.publishedAt || '')
     };
+    grouped[snapshotId] = Object.assign({}, metadata, grouped[snapshotId] || {}, {
+      weekStart: metadata.weekStart, version: metadata.version, publicationReason: metadata.publicationReason,
+      changeSummary: metadata.changeSummary, publishedAt: metadata.publishedAt
+    });
   });
   return Object.keys(grouped).map(function(key) { return grouped[key]; }).sort(function(a, b) {
     return String(b.generatedAt).localeCompare(String(a.generatedAt));
@@ -939,6 +954,13 @@ function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
       };
     }) : (fullState.operations || []).map(function(operation) { return Object.assign({}, operation); })
   };
+  if (fullState) {
+    result.weekStart = String(fullState.weekStart || fullState.planStart || '');
+    result.version = Number(fullState.version || 0);
+    result.publicationReason = String(fullState.publicationReason || '');
+    result.changeSummary = fullState.changeSummary || null;
+    result.publishedAt = String(fullState.publishedAt || '');
+  }
   if (fullState) result.fullState = fullState;
   return result;
 }

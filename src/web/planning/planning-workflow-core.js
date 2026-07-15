@@ -648,6 +648,119 @@
       .sort((a, b) => b.amount - a.amount || a.type.localeCompare(b.type, "es"));
   }
 
+  function mondayIso(value) {
+    const iso = isoDate(String(value || "").slice(0, 10));
+    if (!iso) return "";
+    const date = new Date(`${iso}T00:00:00Z`);
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() - day + 1);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function selectIncrementalBase(snapshots, weekStart, draft) {
+    const week = mondayIso(weekStart);
+    const published = (snapshots || []).filter((snapshot) => {
+      const status = normalize(snapshot?.status || snapshot?.planStatus);
+      return mondayIso(snapshot?.weekStart || snapshot?.planStart) === week &&
+        (Boolean(snapshot?.publishedAt) || status === "PUBLICADO");
+    }).sort((a, b) => String(b?.publishedAt || b?.generatedAt || "").localeCompare(String(a?.publishedAt || a?.generatedAt || "")));
+    return published[0] || draft || null;
+  }
+
+  function incrementalOtSignature(source, ot) {
+    source = source?.fullState || source || {};
+    const key = normalize(ot);
+    const workOrder = (source?.workOrders || []).find((item) => normalize(item?.id || item?.ot || item?.tranid) === key) || {};
+    const configKey = Object.keys(source?.otConfigurations || {}).find((item) => normalize(item) === key);
+    const config = configKey ? source.otConfigurations[configKey] || {} : {};
+    const operationStates = (source.operations || []).filter((operation) => normalize(operation?.ot) === key)
+      .map((operation) => `${Number(operation?.secuencia || 0)}:${normalize(operation?.ct)}:${normalize(operation?.planStatus || operation?.operationState)}`)
+      .sort();
+    return JSON.stringify({
+      quantity: workOrder.pendingQuantity ?? workOrder.quantity ?? workOrder.cantidad ?? "",
+      priority: config.priority ?? workOrder.priority ?? "",
+      dueDate: config.dueDate ?? workOrder.dueDate ?? workOrder.fechaEntrega ?? "",
+      machine: config.machine ?? config.maquina ?? "",
+      tool: config.tool ?? config.herramental ?? "",
+      kit: config.kit ?? config.kitHerramental ?? "",
+      subcontractType: config.subcontractType ?? "",
+      subcontractDays: config.subcontractDays ?? "",
+      operationStates,
+    });
+  }
+
+  function incrementalScope({ base = {}, current = {}, weekStart = "" } = {}) {
+    base = base?.fullState || base || {};
+    current = current?.fullState || current || {};
+    const baseOts = new Map((base.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const currentOts = new Map((current.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const addedOts = [...currentOts].filter(([key]) => !baseOts.has(key)).map(([, ot]) => ot);
+    const removedOts = [...baseOts].filter(([key]) => !currentOts.has(key)).map(([, ot]) => ot);
+    const changedOts = [...currentOts].filter(([key, ot]) => baseOts.has(key) &&
+      incrementalOtSignature(base, baseOts.get(key)) !== incrementalOtSignature(current, ot)).map(([, ot]) => ot);
+    const sorter = (a, b) => String(a).localeCompare(String(b), "es", { numeric: true });
+    const affectedOts = [...new Set([...removedOts, ...changedOts, ...addedOts])].sort(sorter);
+    return {
+      weekStart: mondayIso(weekStart),
+      addedOts: addedOts.sort(sorter),
+      changedOts: changedOts.sort(sorter),
+      removedOts: removedOts.sort(sorter),
+      affectedOts,
+    };
+  }
+
+  function nextWeeklyVersion(snapshots, weekStart) {
+    const week = mondayIso(weekStart);
+    return (snapshots || []).filter((snapshot) => mondayIso(snapshot?.weekStart || snapshot?.planStart) === week)
+      .reduce((max, snapshot) => Math.max(max, Number(snapshot?.version) || 0), 0) + 1;
+  }
+
+  function versionOtData(source, ot) {
+    source = source?.fullState || source || {};
+    const key = normalize(ot);
+    const workOrder = (source.workOrders || []).find((item) => normalize(item?.ot || item?.id || item?.tranid) === key) || {};
+    const configKey = Object.keys(source.otConfigurations || {}).find((item) => normalize(item) === key);
+    const config = configKey ? source.otConfigurations[configKey] || {} : {};
+    return {
+      cantidad: workOrder.pendingQuantity ?? workOrder.quantity ?? workOrder.cantidad ?? "",
+      prioridad: config.priority ?? workOrder.priority ?? "",
+      entrega: config.dueDate ?? workOrder.dueDate ?? workOrder.fechaEntrega ?? "",
+      maquina: config.machine ?? config.maquina ?? "",
+      herramental: config.tool ?? config.herramental ?? "",
+      kit: config.kit ?? config.kitHerramental ?? "",
+      subcontrato: config.subcontractType ?? config.tipoSubcontrato ?? "",
+      diasSubcontrato: config.subcontractDays ?? config.diasSubcontrato ?? "",
+    };
+  }
+
+  function compactVersionDiff(previous, next) {
+    previous = previous?.fullState || previous || {};
+    next = next?.fullState || next || {};
+    const previousOts = new Map((previous.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const nextOts = new Map((next.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const sorter = (a, b) => String(a).localeCompare(String(b), "es", { numeric: true });
+    const addedOts = [...nextOts].filter(([key]) => !previousOts.has(key)).map(([, ot]) => ot).sort(sorter);
+    const removedOts = [...previousOts].filter(([key]) => !nextOts.has(key)).map(([, ot]) => ot).sort(sorter);
+    const changedOts = [...nextOts].filter(([key]) => previousOts.has(key)).map(([key, ot]) => {
+      const before = versionOtData(previous, previousOts.get(key));
+      const after = versionOtData(next, ot);
+      const fields = Object.keys(after).filter((field) => String(before[field] ?? "") !== String(after[field] ?? ""));
+      return fields.length ? { ot, fields } : null;
+    }).filter(Boolean).sort((a, b) => sorter(a.ot, b.ot));
+    return { addedOts, removedOts, changedOts };
+  }
+
+  function loadOperationsForMode(snapshot, statusOverlay, mode) {
+    const source = snapshot?.fullState || snapshot || {};
+    const operations = (source.operations || []).map((operation) => ({ ...operation }));
+    if (mode === "original") return operations;
+    const operationKey = (operation) => [operation?.ot, operation?.secuencia, operation?.ct].map(normalize).join("|");
+    const overlay = new Map((Array.isArray(statusOverlay) ? statusOverlay : [])
+      .map((operation) => [operationKey(operation), operation]));
+    const isCompleted = (operation) => normalize(overlay.get(operationKey(operation))?.planStatus || operation?.planStatus) === "COMPLETADA_PLAN";
+    return operations.filter((operation) => mode === "completed" ? isCompleted(operation) : !isCompleted(operation));
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
@@ -659,5 +772,6 @@
     netSuiteSyncOutcome,
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
-    weeklyFinishingCost, weeklyFinishingRowsByType };
+    weeklyFinishingCost, weeklyFinishingRowsByType,
+    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, compactVersionDiff, loadOperationsForMode };
 });

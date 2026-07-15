@@ -9,6 +9,73 @@ const context = { globalThis: {}, setTimeout, clearTimeout };
 vm.runInNewContext(source, context, { filename: "planning-workflow-core.js" });
 const core = context.globalThis.PlanningWorkflowCore;
 
+test("normaliza el inicio semanal y elige publicado o borrador como base incremental", () => {
+  assert.equal(core.mondayIso("2026-07-23"), "2026-07-20");
+  const draft = { snapshotId: "draft", planStart: "2026-07-20" };
+  const snapshots = [
+    { snapshotId: "pub-v1", status: "PUBLICADO", planStart: "2026-07-20", publishedAt: "2026-07-20T09:00:00Z" },
+    { snapshotId: "pub-v2", status: "PUBLICADO", planStart: "2026-07-21", publishedAt: "2026-07-20T10:00:00Z" },
+    { snapshotId: "other", status: "PUBLICADO", planStart: "2026-07-27", publishedAt: "2026-07-27T10:00:00Z" },
+  ];
+  assert.equal(core.selectIncrementalBase(snapshots, "2026-07-20", draft).snapshotId, "pub-v2");
+  assert.equal(core.selectIncrementalBase([], "2026-07-20", draft).snapshotId, "draft");
+});
+
+test("detecta OTs agregadas modificadas y retiradas del alcance incremental", () => {
+  const base = {
+    selectedOts: ["1325", "2159"],
+    workOrders: [{ id: "1325", pendingQuantity: 30 }, { id: "2159", pendingQuantity: 35 }],
+    otConfigurations: { "2159": { priority: 2, machine: "211", tool: "4 x 5" } },
+  };
+  const current = {
+    selectedOts: ["2159", "2436"],
+    workOrders: [{ id: "2159", pendingQuantity: 40 }, { id: "2436", pendingQuantity: 48 }],
+    otConfigurations: { "2159": { priority: 2, machine: "211", tool: "4 x 5" } },
+  };
+  const scope = structuredClone(core.incrementalScope({ base, current, weekStart: "2026-07-23" }));
+  assert.deepEqual(scope.addedOts, ["2436"]);
+  assert.deepEqual(scope.changedOts, ["2159"]);
+  assert.deepEqual(scope.removedOts, ["1325"]);
+  assert.deepEqual(scope.affectedOts, ["1325", "2159", "2436"]);
+  assert.equal(scope.weekStart, "2026-07-20");
+});
+
+test("versiona por semana y resume solamente cambios compactos", () => {
+  const versions = [
+    { weekStart: "2026-07-20", version: 1 },
+    { planStart: "2026-07-22", version: 2 },
+    { weekStart: "2026-07-27", version: 5 },
+  ];
+  assert.equal(core.nextWeeklyVersion(versions, "2026-07-24"), 3);
+  assert.equal(core.nextWeeklyVersion(versions, "2026-08-03"), 1);
+  const previous = {
+    selectedOts: ["1", "2"], workOrders: [{ ot: "1", pendingQuantity: 10 }, { ot: "2", pendingQuantity: 20 }],
+    otConfigurations: { "2": { machine: "M1", operator: "OP1" } },
+  };
+  const next = {
+    selectedOts: ["2", "3"], workOrders: [{ ot: "2", pendingQuantity: 25 }, { ot: "3", pendingQuantity: 5 }],
+    otConfigurations: { "2": { machine: "M2", operator: "OP2" } },
+  };
+  const diff = structuredClone(core.compactVersionDiff(previous, next));
+  assert.deepEqual(diff.addedOts, ["3"]);
+  assert.deepEqual(diff.removedOts, ["1"]);
+  assert.deepEqual(diff.changedOts, [{ ot: "2", fields: ["cantidad", "maquina"] }]);
+  assert.doesNotMatch(JSON.stringify(diff), /operador|carga|complet/i);
+});
+
+test("cargas historicas permiten pendiente completada y original", () => {
+  const snapshot = { operations: [
+    { ot: "1", secuencia: 1, ct: "A", planStatus: "PENDIENTE", fechaInicio: "2026-07-20" },
+    { ot: "1", secuencia: 2, ct: "B", planStatus: "PENDIENTE", fechaInicio: "2026-07-21" },
+  ] };
+  const overlay = [{ ot: "1", secuencia: 1, ct: "A", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-15" }];
+  assert.deepEqual(core.loadOperationsForMode(snapshot, overlay, "pending").map((op) => op.secuencia), [2]);
+  assert.deepEqual(core.loadOperationsForMode(snapshot, overlay, "completed").map((op) => op.secuencia), [1]);
+  const original = core.loadOperationsForMode(snapshot, overlay, "original");
+  assert.deepEqual(original.map((op) => op.secuencia), [1, 2]);
+  assert.equal(original[0].fechaInicio, "2026-07-20");
+});
+
 test("withTimeout resuelve la promesa y rechaza al vencer el limite", async () => {
   assert.equal(await core.withTimeout(Promise.resolve("ok"), 15), "ok");
   await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /0\.015 segundos/);

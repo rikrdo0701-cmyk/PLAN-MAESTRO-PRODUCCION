@@ -124,6 +124,7 @@ const WORKSPACE_TITLES = {
   calendario: "Calendario de capacidad",
   herramentales: "Catalogos",
   cargas: "Cargas de operadores",
+  "hoja-inspeccion": "Hoja de inspección",
   reportes: "Reportes de produccion",
 };
 const DEFAULT_SUBCONTRACTS = [
@@ -439,6 +440,8 @@ let planningDialogResolve = null;
 let resourceCategoryDrag = null;
 let planSnapshots = [];
 let reportSnapshot = null;
+let loadSnapshot = null;
+let loadMode = "pending";
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -528,6 +531,8 @@ function bindElements() {
     "loadList",
     "loadWeekInput",
     "loadWeekRange",
+    "loadPlanSelect",
+    "loadModeSelect",
     "matrixWrap",
     "newOperatorInput",
     "addOperatorBtn",
@@ -712,6 +717,11 @@ function bindEvents() {
     state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
     saveAndRender("Semana de cargas actualizada");
   });
+  els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
+  els.loadModeSelect.addEventListener("change", () => {
+    loadMode = els.loadModeSelect.value;
+    renderLoads();
+  });
   els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
   els.weekReportStartInput.addEventListener("change", () => {
     state.reportWeekStart = normalizeWeekStartValue(els.weekReportStartInput.value);
@@ -813,7 +823,7 @@ function applyInitialWorkspaceView() {
 function showWorkspaceView(section, tab = "") {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
-  const view = section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config"));
+  const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config")));
   workspace.dataset.view = view;
   workspace.dataset.section = section;
   document.querySelectorAll(".nav-item").forEach((item) => {
@@ -2921,7 +2931,13 @@ function endDrag() {
 }
 
 function renderLoads() {
-  const loads = getOperatorLoads(state.loadWeekStart, 7);
+  renderLoadSourceSelect();
+  const source = window.PlanningWorkflowCore.loadOperationsForMode(
+    loadSnapshot || { operations: window.PlanningWorkflowCore.draftScheduledOperations(state) },
+    state.operations,
+    loadMode
+  );
+  const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
   els.loadWeekInput.value = state.loadWeekStart;
   const week = selectedWeekRange(state.loadWeekStart);
   els.loadWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
@@ -3460,16 +3476,22 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
-  const replannableOts = state.selectedOts.filter((ot) =>
+  state.planStart = window.PlanningWorkflowCore.mondayIso(state.planStart || formatDate(new Date()));
+  const incrementalBase = await loadIncrementalPlanningBase(state.planStart);
+  const incrementalScope = incrementalBase
+    ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: state.planStart })
+    : { affectedOts: [...state.selectedOts] };
+  const affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
+  const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!replannableOts.length) {
-    showToast("No hay OTs desbloqueadas para programar");
+    showToast("No hay cambios pendientes para reprogramar");
     return;
   }
   const planningData = await ensurePlanningDataLoaded(true, { force: false });
   if (!planningData.ready) return;
-  const readyOts = state.selectedOts.filter((ot) =>
+  const readyOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!readyOts.length) {
@@ -3504,6 +3526,8 @@ async function scheduleCurrentPlanImpl() {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
+      baseSnapshot: incrementalBase,
+      affectedOts: readyOts,
     });
     const operatorConflicts = (result.lastSchedule?.diagnostics || [])
       .filter((item) => item.code === "OPERATOR_OVERLAP");
@@ -3530,6 +3554,56 @@ async function scheduleCurrentPlanImpl() {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
     if (label) label.textContent = originalLabel;
+  }
+}
+
+function renderLoadSourceSelect() {
+  if (!els.loadPlanSelect) return;
+  const selected = loadSnapshot?.snapshotId || "draft";
+  const publishedIds = publishedSnapshotIds();
+  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+    const week = snapshot.weekStart || snapshot.planStart;
+    return `<option value="${escapeHtml(snapshot.snapshotId)}">Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(snapshot.version || 1)}</option>`;
+  }).join("");
+  els.loadPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
+  els.loadPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
+  els.loadModeSelect.value = loadMode;
+}
+
+async function loadSelectedLoadPlan(snapshotId) {
+  if (!snapshotId || snapshotId === "draft") {
+    loadSnapshot = null;
+    renderLoads();
+    return;
+  }
+  els.loadPlanSelect.disabled = true;
+  try {
+    loadSnapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    loadSnapshot.snapshotId = snapshotId;
+    renderLoads();
+  } catch (error) {
+    loadSnapshot = null;
+    showToast(`No se pudo cargar la fuente de cargas: ${error.message}`);
+    renderLoads();
+  } finally {
+    els.loadPlanSelect.disabled = false;
+  }
+}
+
+async function loadIncrementalPlanningBase(weekStart) {
+  const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
+  const candidate = window.PlanningWorkflowCore.selectIncrementalBase(planSnapshots, weekStart, draftMeta);
+  if (!candidate?.snapshotId) return null;
+  if (candidate.fullState || Array.isArray(candidate.operations)) return candidate;
+  try {
+    return isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", candidate.snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(candidate.snapshotId)}`);
+  } catch (error) {
+    console.warn("No se pudo cargar la base incremental", error);
+    return null;
   }
 }
 
@@ -3599,10 +3673,40 @@ async function publishCurrentPlan() {
   }
   els.publishPlanBtn.disabled = true;
   try {
+    const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
+    const version = window.PlanningWorkflowCore.nextWeeklyVersion(state.publishedVersions, weekStart);
+    let publicationReason = "";
+    let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
+    if (version > 1) {
+      const answer = window.prompt(`Motivo de publicacion de la version V${version}:`, "");
+      if (answer === null) return;
+      publicationReason = String(answer).trim();
+      if (!publicationReason) {
+        showToast("Captura el motivo de la nueva version");
+        return;
+      }
+      const previous = [...(state.publishedVersions || [])]
+        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart)
+        .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
+      if (previous?.snapshotId) {
+        try {
+          const previousSnapshot = isAppsScriptRuntime()
+            ? await callAppsScript("getPlanSnapshot", previous.snapshotId)
+            : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(previous.snapshotId)}`);
+          changeSummary = window.PlanningWorkflowCore.compactVersionDiff(previousSnapshot, state);
+        } catch (error) {
+          console.warn("No se pudo comparar la version anterior", error);
+        }
+      }
+    }
     const payload = {
       ...createAppSheetPayload(),
       planStatus: "PUBLICADO",
       draftVersionId: state.draftVersionId || "",
+      weekStart,
+      version,
+      publicationReason,
+      changeSummary,
       publishedAt: new Date().toISOString(),
     };
     const result = isAppsScriptRuntime()
@@ -3613,7 +3717,7 @@ async function publishCurrentPlan() {
       state.activePublishedVersionId = active.snapshotId;
       state.publishedVersions = [
         ...(state.publishedVersions || []).filter((item) => item.snapshotId !== active.snapshotId),
-        { ...active, status: "PUBLICADO" },
+        { ...active, weekStart, version, publicationReason, changeSummary, status: "PUBLICADO" },
       ];
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
     }
@@ -4204,8 +4308,9 @@ function renderPlanSnapshotSelect() {
     status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
   }))).filter((item) => item.id !== "draft");
   const options = allowedSnapshots.map((snapshot) => {
-    const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
-    const label = `Publicado - ${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
+    const week = snapshot.weekStart || snapshot.planStart;
+    const version = Number(snapshot.version || 1);
+    const label = `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${version}`;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
   els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
@@ -4238,8 +4343,8 @@ function reportOperationsSource() {
 function reportSourceLabel() {
   if (!reportSnapshot) return "Sin plan publicado";
   if (reportSnapshot.snapshotId === "draft") return "Borrador actual";
-  const generated = reportSnapshot.generatedAt ? formatDateTime(new Date(reportSnapshot.generatedAt)) : "Sin fecha";
-  return `Plan guardado ${generated}`;
+  const week = reportSnapshot.weekStart || reportSnapshot.planStart;
+  return `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(reportSnapshot.version || 1)}`;
 }
 
 function reportWeekLabel() {
@@ -4571,9 +4676,9 @@ function renderAdjusterReport() {
       <td>${escapeHtml(destinationHerramental)}</td>
       <td>${escapeHtml(destinationKit)}</td>
       <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
       <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
       <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
       <td class="report-status-action-column">${planStatusActionCell(op)}</td>
     </tr>`;
@@ -4599,9 +4704,9 @@ function renderSubcontractReport() {
       <td class="${missingType ? "report-warning" : ""}">${escapeHtml(row.type || "FALTA CONFIGURAR")}</td>
       <td class="${missingDays ? "report-warning" : ""}">${missingDays ? "FALTA CONFIGURAR" : escapeHtml(row.days)}</td>
       <td>${escapeHtml(formatReportDate(row.start))}</td>
-      <td>${escapeHtml(formatTime(row.start))}</td>
+      <td>${escapeHtml(formatReportTime(row.start))}</td>
       <td>${escapeHtml(formatReportDate(row.end))}</td>
-      <td>${escapeHtml(formatTime(row.end))}</td>
+      <td>${escapeHtml(formatReportTime(row.end))}</td>
       <td>${reportCommentEditor(row.operationIds, row.comment)}</td>
     </tr>`;
   }).join("");
@@ -4870,9 +4975,9 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${formatReportDuration(op.tiempoSetup)}</td>
       <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
       <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
       <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
       <td>${reportOperationCommentCell(op)}</td>
       ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
     </tr>`;
@@ -6160,7 +6265,14 @@ function formatReportDate(date) {
 
 function formatReportDateTime(date) {
   if (!date) return "";
-  return `${formatReportDate(date)} ${formatTime(date)}`;
+  return `${formatReportDate(date)} ${formatReportTime(date)}`;
+}
+
+function formatReportTime(date) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("es-MX", {
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  }).format(date).replace(/\s+/g, " ").toUpperCase();
 }
 
 function formatMinutes(minutes) {

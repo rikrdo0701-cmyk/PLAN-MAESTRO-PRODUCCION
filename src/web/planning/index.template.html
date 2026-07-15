@@ -8,6 +8,7 @@
     <title>Planeacion de Produccion</title>
     <style>
 {{PLANNING_STYLES}}
+{{INSPECTION_STYLES}}
 </style>
   </head>
   <body>
@@ -47,6 +48,10 @@
           <a href="#reportes" class="nav-item" data-section="reportes" data-tab="week">
             <svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 11h6M9 15h6"/></svg>
             <span>Reportes</span>
+          </a>
+          <a href="#hoja-inspeccion" class="nav-item" data-section="hoja-inspeccion">
+            <svg viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></svg>
+            <span>Hoja de inspección</span>
           </a>
         </nav>
 
@@ -207,6 +212,8 @@
           <div class="load-screen-heading">
             <div><h2 id="operatorLoadTitle">Cargas de operadores</h2><span id="loadWeekRange">Semana seleccionada</span></div>
             <div class="load-screen-actions">
+              <label class="compact-control"><span>Plan</span><select id="loadPlanSelect"></select></label>
+              <label class="compact-control"><span>Estado</span><select id="loadModeSelect"><option value="pending">Pendientes</option><option value="completed">Completadas</option><option value="original">Plan original</option></select></label>
               <label class="compact-control"><span>Semana</span><input id="loadWeekInput" type="date" /></label>
             </div>
           </div>
@@ -394,6 +401,30 @@
           </section>
         </section>
 
+        <section id="hoja-inspeccion" class="inspection-screen" aria-labelledby="inspectionTitle">
+          <aside class="inspection-controls">
+            <h2 id="inspectionTitle">Hoja de inspección</h2>
+            <p>Selecciona una OT abierta para preparar su documento de inspección.</p>
+            <label><span>Buscar OT</span><input id="inspectionSearch" type="search" placeholder="Ej. 1325, CCA 519 CM"></label>
+            <label><span>Trabajo OT</span><select id="inspectionWorkOrder"></select></label>
+            <div id="inspectionStatus" class="inspection-status">Selecciona una OT</div>
+            <button id="inspectionReload" class="button" type="button">Cargar</button>
+            <button id="inspectionSelectOps" class="button secondary" type="button">Seleccionar operaciones</button>
+            <div id="inspectionOperationChoices" class="inspection-operation-choices" hidden></div>
+            <button id="inspectionPrint" class="button primary" type="button">Imprimir</button>
+            <div id="inspectionHistory" class="inspection-history"></div>
+          </aside>
+          <div class="inspection-document-wrap">
+            <article id="inspectionDocument" class="inspection-document">
+              <header><strong class="inspection-logo">MALDONADO</strong><h2>HOJA DE INSPECCIÓN Y ESTADÍSTICAS DE TUBERÍA DOBLADA</h2><small>MP FO 08 V23</small></header>
+              <div id="inspectionJobHeader" class="inspection-job-header"></div>
+              <div id="inspectionMaterials" class="inspection-materials"></div>
+              <table class="inspection-operations-table"><thead><tr><th>OP</th><th>No. Operador</th><th>Fecha</th><th>No. Máquina</th><th>Setup inicio</th><th>Setup fin</th><th>Producción inicio</th><th>Producción fin</th><th>Cant. piezas</th></tr></thead><tbody id="inspectionOperations"></tbody></table>
+              <footer class="inspection-document-footer"><span>FTY</span><span>SELLO LIBERACIÓN</span><span>OBSERVACIONES</span><span>ENTREGA / RECIBE</span></footer>
+            </article>
+          </div>
+        </section>
+
         <dialog id="planningDialog" class="planning-dialog" aria-labelledby="planningDialogTitle">
           <form id="planningDialogForm" method="dialog">
             <header>
@@ -419,7 +450,9 @@
 </script>
     <script>
 {{PLANNING_WORKFLOW_CORE}}
+{{INSPECTION_CORE}}
 {{PLANNING_APP}}
+{{INSPECTION_APP}}
 </script>
   </body>
 </html>

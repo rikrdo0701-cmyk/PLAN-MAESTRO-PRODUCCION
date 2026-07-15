@@ -10,6 +10,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
+  const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
@@ -29,6 +30,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
+  assert.match(pagesIndex, /state\.planStart = window\.PlanningWorkflowCore\.mondayIso/);
+  assert.match(pagesIndex, /loadIncrementalPlanningBase\(state\.planStart\)/);
+  assert.match(pagesIndex, /incrementalScope\(\{ base: incrementalBase, current: state/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
   assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);
   assert.match(pagesIndex, /function formatReportDate\(date\)[\s\S]*\$\{d\}\/\$\{m\}\/\$\{y\}/);
@@ -169,6 +173,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: A4 landscape/);
+  assert.match(pagesIndex, /function formatReportTime\(date\)/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
   assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
@@ -179,6 +186,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
+  assert.match(pagesIndex, /id="hoja-inspeccion"/);
+  assert.match(pagesIndex, />Hoja de inspección</);
+  assert.match(pagesIndex, /Seleccionar operaciones/);
+  assert.match(pagesIndex, /InspectionCore\.printableOperations/);
+  for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
+    assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
+  }
+  assert.doesNotMatch(inspectionService, /credenciales\.txt|netsuiteauth\.txt/i);
   assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);
   assert.match(pagesIndex, /gantt-bar--tool-change/);
