@@ -40,6 +40,29 @@ test("detecta OTs agregadas modificadas y retiradas del alcance incremental", ()
   assert.equal(scope.weekStart, "2026-07-20");
 });
 
+test("versiona por semana y resume solamente cambios compactos", () => {
+  const versions = [
+    { weekStart: "2026-07-20", version: 1 },
+    { planStart: "2026-07-22", version: 2 },
+    { weekStart: "2026-07-27", version: 5 },
+  ];
+  assert.equal(core.nextWeeklyVersion(versions, "2026-07-24"), 3);
+  assert.equal(core.nextWeeklyVersion(versions, "2026-08-03"), 1);
+  const previous = {
+    selectedOts: ["1", "2"], workOrders: [{ ot: "1", pendingQuantity: 10 }, { ot: "2", pendingQuantity: 20 }],
+    otConfigurations: { "2": { machine: "M1", operator: "OP1" } },
+  };
+  const next = {
+    selectedOts: ["2", "3"], workOrders: [{ ot: "2", pendingQuantity: 25 }, { ot: "3", pendingQuantity: 5 }],
+    otConfigurations: { "2": { machine: "M2", operator: "OP2" } },
+  };
+  const diff = structuredClone(core.compactVersionDiff(previous, next));
+  assert.deepEqual(diff.addedOts, ["3"]);
+  assert.deepEqual(diff.removedOts, ["1"]);
+  assert.deepEqual(diff.changedOts, [{ ot: "2", fields: ["cantidad", "maquina"] }]);
+  assert.doesNotMatch(JSON.stringify(diff), /operador|carga|complet/i);
+});
+
 test("withTimeout resuelve la promesa y rechaza al vencer el limite", async () => {
   assert.equal(await core.withTimeout(Promise.resolve("ok"), 15), "ok");
   await assert.rejects(core.withTimeout(new Promise(() => {}), 15), /0\.015 segundos/);

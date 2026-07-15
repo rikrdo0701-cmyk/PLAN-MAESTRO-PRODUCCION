@@ -709,6 +709,47 @@
     };
   }
 
+  function nextWeeklyVersion(snapshots, weekStart) {
+    const week = mondayIso(weekStart);
+    return (snapshots || []).filter((snapshot) => mondayIso(snapshot?.weekStart || snapshot?.planStart) === week)
+      .reduce((max, snapshot) => Math.max(max, Number(snapshot?.version) || 0), 0) + 1;
+  }
+
+  function versionOtData(source, ot) {
+    source = source?.fullState || source || {};
+    const key = normalize(ot);
+    const workOrder = (source.workOrders || []).find((item) => normalize(item?.ot || item?.id || item?.tranid) === key) || {};
+    const configKey = Object.keys(source.otConfigurations || {}).find((item) => normalize(item) === key);
+    const config = configKey ? source.otConfigurations[configKey] || {} : {};
+    return {
+      cantidad: workOrder.pendingQuantity ?? workOrder.quantity ?? workOrder.cantidad ?? "",
+      prioridad: config.priority ?? workOrder.priority ?? "",
+      entrega: config.dueDate ?? workOrder.dueDate ?? workOrder.fechaEntrega ?? "",
+      maquina: config.machine ?? config.maquina ?? "",
+      herramental: config.tool ?? config.herramental ?? "",
+      kit: config.kit ?? config.kitHerramental ?? "",
+      subcontrato: config.subcontractType ?? config.tipoSubcontrato ?? "",
+      diasSubcontrato: config.subcontractDays ?? config.diasSubcontrato ?? "",
+    };
+  }
+
+  function compactVersionDiff(previous, next) {
+    previous = previous?.fullState || previous || {};
+    next = next?.fullState || next || {};
+    const previousOts = new Map((previous.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const nextOts = new Map((next.selectedOts || []).map((ot) => [normalize(ot), String(ot)]).filter(([key]) => key));
+    const sorter = (a, b) => String(a).localeCompare(String(b), "es", { numeric: true });
+    const addedOts = [...nextOts].filter(([key]) => !previousOts.has(key)).map(([, ot]) => ot).sort(sorter);
+    const removedOts = [...previousOts].filter(([key]) => !nextOts.has(key)).map(([, ot]) => ot).sort(sorter);
+    const changedOts = [...nextOts].filter(([key]) => previousOts.has(key)).map(([key, ot]) => {
+      const before = versionOtData(previous, previousOts.get(key));
+      const after = versionOtData(next, ot);
+      const fields = Object.keys(after).filter((field) => String(before[field] ?? "") !== String(after[field] ?? ""));
+      return fields.length ? { ot, fields } : null;
+    }).filter(Boolean).sort((a, b) => sorter(a.ot, b.ot));
+    return { addedOts, removedOts, changedOts };
+  }
+
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
@@ -721,5 +762,5 @@
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, selectIncrementalBase, incrementalScope };
+    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, compactVersionDiff };
 });

@@ -3622,10 +3622,40 @@ async function publishCurrentPlan() {
   }
   els.publishPlanBtn.disabled = true;
   try {
+    const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
+    const version = window.PlanningWorkflowCore.nextWeeklyVersion(state.publishedVersions, weekStart);
+    let publicationReason = "";
+    let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
+    if (version > 1) {
+      const answer = window.prompt(`Motivo de publicacion de la version V${version}:`, "");
+      if (answer === null) return;
+      publicationReason = String(answer).trim();
+      if (!publicationReason) {
+        showToast("Captura el motivo de la nueva version");
+        return;
+      }
+      const previous = [...(state.publishedVersions || [])]
+        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart)
+        .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
+      if (previous?.snapshotId) {
+        try {
+          const previousSnapshot = isAppsScriptRuntime()
+            ? await callAppsScript("getPlanSnapshot", previous.snapshotId)
+            : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(previous.snapshotId)}`);
+          changeSummary = window.PlanningWorkflowCore.compactVersionDiff(previousSnapshot, state);
+        } catch (error) {
+          console.warn("No se pudo comparar la version anterior", error);
+        }
+      }
+    }
     const payload = {
       ...createAppSheetPayload(),
       planStatus: "PUBLICADO",
       draftVersionId: state.draftVersionId || "",
+      weekStart,
+      version,
+      publicationReason,
+      changeSummary,
       publishedAt: new Date().toISOString(),
     };
     const result = isAppsScriptRuntime()
@@ -3636,7 +3666,7 @@ async function publishCurrentPlan() {
       state.activePublishedVersionId = active.snapshotId;
       state.publishedVersions = [
         ...(state.publishedVersions || []).filter((item) => item.snapshotId !== active.snapshotId),
-        { ...active, status: "PUBLICADO" },
+        { ...active, weekStart, version, publicationReason, changeSummary, status: "PUBLICADO" },
       ];
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
     }
@@ -4227,8 +4257,9 @@ function renderPlanSnapshotSelect() {
     status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
   }))).filter((item) => item.id !== "draft");
   const options = allowedSnapshots.map((snapshot) => {
-    const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
-    const label = `Publicado - ${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
+    const week = snapshot.weekStart || snapshot.planStart;
+    const version = Number(snapshot.version || 1);
+    const label = `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${version}`;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
   els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
@@ -4261,8 +4292,8 @@ function reportOperationsSource() {
 function reportSourceLabel() {
   if (!reportSnapshot) return "Sin plan publicado";
   if (reportSnapshot.snapshotId === "draft") return "Borrador actual";
-  const generated = reportSnapshot.generatedAt ? formatDateTime(new Date(reportSnapshot.generatedAt)) : "Sin fecha";
-  return `Plan guardado ${generated}`;
+  const week = reportSnapshot.weekStart || reportSnapshot.planStart;
+  return `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(reportSnapshot.version || 1)}`;
 }
 
 function reportWeekLabel() {
