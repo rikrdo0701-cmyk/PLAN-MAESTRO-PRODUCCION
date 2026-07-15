@@ -4675,9 +4675,9 @@ function renderAdjusterReport() {
       <td>${escapeHtml(destinationHerramental)}</td>
       <td>${escapeHtml(destinationKit)}</td>
       <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
       <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
       <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
       <td class="report-status-action-column">${planStatusActionCell(op)}</td>
     </tr>`;
@@ -4703,9 +4703,9 @@ function renderSubcontractReport() {
       <td class="${missingType ? "report-warning" : ""}">${escapeHtml(row.type || "FALTA CONFIGURAR")}</td>
       <td class="${missingDays ? "report-warning" : ""}">${missingDays ? "FALTA CONFIGURAR" : escapeHtml(row.days)}</td>
       <td>${escapeHtml(formatReportDate(row.start))}</td>
-      <td>${escapeHtml(formatTime(row.start))}</td>
+      <td>${escapeHtml(formatReportTime(row.start))}</td>
       <td>${escapeHtml(formatReportDate(row.end))}</td>
-      <td>${escapeHtml(formatTime(row.end))}</td>
+      <td>${escapeHtml(formatReportTime(row.end))}</td>
       <td>${reportCommentEditor(row.operationIds, row.comment)}</td>
     </tr>`;
   }).join("");
@@ -4974,9 +4974,9 @@ function renderProductionReportTable(operations, options = {}) {
       <td>${formatReportDuration(op.tiempoSetup)}</td>
       <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
       <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
+      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
       <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
+      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
       <td>${reportOperationCommentCell(op)}</td>
       ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
     </tr>`;
@@ -6264,7 +6264,14 @@ function formatReportDate(date) {
 
 function formatReportDateTime(date) {
   if (!date) return "";
-  return `${formatReportDate(date)} ${formatTime(date)}`;
+  return `${formatReportDate(date)} ${formatReportTime(date)}`;
+}
+
+function formatReportTime(date) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("es-MX", {
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  }).format(date).replace(/\s+/g, " ").toUpperCase();
 }
 
 function formatMinutes(minutes) {

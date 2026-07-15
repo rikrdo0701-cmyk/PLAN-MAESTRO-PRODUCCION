@@ -172,6 +172,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: A4 landscape/);
+  assert.match(pagesIndex, /function formatReportTime\(date\)/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
   assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
