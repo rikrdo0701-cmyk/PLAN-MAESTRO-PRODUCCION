@@ -28,7 +28,7 @@
     return cell(1, "", "inspection-br") + cell(2, "", "inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(2, "", "inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(2);
   }
   function operationRow(operation) {
-    return cell(1, escape(operation?.code || ""), "inspection-op-line inspection-op inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, escape(operation?.workCenter || ""), "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line");
+    return cell(1, escape(operation?.code || ""), "inspection-op-line inspection-op inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line");
   }
   function printDiagnostic(detail) { return root.InspectionCore.inspectionPrintDiagnostic(detail?.materials || [], Boolean(currentDrawing())); }
   function renderPrintChecks(detail) {
@@ -43,13 +43,14 @@
     byId("inspectionPrintCheck").innerHTML = `<header class="inspection-check-head"><strong>Semáforo de impresión</strong><span class="inspection-check-pill ${diagnostic.status}">${diagnostic.label}</span></header><div class="inspection-check-list">${checks.map(([label, status, value]) => `<div class="inspection-check-row ${status}"><strong>${label}</strong><span>${escape(value)}</span></div>`).join("")}</div>`;
   }
   function renderHistory(history, job) {
-    const entries = history?.ok ? (history.data || []) : [];
+    const entries = history?.ok ? (history.data?.history || history.data || []) : [];
     const latest = entries[0] || {};
     const printedAt = latest.FECHA_HORA || latest.fechaHora || latest.printedAt || "-";
     const folio = latest.FOLIO || latest.folio || latest.OT || latest.wo || job?.wo || "-";
-    byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${entries.length}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
+    const count = history?.data?.count ?? entries.length;
+    byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${count}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
   }
-  function currentDrawing() { return state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
+  function currentDrawing() { return state.detail?.workOrder?.drawing || state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
     return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, escape(first?.material || ""), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, first?.required ?? "", "inspection-br") + cell(2, escape(second?.material || "")) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, second?.required ?? "");
   }
@@ -58,7 +59,7 @@
     if (!detail) return;
     const job = detail.workOrder || {};
     const materials = root.InspectionCore.inspectionMaterials(detail.materials || []);
-    const rows = root.InspectionCore.inspectionRows(detail.operations || [], state.selection, 16);
+    const rows = root.InspectionCore.inspectionRows(detail.operations || [], state.selection);
     const materialRows = [];
     for (let index = 0; index < materials.length; index += 2) materialRows.push(materialRow(materials[index], materials[index + 1], index === 0 ? "Fechas de entrega:" : "", index === 0 ? escape(job.dueDate || "") : ""));
     if (!materialRows.length) materialRows.push(materialRow({}, {}, "Fechas de entrega:", escape(job.dueDate || "")));
@@ -134,7 +135,20 @@
     if (diagnostic.alerts.length && !root.confirm(`Antes de imprimir revisa: ${diagnostic.alerts.join(", ")}. ¿Quieres continuar y registrar la impresión?`)) return;
     const operations = root.InspectionCore.printableOperations(state.detail.operations || [], state.selection);
     try {
-      const result = await call("recordInspectionPrint", { wo: state.detail.workOrder.wo, article: state.detail.workOrder.article, quantity: state.detail.workOrder.quantity, semaphore: diagnostic.label, operations: operations.map((operation) => operation.code), detail: { alerts: diagnostic.alerts } });
+      const result = await call("recordInspectionPrint", {
+        wo: state.detail.workOrder.wo,
+        article: state.detail.workOrder.article,
+        quantity: state.detail.workOrder.quantity,
+        status: state.detail.workOrder.status || "",
+        semaphore: diagnostic.label,
+        alerts: diagnostic.alerts,
+        withoutDrawing: diagnostic.withoutDrawing,
+        missingRoutes: diagnostic.missingRoutes.length > 0,
+        pendingMaterials: diagnostic.pending.map((material) => ({ material: material.material || "", quantity: material.required ?? "" })),
+        deficitMaterials: diagnostic.deficit.map((material) => ({ material: material.material || "", deficit: Number(material.deficitNeto || material.netDeficit || material.deficit || 0) })),
+        operations: operations.map((operation) => operation.code),
+        detail: { materials: diagnostic.materials.map((material) => ({ material: material.material || "", pending: material.required ?? "", issued: material.issued ?? "", available: material.available || 0, deficitNeto: material.deficitNeto || material.netDeficit || 0 })) }
+      });
       if (!result?.ok && !root.confirm(`No se pudo guardar el historial: ${result?.error || "Error desconocido"}. ¿Imprimir de todos modos?`)) return;
     } catch (error) {
       if (!root.confirm(`No se pudo guardar el historial: ${error.message}. ¿Imprimir de todos modos?`)) return;

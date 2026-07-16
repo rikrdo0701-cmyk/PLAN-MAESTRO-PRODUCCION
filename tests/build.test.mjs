@@ -240,7 +240,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 0\)[\s\S]*sheet\.scrollWidth/);
   assert.match(pagesIndex, /finally\s*\{[^}]*removeProperty\("--inspection-print-scale"\)[^}]*classList\.remove\("printing-inspection"\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
-  assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection, 16\)/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection\)/);
+  assert.match(pagesIndex, /function inspectionOperationLayout\(count\)/);
   for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
     assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
   }
@@ -327,4 +328,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);
   assert.match(storageService, /BORRADOR_PLAN/);
+});
+
+test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const start = inspectionApp.indexOf("function operationRow(operation)");
+  const end = inspectionApp.indexOf("function printDiagnostic", start);
+  const operationRow = inspectionApp.slice(start, end);
+  assert.match(operationRow, /operation\?\.code/);
+  assert.doesNotMatch(operationRow, /operation\?\.workCenter/);
+  assert.doesNotMatch(operationRow, /operation\?\.operation/);
 });
