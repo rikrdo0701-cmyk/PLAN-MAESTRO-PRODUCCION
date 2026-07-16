@@ -72,3 +72,13 @@ Poppler usado: `C:\Users\plane\.cache\codex-runtimes\codex-primary-runtime\depen
 - El detalle y su selección se renderizan antes de consultar rutas. El auxiliar `getInspectionDrawingRoutes` tolera rechazo sin impedir el documento; historial también degrada a resumen vacío.
 - La vista indicada por el hash inicial se aplica antes de `loadAppStateInBackground`, evitando que `#hoja-inspeccion` quede temporalmente en Plan semanal.
 - TDD RED: la prueba focalizada de build falló por ausencia de `Fechas de entrega:`. GREEN: la misma prueba pasó después de los cambios.
+
+## Correcciones finales de fidelidad al original
+
+- Se comparó la implementación con `nesesidades prod/index.html`: Pendientes vuelve a significar materiales con cantidad requerida, sin depender de operaciones ocultas; sólo falta de tramo en cantidades fraccionadas bloquea, mientras dibujo, déficit o ausencia de pendientes piden revisión.
+- La impresión bloqueada informa y abre edición sin registrar. Las advertencias piden confirmación, y un fallo al registrar historial permite confirmar impresión sin registro.
+- El pie recupera encabezados individuales Oper, N° OPER, Cantidad NC, Clave, FTY, Sello liberación, Observaciones, Entrega, Cant. y Recibe, más tres filas y sello con `rowspan` de tres.
+- Para dos materiales o menos se agrega una segunda fila vacía; para más materiales se imprimen pares adicionales.
+- El panel recupera títulos, píldoras, estados por fila, iconos de acciones y la nota sobre persistencia de dibujo/tramo.
+- TDD RED: dos pruebas core fallaron porque `inspectionPrintDiagnostic` no existía y la prueba de build falló por la píldora ausente. GREEN: core 5/5 y build focalizado 1/1.
+- La revisión independiente detectó que faltaban dos detalles de datos del original: `deficitNeto || deficit` y el filtro de materiales “costo 0”/sin requerido. Se agregaron regresiones RED, el servicio conserva `requiredOriginal`, `deficit` y `netDeficit`, y tanto hoja como diagnóstico usan la lista filtrada. GREEN: core 6/6 y build focalizado 1/1.

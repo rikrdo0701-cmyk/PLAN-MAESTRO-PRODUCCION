@@ -202,8 +202,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Fechas de entrega:/);
   assert.match(pagesIndex, /job\.dueDate/);
   assert.match(pagesIndex, /Tubo\/pzas/);
-  assert.match(pagesIndex, /materials\[1\][\s\S]*route/);
-  assert.match(pagesIndex, /materials\[1\][\s\S]*required/);
+  assert.match(pagesIndex, /materialRow\(materials\[index\], materials\[index \+ 1\]/);
+  assert.match(pagesIndex, /second\?\.route[\s\S]*second\?\.required/);
   assert.match(pagesIndex, />Hoja de inspección</);
   assert.match(pagesIndex, /Seleccionar operaciones/);
   assert.match(pagesIndex, /InspectionCore\.printableOperations/);
@@ -217,6 +217,19 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);
+  assert.match(pagesIndex, /inspection-check-pill/);
+  assert.match(pagesIndex, /El dibujo se guarda por art[^<]*fabricado/);
+  assert.match(pagesIndex, /inspection-action-icon/);
+  assert.match(pagesIndex, /missingRoutes[\s\S]*root\.alert[\s\S]*editMaterialLink/);
+  assert.match(pagesIndex, /diagnostic\.alerts[\s\S]*root\.confirm/);
+  assert.match(pagesIndex, /No se pudo guardar el historial[\s\S]*root\.confirm/);
+  assert.match(pagesIndex, /materials\.length <= 2[\s\S]*materialRow\(\{\}, \{\}/);
+  for (const footerHeading of ["Oper", "Cantidad NC", "Clave", "FTY", "SELLO LIBERACI", "OBSERVACIONES", "ENTREGA", "CANT.", "RECIBE"]) {
+    assert.match(pagesIndex, new RegExp(footerHeading));
+  }
+  assert.match(pagesIndex, /N[^<]*<br>OPER/);
+  assert.match(pagesIndex, /footerCell\(6, "", "inspection-seal-box inspection-br", 3\)/);
+  assert.match(pagesIndex, /for \(let row = 0; row < 3; row \+= 1\)/);
   assert.match(pagesIndex, /\.inspection-actions \.primary\s*\{[^}]*grid-column:\s*auto/);
   assert.match(pagesIndex, /\.inspection-actions \.secondary\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
   assert.match(pagesIndex, /id="inspectionReload"[\s\S]*id="inspectionDrawing"[\s\S]*id="inspectionEditLink"[\s\S]*id="inspectionPrint"[\s\S]*id="inspectionSelectOps"/);
@@ -231,6 +244,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
     assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
   }
+  assert.match(inspectionService, /requeridoOriginal/);
+  assert.match(inspectionService, /deficitNeto/);
+  assert.match(inspectionService, /deficit/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionMaterials\(detail\.materials \|\| \[\]\)/);
+  assert.match(pagesIndex, /function firstInspectionMaterialIndex\(\)[\s\S]*inspectionMaterials\(materials\)[\s\S]*materials\.indexOf\(first\)/);
+  assert.match(pagesIndex, /inspectionEditLink"\)\.addEventListener\("click", \(\) => editMaterialLink\(firstInspectionMaterialIndex\(\)\)/);
   assert.doesNotMatch(inspectionService, /credenciales\.txt|netsuiteauth\.txt/i);
   assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);

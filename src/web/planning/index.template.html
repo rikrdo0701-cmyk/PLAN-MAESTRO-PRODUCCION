@@ -407,17 +407,18 @@
             <p>Selecciona una WO para generar la hoja de inspección con materiales, tramos, operaciones y dibujo ligado.</p>
             <label>TRABAJO WO<select id="inspectionWorkOrder"></select></label>
             <label>BUSCAR WO<input id="inspectionSearch" type="search" placeholder="Ej. 28, CM 350"></label>
-            <section id="inspectionJobStatus" class="inspection-side-card inspection-status">Selecciona una WO</section>
-            <section id="inspectionHistory" class="inspection-side-card inspection-history"></section>
-            <section id="inspectionPrintCheck" class="inspection-side-card inspection-status"></section>
+            <section id="inspectionJobStatus" class="inspection-side-card inspection-status"><strong class="inspection-card-title">Estado del trabajo</strong><span class="inspection-status-pill">Selecciona una WO</span></section>
+            <section id="inspectionHistory" class="inspection-side-card inspection-history"><strong class="inspection-card-title">Impresiones</strong></section>
+            <section id="inspectionPrintCheck" class="inspection-side-card inspection-status"><strong class="inspection-card-title">Semáforo de impresión</strong></section>
             <div class="inspection-actions">
-              <button id="inspectionReload" class="button" type="button">Cargar</button>
-              <button id="inspectionDrawing" class="button" type="button">Ver dibujo</button>
-              <button id="inspectionEditLink" class="button" type="button">Editar liga</button>
-              <button id="inspectionPrint" class="button primary" type="button">Imprimir</button>
-              <button id="inspectionSelectOps" class="button secondary" type="button">Seleccionar operaciones</button>
+              <button id="inspectionReload" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">↻</span>Cargar</button>
+              <button id="inspectionDrawing" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">◉</span>Ver dibujo</button>
+              <button id="inspectionEditLink" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">✎</span>Editar liga</button>
+              <button id="inspectionPrint" class="button primary" type="button"><span class="inspection-action-icon" aria-hidden="true">⎙</span>Imprimir</button>
+              <button id="inspectionSelectOps" class="button secondary" type="button"><span class="inspection-action-icon" aria-hidden="true">☷</span>Seleccionar operaciones</button>
             </div>
             <div id="inspectionOperationChoices" class="inspection-operation-choices" hidden></div>
+            <p class="inspection-note">El dibujo se guarda por artículo fabricado. El tramo se guarda por artículo + materia prima, usando la tabla Tramos.</p>
           </aside>
           <div class="inspection-document-wrap">
             <article id="inspectionDocument" class="inspection-sheet inspection-document">

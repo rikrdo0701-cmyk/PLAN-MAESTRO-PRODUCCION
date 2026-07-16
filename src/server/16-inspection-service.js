@@ -95,8 +95,11 @@ function getInspectionWorkOrder(wo) {
         material: material,
         description: PP_Inspection_text_(PP_Inspection_value_(row, ['Descripcion', 'description'])),
         required: Number(PP_Inspection_value_(row, ['requerido', 'required', 'quantity']) || 0),
+        requiredOriginal: Number(PP_Inspection_value_(row, ['requeridoOriginal', 'requiredOriginal']) || 0),
         issued: Number(PP_Inspection_value_(row, ['emitido', 'quantityshiprecv']) || 0),
         available: Number(PP_Inspection_value_(row, ['disponible', 'quantityavailable']) || 0),
+        deficit: Number(PP_Inspection_value_(row, ['deficit', 'shortage']) || 0),
+        deficitNeto: Number(PP_Inspection_value_(row, ['deficitNeto', 'netDeficit']) || 0),
         route: PP_Inspection_text_(route.TRAMO), drawing: PP_Inspection_text_(route.DIBUJO)
       };
     });
