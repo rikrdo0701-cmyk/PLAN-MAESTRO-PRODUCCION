@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - "src/server/**"
-      - "src/web/bridge/**"
+      - "src/web/**"
       - "scripts/build-appscript.mjs"
       - "scripts/check-project.mjs"
       - "package.json"
