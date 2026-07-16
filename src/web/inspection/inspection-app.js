@@ -60,26 +60,36 @@
     if (!text) return "";
     const hyperlink = text.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
     const raw = String(hyperlink ? hyperlink[1] : text).trim();
+    if (!raw) return "";
+    if (/^maldonado:\/\/abrir\?archivo=/i.test(raw)) return raw;
+    const withoutFilePrefix = raw.replace(/^file:\/*/i, "");
+    let networkPath = withoutFilePrefix.replace(/\//g, "\\").trim();
+    if (/^(SERVER2008|192\.168\.1\.101)\\Produccion2\\/i.test(networkPath)) networkPath = `\\\\${networkPath}`;
+    networkPath = networkPath.replace(/^\\\\SERVER2008\\Produccion2\\/i, "\\\\192.168.1.101\\Produccion2\\");
+    if (/^\\\\192\.168\.1\.101\\Produccion2\\/i.test(networkPath) && /\.pdf$/i.test(networkPath)) return `maldonado://abrir?archivo=${encodeURIComponent(networkPath)}`;
     if (/^https?:\/\//i.test(raw)) return raw;
     if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return `https://${raw}`;
     if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return `https://drive.google.com/file/d/${encodeURIComponent(raw)}/view`;
     return "";
   }
   function currentDrawing() { return normalizeDrawingUrl(drawingCandidate()); }
-  function openDrawing() {
-    const raw = drawingCandidate();
-    const drawing = normalizeDrawingUrl(raw);
-    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa la liga capturada: ${raw || "vacía"}`); return; }
-    const opened = root.open(drawing, "_blank", "noopener,noreferrer");
-    if (opened) return;
+  function clickDrawingLink(drawing) {
     const link = document.createElement("a");
     link.href = drawing;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
+    if (!/^maldonado:\/\//i.test(drawing)) { link.target = "_blank"; link.rel = "noopener noreferrer"; }
     link.style.display = "none";
     document.body.appendChild(link);
     link.click();
     link.remove();
+  }
+  function openDrawing() {
+    const raw = drawingCandidate();
+    const drawing = normalizeDrawingUrl(raw);
+    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa que sea PDF dentro de \\192.168.1.101\Produccion2\, maldonado://, URL o ID de Drive. Valor actual: ${raw || "vacía"}`); return; }
+    if (/^maldonado:\/\//i.test(drawing)) { clickDrawingLink(drawing); return; }
+    const opened = root.open(drawing, "_blank", "noopener,noreferrer");
+    if (opened) return;
+    clickDrawingLink(drawing);
   }
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
     return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, escape(first?.material || ""), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, first?.required ?? "", "inspection-br") + cell(2, escape(second?.material || "")) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, second?.required ?? "");
@@ -120,10 +130,10 @@
     if (!job || !material) return;
     const route = root.prompt("Tramo", material.route || "");
     if (route === null) return;
-    const drawingInput = root.prompt("URL o ID del dibujo", material.drawing || "");
+    const drawingInput = root.prompt("URL, ID o ruta UNC del dibujo", material.drawing || "");
     if (drawingInput === null) return;
     const drawing = String(drawingInput).trim() ? normalizeDrawingUrl(drawingInput) : "";
-    if (String(drawingInput).trim() && !drawing) { root.alert("La liga del dibujo debe ser una URL válida o un ID de Google Drive."); return; }
+    if (String(drawingInput).trim() && !drawing) { root.alert("La liga del dibujo debe ser URL válida, ID de Drive o PDF dentro de \\192.168.1.101\Produccion2\."); return; }
     const result = await call("saveInspectionLink", { article: job.article, material: material.material, route, drawing });
     if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el vínculo");
     material.route = route; material.drawing = drawing; renderDetail();
