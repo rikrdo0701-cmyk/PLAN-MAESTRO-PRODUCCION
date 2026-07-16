@@ -371,7 +371,7 @@
     byId("inspectionWorkOrder").addEventListener("change", () => loadDetail().catch(reportError));
     byId("inspectionSelectOps").addEventListener("click", () => { byId("inspectionOperationChoices").hidden = !byId("inspectionOperationChoices").hidden; });
     byId("inspectionDrawing").addEventListener("click", openDrawing);
-    byId("inspectionEditLink").addEventListener("click", () => openEditModal(firstInspectionMaterialIndex()));
+    byId("inspectionEditLink").addEventListener("click", () => editMaterialLink(firstInspectionMaterialIndex()));
     byId("inspectionPrint").addEventListener("click", () => printInspection().catch(reportError));
     const ensureLoaded = () => { if (root.location.hash === "#hoja-inspeccion" && !state.list.length) loadList().catch(reportError); };
     root.addEventListener("hashchange", ensureLoaded);
@@ -381,3 +381,5 @@
   root.InspectionApp = { initialize, loadList, loadDetail };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true }); else initialize();
 })(window);
+
+
