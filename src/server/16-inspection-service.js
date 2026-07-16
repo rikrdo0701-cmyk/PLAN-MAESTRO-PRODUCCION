@@ -172,8 +172,7 @@ function getInspectionWorkOrder(wo) {
     const operations = (response.operaciones || response.operations || []).map(function(row, index) {
       const operation = PP_Inspection_text_(PP_Inspection_value_(row, ['Operacion', 'operation']));
       const sequence = Number(PP_Inspection_value_(row, ['secuencia', 'sequence']) || index + 1);
-      return { id: folio + '-' + sequence + '-' + index, code: operation.split(':')[0].trim() || operation, operation: operation, sequence: sequence,
-        workCenter: PP_Inspection_text_(PP_Inspection_value_(row, ['centro', 'workcenter'])) };
+      return { id: folio + '-' + sequence + '-' + index, code: operation.split(':')[0].trim() || operation, operation: operation, sequence: sequence, workCenter: '' };
     }).filter(function(item) { return item.operation; }).sort(function(a, b) { return a.sequence - b.sequence; });
     return {
       workOrder: { wo: folio, article: article,
