@@ -4,6 +4,14 @@
   const byId = (id) => document.getElementById(id);
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
   const call = (method, ...args) => root.PPAppsScriptBridge?.call(method, args) || Promise.reject(new Error("Backend no disponible"));
+  const numberValue = (value) => {
+    const number = Number(String(value ?? "").replace(/,/g, ""));
+    return Number.isFinite(number) ? number : 0;
+  };
+  const formatValue = (value) => {
+    const number = numberValue(value);
+    return Number.isFinite(number) ? String(Math.round(number * 100000) / 100000) : String(value ?? "");
+  };
   function renderJobStatus(value, detail = "") { byId("inspectionJobStatus").innerHTML = `<strong class="inspection-card-title">Estado del trabajo</strong><span class="inspection-status-pill">${escape(value)}</span>${detail ? `<div>${escape(detail)}</div>` : ""}`; }
 
   function optionLabel(item) { return `WO ${item.wo} - ${item.article} - ${item.quantity} pzas`; }
@@ -33,6 +41,37 @@
   function inspectionOperationLayout(count) {
     const blankRows = Array.from({ length: Math.max(0, Number(count) || 0) }, () => operationRow({})).join("");
     return operationHeader() + operationSubheader("OP") + blankRows;
+  }
+  function materialStatus(material) {
+    const explicit = String(material?.availabilityStatus || material?.disponibilidadEstado || "").trim().toLowerCase();
+    if (["rojo", "red", "critical", "critico", "crítico"].includes(explicit)) return "red";
+    if (["naranja", "orange", "warning", "amarillo"].includes(explicit)) return "orange";
+    const required = numberValue(material?.required);
+    const available = numberValue(material?.available ?? material?.disponible);
+    const deficit = numberValue(material?.deficitNeto ?? material?.netDeficit ?? material?.deficit);
+    if (deficit > 0 || (required > 0 && available < required)) return "red";
+    const remanent = numberValue(material?.remanent ?? material?.remanente ?? (available - required));
+    const average = numberValue(material?.average ?? material?.promedio);
+    if (average > 0 && remanent < average) return "orange";
+    return "ok";
+  }
+  function materialTooltip(material) {
+    if (!material) return "";
+    return [
+      `Disponible: ${formatValue(material.available ?? material.disponible)}`,
+      `Requerido hoja: ${formatValue(material.required)}`,
+      `Total BOM: ${formatValue(material.requiredOriginal ?? material.required)}`,
+      `Emitido WO: ${formatValue(material.issued ?? material.emitido)}`,
+      `Déficit: ${formatValue(material.deficit)}`,
+      `Déficit neto: ${formatValue(material.deficitNeto ?? material.netDeficit ?? material.deficit)}`
+    ].join("\n");
+  }
+  function materialBadge(material) {
+    const name = String(material?.material || "").trim();
+    if (!name) return "";
+    const status = materialStatus(material);
+    const cls = status === "red" ? "inspection-mat--red" : (status === "orange" ? "inspection-mat--orange" : "inspection-mat--ok");
+    return `<span class="inspection-mat ${cls}" title="${escape(materialTooltip(material))}">${escape(name)}</span>`;
   }
   function printDiagnostic(detail) { return root.InspectionCore.inspectionPrintDiagnostic(detail?.materials || [], Boolean(currentDrawing())); }
   function renderPrintChecks(detail) {
@@ -92,7 +131,7 @@
     clickDrawingLink(drawing);
   }
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
-    return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, escape(first?.material || ""), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, first?.required ?? "", "inspection-br") + cell(2, escape(second?.material || "")) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, second?.required ?? "");
+    return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, materialBadge(first), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, escape(first?.required ?? ""), "inspection-br") + cell(2, materialBadge(second)) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, escape(second?.required ?? ""));
   }
   function renderDetail() {
     const detail = state.detail;
@@ -104,17 +143,16 @@
     for (let index = 0; index < materials.length; index += 2) materialRows.push(materialRow(materials[index], materials[index + 1], index === 0 ? "Fechas de entrega:" : "", index === 0 ? escape(job.dueDate || "") : ""));
     if (!materialRows.length) materialRows.push(materialRow({}, {}, "Fechas de entrega:", escape(job.dueDate || "")));
     if (materials.length <= 2) materialRows.push(materialRow({}, {}));
-    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCIÓN Y ESTADÍSTICAS DE TUBERÍA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb")}${cell(3, escape(job.wo), "inspection-big inspection-bb")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb")}${cell(2, "REV", "inspection-big inspection-bb")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb")}${cell(2, "Cantidad:", "inspection-label inspection-bb")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-br inspection-bb")}${cell(3, "Descripción", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb")}${cell(2, "Material", "inspection-head inspection-bb")}${cell(2, "Descripción", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
+    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb")}${cell(3, escape(job.wo), "inspection-big inspection-bb")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb")}${cell(2, "REV", "inspection-big inspection-bb")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb")}${cell(2, "Cantidad:", "inspection-label inspection-bb")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-br inspection-bb")}${cell(3, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb")}${cell(2, "Material", "inspection-head inspection-bb")}${cell(2, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
     byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${inspectionOperationLayout(3).replace(operationSubheader("OP"), operationSubheader("OPER."))}</div>`;
     const footerCell = (span, html, classes = "", rowSpan = 1) => `<div class="inspection-footer-cell ${classes}" style="grid-column:span ${span}${rowSpan > 1 ? `;grid-row:span ${rowSpan}` : ""}">${html}</div>`;
-    let footer = footerCell(1, "Oper", "inspection-footer-head") + footerCell(1, "N°<br>OPER", "inspection-footer-head") + footerCell(2, "Cantidad NC", "inspection-footer-head") + footerCell(1, "Clave", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACIÓN", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES:", "inspection-footer-head inspection-br") + footerCell(2, "ENTREGA", "inspection-footer-head inspection-br") + footerCell(1, "CANT.", "inspection-footer-head inspection-br") + footerCell(1, "RECIBE", "inspection-footer-head");
+    let footer = footerCell(1, "Oper", "inspection-footer-head") + footerCell(1, "N°<br>OPER", "inspection-footer-head") + footerCell(2, "Cantidad NC", "inspection-footer-head") + footerCell(1, "Clave", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACION", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES:", "inspection-footer-head inspection-br") + footerCell(2, "ENTREGA", "inspection-footer-head inspection-br") + footerCell(1, "CANT.", "inspection-footer-head inspection-br") + footerCell(1, "RECIBE", "inspection-footer-head");
     for (let row = 0; row < 3; row += 1) {
       footer += footerCell(1, "") + footerCell(1, "") + footerCell(2, "") + footerCell(1, "", "inspection-br") + footerCell(4, "", "inspection-br");
       if (row === 0) footer += footerCell(6, "", "inspection-seal-box inspection-br", 3);
       footer += footerCell(5, "", "inspection-br") + footerCell(2, "", "inspection-br") + footerCell(1, "", "inspection-br") + footerCell(1, "");
     }
     byId("inspectionReleaseFooter").innerHTML = footer;
-    byId("inspectionSheetGrid").querySelectorAll("[data-inspection-material]").forEach((button) => button.addEventListener("click", () => editMaterialLink(Number(button.dataset.inspectionMaterial))));
     byId("inspectionOperationChoices").innerHTML = (detail.operations || []).map((operation, index) => { const key = root.InspectionCore.operationKey(operation, index); return `<label><input type="checkbox" data-inspection-operation="${escape(key)}" ${state.selection[key] !== false ? "checked" : ""}> ${escape(operation.code)} - ${escape(operation.operation)}</label>`; }).join("");
     byId("inspectionOperationChoices").querySelectorAll("[data-inspection-operation]").forEach((input) => input.addEventListener("change", () => { state.selection[input.dataset.inspectionOperation] = input.checked; renderDetail(); }));
     const semaphore = printDiagnostic(detail).status;
