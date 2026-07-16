@@ -1,61 +1,74 @@
-# Task 4 — Registrar causas de espera
+# Task 4 — QA integral de Hoja de inspección
 
-## RED
+## Estado
 
-- Se agregaron las pruebas `registra la operacion bloqueadora que causa la espera` y `sin espera registra diagnostico vacio`.
-- Comando: `node --test --test-name-pattern="registra la operacion bloqueadora|sin espera" tests/planner-core.test.mjs`
-- Resultado inicial: 2 fallos esperados; `esperaMinutos` era `undefined` en ambos casos.
+**DONE_WITH_CONCERNS.** La suite y la validación de build pasan, y la referencia quedó caracterizada. La validación renderizada integral de la vista de inspección quedó bloqueada por el navegador integrado no disponible y por una shell PWA persistente en el fallback Chromium; no se presenta el PDF del fallback como evidencia válida.
 
-## GREEN
+No se hizo `git push`, por instrucción del controlador. Después del QA, el review Important sí exigió ajustes de fidelidad, panel, tolerancia de auxiliares y navegación inicial; se implementaron con pruebas.
 
-- Las asignaciones conservan el `earliest` calculado antes de buscar recursos.
-- Los intervalos ocupados conservan `operationId`, `ot`, `secuencia`, `resourceType` y `resource`, además de `start`/`end`.
-- `commitFixedOperation` y `commitAssignment` pasan esos metadatos al registrar ocupación.
-- El diagnóstico final distingue operador, máquina, calendario, cambio de herramental y desplazamiento sin causa demostrable; una operación sin espera recibe causa vacía.
-- Las operaciones fijas reciben el diagnóstico estable de espera cero.
+## Flujo objetivo
 
-## Decisiones
+Abrir Hoja de inspección → seleccionar WO → Cargar → abrir selección → ocultar una operación intermedia → confirmar cuadrícula compacta → Ver dibujo → cerrar/editar liga sin guardar → Imprimir.
 
-- Ante varios conflictos se atribuye el intervalo que termina más tarde, porque determina el salto definitivo; en empate se prioriza operador para mantener un resultado estable.
-- Un cambio de herramental con duración previa a producción se reporta como `CAMBIO_HERRAMENTAL` y no inventa una OT bloqueadora.
-- Las OT y secuencias bloqueadoras solo se copian desde metadatos reales del intervalo ocupado.
+## Suite y build
 
-## Verificación
+- `npm.cmd test`: 85 pruebas, 85 aprobadas, 0 fallas.
+- `npm.cmd run check`: código 0, `Validacion correcta. Index.html: 611 KiB; Apps Script: 22 archivos; Pages listo.`
+- `npm.cmd run build`: código 0; generó `dist/` y `site/`.
+- Los cambios productivos posteriores al review se incluyen en el commit de corrección.
 
-- `node --test --test-name-pattern="registra la operacion bloqueadora|sin espera" tests/planner-core.test.mjs` — 2/2 pasan.
-- `node --test tests/planner-core.test.mjs` — 18/18 pasan.
-- `git diff --check` — sin errores.
+## Navegador
 
-## Auto-revisión
+### Ruta preferida
 
-- El cambio queda limitado al motor, sus pruebas y este reporte; no incluye UI ni tooltip.
-- Los consumidores existentes de intervalos siguen pudiendo leer `start` y `end` sin cambios.
-- No se atribuye OT bloqueadora para calendario, cambio de herramental ni `SIN_CAUSA`.
-- No se observaron regresiones en la suite del motor.
+- Habilidad usada: `frontend-testing-debugging` y, por estar disponible en el catálogo, `browser:control-in-app-browser`.
+- La conexión obligatoria al Browser integrado falló exactamente con: `Browser is not available: iab`.
+- Clasificación: **Browser invocation failed**.
 
-## Corrección posterior a revisión
+### Fallback Chromium headless
 
-### RED
+- Binario: `C:\Users\plane\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe` (Chromium 149).
+- URL intentada: `http://127.0.0.1:4173/?qaFixture=1#hoja-inspeccion`, repetida en `localhost` y con cache-busting.
+- Viewports intentados: 1440×1000 y 390×844.
+- Se construyó un fixture temporal con una WO, 2 materiales y 12 operaciones; interceptaba solamente la interfaz local `PPAppsScriptBridge.call` y no alteraba ni fingía solicitudes externas. Fue retirado al finalizar.
+- Resultado DOM repetible: `fixtureBlock=false`, `qaReady=false`, `data-view=plan`; la shell servida permaneció en Plan semanal. Por ello las capturas `tmp/qa/inspection-desktop.png`, `inspection-mobile.png` y `hoja-inspeccion.pdf` corresponden a la shell previa y **no son evidencia válida de Hoja de inspección**.
+- El log de consola sólo mostró `[Plan Maestro] optimizacion activa fluid-2026-07-11-03`; no mostró overlay ni excepción, lo cual es coherente con una shell PWA persistente y no con la ejecución del fixture nuevo.
 
-- Se agregaron cuatro regresiones: calendario posterior a un conflicto corto, espera por máquina, cambio de herramental previo a producción y bloqueadores simultáneos con elección del determinante.
-- Comando: `node --test --test-name-pattern="limite de calendario|maquina como causa|cambio requerido determina|bloqueadores simultaneos" tests/planner-core.test.mjs`.
-- Resultado inicial: el caso calendario falló porque devolvía `OPERADOR` en vez de `CALENDARIO`. Los dos fixtures de máquina también revelaron que necesitaban la capacidad de ajustador exigida por las reglas existentes; tras corregir el fixture quedaron como regresiones válidas. El caso de cambio ya documentaba correctamente el comportamiento existente.
+## Matriz de checks renderizados
 
-### GREEN
+| Check | Estado | Evidencia |
+|---|---:|---|
+| Identidad de página | Bloqueado | Browser integrado no disponible; fallback quedó en Plan semanal |
+| DOM no vacío | PASS parcial | La aplicación renderizó contenido real, pero no la vista objetivo |
+| Overlay de framework | PASS parcial | No apareció overlay en capturas del fallback |
+| Consola | PASS parcial | Sin errores de aplicación relevantes; sólo log informativo |
+| Captura de inspección | Bloqueado | Capturas descartadas por identidad incorrecta |
+| Selección/compactación | PASS automatizado | `tests/inspection-core.test.mjs`: selección inicial y compactación pasan |
+| Dibujo/edición sin guardar | Bloqueado | Fixture no llegó al flujo objetivo |
+| Impresión de inspección | Bloqueado | PDF del fallback era Plan semanal, no inspección |
 
-- El diagnóstico selecciona primero el conflicto que termina más tarde y consulta la disponibilidad de calendario desde su final.
-- Si el calendario desplaza todavía más el cursor hasta el inicio asignado, la causa definitiva es `CALENDARIO` y no se copia una OT bloqueadora.
-- Si el recurso está disponible al terminar el conflicto, se conserva la atribución real a `OPERADOR` o `MAQUINA`.
+## Referencia PDF
 
-### Comandos y resultados
+- Fuente: `C:\Users\plane\Documents\Necesidades de Produccion.pdf`.
+- `pdfinfo`: 1 página, A4 horizontal, 841.92 × 594.96 pt, PDF 1.4.
+- Render: `pdftoppm -png -singlefile -r 144 ... tmp/qa/reference.png`.
+- Evidencia válida: `tmp/qa/reference.png` muestra una hoja horizontal de una página, cuadrícula de operaciones, segunda captura y pie de liberación.
+- Mismatch ledger: no fue posible comparar contra un render válido de inspección. El PDF de fallback también fue una página A4 horizontal, pero su contenido era Plan semanal y fue descartado.
 
-- `node --test --test-name-pattern="limite de calendario|maquina como causa|cambio requerido determina|bloqueadores simultaneos" tests/planner-core.test.mjs` — 4/4 pasan.
-- `node --test --test-name-pattern="registra la operacion bloqueadora|sin espera|limite de calendario|maquina como causa|cambio requerido determina|bloqueadores simultaneos" tests/planner-core.test.mjs` — 6/6 pasan.
-- `node --test tests/planner-core.test.mjs` — 22/22 pasan.
+Poppler usado: `C:\Users\plane\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\poppler\Library\bin\pdfinfo.exe` y `pdftoppm.exe`.
 
-### Auto-revisión de la corrección
+## Riesgos pendientes
 
-- La comparación usa el final del conflicto determinante, no cualquier intervalo que cruce todo el tramo de espera.
-- El desempate entre conflictos conserva el criterio estable existente.
-- Calendario, cambio de herramental y espera sin causa demostrable no inventan una OT bloqueadora.
-- No se modificó UI ni tooltip.
+- Falta confirmar visualmente estructura, proporción, corte y legibilidad de una impresión real de Hoja de inspección.
+- Falta ejercitar en navegador Ver dibujo, cancelación de edición y registro previo a impresión contra una WO adecuada.
+- El service worker/caché persistente del entorno de Chromium puede ocultar builds nuevos durante QA local; conviene repetir con Browser integrado disponible o un perfil Chromium limpio y controlable.
+- No se comprobó producción ni workflows remotos y no se hizo push.
+
+## Correcciones posteriores al review Important
+
+- El encabezado `MP FO 08 V23` conserva fecha de entrega y, para ambos materiales, material, descripción, tramo y Tubo/pzas; los campos vacíos conservan su celda.
+- El panel muestra cuatro verificaciones separadas: Tramos, Dibujo, Material y Pendientes. El historial muestra Total, Última impresión y Folio/fecha.
+- La cuadrícula de acciones mantiene Cargar/Ver dibujo en la primera fila, Editar liga/Imprimir en la segunda y sólo Seleccionar operaciones a ancho completo.
+- El detalle y su selección se renderizan antes de consultar rutas. El auxiliar `getInspectionDrawingRoutes` tolera rechazo sin impedir el documento; historial también degrada a resumen vacío.
+- La vista indicada por el hash inicial se aplica antes de `loadAppStateInBackground`, evitando que `#hoja-inspeccion` quede temporalmente en Plan semanal.
+- TDD RED: la prueba focalizada de build falló por ausencia de `Fechas de entrega:`. GREEN: la misma prueba pasó después de los cambios.

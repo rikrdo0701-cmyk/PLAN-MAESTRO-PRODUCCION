@@ -468,6 +468,7 @@ function initializePlanningApp() {
   resetDailyReportFiltersToToday();
   render();
   saveState("ui");
+  applyInitialWorkspaceView();
   loadAppStateInBackground();
 }
 
