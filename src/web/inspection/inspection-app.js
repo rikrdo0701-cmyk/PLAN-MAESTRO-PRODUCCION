@@ -93,12 +93,17 @@
     const count = history?.data?.count ?? entries.length;
     byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${count}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
   }
-  function drawingCandidate() { return state.detail?.workOrder?.drawing || state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
-  function normalizeDrawingUrl(value) {
+  function cleanDrawingInput(value) {
     const text = String(value ?? "").trim();
     if (!text) return "";
     const hyperlink = text.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
-    const raw = String(hyperlink ? hyperlink[1] : text).trim();
+    let raw = String(hyperlink ? hyperlink[1] : text).trim();
+    raw = raw.replace(/^['"]+|['"]+$/g, "").trim();
+    return raw;
+  }
+  function drawingCandidate() { return state.detail?.workOrder?.drawing || state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
+  function normalizeDrawingUrl(value) {
+    const raw = cleanDrawingInput(value);
     if (!raw) return "";
     if (/^maldonado:\/\/abrir\?archivo=/i.test(raw)) return raw;
     const withoutFilePrefix = raw.replace(/^file:\/*/i, "");
@@ -124,7 +129,7 @@
   function openDrawing() {
     const raw = drawingCandidate();
     const drawing = normalizeDrawingUrl(raw);
-    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa que sea PDF dentro de \\192.168.1.101\Produccion2\, maldonado://, URL o ID de Drive. Valor actual: ${raw || "vacía"}`); return; }
+    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa que sea PDF dentro de \\192.168.1.101\\Produccion2\\, maldonado://, URL o ID de Drive. Valor actual: ${raw || "vacía"}`); return; }
     if (/^maldonado:\/\//i.test(drawing)) { clickDrawingLink(drawing); return; }
     const opened = root.open(drawing, "_blank", "noopener,noreferrer");
     if (opened) return;
@@ -133,6 +138,125 @@
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
     return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, materialBadge(first), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, escape(first?.required ?? ""), "inspection-br") + cell(2, materialBadge(second)) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, escape(second?.required ?? ""));
   }
+  function visibleInspectionMaterials() {
+    return root.InspectionCore.inspectionMaterials(state.detail?.materials || []);
+  }
+  function ensureLinkDialog() {
+    let dialog = byId("inspectionLinkDialog");
+    if (dialog) return dialog;
+    dialog = document.createElement("dialog");
+    dialog.id = "inspectionLinkDialog";
+    dialog.className = "inspection-link-dialog";
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+  function setLinkDialogMessage(text, status = "") {
+    const message = byId("inspectionLinkDialogMessage");
+    if (!message) return;
+    message.textContent = text || "";
+    message.className = `inspection-link-dialog-message ${status}`.trim();
+  }
+  function closeLinkDialog() {
+    const dialog = byId("inspectionLinkDialog");
+    if (!dialog) return;
+    if (dialog.open && typeof dialog.close === "function") dialog.close();
+    else dialog.removeAttribute("open");
+  }
+  function openEditModal(focusIndex) {
+    const detail = state.detail;
+    const job = detail?.workOrder || {};
+    const allMaterials = detail?.materials || [];
+    const materials = visibleInspectionMaterials();
+    if (!job.article || !materials.length) { root.alert("Carga una WO con materiales antes de editar tramo/dibujo."); return; }
+    const dialog = ensureLinkDialog();
+    const drawing = cleanDrawingInput(drawingCandidate());
+    const materialCards = materials.map((material, order) => {
+      const sourceIndex = allMaterials.indexOf(material);
+      const quantity = material.required ?? material.requiredOriginal ?? "";
+      return `<article class="inspection-link-material-card">
+        <header><strong>${escape(material.material || "")}</strong><span>${escape(quantity)}</span></header>
+        <p>${escape(material.description || "")}</p>
+        <label><span>Tramo</span><input type="text" data-inspection-route="${sourceIndex}" value="${escape(material.route || "")}" placeholder="Ej. 650 mm"></label>
+        <small>El tramo se guarda por articulo + material.</small>
+      </article>`;
+    }).join("");
+    dialog.innerHTML = `<form id="inspectionLinkForm" class="inspection-link-form" novalidate>
+      <header class="inspection-link-title">
+        <div><strong>Editar tramo/dibujo - WO ${escape(job.wo || "")}</strong><span>${escape(job.article || "")}</span></div>
+        <button type="button" class="inspection-link-close" data-inspection-link-close aria-label="Cerrar">×</button>
+      </header>
+      <section class="inspection-link-rule">
+        <div><span>Articulo</span><strong>${escape(job.article || "")}</strong></div>
+        <p>El dibujo se captura una sola vez para la OT y se guarda en la fila del material principal. El tramo se captura por articulo + materia prima.</p>
+      </section>
+      <section class="inspection-link-section">
+        <header><strong>Dibujo del artículo</strong><span>${escape(job.article || "")}</span></header>
+        <label><span>DIBUJO</span><input id="inspectionDrawingInput" type="text" value="${escape(drawing)}" placeholder="\\\\192.168.1.101\\Produccion2\\...\\archivo.pdf"></label>
+        <small>Para ruta de red completa pega la ruta en Dibujo. También acepta maldonado://, URL o ID de Drive.</small>
+      </section>
+      <section class="inspection-link-materials">${materialCards}</section>
+      <p id="inspectionLinkDialogMessage" class="inspection-link-dialog-message" aria-live="polite"></p>
+      <footer class="inspection-link-actions">
+        <button type="button" class="button" data-inspection-link-close>Cancelar</button>
+        <button type="submit" class="button primary" data-inspection-save-links>Guardar tramo/dibujo</button>
+      </footer>
+    </form>`;
+    dialog.querySelectorAll("[data-inspection-link-close]").forEach((button) => button.addEventListener("click", closeLinkDialog));
+    dialog.querySelector("#inspectionLinkForm").addEventListener("submit", saveEditModal);
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+    const targetIndex = Number.isFinite(Number(focusIndex)) ? Number(focusIndex) : allMaterials.indexOf(materials[0]);
+    root.requestAnimationFrame(() => dialog.querySelector(`[data-inspection-route="${targetIndex}"]`)?.focus());
+  }
+  async function saveEditModal(event) {
+    event.preventDefault();
+    const dialog = byId("inspectionLinkDialog");
+    const job = state.detail?.workOrder || {};
+    const allMaterials = state.detail?.materials || [];
+    const materials = visibleInspectionMaterials();
+    const principal = materials[0];
+    if (!dialog || !job.article || !principal) return;
+    const drawingInput = cleanDrawingInput(dialog.querySelector("#inspectionDrawingInput")?.value || "");
+    if (drawingInput && !normalizeDrawingUrl(drawingInput)) {
+      setLinkDialogMessage("El dibujo debe ser una ruta PDF dentro de \\192.168.1.101\\Produccion2\\, maldonado://, URL o ID de Drive.", "error");
+      return;
+    }
+    const saveButton = dialog.querySelector("[data-inspection-save-links]");
+    const routeInputs = Array.from(dialog.querySelectorAll("[data-inspection-route]"));
+    const routeByIndex = new Map(routeInputs.map((input) => [Number(input.dataset.inspectionRoute), String(input.value || "").trim()]));
+    const previousPrincipalDrawing = cleanDrawingInput(job.drawing || principal.drawing || "");
+    const changes = materials.map((material) => {
+      const sourceIndex = allMaterials.indexOf(material);
+      const route = routeByIndex.has(sourceIndex) ? routeByIndex.get(sourceIndex) : String(material.route || "").trim();
+      const isPrincipal = material === principal;
+      const drawing = isPrincipal ? drawingInput : cleanDrawingInput(material.drawing || "");
+      const routeChanged = route !== String(material.route || "").trim();
+      const drawingChanged = isPrincipal && drawingInput !== previousPrincipalDrawing;
+      return { material, route, drawing, isPrincipal, routeChanged, drawingChanged };
+    }).filter((item) => item.routeChanged || item.drawingChanged);
+    if (!changes.length) { setLinkDialogMessage("Sin cambios para guardar.", "ok"); return; }
+    try {
+      if (saveButton) saveButton.disabled = true;
+      setLinkDialogMessage("Guardando cambios...", "");
+      for (const item of changes) {
+        const result = await call("saveInspectionLink", { article: job.article, material: item.material.material, route: item.route, drawing: item.drawing });
+        if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el vínculo");
+        item.material.route = item.route;
+        item.material.drawing = item.drawing;
+      }
+      if (principal) {
+        principal.drawing = drawingInput;
+        job.drawing = drawingInput;
+      }
+      renderDetail();
+      setLinkDialogMessage("Cambios guardados.", "ok");
+      root.setTimeout(closeLinkDialog, 550);
+    } catch (error) {
+      setLinkDialogMessage(error.message || String(error), "error");
+    } finally {
+      if (saveButton) saveButton.disabled = false;
+    }
+  }
+  function editMaterialLink(index) { openEditModal(index); }
   function renderDetail() {
     const detail = state.detail;
     if (!detail) return;
@@ -162,20 +286,6 @@
     byId("inspectionDrawing").disabled = !currentDrawing();
     byId("inspectionEditLink").disabled = !materials.length;
   }
-  async function editMaterialLink(index) {
-    const job = state.detail?.workOrder;
-    const material = state.detail?.materials?.[index];
-    if (!job || !material) return;
-    const route = root.prompt("Tramo", material.route || "");
-    if (route === null) return;
-    const drawingInput = root.prompt("URL, ID o ruta UNC del dibujo", material.drawing || "");
-    if (drawingInput === null) return;
-    const drawing = String(drawingInput).trim() ? normalizeDrawingUrl(drawingInput) : "";
-    if (String(drawingInput).trim() && !drawing) { root.alert("La liga del dibujo debe ser URL válida, ID de Drive o PDF dentro de \\192.168.1.101\Produccion2\."); return; }
-    const result = await call("saveInspectionLink", { article: job.article, material: material.material, route, drawing });
-    if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el vínculo");
-    material.route = route; material.drawing = drawing; renderDetail();
-  }
   function firstInspectionMaterialIndex() {
     const materials = state.detail?.materials || [];
     const first = root.InspectionCore.inspectionMaterials(materials)[0];
@@ -197,6 +307,10 @@
         const route = routeByMaterial.get(String(material.material || "").toUpperCase());
         if (route) { material.route = route.TRAMO || route.route || material.route; material.drawing = route.DIBUJO || route.drawing || material.drawing; }
       });
+      if (!state.detail.workOrder?.drawing) {
+        const articleDrawing = (routes.data || []).find((route) => String(route.DIBUJO || route.drawing || "").trim());
+        if (articleDrawing) state.detail.workOrder.drawing = articleDrawing.DIBUJO || articleDrawing.drawing || "";
+      }
       renderDetail();
     }
     const history = await call("getInspectionHistory", wo).catch(() => null);
@@ -257,7 +371,7 @@
     byId("inspectionWorkOrder").addEventListener("change", () => loadDetail().catch(reportError));
     byId("inspectionSelectOps").addEventListener("click", () => { byId("inspectionOperationChoices").hidden = !byId("inspectionOperationChoices").hidden; });
     byId("inspectionDrawing").addEventListener("click", openDrawing);
-    byId("inspectionEditLink").addEventListener("click", () => editMaterialLink(firstInspectionMaterialIndex()).catch(reportError));
+    byId("inspectionEditLink").addEventListener("click", () => openEditModal(firstInspectionMaterialIndex()));
     byId("inspectionPrint").addEventListener("click", () => printInspection().catch(reportError));
     const ensureLoaded = () => { if (root.location.hash === "#hoja-inspeccion" && !state.list.length) loadList().catch(reportError); };
     root.addEventListener("hashchange", ensureLoaded);
