@@ -97,11 +97,17 @@
     const sheet = byId("inspectionDocument");
     sheet.style.setProperty("--inspection-print-scale", "1");
     await new Promise((resolve) => root.setTimeout(resolve, 0));
-    const widthRatio = ((279 - 17) * 96 / 25.4) / sheet.scrollWidth;
-    const heightRatio = ((216 - 8) * 96 / 25.4) / sheet.scrollHeight;
+    const printableWidthMm = 297 - 9 - 8;
+    const printableHeightMm = 210 - 3 - 5;
+    const widthRatio = (printableWidthMm * 96 / 25.4) / sheet.scrollWidth;
+    const heightRatio = (printableHeightMm * 96 / 25.4) / sheet.scrollHeight;
     sheet.style.setProperty("--inspection-print-scale", String(Math.min(1, widthRatio, heightRatio)));
     try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
-    finally { document.body.classList.remove("printing-inspection"); }
+    finally { sheet.style.removeProperty("--inspection-print-scale"); document.body.classList.remove("printing-inspection"); }
+  }
+  function clearInspectionPrintState() {
+    byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale");
+    document.body.classList.remove("printing-inspection");
   }
   function reportError(error) { byId("inspectionJobStatus").textContent = error.message; }
   function initialize() {
@@ -115,7 +121,7 @@
     byId("inspectionPrint").addEventListener("click", () => printInspection().catch(reportError));
     const ensureLoaded = () => { if (root.location.hash === "#hoja-inspeccion" && !state.list.length) loadList().catch(reportError); };
     root.addEventListener("hashchange", ensureLoaded);
-    root.addEventListener("afterprint", () => byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale"));
+    root.addEventListener("afterprint", clearInspectionPrintState);
     ensureLoaded();
   }
   root.InspectionApp = { initialize, loadList, loadDetail };

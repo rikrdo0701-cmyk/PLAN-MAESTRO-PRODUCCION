@@ -184,7 +184,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
-  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 2);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
@@ -209,7 +209,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"/);
-  assert.match(pagesIndex, /@page\s*\{\s*size:\s*landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
+  assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
+  assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
+  assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 0\)[\s\S]*sheet\.scrollWidth/);
+  assert.match(pagesIndex, /finally\s*\{[^}]*removeProperty\("--inspection-print-scale"\)[^}]*classList\.remove\("printing-inspection"\)/);
+  assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection, 16\)/);
   for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
     assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));

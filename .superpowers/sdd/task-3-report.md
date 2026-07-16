@@ -36,4 +36,12 @@ No se generó ni se afirmó validar `output/pdf/hoja-inspeccion.pdf`: la pantall
 ## Preocupaciones
 
 - La fidelidad visual final y ausencia de recortes en el driver de impresión real requieren la WO/backend y Poppler.
-- El proyecto conserva una regla `@page` global para otros reportes y añade la regla específica de inspección; la prueba ahora espera ambas.
+- El proyecto conserva una sola regla `@page` global para otros reportes; inspección usa una página nombrada aislada.
+
+## Corrección posterior de hallazgos
+
+- La impresión usa la página nombrada `inspection` (`A4 landscape`, márgenes `3mm 8mm 5mm 9mm`) y `page: inspection` se aplica únicamente a `.inspection-sheet` bajo `body.printing-inspection`; la regla global de otros reportes no se sobrescribe.
+- La escala usa A4 horizontal de 297 x 210 mm y un área útil exacta de 280 x 202 mm.
+- La clase de impresión se activa antes del reflow y de medir `scrollWidth/scrollHeight`.
+- La variable de escala y la clase se limpian tanto en `finally` como mediante `afterprint`.
+- TDD RED: la prueba focalizada falló con `2 !== 1` al detectar dos reglas `@page` globales. GREEN: prueba focalizada 85/85 y `npm.cmd run check` con código 0.
