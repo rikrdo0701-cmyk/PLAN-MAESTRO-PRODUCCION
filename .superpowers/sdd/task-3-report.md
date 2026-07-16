@@ -1,44 +1,39 @@
-# Task 3 — Eliminar cambios automáticos antiguos
+# Task 3 - Fidelidad visual e impresión horizontal
 
-## Resultado
+## Estado
 
-- Se agregaron dos regresiones en `tests/planner-core.test.mjs`.
-- Un cambio pendiente generado por `PLANNER_CORE_V2` de una ejecución anterior desaparece y no bloquea al `AJUSTADOR` a las 07:00.
-- Un cambio generado completado permanece como historial, conserva sus fechas y no bloquea al `AJUSTADOR` a las 07:00.
-- No fue necesario cambiar la lógica productiva: `planner-core.js` ya separa los cambios completados y excluye los pendientes generados antes de regenerar.
+Implementación terminada y verificación automatizada aprobada. La comparación visual con PDF real quedó bloqueada y no se presenta como aprobada.
 
-## Evidencia TDD
+## Cambios
 
-Las pruebas nuevas pasaron inmediatamente por la lógica existente. Para demostrar que la primera regresión era sensible, se quitó temporalmente la exclusión `op.generatedBy !== GENERATED_BY` y se ejecutó el patrón focalizado:
+- Panel lateral replicado con tarjetas, radios, tipografía y cuadrícula de acciones; la hoja conserva 1280 px y desplazamiento en pantalla.
+- Documento migrado de tabla plana a cuadrícula de 24 columnas, con bordes negros, encabezados agrupados de setup, inactividad y producción, segunda captura y pie.
+- Impresión horizontal con márgenes `3mm 8mm 5mm 9mm`, ocultamiento del chrome de la app y escala mediante `--inspection-print-scale`.
+- Cálculo previo a imprimir con razones de ancho/alto, límite `Math.min(1, widthRatio, heightRatio)` y limpieza en `afterprint`.
+- Prueba de build actualizada mediante ciclo RED-GREEN para cubrir la cuadrícula, agrupaciones, regla de página y escala.
 
-```text
-tests 2; pass 1; fail 1
-un cambio antiguo pendiente desaparece y no reserva capacidad
-AssertionError: true !== false
-```
+## Pruebas y evidencia
 
-La exclusión se restauró inmediatamente. Evidencia final:
-
-```powershell
-node --test --test-name-pattern="cambio antiguo" tests/planner-core.test.mjs
-```
-
-```text
-tests 2; pass 2; fail 0
-```
-
-```powershell
-node --test tests/planner-core.test.mjs
-```
-
-```text
-tests 16; pass 16; fail 0
-```
+- RED: `npm.cmd test -- --test-name-pattern="builds Apps Script"` falló inicialmente porque no existía `.inspection-grid` con 24 columnas.
+- GREEN: el mismo comando pasó después de implementar; 85 pruebas totales, 0 fallas.
+- `npm.cmd test`: 85/85, código 0.
+- `npm.cmd run build`: código 0; Apps Script y GitHub Pages generados.
+- `npm.cmd run check`: código 0; "Validacion correcta".
+- `git diff --check`: código 0.
 
 ## Auto-revisión
 
-- Alcance limitado a las dos regresiones solicitadas y este reporte.
-- Las pruebas verifican tanto presencia/ausencia como consumo de capacidad a las 07:00.
-- El caso completado verifica además fechas históricas y ausencia de conflictos de operador.
-- No se agregó trazabilidad, tooltip ni comportamiento de tareas posteriores.
-- No se incluyeron archivos de tareas anteriores.
+- Cada encabezado, subencabezado y fila de operación suma 24 columnas.
+- Las operaciones ocultas se compactan antes de renderizar por `InspectionCore.inspectionRows`; los huecos sólo se agregan al final.
+- La hoja no se reduce en pantalla y el transform sólo se activa bajo `body.printing-inspection`.
+- No se incorporaron secretos ni archivos de credenciales.
+- La revisión independiente señaló inicialmente una posible fila de materiales de 17 columnas; al recontar el literal completo se confirmó que incluye una celda inicial de 7 columnas y suma 24. El segundo hallazgo sí era válido: la medición ocurría antes de activar estilos de impresión. Se corrigió activando `printing-inspection`, esperando el recálculo de layout y midiendo después.
+
+## Bloqueo de evidencia PDF
+
+No se generó ni se afirmó validar `output/pdf/hoja-inspeccion.pdf`: la pantalla necesita un backend de Apps Script autenticado con una WO que tenga materiales y al menos diez operaciones, datos no disponibles localmente. Además, `pdfinfo` y `pdftoppm` no están instalados en este entorno (`CommandNotFoundException`), por lo que tampoco fue posible renderizar `C:\Users\plane\Documents\Necesidades de Produccion.pdf`. Se verificó la estructura contra el CSS/HTML original indicado en el brief, pero queda pendiente la comparación visual de una página horizontal real.
+
+## Preocupaciones
+
+- La fidelidad visual final y ausencia de recortes en el driver de impresión real requieren la WO/backend y Poppler.
+- El proyecto conserva una regla `@page` global para otros reportes y añade la regla específica de inspección; la prueba ahora espera ambas.

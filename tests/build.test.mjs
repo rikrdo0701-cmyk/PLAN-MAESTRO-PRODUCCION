@@ -184,7 +184,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
-  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 2);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
@@ -202,9 +202,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, />Hoja de inspección</);
   assert.match(pagesIndex, /Seleccionar operaciones/);
   assert.match(pagesIndex, /InspectionCore\.printableOperations/);
-  assert.match(pagesIndex, /grid-template-columns:\s*220px 1fr 100px/);
+  assert.match(pagesIndex, /\.inspection-grid[^}]*grid-template-columns:\s*repeat\(24,\s*1fr\)/);
+  assert.match(pagesIndex, /inspection-time-head/);
+  assert.match(pagesIndex, /SETUP[\s\S]*INACTIVIDAD[\s\S]*PRODUCCI[^<]*/);
+  assert.match(pagesIndex, /--inspection-print-scale/);
+  assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
+  assert.match(pagesIndex, /addEventListener\("afterprint"/);
   assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"/);
-  assert.match(pagesIndex, /#inspectionSheetGrid > header h2/);
+  assert.match(pagesIndex, /@page\s*\{\s*size:\s*landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection, 16\)/);
   for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
     assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));

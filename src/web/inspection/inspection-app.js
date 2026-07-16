@@ -19,13 +19,15 @@
     renderList();
     byId("inspectionJobStatus").textContent = `${state.list.length} WOs abiertas`;
   }
-  function operationCells(operation) {
-    const values = [operation?.code || "", "", "", operation?.workCenter || "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""];
-    return `<tr>${values.map((value) => `<td>${escape(value) || "&nbsp;"}</td>`).join("")}</tr>`;
+  function cell(span, html = "", classes = "") { return `<div class="inspection-cell ${classes}" style="grid-column:span ${span}">${html}</div>`; }
+  function operationHeader(label) {
+    return cell(1, label, "inspection-head inspection-br") + cell(2, "No. Operador", "inspection-head inspection-br") + cell(2, "Fecha", "inspection-head inspection-br") + cell(1, "No.<br>Máquina", "inspection-head inspection-head-tight inspection-br") + cell(2, "SETUP", "inspection-gray") + cell(2, "INACTIVIDAD", "inspection-gray") + cell(2, "PRODUCCIÓN", "inspection-gray inspection-br") + cell(2, "Cant.<br>Piezas", "inspection-head inspection-br") + cell(1, "Captura", "inspection-head inspection-br") + cell(2, "No. Operador", "inspection-head inspection-br") + cell(2, "Fecha", "inspection-head inspection-br") + cell(1, "No.<br>Máquina", "inspection-head inspection-br") + cell(2, "PRODUCCIÓN", "inspection-gray inspection-br") + cell(2, "Cant.", "inspection-head");
   }
-  function operationTable(rows, label) {
-    const headings = [label, "No. Operador", "Fecha", "No. Máquina", "Setup inicio", "Setup fin", "Inactividad inicio", "Inactividad fin", "Producción inicio", "Producción fin", "Cant. piezas", "Captura", "No. Operador", "Fecha", "No. Máquina", "Inicio", "Fin", "Cant."];
-    return `<table class="inspection-operations-table"><thead><tr>${headings.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => operationCells(row.operation)).join("")}</tbody></table>`;
+  function operationSubheader() {
+    return cell(1, "", "inspection-br") + cell(2, "", "inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(2, "", "inspection-br") + cell(2, "", "inspection-br") + cell(1, "", "inspection-br") + cell(1, "Inicio", "inspection-gray") + cell(1, "Fin", "inspection-gray inspection-br") + cell(2);
+  }
+  function operationRow(operation) {
+    return cell(1, escape(operation?.code || ""), "inspection-op-line inspection-op inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, escape(operation?.workCenter || ""), "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line inspection-br") + cell(1, "", "inspection-op-line") + cell(1, "", "inspection-op-line inspection-br") + cell(2, "", "inspection-op-line");
   }
   function printSemaphore(detail) {
     const materials = detail?.materials || [];
@@ -40,11 +42,11 @@
     const job = detail.workOrder || {};
     const materials = detail.materials || [];
     const rows = root.InspectionCore.inspectionRows(detail.operations || [], state.selection, 16);
-    const split = Math.max(1, Math.ceil(rows.length / 2));
-    const materialRows = materials.length ? materials.map((material, index) => `<tr><td>${escape(material.material)}</td><td>${escape(material.description)}</td><td>${escape(material.required)}</td><td>${escape(material.issued)}</td><td class="${Number(material.available) < Number(material.required) ? "inspection-shortage" : ""}">${escape(material.available)}</td><td>${escape(material.route) || "-"}</td><td>${material.drawing ? `<a href="${escape(material.drawing)}" target="_blank" rel="noopener">Dibujo</a>` : "-"}</td><td><button class="inspection-edit-link" type="button" data-inspection-material="${index}">Editar</button></td></tr>`).join("") : `<tr><td colspan="8">Sin materiales</td></tr>`;
-    byId("inspectionSheetGrid").innerHTML = `<header><strong class="inspection-logo">MALDONADO</strong><h2>HOJA DE INSPECCIÓN Y ESTADÍSTICAS DE TUBERÍA DOBLADA</h2><small>MP FO 08 V23</small></header><div class="inspection-job-header"><span>Trabajo: ${escape(job.wo)}</span><span>${escape(job.article)}</span><span>REV ${escape(job.revision)}</span><span>Cantidad</span><span>${escape(job.quantity)} piezas</span></div><div class="inspection-materials"><table><thead><tr><th>Material</th><th>Descripción</th><th>Requerido</th><th>Emitido</th><th>Disponible</th><th>Tramo tubo</th><th>Dibujo</th><th>Liga</th></tr></thead><tbody>${materialRows}</tbody></table></div>${operationTable(rows.slice(0, split), "OP")}`;
-    byId("inspectionSecondCapture").innerHTML = operationTable(rows.slice(split), "OPER.");
-    byId("inspectionReleaseFooter").innerHTML = "<span>FTY</span><span>SELLO LIBERACIÓN</span><span>OBSERVACIONES</span><span>ENTREGA / CANT. / RECIBE</span>";
+    const material = materials[0] || {};
+    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCIÓN Y ESTADÍSTICAS DE TUBERÍA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb")}${cell(3, escape(job.wo), "inspection-big inspection-bb")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb")}${cell(2, "REV", "inspection-big inspection-bb")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb")}${cell(2, "Cantidad:", "inspection-label inspection-bb")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-br inspection-bb")}${cell(5, "Descripción", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-bb")}${cell(4, "Descripción", "inspection-head inspection-bb")}${cell(7, "", "inspection-br")}${cell(3, escape(material.material), "inspection-br")}${cell(5, escape(material.description))}${cell(2, escape(material.route || "-"), "inspection-br")}${cell(3, materials[1] ? escape(materials[1].material) : "")}${cell(4, materials[1] ? escape(materials[1].description) : "")}<div class="inspection-section-title"></div>${operationHeader("OP")}${operationSubheader()}${rows.map((row) => operationRow(row.operation)).join("")}`;
+    byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${operationHeader("OPER.")}${operationSubheader()}${Array.from({ length: 3 }, () => operationRow({})).join("")}</div>`;
+    const footerCell = (span, html, classes = "") => `<div class="inspection-footer-cell ${classes}" style="grid-column:span ${span}">${html}</div>`;
+    byId("inspectionReleaseFooter").innerHTML = footerCell(5, "OPER / N° OPER / CANTIDAD NC / CLAVE", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACIÓN", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES", "inspection-footer-head inspection-br") + footerCell(4, "ENTREGA / CANT. / RECIBE", "inspection-footer-head") + footerCell(5, "", "inspection-br") + footerCell(4, "", "inspection-br") + footerCell(6, "", "inspection-br") + footerCell(5, "", "inspection-br") + footerCell(4, "");
     byId("inspectionSheetGrid").querySelectorAll("[data-inspection-material]").forEach((button) => button.addEventListener("click", () => editMaterialLink(Number(button.dataset.inspectionMaterial))));
     byId("inspectionOperationChoices").innerHTML = (detail.operations || []).map((operation, index) => { const key = root.InspectionCore.operationKey(operation, index); return `<label><input type="checkbox" data-inspection-operation="${escape(key)}" ${state.selection[key] !== false ? "checked" : ""}> ${escape(operation.code)} - ${escape(operation.operation)}</label>`; }).join("");
     byId("inspectionOperationChoices").querySelectorAll("[data-inspection-operation]").forEach((input) => input.addEventListener("change", () => { state.selection[input.dataset.inspectionOperation] = input.checked; renderDetail(); }));
@@ -92,6 +94,12 @@
     const operations = root.InspectionCore.printableOperations(state.detail.operations || [], state.selection);
     await call("recordInspectionPrint", { wo: state.detail.workOrder.wo, article: state.detail.workOrder.article, quantity: state.detail.workOrder.quantity, semaphore: printSemaphore(state.detail), operations: operations.map((operation) => operation.code) });
     document.body.classList.add("printing-inspection");
+    const sheet = byId("inspectionDocument");
+    sheet.style.setProperty("--inspection-print-scale", "1");
+    await new Promise((resolve) => root.setTimeout(resolve, 0));
+    const widthRatio = ((279 - 17) * 96 / 25.4) / sheet.scrollWidth;
+    const heightRatio = ((216 - 8) * 96 / 25.4) / sheet.scrollHeight;
+    sheet.style.setProperty("--inspection-print-scale", String(Math.min(1, widthRatio, heightRatio)));
     try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
     finally { document.body.classList.remove("printing-inspection"); }
   }
@@ -107,6 +115,7 @@
     byId("inspectionPrint").addEventListener("click", () => printInspection().catch(reportError));
     const ensureLoaded = () => { if (root.location.hash === "#hoja-inspeccion" && !state.list.length) loadList().catch(reportError); };
     root.addEventListener("hashchange", ensureLoaded);
+    root.addEventListener("afterprint", () => byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale"));
     ensureLoaded();
   }
   root.InspectionApp = { initialize, loadList, loadDetail };
