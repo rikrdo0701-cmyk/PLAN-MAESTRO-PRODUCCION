@@ -54,7 +54,33 @@
     const count = history?.data?.count ?? entries.length;
     byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${count}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
   }
-  function currentDrawing() { return state.detail?.workOrder?.drawing || state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
+  function drawingCandidate() { return state.detail?.workOrder?.drawing || state.detail?.materials?.find((material) => material.drawing)?.drawing || ""; }
+  function normalizeDrawingUrl(value) {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+    const hyperlink = text.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
+    const raw = String(hyperlink ? hyperlink[1] : text).trim();
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return `https://${raw}`;
+    if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return `https://drive.google.com/file/d/${encodeURIComponent(raw)}/view`;
+    return "";
+  }
+  function currentDrawing() { return normalizeDrawingUrl(drawingCandidate()); }
+  function openDrawing() {
+    const raw = drawingCandidate();
+    const drawing = normalizeDrawingUrl(raw);
+    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa la liga capturada: ${raw || "vacía"}`); return; }
+    const opened = root.open(drawing, "_blank", "noopener,noreferrer");
+    if (opened) return;
+    const link = document.createElement("a");
+    link.href = drawing;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
     return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, escape(first?.material || ""), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, first?.required ?? "", "inspection-br") + cell(2, escape(second?.material || "")) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, second?.required ?? "");
   }
@@ -94,8 +120,10 @@
     if (!job || !material) return;
     const route = root.prompt("Tramo", material.route || "");
     if (route === null) return;
-    const drawing = root.prompt("URL del dibujo", material.drawing || "");
-    if (drawing === null) return;
+    const drawingInput = root.prompt("URL o ID del dibujo", material.drawing || "");
+    if (drawingInput === null) return;
+    const drawing = String(drawingInput).trim() ? normalizeDrawingUrl(drawingInput) : "";
+    if (String(drawingInput).trim() && !drawing) { root.alert("La liga del dibujo debe ser una URL válida o un ID de Google Drive."); return; }
     const result = await call("saveInspectionLink", { article: job.article, material: material.material, route, drawing });
     if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el vínculo");
     material.route = route; material.drawing = drawing; renderDetail();
@@ -180,7 +208,7 @@
     byId("inspectionReload").addEventListener("click", () => loadDetail().catch(reportError));
     byId("inspectionWorkOrder").addEventListener("change", () => loadDetail().catch(reportError));
     byId("inspectionSelectOps").addEventListener("click", () => { byId("inspectionOperationChoices").hidden = !byId("inspectionOperationChoices").hidden; });
-    byId("inspectionDrawing").addEventListener("click", () => { const drawing = currentDrawing(); if (drawing) root.open(drawing, "_blank", "noopener"); });
+    byId("inspectionDrawing").addEventListener("click", openDrawing);
     byId("inspectionEditLink").addEventListener("click", () => editMaterialLink(firstInspectionMaterialIndex()).catch(reportError));
     byId("inspectionPrint").addEventListener("click", () => printInspection().catch(reportError));
     const ensureLoaded = () => { if (root.location.hash === "#hoja-inspeccion" && !state.list.length) loadList().catch(reportError); };
