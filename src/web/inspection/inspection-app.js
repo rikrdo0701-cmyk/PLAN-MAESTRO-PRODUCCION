@@ -170,35 +170,62 @@
     if (!job.article || !materials.length) { root.alert("Carga una WO con materiales antes de editar tramo/dibujo."); return; }
     const dialog = ensureLinkDialog();
     const drawing = cleanDrawingInput(drawingCandidate());
-    const materialCards = materials.map((material, order) => {
+    const materialRows = materials.map((material) => {
       const sourceIndex = allMaterials.indexOf(material);
       const quantity = material.required ?? material.requiredOriginal ?? "";
-      return `<article class="inspection-link-material-card">
-        <header><strong>${escape(material.material || "")}</strong><span>${escape(quantity)}</span></header>
-        <p>${escape(material.description || "")}</p>
-        <label><span>Tramo</span><input type="text" data-inspection-route="${sourceIndex}" value="${escape(material.route || "")}" placeholder="Ej. 650 mm"></label>
-        <small>El tramo se guarda por articulo + material.</small>
-      </article>`;
+      const route = String(material.route || "").trim();
+      return `<div class="inspection-link-material-row" role="row">
+        <div class="inspection-link-material-copy" role="cell">
+          <strong>${escape(material.material || "")}</strong>
+          <span>${escape(material.description || "")}</span>
+        </div>
+        <div class="inspection-link-material-quantity" role="cell"><span>Cantidad requerida</span><strong>${escape(quantity)}</strong></div>
+        <label class="inspection-link-route-field" role="cell">
+          <span>Tramo</span>
+          <input type="text" data-inspection-route="${sourceIndex}" value="${escape(route)}" placeholder="Ej. 650 mm" aria-label="Tramo de ${escape(material.material || "material")}">
+        </label>
+        <div class="inspection-link-material-status ${route ? "is-ready" : "is-pending"}" role="cell">${route ? "Tramo capturado" : "Falta tramo"}</div>
+      </div>`;
     }).join("");
     dialog.innerHTML = `<form id="inspectionLinkForm" class="inspection-link-form" novalidate>
       <header class="inspection-link-title">
-        <div><strong>Editar tramo/dibujo - WO ${escape(job.wo || "")}</strong><span>${escape(job.article || "")}</span></div>
+        <div class="inspection-link-heading">
+          <strong>Editar tramo/dibujo</strong>
+          <span>Completa los datos requeridos para esta orden.</span>
+        </div>
+        <div class="inspection-link-context" aria-label="Orden de trabajo y artículo">
+          <span><small>WO</small><strong>${escape(job.wo || "")}</strong></span>
+          <span><small>Artículo</small><strong>${escape(job.article || "")}</strong></span>
+        </div>
         <button type="button" class="inspection-link-close" data-inspection-link-close aria-label="Cerrar">×</button>
       </header>
-      <section class="inspection-link-rule">
-        <div><span>Articulo</span><strong>${escape(job.article || "")}</strong></div>
-        <p>El dibujo se captura una sola vez para la OT y se guarda en la fila del material principal. El tramo se captura por articulo + materia prima.</p>
-      </section>
-      <section class="inspection-link-section">
-        <header><strong>Dibujo del artículo</strong><span>${escape(job.article || "")}</span></header>
-        <label><span>DIBUJO</span><input id="inspectionDrawingInput" type="text" value="${escape(drawing)}" placeholder="\\\\192.168.1.101\\Produccion2\\...\\archivo.pdf"></label>
-        <small>Para ruta de red completa pega la ruta en Dibujo. También acepta maldonado://, URL o ID de Drive.</small>
-      </section>
-      <section class="inspection-link-materials">${materialCards}</section>
-      <p id="inspectionLinkDialogMessage" class="inspection-link-dialog-message" aria-live="polite"></p>
+      <div class="inspection-link-body">
+        <section class="inspection-link-rule" aria-label="Regla de guardado">
+          <span class="inspection-link-rule-icon" aria-hidden="true">i</span>
+          <p><strong>Regla de guardado</strong><span>El dibujo se captura una sola vez para la OT y se guarda en la fila del material principal. El tramo se captura por articulo + materia prima.</span></p>
+        </section>
+        <section class="inspection-link-section">
+          <header><strong>Dibujo del artículo</strong><span>${escape(job.article || "")}</span></header>
+          <label><span>DIBUJO</span><input id="inspectionDrawingInput" type="text" value="${escape(drawing)}" placeholder="\\\\192.168.1.101\\Produccion2\\...\\archivo.pdf"></label>
+          <small>Para ruta de red completa pega la ruta en Dibujo. También acepta maldonado://, URL o ID de Drive.</small>
+        </section>
+        <section class="inspection-link-materials" role="table" aria-label="Tramos por material">
+          <p class="inspection-link-material-note">El tramo se guarda por articulo + material.</p>
+          <div class="inspection-link-material-head" role="row">
+            <span role="columnheader">Material</span>
+            <span role="columnheader">Cantidad requerida</span>
+            <span role="columnheader">Tramo</span>
+            <span role="columnheader">Estado</span>
+          </div>
+          ${materialRows}
+        </section>
+      </div>
       <footer class="inspection-link-actions">
-        <button type="button" class="button" data-inspection-link-close>Cancelar</button>
-        <button type="submit" class="button primary" data-inspection-save-links>Guardar tramo/dibujo</button>
+        <p id="inspectionLinkDialogMessage" class="inspection-link-dialog-message" aria-live="polite"></p>
+        <div class="inspection-link-action-buttons">
+          <button type="button" class="button" data-inspection-link-close>Cancelar</button>
+          <button type="submit" class="button primary" data-inspection-save-links>Guardar tramo/dibujo</button>
+        </div>
       </footer>
     </form>`;
     dialog.querySelectorAll("[data-inspection-link-close]").forEach((button) => button.addEventListener("click", closeLinkDialog));

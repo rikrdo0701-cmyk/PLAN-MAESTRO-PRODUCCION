@@ -354,3 +354,24 @@ test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina",
   assert.doesNotMatch(operationRow, /operation\?\.workCenter/);
   assert.doesNotMatch(operationRow, /operation\?\.operation/);
 });
+
+test("el editor de tramo usa un panel compacto sin prompts", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const start = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const end = inspectionApp.indexOf("async function saveEditModal", start);
+  const editor = inspectionApp.slice(start, end);
+
+  assert.match(editor, /class="inspection-link-context"/);
+  assert.match(editor, /class="inspection-link-body"/);
+  assert.match(editor, /class="inspection-link-material-head"/);
+  assert.match(editor, /class="inspection-link-material-row/);
+  assert.match(editor, /inspection-link-material-status/);
+  assert.match(editor, /El tramo se guarda por articulo \+ material\./);
+  assert.doesNotMatch(editor, /(?:root\.|window\.)?prompt\s*\(/);
+  assert.match(inspectionCss, /\.inspection-link-form\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/);
+  assert.match(inspectionCss, /\.inspection-link-body\{[^}]*overflow:auto/);
+  assert.match(inspectionCss, /\.inspection-link-material-row\{[^}]*grid-template-columns:/);
+  assert.match(inspectionCss, /\.inspection-link-dialog[^}]*:focus-visible/);
+  assert.match(inspectionCss, /@media \(max-width:759px\)/);
+});
