@@ -220,7 +220,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
   assert.match(pagesIndex, /callAppsScript\("saveInspectionLink", payload\)/);
-  assert.match(pagesIndex, /let editorError = "";[\s\S]*class="planning-error" role="alert"[\s\S]*editorError = `No se pudo guardar el tramo:/);
+  const inspectionRouteEditorSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function editInspectionRouteCatalogRow("),
+    pagesIndex.indexOf("function renderWeeklyReleaseTarget("),
+  );
+  assert.match(inspectionRouteEditorSource, /let attemptedRoute = row\.route;\s*let editorError = "";\s*while \(true\)/);
+  assert.match(inspectionRouteEditorSource, /editorError \? `<p class="planning-error" role="alert">\$\{escapeHtml\(editorError\)\}<\/p>`/);
+  assert.match(inspectionRouteEditorSource, /name="inspection_route" value="\$\{escapeHtml\(attemptedRoute\)\}"/);
+  assert.match(inspectionRouteEditorSource, /attemptedRoute = String\(values\.inspection_route \|\| ""\);/);
+  assert.match(inspectionRouteEditorSource, /editorError = `No se pudo guardar el tramo:[\s\S]*showToast\(editorError, 9000\);[\s\S]*\}\s*\}\s*\}/);
   assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);

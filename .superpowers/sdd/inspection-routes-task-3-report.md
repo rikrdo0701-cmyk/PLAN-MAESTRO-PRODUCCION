@@ -48,3 +48,20 @@ Se integró en Catálogos una sección **Tramos de inspección**, antes de Objet
 - Una carga fallida queda reintentable al volver a entrar; una actualización fallida conserva las filas ya visibles.
 - No se modificaron esquema, hoja imprimible, servicio ni helpers.
 - Revisión independiente: sin hallazgos críticos; se corrigió el hallazgo importante de visibilidad del error. Se mantuvo la prueba de integración por build solicitada y usada por el repositorio, sin introducir un arnés DOM o dependencia nueva.
+
+## Seguimiento de revisión
+
+Se reforzó la regresión del editor para aislar `editInspectionRouteCatalogRow` y comprobar explícitamente:
+
+- estado inicial de `attemptedRoute` y `editorError`;
+- ciclo de reintento;
+- uso del valor intentado al reabrir el campo Tramo;
+- error con `role="alert"` dentro del diálogo;
+- actualización del error y toast tras un fallo.
+
+Verificación del seguimiento:
+
+- `node --test tests/build.test.mjs`: 2/2 aprobadas.
+- `npm.cmd test`: 98/98 aprobadas.
+- `npm.cmd run check`: `Validacion correcta`.
+- `git diff --check`: sin errores.
