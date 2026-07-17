@@ -39,5 +39,38 @@
     const status = missingRoutes.length ? "block" : (alerts.length ? "warn" : "ok");
     return { status, label: status === "block" ? "Bloqueado" : (status === "warn" ? "Revisar" : "OK para imprimir"), alerts, materials: normalized, pending, missingRoutes, withoutDrawing: !hasDrawing, deficit };
   }
-  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionPrintDiagnostic };
+  function inspectionRouteValue(row, field) {
+    const aliases = {
+      article: ["article", "ARTICULO"],
+      material: ["material", "MATERIAL"],
+      route: ["route", "TRAMO"],
+      drawing: ["drawing", "DIBUJO"],
+      updated: ["updated", "ACTUALIZADO"]
+    };
+    const value = aliases[field].map((name) => row?.[name]).find((item) => item !== undefined && item !== null);
+    return String(value || "").trim();
+  }
+  function inspectionRouteRows(rows) {
+    return (rows || []).map((row) => ({
+      article: inspectionRouteValue(row, "article"),
+      material: inspectionRouteValue(row, "material"),
+      route: inspectionRouteValue(row, "route"),
+      drawing: inspectionRouteValue(row, "drawing"),
+      updated: inspectionRouteValue(row, "updated")
+    })).filter((row) => row.article && row.material).sort((left, right) => left.article.localeCompare(right.article, "es", { sensitivity: "base" }) || left.material.localeCompare(right.material, "es", { sensitivity: "base" }));
+  }
+  function filterInspectionRouteRows(rows, query) {
+    const term = String(query || "").trim().toLocaleLowerCase("es");
+    if (!term) return rows;
+    return (rows || []).filter((row) => `${row.article} ${row.material}`.toLocaleLowerCase("es").includes(term));
+  }
+  function inspectionRouteSavePayload(row, route) {
+    return {
+      article: inspectionRouteValue(row, "article"),
+      material: inspectionRouteValue(row, "material"),
+      route: String(route || "").trim(),
+      drawing: inspectionRouteValue(row, "drawing")
+    };
+  }
+  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload };
 })(typeof window !== "undefined" ? window : globalThis);
