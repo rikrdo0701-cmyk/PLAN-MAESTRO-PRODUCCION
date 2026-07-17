@@ -437,6 +437,7 @@ let backlogPointerDrag = null;
 let suppressQueueClick = false;
 let suppressBacklogClick = false;
 let planningDialogResolve = null;
+let planningDialogSubmit = null;
 let resourceCategoryDrag = null;
 let planSnapshots = [];
 let reportSnapshot = null;
@@ -445,6 +446,7 @@ let loadMode = "pending";
 let inspectionRouteCatalogRows = [];
 let inspectionRouteCatalogReady = false;
 let inspectionRouteCatalogLoading = false;
+let inspectionRouteCatalogLoadError = "";
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -620,6 +622,9 @@ function bindElements() {
     "articleConfigTable",
     "inspectionRouteCatalogSearch",
     "refreshInspectionRouteCatalogBtn",
+    "inspectionRouteCatalogError",
+    "inspectionRouteCatalogErrorMessage",
+    "retryInspectionRouteCatalogBtn",
     "inspectionRouteCatalogTable",
     "planningDialog",
     "planningDialogForm",
@@ -783,6 +788,7 @@ function bindEvents() {
   els.saveArticleConfigBtn.addEventListener("click", saveArticleConfiguration);
   els.inspectionRouteCatalogSearch.addEventListener("input", renderInspectionRouteCatalog);
   els.refreshInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
+  els.retryInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
   els.lockAllBtn.addEventListener("click", () => toggleAllJobs(true));
   els.unlockAllBtn.addEventListener("click", () => toggleAllJobs(false));
   els.planningDialogClose.addEventListener("click", () => closePlanningDialog(null));
@@ -791,11 +797,29 @@ function bindEvents() {
     event.preventDefault();
     closePlanningDialog(null);
   });
-  els.planningDialogForm.addEventListener("submit", (event) => {
+  els.planningDialogForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!els.planningDialogForm.reportValidity()) return;
     if (!confirmZeroManualPrice(els.planningDialogForm)) return;
-    closePlanningDialog(Object.fromEntries(new FormData(els.planningDialogForm).entries()));
+    const values = Object.fromEntries(new FormData(els.planningDialogForm).entries());
+    const submit = planningDialogSubmit;
+    if (!submit) {
+      closePlanningDialog(values);
+      return;
+    }
+    els.planningDialogConfirm.disabled = true;
+    els.planningDialogForm.setAttribute("aria-busy", "true");
+    try {
+      const result = await submit(values);
+      if (result !== false && planningDialogSubmit === submit) closePlanningDialog(result);
+    } catch (error) {
+      if (planningDialogSubmit === submit) showToast(error.message || String(error), 9000);
+    } finally {
+      if (planningDialogSubmit === submit) {
+        els.planningDialogConfirm.disabled = false;
+        els.planningDialogForm.removeAttribute("aria-busy");
+      }
+    }
   });
 
   document.addEventListener("mousemove", (event) => updateQueueDrag(event.clientX, event.clientY));
@@ -2225,13 +2249,16 @@ function assignPlanningOperators(operations) {
   }
 }
 
-function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible, setup }) {
+function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible, setup, submit }) {
   if (planningDialogResolve) closePlanningDialog(null);
   els.planningDialogTitle.textContent = title;
   els.planningDialogSummary.textContent = summary || "";
   els.planningDialogBody.innerHTML = body || "";
   els.planningDialogConfirm.textContent = confirmLabel || "Aceptar";
+  els.planningDialogConfirm.disabled = false;
+  els.planningDialogForm.removeAttribute("aria-busy");
   els.planningDialogCancel.hidden = cancelVisible === false;
+  planningDialogSubmit = typeof submit === "function" ? submit : null;
   const promise = new Promise((resolve) => { planningDialogResolve = resolve; });
   els.planningDialog.showModal();
   if (setup) setup();
@@ -2247,6 +2274,9 @@ function confirmZeroManualPrice(form) {
 function closePlanningDialog(result) {
   const resolve = planningDialogResolve;
   planningDialogResolve = null;
+  planningDialogSubmit = null;
+  els.planningDialogConfirm.disabled = false;
+  els.planningDialogForm.removeAttribute("aria-busy");
   if (els.planningDialog.open) els.planningDialog.close();
   if (resolve) resolve(result);
 }
@@ -3170,6 +3200,11 @@ function inspectionRouteCatalogVisibleRows() {
 function renderInspectionRouteCatalog() {
   if (!els.inspectionRouteCatalogTable) return;
   const visibleRows = inspectionRouteCatalogVisibleRows();
+  const hasLoadError = Boolean(inspectionRouteCatalogLoadError);
+  els.inspectionRouteCatalogError.hidden = !hasLoadError;
+  els.inspectionRouteCatalogErrorMessage.textContent = inspectionRouteCatalogLoadError;
+  els.refreshInspectionRouteCatalogBtn.disabled = inspectionRouteCatalogLoading;
+  els.retryInspectionRouteCatalogBtn.disabled = inspectionRouteCatalogLoading;
   let body = visibleRows.map((row, index) => `<tr>
     <td>${escapeHtml(row.article)}</td>
     <td>${escapeHtml(row.material)}</td>
@@ -3177,8 +3212,13 @@ function renderInspectionRouteCatalog() {
     <td>${escapeHtml(row.updated || "")}</td>
     <td><button class="button small" type="button" data-edit-inspection-route="${index}">Editar</button></td>
   </tr>`).join("");
-  if (inspectionRouteCatalogLoading) body = emptyTableRow(5, "Cargando tramos...");
-  else if (!body) body = emptyTableRow(5, "No hay tramos que coincidan con la búsqueda");
+  if (inspectionRouteCatalogLoading && !inspectionRouteCatalogRows.length) body = emptyTableRow(5, "Cargando tramos...");
+  else if (!body) {
+    const message = hasLoadError && !inspectionRouteCatalogRows.length
+      ? "No se pudieron cargar los tramos"
+      : (inspectionRouteCatalogRows.length ? "No hay tramos que coincidan con la búsqueda" : "No hay tramos registrados");
+    body = emptyTableRow(5, message);
+  }
   els.inspectionRouteCatalogTable.innerHTML = `<thead><tr><th>Artículo</th><th>Material</th><th>Tramo</th><th>Última modificación</th><th></th></tr></thead><tbody>${body}</tbody>`;
   els.inspectionRouteCatalogTable.querySelectorAll("[data-edit-inspection-route]").forEach((button) => {
     button.addEventListener("click", () => editInspectionRouteCatalogRow(Number(button.dataset.editInspectionRoute)));
@@ -3194,8 +3234,10 @@ async function loadInspectionRouteCatalog(force = false) {
     if (!result?.ok) throw new Error(result?.error || "No se pudieron cargar los tramos");
     inspectionRouteCatalogRows = window.InspectionCore.inspectionRouteRows(result.data || []);
     inspectionRouteCatalogReady = true;
+    inspectionRouteCatalogLoadError = "";
   } catch (error) {
-    showToast(`No se pudieron cargar los tramos: ${error.message || String(error)}`, 9000);
+    inspectionRouteCatalogLoadError = `No se pudieron cargar los tramos: ${error.message || String(error)}`;
+    showToast(inspectionRouteCatalogLoadError, 9000);
   } finally {
     inspectionRouteCatalogLoading = false;
     renderInspectionRouteCatalog();
@@ -3205,37 +3247,39 @@ async function loadInspectionRouteCatalog(force = false) {
 async function editInspectionRouteCatalogRow(index) {
   const row = inspectionRouteCatalogVisibleRows()[index];
   if (!row) return;
-  let attemptedRoute = row.route;
-  let editorError = "";
-  while (true) {
-    const values = await openPlanningDialog({
-      title: "Editar tramo",
-      summary: `${row.article} · ${row.material}`,
-      body: `${editorError ? `<p class="planning-error" role="alert">${escapeHtml(editorError)}</p>` : ""}
+  await openPlanningDialog({
+    title: "Editar tramo",
+    summary: `${row.article} · ${row.material}`,
+    body: `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
       <div class="planning-requirement-fields inspection-route-dialog-fields">
         <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
         <label>Material<input type="text" name="inspection_material" value="${escapeHtml(row.material)}" readonly></label>
-        <label>Tramo<input type="text" name="inspection_route" value="${escapeHtml(attemptedRoute)}" autofocus></label>
+        <label>Tramo<input type="text" name="inspection_route" value="${escapeHtml(row.route)}" autofocus></label>
       </div>`,
-      confirmLabel: "Guardar tramo",
-    });
-    if (!values) return;
-    attemptedRoute = String(values.inspection_route || "");
-    const payload = window.InspectionCore.inspectionRouteSavePayload(row, attemptedRoute);
-    try {
-      const result = await callAppsScript("saveInspectionLink", payload);
-      if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el tramo");
-      const saved = result.data || payload;
-      row.route = String(saved.route ?? attemptedRoute);
-      row.updated = String(saved.updated || new Date().toLocaleString("es-MX"));
-      renderInspectionRouteCatalog();
-      showToast("Tramo actualizado");
-      return;
-    } catch (error) {
-      editorError = `No se pudo guardar el tramo: ${error.message || String(error)}`;
-      showToast(editorError, 9000);
-    }
-  }
+    confirmLabel: "Guardar tramo",
+    submit: async (values) => {
+      const attemptedRoute = String(values.inspection_route || "");
+      const payload = window.InspectionCore.inspectionRouteSavePayload(row, attemptedRoute);
+      const errorElement = els.planningDialogBody.querySelector("#inspectionRouteDialogError");
+      errorElement.textContent = "";
+      errorElement.hidden = true;
+      try {
+        const result = await callAppsScript("saveInspectionLink", payload);
+        if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el tramo");
+        const saved = { ...payload, ...(result.data || {}) };
+        inspectionRouteCatalogRows = window.InspectionCore.applyInspectionRouteSave(inspectionRouteCatalogRows, row, saved);
+        renderInspectionRouteCatalog();
+        showToast("Tramo actualizado");
+        return saved;
+      } catch (error) {
+        const message = `No se pudo guardar el tramo: ${error.message || String(error)}`;
+        errorElement.textContent = message;
+        errorElement.hidden = false;
+        showToast(message, 9000);
+        return false;
+      }
+    },
+  });
 }
 
 function renderWeeklyReleaseTarget() {

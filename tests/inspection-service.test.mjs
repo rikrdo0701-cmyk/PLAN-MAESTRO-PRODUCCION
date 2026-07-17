@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/server/16-inspection-service.js", import.meta.url), "utf8");
+const drawingSource = await readFile(new URL("../src/server/17-inspection-drawing-service.js", import.meta.url), "utf8");
 
 function loadService(overrides = {}) {
   const context = {
@@ -18,6 +19,12 @@ function loadService(overrides = {}) {
   };
   vm.createContext(context);
   vm.runInContext(source, context);
+  return context;
+}
+
+function loadBundledService(overrides = {}) {
+  const context = loadService(overrides);
+  vm.runInContext(drawingSource, context);
   return context;
 }
 
@@ -70,6 +77,47 @@ test("guarda tramo y dibujo por nombre de columna aunque el orden sea distinto",
   assert.deepEqual(rows[1].slice(0, 4), ["102 MM", "COMP UADA A", "nuevo.pdf", "MP00086"]);
 });
 
+test("preserva el dibujo vigente cuando el payload guarda solo el tramo", () => {
+  const rows = [["Articulo", "Materia prima", "Tramo", "DIBUJO", "Ultima modificacion"], ["A-100", "MP-1", "600 mm", "dibujo-b.pdf", "ayer"]];
+  const sheet = {
+    getDataRange: () => ({ getValues: () => rows.map((row) => row.slice()) }),
+    getRange: (row, column) => ({
+      setValue: (value) => { rows[row - 1][column - 1] = value; }
+    }),
+    appendRow: (row) => rows.push(row),
+    getLastRow: () => rows.length
+  };
+  const context = loadService();
+  context.PP_Inspection_sheet_ = () => sheet;
+
+  const result = context.saveInspectionLink({ article: "A-100", material: "MP-1", route: "650 mm" });
+
+  assert.equal(result.ok, true);
+  assert.equal(rows[1][2], "650 mm");
+  assert.equal(rows[1][3], "dibujo-b.pdf");
+  assert.equal(result.data.drawing, "dibujo-b.pdf");
+});
+
+test("permite limpiar el dibujo cuando el payload incluye una cadena vacia", () => {
+  const rows = [["Articulo", "Materia prima", "Tramo", "DIBUJO", "Ultima modificacion"], ["A-100", "MP-1", "600 mm", "dibujo-b.pdf", "ayer"]];
+  const sheet = {
+    getDataRange: () => ({ getValues: () => rows.map((row) => row.slice()) }),
+    getRange: (row, column) => ({
+      setValue: (value) => { rows[row - 1][column - 1] = value; }
+    }),
+    appendRow: (row) => rows.push(row),
+    getLastRow: () => rows.length
+  };
+  const context = loadService();
+  context.PP_Inspection_sheet_ = () => sheet;
+
+  const result = context.saveInspectionLink({ article: "A-100", material: "MP-1", route: "650 mm", drawing: "" });
+
+  assert.equal(result.ok, true);
+  assert.equal(rows[1][3], "");
+  assert.equal(result.data.drawing, "");
+});
+
 test("lista todo el catalogo de tramos sin filtro y conserva dibujo", () => {
   const context = loadService();
   let routeIndexCalls = 0;
@@ -87,6 +135,29 @@ test("lista todo el catalogo de tramos sin filtro y conserva dibujo", () => {
     { ARTICULO: "A-100", MATERIAL: "MP-1", TRAMO: "650 mm", DIBUJO: "a100.pdf" },
     { ARTICULO: "B-200", MATERIAL: "MP-2", TRAMO: "420 mm", DIBUJO: "b200.pdf" }
   ]);
+});
+
+test("ambas definiciones publicas listan la ultima fila por articulo y material", () => {
+  const physicalRows = [
+    { Articulo: "A-100", "Materia prima": "MP-1", Tramo: "600 mm", DIBUJO: "anterior.pdf", "Ultima modificacion": "ayer" },
+    { Articulo: "a-100", "Materia prima": "mp-1", Tramo: "650 mm", DIBUJO: "vigente.pdf", "Ultima modificacion": "hoy" }
+  ];
+
+  for (const load of [loadService, loadBundledService]) {
+    const context = load({ PP_readRows_: () => physicalRows });
+    context.PP_Inspection_sheet_ = () => ({});
+
+    const result = context.getInspectionDrawingRoutes("");
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(structuredClone(result.data), [{
+      ARTICULO: "a-100",
+      MATERIAL: "mp-1",
+      TRAMO: "650 mm",
+      DIBUJO: "vigente.pdf",
+      ACTUALIZADO: "hoy"
+    }]);
+  }
 });
 
 test("adapta OT 2001 con cantidad pendiente, tramo, dibujo y fecha larga", () => {

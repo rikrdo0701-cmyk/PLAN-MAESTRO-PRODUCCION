@@ -143,11 +143,13 @@
   }
   function ensureLinkDialog() {
     let dialog = byId("inspectionLinkDialog");
-    if (dialog) return dialog;
-    dialog = document.createElement("dialog");
-    dialog.id = "inspectionLinkDialog";
-    dialog.className = "inspection-link-dialog";
-    document.body.appendChild(dialog);
+    if (!dialog) {
+      dialog = document.createElement("dialog");
+      dialog.id = "inspectionLinkDialog";
+      dialog.className = "inspection-link-dialog";
+      document.body.appendChild(dialog);
+    }
+    dialog.setAttribute("aria-labelledby", "inspectionLinkDialogTitle");
     return dialog;
   }
   function setLinkDialogMessage(text, status = "") {
@@ -198,7 +200,7 @@
     dialog.innerHTML = `<form id="inspectionLinkForm" class="inspection-link-form" novalidate>
       <header class="inspection-link-title">
         <div class="inspection-link-heading">
-          <strong>Editar tramo/dibujo</strong>
+          <h2 id="inspectionLinkDialogTitle">Editar tramo/dibujo</h2>
           <span>Completa los datos requeridos para esta orden.</span>
         </div>
         <div class="inspection-link-context" aria-label="Orden de trabajo y artículo">

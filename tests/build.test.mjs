@@ -216,6 +216,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"[\s\S]*\.catch\(\(\) => null\)/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
+  assert.match(pagesIndex, /id="retryInspectionRouteCatalogBtn"[^>]*>Reintentar</);
   assert.match(pagesIndex, /callAppsScript\("getInspectionDrawingRoutes", ""\)/);
   assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
@@ -224,11 +226,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("async function editInspectionRouteCatalogRow("),
     pagesIndex.indexOf("function renderWeeklyReleaseTarget("),
   );
-  assert.match(inspectionRouteEditorSource, /let attemptedRoute = row\.route;\s*let editorError = "";\s*while \(true\)/);
-  assert.match(inspectionRouteEditorSource, /editorError \? `<p class="planning-error" role="alert">\$\{escapeHtml\(editorError\)\}<\/p>`/);
-  assert.match(inspectionRouteEditorSource, /name="inspection_route" value="\$\{escapeHtml\(attemptedRoute\)\}"/);
-  assert.match(inspectionRouteEditorSource, /attemptedRoute = String\(values\.inspection_route \|\| ""\);/);
-  assert.match(inspectionRouteEditorSource, /editorError = `No se pudo guardar el tramo:[\s\S]*showToast\(editorError, 9000\);[\s\S]*\}\s*\}\s*\}/);
+  assert.match(inspectionRouteEditorSource, /submit:\s*async \(values\) =>/);
+  assert.match(inspectionRouteEditorSource, /id="inspectionRouteDialogError" class="planning-error" role="alert" hidden/);
+  assert.match(inspectionRouteEditorSource, /InspectionCore\.applyInspectionRouteSave\(/);
+  assert.match(inspectionRouteEditorSource, /errorElement\.hidden = false;[\s\S]*return false;/);
+  assert.doesNotMatch(inspectionRouteEditorSource, /while \(true\)/);
+  assert.match(pagesIndex, /planningDialogConfirm\.disabled = true;[\s\S]*await submit\(values\)/);
   assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);
@@ -368,6 +371,8 @@ test("el editor de tramo usa un panel compacto sin prompts", async () => {
   assert.match(editor, /class="inspection-link-material-row/);
   assert.match(editor, /inspection-link-material-status/);
   assert.match(editor, /El tramo se guarda por articulo \+ material\./);
+  assert.match(inspectionApp, /dialog\.setAttribute\("aria-labelledby", "inspectionLinkDialogTitle"\)/);
+  assert.match(editor, /<h2 id="inspectionLinkDialogTitle">Editar tramo\/dibujo<\/h2>/);
   assert.doesNotMatch(editor, /(?:root\.|window\.)?prompt\s*\(/);
   assert.match(inspectionCss, /\.inspection-link-form\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/);
   assert.match(inspectionCss, /\.inspection-link-body\{[^}]*overflow:auto/);

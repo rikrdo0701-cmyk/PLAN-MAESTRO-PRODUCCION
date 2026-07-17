@@ -190,6 +190,7 @@ function getInspectionWorkOrder(wo) {
 function saveInspectionLink(payload) {
   return PP_Inspection_result_(function() {
     payload = payload || {};
+    const drawingProvided = Object.prototype.hasOwnProperty.call(payload, 'drawing');
     const article = PP_Inspection_text_(payload.article, 200);
     const material = PP_Inspection_text_(payload.material, 200);
     if (!article || !material) throw new Error('Articulo y material son requeridos');
@@ -216,9 +217,12 @@ function saveInspectionLink(payload) {
       sheet.appendRow(Array.from({ length: headers.length }, function() { return ''; }));
     }
     const route = PP_Inspection_text_(payload.route, 100);
-    const drawing = PP_Inspection_text_(payload.drawing, 1000);
+    const currentDrawing = target <= rows.length && drawingColumn >= 0 ? rows[target - 1][drawingColumn] : '';
+    const drawing = PP_Inspection_text_(drawingProvided ? payload.drawing : currentDrawing, 1000);
     const updated = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'America/Mexico_City', 'dd/MM/yyyy HH:mm:ss');
-    [[articleColumn, article], [materialColumn, material], [routeColumn, route], [drawingColumn, drawing], [updatedColumn, updated]].forEach(function(pair) {
+    const values = [[articleColumn, article], [materialColumn, material], [routeColumn, route], [updatedColumn, updated]];
+    if (drawingProvided) values.push([drawingColumn, drawing]);
+    values.forEach(function(pair) {
       if (pair[0] >= 0) sheet.getRange(target, pair[0] + 1).setValue(pair[1]);
     });
     return { article: article, material: material, route: route, drawing: drawing, updated: updated };

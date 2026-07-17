@@ -1718,6 +1718,9 @@ tr:last-child td { border-bottom: 0; }
 .inspection-route-catalog-form label,
 .inspection-route-dialog-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
 .inspection-route-catalog-form input { width: 100%; }
+.catalog-load-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; padding: 9px 10px; border-left: 3px solid var(--red); background: #fff4f4; color: #70262e; font-size: 10px; }
+.catalog-load-error[hidden] { display: none; }
+.catalog-load-error .button { flex: 0 0 auto; }
 .inspection-route-catalog-table table { min-width: 760px; }
 .inspection-route-catalog-table th:last-child,
 .inspection-route-catalog-table td:last-child { width: 86px; text-align: center; }

@@ -12,6 +12,7 @@ function PP_Inspection_cleanDrawing_(value) {
 function PP_Inspection_routeIndexV2_() {
   const sheet = PP_Inspection_sheet_(PP_INSPECTION_ROUTES_SHEET, ['Articulo', 'Materia prima', 'Tramo', 'DIBUJO', 'Ultima modificacion']);
   const index = { rows: [], byMaterialDrawing: {} };
+  const rowsByKey = {};
   PP_readRows_(sheet).forEach(function(row) {
     const article = PP_Inspection_text_(PP_Inspection_value_(row, ['Articulo', 'Artículo', 'bf', 'ARTICULO']));
     const material = PP_Inspection_text_(PP_Inspection_value_(row, ['Materia prima', 'Material', 'MATERIAL']));
@@ -36,8 +37,9 @@ function PP_Inspection_routeIndexV2_() {
     if (material && item.DIBUJO && !index.byMaterialDrawing[looseMaterial]) {
       index.byMaterialDrawing[looseMaterial] = item;
     }
-    index.rows.push(item);
+    rowsByKey[articleKey + '|' + materialKey] = item;
   });
+  index.rows = Object.keys(rowsByKey).map(function(key) { return rowsByKey[key]; });
   return index;
 }
 

@@ -68,9 +68,34 @@
     return {
       article: inspectionRouteValue(row, "article"),
       material: inspectionRouteValue(row, "material"),
-      route: String(route || "").trim(),
-      drawing: inspectionRouteValue(row, "drawing")
+      route: String(route || "").trim()
     };
   }
-  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload };
+  function inspectionRouteKey(row) {
+    const normalize = (value) => String(value || "").trim().toUpperCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_");
+    return `${normalize(inspectionRouteValue(row, "article"))}|${normalize(inspectionRouteValue(row, "material"))}`;
+  }
+  function inspectionRouteSavedValue(saved, field, fallback) {
+    const aliases = {
+      route: ["route", "TRAMO"],
+      drawing: ["drawing", "DIBUJO"],
+      updated: ["updated", "ACTUALIZADO"]
+    };
+    const name = aliases[field].find((alias) => Object.prototype.hasOwnProperty.call(saved || {}, alias));
+    return name ? String(saved[name] ?? "").trim() : fallback;
+  }
+  function applyInspectionRouteSave(rows, reference, saved) {
+    const key = inspectionRouteKey(reference);
+    return (rows || []).map((row) => {
+      if (inspectionRouteKey(row) !== key) return row;
+      return {
+        ...row,
+        route: inspectionRouteSavedValue(saved, "route", row.route),
+        drawing: inspectionRouteSavedValue(saved, "drawing", row.drawing),
+        updated: inspectionRouteSavedValue(saved, "updated", row.updated)
+      };
+    });
+  }
+  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave };
 })(typeof window !== "undefined" ? window : globalThis);

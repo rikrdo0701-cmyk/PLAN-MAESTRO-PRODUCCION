@@ -76,7 +76,7 @@ test("normaliza, ordena y filtra las filas del catalogo de tramos", () => {
   assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "")), structuredClone(rows));
 });
 
-test("prepara el guardado del tramo sin perder el dibujo existente", () => {
+test("prepara el guardado route-only del catalogo sin enviar dibujo cacheado", () => {
   const payload = core.inspectionRouteSavePayload({
     article: " A-100 ",
     material: " TUBO 1 ",
@@ -88,7 +88,32 @@ test("prepara el guardado del tramo sin perder el dibujo existente", () => {
   assert.deepEqual(structuredClone(payload), {
     article: "A-100",
     material: "TUBO 1",
-    route: "650 mm",
-    drawing: "a100.pdf"
+    route: "650 mm"
   });
+});
+
+test("aplica el guardado a la fila vigente por clave aunque la cache se reemplace", () => {
+  const selectedBeforeRefresh = {
+    article: " A-100 ",
+    material: "TUBO 1",
+    route: "600 mm",
+    drawing: "viejo.pdf",
+    updated: "ayer"
+  };
+  const refreshedRows = core.inspectionRouteRows([
+    { article: "a-100", material: " tubo 1 ", route: "625 mm", drawing: "vigente.pdf", updated: "hoy" },
+    { article: "B-200", material: "MP-2", route: "400 mm", drawing: "b.pdf", updated: "hoy" }
+  ]);
+
+  const result = core.applyInspectionRouteSave(
+    refreshedRows,
+    selectedBeforeRefresh,
+    { route: "650 mm", drawing: "servidor.pdf", updated: "ahora" },
+  );
+
+  assert.notEqual(refreshedRows[0], selectedBeforeRefresh);
+  assert.deepEqual(structuredClone(result), [
+    { article: "a-100", material: "tubo 1", route: "650 mm", drawing: "servidor.pdf", updated: "ahora" },
+    { article: "B-200", material: "MP-2", route: "400 mm", drawing: "b.pdf", updated: "hoy" }
+  ]);
 });
