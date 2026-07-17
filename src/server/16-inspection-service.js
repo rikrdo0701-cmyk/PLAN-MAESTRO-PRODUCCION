@@ -228,7 +228,8 @@ function saveInspectionLink(payload) {
 function getInspectionDrawingRoutes(article) {
   return PP_Inspection_result_(function() {
     const key = PP_normalizeKey_(article);
-    return Object.keys(PP_Inspection_routeIndex_()).map(function(indexKey) { return PP_Inspection_routeIndex_()[indexKey]; })
+    const routes = PP_Inspection_routeIndex_();
+    return Object.keys(routes).map(function(indexKey) { return routes[indexKey]; })
       .filter(function(row) { return !key || PP_normalizeKey_(row.ARTICULO) === key; });
   });
 }

@@ -70,6 +70,25 @@ test("guarda tramo y dibujo por nombre de columna aunque el orden sea distinto",
   assert.deepEqual(rows[1].slice(0, 4), ["102 MM", "COMP UADA A", "nuevo.pdf", "MP00086"]);
 });
 
+test("lista todo el catalogo de tramos sin filtro y conserva dibujo", () => {
+  const context = loadService();
+  let routeIndexCalls = 0;
+  const routes = {
+    "A-100|MP-1": { ARTICULO: "A-100", MATERIAL: "MP-1", TRAMO: "650 mm", DIBUJO: "a100.pdf" },
+    "B-200|MP-2": { ARTICULO: "B-200", MATERIAL: "MP-2", TRAMO: "420 mm", DIBUJO: "b200.pdf" }
+  };
+  context.PP_Inspection_routeIndex_ = () => { routeIndexCalls += 1; return routes; };
+
+  const result = context.getInspectionDrawingRoutes("");
+
+  assert.equal(result.ok, true);
+  assert.equal(routeIndexCalls, 1);
+  assert.deepEqual(structuredClone(result.data), [
+    { ARTICULO: "A-100", MATERIAL: "MP-1", TRAMO: "650 mm", DIBUJO: "a100.pdf" },
+    { ARTICULO: "B-200", MATERIAL: "MP-2", TRAMO: "420 mm", DIBUJO: "b200.pdf" }
+  ]);
+});
+
 test("adapta OT 2001 con cantidad pendiente, tramo, dibujo y fecha larga", () => {
   const context = loadService();
   context.PP_Inspection_restlet_ = () => ({
