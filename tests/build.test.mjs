@@ -214,6 +214,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"[\s\S]*\.catch\(\(\) => null\)/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
+  assert.match(pagesIndex, /callAppsScript\("getInspectionDrawingRoutes", ""\)/);
+  assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
+  assert.match(pagesIndex, /callAppsScript\("saveInspectionLink", payload\)/);
+  assert.match(pagesIndex, /let editorError = "";[\s\S]*class="planning-error" role="alert"[\s\S]*editorError = `No se pudo guardar el tramo:/);
   assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);

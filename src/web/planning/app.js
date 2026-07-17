@@ -442,6 +442,9 @@ let planSnapshots = [];
 let reportSnapshot = null;
 let loadSnapshot = null;
 let loadMode = "pending";
+let inspectionRouteCatalogRows = [];
+let inspectionRouteCatalogReady = false;
+let inspectionRouteCatalogLoading = false;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -615,6 +618,9 @@ function bindElements() {
     "articleConfigPriceInput",
     "saveArticleConfigBtn",
     "articleConfigTable",
+    "inspectionRouteCatalogSearch",
+    "refreshInspectionRouteCatalogBtn",
+    "inspectionRouteCatalogTable",
     "planningDialog",
     "planningDialogForm",
     "planningDialogTitle",
@@ -775,6 +781,8 @@ function bindEvents() {
   els.addOtTypeBtn.addEventListener("click", addOtType);
   els.articleConfigPartInput.addEventListener("change", updateArticleConfigForm);
   els.saveArticleConfigBtn.addEventListener("click", saveArticleConfiguration);
+  els.inspectionRouteCatalogSearch.addEventListener("input", renderInspectionRouteCatalog);
+  els.refreshInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
   els.lockAllBtn.addEventListener("click", () => toggleAllJobs(true));
   els.unlockAllBtn.addEventListener("click", () => toggleAllJobs(false));
   els.planningDialogClose.addEventListener("click", () => closePlanningDialog(null));
@@ -837,6 +845,10 @@ function showWorkspaceView(section, tab = "") {
   if (tab) showTab(tab);
   if (view === "loads") renderLoads();
   if (view === "reports") renderReports();
+  if (section === "herramentales") {
+    renderConfiguration();
+    loadInspectionRouteCatalog();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -3144,7 +3156,86 @@ function renderConfiguration() {
   renderSubcontracts();
   renderOtTypes();
   renderArticleConfigurations();
+  renderInspectionRouteCatalog();
   renderWeeklyReleaseTarget();
+}
+
+function inspectionRouteCatalogVisibleRows() {
+  return window.InspectionCore.filterInspectionRouteRows(
+    inspectionRouteCatalogRows,
+    els.inspectionRouteCatalogSearch.value,
+  );
+}
+
+function renderInspectionRouteCatalog() {
+  if (!els.inspectionRouteCatalogTable) return;
+  const visibleRows = inspectionRouteCatalogVisibleRows();
+  let body = visibleRows.map((row, index) => `<tr>
+    <td>${escapeHtml(row.article)}</td>
+    <td>${escapeHtml(row.material)}</td>
+    <td>${escapeHtml(row.route || "")}</td>
+    <td>${escapeHtml(row.updated || "")}</td>
+    <td><button class="button small" type="button" data-edit-inspection-route="${index}">Editar</button></td>
+  </tr>`).join("");
+  if (inspectionRouteCatalogLoading) body = emptyTableRow(5, "Cargando tramos...");
+  else if (!body) body = emptyTableRow(5, "No hay tramos que coincidan con la búsqueda");
+  els.inspectionRouteCatalogTable.innerHTML = `<thead><tr><th>Artículo</th><th>Material</th><th>Tramo</th><th>Última modificación</th><th></th></tr></thead><tbody>${body}</tbody>`;
+  els.inspectionRouteCatalogTable.querySelectorAll("[data-edit-inspection-route]").forEach((button) => {
+    button.addEventListener("click", () => editInspectionRouteCatalogRow(Number(button.dataset.editInspectionRoute)));
+  });
+}
+
+async function loadInspectionRouteCatalog(force = false) {
+  if (inspectionRouteCatalogLoading || (inspectionRouteCatalogReady && !force)) return;
+  inspectionRouteCatalogLoading = true;
+  renderInspectionRouteCatalog();
+  try {
+    const result = await callAppsScript("getInspectionDrawingRoutes", "");
+    if (!result?.ok) throw new Error(result?.error || "No se pudieron cargar los tramos");
+    inspectionRouteCatalogRows = window.InspectionCore.inspectionRouteRows(result.data || []);
+    inspectionRouteCatalogReady = true;
+  } catch (error) {
+    showToast(`No se pudieron cargar los tramos: ${error.message || String(error)}`, 9000);
+  } finally {
+    inspectionRouteCatalogLoading = false;
+    renderInspectionRouteCatalog();
+  }
+}
+
+async function editInspectionRouteCatalogRow(index) {
+  const row = inspectionRouteCatalogVisibleRows()[index];
+  if (!row) return;
+  let attemptedRoute = row.route;
+  let editorError = "";
+  while (true) {
+    const values = await openPlanningDialog({
+      title: "Editar tramo",
+      summary: `${row.article} · ${row.material}`,
+      body: `${editorError ? `<p class="planning-error" role="alert">${escapeHtml(editorError)}</p>` : ""}
+      <div class="planning-requirement-fields inspection-route-dialog-fields">
+        <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
+        <label>Material<input type="text" name="inspection_material" value="${escapeHtml(row.material)}" readonly></label>
+        <label>Tramo<input type="text" name="inspection_route" value="${escapeHtml(attemptedRoute)}" autofocus></label>
+      </div>`,
+      confirmLabel: "Guardar tramo",
+    });
+    if (!values) return;
+    attemptedRoute = String(values.inspection_route || "");
+    const payload = window.InspectionCore.inspectionRouteSavePayload(row, attemptedRoute);
+    try {
+      const result = await callAppsScript("saveInspectionLink", payload);
+      if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el tramo");
+      const saved = result.data || payload;
+      row.route = String(saved.route ?? attemptedRoute);
+      row.updated = String(saved.updated || new Date().toLocaleString("es-MX"));
+      renderInspectionRouteCatalog();
+      showToast("Tramo actualizado");
+      return;
+    } catch (error) {
+      editorError = `No se pudo guardar el tramo: ${error.message || String(error)}`;
+      showToast(editorError, 9000);
+    }
+  }
 }
 
 function renderWeeklyReleaseTarget() {
