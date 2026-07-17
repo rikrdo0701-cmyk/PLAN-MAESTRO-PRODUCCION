@@ -44,7 +44,7 @@
 **Interfaces:**
 - Consumes: hoja `Tramos` con encabezados `Articulo`, `Materia prima`, `Tramo`, `DIBUJO`, `Ultima modificacion`.
 - Produces: `getInspectionDrawingRoutes(article)` → `{ ok, data: Array<{ ARTICULO, MATERIAL, TRAMO, DIBUJO, ACTUALIZADO }> }`.
-- Produces: `saveInspectionLink(payload)` preservando el dibujo cuando `payload.drawing` contiene el valor vigente.
+- Produces: `saveInspectionLink(payload)` preservando la celda DIBUJO cuando `drawing` se omite; sólo la cambia o limpia cuando la propiedad está presente, incluida `drawing: ""`.
 
 - [ ] **Step 1: Escribir la prueba fallida de listado completo**
 
@@ -134,9 +134,9 @@ git commit -m "Optimizar catalogo de tramos de inspeccion"
 - Consumes: filas crudas del servicio con claves mayúsculas o camelCase.
 - Produces: `inspectionRouteRows(rows)` → filas normalizadas `{ article, material, route, drawing, updated }`.
 - Produces: `filterInspectionRouteRows(rows, query)` → filas ordenadas y filtradas.
-- Produces: `inspectionRouteSavePayload(row, route)` → `{ article, material, route, drawing }`.
+- Produces: `inspectionRouteSavePayload(row, route)` → `{ article, material, route }`; Catálogos nunca envía un dibujo cacheado.
 
-- [ ] **Step 1: Escribir pruebas fallidas de normalización, búsqueda y preservación de dibujo**
+- [ ] **Step 1: Escribir pruebas fallidas de normalización, búsqueda y payload route-only**
 
 Agregar a `tests/inspection-core.test.mjs`:
 
@@ -158,7 +158,7 @@ test("normaliza y filtra el catalogo de tramos por articulo o material", () => {
   );
 });
 
-test("el payload de catalogos preserva el dibujo existente", () => {
+test("el payload de catalogos envia solo el tramo", () => {
   assert.deepEqual(structuredClone(core.inspectionRouteSavePayload({
     article: "A-100",
     material: "MP-1",
@@ -168,7 +168,6 @@ test("el payload de catalogos preserva el dibujo existente", () => {
     article: "A-100",
     material: "MP-1",
     route: "650 mm",
-    drawing: "a100.pdf",
   });
 });
 ```
@@ -212,7 +211,6 @@ function inspectionRouteSavePayload(row, route) {
     article: String(row?.article || "").trim(),
     material: String(row?.material || "").trim(),
     route: String(route || "").trim(),
-    drawing: String(row?.drawing || "").trim(),
   };
 }
 ```
@@ -374,7 +372,9 @@ function renderInspectionRouteCatalog() {
 
 Llamar `loadInspectionRouteCatalog()` cuando `renderConfiguration()` muestre Catálogos.
 
-- [ ] **Step 6: Implementar editor y preservar dibujo**
+- [ ] **Step 6: Implementar editor con guardado route-only**
+
+El payload de Catálogos contiene exactamente `article`, `material` y `route`. La preservación de DIBUJO es responsabilidad de `saveInspectionLink`: omitir `drawing` conserva la celda vigente, mientras que enviar la propiedad explícitamente permite cambiarla o limpiarla.
 
 Agregar:
 
@@ -721,7 +721,7 @@ Confirmar en el diff:
 - Catálogos no edita dibujos;
 - la hoja imprimible no cambió;
 - no se agregaron dependencias;
-- las llamadas de guardado preservan dibujos existentes;
+- los payloads de Catálogos omiten `drawing` y el servidor preserva DIBUJO cuando la propiedad no existe;
 - los cambios locales previos ajenos al plan no fueron incluidos.
 
 - [ ] **Step 3: Preparar revisión**

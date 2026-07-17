@@ -41,14 +41,14 @@ La mejora debe reducir el desplazamiento vertical, facilitar la lectura de mucho
 
 ## Comportamiento y datos
 
-El guardado continuará usando `saveInspectionLink` con `article`, `material`, `route` y el dibujo existente cuando corresponda. La clave funcional seguirá siendo artículo + material.
+Catálogos continuará usando `saveInspectionLink`, pero enviará exactamente `{ article, material, route }`. Al omitir `drawing`, el servidor preservará la celda DIBUJO vigente; sólo la cambiará o limpiará cuando la propiedad exista explícitamente en el payload, incluida una cadena vacía. La clave funcional seguirá siendo artículo + material.
 
 En el editor de Catálogos:
 
 1. Se carga la lista completa con `getInspectionDrawingRoutes("")`.
 2. El usuario filtra y elige una fila.
 3. El editor conserva artículo y material como contexto de solo lectura.
-4. Al guardar, envía el tramo nuevo y preserva el valor de dibujo existente de esa fila.
+4. Al guardar, envía únicamente artículo, material y tramo; el servidor preserva el dibujo porque `drawing` no forma parte del payload de Catálogos.
 5. Tras una respuesta correcta, actualiza la fila visible y la fecha de modificación devuelta por el servidor.
 6. Si el servidor rechaza el cambio, el diálogo permanece abierto y se muestra el error sin perder el valor escrito.
 
@@ -86,7 +86,7 @@ En el editor de la hoja de inspección, el guardado conserva el comportamiento a
 - Comprobar que el modal se abre, cierra y conserva sus valores.
 - Comprobar guardado de dibujo y varios tramos desde la hoja de inspección.
 - Comprobar carga, búsqueda y edición desde Catálogos.
-- Confirmar que editar desde Catálogos preserva el dibujo existente.
+- Confirmar que editar desde Catálogos omite `drawing` y que el servidor preserva el dibujo existente.
 - Confirmar estados de carga, vacío y error.
 - Ejecutar las pruebas automatizadas existentes y agregar cobertura para la nueva integración.
 - Revisar visualmente escritorio y una ventana estrecha, verificando encabezado y pie fijos, ausencia de recortes y navegación por teclado.
