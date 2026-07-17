@@ -214,6 +214,24 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"[\s\S]*\.catch\(\(\) => null\)/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
+  assert.match(pagesIndex, /id="retryInspectionRouteCatalogBtn"[^>]*>Reintentar</);
+  assert.match(pagesIndex, /callAppsScript\("getInspectionDrawingRoutes", ""\)/);
+  assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
+  assert.match(pagesIndex, /callAppsScript\("saveInspectionLink", payload\)/);
+  const inspectionRouteEditorSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function editInspectionRouteCatalogRow("),
+    pagesIndex.indexOf("function renderWeeklyReleaseTarget("),
+  );
+  assert.match(inspectionRouteEditorSource, /submit:\s*async \(values\) =>/);
+  assert.match(inspectionRouteEditorSource, /id="inspectionRouteDialogError" class="planning-error" role="alert" hidden/);
+  assert.match(inspectionRouteEditorSource, /InspectionCore\.applyInspectionRouteSave\(/);
+  assert.match(inspectionRouteEditorSource, /errorElement\.hidden = false;[\s\S]*return false;/);
+  assert.doesNotMatch(inspectionRouteEditorSource, /while \(true\)/);
+  assert.match(pagesIndex, /planningDialogConfirm\.disabled = true;[\s\S]*await submit\(values\)/);
   assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);
@@ -338,4 +356,73 @@ test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina",
   assert.match(operationRow, /operation\?\.code/);
   assert.doesNotMatch(operationRow, /operation\?\.workCenter/);
   assert.doesNotMatch(operationRow, /operation\?\.operation/);
+});
+
+test("el editor de tramo usa un panel compacto sin prompts", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const start = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const end = inspectionApp.indexOf("async function saveEditModal", start);
+  const editor = inspectionApp.slice(start, end);
+
+  assert.match(editor, /class="inspection-link-context"/);
+  assert.match(editor, /class="inspection-link-body"/);
+  assert.match(editor, /class="inspection-link-material-head"/);
+  assert.match(editor, /class="inspection-link-material-row/);
+  assert.match(editor, /inspection-link-material-status/);
+  assert.match(editor, /El tramo se guarda por articulo \+ material\./);
+  assert.match(inspectionApp, /dialog\.setAttribute\("aria-labelledby", "inspectionLinkDialogTitle"\)/);
+  assert.match(editor, /<h2 id="inspectionLinkDialogTitle">Editar tramo\/dibujo<\/h2>/);
+  assert.doesNotMatch(editor, /(?:root\.|window\.)?prompt\s*\(/);
+  assert.match(inspectionCss, /\.inspection-link-form\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/);
+  assert.match(inspectionCss, /\.inspection-link-body\{[^}]*overflow:auto/);
+  assert.match(inspectionCss, /\.inspection-link-material-row\{[^}]*grid-template-columns:/);
+  assert.match(inspectionCss, /\.inspection-link-dialog[^}]*:focus-visible/);
+  assert.match(inspectionCss, /@media \(max-width:\d+px\)/);
+});
+
+test("el editor apila materiales en el borde responsive", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const responsiveRule = inspectionCss.match(/@media \(max-width:(\d+)px\)\{\.inspection-link-dialog/);
+
+  assert.ok(responsiveRule, "debe existir el breakpoint del editor");
+  assert.ok(Number(responsiveRule[1]) >= 801, "el breakpoint debe cubrir de 760 a 801 px");
+  assert.match(responsiveRule[0], /inspection-link-dialog/);
+});
+
+test("el foco del editor contrasta sobre sus fondos", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const focusRule = inspectionCss.match(/\.inspection-link-dialog input:focus-visible,[^{]+\{[^}]*outline:3px solid (#[\da-f]{6})/i);
+  const closeRule = inspectionCss.match(/\.inspection-link-close\{[^}]*background:(#[\da-f]{6})/i);
+  const relativeLuminance = (hex) => {
+    const channels = hex.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16) / 255);
+    const [red, green, blue] = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const contrast = (first, second) => {
+    const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+    const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  assert.ok(focusRule, "debe declarar un outline de foco explícito");
+  assert.ok(closeRule, "debe declarar el fondo del botón cerrar");
+  assert.ok(contrast(focusRule[1], "#ffffff") >= 3, "el foco debe contrastar al menos 3:1 sobre blanco");
+  assert.ok(contrast(focusRule[1], closeRule[1]) >= 3, "el foco debe contrastar al menos 3:1 sobre el botón cerrar");
+});
+
+test("el estado de tramo se sincroniza mientras se edita", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const helperStart = inspectionApp.indexOf("function updateInspectionRouteStatus(input)");
+  const helperEnd = inspectionApp.indexOf("function openEditModal", helperStart);
+  const helper = inspectionApp.slice(helperStart, helperEnd);
+  const editorStart = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const editorEnd = inspectionApp.indexOf("async function saveEditModal", editorStart);
+  const editor = inspectionApp.slice(editorStart, editorEnd);
+
+  assert.ok(helperStart >= 0, "debe existir el sincronizador del estado");
+  assert.match(helper, /status\.textContent = hasRoute \? "Tramo capturado" : "Falta tramo"/);
+  assert.match(helper, /status\.classList\.toggle\("is-ready", hasRoute\)/);
+  assert.match(helper, /status\.classList\.toggle\("is-pending", !hasRoute\)/);
+  assert.match(editor, /addEventListener\("input", \(\) => updateInspectionRouteStatus\(input\)\)/);
 });

@@ -58,3 +58,62 @@ test("usa deficit neto del backend y filtra costo cero o sin requerido", () => {
   assert.deepEqual(diagnostic.materials.map((item) => item.material), ["TUBO"]);
   assert.equal(diagnostic.deficit.length, 0);
 });
+
+test("normaliza, ordena y filtra las filas del catalogo de tramos", () => {
+  const rows = core.inspectionRouteRows([
+    { ARTICULO: "B-200", MATERIAL: "MP-2", TRAMO: "420 mm", DIBUJO: "b.pdf", ACTUALIZADO: "02/07/2026" },
+    { article: "A-100", material: "TUBO 1", route: "650 mm", drawing: "a.pdf", updated: "01/07/2026" },
+    { article: "", material: "SIN ARTICULO" },
+    { article: "C-300", material: "" }
+  ]);
+
+  assert.deepEqual(structuredClone(rows), [
+    { article: "A-100", material: "TUBO 1", route: "650 mm", drawing: "a.pdf", updated: "01/07/2026" },
+    { article: "B-200", material: "MP-2", route: "420 mm", drawing: "b.pdf", updated: "02/07/2026" }
+  ]);
+  assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "mp-2")).map((row) => row.material), ["MP-2"]);
+  assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "a-100")).map((row) => row.article), ["A-100"]);
+  assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "")), structuredClone(rows));
+});
+
+test("prepara el guardado route-only del catalogo sin enviar dibujo cacheado", () => {
+  const payload = core.inspectionRouteSavePayload({
+    article: " A-100 ",
+    material: " TUBO 1 ",
+    route: "600 mm",
+    drawing: " a100.pdf ",
+    updated: "01/07/2026"
+  }, " 650 mm ");
+
+  assert.deepEqual(structuredClone(payload), {
+    article: "A-100",
+    material: "TUBO 1",
+    route: "650 mm"
+  });
+});
+
+test("aplica el guardado a la fila vigente por clave aunque la cache se reemplace", () => {
+  const selectedBeforeRefresh = {
+    article: " A-100 ",
+    material: "TUBO 1",
+    route: "600 mm",
+    drawing: "viejo.pdf",
+    updated: "ayer"
+  };
+  const refreshedRows = core.inspectionRouteRows([
+    { article: "a-100", material: " tubo 1 ", route: "625 mm", drawing: "vigente.pdf", updated: "hoy" },
+    { article: "B-200", material: "MP-2", route: "400 mm", drawing: "b.pdf", updated: "hoy" }
+  ]);
+
+  const result = core.applyInspectionRouteSave(
+    refreshedRows,
+    selectedBeforeRefresh,
+    { route: "650 mm", drawing: "servidor.pdf", updated: "ahora" },
+  );
+
+  assert.notEqual(refreshedRows[0], selectedBeforeRefresh);
+  assert.deepEqual(structuredClone(result), [
+    { article: "a-100", material: "tubo 1", route: "650 mm", drawing: "servidor.pdf", updated: "ahora" },
+    { article: "B-200", material: "MP-2", route: "400 mm", drawing: "b.pdf", updated: "hoy" }
+  ]);
+});
