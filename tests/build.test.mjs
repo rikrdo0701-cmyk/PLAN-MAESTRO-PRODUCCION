@@ -17,6 +17,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const appScriptWorkflow = await readFile(path.join(process.cwd(), ".github/workflows/deploy-appscript.yml"), "utf8");
   const claspConfig = JSON.parse(await readFile(path.join(process.cwd(), ".clasp.json"), "utf8"));
   assert.equal(claspConfig.rootDir, "dist");
+  assert.equal(claspConfig.scriptId, "1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_");
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);
@@ -26,6 +27,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /config\.rootDir = 'dist'/);
+  assert.match(appScriptWorkflow, /EXPECTED_SCRIPT_ID/);
+  assert.match(appScriptWorkflow, /1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_/);
+  assert.match(appScriptWorkflow, /1ew3Nqi0e8SHid_zWv1z5cl6ATCZzqVLqc2lkbfox5CMNsh8FH5tL8zKx/);
   assert.match(appScriptWorkflow, /\^AKfy/);
   assert.match(appScriptWorkflow, /error title=clasp push/);
   assert.match(appScriptWorkflow, /JSON\.parse\(fs\.readFileSync/);

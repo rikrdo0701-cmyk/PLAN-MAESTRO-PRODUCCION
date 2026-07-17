@@ -17,6 +17,10 @@ concurrency:
   group: apps-script-production
   cancel-in-progress: false
 
+env:
+  EXPECTED_SCRIPT_ID: 1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_
+  PROTECTED_SCRIPT_ID: 1ew3Nqi0e8SHid_zWv1z5cl6ATCZzqVLqc2lkbfox5CMNsh8FH5tL8zKx
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -41,7 +45,7 @@ jobs:
           fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
           printf '%s' "$CLASP_JSON" > .clasp.json
-          node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
+          node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); if (config.scriptId === process.env.PROTECTED_SCRIPT_ID) throw new Error('CLASP_JSON apunta al script protegido y el despliegue fue bloqueado'); if (config.scriptId !== process.env.EXPECTED_SCRIPT_ID) throw new Error('CLASP_JSON no apunta al script autorizado ' + process.env.EXPECTED_SCRIPT_ID); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
       - name: Subir a Apps Script
         run: |
           set +e
