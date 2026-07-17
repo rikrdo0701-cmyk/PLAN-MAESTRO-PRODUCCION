@@ -373,5 +373,51 @@ test("el editor de tramo usa un panel compacto sin prompts", async () => {
   assert.match(inspectionCss, /\.inspection-link-body\{[^}]*overflow:auto/);
   assert.match(inspectionCss, /\.inspection-link-material-row\{[^}]*grid-template-columns:/);
   assert.match(inspectionCss, /\.inspection-link-dialog[^}]*:focus-visible/);
-  assert.match(inspectionCss, /@media \(max-width:759px\)/);
+  assert.match(inspectionCss, /@media \(max-width:\d+px\)/);
+});
+
+test("el editor apila materiales en el borde responsive", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const responsiveRule = inspectionCss.match(/@media \(max-width:(\d+)px\)\{\.inspection-link-dialog/);
+
+  assert.ok(responsiveRule, "debe existir el breakpoint del editor");
+  assert.ok(Number(responsiveRule[1]) >= 801, "el breakpoint debe cubrir de 760 a 801 px");
+  assert.match(responsiveRule[0], /inspection-link-dialog/);
+});
+
+test("el foco del editor contrasta sobre sus fondos", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const focusRule = inspectionCss.match(/\.inspection-link-dialog input:focus-visible,[^{]+\{[^}]*outline:3px solid (#[\da-f]{6})/i);
+  const closeRule = inspectionCss.match(/\.inspection-link-close\{[^}]*background:(#[\da-f]{6})/i);
+  const relativeLuminance = (hex) => {
+    const channels = hex.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16) / 255);
+    const [red, green, blue] = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const contrast = (first, second) => {
+    const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+    const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  assert.ok(focusRule, "debe declarar un outline de foco explícito");
+  assert.ok(closeRule, "debe declarar el fondo del botón cerrar");
+  assert.ok(contrast(focusRule[1], "#ffffff") >= 3, "el foco debe contrastar al menos 3:1 sobre blanco");
+  assert.ok(contrast(focusRule[1], closeRule[1]) >= 3, "el foco debe contrastar al menos 3:1 sobre el botón cerrar");
+});
+
+test("el estado de tramo se sincroniza mientras se edita", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const helperStart = inspectionApp.indexOf("function updateInspectionRouteStatus(input)");
+  const helperEnd = inspectionApp.indexOf("function openEditModal", helperStart);
+  const helper = inspectionApp.slice(helperStart, helperEnd);
+  const editorStart = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const editorEnd = inspectionApp.indexOf("async function saveEditModal", editorStart);
+  const editor = inspectionApp.slice(editorStart, editorEnd);
+
+  assert.ok(helperStart >= 0, "debe existir el sincronizador del estado");
+  assert.match(helper, /status\.textContent = hasRoute \? "Tramo capturado" : "Falta tramo"/);
+  assert.match(helper, /status\.classList\.toggle\("is-ready", hasRoute\)/);
+  assert.match(helper, /status\.classList\.toggle\("is-pending", !hasRoute\)/);
+  assert.match(editor, /addEventListener\("input", \(\) => updateInspectionRouteStatus\(input\)\)/);
 });

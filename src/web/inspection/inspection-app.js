@@ -162,6 +162,14 @@
     if (dialog.open && typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
   }
+  function updateInspectionRouteStatus(input) {
+    const status = input.closest(".inspection-link-material-row")?.querySelector(".inspection-link-material-status");
+    if (!status) return;
+    const hasRoute = Boolean(String(input.value || "").trim());
+    status.textContent = hasRoute ? "Tramo capturado" : "Falta tramo";
+    status.classList.toggle("is-ready", hasRoute);
+    status.classList.toggle("is-pending", !hasRoute);
+  }
   function openEditModal(focusIndex) {
     const detail = state.detail;
     const job = detail?.workOrder || {};
@@ -184,7 +192,7 @@
           <span>Tramo</span>
           <input type="text" data-inspection-route="${sourceIndex}" value="${escape(route)}" placeholder="Ej. 650 mm" aria-label="Tramo de ${escape(material.material || "material")}">
         </label>
-        <div class="inspection-link-material-status ${route ? "is-ready" : "is-pending"}" role="cell">${route ? "Tramo capturado" : "Falta tramo"}</div>
+        <div class="inspection-link-material-status ${route ? "is-ready" : "is-pending"}" role="cell" aria-live="polite">${route ? "Tramo capturado" : "Falta tramo"}</div>
       </div>`;
     }).join("");
     dialog.innerHTML = `<form id="inspectionLinkForm" class="inspection-link-form" novalidate>
@@ -229,6 +237,7 @@
       </footer>
     </form>`;
     dialog.querySelectorAll("[data-inspection-link-close]").forEach((button) => button.addEventListener("click", closeLinkDialog));
+    dialog.querySelectorAll("[data-inspection-route]").forEach((input) => input.addEventListener("input", () => updateInspectionRouteStatus(input)));
     dialog.querySelector("#inspectionLinkForm").addEventListener("submit", saveEditModal);
     if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
     const targetIndex = Number.isFinite(Number(focusIndex)) ? Number(focusIndex) : allMaterials.indexOf(materials[0]);

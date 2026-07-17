@@ -32,8 +32,8 @@ No se modificaron impresión, diagnóstico, servicios, esquema ni Catálogos.
 
 ## Pruebas
 
-- `node --test tests/build.test.mjs` — 3/3 pasan.
-- `npm.cmd test` — 99/99 pasan.
+- `node --test tests/build.test.mjs` — 6/6 pasan.
+- `npm.cmd test` — 102/102 pasan.
 - `npm.cmd run check` — `Validacion correcta`; Apps Script y Pages listos.
 - `git diff --check` — sin errores.
 
@@ -58,9 +58,32 @@ El estado real del modal requiere el bridge/backend de Apps Script. Se usó un h
 - `C:\Users\plane\.codex\visualizations\2026\07\17\019f703e-6115-7382-b936-131c2f7e30f8\inspection-link-dialog-1440x900-scrolled.png`
 - `C:\Users\plane\.codex\visualizations\2026\07\17\019f703e-6115-7382-b936-131c2f7e30f8\inspection-link-dialog-720x900.png`
 
+## Correcciones posteriores al review
+
+- Breakpoint ampliado de 759 a 820 px para cubrir el intervalo 760–801 con las filas apiladas.
+- Foco cambiado de `#2dd4bf` a `#0f766e`; la prueba calcula un contraste mínimo de 3:1 sobre blanco y `#edf3f7`.
+- `updateInspectionRouteStatus` sincroniza texto y clases en cada evento `input`, sin intervenir en el guardado.
+- El estado tiene `aria-live="polite"` para anunciar el cambio.
+- Se agregaron tres pruebas estructurales específicas y se observaron sus fallos RED antes de implementar.
+
+QA adicional con Playwright y Chrome local:
+
+- 760 × 900: sin overflow horizontal en documento, diálogo ni cuerpo; scroll interno `1798 px`.
+- 800 × 900: sin overflow horizontal en documento, diálogo ni cuerpo; scroll interno `1782 px`.
+- 1440 × 900: layout de cuatro columnas conservado y sin overflow.
+- En los tres tamaños, encabezado y pie conservaron sus coordenadas después del scroll.
+- En 800 px, escribir un tramo cambió `Falta tramo/is-pending` a `Tramo capturado/is-ready`; borrar revirtió texto y clases.
+- El navegador reportó el foco como `rgb(15, 118, 110)` y no registró warnings ni errores.
+
+Capturas posteriores al review:
+
+- `C:\Users\plane\.codex\visualizations\2026\07\17\019f703e-6115-7382-b936-131c2f7e30f8\inspection-link-dialog-1440x900-review.png`
+- `C:\Users\plane\.codex\visualizations\2026\07\17\019f703e-6115-7382-b936-131c2f7e30f8\inspection-link-dialog-800x900-review.png`
+- `C:\Users\plane\.codex\visualizations\2026\07\17\019f703e-6115-7382-b936-131c2f7e30f8\inspection-link-dialog-760x900-review.png`
+
 ## Auto-revisión y preocupaciones
 
-- Se confirmó en el diff que `saveEditModal`, `closeLinkDialog` y los listeners existentes no cambiaron.
+- Se confirmó en el diff que `saveEditModal`, `closeLinkDialog` y los listeners existentes no cambiaron; sólo se agregó el listener `input` de estado.
 - El copy de ayuda de tramo se conserva una vez, evitando repetirlo en cada material.
 - No se pudo ejercitar un guardado real contra Apps Script desde el navegador local; la suite automatizada y la preservación literal de la lógica reducen ese riesgo.
 - La captura usa datos de ejemplo y Chrome local; conviene una pasada final en el despliegue conectado cuando haya una WO real disponible.
