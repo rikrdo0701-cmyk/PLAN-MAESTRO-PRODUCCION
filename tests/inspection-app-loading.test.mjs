@@ -209,10 +209,12 @@ test("una reseleccion posterior a forceRefresh no adopta la promesa normal anter
   const forcedLoad = app.loadDetail({ forceRefresh: true });
   const reselectedLoad = app.loadDetail();
 
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 2);
   assert.deepEqual(structuredClone(requests[1].args), ["210", { forceRefresh: true }]);
   requests[0].request.resolve(bundle("210-antigua"));
   await oldNormalLoad;
+  await flush();
+  assert.equal(requests.length, 3);
   assert.doesNotMatch(byId("inspectionSheetGrid").innerHTML, /210-antigua/);
   requests[1].request.resolve(bundle("210-forzada"));
   await forcedLoad;
@@ -246,10 +248,13 @@ test("filtrar la WO seleccionada invalida su solicitud normal antes de reselecci
   byId("inspectionWorkOrder").value = "800";
   const reselectedLoad = app.loadDetail();
 
-  const requests800 = requests.filter((entry) => entry.wo === "800");
-  assert.equal(requests800.length, 2);
+  let requests800 = requests.filter((entry) => entry.wo === "800");
+  assert.equal(requests800.length, 1);
   requests800[0].request.resolve(bundle("800-antigua"));
   await oldLoad;
+  await flush();
+  requests800 = requests.filter((entry) => entry.wo === "800");
+  assert.equal(requests800.length, 2);
   assert.doesNotMatch(byId("inspectionSheetGrid").innerHTML, /800-antigua/);
   requests800[1].request.resolve(bundle("800-vigente"));
   await reselectedLoad;
@@ -279,31 +284,40 @@ test("un fallo posterior al filtro no reemplaza el estado con un error obsoleto"
   assert.doesNotMatch(byId("inspectionJobStatus").innerHTML, /Error|respuesta antigua/);
 });
 
-test("la seleccion manual inicia una WO pendiente aunque dos precargas sigan bloqueadas", async () => {
+test("la seleccion manual respeta el limite total y ocupa el siguiente hueco antes de otra precarga", async () => {
   const requests = [];
+  let active = 0;
+  let maximumActive = 0;
   const { app, byId } = createHarness((method, args) => {
-    if (method === "getInspectionWorkOrders") return Promise.resolve({ ok: true, data: ["1", "2", "3"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
+    if (method === "getInspectionWorkOrders") return Promise.resolve({ ok: true, data: ["1", "2", "3", "4"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
     const request = deferred();
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
     requests.push({ wo: args[0], request });
-    return request.promise;
+    return request.promise.finally(() => { active -= 1; });
   });
 
   await app.loadList();
   await flush();
   assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2"]);
-  byId("inspectionWorkOrder").value = "3";
+  byId("inspectionWorkOrder").value = "4";
   const selectedLoad = app.loadDetail();
 
-  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "3"]);
-  requests[2].request.resolve(bundle("3"));
-  await selectedLoad;
-  assert.match(byId("inspectionSheetGrid").innerHTML, />3</);
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2"]);
   requests[0].request.resolve(bundle("1"));
+  await flush();
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "4"]);
+  requests[2].request.resolve(bundle("4"));
+  await selectedLoad;
+  assert.match(byId("inspectionSheetGrid").innerHTML, />4</);
+  assert.equal(maximumActive, 2);
   requests[1].request.resolve(bundle("2"));
+  await flush();
+  requests.find((entry) => entry.wo === "3")?.request.resolve(bundle("3"));
   await flush();
 });
 
-test("dos loadList solapados comparten un limite global de dos precargas", async () => {
+test("una respuesta loadList obsoleta no reemplaza ni encola sobre la lista vigente", async () => {
   const listRequests = [];
   const pending = [];
   let active = 0;
@@ -325,11 +339,14 @@ test("dos loadList solapados comparten un limite global de dos precargas", async
   const secondList = app.loadList();
   listRequests[0].resolve({ ok: true, data: ["1", "2", "3", "4", "5"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
   listRequests[1].resolve({ ok: true, data: ["6", "7", "8", "9", "10"].map((wo) => ({ wo, article: "B", quantity: 1 })) });
-  await Promise.all([firstList, secondList]);
+  await secondList;
   await flush();
-
   assert.equal(pending.length, 2);
-  while (pending.length < 10) {
+  await firstList;
+  await flush();
+  assert.deepEqual(pending.map((entry) => entry.wo), ["6", "7"]);
+
+  while (pending.length < 5) {
     const next = pending.find((entry) => !entry.resolved);
     next.resolved = true;
     next.request.resolve(bundle(next.wo));
@@ -340,6 +357,49 @@ test("dos loadList solapados comparten un limite global de dos precargas", async
   await flush();
 
   assert.equal(maximumActive, 2);
+  assert.deepEqual(pending.map((entry) => entry.wo), ["6", "7", "8", "9", "10"]);
+});
+
+test("la lista vigente elimina precargas pendientes obsoletas y conserva activas compartidas", async () => {
+  const listRequests = [];
+  const bundleRequests = [];
+  const { app } = createHarness((method, args) => {
+    if (method === "getInspectionWorkOrders") {
+      const request = deferred();
+      listRequests.push(request);
+      return request.promise;
+    }
+    const request = deferred();
+    bundleRequests.push({ wo: args[0], request });
+    return request.promise;
+  });
+
+  const firstList = app.loadList();
+  listRequests[0].resolve({ ok: true, data: ["1", "2", "3", "4", "5"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
+  await firstList;
+  await flush();
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2"]);
+
+  const secondList = app.loadList();
+  listRequests[1].resolve({ ok: true, data: ["2", "6", "7", "8", "9"].map((wo) => ({ wo, article: "B", quantity: 1 })) });
+  await secondList;
+  bundleRequests.find((entry) => entry.wo === "1").request.resolve(bundle("1"));
+  await flush();
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6"]);
+  bundleRequests.find((entry) => entry.wo === "2").request.resolve(bundle("2"));
+  await flush();
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6", "7"]);
+  assert.equal(bundleRequests.filter((entry) => entry.wo === "2").length, 1);
+
+  while (bundleRequests.length < 6) {
+    const next = bundleRequests.find((entry) => !entry.resolved && !["1", "2"].includes(entry.wo));
+    next.resolved = true;
+    next.request.resolve(bundle(next.wo));
+    await flush();
+  }
+  bundleRequests.filter((entry) => !entry.resolved && !["1", "2"].includes(entry.wo)).forEach((entry) => entry.request.resolve(bundle(entry.wo)));
+  await flush();
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6", "7", "8", "9"]);
 });
 
 test("un fallo de precarga es silencioso y la seleccion vuelve a intentar", async () => {

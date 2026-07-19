@@ -218,7 +218,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /--inspection-print-scale/);
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
-  assert.match(pagesIndex, /call\("getInspectionWorkOrderBundle", wo/);
+  assert.match(pagesIndex, /call\("getInspectionWorkOrderBundle", task\.wo/);
   assert.doesNotMatch(pagesIndex, /call\("getInspectionWorkOrder", wo\)/);
   assert.doesNotMatch(pagesIndex, /call\("getInspectionDrawingRoutes"/);
   assert.doesNotMatch(pagesIndex, /call\("getInspectionHistory"/);
@@ -327,6 +327,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(bridge, /saveDraftSnapshot: true/);
   assert.match(bridge, /restorePublishedPlanAsDraft: true/);
   assert.match(bridge, /fetchNetSuiteWorkOrdersLite: true/);
+  assert.match(bridge, /getInspectionWorkOrderBundle: true/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
   assert.match(storageService, /fullState/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);

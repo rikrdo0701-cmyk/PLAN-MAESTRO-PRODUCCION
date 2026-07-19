@@ -5,9 +5,10 @@
   const bundleCache = new Map();
   const normalBundleRequests = new Map();
   const bundleRequestVersions = new Map();
-  const prefetchQueue = [];
-  const scheduledPrefetchWos = new Set();
-  let activePrefetches = 0;
+  const manualBundleQueue = [];
+  const prefetchBundleQueue = [];
+  let activeBundleRequests = 0;
+  let loadListVersion = 0;
   let selectionToken = 0;
   const byId = (id) => document.getElementById(id);
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
@@ -34,13 +35,21 @@
     if (selectedWo && !selectionRemains) invalidateBundleSelection(selectedWo);
   }
   async function loadList() {
+    const version = ++loadListVersion;
     renderJobStatus("Cargando WOs abiertas...");
-    const result = await call("getInspectionWorkOrders");
+    let result;
+    try {
+      result = await call("getInspectionWorkOrders");
+    } catch (error) {
+      if (version !== loadListVersion) return;
+      throw error;
+    }
+    if (version !== loadListVersion) return;
     if (!result?.ok) throw new Error(result?.error || "No se pudieron cargar las WOs");
     state.list = result.data || [];
     renderList();
     renderJobStatus(`${state.list.length} WOs abiertas`);
-    prefetchWorkOrders(state.list);
+    replacePrefetchSchedule(state.list);
   }
   function cachedBundle(wo) {
     const cached = bundleCache.get(wo);
@@ -56,52 +65,119 @@
   }
   function invalidateBundleSelection(wo) {
     selectionToken += 1;
+    const pending = normalBundleRequests.get(wo);
     normalBundleRequests.delete(wo);
     nextBundleRequestVersion(wo);
+    if (pending?.task && !pending.task.started) cancelQueuedBundleTask(pending.task);
   }
-  function requestBundle(wo, forceRefresh = false) {
+  function removeQueuedBundleTask(queue, task) {
+    const index = queue.indexOf(task);
+    if (index >= 0) queue.splice(index, 1);
+  }
+  function settleBundleTask(task, error, data) {
+    if (!task.forceRefresh && normalBundleRequests.get(task.wo)?.task === task) normalBundleRequests.delete(task.wo);
+    if (error) task.reject(error);
+    else task.resolve(data);
+  }
+  function cancelQueuedBundleTask(task) {
+    if (!task || task.started || task.cancelled) return false;
+    task.cancelled = true;
+    removeQueuedBundleTask(manualBundleQueue, task);
+    removeQueuedBundleTask(prefetchBundleQueue, task);
+    settleBundleTask(task, new Error("Solicitud de WO obsoleta"));
+    return true;
+  }
+  function promoteBundleTask(task) {
+    task.manualDemand = true;
+    if (task.started || task.priority === "manual") return;
+    removeQueuedBundleTask(prefetchBundleQueue, task);
+    task.priority = "manual";
+    manualBundleQueue.push(task);
+    drainBundleQueue();
+  }
+  function startBundleTask(task) {
+    task.started = true;
+    activeBundleRequests += 1;
+    const backendRequest = task.forceRefresh
+      ? call("getInspectionWorkOrderBundle", task.wo, { forceRefresh: true })
+      : call("getInspectionWorkOrderBundle", task.wo);
+    Promise.resolve(backendRequest).then((result) => {
+      if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la WO");
+      if (bundleRequestVersions.get(task.wo) === task.version) bundleCache.set(task.wo, { data: result.data, cachedAt: Date.now() });
+      return result.data;
+    }).then(
+      (data) => settleBundleTask(task, null, data),
+      (error) => settleBundleTask(task, error),
+    ).finally(() => {
+      activeBundleRequests -= 1;
+      drainBundleQueue();
+    });
+  }
+  function drainBundleQueue() {
+    while (activeBundleRequests < 2) {
+      const task = manualBundleQueue.shift() || prefetchBundleQueue.shift();
+      if (!task) return;
+      if (task.cancelled) continue;
+      if (!task.forceRefresh && bundleRequestVersions.get(task.wo) !== task.version) {
+        settleBundleTask(task, new Error("Solicitud de WO obsoleta"));
+        continue;
+      }
+      const cached = !task.forceRefresh && cachedBundle(task.wo);
+      if (cached) {
+        settleBundleTask(task, null, cached);
+        continue;
+      }
+      startBundleTask(task);
+    }
+  }
+  function requestBundle(wo, forceRefresh = false, priority = "manual") {
     if (!forceRefresh) {
       const cached = cachedBundle(wo);
       if (cached) return Promise.resolve(cached);
       const currentVersion = bundleRequestVersions.get(wo) || 0;
       const pending = normalBundleRequests.get(wo);
-      if (pending?.version === currentVersion) return pending.promise;
-      if (pending) normalBundleRequests.delete(wo);
+      if (pending?.version === currentVersion) {
+        if (priority === "manual") promoteBundleTask(pending.task);
+        return pending.promise;
+      }
+      if (pending) {
+        normalBundleRequests.delete(wo);
+        if (!pending.task.started) cancelQueuedBundleTask(pending.task);
+      }
     } else {
+      const pending = normalBundleRequests.get(wo);
       normalBundleRequests.delete(wo);
+      if (pending?.task && !pending.task.started) cancelQueuedBundleTask(pending.task);
     }
     const version = nextBundleRequestVersion(wo);
-    const backendRequest = forceRefresh
-      ? call("getInspectionWorkOrderBundle", wo, { forceRefresh: true })
-      : call("getInspectionWorkOrderBundle", wo);
-    const request = backendRequest.then((result) => {
-      if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la WO");
-      if (bundleRequestVersions.get(wo) === version) bundleCache.set(wo, { data: result.data, cachedAt: Date.now() });
-      return result.data;
-    }).finally(() => {
-      if (!forceRefresh && normalBundleRequests.get(wo)?.promise === request) normalBundleRequests.delete(wo);
+    let resolveRequest;
+    let rejectRequest;
+    const request = new Promise((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = reject;
     });
-    if (!forceRefresh) normalBundleRequests.set(wo, { version, promise: request });
+    const task = {
+      wo,
+      forceRefresh,
+      version,
+      priority,
+      manualDemand: priority === "manual",
+      started: false,
+      cancelled: false,
+      resolve: resolveRequest,
+      reject: rejectRequest,
+    };
+    if (!forceRefresh) normalBundleRequests.set(wo, { version, promise: request, task });
+    (priority === "manual" ? manualBundleQueue : prefetchBundleQueue).push(task);
+    drainBundleQueue();
     return request;
   }
-  function drainPrefetchQueue() {
-    while (activePrefetches < 2 && prefetchQueue.length) {
-      const wo = prefetchQueue.shift();
-      activePrefetches += 1;
-      Promise.resolve().then(() => requestBundle(wo)).catch(() => {}).finally(() => {
-        activePrefetches -= 1;
-        scheduledPrefetchWos.delete(wo);
-        drainPrefetchQueue();
-      });
-    }
-  }
-  function prefetchWorkOrders(workOrders) {
-    (workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean).forEach((wo) => {
-      if (scheduledPrefetchWos.has(wo)) return;
-      scheduledPrefetchWos.add(wo);
-      prefetchQueue.push(wo);
+  function replacePrefetchSchedule(workOrders) {
+    const desiredWos = new Set((workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean));
+    prefetchBundleQueue.slice().forEach((task) => {
+      if (!task.manualDemand && !desiredWos.has(task.wo)) cancelQueuedBundleTask(task);
     });
-    drainPrefetchQueue();
+    desiredWos.forEach((wo) => requestBundle(wo, false, "prefetch").catch(() => {}));
   }
   function cell(span, html = "", classes = "") { return `<div class="inspection-cell ${classes}" style="grid-column:span ${span}">${html}</div>`; }
   function operationHeader() {
