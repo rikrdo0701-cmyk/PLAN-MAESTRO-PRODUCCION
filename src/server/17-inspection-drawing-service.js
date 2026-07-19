@@ -13,19 +13,34 @@ function getInspectionWorkOrderBundle(wo, options) {
   return PP_Inspection_result_(function() {
     const folio = PP_Inspection_text_(wo, 80);
     if (!folio) throw new Error('OT requerida');
-    const cache = CacheService.getScriptCache();
+    let cache = null;
+    try {
+      cache = CacheService.getScriptCache();
+    } catch (error) {
+      cache = null;
+    }
     const cacheKey = 'PP_INSPECTION_WO_BUNDLE_' + folio;
     const forceRefresh = options && options.forceRefresh === true;
-    if (!forceRefresh) {
-      const cached = cache.get(cacheKey);
-      if (cached) return JSON.parse(cached);
+    if (!forceRefresh && cache) {
+      try {
+        const cached = cache.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+      } catch (error) {
+        // La cache es opcional; continuar con las fuentes de verdad.
+      }
     }
     const detail = getInspectionWorkOrder(folio);
     if (!detail.ok) throw new Error(detail.error);
     const history = getInspectionHistory(folio);
     if (!history.ok) throw new Error(history.error);
     const bundle = { detail: detail.data, history: history.data };
-    cache.put(cacheKey, JSON.stringify(bundle), 300);
+    if (cache) {
+      try {
+        cache.put(cacheKey, JSON.stringify(bundle), 300);
+      } catch (error) {
+        // Un fallo de cache no invalida datos obtenidos correctamente.
+      }
+    }
     return bundle;
   });
 }

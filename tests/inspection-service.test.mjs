@@ -277,6 +277,52 @@ test("no guarda en cache cuando falla el historial de la OT", () => {
   assert.equal(puts, 0);
 });
 
+test("devuelve detalle e historial aunque falle la escritura de cache", () => {
+  const context = loadBundledService({ CacheService: { getScriptCache: () => ({
+    get: () => null,
+    put: () => { throw new Error("cache sin espacio"); }
+  }) } });
+  context.getInspectionWorkOrder = () => ({ ok: true, data: { wo: "2001" } });
+  context.getInspectionHistory = () => ({ ok: true, data: { count: 2 } });
+
+  const result = context.getInspectionWorkOrderBundle("2001");
+
+  assert.deepEqual(structuredClone(result), {
+    ok: true,
+    data: { detail: { wo: "2001" }, history: { count: 2 } }
+  });
+});
+
+test("trata un fallo de lectura de cache como cache miss", () => {
+  let detailCalls = 0;
+  const context = loadBundledService({ CacheService: { getScriptCache: () => ({
+    get: () => { throw new Error("cache no disponible"); },
+    put: () => {}
+  }) } });
+  context.getInspectionWorkOrder = () => { detailCalls += 1; return { ok: true, data: { wo: "2001" } }; };
+  context.getInspectionHistory = () => ({ ok: true, data: { count: 1 } });
+
+  const result = context.getInspectionWorkOrderBundle("2001");
+
+  assert.equal(result.ok, true);
+  assert.equal(detailCalls, 1);
+});
+
+test("trata JSON corrupto en cache como cache miss y reemplaza su contenido", () => {
+  let cachedValue;
+  const context = loadBundledService({ CacheService: { getScriptCache: () => ({
+    get: () => "{corrupto",
+    put: (_key, value) => { cachedValue = value; }
+  }) } });
+  context.getInspectionWorkOrder = () => ({ ok: true, data: { wo: "2001" } });
+  context.getInspectionHistory = () => ({ ok: true, data: { count: 1 } });
+
+  const result = context.getInspectionWorkOrderBundle("2001");
+
+  assert.equal(result.ok, true);
+  assert.equal(cachedValue, JSON.stringify(result.data));
+});
+
 test("registra historial con todos los campos del contrato original", () => {
   let appended;
   const context = loadService();
