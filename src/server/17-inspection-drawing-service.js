@@ -9,6 +9,27 @@ function PP_Inspection_cleanDrawing_(value) {
   return PP_Inspection_text_(value, 1000).replace(/^['"]+|['"]+$/g, '').trim();
 }
 
+function getInspectionWorkOrderBundle(wo, options) {
+  return PP_Inspection_result_(function() {
+    const folio = PP_Inspection_text_(wo, 80);
+    if (!folio) throw new Error('OT requerida');
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'PP_INSPECTION_WO_BUNDLE_' + folio;
+    const forceRefresh = options && options.forceRefresh === true;
+    if (!forceRefresh) {
+      const cached = cache.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    }
+    const detail = getInspectionWorkOrder(folio);
+    if (!detail.ok) throw new Error(detail.error);
+    const history = getInspectionHistory(folio);
+    if (!history.ok) throw new Error(history.error);
+    const bundle = { detail: detail.data, history: history.data };
+    cache.put(cacheKey, JSON.stringify(bundle), 300);
+    return bundle;
+  });
+}
+
 function PP_Inspection_routeIndexV2_() {
   const sheet = PP_Inspection_sheet_(PP_INSPECTION_ROUTES_SHEET, ['Articulo', 'Materia prima', 'Tramo', 'DIBUJO', 'Ultima modificacion']);
   const index = { rows: [], byMaterialDrawing: {} };

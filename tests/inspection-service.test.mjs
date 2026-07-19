@@ -203,6 +203,68 @@ test("lee historial con el contrato original y conserva conteo y folio", () => {
   assert.equal(result.data.history[0].folio, "2001");
 });
 
+test("consolida detalle e historial de una OT y los conserva en cache por 300 segundos", () => {
+  const cacheEntries = new Map();
+  let detailCalls = 0;
+  let historyCalls = 0;
+  const cache = {
+    get: (key) => cacheEntries.get(key)?.value || null,
+    put: (key, value, ttl) => cacheEntries.set(key, { value, ttl })
+  };
+  const context = loadBundledService({ CacheService: { getScriptCache: () => cache } });
+  context.getInspectionWorkOrder = (wo) => { detailCalls += 1; return { ok: true, data: { wo, source: "detail" } }; };
+  context.getInspectionHistory = (wo) => { historyCalls += 1; return { ok: true, data: { wo, source: "history" } }; };
+
+  const first = context.getInspectionWorkOrderBundle(" 2001 ");
+  const second = context.getInspectionWorkOrderBundle("2001");
+
+  assert.deepEqual(structuredClone(first), { ok: true, data: {
+    detail: { wo: "2001", source: "detail" }, history: { wo: "2001", source: "history" }
+  } });
+  assert.deepEqual(structuredClone(second), structuredClone(first));
+  assert.equal(detailCalls, 1);
+  assert.equal(historyCalls, 1);
+  assert.deepEqual(cacheEntries.get("PP_INSPECTION_WO_BUNDLE_2001"), {
+    value: JSON.stringify(first.data), ttl: 300
+  });
+});
+
+test("la recarga forzada omite la cache y reemplaza el paquete", () => {
+  const cacheEntries = new Map([["PP_INSPECTION_WO_BUNDLE_2001", { value: JSON.stringify({ detail: "anterior", history: "anterior" }), ttl: 300 }]]);
+  let reads = 0;
+  let detailCalls = 0;
+  const cache = {
+    get: (key) => { reads += 1; return cacheEntries.get(key)?.value || null; },
+    put: (key, value, ttl) => cacheEntries.set(key, { value, ttl })
+  };
+  const context = loadBundledService({ CacheService: { getScriptCache: () => cache } });
+  context.getInspectionWorkOrder = () => { detailCalls += 1; return { ok: true, data: "nuevo detalle" }; };
+  context.getInspectionHistory = () => ({ ok: true, data: "nuevo historial" });
+
+  const result = context.getInspectionWorkOrderBundle("2001", { forceRefresh: true });
+
+  assert.deepEqual(structuredClone(result), { ok: true, data: { detail: "nuevo detalle", history: "nuevo historial" } });
+  assert.equal(reads, 0);
+  assert.equal(detailCalls, 1);
+  assert.deepEqual(cacheEntries.get("PP_INSPECTION_WO_BUNDLE_2001"), {
+    value: JSON.stringify(result.data), ttl: 300
+  });
+});
+
+test("no guarda en cache un paquete fallido y conserva el contrato de error", () => {
+  let puts = 0;
+  const context = loadBundledService({ CacheService: { getScriptCache: () => ({ get: () => null, put: () => { puts += 1; } }) } });
+  context.getInspectionWorkOrder = () => ({ ok: false, error: "detalle no disponible" });
+  context.getInspectionHistory = () => ({ ok: true, data: {} });
+
+  const failed = context.getInspectionWorkOrderBundle("2001");
+  const missingWo = context.getInspectionWorkOrderBundle("");
+
+  assert.deepEqual(structuredClone(failed), { ok: false, error: "detalle no disponible" });
+  assert.deepEqual(structuredClone(missingWo), { ok: false, error: "OT requerida" });
+  assert.equal(puts, 0);
+});
+
 test("registra historial con todos los campos del contrato original", () => {
   let appended;
   const context = loadService();
