@@ -11,6 +11,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
   const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
+  const inspectionDrawingService = await readFile(path.join(result.distDir, "17-inspection-drawing-service.js"), "utf8");
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
@@ -217,7 +218,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /--inspection-print-scale/);
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
-  assert.match(pagesIndex, /call\("getInspectionDrawingRoutes"[\s\S]*\.catch\(\(\) => null\)/);
+  assert.match(pagesIndex, /call\("getInspectionWorkOrderBundle", wo/);
+  assert.doesNotMatch(pagesIndex, /call\("getInspectionWorkOrder", wo\)/);
+  assert.doesNotMatch(pagesIndex, /call\("getInspectionDrawingRoutes"/);
+  assert.doesNotMatch(pagesIndex, /call\("getInspectionHistory"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
@@ -236,7 +240,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(inspectionRouteEditorSource, /errorElement\.hidden = false;[\s\S]*return false;/);
   assert.doesNotMatch(inspectionRouteEditorSource, /while \(true\)/);
   assert.match(pagesIndex, /planningDialogConfirm\.disabled = true;[\s\S]*await submit\(values\)/);
-  assert.match(pagesIndex, /renderDetail\(\)[\s\S]*getInspectionHistory/);
+  assert.match(pagesIndex, /state\.detail = bundle\.detail;[\s\S]*renderDetail\(\);[\s\S]*renderHistory\(bundle\.history/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
   assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);
   assert.match(pagesIndex, /inspection-check-pill/);
@@ -264,8 +268,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection\)/);
   assert.match(pagesIndex, /function inspectionOperationLayout\(count\)/);
-  for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
-    assert.match(inspectionService, new RegExp(`function ${inspectionFunction}\\(`));
+  const inspectionPublicFunctions = `${inspectionService}\n${inspectionDrawingService}`;
+  for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "getInspectionWorkOrderBundle", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
+    assert.match(inspectionPublicFunctions, new RegExp(`function ${inspectionFunction}\\(`));
   }
   assert.match(inspectionService, /requeridoOriginal/);
   assert.match(inspectionService, /deficitNeto/);

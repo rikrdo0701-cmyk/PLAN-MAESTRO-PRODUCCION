@@ -1,6 +1,11 @@
 (function inspectionAppFactory(root) {
   "use strict";
   const state = { list: [], detail: null, selection: {} };
+  const INSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+  const bundleCache = new Map();
+  const normalBundleRequests = new Map();
+  const bundleRequestVersions = new Map();
+  let selectionToken = 0;
   const byId = (id) => document.getElementById(id);
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
   const call = (method, ...args) => root.PPAppsScriptBridge?.call(method, args) || Promise.reject(new Error("Backend no disponible"));
@@ -27,6 +32,48 @@
     state.list = result.data || [];
     renderList();
     renderJobStatus(`${state.list.length} WOs abiertas`);
+    prefetchWorkOrders(state.list);
+  }
+  function cachedBundle(wo) {
+    const cached = bundleCache.get(wo);
+    if (!cached) return null;
+    if (Date.now() - cached.cachedAt < INSPECTION_CACHE_TTL_MS) return cached.data;
+    bundleCache.delete(wo);
+    return null;
+  }
+  function requestBundle(wo, forceRefresh = false) {
+    if (!forceRefresh) {
+      const cached = cachedBundle(wo);
+      if (cached) return Promise.resolve(cached);
+      const pending = normalBundleRequests.get(wo);
+      if (pending) return pending;
+    }
+    const version = (bundleRequestVersions.get(wo) || 0) + 1;
+    bundleRequestVersions.set(wo, version);
+    const backendRequest = forceRefresh
+      ? call("getInspectionWorkOrderBundle", wo, { forceRefresh: true })
+      : call("getInspectionWorkOrderBundle", wo);
+    const request = backendRequest.then((result) => {
+      if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la WO");
+      if (bundleRequestVersions.get(wo) === version) bundleCache.set(wo, { data: result.data, cachedAt: Date.now() });
+      return result.data;
+    }).finally(() => {
+      if (!forceRefresh && normalBundleRequests.get(wo) === request) normalBundleRequests.delete(wo);
+    });
+    if (!forceRefresh) normalBundleRequests.set(wo, request);
+    return request;
+  }
+  function prefetchWorkOrders(workOrders) {
+    const queue = (workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length) {
+        const wo = queue[nextIndex];
+        nextIndex += 1;
+        try { await requestBundle(wo); } catch (_) { /* La precarga es silenciosa. */ }
+      }
+    };
+    return Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
   }
   function cell(span, html = "", classes = "") { return `<div class="inspection-cell ${classes}" style="grid-column:span ${span}">${html}</div>`; }
   function operationHeader() {
@@ -86,11 +133,12 @@
     byId("inspectionPrintCheck").innerHTML = `<header class="inspection-check-head"><strong>Semáforo de impresión</strong><span class="inspection-check-pill ${diagnostic.status}">${diagnostic.label}</span></header><div class="inspection-check-list">${checks.map(([label, status, value]) => `<div class="inspection-check-row ${status}"><strong>${label}</strong><span>${escape(value)}</span></div>`).join("")}</div>`;
   }
   function renderHistory(history, job) {
-    const entries = history?.ok ? (history.data?.history || history.data || []) : [];
+    const data = history?.ok ? history.data : history;
+    const entries = Array.isArray(data) ? data : (data?.history || data?.historial || []);
     const latest = entries[0] || {};
     const printedAt = latest.FECHA_HORA || latest.fechaHora || latest.printedAt || "-";
     const folio = latest.FOLIO || latest.folio || latest.OT || latest.wo || job?.wo || "-";
-    const count = history?.data?.count ?? entries.length;
+    const count = data?.count ?? data?.conteo ?? entries.length;
     byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${count}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
   }
   function cleanDrawingInput(value) {
@@ -329,30 +377,23 @@
     const first = root.InspectionCore.inspectionMaterials(materials)[0];
     return materials.indexOf(first);
   }
-  async function loadDetail() {
+  async function loadDetail(options = {}) {
+    const token = ++selectionToken;
     const wo = byId("inspectionWorkOrder").value;
     if (!wo) return;
     renderJobStatus(`Cargando WO ${wo}...`);
-    const result = await call("getInspectionWorkOrder", wo);
-    if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la WO");
-    state.detail = result.data;
+    let bundle;
+    try {
+      bundle = await requestBundle(wo, options.forceRefresh === true);
+    } catch (error) {
+      if (token !== selectionToken) return;
+      throw error;
+    }
+    if (token !== selectionToken) return;
+    state.detail = bundle.detail;
     state.selection = root.InspectionCore.initialOperationSelection(state.detail.operations || []);
     renderDetail();
-    const routes = await call("getInspectionDrawingRoutes", state.detail.workOrder?.article).catch(() => null);
-    if (routes?.ok) {
-      const routeByMaterial = new Map((routes.data || []).map((route) => [String(route.MATERIAL || route.material || "").toUpperCase(), route]));
-      (state.detail.materials || []).forEach((material) => {
-        const route = routeByMaterial.get(String(material.material || "").toUpperCase());
-        if (route) { material.route = route.TRAMO || route.route || material.route; material.drawing = route.DIBUJO || route.drawing || material.drawing; }
-      });
-      if (!state.detail.workOrder?.drawing) {
-        const articleDrawing = (routes.data || []).find((route) => String(route.DIBUJO || route.drawing || "").trim());
-        if (articleDrawing) state.detail.workOrder.drawing = articleDrawing.DIBUJO || articleDrawing.drawing || "";
-      }
-      renderDetail();
-    }
-    const history = await call("getInspectionHistory", wo).catch(() => null);
-    renderHistory(history, state.detail.workOrder);
+    renderHistory(bundle.history, state.detail.workOrder);
   }
   async function printInspection() {
     if (!state.detail) return;
@@ -405,7 +446,7 @@
   function initialize() {
     if (!byId("inspectionWorkOrder")) return;
     byId("inspectionSearch").addEventListener("input", renderList);
-    byId("inspectionReload").addEventListener("click", () => loadDetail().catch(reportError));
+    byId("inspectionReload").addEventListener("click", () => loadDetail({ forceRefresh: true }).catch(reportError));
     byId("inspectionWorkOrder").addEventListener("change", () => loadDetail().catch(reportError));
     byId("inspectionSelectOps").addEventListener("click", () => { byId("inspectionOperationChoices").hidden = !byId("inspectionOperationChoices").hidden; });
     byId("inspectionDrawing").addEventListener("click", openDrawing);
