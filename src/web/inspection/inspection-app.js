@@ -5,6 +5,9 @@
   const bundleCache = new Map();
   const normalBundleRequests = new Map();
   const bundleRequestVersions = new Map();
+  const prefetchQueue = [];
+  const scheduledPrefetchWos = new Set();
+  let activePrefetches = 0;
   let selectionToken = 0;
   const byId = (id) => document.getElementById(id);
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
@@ -23,7 +26,12 @@
   function renderList() {
     const query = String(byId("inspectionSearch")?.value || "").trim().toUpperCase();
     const items = state.list.filter((item) => !query || optionLabel(item).toUpperCase().includes(query));
-    byId("inspectionWorkOrder").innerHTML = `<option value="">${items.length ? "Selecciona WO" : "Sin WO con ese filtro"}</option>` + items.map((item) => `<option value="${escape(item.wo)}">${escape(optionLabel(item))}</option>`).join("");
+    const select = byId("inspectionWorkOrder");
+    const selectedWo = String(select.value || "");
+    select.innerHTML = `<option value="">${items.length ? "Selecciona WO" : "Sin WO con ese filtro"}</option>` + items.map((item) => `<option value="${escape(item.wo)}">${escape(optionLabel(item))}</option>`).join("");
+    const selectionRemains = Boolean(selectedWo && items.some((item) => String(item.wo) === selectedWo));
+    select.value = selectionRemains ? selectedWo : "";
+    if (selectedWo && !selectionRemains) invalidateBundleSelection(selectedWo);
   }
   async function loadList() {
     renderJobStatus("Cargando WOs abiertas...");
@@ -41,15 +49,28 @@
     bundleCache.delete(wo);
     return null;
   }
+  function nextBundleRequestVersion(wo) {
+    const version = (bundleRequestVersions.get(wo) || 0) + 1;
+    bundleRequestVersions.set(wo, version);
+    return version;
+  }
+  function invalidateBundleSelection(wo) {
+    selectionToken += 1;
+    normalBundleRequests.delete(wo);
+    nextBundleRequestVersion(wo);
+  }
   function requestBundle(wo, forceRefresh = false) {
     if (!forceRefresh) {
       const cached = cachedBundle(wo);
       if (cached) return Promise.resolve(cached);
+      const currentVersion = bundleRequestVersions.get(wo) || 0;
       const pending = normalBundleRequests.get(wo);
-      if (pending) return pending;
+      if (pending?.version === currentVersion) return pending.promise;
+      if (pending) normalBundleRequests.delete(wo);
+    } else {
+      normalBundleRequests.delete(wo);
     }
-    const version = (bundleRequestVersions.get(wo) || 0) + 1;
-    bundleRequestVersions.set(wo, version);
+    const version = nextBundleRequestVersion(wo);
     const backendRequest = forceRefresh
       ? call("getInspectionWorkOrderBundle", wo, { forceRefresh: true })
       : call("getInspectionWorkOrderBundle", wo);
@@ -58,22 +79,29 @@
       if (bundleRequestVersions.get(wo) === version) bundleCache.set(wo, { data: result.data, cachedAt: Date.now() });
       return result.data;
     }).finally(() => {
-      if (!forceRefresh && normalBundleRequests.get(wo) === request) normalBundleRequests.delete(wo);
+      if (!forceRefresh && normalBundleRequests.get(wo)?.promise === request) normalBundleRequests.delete(wo);
     });
-    if (!forceRefresh) normalBundleRequests.set(wo, request);
+    if (!forceRefresh) normalBundleRequests.set(wo, { version, promise: request });
     return request;
   }
+  function drainPrefetchQueue() {
+    while (activePrefetches < 2 && prefetchQueue.length) {
+      const wo = prefetchQueue.shift();
+      activePrefetches += 1;
+      Promise.resolve().then(() => requestBundle(wo)).catch(() => {}).finally(() => {
+        activePrefetches -= 1;
+        scheduledPrefetchWos.delete(wo);
+        drainPrefetchQueue();
+      });
+    }
+  }
   function prefetchWorkOrders(workOrders) {
-    const queue = (workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean);
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < queue.length) {
-        const wo = queue[nextIndex];
-        nextIndex += 1;
-        try { await requestBundle(wo); } catch (_) { /* La precarga es silenciosa. */ }
-      }
-    };
-    return Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
+    (workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean).forEach((wo) => {
+      if (scheduledPrefetchWos.has(wo)) return;
+      scheduledPrefetchWos.add(wo);
+      prefetchQueue.push(wo);
+    });
+    drainPrefetchQueue();
   }
   function cell(span, html = "", classes = "") { return `<div class="inspection-cell ${classes}" style="grid-column:span ${span}">${html}</div>`; }
   function operationHeader() {

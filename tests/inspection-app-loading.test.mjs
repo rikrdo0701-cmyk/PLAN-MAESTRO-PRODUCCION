@@ -196,6 +196,152 @@ test("la recarga fuerza otra llamada aunque exista una carga normal pendiente", 
   assert.match(byId("inspectionSheetGrid").innerHTML, />200-forzada</);
 });
 
+test("una reseleccion posterior a forceRefresh no adopta la promesa normal anterior", async () => {
+  const requests = [];
+  const { app, byId } = createHarness((method, args) => {
+    const request = deferred();
+    requests.push({ args, request });
+    return request.promise;
+  });
+  byId("inspectionWorkOrder").value = "210";
+
+  const oldNormalLoad = app.loadDetail();
+  const forcedLoad = app.loadDetail({ forceRefresh: true });
+  const reselectedLoad = app.loadDetail();
+
+  assert.equal(requests.length, 3);
+  assert.deepEqual(structuredClone(requests[1].args), ["210", { forceRefresh: true }]);
+  requests[0].request.resolve(bundle("210-antigua"));
+  await oldNormalLoad;
+  assert.doesNotMatch(byId("inspectionSheetGrid").innerHTML, /210-antigua/);
+  requests[1].request.resolve(bundle("210-forzada"));
+  await forcedLoad;
+  assert.doesNotMatch(byId("inspectionSheetGrid").innerHTML, /210-forzada/);
+  requests[2].request.resolve(bundle("210-vigente"));
+  await reselectedLoad;
+  assert.match(byId("inspectionSheetGrid").innerHTML, /210-vigente/);
+});
+
+test("filtrar la WO seleccionada invalida su solicitud normal antes de reseleccionarla", async () => {
+  const requests = [];
+  const { app, byId } = createHarness((method, args) => {
+    if (method === "getInspectionWorkOrders") return Promise.resolve({ ok: true, data: [
+      { wo: "800", article: "ALFA", quantity: 1 },
+      { wo: "900", article: "BETA", quantity: 1 },
+    ] });
+    const request = deferred();
+    requests.push({ wo: args[0], request });
+    return request.promise;
+  });
+
+  await app.loadList();
+  await flush();
+  byId("inspectionWorkOrder").value = "800";
+  const oldLoad = app.loadDetail();
+  byId("inspectionSearch").value = "900";
+  byId("inspectionSearch").dispatch("input");
+  assert.equal(byId("inspectionWorkOrder").value, "");
+  byId("inspectionSearch").value = "";
+  byId("inspectionSearch").dispatch("input");
+  byId("inspectionWorkOrder").value = "800";
+  const reselectedLoad = app.loadDetail();
+
+  const requests800 = requests.filter((entry) => entry.wo === "800");
+  assert.equal(requests800.length, 2);
+  requests800[0].request.resolve(bundle("800-antigua"));
+  await oldLoad;
+  assert.doesNotMatch(byId("inspectionSheetGrid").innerHTML, /800-antigua/);
+  requests800[1].request.resolve(bundle("800-vigente"));
+  await reselectedLoad;
+  assert.match(byId("inspectionSheetGrid").innerHTML, /800-vigente/);
+  requests.find((entry) => entry.wo === "900")?.request.resolve(bundle("900"));
+  await flush();
+});
+
+test("un fallo posterior al filtro no reemplaza el estado con un error obsoleto", async () => {
+  let request;
+  const { app, byId } = createHarness((method) => {
+    if (method === "getInspectionWorkOrders") return Promise.resolve({ ok: true, data: [{ wo: "810", article: "ALFA", quantity: 1 }] });
+    request = deferred();
+    return request.promise;
+  });
+
+  await app.loadList();
+  await flush();
+  byId("inspectionWorkOrder").value = "810";
+  const selectedLoad = byId("inspectionWorkOrder").dispatch("change");
+  byId("inspectionSearch").value = "sin coincidencias";
+  byId("inspectionSearch").dispatch("input");
+  request.reject(new Error("respuesta antigua"));
+  await selectedLoad;
+  await flush();
+
+  assert.doesNotMatch(byId("inspectionJobStatus").innerHTML, /Error|respuesta antigua/);
+});
+
+test("la seleccion manual inicia una WO pendiente aunque dos precargas sigan bloqueadas", async () => {
+  const requests = [];
+  const { app, byId } = createHarness((method, args) => {
+    if (method === "getInspectionWorkOrders") return Promise.resolve({ ok: true, data: ["1", "2", "3"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
+    const request = deferred();
+    requests.push({ wo: args[0], request });
+    return request.promise;
+  });
+
+  await app.loadList();
+  await flush();
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2"]);
+  byId("inspectionWorkOrder").value = "3";
+  const selectedLoad = app.loadDetail();
+
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "3"]);
+  requests[2].request.resolve(bundle("3"));
+  await selectedLoad;
+  assert.match(byId("inspectionSheetGrid").innerHTML, />3</);
+  requests[0].request.resolve(bundle("1"));
+  requests[1].request.resolve(bundle("2"));
+  await flush();
+});
+
+test("dos loadList solapados comparten un limite global de dos precargas", async () => {
+  const listRequests = [];
+  const pending = [];
+  let active = 0;
+  let maximumActive = 0;
+  const { app } = createHarness((method, args) => {
+    if (method === "getInspectionWorkOrders") {
+      const request = deferred();
+      listRequests.push(request);
+      return request.promise;
+    }
+    const request = deferred();
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    pending.push({ wo: args[0], request });
+    return request.promise.finally(() => { active -= 1; });
+  });
+
+  const firstList = app.loadList();
+  const secondList = app.loadList();
+  listRequests[0].resolve({ ok: true, data: ["1", "2", "3", "4", "5"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
+  listRequests[1].resolve({ ok: true, data: ["6", "7", "8", "9", "10"].map((wo) => ({ wo, article: "B", quantity: 1 })) });
+  await Promise.all([firstList, secondList]);
+  await flush();
+
+  assert.equal(pending.length, 2);
+  while (pending.length < 10) {
+    const next = pending.find((entry) => !entry.resolved);
+    next.resolved = true;
+    next.request.resolve(bundle(next.wo));
+    await flush();
+    assert.ok(active <= 2);
+  }
+  pending.filter((entry) => !entry.resolved).forEach((entry) => entry.request.resolve(bundle(entry.wo)));
+  await flush();
+
+  assert.equal(maximumActive, 2);
+});
+
 test("un fallo de precarga es silencioso y la seleccion vuelve a intentar", async () => {
   let bundleCalls = 0;
   const { app, byId } = createHarness(async (method, args) => {
