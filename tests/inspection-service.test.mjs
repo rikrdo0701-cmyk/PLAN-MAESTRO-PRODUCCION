@@ -265,6 +265,18 @@ test("no guarda en cache un paquete fallido y conserva el contrato de error", ()
   assert.equal(puts, 0);
 });
 
+test("no guarda en cache cuando falla el historial de la OT", () => {
+  let puts = 0;
+  const context = loadBundledService({ CacheService: { getScriptCache: () => ({ get: () => null, put: () => { puts += 1; } }) } });
+  context.getInspectionWorkOrder = () => ({ ok: true, data: { wo: "2001" } });
+  context.getInspectionHistory = () => ({ ok: false, error: "historial no disponible" });
+
+  const result = context.getInspectionWorkOrderBundle("2001");
+
+  assert.deepEqual(structuredClone(result), { ok: false, error: "historial no disponible" });
+  assert.equal(puts, 0);
+});
+
 test("registra historial con todos los campos del contrato original", () => {
   let appended;
   const context = loadService();
