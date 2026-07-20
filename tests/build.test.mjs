@@ -4,6 +4,20 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildProject } from "../scripts/build-appscript.mjs";
 
+test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
+  const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
+  const workflows = await Promise.all(workflowNames.map((name) =>
+    readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8")
+  ));
+  for (const workflow of workflows) {
+    assert.doesNotMatch(workflow, /actions\/checkout@v[45]\b/);
+    assert.doesNotMatch(workflow, /actions\/setup-node@v[45]\b/);
+  }
+  assert.match(workflows[2], /actions\/configure-pages@v6\b/);
+  assert.match(workflows[2], /actions\/upload-pages-artifact@v5\b/);
+  assert.match(workflows[2], /actions\/deploy-pages@v5\b/);
+});
+
 test("el build genera Apps Script y GitHub Pages", async () => {
   const result = await buildProject();
   assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"]);
