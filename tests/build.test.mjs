@@ -9,9 +9,10 @@ test("todos los workflows usan acciones compatibles con Node.js 24", async () =>
   const workflows = await Promise.all(workflowNames.map((name) =>
     readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8")
   ));
-  for (const workflow of workflows) {
-    assert.doesNotMatch(workflow, /actions\/checkout@v[45]\b/);
-    assert.doesNotMatch(workflow, /actions\/setup-node@v[45]\b/);
+  const expectedActionCounts = [1, 1, 1, 2];
+  for (const [index, workflow] of workflows.entries()) {
+    assert.equal((workflow.match(/actions\/checkout@v6\b/g) || []).length, expectedActionCounts[index], `${workflowNames[index]} debe usar actions/checkout@v6`);
+    assert.equal((workflow.match(/actions\/setup-node@v6\b/g) || []).length, expectedActionCounts[index], `${workflowNames[index]} debe usar actions/setup-node@v6`);
   }
   assert.match(workflows[2], /actions\/configure-pages@v6\b/);
   assert.match(workflows[2], /actions\/upload-pages-artifact@v5\b/);
