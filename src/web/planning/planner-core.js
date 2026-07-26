@@ -1353,7 +1353,7 @@
     if (!predecessor) return null;
     const start = operationStart(predecessor);
     const end = operationEnd(predecessor);
-    return { operation: predecessor, start, end, duration: Math.max(0, diffMinutes(start, end)) };
+    return { operation: predecessor, start, end, duration: operationDuration(predecessor, 100, 100) };
   }
 
   function latestPredecessor(left, right) {
