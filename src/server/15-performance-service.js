@@ -97,6 +97,7 @@ function savePlanningStateOptimized(payload) {
       reportWeekStart: payload.reportWeekStart || '',
       reportFilters: payload.reportFilters || {},
       preparedPlanningByOt: payload.preparedPlanningByOt || {},
+      EXCLUDED_CAPABILITIES: PP_normalizeExcludedCapabilities_(payload.excludedCapabilities),
       selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
       lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
       expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],

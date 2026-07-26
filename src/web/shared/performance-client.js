@@ -232,6 +232,7 @@
       reportWeekStart: state.reportWeekStart,
       reportFilters: clone(state.reportFilters || {}),
       preparedPlanningByOt: clone(state.preparedPlanningByOt || {}),
+      excludedCapabilities: normalizeCapabilityKeys(state.excludedCapabilities),
       selectedOts: [...(state.selectedOts || [])],
       lockedOts: [...(state.lockedOts || [])],
       expandedOts: [...(state.expandedOts || [])],

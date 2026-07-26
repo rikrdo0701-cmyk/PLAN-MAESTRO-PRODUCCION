@@ -480,7 +480,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   const persistence = app.slice(persistStart, persistEnd);
 
   assert.match(app, /let state = loadState\(\);\s*state\.matrixSearch = "";/);
-  assert.match(app, /state\.excludedCapabilities = Array\.isArray\(state\.excludedCapabilities\) \? state\.excludedCapabilities : \[\];/);
+  assert.match(app, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\);/);
   assert.match(renderMatrix, /window\.PlannerCore\.filterCapabilities\(capabilities, state\.matrixSearch\)/);
   assert.match(renderMatrix, /matrixSearchInput\.value = state\.matrixSearch/);
   assert.match(renderMatrix, /matrixSearchCount\.textContent = `\$\{filteredCapabilities\.length\} de \$\{capabilities\.length\} operaciones`/);
@@ -516,6 +516,31 @@ test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
   assert.equal(persisted.matrixSearch, undefined);
   assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
   assert.deepEqual(persisted.materials, []);
+});
+
+test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const normalizeStart = app.indexOf("function normalizeState()");
+  const normalizeEnd = app.indexOf("function bindEvents()", normalizeStart);
+  const normalizeState = app.slice(normalizeStart, normalizeEnd);
+  const importStart = app.indexOf("function applyImported(");
+  const importEnd = app.indexOf("function importCsv(", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  const removalStart = app.indexOf("function removeCapability(");
+  const removalEnd = app.indexOf("function removeOperator(", removalStart);
+  const removal = app.slice(removalStart, removalEnd);
+  const deferredStart = performanceClient.indexOf("function baseSavePayload()");
+  const deferredEnd = performanceClient.indexOf("function saveJobsForScopes(", deferredStart);
+  const deferredPayloads = performanceClient.slice(deferredStart, deferredEnd);
+
+  assert.match(normalizeState, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.match(importFlow, /if \(Array\.isArray\(imported\.excludedCapabilities\)\) state\.excludedCapabilities = normalizeCapabilityKeys\(imported\.excludedCapabilities\)/);
+  assert.match(importFlow, /"excludedCapabilities"/);
+  assert.match(importFlow, /excludedCapabilities:\s*Array\.isArray\(parsed\.excludedCapabilities\)/);
+  assert.match(removal, /state\.excludedCapabilities = state\.excludedCapabilities\.filter\(\(excludedKey\) => excludedKey !== key\)/);
+  assert.match(deferredPayloads, /excludedCapabilities:\s*normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.doesNotMatch(deferredPayloads, /matrixSearch/);
 });
 
 test("cambiar la exclusion restaura el foco al control de la misma capacidad", async () => {

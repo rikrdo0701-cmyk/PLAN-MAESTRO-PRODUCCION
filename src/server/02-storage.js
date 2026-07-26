@@ -119,6 +119,7 @@ function PP_readState_(spreadsheet) {
     reportWeekStart: config.reportWeekStart || '',
     reportFilters: config.reportFilters || null,
     preparedPlanningByOt: config.preparedPlanningByOt || {},
+    excludedCapabilities: PP_normalizeExcludedCapabilities_(config.EXCLUDED_CAPABILITIES),
     selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : null,
     lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : null,
     expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : null,
@@ -242,6 +243,7 @@ function PP_writeSkillState_(spreadsheet, payload, user) {
   PP_writeTable_(spreadsheet.getSheetByName('MATRIZ'), PP_SHEETS.MATRIZ, PP_matrixRows_(payload));
   return PP_finishPartialWrite_(spreadsheet, payload, user, 'GUARDAR_MATRIZ', {
     capacityMinutes: Number(payload.capacityMinutes || 2400),
+    EXCLUDED_CAPABILITIES: PP_normalizeExcludedCapabilities_(payload.excludedCapabilities),
     settings: payload.settings || {}
   }, {
     operators: (payload.operators || []).length,
@@ -494,6 +496,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['reportWeekStart', JSON.stringify(payload.reportWeekStart || '')],
     ['reportFilters', JSON.stringify(payload.reportFilters || {})],
     ['preparedPlanningByOt', JSON.stringify(payload.preparedPlanningByOt || {})],
+    ['EXCLUDED_CAPABILITIES', JSON.stringify(PP_normalizeExcludedCapabilities_(payload.excludedCapabilities))],
     ['selectedOts', JSON.stringify(Array.isArray(payload.selectedOts) ? payload.selectedOts : [])],
     ['lockedOts', JSON.stringify(Array.isArray(payload.lockedOts) ? payload.lockedOts : [])],
     ['expandedOts', JSON.stringify(Array.isArray(payload.expandedOts) ? payload.expandedOts : [])],
@@ -1157,4 +1160,13 @@ function PP_normalizeCapabilityKey_(value) {
   const separator = text.indexOf('::');
   if (separator < 0) return text;
   return text.slice(0, separator) + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+}
+
+function PP_normalizeExcludedCapabilities_(values) {
+  const normalized = [];
+  (Array.isArray(values) ? values : []).forEach(function(value) {
+    const key = PP_normalizeCapabilityKey_(value);
+    if (key && normalized.indexOf(key) < 0) normalized.push(key);
+  });
+  return normalized;
 }

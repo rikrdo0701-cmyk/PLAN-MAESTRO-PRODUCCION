@@ -938,7 +938,7 @@ function normalizeState() {
   state.configuredCapabilities = hadConfiguredCapabilities ? state.configuredCapabilities : [];
   state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
   state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
-  state.excludedCapabilities = Array.isArray(state.excludedCapabilities) ? state.excludedCapabilities : [];
+  state.excludedCapabilities = normalizeCapabilityKeys(state.excludedCapabilities);
   state.matrixSearch = String(state.matrixSearch || "");
   state.operationRules = state.operationRules && typeof state.operationRules === "object" ? state.operationRules : {};
   state.machines = (Array.isArray(state.machines) ? state.machines : [])
@@ -5260,6 +5260,7 @@ function removeCapability(key) {
   if (!capability) return;
   state.customCapabilities = state.customCapabilities.filter((row) => row.key !== key);
   state.configuredCapabilities = state.configuredCapabilities.filter((configuredKey) => configuredKey !== key);
+  state.excludedCapabilities = state.excludedCapabilities.filter((excludedKey) => excludedKey !== key);
   if (!state.hiddenCapabilities.includes(key)) state.hiddenCapabilities.push(key);
   delete state.matrix[key];
   delete state.capacityModes[key];
@@ -5734,6 +5735,8 @@ function applyImported(imported, options = {}) {
   if (Array.isArray(imported.configuredCapabilities)) state.configuredCapabilities = imported.configuredCapabilities;
   if (imported.customCapabilities) state.customCapabilities = imported.customCapabilities;
   if (imported.hiddenCapabilities) state.hiddenCapabilities = imported.hiddenCapabilities;
+  if (Array.isArray(imported.excludedCapabilities)) state.excludedCapabilities = normalizeCapabilityKeys(imported.excludedCapabilities);
+  else if (!preserveLocalPlanning) state.excludedCapabilities = [];
   if (imported.capacityModes) state.capacityModes = imported.capacityModes;
   if (imported.matrix) state.matrix = imported.matrix;
   if (imported.operatorPerformance) state.operatorPerformance = imported.operatorPerformance;
@@ -5785,6 +5788,7 @@ function captureLocalPlanningState() {
     "configuredCapabilities",
     "customCapabilities",
     "hiddenCapabilities",
+    "excludedCapabilities",
     "capacityModes",
     "matrix",
     "operationRules",
@@ -5846,6 +5850,7 @@ function importJson(text) {
     configuredCapabilities: Array.isArray(parsed.configuredCapabilities) ? parsed.configuredCapabilities : null,
     customCapabilities: Array.isArray(parsed.customCapabilities) ? parsed.customCapabilities : null,
     hiddenCapabilities: Array.isArray(parsed.hiddenCapabilities) ? parsed.hiddenCapabilities : null,
+    excludedCapabilities: Array.isArray(parsed.excludedCapabilities) ? normalizeCapabilityKeys(parsed.excludedCapabilities) : [],
     capacityModes: parsed.capacityModes,
     matrix: parsed.matrix,
     operatorPerformance: parsed.operatorPerformance,
@@ -7382,6 +7387,18 @@ function capabilityLabelForOperation(op) {
 
 function capabilityKey(ct, label) {
   return `${String(ct || "SIN_CT").trim()}::${normalizeHeader(label || "OPERACION")}`;
+}
+
+function normalizeCapabilityKeys(values) {
+  return uniq((Array.isArray(values) ? values : []).map((value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const separator = text.indexOf("::");
+    if (separator < 0) return text;
+    const ct = text.slice(0, separator).trim();
+    const label = normalizeHeader(text.slice(separator + 2).replace(/_/g, " "));
+    return ct && label ? `${ct}::${label}` : "";
+  }).filter(Boolean));
 }
 
 function parseManualCapability(value) {
