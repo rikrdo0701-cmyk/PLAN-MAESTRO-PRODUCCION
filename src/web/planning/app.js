@@ -3122,7 +3122,8 @@ function renderMatrix() {
   for (const capability of filteredCapabilities) {
     const capacityMode = capacityModeForCapability(capability);
     const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
-    const excluded = state.excludedCapabilities.includes(capability.key);
+    const mandatory = normalizeHeader(capability.key) === normalizeHeader(TOOL_CHANGE_CAPABILITY.key);
+    const excluded = !mandatory && state.excludedCapabilities.includes(capability.key);
     rows.push(`<tr${excluded ? ' class="matrix-row-excluded"' : ""}>
       <td>
         <div class="capability-heading">
@@ -3130,9 +3131,9 @@ function renderMatrix() {
             <strong>${escapeHtml(capability.label)}</strong>
             <span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span>
             <div class="capability-plan-controls">
-              <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan">
+              <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan"${mandatory ? ' disabled aria-disabled="true"' : ""}>
                 <option value="USE"${excluded ? "" : " selected"}>Usar en el plan</option>
-                <option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>
+                ${mandatory ? "" : `<option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>`}
               </select>
               ${excluded ? '<span class="matrix-excluded-badge">Excluida</span>' : ""}
             </div>
@@ -7455,7 +7456,8 @@ function normalizeCapabilityKeys(values) {
     const ct = text.slice(0, separator).trim();
     const label = normalizeHeader(text.slice(separator + 2).replace(/_/g, " "));
     return ct && label ? `${ct}::${label}` : "";
-  }).filter(Boolean));
+  }).filter(Boolean))
+    .filter((key) => normalizeHeader(key) !== normalizeHeader(TOOL_CHANGE_CAPABILITY.key));
 }
 
 function parseManualCapability(value) {

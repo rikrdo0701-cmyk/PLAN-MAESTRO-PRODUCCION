@@ -8,6 +8,7 @@ const plannerSource = await readFile(new URL("../src/web/planning/planner-core.j
 const plannerContext = { globalThis: {} };
 vm.runInNewContext(plannerSource, plannerContext, { filename: "planner-core.js" });
 const PlannerCore = plannerContext.globalThis.PlannerCore;
+const TOOL_CHANGE_KEY = "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL";
 
 function sourceBetween(startText, endText) {
   const start = app.indexOf(startText);
@@ -31,6 +32,130 @@ function isProgrammedJobStatus(status) {
 function isPlannedJobStatus(status) {
   return normalizeStatus(status).includes("PLANIFICAD");
 }
+
+test("TOOL_CHANGE obligatorio se normaliza y se muestra fijo en la matriz", () => {
+  const capability = {
+    key: TOOL_CHANGE_KEY,
+    ct: "TOOL_CHANGE",
+    label: "CAMBIO DE HERRAMENTAL",
+    count: 0,
+  };
+  const normalizeCapabilityKeys = Function(
+    "uniq", "normalizeHeader", "TOOL_CHANGE_CAPABILITY",
+    `${sourceBetween("function normalizeCapabilityKeys(", "function parseManualCapability(")}; return normalizeCapabilityKeys;`,
+  )(
+    (items) => [...new Set(items)],
+    (value) => normalizeStatus(value).replace(/\s+/g, "_"),
+    capability,
+  );
+  const state = {
+    operators: [],
+    matrixSearch: "",
+    excludedCapabilities: normalizeCapabilityKeys([
+      TOOL_CHANGE_KEY,
+      " 5459::dóblado ",
+    ]),
+    operationRules: {},
+  };
+  const matrixWrap = {
+    innerHTML: "",
+    querySelectorAll: () => [],
+  };
+  const els = {
+    matrixWrap,
+    matrixSearchInput: { value: "" },
+    matrixSearchCount: { textContent: "" },
+    clearMatrixSearchBtn: { disabled: false },
+  };
+  const renderMatrix = Function(
+    "state", "els", "window", "renderOperationCatalogSelect", "getCapabilityRows",
+    "capacityModeForCapability", "escapeHtml", "isOperatorSkilledForCapability",
+    "TOOL_CHANGE_CAPABILITY", "normalizeHeader",
+    `${sourceBetween("function renderMatrix()", "function renderOperationCatalogSelect()")}; return renderMatrix;`,
+  )(
+    state,
+    els,
+    { PlannerCore },
+    () => {},
+    () => [capability],
+    () => "FINITA",
+    (value) => String(value),
+    () => false,
+    capability,
+    (value) => normalizeStatus(value).replace(/\s+/g, "_"),
+  );
+
+  renderMatrix();
+
+  assert.deepEqual(state.excludedCapabilities, ["5459::DOBLADO"]);
+  assert.match(matrixWrap.innerHTML, /data-capability-plan-state="TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"[^>]*disabled/);
+  assert.doesNotMatch(matrixWrap.innerHTML, /value="EXCLUDE"/);
+});
+
+test("un estado corrupto no oculta el cambio generado por el motor", () => {
+  const corruptState = {
+    selectedOts: ["100"],
+    excludedCapabilities: [TOOL_CHANGE_KEY],
+    operations: [
+      {
+        id: "old-completed-change",
+        ot: "100",
+        secuencia: 0,
+        ct: "TOOL_CHANGE",
+        descripcion: "CAMBIO DE HERRAMENTAL",
+        tipoInsercion: "CAMBIO_HERRAMENTAL",
+        estatus: "PLAN",
+        planStatus: "COMPLETADA_PLAN",
+        generatedBy: "PLANNER_CORE_V2",
+        operador: "AJUSTADOR",
+        maquina: "M1",
+        herramental: "H0",
+        fechaInicio: "2026-07-24",
+        horaInicio: "07:00",
+        fechaFin: "2026-07-24",
+        horaFin: "07:30",
+        tiempoSetup: 30,
+      },
+      {
+        id: "bend-100",
+        ot: "100",
+        secuencia: 1,
+        ct: "5459",
+        descripcion: "DOBLEZ",
+        estatus: "PLAN",
+        operador: "OPERADOR 1",
+        maquina: "M1",
+        herramental: "H1",
+        tiempoProd: 20,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    operators: ["OPERADOR 1", "AJUSTADOR"],
+    matrix: {
+      "5459::DOBLEZ": ["OPERADOR 1"],
+      [TOOL_CHANGE_KEY]: ["AJUSTADOR"],
+    },
+    configuredCapabilities: ["5459::DOBLEZ", TOOL_CHANGE_KEY],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 },
+    workSchedule: {},
+  };
+  const scheduled = PlannerCore.schedulePlan(corruptState, {
+    planStart: "2026-07-27",
+    horizonDays: 5,
+    executionTime: "2026-07-27T07:00:00",
+  });
+  const scheduledChanges = scheduled.operations
+    .filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  const visibleChanges = PlannerCore.filterExcludedOperations(corruptState, scheduled.operations)
+    .filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+
+  assert.ok(scheduledChanges.length > 0, JSON.stringify(scheduled.lastSchedule.diagnostics));
+  assert.deepEqual(
+    visibleChanges.map((op) => op.id),
+    scheduledChanges.map((op) => op.id),
+  );
+  assert.ok(visibleChanges.every((op) => op.fechaInicio && op.fechaFin));
+});
 
 test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", () => {
   const state = {

@@ -25,6 +25,7 @@ const PP_SHEETS = {
   BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
+const PP_TOOL_CHANGE_CAPABILITY_KEY = 'TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL';
 
 const PP_OPERATION_FIELDS = {
   ID: 'id', NUM: 'num', OT: 'ot', PARTE: 'parte', DESCRIPCION: 'descripcion', CONTENIDO: 'contenido',
@@ -1182,7 +1183,11 @@ function PP_normalizeExcludedCapabilities_(values) {
   const normalized = [];
   (Array.isArray(values) ? values : []).forEach(function(value) {
     const key = PP_normalizeCapabilityKey_(value);
-    if (key && normalized.indexOf(key) < 0) normalized.push(key);
+    if (
+      key &&
+      PP_normalizeKey_(key) !== PP_TOOL_CHANGE_CAPABILITY_KEY &&
+      normalized.indexOf(key) < 0
+    ) normalized.push(key);
   });
   return normalized;
 }

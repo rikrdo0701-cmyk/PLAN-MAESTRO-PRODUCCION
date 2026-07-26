@@ -244,13 +244,17 @@ function PP_fetchNetSuiteOperationCatalog_(config) {
   const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
   const limit = 1000;
   const sql = [
-    'SELECT BUILTIN.DF(step.manufacturingworkcenter) AS work_center,',
+    'SELECT routing.id AS routing_id,',
+    'step.operationsequence AS operation_sequence,',
+    'step.id AS step_id,',
+    'BUILTIN.DF(step.manufacturingworkcenter) AS work_center,',
     'step.operationname AS operation_name',
     'FROM manufacturingroutingstep step',
     'JOIN manufacturingrouting routing ON routing.id = step.manufacturingrouting',
     'JOIN entitygroup center ON center.id = step.manufacturingworkcenter',
     "WHERE NVL(routing.isinactive, 'F') = 'F'",
-    "AND NVL(center.isinactive, 'F') = 'F'"
+    "AND NVL(center.isinactive, 'F') = 'F'",
+    'ORDER BY routing_id, operation_sequence, step_id'
   ].join(' ');
   const catalog = {};
   try {

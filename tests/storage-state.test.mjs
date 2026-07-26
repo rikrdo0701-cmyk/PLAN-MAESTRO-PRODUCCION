@@ -59,6 +59,7 @@ function configObject(context, sheet) {
 
 test("carga exclusiones normalizadas desde CONFIG y usa lista vacia para estado legacy", () => {
   const stored = [
+    "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
     " 5527::soldadura soporte ",
     "5527 :: soldadura soporte",
     "",
@@ -88,6 +89,7 @@ test("el guardado completo conserva exclusiones normalizadas y no persiste matri
     revision: 0,
     operations: [],
     excludedCapabilities: [
+      "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
       " 5527::soldadura soporte ",
       "5527::SOLDADURA_SOPORTE",
       "",
@@ -105,7 +107,12 @@ test("el guardado parcial de matriz conserva exclusiones en CONFIG", () => {
   const fixture = loadStorage([["revision", "0"]]);
 
   fixture.context.PP_writeSkillState_(fixture.spreadsheet, {
-    excludedCapabilities: [" 5459::dóblado ", "", "5459::DOBLADO"],
+    excludedCapabilities: [
+      "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
+      " 5459::dóblado ",
+      "",
+      "5459::DOBLADO",
+    ],
   }, "pruebas");
   const config = configObject(fixture.context, fixture.sheets.CONFIG);
 

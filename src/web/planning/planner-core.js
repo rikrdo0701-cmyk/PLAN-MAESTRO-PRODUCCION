@@ -1051,6 +1051,7 @@
   }
 
   function isOperationCapabilityExcluded(state, operation) {
+    if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return false;
     const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
     if (!excluded.length) return false;
     const operationKey = normalizedCapabilityKey(capabilityForOperation(operation || {}));

@@ -85,6 +85,10 @@ test("catálogo maestro pagina SuiteQL, normaliza CT, deduplica y excluye subcon
   assert.match(sql, /entitygroup/i);
   assert.match(sql, /routing\.isinactive/i);
   assert.match(sql, /center\.isinactive/i);
+  assert.match(sql, /routing\.id\s+AS\s+routing_id/i);
+  assert.match(sql, /step\.operationsequence\s+AS\s+operation_sequence/i);
+  assert.match(sql, /step\.id\s+AS\s+step_id/i);
+  assert.match(sql, /ORDER BY\s+routing_id,\s*operation_sequence,\s*step_id/i);
 });
 
 test("catálogo maestro devuelve aviso breve ante HTTP, JSON o esquema inválido", () => {
