@@ -655,10 +655,9 @@
     let earliest = new Date(context.windowStart);
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
-      const milestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-      const predecessorLimit = isSubcontractOperation(context.state, previous.operation)
+      const predecessorLimit = isSubcontractOperation(context.state, previous.operation) || ratio >= 1
         ? previous.end
-        : (milestone || (ratio >= 1 ? previous.end : null));
+        : addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 

@@ -182,6 +182,36 @@ test("una sucesora conserva precedencia si la ultima incluida anterior esta fija
   );
 });
 
+test("un antecedente fijo que cruza tiempo no laborable limita por su fin real", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed-weekend", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1", tiempoProd: 120,
+        fechaInicio: "2026-07-17", horaInicio: "16:00", fechaFin: "2026-07-20", horaFin: "08:00",
+      },
+      { id: "middle-weekend", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last-weekend", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-17",
+    horizonDays: 5,
+    executionTime: "2026-07-17T07:00:00",
+  });
+  const last = result.operations.find((operation) => operation.id === "last-weekend");
+
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
+});
+
 test("nextResourceAvailability ignora intervalos de operaciones excluidas", () => {
   const core = loadPlannerCore();
   const availability = core.nextResourceAvailability({
