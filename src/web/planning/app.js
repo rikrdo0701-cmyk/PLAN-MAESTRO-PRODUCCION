@@ -1954,7 +1954,8 @@ async function selectJob(ot, selected) {
 
 async function prepareJobForPlanning(job, options = {}) {
   if (!job) return false;
-  const operations = job.ops.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+  const operations = currentPlanOperations(job.ops).filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+  const planningJob = { ...job, ops: operations };
   const issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
@@ -1978,7 +1979,7 @@ async function prepareJobForPlanning(job, options = {}) {
     Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
     return true;
   }
-  const values = await showPlanningRequirements(job, requirements, commercial);
+  const values = await showPlanningRequirements(planningJob, requirements, commercial);
   if (!values) return false;
 
   applyPlanningRequirements(requirements, values, operations);
@@ -4020,7 +4021,7 @@ async function generatePlanPdf() {
 }
 
 function validateScheduleConfiguration(executionTime) {
-  const operations = state.operations.filter((op) =>
+  const operations = currentPlanOperations().filter((op) =>
     isJobSelected(op.ot) &&
     !isPlanCompletedOperation(op) &&
     !isJobLocked(op.ot) &&
@@ -4554,7 +4555,7 @@ function activePublishedSnapshotId() {
 function reportOperationsSource() {
   const operations = reportSnapshot?.operations || [];
   return reportSnapshot?.snapshotId === "draft"
-    ? window.PlannerCore.filterExcludedOperations(reportSnapshot, operations)
+    ? window.PlannerCore.filterExcludedOperations(state, operations)
     : operations;
 }
 
@@ -4618,7 +4619,7 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
     .map((op) => ({ op, minutes: operationDuration(op) }))
     .sort((a, b) => b.minutes - a.minutes)[0] || null;
   const finishingByType = groupFinishingRowsByType(finishingRows);
-  const stale = stalePublishedPieces(range.start);
+  const stale = stalePublishedPieces(range.start, sourceOperations);
   const toolChangeMinutes = toolChangeOps.reduce((sum, op) => sum + operationDuration(op), 0);
   const targetFactors = releaseTargetFactors({
     releaseAmount,
@@ -4750,9 +4751,9 @@ function workingDaysInRange(start, end) {
   return Math.max(1, days);
 }
 
-function stalePublishedPieces(currentWeekStart) {
+function stalePublishedPieces(currentWeekStart, sourceOperations = reportOperationsSource()) {
   const result = { initialCut: 0, finishing: 0 };
-  const source = reportSnapshot?.operations || state.operations;
+  const source = sourceOperations;
   const seenInitial = new Set();
   const seenFinish = new Set();
   for (const op of source) {
@@ -4760,7 +4761,7 @@ function stalePublishedPieces(currentWeekStart) {
     const start = opStart(op);
     const end = opEnd(op);
     if (!start || start >= currentWeekStart) continue;
-    const sequenced = state.operations
+    const sequenced = source
       .filter((item) => item.ot === op.ot && item.tipoInsercion !== "CAMBIO_HERRAMENTAL")
       .sort((a, b) => sequenceSort(a, b));
     const first = sequenced[0];
@@ -5878,6 +5879,7 @@ function importJson(text) {
     cts: Array.isArray(parsed.cts) ? parsed.cts : null,
     plant: parsed.plant || null,
     operationCatalog: Array.isArray(parsed.operationCatalog) ? parsed.operationCatalog : null,
+    operationCatalogWarning: typeof parsed.operationCatalogWarning === "string" ? parsed.operationCatalogWarning : undefined,
     configuredCapabilities: Array.isArray(parsed.configuredCapabilities) ? parsed.configuredCapabilities : null,
     customCapabilities: Array.isArray(parsed.customCapabilities) ? parsed.customCapabilities : null,
     hiddenCapabilities: Array.isArray(parsed.hiddenCapabilities) ? parsed.hiddenCapabilities : null,
@@ -5930,7 +5932,10 @@ function importCsv(text) {
 }
 
 function exportCsv() {
-  const operations = window.PlanningWorkflowCore.draftExportOperations(state);
+  const operations = window.PlanningWorkflowCore.draftExportOperations({
+    ...state,
+    operations: currentPlanOperations(),
+  });
   const rows = [PLAN_HEADERS, ...operations.map(operationToRow)];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");

@@ -45,6 +45,9 @@ test("clasifica todas las variantes especiales de subcontrato por contenido", ()
     assert.equal(core.isSpecialSubcontractCapability({ ct: "999", label }), true, label);
   }
   assert.equal(core.isSpecialSubcontractCapability({ ct: "100", label: "CORTE" }), false);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "6462", label: "PINTURA EXTERIOR" }), true);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "5495", label: "E-COAT PINTURA" }), true);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "5495", label: "67OTD ENVIO A PINTURA" }), true);
 });
 
 test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", () => {

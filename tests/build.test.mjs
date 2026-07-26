@@ -691,3 +691,164 @@ test("Gantt, cargas, metricas y borradores omiten capacidades excluidas", async 
   assert.match(sliceFunction("getOperatorLoads(", "operatorLoadsForOperations("), /currentPlanOperations\(\)/);
   assert.match(sliceFunction("getCtLoads(", "operationDuration("), /currentPlanOperations\(\)/);
 });
+
+test("preparacion y validacion ignoran operaciones excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const preparation = app.slice(
+    app.indexOf("async function prepareJobForPlanning("),
+    app.indexOf("function setGanttView(", app.indexOf("async function prepareJobForPlanning(")),
+  );
+  const validation = app.slice(
+    app.indexOf("function validateScheduleConfiguration("),
+    app.indexOf("function freezeElapsedOperations(", app.indexOf("function validateScheduleConfiguration(")),
+  );
+  const excluded = { id: "excluded", ot: "100", ct: "5459", tipoInsercion: "OPERACION" };
+  const state = { excludedCapabilities: ["5459::DOBLADO"], preparedPlanningByOt: {} };
+  const currentPlanOperations = () => [];
+  let preparedOperations = null;
+  let validatedOperations = null;
+  let dialogs = 0;
+  const window = {
+    PlannerCore: {
+      planningConfigurationIssues: (_state, operations) => {
+        validatedOperations = operations;
+        return [];
+      },
+    },
+    PlanningWorkflowCore: {
+      canReusePlanningPreparation: () => false,
+      needsPlanningPreparation: () => true,
+      markPlanningPrepared: () => ({}),
+    },
+  };
+  const prepareJobForPlanning = Function(
+    "state", "window", "currentPlanOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
+    "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
+    "applyCommercialPlanningRequirement", "assignPlanningOperators",
+    `${preparation}; return prepareJobForPlanning;`,
+  )(
+    state, window, currentPlanOperations, async () => { dialogs += 1; },
+    (_issues, operations) => { preparedOperations = operations; return []; },
+    () => ({ needsType: false, needsPlanningType: false }),
+    () => "signature", () => true, () => true,
+    async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
+  );
+  const validateScheduleConfiguration = Function(
+    "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
+    "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
+    "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    `${validation}; return validateScheduleConfiguration;`,
+  )(
+    { ...state, operations: [excluded] }, window, currentPlanOperations,
+    () => true, () => false, () => false, () => false,
+    () => ({ label: "DOBLADO", ct: "5459" }), () => excluded,
+    () => null, () => ({ days: 0 }), () => true,
+  );
+
+  assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
+  assert.deepEqual(preparedOperations, []);
+  assert.equal(dialogs, 0);
+  assert.equal(validateScheduleConfiguration(new Date()), null);
+  assert.deepEqual(validatedOperations, []);
+});
+
+test("borrador usa exclusiones actuales y publicado permanece inmutable", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const reportSource = app.slice(
+    app.indexOf("function reportOperationsSource()"),
+    app.indexOf("function reportSourceLabel()", app.indexOf("function reportOperationsSource()")),
+  );
+  const staleSource = app.slice(
+    app.indexOf("function stalePublishedPieces("),
+    app.indexOf("function weeklyJobSummary(", app.indexOf("function stalePublishedPieces(")),
+  );
+  const included = { id: "included", ot: "100", secuencia: 2, pendingPieces: 5 };
+  const excluded = { id: "excluded", ot: "100", secuencia: 1, pendingPieces: 5 };
+  const state = { excludedCapabilities: ["5459::DOBLADO"], operations: [excluded, included] };
+  const filterExcludedOperations = (filterState, operations) => (
+    filterState.excludedCapabilities?.length ? operations.filter((op) => op.id !== "excluded") : operations
+  );
+  const makeReportOperationsSource = (reportSnapshot) => Function(
+    "state", "reportSnapshot", "window",
+    `${reportSource}; return reportOperationsSource;`,
+  )(state, reportSnapshot, { PlannerCore: { filterExcludedOperations } });
+
+  const draftSource = makeReportOperationsSource({
+    snapshotId: "draft",
+    excludedCapabilities: [],
+    operations: [excluded, included],
+  });
+  const publishedSource = makeReportOperationsSource({
+    snapshotId: "published-1",
+    operations: [excluded, included],
+  });
+
+  assert.deepEqual(draftSource().map((op) => op.id), ["included"]);
+  assert.deepEqual(publishedSource().map((op) => op.id), ["excluded", "included"]);
+
+  const stalePublishedPieces = Function(
+    "state", "reportOperationsSource", "isJobScheduled", "isPlanCompletedOperation",
+    "isClosedJobStatus", "jobStatusForOt", "opStart", "opEnd", "sequenceSort",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${staleSource}; return stalePublishedPieces;`,
+  )(
+    state, draftSource, () => true, () => false, () => false, () => "",
+    () => new Date("2026-07-01T07:00:00"), () => new Date("2026-07-01T08:00:00"),
+    (a, b) => a.secuencia - b.secuencia, () => 0, () => null,
+  );
+
+  assert.deepEqual(stalePublishedPieces(new Date("2026-07-20T00:00:00")), {
+    initialCut: 5,
+    finishing: 5,
+  });
+});
+
+test("exportCsv omite capacidades excluidas del borrador", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("function exportCsv()"),
+    app.indexOf("function operationToRow(", app.indexOf("function exportCsv()")),
+  );
+  const state = { operations: [{ id: "keep" }, { id: "drop" }] };
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob",
+    `${exportSource}; return exportCsv;`,
+  )(
+    state,
+    { PlanningWorkflowCore: { draftExportOperations: (value) => value.operations } },
+    () => [state.operations[0]],
+    ["ID"],
+    (op) => [op.id],
+    (value) => String(value),
+    (value) => { exported = value; },
+  );
+
+  exportCsv();
+
+  assert.match(exported, /keep/);
+  assert.doesNotMatch(exported, /drop/);
+});
+
+test("importJson adopta y limpia operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importSource = app.slice(
+    app.indexOf("function importJson("),
+    app.indexOf("function importCsv(", app.indexOf("function importJson(")),
+  );
+  const importJson = Function(
+    "normalizeOperation", "normalizeCapabilityKeys",
+    `${importSource}; return importJson;`,
+  )((op) => op, (values) => values);
+
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "Catalogo no disponible",
+  })).operationCatalogWarning, "Catalogo no disponible");
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "",
+  })).operationCatalogWarning, "");
+});

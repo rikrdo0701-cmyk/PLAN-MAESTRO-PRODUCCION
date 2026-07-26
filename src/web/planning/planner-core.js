@@ -952,14 +952,8 @@
 
   function isSubcontractOperation(state, op) {
     if (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") return true;
-    if (String(op.ct || "") === "6462") return true;
     const description = normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`);
-    if (isSpecialSubcontractCapability({ ct: op.ct, label: description })) return true;
-    if (String(op.ct || "") === "5495") {
-      const eCoat = /E\s*[- ]?\s*COAT/.test(description);
-      if ((description.includes("67OTD") && description.includes("ENVIO") && description.includes("PINTURA")) || (eCoat && description.includes("PINTURA"))) return true;
-    }
-    return false;
+    return isSpecialSubcontractCapability({ ct: op.ct, label: description });
   }
 
   function subcontractRule(state, op) {
@@ -1021,6 +1015,7 @@
   }
 
   function isSpecialSubcontractCapability(capability) {
+    const ct = String(capability?.ct || "").trim();
     const value = normalizeSearchText([
       capability?.ct,
       capability?.label,
@@ -1028,8 +1023,12 @@
       capability?.operation,
       capability?.key,
     ].filter(Boolean).join(" "));
-    return ["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"]
-      .some((name) => value.includes(name));
+    if (["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"].some((name) => value.includes(name))) return true;
+    if (ct === "6462") return true;
+    if (ct !== "5495") return false;
+    const eCoat = /E\s*[- ]?\s*COAT/.test(value);
+    return (value.includes("67OTD") && value.includes("ENVIO") && value.includes("PINTURA")) ||
+      (eCoat && value.includes("PINTURA"));
   }
 
   function normalizedCapabilityKey(capability) {
