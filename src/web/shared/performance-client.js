@@ -75,8 +75,9 @@
   document.addEventListener("DOMContentLoaded", installPerformanceAdapters, { once: true });
 
   function compactLocalState() {
+    const { matrixSearch, ...persisted } = state;
     return {
-      ...state,
+      ...persisted,
       materials: [],
     };
   }

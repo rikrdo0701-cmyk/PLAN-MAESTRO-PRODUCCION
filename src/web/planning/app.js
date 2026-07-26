@@ -3062,6 +3062,12 @@ function clearResourceCategoryDropTargets() {
   els.loadList.querySelectorAll(".resource-category-group.drag-over").forEach((group) => group.classList.remove("drag-over"));
 }
 
+function focusCapabilityPlanState(key) {
+  const control = [...els.matrixWrap.querySelectorAll("[data-capability-plan-state]")]
+    .find((item) => item.dataset.capabilityPlanState === key);
+  if (control) control.focus();
+}
+
 function renderMatrix() {
   renderOperationCatalogSelect();
   const operators = state.operators;
@@ -3145,6 +3151,7 @@ function renderMatrix() {
         ? uniq([...state.excludedCapabilities, key])
         : state.excludedCapabilities.filter((item) => item !== key);
       saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
+      focusCapabilityPlanState(key);
     });
   });
   els.matrixWrap.querySelectorAll(".matrix-operator-check").forEach((input) => {

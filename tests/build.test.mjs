@@ -498,3 +498,47 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(\)\)/);
 });
+
+test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const compactStart = performanceClient.indexOf("function compactLocalState()");
+  const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
+  const compactSource = performanceClient.slice(compactStart, compactEnd);
+  const compactLocalState = Function("state", `${compactSource}; return compactLocalState;`)({
+    revision: 7,
+    matrixSearch: "soldadura",
+    excludedCapabilities: ["5527::SOLDADURA_SOPORTE"],
+    materials: [{ ot: "WO-1" }],
+  });
+
+  const persisted = compactLocalState();
+
+  assert.equal(persisted.matrixSearch, undefined);
+  assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
+  assert.deepEqual(persisted.materials, []);
+});
+
+test("cambiar la exclusion restaura el foco al control de la misma capacidad", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const focusStart = app.indexOf("function focusCapabilityPlanState(key)");
+  const focusEnd = app.indexOf("function renderMatrix()", focusStart);
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+
+  assert.ok(focusStart >= 0, "debe existir el restaurador de foco por capacidad");
+  const focusSource = app.slice(focusStart, focusEnd);
+  const focused = [];
+  const controls = ["5459::DOBLADO", "5527::SOLDADURA_SOPORTE"].map((key) => ({
+    dataset: { capabilityPlanState: key },
+    focus: () => focused.push(key),
+  }));
+  const focusCapabilityPlanState = Function("els", `${focusSource}; return focusCapabilityPlanState;`)({
+    matrixWrap: { querySelectorAll: () => controls },
+  });
+
+  focusCapabilityPlanState("5527::SOLDADURA_SOPORTE");
+
+  assert.deepEqual(focused, ["5527::SOLDADURA_SOPORTE"]);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\);\s*focusCapabilityPlanState\(key\);/);
+});
