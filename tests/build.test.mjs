@@ -533,13 +533,16 @@ test("las exclusiones sobreviven importacion, restauracion y guardado diferido",
   const deferredStart = performanceClient.indexOf("function baseSavePayload()");
   const deferredEnd = performanceClient.indexOf("function saveJobsForScopes(", deferredStart);
   const deferredPayloads = performanceClient.slice(deferredStart, deferredEnd);
+  const basePayload = deferredPayloads.slice(0, deferredPayloads.indexOf("function planningSavePayload()"));
+  const matrixPayload = deferredPayloads.slice(deferredPayloads.indexOf("function matrixSavePayload()"));
 
   assert.match(normalizeState, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
   assert.match(importFlow, /if \(Array\.isArray\(imported\.excludedCapabilities\)\) state\.excludedCapabilities = normalizeCapabilityKeys\(imported\.excludedCapabilities\)/);
   assert.match(importFlow, /"excludedCapabilities"/);
   assert.match(importFlow, /excludedCapabilities:\s*Array\.isArray\(parsed\.excludedCapabilities\)/);
   assert.match(removal, /state\.excludedCapabilities = state\.excludedCapabilities\.filter\(\(excludedKey\) => excludedKey !== key\)/);
-  assert.match(deferredPayloads, /excludedCapabilities:\s*normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.doesNotMatch(basePayload, /excludedCapabilities/);
+  assert.match(matrixPayload, /excludedCapabilities:\s*normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
   assert.doesNotMatch(deferredPayloads, /matrixSearch/);
 });
 

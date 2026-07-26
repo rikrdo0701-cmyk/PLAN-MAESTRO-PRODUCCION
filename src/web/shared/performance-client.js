@@ -232,7 +232,6 @@
       reportWeekStart: state.reportWeekStart,
       reportFilters: clone(state.reportFilters || {}),
       preparedPlanningByOt: clone(state.preparedPlanningByOt || {}),
-      excludedCapabilities: normalizeCapabilityKeys(state.excludedCapabilities),
       selectedOts: [...(state.selectedOts || [])],
       lockedOts: [...(state.lockedOts || [])],
       expandedOts: [...(state.expandedOts || [])],
@@ -283,6 +282,7 @@
       operationRules: clone(state.operationRules || {}),
       operationCatalog: clone(state.operationCatalog || []),
       matrix: clone(state.matrix || {}),
+      excludedCapabilities: normalizeCapabilityKeys(state.excludedCapabilities),
     };
   }
 
@@ -313,15 +313,17 @@
     saveRetryTimer = root.setTimeout(() => saveAppSheet(false), delay);
   }
 
-  async function refreshRevisionAfterConflict() {
+  async function reloadStateAfterConflict() {
     try {
-      const metadata = await callAppsScript("getAppRevision");
-      if (Number.isFinite(Number(metadata?.revision))) {
-        state.revision = Number(metadata.revision);
-        deferredRevision = state.revision;
-      }
+      const imported = await callAppsScript("getAppState");
+      applyImported(imported, { preserveLocalPlanning: false });
+      deferredRevision = Number(imported.revision || state.revision || 0);
+      writeMeta({ revision: deferredRevision, syncedAt: state.syncedAt || "" });
+      scheduleLocalStorageFlush();
+      return true;
     } catch (error) {
-      console.warn("No se pudo actualizar la revision para reintentar el guardado:", error);
+      console.warn("No se pudo recargar el estado despues del conflicto:", error);
+      return false;
     }
   }
 
@@ -372,9 +374,17 @@
       if (showMessage) showToast("Cambios guardados");
       return true;
     } catch (error) {
-      scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
       const conflict = /CONFLICT_REVISION/i.test(String(error?.message || error));
-      if (conflict) await refreshRevisionAfterConflict();
+      if (conflict) {
+        const reloaded = await reloadStateAfterConflict();
+        appSheetSavePending = false;
+        document.body.dataset.saveStatus = reloaded ? "conflict" : "pending";
+        if (showMessage) showToast(reloaded
+          ? "Otro usuario guardo cambios; se recargo el estado vigente"
+          : "Conflicto de guardado; recarga antes de continuar", 4200);
+        return false;
+      }
+      scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
       console.warn("Guardado en segundo plano pendiente; se reintentara:", error);
       document.body.dataset.saveStatus = "pending";
       scheduleRetry();

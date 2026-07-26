@@ -60,6 +60,7 @@ function configObject(context, sheet) {
 test("carga exclusiones normalizadas desde CONFIG y usa lista vacia para estado legacy", () => {
   const stored = [
     " 5527::soldadura soporte ",
+    "5527 :: soldadura soporte",
     "",
     "5527::SOLDADURA_SOPORTE",
     "5459::dóblado",
@@ -111,8 +112,39 @@ test("el guardado parcial de matriz conserva exclusiones en CONFIG", () => {
   assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5459::DOBLADO"]);
 });
 
-test("el guardado diferido de plan conserva exclusiones en CONFIG", () => {
-  const fixture = loadStorage([["revision", "0"]]);
+test("un guardado parcial obsoleto no borra exclusiones de otra revision", () => {
+  const fixture = loadStorage([
+    ["revision", "2"],
+    ["EXCLUDED_CAPABILITIES", JSON.stringify(["5527::SOLDADURA"])],
+  ]);
+  fixture.sheets.MATRIZ = createSheet(
+    ["CAPACIDAD_KEY", "OPERADOR", "HABILITADO"],
+    [["5527::SOLDADURA", "ANA", true]]
+  );
+
+  assert.throws(
+    () => fixture.context.PP_writeSkillState_(fixture.spreadsheet, {
+      revision: 1,
+      excludedCapabilities: [],
+      matrix: { "5459::DOBLADO": ["BOB"] },
+    }, "cliente-obsoleto"),
+    /CONFLICT_REVISION/
+  );
+  const config = configObject(fixture.context, fixture.sheets.CONFIG);
+
+  assert.equal(config.revision, 2);
+  assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA"]);
+  assert.deepEqual(fixture.sheets.MATRIZ.rows(), [
+    ["CAPACIDAD_KEY", "OPERADOR", "HABILITADO"],
+    ["5527::SOLDADURA", "ANA", true],
+  ]);
+});
+
+test("el guardado optimizado de plan no sobrescribe exclusiones de la matriz", () => {
+  const fixture = loadStorage([
+    ["revision", "0"],
+    ["EXCLUDED_CAPABILITIES", JSON.stringify(["5527::SOLDADURA"])],
+  ]);
   fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
   fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
   fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
@@ -122,9 +154,38 @@ test("el guardado diferido de plan conserva exclusiones en CONFIG", () => {
   fixture.context.savePlanningStateOptimized({
     revision: 0,
     operations: [],
-    excludedCapabilities: [" 5527::soldadura soporte ", "5527::SOLDADURA_SOPORTE"],
+    excludedCapabilities: [],
   });
   const config = configObject(fixture.context, fixture.sheets.CONFIG);
 
-  assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA_SOPORTE"]);
+  assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA"]);
+});
+
+test("dos clientes concurrentes no permiten que el optimizado obsoleto borre exclusiones", () => {
+  const fixture = loadStorage([
+    ["revision", "1"],
+    ["EXCLUDED_CAPABILITIES", "[]"],
+  ]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+  vm.runInContext(performanceSource, fixture.context, { filename: "15-performance-service.js" });
+
+  fixture.context.PP_writeSkillState_(fixture.spreadsheet, {
+    revision: 1,
+    excludedCapabilities: ["5527::SOLDADURA"],
+  }, "cliente-a");
+  assert.throws(
+    () => fixture.context.savePlanningStateOptimized({
+      revision: 1,
+      operations: [],
+      excludedCapabilities: [],
+    }),
+    /CONFLICT_REVISION/
+  );
+  const config = configObject(fixture.context, fixture.sheets.CONFIG);
+
+  assert.equal(config.revision, 2);
+  assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA"]);
 });

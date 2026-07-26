@@ -208,6 +208,7 @@ function PP_readState_(spreadsheet) {
 }
 
 function PP_writeCatalogState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
@@ -235,6 +236,7 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
 }
 
 function PP_writeSkillState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('OPERADORES'), PP_SHEETS.OPERADORES, PP_operatorRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CAPACIDADES'), PP_SHEETS.CAPACIDADES, PP_capabilityRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || payload.capabilities || []).map(function(item) {
@@ -311,8 +313,9 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
 }
 
 function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail) {
+  const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
   const savedAt = new Date().toISOString();
-  const revision = PP_nextRevision_(spreadsheet);
+  const revision = currentRevision + 1;
   PP_writeConfigPatch_(spreadsheet, Object.assign({
     schemaVersion: PP_SCHEMA_VERSION,
     appVersion: PP_APP_VERSION,
@@ -322,6 +325,16 @@ function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch,
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, action, revision, JSON.stringify(detail || {})]);
   SpreadsheetApp.flush();
   return PP_writeStateAck_(revision, savedAt);
+}
+
+function PP_assertCurrentRevision_(spreadsheet, payload) {
+  const currentConfig = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const currentRevision = Number(currentConfig.revision || 0);
+  const incomingRevision = Number(payload.revision || 0);
+  if (incomingRevision !== currentRevision) {
+    throw new Error('CONFLICT_REVISION: el plan cambio desde la ultima carga. Recarga antes de guardar.');
+  }
+  return currentRevision;
 }
 
 function PP_nextRevision_(spreadsheet) {
@@ -1159,7 +1172,7 @@ function PP_normalizeCapabilityKey_(value) {
   const text = String(value || '').trim();
   const separator = text.indexOf('::');
   if (separator < 0) return text;
-  return text.slice(0, separator) + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+  return text.slice(0, separator).trim() + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
 }
 
 function PP_normalizeExcludedCapabilities_(values) {
