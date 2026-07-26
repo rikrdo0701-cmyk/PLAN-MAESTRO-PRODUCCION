@@ -655,7 +655,8 @@
     let earliest = new Date(context.windowStart);
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
-      const predecessorLimit = isSubcontractOperation(context.state, previous.operation) || ratio >= 1
+      const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
+      const predecessorLimit = isSubcontractOperation(context.state, previous.operation) || ratio >= 1 || !durationKnown
         ? previous.end
         : addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
@@ -1353,7 +1354,13 @@
     if (!predecessor) return null;
     const start = operationStart(predecessor);
     const end = operationEnd(predecessor);
-    return { operation: predecessor, start, end, duration: operationDuration(predecessor, 100, 100) };
+    return { operation: predecessor, start, end, duration: declaredOperationDuration(predecessor) };
+  }
+
+  function declaredOperationDuration(operation) {
+    const setup = numberOr(operation?.tiempoSetup, 0);
+    const production = productionMinutes(operation);
+    return setup + production > 0 ? operationDuration(operation, 100, 100) : null;
   }
 
   function latestPredecessor(left, right) {
