@@ -273,6 +273,14 @@ function PP_fetchNetSuiteOperationCatalog_(config) {
       let json;
       try { json = JSON.parse(raw || '{}'); } catch (error) { throw new Error('JSON invalido'); }
       if (!Array.isArray(json.items)) throw new Error('respuesta sin items');
+      if (typeof json.hasMore !== 'boolean') throw new Error('respuesta sin hasMore booleano');
+      const malformedRow = json.items.some(function(row) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return true;
+        const workCenter = row.work_center != null ? row.work_center : row.workCenter;
+        const operationName = row.operation_name != null ? row.operation_name : row.operationName;
+        return !String(workCenter || '').trim() || !String(operationName || '').trim();
+      });
+      if (malformedRow) throw new Error('fila de operacion incompleta');
       json.items.forEach(function(row) {
         const workCenter = String(row.work_center || row.workCenter || '').trim();
         const label = String(row.operation_name || row.operationName || '').trim();

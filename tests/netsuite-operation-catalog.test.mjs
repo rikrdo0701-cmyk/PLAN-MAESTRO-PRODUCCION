@@ -101,6 +101,35 @@ test("catálogo maestro devuelve aviso breve ante HTTP, JSON o esquema inválido
   }
 });
 
+test("catálogo maestro rechaza hasMore ausente o con tipo distinto de boolean", () => {
+  for (const page of [
+    { items: [{ work_center: "CT 5467", operation_name: "Corte" }] },
+    { items: [{ work_center: "CT 5467", operation_name: "Corte" }], hasMore: "false" },
+  ]) {
+    const { context } = load([{ body: JSON.stringify(page) }]);
+    const result = context.PP_fetchNetSuiteOperationCatalog_(config);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.items)), []);
+    assert.match(result.warning, /catálogo.*NetSuite/i);
+  }
+});
+
+test("catálogo maestro rechaza toda la captura si una fila está parcialmente malformada", () => {
+  const { context } = load([{
+    body: JSON.stringify({
+      items: [
+        { work_center: "CT 5467", operation_name: "Corte" },
+        { work_center: "CT 5527" },
+      ],
+      hasMore: false,
+    }),
+  }]);
+
+  const result = context.PP_fetchNetSuiteOperationCatalog_(config);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.items)), []);
+  assert.match(result.warning, /catálogo.*NetSuite/i);
+});
+
 test("sincronizaciones completa y de planeación conservan el catálogo anterior cuando el maestro falla", () => {
   const { context } = load();
   const previous = [{ key: "1::CORTE", ct: "1", label: "Corte", source: "NETSUITE_MASTER", active: true }];
