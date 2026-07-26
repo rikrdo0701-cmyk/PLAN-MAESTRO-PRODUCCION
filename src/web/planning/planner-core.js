@@ -123,7 +123,7 @@
     for (const op of fixed) commitFixedOperation(context, op);
 
     enrichToolsFromCatalog(state, movable);
-    const jobs = buildJobs(movable);
+    const jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
     let pending = movable.length;
     let safety = Math.max(100, pending * 4);
 
@@ -132,7 +132,8 @@
       for (const job of jobs) {
         const op = job.operations[job.index];
         if (!op) continue;
-        const assignment = findBestAssignment(context, op, job.last);
+        const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
+        const assignment = findBestAssignment(context, op, previous);
         if (assignment) ready.push({ job, op, assignment });
       }
 
@@ -1179,11 +1180,12 @@
   }
 
   function nextResourceAvailability(state, operator, machine, startValue) {
-    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(state.operations);
+    const operations = filterExcludedOperations(state, state.operations);
+    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(operations);
     const cursorStart = atMinute(startDate, DEFAULT_START_MINUTE);
     const windowEnd = atMinute(addDays(startOfDay(startDate), clampInteger(state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45)), DEFAULT_START_MINUTE);
     const selected = Array.isArray(state.selectedOts) ? new Set(state.selectedOts.map(normalizeKey)) : null;
-    const intervals = (state.operations || []).filter((op) => {
+    const intervals = operations.filter((op) => {
       if (isPlanCompletedOperation(state, op)) return false;
       if (selected && !selected.has(normalizeKey(op.ot))) return false;
       if (operator && String(op.operador || "") !== String(operator)) return false;
@@ -1327,7 +1329,7 @@
     return Boolean(key) && key !== "SIN_MAQUINA";
   }
 
-  function buildJobs(operations) {
+  function buildJobs(operations, fixedOperations) {
     const byOt = new Map();
     for (const op of operations) {
       const key = normalizeKey(op.ot);
@@ -1335,10 +1337,34 @@
       byOt.get(key).push(op);
     }
     return [...byOt.values()].map((items) => ({
-      operations: items.sort((a, b) => Number(a.secuencia) - Number(b.secuencia) || Number(a.num) - Number(b.num)),
+      operations: items.sort(compareOperationSequence),
+      fixedOperations: (fixedOperations || [])
+        .filter((op) => normalizeKey(op.ot) === normalizeKey(items[0]?.ot))
+        .sort(compareOperationSequence),
       index: 0,
       last: null,
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
+  }
+
+  function fixedPredecessor(job, operation) {
+    const candidates = (job.fixedOperations || [])
+      .filter((candidate) => compareOperationSequence(candidate, operation) < 0)
+      .filter((candidate) => operationStart(candidate) && operationEnd(candidate));
+    const predecessor = candidates[candidates.length - 1];
+    if (!predecessor) return null;
+    const start = operationStart(predecessor);
+    const end = operationEnd(predecessor);
+    return { operation: predecessor, start, end, duration: Math.max(0, diffMinutes(start, end)) };
+  }
+
+  function latestPredecessor(left, right) {
+    if (!left) return right;
+    if (!right) return left;
+    return compareOperationSequence(left.operation, right.operation) >= 0 ? left : right;
+  }
+
+  function compareOperationSequence(a, b) {
+    return Number(a?.secuencia) - Number(b?.secuencia) || Number(a?.num) - Number(b?.num);
   }
 
   function compareFirstOperationCandidates(a, b) {

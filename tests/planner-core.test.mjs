@@ -148,6 +148,58 @@ test("al excluir una operacion intermedia la sucesora depende de la ultima inclu
   );
 });
 
+test("una sucesora conserva precedencia si la ultima incluida anterior esta fija", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1", tiempoProd: 120,
+        fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00",
+      },
+      { id: "middle", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+  });
+  const fixed = result.operations.find((operation) => operation.id === "fixed");
+  const last = result.operations.find((operation) => operation.id === "last");
+
+  assert.ok(last.fechaInicio, JSON.stringify(result.lastSchedule.diagnostics));
+  assert.ok(
+    new Date(`${last.fechaInicio}T${last.horaInicio}:00`) >= new Date(`${fixed.fechaFin}T${fixed.horaFin}:00`),
+  );
+});
+
+test("nextResourceAvailability ignora intervalos de operaciones excluidas", () => {
+  const core = loadPlannerCore();
+  const availability = core.nextResourceAvailability({
+    excludedCapabilities: ["999::SIN_CONFIGURAR"],
+    selectedOts: ["100"],
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    operations: [{
+      id: "excluded-blocker", ot: "100", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR",
+      estatus: "PLAN", locked: true, operador: "OP 1",
+      fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00",
+    }],
+    workSchedule: {},
+  }, "OP 1", "", "2026-07-13");
+
+  assert.equal(availability?.getHours(), 7);
+});
+
 test("un subcontrato puede terminar despues del horizonte visible", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
