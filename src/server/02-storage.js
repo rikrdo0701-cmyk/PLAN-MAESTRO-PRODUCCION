@@ -25,6 +25,7 @@ const PP_SHEETS = {
   BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
+const PP_TOOL_CHANGE_CAPABILITY_KEY = 'TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL';
 
 const PP_OPERATION_FIELDS = {
   ID: 'id', NUM: 'num', OT: 'ot', PARTE: 'parte', DESCRIPCION: 'descripcion', CONTENIDO: 'contenido',
@@ -109,6 +110,7 @@ function PP_readState_(spreadsheet) {
     savedAt: config.savedAt || '',
     syncedAt: config.syncedAt || '',
     invoicePriceWindow: config.invoicePriceWindow || null,
+    operationCatalogWarning: String(config.operationCatalogWarning || ''),
     ganttView: config.ganttView || 'job',
     ganttDayWidth: Number(config.ganttDayWidth || 180),
     selectedOperationId: config.selectedOperationId || '',
@@ -119,6 +121,7 @@ function PP_readState_(spreadsheet) {
     reportWeekStart: config.reportWeekStart || '',
     reportFilters: config.reportFilters || null,
     preparedPlanningByOt: config.preparedPlanningByOt || {},
+    excludedCapabilities: PP_normalizeExcludedCapabilities_(config.EXCLUDED_CAPABILITIES),
     selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : null,
     lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : null,
     expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : null,
@@ -207,6 +210,7 @@ function PP_readState_(spreadsheet) {
 }
 
 function PP_writeCatalogState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
@@ -234,6 +238,7 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
 }
 
 function PP_writeSkillState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('OPERADORES'), PP_SHEETS.OPERADORES, PP_operatorRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CAPACIDADES'), PP_SHEETS.CAPACIDADES, PP_capabilityRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || payload.capabilities || []).map(function(item) {
@@ -242,6 +247,7 @@ function PP_writeSkillState_(spreadsheet, payload, user) {
   PP_writeTable_(spreadsheet.getSheetByName('MATRIZ'), PP_SHEETS.MATRIZ, PP_matrixRows_(payload));
   return PP_finishPartialWrite_(spreadsheet, payload, user, 'GUARDAR_MATRIZ', {
     capacityMinutes: Number(payload.capacityMinutes || 2400),
+    EXCLUDED_CAPABILITIES: PP_normalizeExcludedCapabilities_(payload.excludedCapabilities),
     settings: payload.settings || {}
   }, {
     operators: (payload.operators || []).length,
@@ -260,7 +266,8 @@ function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
     source: payload.source || 'NetSuite RESTlets / Apps Script',
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
-    invoicePriceWindow: payload.invoicePriceWindow || null
+    invoicePriceWindow: payload.invoicePriceWindow || null,
+    operationCatalogWarning: String(payload.operationCatalogWarning || '')
   });
   PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || []).map(function(item) {
@@ -309,8 +316,9 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
 }
 
 function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail) {
+  const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
   const savedAt = new Date().toISOString();
-  const revision = PP_nextRevision_(spreadsheet);
+  const revision = currentRevision + 1;
   PP_writeConfigPatch_(spreadsheet, Object.assign({
     schemaVersion: PP_SCHEMA_VERSION,
     appVersion: PP_APP_VERSION,
@@ -320,6 +328,16 @@ function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch,
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, action, revision, JSON.stringify(detail || {})]);
   SpreadsheetApp.flush();
   return PP_writeStateAck_(revision, savedAt);
+}
+
+function PP_assertCurrentRevision_(spreadsheet, payload) {
+  const currentConfig = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const currentRevision = Number(currentConfig.revision || 0);
+  const incomingRevision = Number(payload.revision || 0);
+  if (incomingRevision !== currentRevision) {
+    throw new Error('CONFLICT_REVISION: el plan cambio desde la ultima carga. Recarga antes de guardar.');
+  }
+  return currentRevision;
 }
 
 function PP_nextRevision_(spreadsheet) {
@@ -494,6 +512,8 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['reportWeekStart', JSON.stringify(payload.reportWeekStart || '')],
     ['reportFilters', JSON.stringify(payload.reportFilters || {})],
     ['preparedPlanningByOt', JSON.stringify(payload.preparedPlanningByOt || {})],
+    ['operationCatalogWarning', JSON.stringify(String(payload.operationCatalogWarning || ''))],
+    ['EXCLUDED_CAPABILITIES', JSON.stringify(PP_normalizeExcludedCapabilities_(payload.excludedCapabilities))],
     ['selectedOts', JSON.stringify(Array.isArray(payload.selectedOts) ? payload.selectedOts : [])],
     ['lockedOts', JSON.stringify(Array.isArray(payload.lockedOts) ? payload.lockedOts : [])],
     ['expandedOts', JSON.stringify(Array.isArray(payload.expandedOts) ? payload.expandedOts : [])],
@@ -1156,5 +1176,18 @@ function PP_normalizeCapabilityKey_(value) {
   const text = String(value || '').trim();
   const separator = text.indexOf('::');
   if (separator < 0) return text;
-  return text.slice(0, separator) + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+  return text.slice(0, separator).trim() + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+}
+
+function PP_normalizeExcludedCapabilities_(values) {
+  const normalized = [];
+  (Array.isArray(values) ? values : []).forEach(function(value) {
+    const key = PP_normalizeCapabilityKey_(value);
+    if (
+      key &&
+      PP_normalizeKey_(key) !== PP_TOOL_CHANGE_CAPABILITY_KEY &&
+      normalized.indexOf(key) < 0
+    ) normalized.push(key);
+  });
+  return normalized;
 }

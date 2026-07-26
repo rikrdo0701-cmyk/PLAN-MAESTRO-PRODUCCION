@@ -44,6 +44,7 @@ function PP_syncNetSuitePlant_(current) {
 
 function PP_fetchNetSuitePlantData_() {
   const config = PP_netSuiteConfig_();
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const plantFilter = PP_buildPlantFilter_(workOrders.rows);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
@@ -69,7 +70,8 @@ function PP_fetchNetSuitePlantData_() {
     workOrders: workOrderCatalog,
     plantOperations: plantOperations,
     materials: materials,
-    operationCatalog: PP_buildOperationCatalog_(plantOperations),
+    operationCatalog: operationCatalogResult.items,
+    operationCatalogWarning: operationCatalogResult.warning,
     invoicePriceWindow: { from: invoiceAverages.from, to: invoiceAverages.to, warning: invoiceAverages.warning || '' },
     fetchedAt: new Date().toISOString()
   };
@@ -101,6 +103,7 @@ function PP_fetchNetSuitePlanningData_(current) {
     return PP_fetchNetSuitePlantData_();
   }
   const config = PP_netSuiteConfig_();
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
   const plantFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
@@ -112,7 +115,8 @@ function PP_fetchNetSuitePlanningData_(current) {
   return {
     plantOperations: plantOperations,
     materials: materials,
-    operationCatalog: PP_buildOperationCatalog_(plantOperations),
+    operationCatalog: operationCatalogResult.items,
+    operationCatalogWarning: operationCatalogResult.warning,
     fetchedAt: new Date().toISOString()
   };
 }
@@ -143,7 +147,8 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
   merged.operations = operations;
   merged.workOrders = workOrderCatalog;
   merged.materials = materials;
-  merged.operationCatalog = snapshot.operationCatalog || PP_buildOperationCatalog_(plantOperations);
+  merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
+  merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   const openOts = {};
   workOrderCatalog.forEach(function(item) { openOts[PP_normalizeKey_(item.ot)] = true; });
   merged.operationPlanStatuses = Object.keys(merged.operationPlanStatuses || {}).reduce(function(out, key) {
@@ -209,7 +214,8 @@ function PP_applyNetSuitePlanningData_(current, snapshot) {
   const merged = JSON.parse(JSON.stringify(current || {}));
   merged.operations = operations;
   merged.materials = materials;
-  merged.operationCatalog = snapshot.operationCatalog || PP_buildOperationCatalog_(plantOperations);
+  merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
+  merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   merged.plant = Object.assign({}, merged.plant || {}, {
     name: PP_PLANT_NAME,
     locationId: PP_PLANT_LOCATION_ID,
@@ -232,6 +238,91 @@ function PP_invoiceAverageWindow_(endDate) {
     from: Utilities.formatDate(start, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
     to: Utilities.formatDate(end, Session.getScriptTimeZone(), 'yyyy-MM-dd')
   };
+}
+
+function PP_fetchNetSuiteOperationCatalog_(config) {
+  const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+  const limit = 1000;
+  const sql = [
+    'SELECT routing.id AS routing_id,',
+    'step.operationsequence AS operation_sequence,',
+    'step.id AS step_id,',
+    'BUILTIN.DF(step.manufacturingworkcenter) AS work_center,',
+    'step.operationname AS operation_name',
+    'FROM manufacturingroutingstep step',
+    'JOIN manufacturingrouting routing ON routing.id = step.manufacturingrouting',
+    'JOIN entitygroup center ON center.id = step.manufacturingworkcenter',
+    "WHERE NVL(routing.isinactive, 'F') = 'F'",
+    "AND NVL(center.isinactive, 'F') = 'F'",
+    'ORDER BY routing_id, operation_sequence, step_id'
+  ].join(' ');
+  const catalog = {};
+  try {
+    for (let offset = 0, page = 0; page < 100; page++, offset += limit) {
+      const query = { limit: limit, offset: offset };
+      const finalUrl = endpoint + '?limit=' + limit + '&offset=' + offset;
+      const response = UrlFetchApp.fetch(finalUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: {
+          Authorization: PP_oauthHeader_('POST', endpoint, query, config),
+          Prefer: 'transient'
+        },
+        payload: JSON.stringify({ q: sql }),
+        muteHttpExceptions: true
+      });
+      const status = response.getResponseCode();
+      const raw = response.getContentText();
+      if (status < 200 || status >= 300) throw new Error('HTTP ' + status);
+      let json;
+      try { json = JSON.parse(raw || '{}'); } catch (error) { throw new Error('JSON invalido'); }
+      if (!Array.isArray(json.items)) throw new Error('respuesta sin items');
+      if (typeof json.hasMore !== 'boolean') throw new Error('respuesta sin hasMore booleano');
+      const malformedRow = json.items.some(function(row) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return true;
+        const workCenter = row.work_center != null ? row.work_center : row.workCenter;
+        const operationName = row.operation_name != null ? row.operation_name : row.operationName;
+        return !String(workCenter || '').trim() || !String(operationName || '').trim();
+      });
+      if (malformedRow) throw new Error('fila de operacion incompleta');
+      json.items.forEach(function(row) {
+        const workCenter = String(row.work_center || row.workCenter || '').trim();
+        const label = String(row.operation_name || row.operationName || '').trim();
+        const ct = PP_extractOperationCatalogCt_(workCenter);
+        if (!ct || !label || PP_isSpecialNetSuiteOperation_(ct, label)) return;
+        const key = ct + '::' + PP_normalizeKey_(label);
+        if (!catalog[key]) {
+          catalog[key] = { key: key, ct: ct, label: label, source: 'NETSUITE_MASTER', active: true };
+        }
+      });
+      if (json.hasMore !== true) break;
+      if (page === 99) throw new Error('paginacion incompleta');
+    }
+    const items = Object.keys(catalog).sort().map(function(key) { return catalog[key]; });
+    if (!items.length) throw new Error('respuesta sin operaciones validas');
+    return { items: items, warning: '' };
+  } catch (error) {
+    return { items: [], warning: 'Catálogo de operaciones NetSuite no disponible: ' + String(error.message || error).slice(0, 100) };
+  }
+}
+
+function PP_extractOperationCatalogCt_(workCenter) {
+  const text = String(workCenter || '').trim();
+  const match = text.match(/(?:^|\b)CT[\s:_-]*(\d{3,})\b/i) || text.match(/\b(\d{3,})\b/);
+  return match ? match[1] : text;
+}
+
+function PP_isSpecialNetSuiteOperation_(ct, label) {
+  const normalized = PP_normalizeKey_(String(ct || '') + ' ' + String(label || '')).replace(/[^A-Z0-9]+/g, '');
+  return ['SUBCONTRATO', 'CROMADO', 'METOKOTE', 'MAKA', 'GALVANIZADO'].some(function(term) {
+    return normalized.indexOf(term) >= 0;
+  });
+}
+
+function PP_resolveOperationCatalog_(current, snapshot, plantOperations) {
+  if (Array.isArray(snapshot.operationCatalog) && snapshot.operationCatalog.length) return snapshot.operationCatalog;
+  if (current && Array.isArray(current.operationCatalog) && current.operationCatalog.length) return current.operationCatalog;
+  return PP_buildOperationCatalog_(plantOperations);
 }
 
 function PP_fetchInvoiceSalesAverages_(config, window) {

@@ -226,6 +226,11 @@
           <div class="config-view-heading"><div><h2>Matriz de habilidades</h2><span>Operaciones, capacidad, solapamiento, eficiencia y operadores habilitados</span></div></div>
           <div class="config-view-body">
             <div class="matrix-toolbar">
+              <div class="matrix-search" role="search">
+                <input id="matrixSearchInput" class="matrix-search-input" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" />
+                <output id="matrixSearchCount" aria-live="polite">0 de 0 operaciones</output>
+                <button id="clearMatrixSearchBtn" class="button small" type="button">Limpiar</button>
+              </div>
               <div class="inline-form">
                 <input id="newOperatorInput" type="text" placeholder="Operador nuevo" />
                 <button id="addOperatorBtn" class="button small" type="button">Agregar operador</button>

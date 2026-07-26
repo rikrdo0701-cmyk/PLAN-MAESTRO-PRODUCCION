@@ -1444,6 +1444,12 @@ body.gantt-fullscreen-active { overflow: hidden; }
 
 .matrix-toolbar,
 .report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.matrix-toolbar { flex-wrap: wrap; }
+.matrix-search { display: flex; align-items: center; gap: 7px; }
+.matrix-search-input { width: min(280px, 32vw); }
+.matrix-search output { min-width: 106px; color: var(--muted); font-size: 9px; font-weight: 650; white-space: nowrap; }
+.matrix-search-input:focus-visible,
+.capability-plan-state:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .report-toolbar h2 { font-size: 13px; }
 .report-toolbar > div:first-child > span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
 .report-actions,
@@ -1598,6 +1604,14 @@ tr:last-child td { border-bottom: 0; }
 .matrix-table th:nth-child(n+5),
 .matrix-table td:nth-child(n+5) { width: 138px; min-width: 138px; max-width: 138px; }
 .matrix-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 500; }
+.capability-plan-controls { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.capability-plan-state { width: 126px; min-height: 26px; padding: 0 5px; font-size: 9px; }
+.matrix-excluded-badge { padding: 2px 5px; border-radius: 9px; background: #e7ebed; color: #526169; font-size: 8px; font-weight: 750; text-transform: uppercase; }
+.matrix-row-excluded { opacity: 0.58; }
+.matrix-row-excluded:focus-within { opacity: 0.82; }
+.matrix-row-excluded td { background: #f5f6f7; }
+.matrix-row-excluded td:first-child { background: #f5f6f7; }
+.matrix-empty { display: grid; min-height: 120px; place-items: center; padding: 20px; color: var(--muted); font-size: 11px; font-weight: 650; text-align: center; }
 .overlap-cell { padding: 4px; text-align: center; }
 .efficiency-cell { padding: 4px; text-align: center; }
 .matrix-overlap-input,
@@ -1868,6 +1882,8 @@ tr:last-child td { border-bottom: 0; }
   .ct-loads { border-top: 1px solid var(--line); border-left: 0; }
   .matrix-toolbar,
   .report-toolbar { align-items: stretch; flex-direction: column; }
+  .matrix-search { flex-wrap: wrap; }
+  .matrix-search-input { width: 100%; }
   .inline-form { flex-wrap: wrap; }
   .gantt-toolbar { align-items: flex-start; flex-direction: column; }
   .gantt-controls { width: 100%; justify-content: flex-start; flex-wrap: wrap; }

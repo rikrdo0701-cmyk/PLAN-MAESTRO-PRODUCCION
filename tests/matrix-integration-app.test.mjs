@@ -1,0 +1,316 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import vm from "node:vm";
+import { readFile } from "node:fs/promises";
+
+const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+const plannerSource = await readFile(new URL("../src/web/planning/planner-core.js", import.meta.url), "utf8");
+const plannerContext = { globalThis: {} };
+vm.runInNewContext(plannerSource, plannerContext, { filename: "planner-core.js" });
+const PlannerCore = plannerContext.globalThis.PlannerCore;
+const TOOL_CHANGE_KEY = "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL";
+
+function sourceBetween(startText, endText) {
+  const start = app.indexOf(startText);
+  const end = app.indexOf(endText, start);
+  assert.ok(start >= 0 && end > start, `Falta ${startText}`);
+  return app.slice(start, end);
+}
+
+function normalizeStatus(value) {
+  return String(value || "PLAN").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function isClosedJobStatus(status) {
+  return ["CERRAD", "CLOSED", "COMPLETE", "COMPLETADO"].some((value) => normalizeStatus(status).includes(value));
+}
+
+function isProgrammedJobStatus(status) {
+  return normalizeStatus(status).includes("PROGRAMAD");
+}
+
+function isPlannedJobStatus(status) {
+  return normalizeStatus(status).includes("PLANIFICAD");
+}
+
+test("TOOL_CHANGE obligatorio se normaliza y se muestra fijo en la matriz", () => {
+  const capability = {
+    key: TOOL_CHANGE_KEY,
+    ct: "TOOL_CHANGE",
+    label: "CAMBIO DE HERRAMENTAL",
+    count: 0,
+  };
+  const normalizeCapabilityKeys = Function(
+    "uniq", "normalizeHeader", "TOOL_CHANGE_CAPABILITY",
+    `${sourceBetween("function normalizeCapabilityKeys(", "function parseManualCapability(")}; return normalizeCapabilityKeys;`,
+  )(
+    (items) => [...new Set(items)],
+    (value) => normalizeStatus(value).replace(/\s+/g, "_"),
+    capability,
+  );
+  const state = {
+    operators: [],
+    matrixSearch: "",
+    excludedCapabilities: normalizeCapabilityKeys([
+      TOOL_CHANGE_KEY,
+      " 5459::dóblado ",
+    ]),
+    operationRules: {},
+  };
+  const matrixWrap = {
+    innerHTML: "",
+    querySelectorAll: () => [],
+  };
+  const els = {
+    matrixWrap,
+    matrixSearchInput: { value: "" },
+    matrixSearchCount: { textContent: "" },
+    clearMatrixSearchBtn: { disabled: false },
+  };
+  const renderMatrix = Function(
+    "state", "els", "window", "renderOperationCatalogSelect", "getCapabilityRows",
+    "capacityModeForCapability", "escapeHtml", "isOperatorSkilledForCapability",
+    "TOOL_CHANGE_CAPABILITY", "normalizeHeader",
+    `${sourceBetween("function renderMatrix()", "function renderOperationCatalogSelect()")}; return renderMatrix;`,
+  )(
+    state,
+    els,
+    { PlannerCore },
+    () => {},
+    () => [capability],
+    () => "FINITA",
+    (value) => String(value),
+    () => false,
+    capability,
+    (value) => normalizeStatus(value).replace(/\s+/g, "_"),
+  );
+
+  renderMatrix();
+
+  assert.deepEqual(state.excludedCapabilities, ["5459::DOBLADO"]);
+  assert.match(matrixWrap.innerHTML, /data-capability-plan-state="TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"[^>]*disabled/);
+  assert.doesNotMatch(matrixWrap.innerHTML, /value="EXCLUDE"/);
+});
+
+test("un estado corrupto no oculta el cambio generado por el motor", () => {
+  const corruptState = {
+    selectedOts: ["100"],
+    excludedCapabilities: [TOOL_CHANGE_KEY],
+    operations: [
+      {
+        id: "old-completed-change",
+        ot: "100",
+        secuencia: 0,
+        ct: "TOOL_CHANGE",
+        descripcion: "CAMBIO DE HERRAMENTAL",
+        tipoInsercion: "CAMBIO_HERRAMENTAL",
+        estatus: "PLAN",
+        planStatus: "COMPLETADA_PLAN",
+        generatedBy: "PLANNER_CORE_V2",
+        operador: "AJUSTADOR",
+        maquina: "M1",
+        herramental: "H0",
+        fechaInicio: "2026-07-24",
+        horaInicio: "07:00",
+        fechaFin: "2026-07-24",
+        horaFin: "07:30",
+        tiempoSetup: 30,
+      },
+      {
+        id: "bend-100",
+        ot: "100",
+        secuencia: 1,
+        ct: "5459",
+        descripcion: "DOBLEZ",
+        estatus: "PLAN",
+        operador: "OPERADOR 1",
+        maquina: "M1",
+        herramental: "H1",
+        tiempoProd: 20,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    operators: ["OPERADOR 1", "AJUSTADOR"],
+    matrix: {
+      "5459::DOBLEZ": ["OPERADOR 1"],
+      [TOOL_CHANGE_KEY]: ["AJUSTADOR"],
+    },
+    configuredCapabilities: ["5459::DOBLEZ", TOOL_CHANGE_KEY],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 },
+    workSchedule: {},
+  };
+  const scheduled = PlannerCore.schedulePlan(corruptState, {
+    planStart: "2026-07-27",
+    horizonDays: 5,
+    executionTime: "2026-07-27T07:00:00",
+  });
+  const scheduledChanges = scheduled.operations
+    .filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  const visibleChanges = PlannerCore.filterExcludedOperations(corruptState, scheduled.operations)
+    .filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+
+  assert.ok(scheduledChanges.length > 0, JSON.stringify(scheduled.lastSchedule.diagnostics));
+  assert.deepEqual(
+    visibleChanges.map((op) => op.id),
+    scheduledChanges.map((op) => op.id),
+  );
+  assert.ok(visibleChanges.every((op) => op.fechaInicio && op.fechaFin));
+});
+
+test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", () => {
+  const state = {
+    excludedCapabilities: ["5459::DOBLADO"],
+    operations: [
+      {
+        id: "excluded",
+        ot: "100",
+        ct: "5459",
+        descripcion: "DOBLADO",
+        estatus: "CERRADA",
+        operador: "FANTASMA",
+        prioridad: 1,
+        fechaInicio: "2026-07-30",
+        horaInicio: "07:00",
+        fechaFin: "2026-07-30",
+        horaFin: "17:00",
+      },
+      {
+        id: "included",
+        ot: "100",
+        ct: "100",
+        descripcion: "CORTE",
+        estatus: "PLAN",
+        operador: "ANA",
+        prioridad: 5,
+        tiempoProd: 60,
+        fechaInicio: "2026-07-27",
+        horaInicio: "07:00",
+        fechaFin: "2026-07-27",
+        horaFin: "08:00",
+      },
+    ],
+    workOrders: [{ ot: "100", status: "PLAN", item: "P-1" }],
+  };
+  const currentPlanOperations = Function(
+    "state", "window",
+    `${sourceBetween("function currentPlanOperations(", "function currentDraftScheduledOperations(")}; return currentPlanOperations;`,
+  )(state, { PlannerCore });
+  const jobStatusSource = sourceBetween("function jobStatusFromOperations(", "function matchesStatusFilter(");
+  const { jobStatusFromOperations, jobStatusForOt } = Function(
+    "state", "currentPlanOperations", "workOrderForOt", "isClosedJobStatus",
+    "isProgrammedJobStatus", "isPlannedJobStatus", "materialOtKey",
+    `${jobStatusSource}; return { jobStatusFromOperations, jobStatusForOt };`,
+  )(
+    state,
+    currentPlanOperations,
+    (ot) => state.workOrders.find((item) => item.ot === ot),
+    isClosedJobStatus,
+    isProgrammedJobStatus,
+    isPlannedJobStatus,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+  const jobScheduledFinish = Function(
+    "currentPlanOperations", "opEnd",
+    `${sourceBetween("function jobScheduledFinish(", "function jobRiskLevel(")}; return jobScheduledFinish;`,
+  )(
+    currentPlanOperations,
+    (op) => op.fechaFin ? new Date(`${op.fechaFin}T${op.horaFin}:00`) : null,
+  );
+  const getPriorityJobs = Function(
+    "state", "currentPlanOperations", "sequenceSort", "opStart", "workOrderForOt",
+    "workOrderPlaceholderOperation", "jobPriority", "effectiveWorkOrderDueDate",
+    "pendingPiecesForWorkOrder", "uniq", "materialsForOt", "materialBaseForOt",
+    "jobStatusForOt", "isMovablePlanningStatus", "isProgrammedJobStatus",
+    "isClosedJobStatus", "isJobLocked", "operationDuration", "compareJobs",
+    `${sourceBetween("function getPriorityJobs()", "function getSelectedPriorityJob()")}; return getPriorityJobs;`,
+  )(
+    state,
+    currentPlanOperations,
+    (a, b) => a.secuencia - b.secuencia,
+    (op) => op.fechaInicio ? new Date(`${op.fechaInicio}T${op.horaInicio}:00`) : null,
+    (ot) => state.workOrders.find((item) => item.ot === ot),
+    (wo) => ({ id: `placeholder-${wo.ot}`, ot: wo.ot }),
+    (ops) => Math.min(...ops.map((op) => op.prioridad), 999),
+    () => "",
+    () => 0,
+    (values) => [...new Set(values)],
+    () => [],
+    () => "",
+    jobStatusForOt,
+    (status) => !isClosedJobStatus(status) && !isProgrammedJobStatus(status),
+    isProgrammedJobStatus,
+    isClosedJobStatus,
+    () => false,
+    (op) => Number(op.tiempoProd || 0),
+    () => 0,
+  );
+
+  const jobs = getPriorityJobs();
+
+  assert.equal(jobStatusFromOperations("100", currentPlanOperations(), state.workOrders), "PLAN");
+  assert.equal(jobStatusForOt("100"), "PLAN");
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].ops.map((op) => op.id), ["included"]);
+  assert.deepEqual(jobs[0].operators, ["ANA"]);
+  assert.deepEqual(jobs[0].cts, ["100"]);
+  assert.equal(jobs[0].minutes, 60);
+  const finish = jobScheduledFinish({ ops: state.operations });
+  assert.equal(finish.getFullYear(), 2026);
+  assert.equal(finish.getMonth(), 6);
+  assert.equal(finish.getDate(), 27);
+  assert.equal(finish.getHours(), 8);
+});
+
+test("KPI histórico se calcula solo con el snapshot publicado", () => {
+  const published = {
+    snapshotId: "published-1",
+    selectedOts: ["100"],
+    lastSchedule: { scheduledOts: ["100"] },
+    workOrders: [{ ot: "100", status: "PLAN", pendingQuantity: 7 }],
+    operationPlanStatuses: {},
+    operations: [{
+      id: "published-op",
+      ot: "100",
+      ct: "100",
+      descripcion: "CORTE",
+      estatus: "PLAN",
+      secuencia: 1,
+      pendingPieces: 7,
+      fechaInicio: "2026-07-01",
+      horaInicio: "07:00",
+      fechaFin: "2026-07-01",
+      horaFin: "08:00",
+    }],
+  };
+  const jobStatusFromOperations = Function(
+    "isClosedJobStatus", "isProgrammedJobStatus", "isPlannedJobStatus", "materialOtKey",
+    `${sourceBetween("function jobStatusFromOperations(", "function jobStatusForOt(")}; return jobStatusFromOperations;`,
+  )(
+    isClosedJobStatus,
+    isProgrammedJobStatus,
+    isPlannedJobStatus,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+  const stalePublishedPieces = Function(
+    "window", "jobStatusFromOperations", "isClosedJobStatus", "opStart", "opEnd",
+    "sequenceSort", "pendingPiecesForWorkOrder", "materialOtKey",
+    `${sourceBetween("function stalePublishedPieces(", "function weeklyJobSummary(")}; return stalePublishedPieces;`,
+  )(
+    { PlannerCore },
+    jobStatusFromOperations,
+    isClosedJobStatus,
+    (op) => op.fechaInicio ? new Date(`${op.fechaInicio}T${op.horaInicio}:00`) : null,
+    (op) => op.fechaFin ? new Date(`${op.fechaFin}T${op.horaFin}:00`) : null,
+    (a, b) => a.secuencia - b.secuencia,
+    (wo) => Number(wo?.pendingQuantity || 0),
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+  const result = stalePublishedPieces(
+    new Date("2026-07-20T00:00:00"),
+    published.operations,
+    published,
+  );
+
+  assert.deepEqual(result, { initialCut: 7, finishing: 7 });
+});

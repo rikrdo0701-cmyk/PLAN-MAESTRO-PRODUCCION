@@ -18,6 +18,52 @@ test("PlannerCore expone el programador principal", () => {
   assert.equal(typeof core.operationToolKey, "function");
 });
 
+test("filtra capacidades parcialmente por nombre o CT sin acentos, mayusculas ni espacios extra", () => {
+  const core = loadPlannerCore();
+  const capabilities = [
+    { key: "5459::DOBLEZ_DE_TUBERIA", ct: "5459", label: "Dóblez   de tubería" },
+    { key: "100::CORTE", ct: "100", label: "Corte" },
+  ];
+
+  assert.deepEqual(
+    [...core.filterCapabilities(capabilities, "  doblez de TUBERIA ")],
+    [capabilities[0]],
+  );
+  assert.deepEqual([...core.filterCapabilities(capabilities, "459")], [capabilities[0]]);
+  assert.deepEqual([...core.filterCapabilities(capabilities, "   ")], capabilities);
+});
+
+test("clasifica todas las variantes especiales de subcontrato por contenido", () => {
+  const core = loadPlannerCore();
+  for (const label of [
+    "Envío a subcontrato externo",
+    "Servicio de cromado brillante",
+    "Acabado Metokote negro",
+    "Proceso MAKA final",
+    "Baño galvanizado",
+  ]) {
+    assert.equal(core.isSpecialSubcontractCapability({ ct: "999", label }), true, label);
+  }
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "100", label: "CORTE" }), false);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "6462", label: "PINTURA EXTERIOR" }), true);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "5495", label: "E-COAT PINTURA" }), true);
+  assert.equal(core.isSpecialSubcontractCapability({ ct: "5495", label: "67OTD ENVIO A PINTURA" }), true);
+});
+
+test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "excluded", ct: " 54á ", descripcion: "  Dóblez   especial " },
+    { id: "included", ct: "100", descripcion: "CORTE" },
+  ];
+  const state = { excludedCapabilities: ["54A::DOBLEZ_ESPECIAL"] };
+
+  assert.equal(core.isOperationCapabilityExcluded(state, operations[0]), true);
+  assert.equal(core.isOperationCapabilityExcluded(state, operations[1]), false);
+  assert.deepEqual([...core.filterExcludedOperations(state, operations)], [operations[1]]);
+  assert.deepEqual([...core.filterExcludedOperations({}, operations)], operations);
+});
+
 test("PlannerCore acepta un estado vacio", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
@@ -28,6 +74,262 @@ test("PlannerCore acepta un estado vacio", () => {
   assert.ok(Array.isArray(result.operations));
   assert.equal(result.operations.length, 0);
   assert.equal(result.horizonDays, 5);
+});
+
+test("una operacion excluida no se agenda, bloquea recursos ni genera errores de configuracion", () => {
+  const core = loadPlannerCore();
+  const excluded = {
+    id: "excluded", ot: "100", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR",
+    estatus: "PLAN", operador: "OP 1", tiempoProd: 120,
+  };
+  const excludedBlocker = {
+    id: "excluded-blocker", ot: "101", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR",
+    estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 120,
+    fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00",
+  };
+  const included = {
+    id: "included", ot: "200", secuencia: 1, ct: "100", descripcion: "CORTE",
+    estatus: "PLAN", operador: "OP 1", tiempoProd: 20,
+  };
+  const state = {
+    excludedCapabilities: ["999::SIN_CONFIGURAR"],
+    selectedOts: ["100", "101", "200"],
+    operations: [excluded, excludedBlocker, included],
+    workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  };
+
+  assert.deepEqual([...core.planningConfigurationIssues(state, state.operations)], []);
+  const result = core.schedulePlan(state, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+  });
+  const excludedResult = result.operations.find((operation) => operation.id === "excluded");
+  const includedResult = result.operations.find((operation) => operation.id === "included");
+  assert.equal(excludedResult.fechaInicio, undefined);
+  assert.equal(excludedResult.operador, "OP 1");
+  assert.equal(includedResult.horaInicio, "07:00");
+  assert.equal(result.lastSchedule.scheduled, 1);
+  assert.equal(result.lastSchedule.unscheduled, 0);
+  assert.equal(result.lastSchedule.diagnostics.some((item) => item.operationId === "excluded"), false);
+});
+
+test("al excluir una operacion intermedia la sucesora depende de la ultima incluida de la OT", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      { id: "first", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+      { id: "middle", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+  });
+  const first = result.operations.find((operation) => operation.id === "first");
+  const middle = result.operations.find((operation) => operation.id === "middle");
+  const last = result.operations.find((operation) => operation.id === "last");
+
+  assert.equal(middle.fechaInicio, undefined);
+  assert.ok(last.fechaInicio, JSON.stringify(result.lastSchedule.diagnostics));
+  assert.ok(
+    new Date(`${last.fechaInicio}T${last.horaInicio}:00`) >= new Date(`${first.fechaFin}T${first.horaFin}:00`),
+  );
+});
+
+test("una sucesora conserva precedencia si la ultima incluida anterior esta fija", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1", tiempoProd: 120,
+        fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00",
+      },
+      { id: "middle", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+  });
+  const fixed = result.operations.find((operation) => operation.id === "fixed");
+  const last = result.operations.find((operation) => operation.id === "last");
+
+  assert.ok(last.fechaInicio, JSON.stringify(result.lastSchedule.diagnostics));
+  assert.ok(
+    new Date(`${last.fechaInicio}T${last.horaInicio}:00`) >= new Date(`${fixed.fechaFin}T${fixed.horaFin}:00`),
+  );
+});
+
+test("un antecedente fijo que cruza tiempo no laborable limita por su fin real", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed-weekend", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1", tiempoProd: 120,
+        fechaInicio: "2026-07-17", horaInicio: "16:00", fechaFin: "2026-07-20", horaFin: "08:00",
+      },
+      { id: "middle-weekend", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last-weekend", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-17",
+    horizonDays: 5,
+    executionTime: "2026-07-17T07:00:00",
+  });
+  const last = result.operations.find((operation) => operation.id === "last-weekend");
+
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
+});
+
+test("un solapamiento parcial usa la duracion productiva del antecedente fijo", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed-partial", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1", tiempoProd: 120,
+        fechaInicio: "2026-07-17", horaInicio: "16:00", fechaFin: "2026-07-20", horaFin: "08:00",
+      },
+      { id: "middle-partial", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last-partial", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operationRules: { "100::CORTE": { overlap: 0.5 } },
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-17",
+    horizonDays: 5,
+    executionTime: "2026-07-17T07:00:00",
+  });
+  const last = result.operations.find((operation) => operation.id === "last-partial");
+
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "07:00"]);
+});
+
+test("un solapamiento parcial sin duracion productiva respeta el fin fijo", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    excludedCapabilities: ["200::INSPECCION"],
+    selectedOts: ["300"],
+    operations: [
+      {
+        id: "fixed-no-duration", ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+        locked: true, operador: "OP 1",
+        fechaInicio: "2026-07-17", horaInicio: "16:00", fechaFin: "2026-07-20", horaFin: "08:00",
+      },
+      { id: "middle-no-duration", ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "last-no-duration", ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "300" }],
+    matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+    operationRules: { "100::CORTE": { overlap: 0.5 } },
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-17",
+    horizonDays: 5,
+    executionTime: "2026-07-17T07:00:00",
+  });
+  const last = result.operations.find((operation) => operation.id === "last-no-duration");
+
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
+});
+
+test("un hito parcial nunca supera el fin real del antecedente fijo", () => {
+  const core = loadPlannerCore();
+  const starts = [0.5, 1].map((overlap) => {
+    const result = core.schedulePlan({
+      excludedCapabilities: ["200::INSPECCION"],
+      selectedOts: ["300"],
+      operations: [
+        {
+          id: `fixed-${overlap}`, ot: "300", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN",
+          locked: true, operador: "OP 1", tiempoProd: 180,
+          fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00",
+        },
+        { id: `middle-${overlap}`, ot: "300", secuencia: 2, ct: "200", descripcion: "INSPECCION", estatus: "PLAN", tiempoProd: 30 },
+        { id: `last-${overlap}`, ot: "300", secuencia: 3, ct: "300", descripcion: "EMPAQUE", estatus: "PLAN", tiempoProd: 20 },
+      ],
+      workOrders: [{ ot: "300" }],
+      matrix: { "100::CORTE": ["OP 1"], "300::EMPAQUE": ["OP 2"] },
+      configuredCapabilities: ["100::CORTE", "300::EMPAQUE"],
+      operationRules: { "100::CORTE": { overlap } },
+      operators: ["OP 1", "OP 2"],
+      settings: { optimizationPasses: 1 },
+      workSchedule: {},
+    }, {
+      planStart: "2026-07-13",
+      horizonDays: 5,
+      executionTime: "2026-07-13T07:00:00",
+    });
+    const last = result.operations.find((operation) => operation.id === `last-${overlap}`);
+    return [last.fechaInicio, last.horaInicio];
+  });
+
+  assert.deepEqual(starts, [
+    ["2026-07-13", "08:00"],
+    ["2026-07-13", "08:00"],
+  ]);
+});
+
+test("nextResourceAvailability ignora intervalos de operaciones excluidas", () => {
+  const core = loadPlannerCore();
+  const availability = core.nextResourceAvailability({
+    excludedCapabilities: ["999::SIN_CONFIGURAR"],
+    selectedOts: ["100"],
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    operations: [{
+      id: "excluded-blocker", ot: "100", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR",
+      estatus: "PLAN", locked: true, operador: "OP 1",
+      fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00",
+    }],
+    workSchedule: {},
+  }, "OP 1", "", "2026-07-13");
+
+  assert.equal(availability?.getHours(), 7);
 });
 
 test("un subcontrato puede terminar despues del horizonte visible", () => {

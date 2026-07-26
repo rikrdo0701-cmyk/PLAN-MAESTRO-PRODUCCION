@@ -21,7 +21,7 @@
 
   function schedulePlan(inputState, options) {
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
-    const operationCount = Array.isArray(inputState?.operations) ? inputState.operations.length : 0;
+    const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
     const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle"];
@@ -49,7 +49,7 @@
     const state = { ...inputState, operations, lastSchedule: undefined };
     const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
     const horizonDays = clampInteger(options?.horizonDays || state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45);
-    const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(state.operations));
+    const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(filterExcludedOperations(state, state.operations)));
     const requestedStart = atMinute(planStart, DEFAULT_START_MINUTE);
     const executionTime = parseExecutionTime(options?.executionTime);
     const windowStart = executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart;
@@ -64,9 +64,11 @@
     const sourceOperations = allOperations
       .filter((op) => op.generatedBy !== GENERATED_BY)
       .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
-    const completed = sourceOperations.filter((op) => isPlanCompletedOperation(state, op));
-    const inactive = sourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && !isSchedulableOperation(op));
-    const activeSourceOperations = sourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op));
+    const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
+    const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
+    const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
+    const inactive = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && !isSchedulableOperation(op));
+    const activeSourceOperations = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op));
     const selectionDefined = Array.isArray(state.selectedOts);
     const selectedOtsSet = new Set((state.selectedOts || []).map(normalizeKey));
     const isSelected = (op) => !selectionDefined || selectedOtsSet.has(normalizeKey(op.ot));
@@ -100,7 +102,7 @@
         .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
         .filter(isCompletedToolHistory)
       : (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : []).filter(isCompletedToolHistory);
-    const authorizedSourceOperations = sourceOperations.filter(isSelected);
+    const authorizedSourceOperations = includedSourceOperations.filter(isSelected);
     const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
       isPlanCompletedOperation(state, op) || isFixedOperation(op)
     );
@@ -121,7 +123,7 @@
     for (const op of fixed) commitFixedOperation(context, op);
 
     enrichToolsFromCatalog(state, movable);
-    const jobs = buildJobs(movable);
+    const jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
     let pending = movable.length;
     let safety = Math.max(100, pending * 4);
 
@@ -130,7 +132,8 @@
       for (const job of jobs) {
         const op = job.operations[job.index];
         if (!op) continue;
-        const assignment = findBestAssignment(context, op, job.last);
+        const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
+        const assignment = findBestAssignment(context, op, previous);
         if (assignment) ready.push({ job, op, assignment });
       }
 
@@ -164,7 +167,7 @@
     const fixedIds = new Set(fixed.map((item) => item.id));
     const scheduled = [...context.scheduledByKey.values()]
       .filter((op) => !fixedIds.has(op.id));
-    state.operations = [...completed, ...inactive, ...preservedCompletedChanges, ...fixed, ...context.generatedChanges, ...scheduled, ...unscheduled, ...excluded]
+    state.operations = [...completed, ...inactive, ...preservedCompletedChanges, ...fixed, ...context.generatedChanges, ...scheduled, ...unscheduled, ...excluded, ...excludedCapabilityOperations]
       .sort(compareScheduledOperations)
       .map((op, index) => ({ ...op, num: index + 1 }));
     state.planStart = formatDate(planStart);
@@ -652,10 +655,12 @@
     let earliest = new Date(context.windowStart);
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
-      const milestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-      const predecessorLimit = isSubcontractOperation(context.state, previous.operation)
-        ? previous.end
-        : (milestone || (ratio >= 1 ? previous.end : null));
+      const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
+      let predecessorLimit = previous.end;
+      if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
+        const partialMilestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
+        if (partialMilestone && partialMilestone < previous.end) predecessorLimit = partialMilestone;
+      }
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 
@@ -861,7 +866,7 @@
     const toolsByMachine = new Map();
     const configured = Array.isArray(state.configuredCapabilities) ? new Set(state.configuredCapabilities) : null;
     const matrix = state.matrix || {};
-    for (const op of operations || []) {
+    for (const op of filterExcludedOperations(state, operations)) {
       if (String(op.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL") continue;
       const capability = capabilityForOperation(op);
       const isSubcontract = isSubcontractOperation(state, op);
@@ -947,14 +952,8 @@
 
   function isSubcontractOperation(state, op) {
     if (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") return true;
-    if (String(op.ct || "") === "6462") return true;
     const description = normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`);
-    if (["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"].some((name) => description.includes(name))) return true;
-    if (String(op.ct || "") === "5495") {
-      const eCoat = /E\s*[- ]?\s*COAT/.test(description);
-      if ((description.includes("67OTD") && description.includes("ENVIO") && description.includes("PINTURA")) || (eCoat && description.includes("PINTURA"))) return true;
-    }
-    return false;
+    return isSpecialSubcontractCapability({ ct: op.ct, label: description });
   }
 
   function subcontractRule(state, op) {
@@ -997,6 +996,71 @@
     const ct = String(op.ct || "SIN_CT").trim();
     const label = String(op.descripcion || op.tipoInsercion || "OPERACION").trim();
     return { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
+  }
+
+  function filterCapabilities(capabilities, query) {
+    const items = Array.isArray(capabilities) ? capabilities : [];
+    const terms = normalizeSearchText(query).split(" ").filter(Boolean);
+    if (!terms.length) return items.slice();
+    return items.filter((capability) => {
+      const haystack = normalizeSearchText([
+        capability?.ct,
+        capability?.label,
+        capability?.name,
+        capability?.operation,
+        capability?.key,
+      ].filter(Boolean).join(" "));
+      return terms.every((term) => haystack.includes(term));
+    });
+  }
+
+  function isSpecialSubcontractCapability(capability) {
+    const ct = String(capability?.ct || "").trim();
+    const value = normalizeSearchText([
+      capability?.ct,
+      capability?.label,
+      capability?.name,
+      capability?.operation,
+      capability?.key,
+    ].filter(Boolean).join(" "));
+    if (["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"].some((name) => value.includes(name))) return true;
+    if (ct === "6462") return true;
+    if (ct !== "5495") return false;
+    const eCoat = /E\s*[- ]?\s*COAT/.test(value);
+    return (value.includes("67OTD") && value.includes("ENVIO") && value.includes("PINTURA")) ||
+      (eCoat && value.includes("PINTURA"));
+  }
+
+  function normalizedCapabilityKey(capability) {
+    if (typeof capability === "string") {
+      const separator = capability.indexOf("::");
+      if (separator < 0) return normalizeKey(capability).replace(/\s+/g, "_");
+      return capabilityKeyFromParts(capability.slice(0, separator), capability.slice(separator + 2));
+    }
+    if (capability?.key) return normalizedCapabilityKey(capability.key);
+    return capabilityKeyFromParts(
+      capability?.ct,
+      capability?.label || capability?.name || capability?.operation || capability?.descripcion || capability?.tipoInsercion,
+    );
+  }
+
+  function capabilityKeyFromParts(ct, label) {
+    const normalizedCt = normalizeKey(ct || "SIN_CT").replace(/\s+/g, "_");
+    const normalizedLabel = normalizeKey(label || "OPERACION").replace(/\s+/g, "_");
+    return `${normalizedCt}::${normalizedLabel}`;
+  }
+
+  function isOperationCapabilityExcluded(state, operation) {
+    if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return false;
+    const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
+    if (!excluded.length) return false;
+    const operationKey = normalizedCapabilityKey(capabilityForOperation(operation || {}));
+    return excluded.some((capability) => normalizedCapabilityKey(capability) === operationKey);
+  }
+
+  function filterExcludedOperations(state, operations) {
+    return (Array.isArray(operations) ? operations : [])
+      .filter((operation) => !isOperationCapabilityExcluded(state, operation));
   }
 
   function isCalendarAvailable(state, start, end, operator, machine) {
@@ -1118,11 +1182,12 @@
   }
 
   function nextResourceAvailability(state, operator, machine, startValue) {
-    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(state.operations);
+    const operations = filterExcludedOperations(state, state.operations);
+    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(operations);
     const cursorStart = atMinute(startDate, DEFAULT_START_MINUTE);
     const windowEnd = atMinute(addDays(startOfDay(startDate), clampInteger(state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45)), DEFAULT_START_MINUTE);
     const selected = Array.isArray(state.selectedOts) ? new Set(state.selectedOts.map(normalizeKey)) : null;
-    const intervals = (state.operations || []).filter((op) => {
+    const intervals = operations.filter((op) => {
       if (isPlanCompletedOperation(state, op)) return false;
       if (selected && !selected.has(normalizeKey(op.ot))) return false;
       if (operator && String(op.operador || "") !== String(operator)) return false;
@@ -1266,7 +1331,7 @@
     return Boolean(key) && key !== "SIN_MAQUINA";
   }
 
-  function buildJobs(operations) {
+  function buildJobs(operations, fixedOperations) {
     const byOt = new Map();
     for (const op of operations) {
       const key = normalizeKey(op.ot);
@@ -1274,10 +1339,40 @@
       byOt.get(key).push(op);
     }
     return [...byOt.values()].map((items) => ({
-      operations: items.sort((a, b) => Number(a.secuencia) - Number(b.secuencia) || Number(a.num) - Number(b.num)),
+      operations: items.sort(compareOperationSequence),
+      fixedOperations: (fixedOperations || [])
+        .filter((op) => normalizeKey(op.ot) === normalizeKey(items[0]?.ot))
+        .sort(compareOperationSequence),
       index: 0,
       last: null,
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
+  }
+
+  function fixedPredecessor(job, operation) {
+    const candidates = (job.fixedOperations || [])
+      .filter((candidate) => compareOperationSequence(candidate, operation) < 0)
+      .filter((candidate) => operationStart(candidate) && operationEnd(candidate));
+    const predecessor = candidates[candidates.length - 1];
+    if (!predecessor) return null;
+    const start = operationStart(predecessor);
+    const end = operationEnd(predecessor);
+    return { operation: predecessor, start, end, duration: declaredOperationDuration(predecessor) };
+  }
+
+  function declaredOperationDuration(operation) {
+    const setup = numberOr(operation?.tiempoSetup, 0);
+    const production = productionMinutes(operation);
+    return setup + production > 0 ? operationDuration(operation, 100, 100) : null;
+  }
+
+  function latestPredecessor(left, right) {
+    if (!left) return right;
+    if (!right) return left;
+    return compareOperationSequence(left.operation, right.operation) >= 0 ? left : right;
+  }
+
+  function compareOperationSequence(a, b) {
+    return Number(a?.secuencia) - Number(b?.secuencia) || Number(a?.num) - Number(b?.num);
   }
 
   function compareFirstOperationCandidates(a, b) {
@@ -1344,7 +1439,8 @@
   }
 
   function evaluatePlan(state) {
-    const operations = (state.operations || []).filter((op) => !isPlanCompletedOperation(state, op) && operationStart(op) && operationEnd(op));
+    const operations = filterExcludedOperations(state, state.operations)
+      .filter((op) => !isPlanCompletedOperation(state, op) && operationStart(op) && operationEnd(op));
     const starts = operations.map((op) => operationStart(op).getTime());
     const ends = operations.map((op) => operationEnd(op).getTime());
     const makespanMinutes = starts.length ? Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 60000) : 0;
@@ -1700,6 +1796,10 @@
       .replace(/\s+/g, " ");
   }
 
+  function normalizeSearchText(value) {
+    return normalizeKey(value).replace(/_/g, " ").replace(/\s+/g, " ");
+  }
+
   function cleanTool(value) {
     const text = String(value || "").trim();
     return ["", "NO", "N/A", "NA", "-"].includes(normalizeKey(text)) ? "" : text;
@@ -1734,6 +1834,10 @@
     GENERATED_BY,
     SNAP_MINUTES,
     schedulePlan,
+    filterCapabilities,
+    isSpecialSubcontractCapability,
+    isOperationCapabilityExcluded,
+    filterExcludedOperations,
     operatorOverlapConflicts,
     availableMinutes,
     nextResourceAvailability,

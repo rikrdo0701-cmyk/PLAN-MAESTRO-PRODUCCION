@@ -451,3 +451,410 @@ test("el estado de tramo se sincroniza mientras se edita", async () => {
   assert.match(helper, /status\.classList\.toggle\("is-pending", !hasRoute\)/);
   assert.match(editor, /addEventListener\("input", \(\) => updateInspectionRouteStatus\(input\)\)/);
 });
+
+test("la matriz ofrece busqueda compacta y controles de exclusion accesibles", async () => {
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
+
+  assert.match(template, /id="matrixSearchInput"[^>]*placeholder="Buscar operación o CT…"/);
+  assert.match(template, /id="matrixSearchCount"[^>]*aria-live="polite"/);
+  assert.match(template, /id="clearMatrixSearchBtn"[^>]*>Limpiar<\/button>/);
+  assert.match(styles, /\.matrix-search\s*\{[^}]*display:\s*(?:flex|grid)/);
+  assert.match(styles, /\.matrix-search-input:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.capability-plan-state:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.matrix-row-excluded[\s\S]*opacity:/);
+  assert.match(styles, /\.matrix-excluded-badge\s*\{/);
+  assert.match(styles, /\.matrix-empty\s*\{/);
+});
+
+test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusiones", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function showWorkspaceView(", bindStart);
+  const bindings = app.slice(bindStart, bindEnd);
+  const persistStart = app.indexOf("function persistableState()");
+  const persistEnd = app.indexOf("function isAppsScriptRuntime()", persistStart);
+  const persistence = app.slice(persistStart, persistEnd);
+
+  assert.match(app, /let state = loadState\(\);\s*state\.matrixSearch = "";/);
+  assert.match(app, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\);/);
+  assert.match(renderMatrix, /window\.PlannerCore\.filterCapabilities\(capabilities, state\.matrixSearch\)/);
+  assert.match(renderMatrix, /matrixSearchInput\.value = state\.matrixSearch/);
+  assert.match(renderMatrix, /matrixSearchCount\.textContent = `\$\{filteredCapabilities\.length\} de \$\{capabilities\.length\} operaciones`/);
+  assert.match(renderMatrix, /Sin operaciones que coincidan/);
+  assert.match(renderMatrix, /data-capability-plan-state=/);
+  assert.match(renderMatrix, />Usar en el plan<\/option>/);
+  assert.match(renderMatrix, />Excluir del plan<\/option>/);
+  assert.match(renderMatrix, /matrix-row-excluded/);
+  assert.match(renderMatrix, /matrix-excluded-badge[^>]*>Excluida</);
+  assert.match(renderMatrix, /state\.excludedCapabilities = excluded[\s\S]*filter\(\(item\) => item !== key\)/);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
+  assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
+  assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
+  assert.match(persistence, /const \{ matrixSearch, \.\.\.persisted \} = state;/);
+  assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
+  assert.match(persistence, /\.\.\.deepClone\(persistableState\(\)\)/);
+});
+
+test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const compactStart = performanceClient.indexOf("function compactLocalState()");
+  const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
+  const compactSource = performanceClient.slice(compactStart, compactEnd);
+  const compactLocalState = Function("state", `${compactSource}; return compactLocalState;`)({
+    revision: 7,
+    matrixSearch: "soldadura",
+    excludedCapabilities: ["5527::SOLDADURA_SOPORTE"],
+    materials: [{ ot: "WO-1" }],
+  });
+
+  const persisted = compactLocalState();
+
+  assert.equal(persisted.matrixSearch, undefined);
+  assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
+  assert.deepEqual(persisted.materials, []);
+});
+
+test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const normalizeStart = app.indexOf("function normalizeState()");
+  const normalizeEnd = app.indexOf("function bindEvents()", normalizeStart);
+  const normalizeState = app.slice(normalizeStart, normalizeEnd);
+  const importStart = app.indexOf("function applyImported(");
+  const importEnd = app.indexOf("function importCsv(", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  const removalStart = app.indexOf("function removeCapability(");
+  const removalEnd = app.indexOf("function removeOperator(", removalStart);
+  const removal = app.slice(removalStart, removalEnd);
+  const deferredStart = performanceClient.indexOf("function baseSavePayload()");
+  const deferredEnd = performanceClient.indexOf("function saveJobsForScopes(", deferredStart);
+  const deferredPayloads = performanceClient.slice(deferredStart, deferredEnd);
+  const basePayload = deferredPayloads.slice(0, deferredPayloads.indexOf("function planningSavePayload()"));
+  const matrixPayload = deferredPayloads.slice(deferredPayloads.indexOf("function matrixSavePayload()"));
+
+  assert.match(normalizeState, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.match(importFlow, /if \(Array\.isArray\(imported\.excludedCapabilities\)\) state\.excludedCapabilities = normalizeCapabilityKeys\(imported\.excludedCapabilities\)/);
+  assert.match(importFlow, /"excludedCapabilities"/);
+  assert.match(importFlow, /excludedCapabilities:\s*Array\.isArray\(parsed\.excludedCapabilities\)/);
+  assert.match(removal, /state\.excludedCapabilities = state\.excludedCapabilities\.filter\(\(excludedKey\) => excludedKey !== key\)/);
+  assert.doesNotMatch(basePayload, /excludedCapabilities/);
+  assert.match(matrixPayload, /excludedCapabilities:\s*normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.doesNotMatch(deferredPayloads, /matrixSearch/);
+});
+
+test("cambiar la exclusion restaura el foco al control de la misma capacidad", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const focusStart = app.indexOf("function focusCapabilityPlanState(key)");
+  const focusEnd = app.indexOf("function renderMatrix()", focusStart);
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+
+  assert.ok(focusStart >= 0, "debe existir el restaurador de foco por capacidad");
+  const focusSource = app.slice(focusStart, focusEnd);
+  const focused = [];
+  const controls = ["5459::DOBLADO", "5527::SOLDADURA_SOPORTE"].map((key) => ({
+    dataset: { capabilityPlanState: key },
+    focus: () => focused.push(key),
+  }));
+  const focusCapabilityPlanState = Function("els", `${focusSource}; return focusCapabilityPlanState;`)({
+    matrixWrap: { querySelectorAll: () => controls },
+  });
+
+  focusCapabilityPlanState("5527::SOLDADURA_SOPORTE");
+
+  assert.deepEqual(focused, ["5527::SOLDADURA_SOPORTE"]);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\);\s*focusCapabilityPlanState\(key\);/);
+});
+
+test("el cliente conserva y muestra operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const applyStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const applyEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", applyStart);
+  const applySource = app.slice(applyStart, applyEnd);
+  const alertsStart = app.indexOf("function planAlertItems()");
+  const alertsEnd = app.indexOf("function renderPriorityList()", alertsStart);
+  const alertsSource = app.slice(alertsStart, alertsEnd);
+  const state = {
+    operations: [],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "",
+    selectedOts: [],
+    netSuiteSyncAlert: null,
+    netSuiteChangeAlerts: [],
+    planStart: "2026-07-26",
+  };
+  const applyPayload = Function("state", "normalizeKey", `${applySource}; return applyNetSuitePlanningPayload;`)(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+  const planAlertItems = Function(
+    "state",
+    "normalizeStatus",
+    "getPriorityJobs",
+    "isJobSelected",
+    "jobRiskLevel",
+    "weeklyExecutiveSummary",
+    "weeklyJobSummary",
+    "currentDraftScheduledOperations",
+    `${alertsSource}; return planAlertItems;`,
+  )(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+    () => [],
+    () => false,
+    () => ({ level: "VERDE", label: "" }),
+    () => ({ targetMet: true }),
+    () => [],
+    () => [],
+  );
+
+  applyPayload({ operationCatalogWarning: "Catalogo NetSuite no disponible" });
+
+  assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.deepEqual(planAlertItems().find((alert) => alert.title === "Catalogo de operaciones NetSuite"), {
+    level: "warning",
+    title: "Catalogo de operaciones NetSuite",
+    message: "Catalogo NetSuite no disponible",
+  });
+});
+
+test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderOperationCatalogSelect()");
+  const renderEnd = app.indexOf("function renderConfiguration()", renderStart);
+  const renderSource = app.slice(renderStart, renderEnd);
+  const newCtInput = { innerHTML: "", disabled: false };
+  const addCtBtn = { disabled: false };
+  const state = {
+    operationCatalog: [
+      { key: "5467::CORTE", ct: "5467", label: "CORTE", active: true },
+      { key: "6462::CROMADO_ESPECIAL", ct: "6462", label: "CROMADO ESPECIAL", active: true },
+    ],
+  };
+  const renderOperationCatalogSelect = Function(
+    "state",
+    "getCapabilityRows",
+    "capabilityKey",
+    "els",
+    "escapeHtml",
+    "window",
+    `${renderSource}; return renderOperationCatalogSelect;`,
+  )(
+    state,
+    () => [],
+    (ct, label) => `${ct}::${String(label).replace(/ /g, "_")}`,
+    { newCtInput, addCtBtn },
+    (value) => String(value),
+    {
+      PlannerCore: {
+        isSpecialSubcontractCapability: (item) => /CROMADO/.test(item.label),
+      },
+    },
+  );
+
+  renderOperationCatalogSelect();
+
+  assert.match(newCtInput.innerHTML, /5467::CORTE/);
+  assert.doesNotMatch(newCtInput.innerHTML, /CROMADO/);
+});
+
+test("Gantt, cargas, metricas y borradores omiten capacidades excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const sliceFunction = (name, nextName) => {
+    const start = app.indexOf(`function ${name}`);
+    const end = app.indexOf(`function ${nextName}`, start);
+    assert.ok(start >= 0 && end > start, `debe existir ${name}`);
+    return app.slice(start, end);
+  };
+  const helper = sliceFunction("currentPlanOperations(", "currentDraftScheduledOperations(");
+  const currentPlanOperations = Function(
+    "state",
+    "window",
+    `${helper}; return currentPlanOperations;`,
+  )(
+    { excludedCapabilities: ["5527::SOLDADURA"], operations: [{ id: "keep" }, { id: "drop" }] },
+    { PlannerCore: { filterExcludedOperations: (_state, operations) => operations.filter((op) => op.id !== "drop") } },
+  );
+
+  assert.deepEqual(currentPlanOperations().map((op) => op.id), ["keep"]);
+  assert.match(sliceFunction("currentDraftScheduledOperations(", "renderDraftExecutiveSummary("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderDraftExecutiveSummary(", "renderTop("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderTop(", "renderPlanAlerts("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderLoads(", "renderOperationCatalogSelect("), /currentDraftScheduledOperations\(\)/);
+  assert.match(sliceFunction("persistPlanSnapshot(", "publishCurrentPlan("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("publishCurrentPlan(", "generatePlanPdf("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getGanttGroups(", "ganttOperationHasMachine("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getOperatorLoads(", "operatorLoadsForOperations("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getCtLoads(", "operationDuration("), /currentPlanOperations\(\)/);
+});
+
+test("preparacion y validacion ignoran operaciones excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const preparation = app.slice(
+    app.indexOf("async function prepareJobForPlanning("),
+    app.indexOf("function setGanttView(", app.indexOf("async function prepareJobForPlanning(")),
+  );
+  const validation = app.slice(
+    app.indexOf("function validateScheduleConfiguration("),
+    app.indexOf("function freezeElapsedOperations(", app.indexOf("function validateScheduleConfiguration(")),
+  );
+  const excluded = { id: "excluded", ot: "100", ct: "5459", tipoInsercion: "OPERACION" };
+  const state = { excludedCapabilities: ["5459::DOBLADO"], preparedPlanningByOt: {} };
+  const currentPlanOperations = () => [];
+  let preparedOperations = null;
+  let validatedOperations = null;
+  let dialogs = 0;
+  const window = {
+    PlannerCore: {
+      planningConfigurationIssues: (_state, operations) => {
+        validatedOperations = operations;
+        return [];
+      },
+    },
+    PlanningWorkflowCore: {
+      canReusePlanningPreparation: () => false,
+      needsPlanningPreparation: () => true,
+      markPlanningPrepared: () => ({}),
+    },
+  };
+  const prepareJobForPlanning = Function(
+    "state", "window", "currentPlanOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
+    "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
+    "applyCommercialPlanningRequirement", "assignPlanningOperators",
+    `${preparation}; return prepareJobForPlanning;`,
+  )(
+    state, window, currentPlanOperations, async () => { dialogs += 1; },
+    (_issues, operations) => { preparedOperations = operations; return []; },
+    () => ({ needsType: false, needsPlanningType: false }),
+    () => "signature", () => true, () => true,
+    async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
+  );
+  const validateScheduleConfiguration = Function(
+    "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
+    "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
+    "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    `${validation}; return validateScheduleConfiguration;`,
+  )(
+    { ...state, operations: [excluded] }, window, currentPlanOperations,
+    () => true, () => false, () => false, () => false,
+    () => ({ label: "DOBLADO", ct: "5459" }), () => excluded,
+    () => null, () => ({ days: 0 }), () => true,
+  );
+
+  assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
+  assert.deepEqual(preparedOperations, []);
+  assert.equal(dialogs, 0);
+  assert.equal(validateScheduleConfiguration(new Date()), null);
+  assert.deepEqual(validatedOperations, []);
+});
+
+test("borrador usa exclusiones actuales y publicado permanece inmutable", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const reportSource = app.slice(
+    app.indexOf("function reportOperationsSource()"),
+    app.indexOf("function reportSourceLabel()", app.indexOf("function reportOperationsSource()")),
+  );
+  const staleSource = app.slice(
+    app.indexOf("function stalePublishedPieces("),
+    app.indexOf("function weeklyJobSummary(", app.indexOf("function stalePublishedPieces(")),
+  );
+  const included = { id: "included", ot: "100", secuencia: 2, pendingPieces: 5 };
+  const excluded = { id: "excluded", ot: "100", secuencia: 1, pendingPieces: 5 };
+  const state = { excludedCapabilities: ["5459::DOBLADO"], operations: [excluded, included] };
+  const filterExcludedOperations = (filterState, operations) => (
+    filterState.excludedCapabilities?.length ? operations.filter((op) => op.id !== "excluded") : operations
+  );
+  const makeReportOperationsSource = (reportSnapshot) => Function(
+    "state", "reportSnapshot", "window",
+    `${reportSource}; return reportOperationsSource;`,
+  )(state, reportSnapshot, { PlannerCore: { filterExcludedOperations } });
+
+  const draftSource = makeReportOperationsSource({
+    snapshotId: "draft",
+    excludedCapabilities: [],
+    operations: [excluded, included],
+  });
+  const publishedSource = makeReportOperationsSource({
+    snapshotId: "published-1",
+    operations: [excluded, included],
+  });
+
+  assert.deepEqual(draftSource().map((op) => op.id), ["included"]);
+  assert.deepEqual(publishedSource().map((op) => op.id), ["excluded", "included"]);
+
+  const stalePublishedPieces = Function(
+    "state", "reportOperationsSource", "isJobScheduled", "isPlanCompletedOperation",
+    "isClosedJobStatus", "jobStatusForOt", "opStart", "opEnd", "sequenceSort",
+    "pendingPiecesForWorkOrder", "workOrderForOt", "window", "jobStatusFromOperations",
+    "materialOtKey",
+    `${staleSource}; return stalePublishedPieces;`,
+  )(
+    state, draftSource, () => true, () => false, () => false, () => "",
+    () => new Date("2026-07-01T07:00:00"), () => new Date("2026-07-01T08:00:00"),
+    (a, b) => a.secuencia - b.secuencia, () => 0, () => null,
+    { PlannerCore: { isPlanCompletedOperation: () => false } },
+    () => "PLAN",
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+  assert.deepEqual(stalePublishedPieces(new Date("2026-07-20T00:00:00"), draftSource(), state), {
+    initialCut: 5,
+    finishing: 5,
+  });
+});
+
+test("exportCsv omite capacidades excluidas del borrador", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("function exportCsv()"),
+    app.indexOf("function operationToRow(", app.indexOf("function exportCsv()")),
+  );
+  const state = { operations: [{ id: "keep" }, { id: "drop" }] };
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob",
+    `${exportSource}; return exportCsv;`,
+  )(
+    state,
+    { PlanningWorkflowCore: { draftExportOperations: (value) => value.operations } },
+    () => [state.operations[0]],
+    ["ID"],
+    (op) => [op.id],
+    (value) => String(value),
+    (value) => { exported = value; },
+  );
+
+  exportCsv();
+
+  assert.match(exported, /keep/);
+  assert.doesNotMatch(exported, /drop/);
+});
+
+test("importJson adopta y limpia operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importSource = app.slice(
+    app.indexOf("function importJson("),
+    app.indexOf("function importCsv(", app.indexOf("function importJson(")),
+  );
+  const importJson = Function(
+    "normalizeOperation", "normalizeCapabilityKeys",
+    `${importSource}; return importJson;`,
+  )((op) => op, (values) => values);
+
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "Catalogo no disponible",
+  })).operationCatalogWarning, "Catalogo no disponible");
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "",
+  })).operationCatalogWarning, "");
+});
