@@ -109,6 +109,7 @@ function PP_readState_(spreadsheet) {
     savedAt: config.savedAt || '',
     syncedAt: config.syncedAt || '',
     invoicePriceWindow: config.invoicePriceWindow || null,
+    operationCatalogWarning: String(config.operationCatalogWarning || ''),
     ganttView: config.ganttView || 'job',
     ganttDayWidth: Number(config.ganttDayWidth || 180),
     selectedOperationId: config.selectedOperationId || '',
@@ -264,7 +265,8 @@ function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
     source: payload.source || 'NetSuite RESTlets / Apps Script',
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
-    invoicePriceWindow: payload.invoicePriceWindow || null
+    invoicePriceWindow: payload.invoicePriceWindow || null,
+    operationCatalogWarning: String(payload.operationCatalogWarning || '')
   });
   PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || []).map(function(item) {
@@ -509,6 +511,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['reportWeekStart', JSON.stringify(payload.reportWeekStart || '')],
     ['reportFilters', JSON.stringify(payload.reportFilters || {})],
     ['preparedPlanningByOt', JSON.stringify(payload.preparedPlanningByOt || {})],
+    ['operationCatalogWarning', JSON.stringify(String(payload.operationCatalogWarning || ''))],
     ['EXCLUDED_CAPABILITIES', JSON.stringify(PP_normalizeExcludedCapabilities_(payload.excludedCapabilities))],
     ['selectedOts', JSON.stringify(Array.isArray(payload.selectedOts) ? payload.selectedOts : [])],
     ['lockedOts', JSON.stringify(Array.isArray(payload.lockedOts) ? payload.lockedOts : [])],

@@ -206,6 +206,7 @@ const sampleState = {
   operationPlanStatuses: {},
   netSuiteChangeAlerts: [],
   netSuiteSyncAlert: null,
+  operationCatalogWarning: "",
   capacityModes: {
     5459: "FINITA",
     5527: "FINITA",
@@ -937,6 +938,7 @@ function normalizeState() {
   const hadConfiguredCapabilities = Array.isArray(state.configuredCapabilities);
   state.configuredCapabilities = hadConfiguredCapabilities ? state.configuredCapabilities : [];
   state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
+  state.operationCatalogWarning = String(state.operationCatalogWarning || "");
   state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
   state.excludedCapabilities = normalizeCapabilityKeys(state.excludedCapabilities);
   state.matrixSearch = String(state.matrixSearch || "");
@@ -1472,9 +1474,20 @@ function render(options = {}) {
   saveState(options.saveScope || "plan");
 }
 
+function currentPlanOperations(operations = state.operations) {
+  return window.PlannerCore.filterExcludedOperations(state, operations);
+}
+
+function currentDraftScheduledOperations() {
+  return window.PlanningWorkflowCore.draftScheduledOperations({
+    ...state,
+    operations: currentPlanOperations(),
+  });
+}
+
 function renderDraftExecutiveSummary() {
   if (!els.draftExecutiveBody) return;
-  const draftOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const draftOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   const summary = weeklyExecutiveSummary(
     weeklyJobSummary(state.planStart, { operations: draftOperations }),
     state.planStart,
@@ -1487,7 +1500,7 @@ function renderDraftExecutiveSummary() {
 }
 
 function renderTop() {
-  const scheduledOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const scheduledOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   const total = scheduledOperations.length;
   const planned = scheduledOperations.filter((op) => op.estatus.toUpperCase() !== "COMPLETE").length;
   const dueCount = getPriorityJobs().filter((job) => isJobSelected(job.ot) && Boolean(job.dueDate)).length;
@@ -1538,6 +1551,13 @@ function renderPlanAlerts() {
 
 function planAlertItems() {
   const alerts = [];
+  if (state.operationCatalogWarning) {
+    alerts.push({
+      level: "warning",
+      title: "Catalogo de operaciones NetSuite",
+      message: state.operationCatalogWarning,
+    });
+  }
   if (state.netSuiteSyncAlert) {
     alerts.push({
       level: "critical",
@@ -2893,7 +2913,7 @@ function applyDraggedSequence(newAnchorStart, targetGroup) {
   sequenceStartOffset = Math.max(0, Math.min(maxStartOffset, sequenceStartOffset));
   let cursor = sequenceStartOffset;
   const sequenceIds = new Set(drag.sequence.map((item) => item.id));
-  const occupied = state.operations
+  const occupied = currentPlanOperations()
     .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && !sequenceIds.has(op.id) && opStart(op) && opEnd(op))
     .map((op) => ({
       operator: op.operador,
@@ -2992,7 +3012,7 @@ function endDrag() {
 function renderLoads() {
   renderLoadSourceSelect();
   const source = window.PlanningWorkflowCore.loadOperationsForMode(
-    loadSnapshot || { operations: window.PlanningWorkflowCore.draftScheduledOperations(state) },
+    loadSnapshot || { operations: currentDraftScheduledOperations() },
     state.operations,
     loadMode
   );
@@ -3220,7 +3240,9 @@ function renderMatrix() {
 function renderOperationCatalogSelect() {
   const configured = new Set(getCapabilityRows().map((item) => capabilityKey(item.ct, item.label)));
   const available = (state.operationCatalog || []).filter((item) => (
-    item.active !== false && !configured.has(capabilityKey(item.ct, item.label))
+    item.active !== false &&
+    !window.PlannerCore.isSpecialSubcontractCapability(item) &&
+    !configured.has(capabilityKey(item.ct, item.label))
   ));
   els.newCtInput.innerHTML = [
     `<option value="">${available.length ? "Selecciona una operacion de NetSuite" : "No hay operaciones pendientes"}</option>`,
@@ -3829,7 +3851,10 @@ async function ensureCommercialDataForPlan(ots) {
 }
 
 async function persistPlanSnapshot() {
-  const payload = window.PlanningWorkflowCore.buildDraftSnapshot(createAppSheetPayload(), new Date().toISOString());
+  const payload = window.PlanningWorkflowCore.buildDraftSnapshot({
+    ...createAppSheetPayload(),
+    operations: currentPlanOperations(),
+  }, new Date().toISOString());
   try {
     let saved;
     if (isAppsScriptRuntime()) {
@@ -3855,7 +3880,7 @@ async function persistPlanSnapshot() {
 }
 
 async function publishCurrentPlan() {
-  const scheduled = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   if (!scheduled.length) {
     showToast("Genera el plan antes de publicarlo");
     return;
@@ -3890,6 +3915,7 @@ async function publishCurrentPlan() {
     }
     const payload = {
       ...createAppSheetPayload(),
+      operations: currentPlanOperations(),
       planStatus: "PUBLICADO",
       draftVersionId: state.draftVersionId || "",
       weekStart,
@@ -3961,7 +3987,7 @@ async function generatePlanPdf() {
     }
   }
   if (!usingDraft && !snapshotId) {
-    const scheduled = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
     if (!scheduled.length) {
       showToast("Genera el plan antes de crear el PDF");
       return;
@@ -3970,10 +3996,10 @@ async function generatePlanPdf() {
     if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
   }
   if (usingDraft) {
-    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
+    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
   } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   if (!reportSnapshot?.operations?.length) {
-    reportSnapshot = { operations: state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
+    reportSnapshot = { operations: currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
   showWorkspaceView("reportes", "week");
@@ -4415,7 +4441,7 @@ async function loadPlanSnapshots(showMessage) {
       })), state);
       if (source.type === "published") await loadPlanSnapshotById(source.snapshotId, { render: false, silent: true });
       else if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft", { render: false, silent: true });
-      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
+      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
@@ -4431,7 +4457,7 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
   if (snapshotId === "draft") {
     if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft");
     else {
-      reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: window.PlanningWorkflowCore.draftScheduledOperations(state).map((op) => ({ ...op })) };
+      reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
       renderReports();
     }
     return;
@@ -4526,7 +4552,10 @@ function activePublishedSnapshotId() {
 }
 
 function reportOperationsSource() {
-  return reportSnapshot?.operations || [];
+  const operations = reportSnapshot?.operations || [];
+  return reportSnapshot?.snapshotId === "draft"
+    ? window.PlannerCore.filterExcludedOperations(reportSnapshot, operations)
+    : operations;
 }
 
 function reportSourceLabel() {
@@ -5514,6 +5543,7 @@ function applyNetSuitePlanningPayload(payload) {
   if (Array.isArray(payload?.operations)) state.operations = [...preservedDraft, ...refreshed];
   if (Array.isArray(payload?.materials)) state.materials = payload.materials;
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
+  if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
 }
 
@@ -5732,6 +5762,7 @@ function applyImported(imported, options = {}) {
   if (imported.cts) state.cts = imported.cts;
   if (imported.plant) state.plant = imported.plant;
   if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;
+  if (typeof imported.operationCatalogWarning === "string") state.operationCatalogWarning = imported.operationCatalogWarning;
   if (Array.isArray(imported.configuredCapabilities)) state.configuredCapabilities = imported.configuredCapabilities;
   if (imported.customCapabilities) state.customCapabilities = imported.customCapabilities;
   if (imported.hiddenCapabilities) state.hiddenCapabilities = imported.hiddenCapabilities;
@@ -5959,7 +5990,7 @@ function parseCsv(text) {
 
 function getPlanWindow() {
   const configured = parseDate(state.planStart);
-  const starts = state.operations.map(opStart).filter(Boolean);
+  const starts = currentPlanOperations().map(opStart).filter(Boolean);
   const base = scheduledPlanWindowStart() || (configured
     ? new Date(configured.year, configured.month - 1, configured.day)
     : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date())));
@@ -5969,7 +6000,7 @@ function getPlanWindow() {
 }
 
 function scheduledPlanWindowStart() {
-  const starts = state.operations
+  const starts = currentPlanOperations()
     .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op))
     .map(opStart)
     .filter(Boolean);
@@ -5978,7 +6009,7 @@ function scheduledPlanWindowStart() {
 }
 
 function getGanttGroups() {
-  const visibleOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const visibleOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   const cacheKey = `${visibleOperations.length}-${state.ganttView}-${GANTT_GROUPS_CACHE_VERSION}`;
   
   if (GANTT_GROUPS_CACHE.has(cacheKey)) {
@@ -6127,7 +6158,7 @@ function ganttGroupSubtitle(ops) {
 
 function getOperatorLoads(weekStartValue = state.loadWeekStart, horizonDays = 7) {
   return operatorLoadsForOperations(
-    state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
+    currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
     weekStartValue,
     horizonDays
   );
@@ -6173,13 +6204,14 @@ function operationMinutesInRange(op, rangeStart, rangeEnd) {
 }
 
 function getCtLoads() {
-  const selectedCts = uniq(state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op) => op.ct));
-  const maxMinutes = Math.max(1, ...selectedCts.map((ct) => state.operations
+  const operations = currentPlanOperations();
+  const selectedCts = uniq(operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op) => op.ct));
+  const maxMinutes = Math.max(1, ...selectedCts.map((ct) => operations
     .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && op.ct === ct && isFiniteCapacityOperation(op))
     .reduce((sum, op) => sum + operationDuration(op), 0)));
   return selectedCts
     .map((ct) => {
-      const minutes = state.operations
+      const minutes = operations
         .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && op.ct === ct && isFiniteCapacityOperation(op))
         .reduce((sum, op) => sum + operationDuration(op), 0);
       return { ct, minutes, percent: (minutes / maxMinutes) * 100 };
@@ -6510,7 +6542,7 @@ function sequenceSort(a, b) {
 }
 
 function getJobSequence(op) {
-  return state.operations
+  return currentPlanOperations()
     .filter((item) => item.ot === op.ot && !isPlanCompletedOperation(item))
     .sort((a, b) => sequenceSort(a, b) || opStart(a) - opStart(b));
 }

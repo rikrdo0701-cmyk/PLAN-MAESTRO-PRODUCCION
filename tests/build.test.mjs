@@ -570,3 +570,124 @@ test("cambiar la exclusion restaura el foco al control de la misma capacidad", a
   assert.deepEqual(focused, ["5527::SOLDADURA_SOPORTE"]);
   assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\);\s*focusCapabilityPlanState\(key\);/);
 });
+
+test("el cliente conserva y muestra operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const applyStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const applyEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", applyStart);
+  const applySource = app.slice(applyStart, applyEnd);
+  const alertsStart = app.indexOf("function planAlertItems()");
+  const alertsEnd = app.indexOf("function renderPriorityList()", alertsStart);
+  const alertsSource = app.slice(alertsStart, alertsEnd);
+  const state = {
+    operations: [],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "",
+    selectedOts: [],
+    netSuiteSyncAlert: null,
+    netSuiteChangeAlerts: [],
+    planStart: "2026-07-26",
+  };
+  const applyPayload = Function("state", "normalizeKey", `${applySource}; return applyNetSuitePlanningPayload;`)(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+  const planAlertItems = Function(
+    "state",
+    "normalizeStatus",
+    "getPriorityJobs",
+    "isJobSelected",
+    "jobRiskLevel",
+    "weeklyExecutiveSummary",
+    "weeklyJobSummary",
+    `${alertsSource}; return planAlertItems;`,
+  )(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+    () => [],
+    () => false,
+    () => ({ level: "VERDE", label: "" }),
+    () => ({ targetMet: true }),
+    () => [],
+  );
+
+  applyPayload({ operationCatalogWarning: "Catalogo NetSuite no disponible" });
+
+  assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.deepEqual(planAlertItems().find((alert) => alert.title === "Catalogo de operaciones NetSuite"), {
+    level: "warning",
+    title: "Catalogo de operaciones NetSuite",
+    message: "Catalogo NetSuite no disponible",
+  });
+});
+
+test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderOperationCatalogSelect()");
+  const renderEnd = app.indexOf("function renderConfiguration()", renderStart);
+  const renderSource = app.slice(renderStart, renderEnd);
+  const newCtInput = { innerHTML: "", disabled: false };
+  const addCtBtn = { disabled: false };
+  const state = {
+    operationCatalog: [
+      { key: "5467::CORTE", ct: "5467", label: "CORTE", active: true },
+      { key: "6462::CROMADO_ESPECIAL", ct: "6462", label: "CROMADO ESPECIAL", active: true },
+    ],
+  };
+  const renderOperationCatalogSelect = Function(
+    "state",
+    "getCapabilityRows",
+    "capabilityKey",
+    "els",
+    "escapeHtml",
+    "window",
+    `${renderSource}; return renderOperationCatalogSelect;`,
+  )(
+    state,
+    () => [],
+    (ct, label) => `${ct}::${String(label).replace(/ /g, "_")}`,
+    { newCtInput, addCtBtn },
+    (value) => String(value),
+    {
+      PlannerCore: {
+        isSpecialSubcontractCapability: (item) => /CROMADO/.test(item.label),
+      },
+    },
+  );
+
+  renderOperationCatalogSelect();
+
+  assert.match(newCtInput.innerHTML, /5467::CORTE/);
+  assert.doesNotMatch(newCtInput.innerHTML, /CROMADO/);
+});
+
+test("Gantt, cargas, metricas y borradores omiten capacidades excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const sliceFunction = (name, nextName) => {
+    const start = app.indexOf(`function ${name}`);
+    const end = app.indexOf(`function ${nextName}`, start);
+    assert.ok(start >= 0 && end > start, `debe existir ${name}`);
+    return app.slice(start, end);
+  };
+  const helper = sliceFunction("currentPlanOperations(", "currentDraftScheduledOperations(");
+  const currentPlanOperations = Function(
+    "state",
+    "window",
+    `${helper}; return currentPlanOperations;`,
+  )(
+    { excludedCapabilities: ["5527::SOLDADURA"], operations: [{ id: "keep" }, { id: "drop" }] },
+    { PlannerCore: { filterExcludedOperations: (_state, operations) => operations.filter((op) => op.id !== "drop") } },
+  );
+
+  assert.deepEqual(currentPlanOperations().map((op) => op.id), ["keep"]);
+  assert.match(sliceFunction("currentDraftScheduledOperations(", "renderDraftExecutiveSummary("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderDraftExecutiveSummary(", "renderTop("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderTop(", "renderPlanAlerts("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderLoads(", "renderOperationCatalogSelect("), /currentDraftScheduledOperations\(\)/);
+  assert.match(sliceFunction("persistPlanSnapshot(", "publishCurrentPlan("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("publishCurrentPlan(", "generatePlanPdf("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getGanttGroups(", "ganttOperationHasMachine("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getOperatorLoads(", "operatorLoadsForOperations("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getCtLoads(", "operationDuration("), /currentPlanOperations\(\)/);
+});

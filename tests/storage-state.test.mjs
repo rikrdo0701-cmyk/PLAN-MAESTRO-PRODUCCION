@@ -189,3 +189,21 @@ test("dos clientes concurrentes no permiten que el optimizado obsoleto borre exc
   assert.equal(config.revision, 2);
   assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA"]);
 });
+
+test("la sincronizacion persiste y devuelve la advertencia del catalogo maestro", () => {
+  const fixture = loadStorage([["revision", "0"]]);
+
+  fixture.context.PP_writeNetSuiteSyncState_(fixture.spreadsheet, {
+    operations: [],
+    workOrders: [],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "Catalogo NetSuite no disponible",
+  }, "pruebas");
+
+  const config = configObject(fixture.context, fixture.sheets.CONFIG);
+  const state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+
+  assert.equal(config.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+});
