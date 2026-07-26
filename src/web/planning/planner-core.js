@@ -656,9 +656,11 @@
     if (previous?.operation) {
       const ratio = overlapForOperation(context.state, previous.operation);
       const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
-      const predecessorLimit = isSubcontractOperation(context.state, previous.operation) || ratio >= 1 || !durationKnown
-        ? previous.end
-        : addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
+      let predecessorLimit = previous.end;
+      if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
+        const partialMilestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
+        if (partialMilestone && partialMilestone < previous.end) predecessorLimit = partialMilestone;
+      }
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 
