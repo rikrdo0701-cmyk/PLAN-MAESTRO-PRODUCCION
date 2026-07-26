@@ -1058,7 +1058,7 @@ function normalizeState() {
       scheduledOts: uniq(scheduledOts).filter((ot) => visibleOts.has(ot)),
     };
   }
-  const derivedLockedOts = uniq(state.operations.filter((op) => op.locked === true).map((op) => op.ot));
+  const derivedLockedOts = uniq(currentPlanOperations().filter((op) => op.locked === true).map((op) => op.ot));
   const configuredLockedOts = Array.isArray(state.lockedOts) && state.lockedOts.length ? state.lockedOts : derivedLockedOts;
   state.lockedOts = uniq(configuredLockedOts)
     .filter((ot) => state.selectedOts.includes(ot));
@@ -1073,7 +1073,7 @@ function normalizeState() {
   state.expandedCts = Array.isArray(state.expandedCts) ? state.expandedCts : [];
   for (const op of state.operations) op.locked = state.lockedOts.includes(op.ot);
   const priorityByOt = new Map();
-  for (const op of state.operations) {
+  for (const op of currentPlanOperations()) {
     const current = priorityByOt.get(op.ot);
     priorityByOt.set(op.ot, current == null ? op.prioridad : Math.min(current, op.prioridad));
   }
@@ -1491,7 +1491,7 @@ function renderDraftExecutiveSummary() {
   const summary = weeklyExecutiveSummary(
     weeklyJobSummary(state.planStart, { operations: draftOperations }),
     state.planStart,
-    { operations: draftOperations }
+    { operations: draftOperations, sourceState: state }
   );
   els.draftExecutiveBody.innerHTML = renderWeeklyExecutiveSummary(summary, {
     title: "Resumen",
@@ -1581,7 +1581,12 @@ function planAlertItems() {
       alerts.push({ level: "warning", ot: job.ot, title: `Faltante OT ${job.ot}`, message: risk.label });
     }
   }
-  const target = weeklyExecutiveSummary(weeklyJobSummary(state.planStart), state.planStart);
+  const targetOperations = currentDraftScheduledOperations();
+  const target = weeklyExecutiveSummary(
+    weeklyJobSummary(state.planStart, { operations: targetOperations }),
+    state.planStart,
+    { operations: targetOperations, sourceState: state },
+  );
   if (!target.targetMet) {
     alerts.push({
       level: "warning",
@@ -4590,7 +4595,10 @@ function renderWeekReport() {
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
   els.weekExecutiveSummary.innerHTML = reportOps.length
-    ? renderWeeklyExecutiveSummary(weeklyExecutiveSummary(summary, state.reportWeekStart, { operations: reportOps }))
+    ? renderWeeklyExecutiveSummary(weeklyExecutiveSummary(summary, state.reportWeekStart, {
+      operations: reportOps,
+      sourceState: reportSnapshot?.snapshotId === "draft" ? state : (reportSnapshot || state),
+    }))
     : `<div class="report-empty-state">No hay un plan publicado cargado para reportes.</div>`;
   els.weekReport.innerHTML = `
     <section class="weekly-job-panel"><header><h3>OT que inician</h3><span>Fecha de la primera operacion</span></header>${renderWeeklyJobDays(summary.starts, false)}</section>
@@ -4619,7 +4627,7 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
     .map((op) => ({ op, minutes: operationDuration(op) }))
     .sort((a, b) => b.minutes - a.minutes)[0] || null;
   const finishingByType = groupFinishingRowsByType(finishingRows);
-  const stale = stalePublishedPieces(range.start, sourceOperations);
+  const stale = stalePublishedPieces(range.start, sourceOperations, options.sourceState);
   const toolChangeMinutes = toolChangeOps.reduce((sum, op) => sum + operationDuration(op), 0);
   const targetFactors = releaseTargetFactors({
     releaseAmount,
@@ -4751,22 +4759,30 @@ function workingDaysInRange(start, end) {
   return Math.max(1, days);
 }
 
-function stalePublishedPieces(currentWeekStart, sourceOperations = reportOperationsSource()) {
+function stalePublishedPieces(
+  currentWeekStart,
+  sourceOperations = reportOperationsSource(),
+  sourceState = reportSnapshot?.snapshotId === "draft" ? state : (reportSnapshot || state),
+) {
   const result = { initialCut: 0, finishing: 0 };
   const source = sourceOperations;
+  const workOrders = Array.isArray(sourceState?.workOrders) ? sourceState.workOrders : [];
   const seenInitial = new Set();
   const seenFinish = new Set();
   for (const op of source) {
-    if (!isJobScheduled(op.ot) || isPlanCompletedOperation(op) || isClosedJobStatus(jobStatusForOt(op.ot))) continue;
     const start = opStart(op);
     const end = opEnd(op);
+    if (!start || !end) continue;
+    if (window.PlannerCore.isPlanCompletedOperation(sourceState || {}, op)) continue;
+    if (isClosedJobStatus(jobStatusFromOperations(op.ot, source, workOrders))) continue;
     if (!start || start >= currentWeekStart) continue;
     const sequenced = source
       .filter((item) => item.ot === op.ot && item.tipoInsercion !== "CAMBIO_HERRAMENTAL")
       .sort((a, b) => sequenceSort(a, b));
     const first = sequenced[0];
     const last = sequenced[sequenced.length - 1];
-    const pieces = Number(op.pendingPieces ?? op.cantPendiente ?? pendingPiecesForWorkOrder(workOrderForOt(op.ot)));
+    const workOrder = workOrders.find((item) => materialOtKey(item.ot) === materialOtKey(op.ot));
+    const pieces = Number(op.pendingPieces ?? op.cantPendiente ?? pendingPiecesForWorkOrder(workOrder));
     if (first && op.id === first.id && !seenInitial.has(op.ot)) {
       result.initialCut += Math.max(0, pieces);
       seenInitial.add(op.ot);
@@ -6554,7 +6570,7 @@ function getJobSequence(op) {
 
 function getPriorityJobs() {
   const map = new Map();
-  for (const op of state.operations) {
+  for (const op of currentPlanOperations()) {
     const job = map.get(op.ot) || {
       ot: op.ot,
       ops: [],
@@ -7083,11 +7099,11 @@ function jobPriority(ops) {
 }
 
 function jobPriorityForOperation(op) {
-  return jobPriority(state.operations.filter((item) => item.ot === op.ot));
+  return jobPriority(currentPlanOperations().filter((item) => item.ot === op.ot));
 }
 
 function jobPriorityForOt(ot) {
-  const operations = state.operations.filter((item) => item.ot === ot);
+  const operations = currentPlanOperations().filter((item) => item.ot === ot);
   return operations.length ? jobPriority(operations) : 999;
 }
 
@@ -7178,13 +7194,17 @@ function isMovablePlanningStatus(status) {
   return PlannerCore.isMovablePlanningStatus(status);
 }
 
-function jobStatusForOt(ot) {
-  const workOrderStatus = String(workOrderForOt(ot)?.status || "").trim();
-  const statuses = [workOrderStatus, ...state.operations
+function jobStatusFromOperations(ot, operations, workOrders = []) {
+  const workOrderStatus = String((workOrders || []).find((item) => materialOtKey(item.ot) === materialOtKey(ot))?.status || "").trim();
+  const statuses = [workOrderStatus, ...(operations || [])
     .filter((op) => op.ot === ot && op.tipoInsercion !== "CAMBIO_HERRAMENTAL")
     .map((op) => String(op.estatus || "PLAN").trim())
     .filter(Boolean)].filter(Boolean);
   return statuses.find(isClosedJobStatus) || statuses.find(isProgrammedJobStatus) || statuses.find(isPlannedJobStatus) || statuses[0] || "PLAN";
+}
+
+function jobStatusForOt(ot) {
+  return jobStatusFromOperations(ot, currentPlanOperations(), state.workOrders);
 }
 
 function matchesStatusFilter(job, filter) {
@@ -7262,7 +7282,7 @@ function jobTypeTagHtml(job) {
 }
 
 function jobScheduledFinish(job) {
-  const finishes = (job?.ops || [])
+  const finishes = currentPlanOperations(job?.ops || [])
     .map(opEnd)
     .filter(Boolean)
     .sort((a, b) => b - a);

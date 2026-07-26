@@ -601,6 +601,7 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
     "jobRiskLevel",
     "weeklyExecutiveSummary",
     "weeklyJobSummary",
+    "currentDraftScheduledOperations",
     `${alertsSource}; return planAlertItems;`,
   )(
     state,
@@ -609,6 +610,7 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
     () => false,
     () => ({ level: "VERDE", label: "" }),
     () => ({ targetMet: true }),
+    () => [],
     () => [],
   );
 
@@ -790,15 +792,19 @@ test("borrador usa exclusiones actuales y publicado permanece inmutable", async 
   const stalePublishedPieces = Function(
     "state", "reportOperationsSource", "isJobScheduled", "isPlanCompletedOperation",
     "isClosedJobStatus", "jobStatusForOt", "opStart", "opEnd", "sequenceSort",
-    "pendingPiecesForWorkOrder", "workOrderForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt", "window", "jobStatusFromOperations",
+    "materialOtKey",
     `${staleSource}; return stalePublishedPieces;`,
   )(
     state, draftSource, () => true, () => false, () => false, () => "",
     () => new Date("2026-07-01T07:00:00"), () => new Date("2026-07-01T08:00:00"),
     (a, b) => a.secuencia - b.secuencia, () => 0, () => null,
+    { PlannerCore: { isPlanCompletedOperation: () => false } },
+    () => "PLAN",
+    (value) => String(value || "").trim().toUpperCase(),
   );
 
-  assert.deepEqual(stalePublishedPieces(new Date("2026-07-20T00:00:00")), {
+  assert.deepEqual(stalePublishedPieces(new Date("2026-07-20T00:00:00"), draftSource(), state), {
     initialCut: 5,
     finishing: 5,
   });
