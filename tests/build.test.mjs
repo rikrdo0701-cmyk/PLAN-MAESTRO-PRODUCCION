@@ -451,3 +451,50 @@ test("el estado de tramo se sincroniza mientras se edita", async () => {
   assert.match(helper, /status\.classList\.toggle\("is-pending", !hasRoute\)/);
   assert.match(editor, /addEventListener\("input", \(\) => updateInspectionRouteStatus\(input\)\)/);
 });
+
+test("la matriz ofrece busqueda compacta y controles de exclusion accesibles", async () => {
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
+
+  assert.match(template, /id="matrixSearchInput"[^>]*placeholder="Buscar operación o CT…"/);
+  assert.match(template, /id="matrixSearchCount"[^>]*aria-live="polite"/);
+  assert.match(template, /id="clearMatrixSearchBtn"[^>]*>Limpiar<\/button>/);
+  assert.match(styles, /\.matrix-search\s*\{[^}]*display:\s*(?:flex|grid)/);
+  assert.match(styles, /\.matrix-search-input:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.capability-plan-state:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.matrix-row-excluded[\s\S]*opacity:/);
+  assert.match(styles, /\.matrix-excluded-badge\s*\{/);
+  assert.match(styles, /\.matrix-empty\s*\{/);
+});
+
+test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusiones", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function showWorkspaceView(", bindStart);
+  const bindings = app.slice(bindStart, bindEnd);
+  const persistStart = app.indexOf("function persistableState()");
+  const persistEnd = app.indexOf("function isAppsScriptRuntime()", persistStart);
+  const persistence = app.slice(persistStart, persistEnd);
+
+  assert.match(app, /let state = loadState\(\);\s*state\.matrixSearch = "";/);
+  assert.match(app, /state\.excludedCapabilities = Array\.isArray\(state\.excludedCapabilities\) \? state\.excludedCapabilities : \[\];/);
+  assert.match(renderMatrix, /window\.PlannerCore\.filterCapabilities\(capabilities, state\.matrixSearch\)/);
+  assert.match(renderMatrix, /matrixSearchInput\.value = state\.matrixSearch/);
+  assert.match(renderMatrix, /matrixSearchCount\.textContent = `\$\{filteredCapabilities\.length\} de \$\{capabilities\.length\} operaciones`/);
+  assert.match(renderMatrix, /Sin operaciones que coincidan/);
+  assert.match(renderMatrix, /data-capability-plan-state=/);
+  assert.match(renderMatrix, />Usar en el plan<\/option>/);
+  assert.match(renderMatrix, />Excluir del plan<\/option>/);
+  assert.match(renderMatrix, /matrix-row-excluded/);
+  assert.match(renderMatrix, /matrix-excluded-badge[^>]*>Excluida</);
+  assert.match(renderMatrix, /state\.excludedCapabilities = excluded[\s\S]*filter\(\(item\) => item !== key\)/);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
+  assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
+  assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
+  assert.match(persistence, /const \{ matrixSearch, \.\.\.persisted \} = state;/);
+  assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
+  assert.match(persistence, /\.\.\.deepClone\(persistableState\(\)\)/);
+});

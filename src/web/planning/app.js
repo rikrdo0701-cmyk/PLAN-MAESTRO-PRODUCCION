@@ -187,6 +187,7 @@ const sampleState = {
   cts: ["5459", "5527", "6462", "5495", "122", TOOL_CHANGE_CAPABILITY.ct],
   customCapabilities: [{ ...TOOL_CHANGE_CAPABILITY }],
   hiddenCapabilities: [],
+  excludedCapabilities: [],
   operationRules: {
     5459: { overlap: 0.6, keywords: "DOBLADO" },
     5527: { overlap: 0.6, keywords: "DOBLADO" },
@@ -422,6 +423,7 @@ const sampleState = {
 };
 
 let state = loadState();
+state.matrixSearch = "";
 let drag = null;
 let appSheetAvailable = false;
 let appSheetSaveTimer = null;
@@ -464,7 +466,7 @@ function invalidateGanttGroupsCache() {
 }
 
 window.addEventListener("beforeunload", () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState()));
 });
 
 function initializePlanningApp() {
@@ -540,6 +542,9 @@ function bindElements() {
     "loadPlanSelect",
     "loadModeSelect",
     "matrixWrap",
+    "matrixSearchInput",
+    "matrixSearchCount",
+    "clearMatrixSearchBtn",
     "newOperatorInput",
     "addOperatorBtn",
     "newCtInput",
@@ -684,6 +689,15 @@ function bindEvents() {
     button.onclick = () => setGanttView(button.dataset.view);
   });
   els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
+  els.matrixSearchInput.addEventListener("input", () => {
+    state.matrixSearch = els.matrixSearchInput.value;
+    renderMatrix();
+  });
+  els.clearMatrixSearchBtn.addEventListener("click", () => {
+    state.matrixSearch = "";
+    renderMatrix();
+    els.matrixSearchInput.focus();
+  });
   els.syncBacklogOtsBtn.addEventListener("click", syncBacklogWorkOrders);
   els.statusFilter.addEventListener("change", renderPriorityList);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
@@ -924,6 +938,8 @@ function normalizeState() {
   state.configuredCapabilities = hadConfiguredCapabilities ? state.configuredCapabilities : [];
   state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
   state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
+  state.excludedCapabilities = Array.isArray(state.excludedCapabilities) ? state.excludedCapabilities : [];
+  state.matrixSearch = String(state.matrixSearch || "");
   state.operationRules = state.operationRules && typeof state.operationRules === "object" ? state.operationRules : {};
   state.machines = (Array.isArray(state.machines) ? state.machines : [])
     .map((machine) => ({ id: String(machine.id || machine.machine || machine.maquina || "").trim().toUpperCase(), active: machine.active !== false }))
@@ -3050,6 +3066,10 @@ function renderMatrix() {
   renderOperationCatalogSelect();
   const operators = state.operators;
   const capabilities = getCapabilityRows();
+  const filteredCapabilities = window.PlannerCore.filterCapabilities(capabilities, state.matrixSearch);
+  els.matrixSearchInput.value = state.matrixSearch;
+  els.matrixSearchCount.textContent = `${filteredCapabilities.length} de ${capabilities.length} operaciones`;
+  els.clearMatrixSearchBtn.disabled = !state.matrixSearch;
   const header = `<thead><tr>
       <th>Operacion / CT</th>
       <th>Capacidad</th>
@@ -3067,13 +3087,24 @@ function renderMatrix() {
     </tr></thead>`;
   const rows = [];
 
-  for (const capability of capabilities) {
+  for (const capability of filteredCapabilities) {
     const capacityMode = capacityModeForCapability(capability);
     const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
-    rows.push(`<tr>
+    const excluded = state.excludedCapabilities.includes(capability.key);
+    rows.push(`<tr${excluded ? ' class="matrix-row-excluded"' : ""}>
       <td>
         <div class="capability-heading">
-          <div><strong>${escapeHtml(capability.label)}</strong><span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span></div>
+          <div>
+            <strong>${escapeHtml(capability.label)}</strong>
+            <span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span>
+            <div class="capability-plan-controls">
+              <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan">
+                <option value="USE"${excluded ? "" : " selected"}>Usar en el plan</option>
+                <option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>
+              </select>
+              ${excluded ? '<span class="matrix-excluded-badge">Excluida</span>' : ""}
+            </div>
+          </div>
           <button class="matrix-delete capability-delete" type="button" data-remove-capability="${escapeHtml(capability.key)}" aria-label="Eliminar operacion ${escapeHtml(capability.label)}" title="Eliminar de la matriz">
             <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
           </button>
@@ -3100,7 +3131,22 @@ function renderMatrix() {
       .join("")}</tr>`);
   }
 
+  if (!rows.length) {
+    els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">Sin operaciones que coincidan</div>';
+    return;
+  }
   els.matrixWrap.innerHTML = `<table class="matrix-table">${header}<tbody>${rows.join("")}</tbody></table>`;
+  els.matrixWrap.querySelectorAll("[data-capability-plan-state]").forEach((select) => {
+    select.addEventListener("change", () => {
+      checkpointState();
+      const key = select.dataset.capabilityPlanState;
+      const excluded = select.value === "EXCLUDE";
+      state.excludedCapabilities = excluded
+        ? uniq([...state.excludedCapabilities, key])
+        : state.excludedCapabilities.filter((item) => item !== key);
+      saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
+    });
+  });
   els.matrixWrap.querySelectorAll(".matrix-operator-check").forEach((input) => {
     input.addEventListener("change", () => {
       checkpointState();
@@ -7393,7 +7439,7 @@ function scheduleLocalStorageFlush() {
   if (_flushTimer) return;
   _flushTimer = setTimeout(() => {
     _flushTimer = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState()));
   }, 0);
 }
 
@@ -7488,9 +7534,14 @@ function appSheetSaveMethodForScopes(scopes) {
   return method;
 }
 
+function persistableState() {
+  const { matrixSearch, ...persisted } = state;
+  return persisted;
+}
+
 function createAppSheetPayload() {
   return {
-    ...deepClone(state),
+    ...deepClone(persistableState()),
     source: "plan-app-sheet",
     savedAt: new Date().toISOString(),
   };
