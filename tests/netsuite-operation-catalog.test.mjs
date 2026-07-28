@@ -8,7 +8,10 @@ const source = fs.readFileSync(new URL("../src/server/08-netsuite.js", import.me
 function load(responses = [], cacheOptions = {}) {
   const requests = [];
   const cacheEntries = new Map(Object.entries(cacheOptions.entries || {}));
+  const propertyEntries = new Map(Object.entries(cacheOptions.propertyEntries || {}));
   const cachePuts = [];
+  let lockHeld = false;
+  let lockAttempts = 0;
   const context = {
     console,
     Date,
@@ -28,6 +31,7 @@ function load(responses = [], cacheOptions = {}) {
     UrlFetchApp: {
       fetch(url, options) {
         requests.push({ url, options });
+        if (cacheOptions.onFetch) cacheOptions.onFetch();
         const response = responses.shift();
         if (response instanceof Error) throw response;
         return {
@@ -38,6 +42,7 @@ function load(responses = [], cacheOptions = {}) {
     },
     CacheService: {
       getScriptCache() {
+        if (cacheOptions.cacheServiceError) throw cacheOptions.cacheServiceError;
         return {
           get(key) {
             if (cacheOptions.getError) throw cacheOptions.getError;
@@ -51,11 +56,43 @@ function load(responses = [], cacheOptions = {}) {
         };
       },
     },
+    PropertiesService: {
+      getScriptProperties() {
+        if (cacheOptions.propertiesServiceError) throw cacheOptions.propertiesServiceError;
+        return {
+          getProperty(key) {
+            if (cacheOptions.propertyGetError) throw cacheOptions.propertyGetError;
+            return propertyEntries.get(key) || null;
+          },
+          setProperty(key, value) {
+            if (cacheOptions.propertySetError) throw cacheOptions.propertySetError;
+            propertyEntries.set(key, value);
+          },
+        };
+      },
+    },
+    LockService: {
+      getScriptLock() {
+        if (cacheOptions.lockServiceError) throw cacheOptions.lockServiceError;
+        return {
+          tryLock() {
+            lockAttempts += 1;
+            if (cacheOptions.onTryLock) cacheOptions.onTryLock(cacheEntries);
+            if (lockHeld || cacheOptions.lockUnavailable) return false;
+            lockHeld = true;
+            return true;
+          },
+          releaseLock() {
+            lockHeld = false;
+          },
+        };
+      },
+    },
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "08-netsuite.js" });
   context.PP_normalizeKey_ = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
-  return { context, requests, cachePuts };
+  return { context, requests, cachePuts, propertyEntries, getLockAttempts: () => lockAttempts };
 }
 
 const config = {
@@ -130,6 +167,149 @@ test("errores de lectura o escritura del caché no bloquean un catálogo válido
     assert.equal(result.items.length, 1);
     assert.equal(requests.length, 1);
   }
+});
+
+test("miss concurrente se serializa y evita una segunda consulta SuiteQL", () => {
+  let concurrentResult;
+  let loaded;
+  let triggered = false;
+  loaded = load([catalogPage], {
+    onFetch() {
+      if (triggered) return;
+      triggered = true;
+      concurrentResult = loaded.context.PP_fetchNetSuiteOperationCatalogCached_(config);
+    },
+  });
+
+  const first = loaded.context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.equal(first.items.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(concurrentResult.items)), []);
+  assert.match(concurrentResult.warning, /catálogo.*NetSuite/i);
+  assert.equal(loaded.requests.length, 1);
+  assert.equal(loaded.getLockAttempts(), 2);
+});
+
+test("relee el caché dentro del lock antes de consultar SuiteQL", () => {
+  const key = "NS_OPERATION_CATALOG_V1_ACME_SB1_1";
+  const cached = [{ key: "5467::CORTE FINAL", ct: "5467", label: "Corte final", source: "NETSUITE_MASTER", active: true }];
+  const { context, requests } = load([catalogPage], {
+    onTryLock(entries) {
+      entries.set(key, JSON.stringify(cached));
+    },
+  });
+
+  const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.items)), cached);
+  assert.equal(requests.length, 0);
+});
+
+test("error HTTP activa cooldown por una hora y evita reconsultar", () => {
+  const { context, requests, propertyEntries } = load([
+    { status: 500, body: "falló" },
+    catalogPage,
+  ]);
+
+  const first = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  const second = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(first.items)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(second.items)), []);
+  assert.match(first.warning, /catálogo.*NetSuite/i);
+  assert.match(second.warning, /catálogo.*NetSuite/i);
+  assert.equal(requests.length, 1);
+  const marker = propertyEntries.get("NS_OPERATION_CATALOG_ATTEMPT_V1_ACME_SB1_1");
+  assert.match(marker, /^\d{13}$/);
+  assert.ok(marker.length < 20);
+});
+
+test("cooldown aísla intentos por cuenta y ubicación", () => {
+  const { context, requests } = load([
+    { status: 500, body: "falló" },
+    { status: 500, body: "falló" },
+    { status: 500, body: "falló" },
+  ]);
+
+  context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  context.PP_fetchNetSuiteOperationCatalogCached_({ ...config, accountId: "OTHER_SB1" });
+  context.PP_fetchNetSuiteOperationCatalogCached_({ ...config, locationId: 2 });
+
+  assert.equal(requests.length, 3);
+});
+
+test("fallo de cache.put activa cooldown sin descartar el primer catálogo válido", () => {
+  const { context, requests } = load([catalogPage, catalogPage], {
+    putError: new Error("payload supera límite"),
+  });
+
+  const first = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  const second = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.equal(first.items.length, 1);
+  assert.equal(first.warning, "");
+  assert.deepEqual(JSON.parse(JSON.stringify(second.items)), []);
+  assert.match(second.warning, /catálogo.*NetSuite/i);
+  assert.equal(requests.length, 1);
+});
+
+test("fallo al adquirir CacheService no bloquea la consulta ni el resultado", () => {
+  const { context, requests } = load([catalogPage], {
+    cacheServiceError: new Error("CacheService no disponible"),
+  });
+
+  const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.warning, "");
+  assert.equal(requests.length, 1);
+});
+
+test("fallos de PropertiesService o LockService no bloquean la sincronización", () => {
+  for (const cacheOptions of [
+    { propertiesServiceError: new Error("properties no disponible") },
+    { propertyGetError: new Error("properties get no disponible") },
+    { propertySetError: new Error("properties set no disponible") },
+    { lockServiceError: new Error("lock no disponible") },
+  ]) {
+    const { context } = load([catalogPage], cacheOptions);
+
+    assert.doesNotThrow(() => context.PP_fetchNetSuiteOperationCatalogCached_(config));
+  }
+});
+
+test("hit con esquema, source o key inválidos se descarta y consulta SuiteQL", () => {
+  const key = "NS_OPERATION_CATALOG_V1_ACME_SB1_1";
+  for (const cached of [
+    [{ key: "5467::CORTE", ct: "5467", label: "Corte", source: "OTRO", active: true }],
+    [{ key: "5467::OTRA", ct: "5467", label: "Corte", source: "NETSUITE_MASTER", active: true }],
+    [{ key: "5467::CORTE", ct: "5467", label: "Corte", source: "NETSUITE_MASTER" }],
+  ]) {
+    const { context, requests } = load([catalogPage], {
+      entries: { [key]: JSON.stringify(cached) },
+    });
+
+    const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].label, "Corte final");
+    assert.equal(requests.length, 1);
+  }
+});
+
+test("hit válido deduplica y vuelve a excluir operaciones especiales", () => {
+  const key = "NS_OPERATION_CATALOG_V1_ACME_SB1_1";
+  const corte = { key: "5467::CORTE FINAL", ct: "5467", label: "Corte final", source: "NETSUITE_MASTER", active: true };
+  const special = { key: "7000::CROMADO EXTERNO", ct: "7000", label: "Cromado externo", source: "NETSUITE_MASTER", active: true };
+  const { context, requests } = load([], {
+    entries: { [key]: JSON.stringify([corte, corte, special]) },
+  });
+
+  const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.items)), [corte]);
+  assert.equal(requests.length, 0);
 });
 
 test("caché aísla catálogos por cuenta y ubicación", () => {

@@ -241,21 +241,81 @@ function PP_invoiceAverageWindow_(endDate) {
 }
 
 function PP_fetchNetSuiteOperationCatalogCached_(config) {
-  const cache = CacheService.getScriptCache();
-  const key = 'NS_OPERATION_CATALOG_V1_' + PP_normalizeKey_(config.accountId + '_' + config.locationId);
+  const scope = PP_normalizeKey_(config.accountId + '_' + config.locationId);
+  const cacheKey = 'NS_OPERATION_CATALOG_V1_' + scope;
+  const attemptKey = 'NS_OPERATION_CATALOG_ATTEMPT_V1_' + scope;
+  let cache = PP_getNetSuiteOperationCatalogCache_();
+  let items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+  if (items.length) return { items: items, warning: '' };
+
+  let lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return PP_netSuiteOperationCatalogDeferred_('actualizacion en curso');
+  } catch (_) {
+    return PP_netSuiteOperationCatalogDeferred_('bloqueo temporal no disponible');
+  }
+
+  try {
+    if (!cache) cache = PP_getNetSuiteOperationCatalogCache_();
+    items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+    if (items.length) return { items: items, warning: '' };
+
+    let properties = null;
+    try { properties = PropertiesService.getScriptProperties(); } catch (_) {}
+    let lastAttempt = 0;
+    try { lastAttempt = Number(properties && properties.getProperty(attemptKey) || 0); } catch (_) {}
+    const now = Date.now();
+    if (lastAttempt > 0 && now - lastAttempt < 3600000) {
+      return PP_netSuiteOperationCatalogDeferred_('consulta omitida durante cooldown');
+    }
+    try { if (properties) properties.setProperty(attemptKey, String(now)); } catch (_) {}
+
+    const result = PP_fetchNetSuiteOperationCatalog_(config);
+    if (result.items.length && cache) {
+      try { cache.put(cacheKey, JSON.stringify(result.items), 3600); } catch (_) {}
+    }
+    return result;
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+function PP_getNetSuiteOperationCatalogCache_() {
+  try { return CacheService.getScriptCache(); } catch (_) { return null; }
+}
+
+function PP_readNetSuiteOperationCatalogCache_(cache, key) {
+  if (!cache) return [];
   let cached = '';
-  try { cached = cache.get(key); } catch (_) {}
-  if (cached) {
-    try {
-      const items = JSON.parse(cached);
-      if (Array.isArray(items) && items.length) return { items: items, warning: '' };
-    } catch (_) {}
+  try { cached = cache.get(key); } catch (_) { return []; }
+  if (!cached) return [];
+  try { return PP_validateNetSuiteOperationCatalogCache_(JSON.parse(cached)); } catch (_) { return []; }
+}
+
+function PP_validateNetSuiteOperationCatalogCache_(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const catalog = {};
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+        || typeof item.key !== 'string' || typeof item.ct !== 'string'
+        || typeof item.label !== 'string' || item.source !== 'NETSUITE_MASTER'
+        || item.active !== true) return [];
+    const ct = item.ct.trim();
+    const label = item.label.trim();
+    const key = ct + '::' + PP_normalizeKey_(label);
+    if (!ct || !label || item.key !== key) return [];
+    if (PP_isSpecialNetSuiteOperation_(ct, label)) continue;
+    if (!catalog[key]) {
+      catalog[key] = { key: key, ct: ct, label: label, source: 'NETSUITE_MASTER', active: true };
+    }
   }
-  const result = PP_fetchNetSuiteOperationCatalog_(config);
-  if (result.items.length) {
-    try { cache.put(key, JSON.stringify(result.items), 3600); } catch (_) {}
-  }
-  return result;
+  return Object.keys(catalog).sort().map(function(key) { return catalog[key]; });
+}
+
+function PP_netSuiteOperationCatalogDeferred_(reason) {
+  return { items: [], warning: 'Catálogo de operaciones NetSuite no disponible: ' + reason };
 }
 
 function PP_fetchNetSuiteOperationCatalog_(config) {
