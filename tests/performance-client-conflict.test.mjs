@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
-const CACHE_IDENTITY = "plan-produccion-cache-v3";
+const CACHE_IDENTITY = "plan-produccion-cache-v4";
 
 function coherentLocalState(revision, patch = {}) {
   return JSON.stringify({
@@ -47,6 +47,7 @@ function loadClient(options = {}) {
   const metadataWrites = [];
   const loadPlanSnapshotsCalls = [];
   const snapshotStateAtLoad = [];
+  const syncNetSuiteDataCalls = [];
   let restoreDraftCalls = 0;
   const state = {
     revision: options.revision ?? 1,
@@ -162,7 +163,10 @@ function loadClient(options = {}) {
     applyInitialWorkspaceView: () => {
       if (options.initialSection) context.showWorkspaceView(options.initialSection);
     },
-    syncNetSuiteData: async () => false,
+    syncNetSuiteData: async (...args) => {
+      syncNetSuiteDataCalls.push(args);
+      return false;
+    },
     syncWorkOrdersOnce: () => context.syncNetSuiteData(false, { mode: "workOrders" }),
     renderTop: () => {},
     renderPlanAlerts: () => {},
@@ -189,6 +193,7 @@ function loadClient(options = {}) {
     applyImportedCalls,
     metadataWrites,
     loadPlanSnapshotsCalls,
+    syncNetSuiteDataCalls,
     snapshotStateAtLoad,
     storage,
     get restoreDraftCalls() { return restoreDraftCalls; },
@@ -226,6 +231,39 @@ test("el arranque evita descargar el estado cuando la revision y la cache utiliz
   assert.equal(fixture.applyImportedCalls.length, 0);
   assert.equal(fixture.state.revision, 12);
   assert.equal(fixture.metadataWrites.at(-1).revision, 12);
+});
+
+test("una cobertura incompleta de OTs fuerza sincronizacion aunque el estado sea reciente", async () => {
+  const operations = ["1803", "1954", "1962", "2001"].map((ot, index) => ({
+    id: `op-${index}`,
+    ot,
+    tipoInsercion: "OPERACION",
+  }));
+  const workOrders = [{ ot: "1803", dueDate: "2026-05-21", description: "Ensamble brida 4473" }];
+  const fixture = loadClient({
+    revision: 12,
+    state: {
+      operations,
+      workOrders,
+      syncedAt: new Date().toISOString(),
+    },
+    localState: coherentLocalState(12, { operations, workOrders }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations,
+        workOrders,
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+  await settleMicrotasks();
+
+  assert.equal(fixture.syncNetSuiteDataCalls.length, 1);
 });
 
 test("metadata positiva no vuelve utilizable una cache sin identidad y revision propias", async () => {

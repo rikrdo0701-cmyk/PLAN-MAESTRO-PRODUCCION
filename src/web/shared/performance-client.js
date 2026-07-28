@@ -5,7 +5,7 @@
   const NETSUITE_REFRESH_MS = 15 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 850;
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
-  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v3";
+  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v4";
   const initialPerformanceMeta = readMeta();
   const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
   let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
@@ -229,8 +229,21 @@
     });
   };
 
-  function shouldRefreshNetSuite() {
+  function hasIncompleteWorkOrderCoverage() {
+    const operationOts = new Set((state.operations || [])
+      .filter((item) => String(item.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL")
+      .map((item) => materialOtKey(item.ot))
+      .filter(Boolean));
+    if (operationOts.size < 3) return false;
+    const workOrderOts = new Set((state.workOrders || []).map((item) => materialOtKey(item.ot)).filter(Boolean));
+    let missing = 0;
+    operationOts.forEach((ot) => { if (!workOrderOts.has(ot)) missing += 1; });
+    return missing >= 2 && missing / operationOts.size >= 0.2;
+  }
+
+  function shouldRefreshNetSuite(checkCoverage = false) {
     if (!Array.isArray(state.workOrders) || state.workOrders.length === 0) return true;
+    if (checkCoverage && hasIncompleteWorkOrderCoverage()) return true;
     const last = Date.parse(state.syncedAt || readMeta().syncedAt || "");
     return !Number.isFinite(last) || Date.now() - last >= NETSUITE_REFRESH_MS;
   }
@@ -516,7 +529,7 @@
       render({ saveScope: "ui" });
       applyInitialWorkspaceView();
 
-      if (isAppsScriptRuntime() && shouldRefreshNetSuite()) {
+      if (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded)) {
         syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
       }
     });
