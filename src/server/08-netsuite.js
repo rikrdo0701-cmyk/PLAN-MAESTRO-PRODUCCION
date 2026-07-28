@@ -628,8 +628,10 @@ function PP_netSuiteDate_(value) {
 
 function PP_isSchedulable_(row) {
   const status = PP_normalizeKey_(PP_pick_(row, ['Estado', 'Status', 'status_op'])).replace(/[ _-]/g, '');
-  if (status.indexOf('COMPLETE') >= 0 || status.indexOf('COMPLETADO') >= 0 || status.indexOf('CERRADO') >= 0 || status.indexOf('CLOSED') >= 0) return false;
-  return status === '' || status.indexOf('NOINICIADO') >= 0 || status.indexOf('NOTSTARTED') >= 0 || status.indexOf('PROGRESS') >= 0 || status.indexOf('PROCESO') >= 0 || status.indexOf('ENCURSO') >= 0 || status.indexOf('LIBERADO') >= 0 || status.indexOf('RELEASED') >= 0 || status.indexOf('PLANIFICAD') >= 0 || status.indexOf('PLANNED') >= 0 || status.indexOf('PROGRAMADO') >= 0 || status.indexOf('SCHEDULED') >= 0;
+  return ![
+    'COMPLETE', 'COMPLETAD', 'CERRAD', 'CLOSED',
+    'CANCELAD', 'CANCELED', 'CANCELLED'
+  ].some(function(terminal) { return status.indexOf(terminal) >= 0; });
 }
 
 function PP_mapNetSuiteOperation_(row, index, current) {

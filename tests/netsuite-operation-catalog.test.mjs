@@ -5,6 +5,16 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../src/server/08-netsuite.js", import.meta.url), "utf8");
 
+test("el filtro conserva variantes activas y excluye solo estados terminales", () => {
+  const context = load().context;
+
+  assert.equal(context.PP_isSchedulable_({ Estado: "No iniciada" }), true);
+  assert.equal(context.PP_isSchedulable_({ Estado: "In Process" }), true);
+  assert.equal(context.PP_isSchedulable_({ Estado: "Pendiente de liberación" }), true);
+  assert.equal(context.PP_isSchedulable_({ Estado: "Completado" }), false);
+  assert.equal(context.PP_isSchedulable_({ Estado: "Closed" }), false);
+});
+
 function load(responses = [], cacheOptions = {}) {
   const requests = [];
   const cacheEntries = new Map(Object.entries(cacheOptions.entries || {}));
