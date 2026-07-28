@@ -168,6 +168,40 @@ test("el guardado optimizado de plan no sobrescribe exclusiones de la matriz", (
   assert.deepEqual(config.EXCLUDED_CAPABILITIES, ["5527::SOLDADURA"]);
 });
 
+test("completar una operacion actualiza solo su estado sobre la revision vigente", () => {
+  const fixture = loadStorage([
+    ["revision", "5"],
+    ["selectedOts", JSON.stringify(["2001"])],
+  ]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+  vm.runInContext(performanceSource, fixture.context, { filename: "15-performance-service.js" });
+
+  const saved = structuredClone(fixture.context.saveOperationPlanStatus({
+    revision: 3,
+    status: {
+      key: "1325::2::5461",
+      status: "COMPLETADA_PLAN",
+      ot: "1325",
+      sequence: 2,
+      ct: "5461",
+    },
+  }));
+  const config = configObject(fixture.context, fixture.sheets.CONFIG);
+  const statuses = structuredClone(fixture.context.PP_buildOperationPlanStatuses_(
+    fixture.context.PP_readRows_(fixture.sheets.ESTADOS_OPERACION_PLAN)
+  ));
+
+  assert.equal(saved.revision, 6);
+  assert.equal(config.revision, 6);
+  assert.deepEqual(config.selectedOts, ["2001"]);
+  assert.equal(statuses["1325::2::5461"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.sheets.OPERACIONES.rows().length, 1);
+  assert.equal(fixture.sheets.ORDENES_TRABAJO.rows().length, 1);
+});
+
 test("dos clientes concurrentes no permiten que el optimizado obsoleto borre exclusiones", () => {
   const fixture = loadStorage([
     ["revision", "1"],

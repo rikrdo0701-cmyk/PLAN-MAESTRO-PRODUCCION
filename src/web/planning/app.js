@@ -464,6 +464,7 @@ let appSheetSaveTimer = null;
 let appSheetSaveInFlight = false;
 let appSheetSavePending = false;
 let appSheetDirtyScopes = new Set();
+let operationStatusSavesInFlight = 0;
 let netSuiteSyncInFlight = false;
 let netSuitePlanningSyncInFlight = false;
 let planningActionsBusy = "";
@@ -5267,19 +5268,50 @@ async function toggleOperationPlanStatus(key) {
 }
 
 async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, message) {
-  invalidateGanttCache();
-  render();
+  const renderPlanStatusChange = () => {
+    invalidateGanttCache();
+    renderTop();
+    renderPlanAlerts();
+    renderSelectedJobPanel();
+    requestAnimationFrame(() => {
+      renderDraftExecutiveSummary();
+      renderGantt();
+    });
+  };
+
+  renderPlanStatusChange();
   showToast(message);
   scheduleLocalStorageFlush();
   if (!appSheetAvailable) return true;
-  appSheetMarkDirtyScope("plan");
-  const saved = await saveAppSheet(false);
-  if (saved) return true;
+  try {
+    let saved;
+    if (isAppsScriptRuntime()) {
+      window.clearTimeout(appSheetSaveTimer);
+      operationStatusSavesInFlight += 1;
+      try {
+        saved = await callAppsScript("saveOperationPlanStatus", {
+          revision: Number(state.revision || 0),
+          status: state.operationPlanStatuses[key],
+        });
+        state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
+        state.savedAt = saved?.savedAt || state.savedAt;
+      } finally {
+        operationStatusSavesInFlight -= 1;
+        if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
+      }
+    } else {
+      appSheetMarkDirtyScope("plan");
+      if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
+    }
+    scheduleLocalStorageFlush();
+    return true;
+  } catch (error) {
+    console.warn("No se pudo guardar el estado de la operacion:", error);
+  }
   if (previousStatus) state.operationPlanStatuses[key] = previousStatus;
   else delete state.operationPlanStatuses[key];
   if (operation && previousOperation) Object.assign(operation, previousOperation);
-  invalidateGanttCache();
-  render();
+  renderPlanStatusChange();
   scheduleLocalStorageFlush();
   showToast("No se pudo guardar el estado; se restauro el valor anterior");
   return false;
@@ -7641,6 +7673,7 @@ function queueAppSheetSave(saveScope = "plan") {
   if (scope === "local" || scope === "ui") return;
   if (!appSheetAvailable) return;
   appSheetMarkDirtyScope(scope);
+  if (operationStatusSavesInFlight) return;
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     return;

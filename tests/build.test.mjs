@@ -42,6 +42,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
   assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
   assert.match(bridge, /getAppStateIfChanged: true/);
+  assert.match(bridge, /saveOperationPlanStatus: true/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
@@ -922,6 +923,18 @@ test("agregar una OT sin operaciones carga y valida sus operaciones antes de pla
   assert.match(selection, /await ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
   assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => item\.ot === ot\)/);
   assert.match(selection, /if \(!jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
+});
+
+test("completar una operacion usa guardado atomico y render parcial", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const persistence = app.slice(
+    app.indexOf("async function persistOptimisticPlanStatus("),
+    app.indexOf("function renderProductionReportTable(", app.indexOf("async function persistOptimisticPlanStatus(")),
+  );
+
+  assert.match(persistence, /callAppsScript\("saveOperationPlanStatus"/);
+  assert.match(persistence, /renderPlanStatusChange\(\)/);
+  assert.doesNotMatch(persistence, /\brender\(\)/);
 });
 
 test("borrador usa exclusiones actuales y publicado permanece inmutable", async () => {

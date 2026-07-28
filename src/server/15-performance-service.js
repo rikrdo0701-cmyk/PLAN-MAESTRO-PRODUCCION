@@ -129,6 +129,59 @@ function savePlanningStateOptimized(payload) {
 }
 
 /**
+ * Guarda un solo estado de operacion sobre la revision vigente.
+ * No reemplaza el borrador, las OTs ni la tabla de operaciones.
+ */
+function saveOperationPlanStatus(payload) {
+  const status = payload && payload.status;
+  const key = String(status && (status.key || status.completionKey) || '').trim();
+  if (!key) throw new Error('Falta la clave del estado de operacion');
+  const normalizedStatus = String(status.status || status.planStatus || '').trim().toUpperCase();
+  if (normalizedStatus !== 'COMPLETADA_PLAN' && normalizedStatus !== 'PENDIENTE') {
+    throw new Error('Estado de operacion no valido');
+  }
+
+  const lock = PP_acquireScriptLock_('guardar estado de operacion', 30000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+    const current = PP_buildOperationPlanStatuses_(
+      PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'))
+    );
+    current[key] = Object.assign({}, current[key] || {}, status, {
+      key: key,
+      status: normalizedStatus
+    });
+
+    const revision = Number(config.revision || 0) + 1;
+    const savedAt = new Date().toISOString();
+    PP_writeConfigPatch_(spreadsheet, {
+      revision: revision,
+      savedAt: savedAt
+    });
+    PP_writeTable_(
+      spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'),
+      PP_SHEETS.ESTADOS_OPERACION_PLAN,
+      PP_operationStatusRows_({ operationPlanStatuses: current })
+    );
+    spreadsheet.getSheetByName('AUDITORIA').appendRow([
+      savedAt,
+      Session.getActiveUser().getEmail() || 'usuario',
+      'GUARDAR_ESTADO_OPERACION',
+      revision,
+      JSON.stringify({ key: key, status: normalizedStatus })
+    ]);
+    SpreadsheetApp.flush();
+    return PP_writeStateAck_(revision, savedAt, {
+      operationPlanStatus: current[key]
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * Sincroniza solamente OTs y devuelve un payload reducido al navegador.
  */
 function syncNetSuiteWorkOrdersLite() {

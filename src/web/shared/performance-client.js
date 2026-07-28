@@ -377,6 +377,7 @@
     const scope = String(saveScope || "plan").trim().toLowerCase();
     if (scope === "local" || scope === "ui") return;
     appSheetMarkDirtyScope(scope);
+    if (operationStatusSavesInFlight) return;
     if (!appSheetAvailable) return;
     if (appSheetSaveInFlight) {
       appSheetSavePending = true;
