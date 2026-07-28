@@ -153,7 +153,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(restorePreviewSource, /let previewState = createAppSheetPayload\(\);/);
   assert.doesNotMatch(restorePreviewSource, /\bstate\s*=/);
   assert.match(restorePreviewSource, /confirmDraftRestore\(snapshotId, previewState\)/);
-  assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*restoreDraftBtn\.disabled = inProgress \|\| Boolean\(planningActionsBusy\)/);
+  assert.match(pagesIndex, /function refreshPlanningActionControls\(\)[\s\S]*planningActionsBusy \|\| netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight[\s\S]*setPlanningControlBusy\(els\.restoreDraftBtn, busy\)/);
+  assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*refreshPlanningActionControls\(\)/);
   assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
   assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal"\)/);
   assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
@@ -388,7 +389,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);
-  assert.match(pagesIndex, /if \(Array\.isArray\(payload\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
+  assert.match(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);
@@ -776,7 +777,7 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
   assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
   assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
   assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*saveAndRender\(/);
-  assert.match(syncTwoPhase, /resetBacklogWindow\(\)[\s\S]*render\(\)/);
+  assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
 });
 
 test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {

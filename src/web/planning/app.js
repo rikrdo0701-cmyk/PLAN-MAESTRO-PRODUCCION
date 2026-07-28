@@ -5603,25 +5603,13 @@ async function syncBacklogWorkOrders() {
 }
 
 async function syncNetSuiteTwoPhase(options = {}) {
-  let workOrdersResult;
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
-  try {
-    const payload = await fetchNetSuiteWorkOrdersLiteCompat(true);
-    validateNetSuiteImportedData(payload, "workOrders");
-    state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
-    if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
-    Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
-    invalidateCurrentPlanOperationsCache();
-    if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
-    if (payload.plant) state.plant = payload.plant;
-    state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
-    workOrdersResult = { ok: true };
-    resetBacklogWindow();
-    saveState("ui");
-    render();
-  } catch (error) {
-    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error: error.message }, null);
+  const workOrdersLoaded = await syncWorkOrdersOnce({ showMessage: false, manual: true });
+  if (!workOrdersLoaded) {
+    const error = state.netSuiteSyncAlert?.message || "No se pudieron sincronizar las OTs";
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error }, null);
   }
+  const workOrdersResult = { ok: true };
 
   setNetSuiteSyncPhaseLabel("Sincronizando operaciones...");
   try {
@@ -5658,6 +5646,17 @@ function applyNetSuitePlanningPayload(payload) {
   if (backlogDatasetChanged) resetBacklogWindow();
 }
 
+function applyNetSuiteWorkOrdersPayload(payload) {
+  state.workOrders = Array.isArray(payload?.workOrders) ? payload.workOrders : state.workOrders;
+  if (Array.isArray(payload?.selectedOts)) state.selectedOts = payload.selectedOts;
+  Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+  if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
+  if (payload?.plant) state.plant = payload.plant;
+  state.syncedAt = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+}
+
 function setNetSuiteSyncPhaseLabel(message) {
   const label = els.loadNsExerciseBtn?.querySelector("[data-sync-label]");
   if (label) label.textContent = message || "Sincronizar";
@@ -5665,10 +5664,12 @@ function setNetSuiteSyncPhaseLabel(message) {
 
 function syncWorkOrdersOnce(options = {}) {
   return syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
-    if (!loaded) return;
-    saveState("ui");
-    render();
-    applyInitialWorkspaceView();
+    if (loaded && options.deferPresentation !== true) {
+      saveState("ui");
+      render();
+      applyInitialWorkspaceView();
+    }
+    return loaded;
   });
 }
 
@@ -5691,6 +5692,7 @@ async function syncNetSuiteData(showMessage, options = {}) {
         : await callAppsScript("syncNetSuiteWorkOrders");
       validateNetSuiteImportedData(imported, mode);
       applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
     } else {
       const response = await fetchNetSuiteExercise();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -5785,44 +5787,36 @@ async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
   }
 }
 
+function setPlanningControlBusy(control, busy) {
+  if (!control) return;
+  control.disabled = busy;
+  if (busy) control.setAttribute("aria-busy", "true");
+  else control.removeAttribute("aria-busy");
+}
+
+function refreshPlanningActionControls() {
+  const busy = Boolean(planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight);
+  setPlanningControlBusy(els.scheduleBtn, busy);
+  setPlanningControlBusy(els.loadNsExerciseBtn, busy);
+  setPlanningControlBusy(els.syncBacklogOtsBtn, busy);
+  setPlanningControlBusy(els.restoreDraftBtn, busy);
+}
+
 function setNetSuiteSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.loadNsExerciseBtn) return;
-  els.loadNsExerciseBtn.disabled = inProgress || Boolean(planningActionsBusy);
-  if (inProgress) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
-  else els.loadNsExerciseBtn.removeAttribute("aria-busy");
   const label = els.loadNsExerciseBtn.querySelector("[data-sync-label]");
-  if (label) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
-  if (els.restoreDraftBtn) els.restoreDraftBtn.disabled = inProgress || Boolean(planningActionsBusy);
+  if (label && (inProgress || !planningActionsBusy)) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
 }
 
 function setPlanningActionsBusy(action, inProgress) {
   planningActionsBusy = inProgress ? action : "";
-  const busy = Boolean(planningActionsBusy);
-  if (els.scheduleBtn) {
-    els.scheduleBtn.disabled = busy;
-    if (busy) els.scheduleBtn.setAttribute("aria-busy", "true");
-    else els.scheduleBtn.removeAttribute("aria-busy");
-  }
-  if (els.loadNsExerciseBtn) {
-    els.loadNsExerciseBtn.disabled = busy;
-    if (busy) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
-    else els.loadNsExerciseBtn.removeAttribute("aria-busy");
-  }
-  if (els.syncBacklogOtsBtn) {
-    els.syncBacklogOtsBtn.disabled = busy;
-    if (busy) els.syncBacklogOtsBtn.setAttribute("aria-busy", "true");
-    else els.syncBacklogOtsBtn.removeAttribute("aria-busy");
-  }
-  if (els.restoreDraftBtn) {
-    els.restoreDraftBtn.disabled = busy;
-    if (busy) els.restoreDraftBtn.setAttribute("aria-busy", "true");
-    else els.restoreDraftBtn.removeAttribute("aria-busy");
-  }
+  refreshPlanningActionControls();
 }
 
 function setNetSuitePlanningSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.scheduleBtn) return;
-  els.scheduleBtn.disabled = inProgress || Boolean(planningActionsBusy);
   els.scheduleBtn.classList.toggle("is-running", inProgress);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
   if (label) label.textContent = inProgress ? "Cargando operaciones..." : "Generar plan";

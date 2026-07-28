@@ -32,9 +32,25 @@ Implementacion terminada y verificada.
 
 ## Revision
 
-- Revision independiente: sin hallazgos criticos, importantes ni menores; listo para integrar.
+- Revision independiente final: listo para integrar, sin hallazgos criticos ni importantes.
+- Observacion menor: una accion solapada podria conservar temporalmente una etiqueta visual anterior; no afecta `disabled`, `aria-busy` ni la ejecucion.
 
 ## Alcance
 
 - Se actualizaron las aserciones de build que todavia exigian `snapshotsRequestPromise`.
 - Los cambios y archivos ajenos ya presentes en el worktree quedaron fuera del commit.
+
+## Correcciones de revision
+
+- El boton manual y la sincronizacion de fondo comparten ahora la primera fase de OTs mediante `syncWorkOrdersOnce`.
+- La implementacion base se captura antes del wrapper optimizado; `deferPresentation` evita renders y toasts duplicados sin recursion.
+- Si el flujo manual se une a una operacion de fondo, conserva el busy global y emite solo el resultado final de las dos fases.
+- El payload compartido actualiza OTs, seleccion, planta, ventana de precios y poda el borrador antes de continuar con operaciones.
+- `snapshotsLoaded` distingue una carga valida vacia de una carga fallida; `count: 0` queda cacheado y los errores permiten retry.
+- RED de revision: manual y background ejecutaban dos llamadas backend; una lista vacia valida se solicitaba dos veces.
+- RED adicional: al terminar el sync de OTs, Generar plan y Backlog podian conservar `disabled` aunque ya no hubiera trabajo activo.
+- Los cuatro controles recalculan juntos `disabled` y `aria-busy` ante cualquier transicion de las tres fuentes de actividad.
+- GREEN de revision: `node --test tests/performance-client-calls.test.mjs`, 8/8.
+- Focalizada final: 52/52.
+- Suite final: 219/219.
+- Build, validacion e higiene final: codigo 0.

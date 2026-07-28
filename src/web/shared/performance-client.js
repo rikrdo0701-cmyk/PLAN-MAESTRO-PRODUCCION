@@ -14,9 +14,10 @@
     : (state.materials || []).map((item) => materialOtKey(item.ot)));
   const activeCalls = new Map();
   const materialRequests = new Map();
-  let snapshotsRequested = false;
+  let snapshotsLoaded = false;
   let snapshotsMessageRequested = false;
   let syncWorkOrdersMessageRequested = false;
+  let syncWorkOrdersManualRequested = false;
   let initialStateLoadPending = true;
   let deferredRevision = Number(state.revision || initialLocalCache.revision || 0);
   let localFlushHandle = null;
@@ -527,7 +528,7 @@
     return singleFlight("snapshots", async () => {
       try {
         const result = await originalLoadPlanSnapshots(false);
-        snapshotsRequested = result?.ok === true && Number(result.count || 0) > 0;
+        snapshotsLoaded = result?.ok === true;
         if (snapshotsMessageRequested) {
           const message = result?.ok
             ? `${Number(result.count || 0)} planes guardados disponibles`
@@ -536,7 +537,7 @@
         }
         return result;
       } catch (error) {
-        snapshotsRequested = false;
+        snapshotsLoaded = false;
         throw error;
       } finally {
         snapshotsMessageRequested = false;
@@ -546,7 +547,7 @@
 
   loadSnapshotsOnce = function optimizedLoadSnapshotsOnce(showMessage) {
     if (activeCalls.has("snapshots")) return requestPlanSnapshots(showMessage);
-    if (snapshotsRequested && Array.isArray(planSnapshots) && planSnapshots.length > 0) {
+    if (snapshotsLoaded) {
       return Promise.resolve({ ok: true, count: planSnapshots.length });
     }
     return requestPlanSnapshots(showMessage);
@@ -556,15 +557,17 @@
     return requestPlanSnapshots(showMessage);
   };
 
-  const originalSyncNetSuiteData = syncNetSuiteData;
+  const originalSyncWorkOrdersOnce = syncWorkOrdersOnce;
   syncWorkOrdersOnce = function optimizedSyncWorkOrdersOnce(options = {}) {
     syncWorkOrdersMessageRequested ||= options.showMessage === true;
+    syncWorkOrdersManualRequested ||= options.manual === true;
     return singleFlight("sync-work-orders", async () => {
       try {
-        const loaded = await originalSyncNetSuiteData(false, { mode: "workOrders" });
+        const loaded = await originalSyncWorkOrdersOnce({ showMessage: false, deferPresentation: true });
         if (loaded) {
-          saveState(syncWorkOrdersMessageRequested ? "plan" : "ui");
-          if (syncWorkOrdersMessageRequested) {
+          const showMessage = syncWorkOrdersMessageRequested && !syncWorkOrdersManualRequested;
+          saveState(showMessage ? "plan" : "ui");
+          if (showMessage) {
             render({ parts: { normalize: false, top: true, alerts: true, priorityList: true, queue: true, gantt: true } });
             showToast(`${state.workOrders.length} OTs NetSuite cargadas`);
           } else {
@@ -575,12 +578,13 @@
               renderPriorityQueue();
             });
           }
-        } else if (syncWorkOrdersMessageRequested) {
+        } else if (syncWorkOrdersMessageRequested && !syncWorkOrdersManualRequested) {
           showToast(`No se pudo cargar NetSuite: ${state.netSuiteSyncAlert?.message || "Error desconocido"}`, 9000);
         }
         return loaded;
       } finally {
         syncWorkOrdersMessageRequested = false;
+        syncWorkOrdersManualRequested = false;
       }
     });
   };
@@ -588,7 +592,7 @@
   const originalShowWorkspaceView = showWorkspaceView;
   showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
     originalShowWorkspaceView(section, tab);
-    if (section === "reportes" && !snapshotsRequested && !initialStateLoadPending) {
+    if (section === "reportes" && !snapshotsLoaded && !initialStateLoadPending) {
       loadSnapshotsOnce(false).catch((error) => {
         console.warn("No se pudieron cargar los historicos:", error);
       });

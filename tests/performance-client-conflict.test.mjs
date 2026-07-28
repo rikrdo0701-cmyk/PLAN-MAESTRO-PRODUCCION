@@ -163,6 +163,7 @@ function loadClient(options = {}) {
       if (options.initialSection) context.showWorkspaceView(options.initialSection);
     },
     syncNetSuiteData: async () => false,
+    syncWorkOrdersOnce: () => context.syncNetSuiteData(false, { mode: "workOrders" }),
     renderTop: () => {},
     renderPlanAlerts: () => {},
     showWorkspaceView: () => {},
@@ -513,7 +514,7 @@ test("Restaurar marca los snapshots como solicitados antes de abrir el flujo", a
   assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
 });
 
-test("Restaurar permite que Reportes reintente cuando no se cargaron snapshots", async () => {
+test("Restaurar conserva una lista vacia valida al abrir Reportes", async () => {
   const fixture = loadClient({ planSnapshots: [] });
 
   await fixture.context.loadAppStateInBackground();
@@ -522,24 +523,21 @@ test("Restaurar permite que Reportes reintente cuando no se cargaron snapshots",
   await settleMicrotasks();
 
   assert.equal(fixture.restoreDraftCalls, 1);
-  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
 });
 
-test("Reportes reintenta cuando loadPlanSnapshots informa fallo o lista vacia", async () => {
-  for (const result of [
-    { ok: false, count: 0, error: "backend fuera de linea" },
-    { ok: true, count: 0 },
-  ]) {
-    const fixture = loadClient({ loadPlanSnapshotsResult: result });
-    await fixture.context.loadAppStateInBackground();
+test("Reportes reintenta cuando loadPlanSnapshots informa fallo", async () => {
+  const fixture = loadClient({
+    loadPlanSnapshotsResult: { ok: false, count: 0, error: "backend fuera de linea" },
+  });
+  await fixture.context.loadAppStateInBackground();
 
-    fixture.context.showWorkspaceView("reportes");
-    await settleMicrotasks();
-    fixture.context.showWorkspaceView("reportes");
-    await settleMicrotasks();
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
 
-    assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
-  }
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
 });
 
 test("Reportes y Restaurar concurrentes comparten una sola promesa de snapshots", async () => {
