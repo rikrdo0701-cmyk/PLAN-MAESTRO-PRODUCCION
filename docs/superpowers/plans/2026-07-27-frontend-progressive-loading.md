@@ -135,7 +135,7 @@ assert.deepEqual(second.items, first.items);
 assert.equal(cachePutTtl, 3600);
 ```
 
-Agregar JSON corrupto en caché y exigir consulta real; agregar error HTTP y exigir fallback anterior.
+Agregar JSON corrupto en caché y exigir consulta real; agregar error HTTP y exigir fallback anterior. Simular errores de `cache.get` y `cache.put` y exigir que el catálogo válido siga regresando sin bloquear la sincronización.
 
 - [ ] **Step 2: Verify RED**
 
@@ -151,7 +151,8 @@ En `08-netsuite.js`:
 function PP_fetchNetSuiteOperationCatalogCached_(config) {
   const cache = CacheService.getScriptCache();
   const key = "NS_OPERATION_CATALOG_V1_" + PP_normalizeKey_(config.accountId + "_" + config.locationId);
-  const cached = cache.get(key);
+  let cached = "";
+  try { cached = cache.get(key); } catch (_) {}
   if (cached) {
     try {
       const items = JSON.parse(cached);
@@ -159,7 +160,9 @@ function PP_fetchNetSuiteOperationCatalogCached_(config) {
     } catch (_) {}
   }
   const result = PP_fetchNetSuiteOperationCatalog_(config);
-  if (result.items.length) cache.put(key, JSON.stringify(result.items), 3600);
+  if (result.items.length) {
+    try { cache.put(key, JSON.stringify(result.items), 3600); } catch (_) {}
+  }
   return result;
 }
 ```
