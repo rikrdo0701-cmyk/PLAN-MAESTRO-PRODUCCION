@@ -4408,7 +4408,7 @@ async function openRestoreDraftDialog() {
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
-    const loaded = await loadPlanSnapshots(false);
+    const loaded = await loadSnapshotsOnce(false);
     if (!loaded?.ok) {
       showToast(`No se pudieron leer los planes publicados: ${loaded?.error || "Error desconocido"}`);
       return;
@@ -4538,6 +4538,10 @@ async function loadPlanSnapshots(showMessage) {
     if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
     return { ok: false, count: 0, error: error.message };
   }
+}
+
+function loadSnapshotsOnce(showMessage) {
+  return loadPlanSnapshots(showMessage);
 }
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
@@ -5659,13 +5663,17 @@ function setNetSuiteSyncPhaseLabel(message) {
   if (label) label.textContent = message || "Sincronizar";
 }
 
-function syncNetSuiteInBackground(options = {}) {
-  syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
+function syncWorkOrdersOnce(options = {}) {
+  return syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
     if (!loaded) return;
     saveState("ui");
     render();
     applyInitialWorkspaceView();
   });
+}
+
+function syncNetSuiteInBackground(options = {}) {
+  return syncWorkOrdersOnce(options);
 }
 
 async function syncNetSuiteData(showMessage, options = {}) {

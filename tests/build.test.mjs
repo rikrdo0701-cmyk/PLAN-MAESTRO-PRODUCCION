@@ -291,10 +291,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     "la cache inicial debe capturarse antes de esperar al bridge",
   );
   assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
-  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadPlanSnapshots\(false\)/);
-  assert.match(pagesIndex, /let snapshotsRequestPromise = null/);
-  assert.match(pagesIndex, /loadPlanSnapshots = function optimizedLoadPlanSnapshots[\s\S]*snapshotsRequestPromise/);
-  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadPlanSnapshots\(false\)/);
+  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadSnapshotsOnce\(false\)/);
+  assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
+  assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
   assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);

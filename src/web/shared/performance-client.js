@@ -12,9 +12,11 @@
   const loadedMaterialOts = new Set(deferredMaterials
     ? []
     : (state.materials || []).map((item) => materialOtKey(item.ot)));
+  const activeCalls = new Map();
   const materialRequests = new Map();
   let snapshotsRequested = false;
-  let snapshotsRequestPromise = null;
+  let snapshotsMessageRequested = false;
+  let syncWorkOrdersMessageRequested = false;
   let initialStateLoadPending = true;
   let deferredRevision = Number(state.revision || initialLocalCache.revision || 0);
   let localFlushHandle = null;
@@ -92,6 +94,15 @@
         revision,
       },
     };
+  }
+
+  function singleFlight(key, factory) {
+    if (activeCalls.has(key)) return activeCalls.get(key);
+    const request = Promise.resolve()
+      .then(factory)
+      .finally(() => activeCalls.delete(key));
+    activeCalls.set(key, request);
+    return request;
   }
 
   scheduleLocalStorageFlush = function optimizedScheduleLocalStorageFlush() {
@@ -484,60 +495,93 @@
     return { loaded: true, unchanged: false };
   }
 
-  loadAppStateInBackground = async function optimizedLoadAppStateInBackground() {
-    let loaded = false;
-    try {
-      await root.PPAppsScriptBridge.ensureReady();
-      const result = await loadInitialStateConditionally(initialLocalCache);
-      loaded = result.loaded;
-      appSheetAvailable = true;
-    } catch (error) {
-      appSheetAvailable = false;
-      console.warn("Se mantiene el cache local porque el backend no respondio:", error);
-    }
+  loadAppStateInBackground = function optimizedLoadAppStateInBackground() {
+    return singleFlight("state", async () => {
+      let loaded = false;
+      try {
+        await root.PPAppsScriptBridge.ensureReady();
+        const result = await loadInitialStateConditionally(initialLocalCache);
+        loaded = result.loaded;
+        appSheetAvailable = true;
+      } catch (error) {
+        appSheetAvailable = false;
+        console.warn("Se mantiene el cache local porque el backend no respondio:", error);
+      }
 
-    if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
-    initialStateLoadPending = false;
-    state.selectedOperationId = "";
-    saveState("ui");
-    render({ saveScope: "ui" });
-    applyInitialWorkspaceView();
+      if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+      initialStateLoadPending = false;
+      state.selectedOperationId = "";
+      saveState("ui");
+      render({ saveScope: "ui" });
+      applyInitialWorkspaceView();
 
-    if (isAppsScriptRuntime() && shouldRefreshNetSuite()) {
-      syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
-    }
+      if (isAppsScriptRuntime() && shouldRefreshNetSuite()) {
+        syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
+      }
+    });
   };
 
   const originalLoadPlanSnapshots = loadPlanSnapshots;
-  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage) {
-    if (snapshotsRequestPromise) return snapshotsRequestPromise;
-    snapshotsRequested = true;
-    snapshotsRequestPromise = Promise.resolve()
-      .then(() => originalLoadPlanSnapshots(showMessage))
-      .then((result) => {
+  function requestPlanSnapshots(showMessage) {
+    snapshotsMessageRequested ||= showMessage === true;
+    return singleFlight("snapshots", async () => {
+      try {
+        const result = await originalLoadPlanSnapshots(false);
         snapshotsRequested = result?.ok === true && Number(result.count || 0) > 0;
+        if (snapshotsMessageRequested) {
+          const message = result?.ok
+            ? `${Number(result.count || 0)} planes guardados disponibles`
+            : `No se pudieron cargar los planes guardados: ${result?.error || "Error desconocido"}`;
+          showToast(message);
+        }
         return result;
-      })
-      .catch((error) => {
+      } catch (error) {
         snapshotsRequested = false;
         throw error;
-      })
-      .finally(() => {
-        snapshotsRequestPromise = null;
-      });
-    return snapshotsRequestPromise;
+      } finally {
+        snapshotsMessageRequested = false;
+      }
+    });
+  }
+
+  loadSnapshotsOnce = function optimizedLoadSnapshotsOnce(showMessage) {
+    if (activeCalls.has("snapshots")) return requestPlanSnapshots(showMessage);
+    if (snapshotsRequested && Array.isArray(planSnapshots) && planSnapshots.length > 0) {
+      return Promise.resolve({ ok: true, count: planSnapshots.length });
+    }
+    return requestPlanSnapshots(showMessage);
   };
 
-  syncNetSuiteInBackground = function optimizedSyncNetSuiteInBackground(options = {}) {
-    syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
-      if (!loaded) return;
-      saveState("ui");
-      root.requestAnimationFrame(() => {
-        renderTop();
-        renderPlanAlerts();
-        renderPriorityList();
-        renderPriorityQueue();
-      });
+  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage) {
+    return requestPlanSnapshots(showMessage);
+  };
+
+  const originalSyncNetSuiteData = syncNetSuiteData;
+  syncWorkOrdersOnce = function optimizedSyncWorkOrdersOnce(options = {}) {
+    syncWorkOrdersMessageRequested ||= options.showMessage === true;
+    return singleFlight("sync-work-orders", async () => {
+      try {
+        const loaded = await originalSyncNetSuiteData(false, { mode: "workOrders" });
+        if (loaded) {
+          saveState(syncWorkOrdersMessageRequested ? "plan" : "ui");
+          if (syncWorkOrdersMessageRequested) {
+            render({ parts: { normalize: false, top: true, alerts: true, priorityList: true, queue: true, gantt: true } });
+            showToast(`${state.workOrders.length} OTs NetSuite cargadas`);
+          } else {
+            root.requestAnimationFrame(() => {
+              renderTop();
+              renderPlanAlerts();
+              renderPriorityList();
+              renderPriorityQueue();
+            });
+          }
+        } else if (syncWorkOrdersMessageRequested) {
+          showToast(`No se pudo cargar NetSuite: ${state.netSuiteSyncAlert?.message || "Error desconocido"}`, 9000);
+        }
+        return loaded;
+      } finally {
+        syncWorkOrdersMessageRequested = false;
+      }
     });
   };
 
@@ -545,7 +589,7 @@
   showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
     originalShowWorkspaceView(section, tab);
     if (section === "reportes" && !snapshotsRequested && !initialStateLoadPending) {
-      loadPlanSnapshots(false).catch((error) => {
+      loadSnapshotsOnce(false).catch((error) => {
         console.warn("No se pudieron cargar los historicos:", error);
       });
     }
