@@ -266,17 +266,32 @@ test("fallo al adquirir CacheService no bloquea la consulta ni el resultado", ()
   assert.equal(requests.length, 1);
 });
 
-test("fallos de PropertiesService o LockService no bloquean la sincronización", () => {
+test("fallos de lectura o escritura del cooldown aplican fail-closed sin consultar SuiteQL", () => {
   for (const cacheOptions of [
     { propertiesServiceError: new Error("properties no disponible") },
     { propertyGetError: new Error("properties get no disponible") },
     { propertySetError: new Error("properties set no disponible") },
-    { lockServiceError: new Error("lock no disponible") },
   ]) {
-    const { context } = load([catalogPage], cacheOptions);
+    const { context, requests } = load([catalogPage], cacheOptions);
 
-    assert.doesNotThrow(() => context.PP_fetchNetSuiteOperationCatalogCached_(config));
+    const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+    assert.deepEqual(JSON.parse(JSON.stringify(result.items)), []);
+    assert.match(result.warning, /catálogo.*NetSuite/i);
+    assert.equal(requests.length, 0);
   }
+});
+
+test("fallo de LockService aplica fail-closed sin consultar SuiteQL", () => {
+  const { context, requests } = load([catalogPage], {
+    lockServiceError: new Error("lock no disponible"),
+  });
+
+  const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.items)), []);
+  assert.match(result.warning, /catálogo.*NetSuite/i);
+  assert.equal(requests.length, 0);
 });
 
 test("hit con esquema, source o key inválidos se descarta y consulta SuiteQL", () => {

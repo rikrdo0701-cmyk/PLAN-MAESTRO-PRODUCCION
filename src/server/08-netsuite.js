@@ -261,15 +261,29 @@ function PP_fetchNetSuiteOperationCatalogCached_(config) {
     items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
     if (items.length) return { items: items, warning: '' };
 
-    let properties = null;
-    try { properties = PropertiesService.getScriptProperties(); } catch (_) {}
-    let lastAttempt = 0;
-    try { lastAttempt = Number(properties && properties.getProperty(attemptKey) || 0); } catch (_) {}
     const now = Date.now();
+    let properties;
+    let lastAttemptRaw = '';
+    try {
+      properties = PropertiesService.getScriptProperties();
+      lastAttemptRaw = properties.getProperty(attemptKey) || '';
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('lectura de cooldown no disponible');
+    }
+    const lastAttempt = Number(lastAttemptRaw || 0);
+    if (lastAttemptRaw && (!Number.isFinite(lastAttempt) || lastAttempt <= 0)) {
+      return PP_netSuiteOperationCatalogDeferred_('marcador de cooldown invalido');
+    }
     if (lastAttempt > 0 && now - lastAttempt < 3600000) {
       return PP_netSuiteOperationCatalogDeferred_('consulta omitida durante cooldown');
     }
-    try { if (properties) properties.setProperty(attemptKey, String(now)); } catch (_) {}
+    const attemptMarker = String(now);
+    try {
+      properties.setProperty(attemptKey, attemptMarker);
+      if (properties.getProperty(attemptKey) !== attemptMarker) throw new Error('cooldown no persistido');
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('escritura de cooldown no disponible');
+    }
 
     const result = PP_fetchNetSuiteOperationCatalog_(config);
     if (result.items.length && cache) {
