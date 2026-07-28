@@ -4408,14 +4408,11 @@ async function openRestoreDraftDialog() {
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
-    const snapshots = isAppsScriptRuntime()
-      ? await callAppsScript("listPlanSnapshots")
-      : await fetchJson(PLAN_SNAPSHOTS_API);
-    planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
-      .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
-  } catch (error) {
-    showToast(`No se pudieron leer los planes publicados: ${error.message}`);
-    return;
+    const loaded = await loadPlanSnapshots(false);
+    if (!loaded?.ok) {
+      showToast(`No se pudieron leer los planes publicados: ${loaded?.error || "Error desconocido"}`);
+      return;
+    }
   } finally {
     setPlanningActionsBusy("restore", false);
   }
@@ -4534,10 +4531,12 @@ async function loadPlanSnapshots(showMessage) {
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
+    return { ok: true, count: planSnapshots.length };
   } catch (error) {
     planSnapshots = [];
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
+    return { ok: false, count: 0, error: error.message };
   }
 }
 

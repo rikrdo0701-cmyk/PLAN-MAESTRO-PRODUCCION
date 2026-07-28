@@ -279,14 +279,24 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /id="inspectionReload"[\s\S]*id="inspectionDrawing"[\s\S]*id="inspectionEditLink"[\s\S]*id="inspectionPrint"[\s\S]*id="inspectionSelectOps"/);
   assert.match(pagesIndex, /function initializePlanningApp\(\)\s*\{[\s\S]*applyInitialWorkspaceView\(\);[\s\S]*loadAppStateInBackground\(\);/);
   const optimizedStartupSource = pagesIndex.slice(
-    pagesIndex.indexOf("async function loadInitialStateConditionally()"),
-    pagesIndex.indexOf("syncNetSuiteInBackground =", pagesIndex.indexOf("async function loadInitialStateConditionally()")),
+    pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)"),
+    pagesIndex.indexOf("const originalLoadPlanSnapshots =", pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)")),
   );
   assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshots|loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
-  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*snapshotsRequested = true[\s\S]*loadPlanSnapshots\(false\)/);
-  assert.match(pagesIndex, /openRestoreDraftDialog = async function optimizedOpenRestoreDraftDialog[\s\S]*snapshotsRequested = true/);
-  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource/);
+  const initialCacheCaptureIndex = pagesIndex.indexOf("const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta)");
+  assert.ok(
+    initialCacheCaptureIndex >= 0 &&
+      initialCacheCaptureIndex < pagesIndex.indexOf("await root.PPAppsScriptBridge.ensureReady()"),
+    "la cache inicial debe capturarse antes de esperar al bridge",
+  );
+  assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
+  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadPlanSnapshots\(false\)/);
+  assert.match(pagesIndex, /let snapshotsRequestPromise = null/);
+  assert.match(pagesIndex, /loadPlanSnapshots = function optimizedLoadPlanSnapshots[\s\S]*snapshotsRequestPromise/);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadPlanSnapshots\(false\)/);
+  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
   assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
@@ -516,18 +526,20 @@ test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
   const compactStart = performanceClient.indexOf("function compactLocalState()");
   const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
   const compactSource = performanceClient.slice(compactStart, compactEnd);
-  const compactLocalState = Function("state", `${compactSource}; return compactLocalState;`)({
+  const compactLocalState = Function("state", "LOCAL_CACHE_IDENTITY", `${compactSource}; return compactLocalState;`)({
     revision: 7,
     matrixSearch: "soldadura",
     excludedCapabilities: ["5527::SOLDADURA_SOPORTE"],
     materials: [{ ot: "WO-1" }],
-  });
+  }, "plan-produccion-cache-v2");
 
   const persisted = compactLocalState();
 
   assert.equal(persisted.matrixSearch, undefined);
   assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
   assert.deepEqual(persisted.materials, []);
+  assert.match(compactSource, /performanceCache:\s*\{[\s\S]*identity: LOCAL_CACHE_IDENTITY[\s\S]*revision[,:\s]/);
+  assert.match(performanceClient, /const compacted = compactLocalState\(\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\);[\s\S]*writeMeta\(\{[\s\S]*deferredMaterials: true/);
 });
 
 test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {

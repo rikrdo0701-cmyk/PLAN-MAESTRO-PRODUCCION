@@ -5,15 +5,18 @@
   const NETSUITE_REFRESH_MS = 15 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 850;
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
+  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v2";
   const initialPerformanceMeta = readMeta();
-  let deferredMaterials = Boolean(initialPerformanceMeta.deferredMaterials);
+  const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
+  let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
   const loadedMaterialOts = new Set(deferredMaterials
     ? []
     : (state.materials || []).map((item) => materialOtKey(item.ot)));
   const materialRequests = new Map();
   let snapshotsRequested = false;
+  let snapshotsRequestPromise = null;
   let initialStateLoadPending = true;
-  let deferredRevision = Number(state.revision || initialPerformanceMeta.revision || 0);
+  let deferredRevision = Number(state.revision || initialLocalCache.revision || 0);
   let localFlushHandle = null;
   let saveIdleHandle = null;
   let saveRetryTimer = null;
@@ -80,9 +83,14 @@
 
   function compactLocalState() {
     const { matrixSearch, ...persisted } = state;
+    const revision = Number(state.revision || 0);
     return {
       ...persisted,
       materials: [],
+      performanceCache: {
+        identity: LOCAL_CACHE_IDENTITY,
+        revision,
+      },
     };
   }
 
@@ -91,7 +99,14 @@
     localFlushHandle = requestIdle(() => {
       localFlushHandle = null;
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(compactLocalState()));
+        const compacted = compactLocalState();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(compacted));
+        writeMeta({
+          revision: compacted.revision,
+          cacheIdentity: LOCAL_CACHE_IDENTITY,
+          cacheRevision: compacted.performanceCache.revision,
+          deferredMaterials: true,
+        });
       } catch (error) {
         console.warn("No se pudo actualizar el cache local:", error);
       }
@@ -405,33 +420,45 @@
     }
   };
 
-  function hasUsableLocalStateCache() {
+  function readUsableLocalStateCache(metadata = readMeta()) {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return false;
+      if (!raw) return { usable: false, revision: 0, deferredMaterials: false };
       const cached = JSON.parse(raw);
-      return Boolean(
+      const revision = Number(cached?.revision || 0);
+      const marker = cached?.performanceCache;
+      const usable = Boolean(
         cached
         && typeof cached === "object"
         && !Array.isArray(cached)
         && Array.isArray(cached.operations)
         && Array.isArray(cached.workOrders)
+        && revision > 0
+        && Number(state.revision) === revision
+        && marker?.identity === LOCAL_CACHE_IDENTITY
+        && Number(marker.revision) === revision
+        && metadata?.cacheIdentity === LOCAL_CACHE_IDENTITY
+        && Number(metadata.cacheRevision) === revision
+        && Number(metadata.revision) === revision
       );
+      return {
+        usable,
+        revision: usable ? revision : 0,
+        deferredMaterials: usable && metadata.deferredMaterials === true,
+      };
     } catch {
-      return false;
+      return { usable: false, revision: 0, deferredMaterials: false };
     }
   }
 
-  async function loadInitialStateConditionally() {
-    const revision = hasUsableLocalStateCache()
-      ? Number(state.revision || readMeta().revision || 0)
-      : 0;
+  async function loadInitialStateConditionally(localCache) {
+    const revision = localCache?.usable ? Number(localCache.revision || 0) : 0;
     const imported = revision > 0
       ? await callAppsScript("getAppStateIfChanged", revision, { includeMaterials: false })
       : await callAppsScript("getAppState");
     if (imported?.unchanged) {
       const currentRevision = Number(imported.revision || revision);
-      deferredMaterials = Boolean(readMeta().deferredMaterials);
+      deferredMaterials = localCache.deferredMaterials === true;
       if (deferredMaterials) loadedMaterialOts.clear();
       state.revision = currentRevision;
       state.savedAt = imported.savedAt || state.savedAt;
@@ -461,7 +488,7 @@
     let loaded = false;
     try {
       await root.PPAppsScriptBridge.ensureReady();
-      const result = await loadInitialStateConditionally();
+      const result = await loadInitialStateConditionally(initialLocalCache);
       loaded = result.loaded;
       appSheetAvailable = true;
     } catch (error) {
@@ -481,17 +508,24 @@
     }
   };
 
-  const originalOpenRestoreDraftDialog = openRestoreDraftDialog;
-  openRestoreDraftDialog = async function optimizedOpenRestoreDraftDialog() {
-    if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) {
-      return originalOpenRestoreDraftDialog();
-    }
+  const originalLoadPlanSnapshots = loadPlanSnapshots;
+  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage) {
+    if (snapshotsRequestPromise) return snapshotsRequestPromise;
     snapshotsRequested = true;
-    try {
-      return await originalOpenRestoreDraftDialog();
-    } finally {
-      if (!Array.isArray(planSnapshots) || planSnapshots.length === 0) snapshotsRequested = false;
-    }
+    snapshotsRequestPromise = Promise.resolve()
+      .then(() => originalLoadPlanSnapshots(showMessage))
+      .then((result) => {
+        snapshotsRequested = result?.ok === true && Number(result.count || 0) > 0;
+        return result;
+      })
+      .catch((error) => {
+        snapshotsRequested = false;
+        throw error;
+      })
+      .finally(() => {
+        snapshotsRequestPromise = null;
+      });
+    return snapshotsRequestPromise;
   };
 
   syncNetSuiteInBackground = function optimizedSyncNetSuiteInBackground(options = {}) {
@@ -511,9 +545,7 @@
   showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
     originalShowWorkspaceView(section, tab);
     if (section === "reportes" && !snapshotsRequested && !initialStateLoadPending) {
-      snapshotsRequested = true;
       loadPlanSnapshots(false).catch((error) => {
-        snapshotsRequested = false;
         console.warn("No se pudieron cargar los historicos:", error);
       });
     }
