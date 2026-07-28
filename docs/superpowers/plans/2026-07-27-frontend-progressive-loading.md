@@ -4,7 +4,7 @@
 
 **Goal:** Reducir el trabajo inicial del navegador y las llamadas innecesarias sin limitar búsquedas ni datos de planeación.
 
-**Architecture:** `app.js` conservará el conjunto completo de OT, pero renderizará el backlog en bloques de 30. `performance-client.js` coordinará estado condicional, llamadas compartidas y carga diferida de históricos usando los endpoints existentes.
+**Architecture:** Primero se memorizará el filtrado introducido por la matriz y se reutilizará el catálogo SuiteQL durante una hora. Después `app.js` renderizará el backlog en bloques de 30 y `performance-client.js` coordinará estado condicional, llamadas compartidas e históricos diferidos.
 
 **Tech Stack:** JavaScript, Google Apps Script bridge, IntersectionObserver, Node.js `node:test`, HTML/CSS.
 
@@ -17,10 +17,167 @@
 - No descargar el estado completo cuando la revisión local coincide.
 - No modificar contratos de NetSuite, RESTlets ni Apps Scripts externos.
 - Mantener Apps Script nativo y GitHub Pages.
+- Una renderización completa reutiliza la misma colección de operaciones incluidas.
+- Máximo una consulta del catálogo SuiteQL por hora, cuenta y ubicación.
 
 ---
 
-### Task 1: Backlog progresivo
+### Task 1: Memorizar operaciones incluidas
+
+**Files:**
+- Modify: `src/web/planning/planner-core.js`
+- Modify: `src/web/planning/app.js`
+- Modify: `tests/planner-core.test.mjs`
+- Modify: `tests/matrix-integration-app.test.mjs`
+
+**Interfaces:**
+- Produces: `excludedCapabilityKeySet(state)` → `Set<string>`.
+- Produces: `filterExcludedOperations(state, operations, excludedSet?)`.
+- Produces: `invalidateCurrentPlanOperationsCache()`.
+
+- [ ] **Step 1: Write failing tests**
+
+Instrumentar `PlannerCore.filterExcludedOperations` y exigir que múltiples consumidores del mismo render compartan un resultado:
+
+```js
+const first = currentPlanOperations();
+const second = currentPlanOperations();
+assert.equal(first, second);
+assert.equal(filterCalls, 1);
+```
+
+Agregar casos que cambien `state.operations` y `state.excludedCapabilities`, llamen `invalidateCurrentPlanOperationsCache()` y exijan una colección nueva.
+
+- [ ] **Step 2: Verify RED**
+
+Run: `node --test tests/planner-core.test.mjs tests/matrix-integration-app.test.mjs`
+
+Expected: FAIL porque cada acceso filtra nuevamente y no existe invalidación explícita.
+
+- [ ] **Step 3: Precompute exclusion keys**
+
+En `planner-core.js`:
+
+```js
+function excludedCapabilityKeySet(state) {
+  return new Set((state?.excludedCapabilities || []).map(normalizedCapabilityKey).filter(Boolean));
+}
+
+function filterExcludedOperations(state, operations, excludedSet = excludedCapabilityKeySet(state)) {
+  return (Array.isArray(operations) ? operations : []).filter((operation) => {
+    if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return true;
+    return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {})));
+  });
+}
+```
+
+- [ ] **Step 4: Memoize the primary collection**
+
+En `app.js`:
+
+```js
+let currentPlanOperationsCache = null;
+
+function invalidateCurrentPlanOperationsCache() {
+  currentPlanOperationsCache = null;
+}
+
+function currentPlanOperations(operations = state.operations) {
+  if (operations !== state.operations) {
+    return window.PlannerCore.filterExcludedOperations(state, operations);
+  }
+  const excludedSignature = normalizeCapabilityKeys(state.excludedCapabilities).join("|");
+  if (!currentPlanOperationsCache
+      || currentPlanOperationsCache.operations !== operations
+      || currentPlanOperationsCache.excludedSignature !== excludedSignature) {
+    currentPlanOperationsCache = {
+      operations,
+      excludedSignature,
+      result: window.PlannerCore.filterExcludedOperations(state, operations),
+    };
+  }
+  return currentPlanOperationsCache.result;
+}
+```
+
+Invalidar después de importar, sincronizar, programar, normalizar y alternar exclusiones.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `node --test tests/planner-core.test.mjs tests/matrix-integration-app.test.mjs`
+
+Expected: PASS.
+
+```bash
+git add src/web/planning/planner-core.js src/web/planning/app.js tests/planner-core.test.mjs tests/matrix-integration-app.test.mjs
+git commit -m "perf: cache included planning operations"
+```
+
+### Task 2: Reutilizar catálogo maestro SuiteQL
+
+**Files:**
+- Modify: `src/server/08-netsuite.js`
+- Modify: `tests/netsuite-operation-catalog.test.mjs`
+
+**Interfaces:**
+- Produces: `PP_fetchNetSuiteOperationCatalogCached_(config)` → `{items, warning}`.
+- Cache key: cuenta + ubicación; TTL exacto `3600` segundos.
+
+- [ ] **Step 1: Write failing cache tests**
+
+Simular `CacheService.getScriptCache()` y ejecutar dos veces:
+
+```js
+const first = PP_fetchNetSuiteOperationCatalogCached_(config);
+const second = PP_fetchNetSuiteOperationCatalogCached_(config);
+assert.equal(urlFetchCalls, 1);
+assert.deepEqual(second.items, first.items);
+assert.equal(cachePutTtl, 3600);
+```
+
+Agregar JSON corrupto en caché y exigir consulta real; agregar error HTTP y exigir fallback anterior.
+
+- [ ] **Step 2: Verify RED**
+
+Run: `node --test tests/netsuite-operation-catalog.test.mjs`
+
+Expected: FAIL porque todas las sincronizaciones consultan SuiteQL.
+
+- [ ] **Step 3: Implement one-hour cache**
+
+En `08-netsuite.js`:
+
+```js
+function PP_fetchNetSuiteOperationCatalogCached_(config) {
+  const cache = CacheService.getScriptCache();
+  const key = "NS_OPERATION_CATALOG_V1_" + PP_normalizeKey_(config.accountId + "_" + config.locationId);
+  const cached = cache.get(key);
+  if (cached) {
+    try {
+      const items = JSON.parse(cached);
+      if (Array.isArray(items) && items.length) return { items: items, warning: "" };
+    } catch (_) {}
+  }
+  const result = PP_fetchNetSuiteOperationCatalog_(config);
+  if (result.items.length) cache.put(key, JSON.stringify(result.items), 3600);
+  return result;
+}
+```
+
+Usar el wrapper en sincronización completa y de planeación. Mantener `PP_resolveOperationCatalog_` como fallback no destructivo.
+
+- [ ] **Step 4: Verify and commit**
+
+Run: `node --test tests/netsuite-operation-catalog.test.mjs`
+
+Expected: PASS.
+
+```bash
+git add src/server/08-netsuite.js tests/netsuite-operation-catalog.test.mjs
+git commit -m "perf: cache NetSuite operation catalog"
+```
+
+### Task 3: Backlog progresivo
 
 **Files:**
 - Modify: `src/web/planning/index.template.html`
@@ -118,7 +275,7 @@ git add src/web/planning/index.template.html src/web/planning/styles.css src/web
 git commit -m "perf: render backlog progressively"
 ```
 
-### Task 2: Estado condicional y arranque ligero
+### Task 4: Estado condicional y arranque ligero
 
 **Files:**
 - Modify: `src/web/shared/performance-client.js`
@@ -194,7 +351,7 @@ git add src/web/shared/performance-client.js tests/performance-client-conflict.t
 git commit -m "perf: avoid unchanged state and eager reports"
 ```
 
-### Task 3: Llamadas compartidas y sincronización única
+### Task 5: Llamadas compartidas y sincronización única
 
 **Files:**
 - Modify: `src/web/shared/performance-client.js`
@@ -262,14 +419,14 @@ git add src/web/shared/performance-client.js src/web/planning/app.js tests/perfo
 git commit -m "perf: share frontend data requests"
 ```
 
-### Task 4: Integración y QA de rendimiento
+### Task 6: Integración y QA de rendimiento
 
 **Files:**
 - Modify if required: `tests/build.test.mjs`
 - Verify: all changed files
 
 **Interfaces:**
-- Consumes: Tasks 1–3.
+- Consumes: Tasks 1–5.
 - Produces: evidencia de regresión y medición en PC.
 
 - [ ] **Step 1: Run complete verification**
