@@ -39,6 +39,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
+  assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
+  assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
+  assert.match(bridge, /getAppStateIfChanged: true/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
@@ -275,6 +278,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /\.inspection-actions \.secondary\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
   assert.match(pagesIndex, /id="inspectionReload"[\s\S]*id="inspectionDrawing"[\s\S]*id="inspectionEditLink"[\s\S]*id="inspectionPrint"[\s\S]*id="inspectionSelectOps"/);
   assert.match(pagesIndex, /function initializePlanningApp\(\)\s*\{[\s\S]*applyInitialWorkspaceView\(\);[\s\S]*loadAppStateInBackground\(\);/);
+  const optimizedStartupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function loadInitialStateConditionally()"),
+    pagesIndex.indexOf("syncNetSuiteInBackground =", pagesIndex.indexOf("async function loadInitialStateConditionally()")),
+  );
+  assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshots|loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
+  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*snapshotsRequested = true[\s\S]*loadPlanSnapshots\(false\)/);
+  assert.match(pagesIndex, /openRestoreDraftDialog = async function optimizedOpenRestoreDraftDialog[\s\S]*snapshotsRequested = true/);
+  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
   assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
