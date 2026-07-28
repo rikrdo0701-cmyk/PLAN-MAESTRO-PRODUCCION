@@ -589,9 +589,11 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
     netSuiteChangeAlerts: [],
     planStart: "2026-07-26",
   };
-  const applyPayload = Function("state", "normalizeKey", `${applySource}; return applyNetSuitePlanningPayload;`)(
+  let backlogResetCount = 0;
+  const applyPayload = Function("state", "normalizeKey", "resetBacklogWindow", `${applySource}; return applyNetSuitePlanningPayload;`)(
     state,
     (value) => String(value || "").trim().toUpperCase(),
+    () => { backlogResetCount += 1; },
   );
   const planAlertItems = Function(
     "state",
@@ -617,11 +619,140 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
   applyPayload({ operationCatalogWarning: "Catalogo NetSuite no disponible" });
 
   assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.equal(backlogResetCount, 0);
+  applyPayload({ operations: [] });
+  assert.equal(backlogResetCount, 1);
   assert.deepEqual(planAlertItems().find((alert) => alert.title === "Catalogo de operaciones NetSuite"), {
     level: "warning",
     title: "Catalogo de operaciones NetSuite",
     message: "Catalogo NetSuite no disponible",
   });
+});
+
+test("el backlog renderiza una ventana inicial de 30 trabajos con controles progresivos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+
+  assert.match(app, /const BACKLOG_PAGE_SIZE = 30/);
+  assert.match(renderPriorityList, /jobs\.slice\(0,\s*backlogVisibleLimit\)/);
+  assert.match(renderPriorityList, /\$\{visibleJobs\.length\} de \$\{jobs\.length\}/);
+  assert.match(template, /id="priorityLoadMore"/);
+  assert.match(template, /id="priorityLoadMoreSentinel"/);
+});
+
+test("la ventana del backlog avanza exactamente 30 y puede reiniciarse sin render adicional", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      resetBacklogWindow,
+      showMoreBacklogJobs,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {},
+    {},
+  );
+
+  assert.equal(backlog.limit, 30);
+  backlog.showMoreBacklogJobs();
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  backlog.resetBacklogWindow();
+  assert.equal(backlog.limit, 30);
+  assert.equal(renderCount, 1);
+});
+
+test("buscar y filtrar reinician el backlog; el boton carga mas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function setActiveTab(", bindStart);
+  const bindEvents = app.slice(bindStart, bindEnd);
+
+  assert.match(bindEvents, /searchInput\.addEventListener\("input",\s*debounce\(\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\},\s*120\)\)/);
+  assert.match(bindEvents, /statusFilter\.addEventListener\("change",\s*\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\}\)/);
+  assert.match(bindEvents, /priorityLoadMore\.addEventListener\("click",\s*showMoreBacklogJobs\)/);
+});
+
+test("el observer del backlog es unico, no carga en cascada y conserva el fallback", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let observed = 0;
+  let observerCallback;
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      bindBacklogLoadMoreObserver,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {
+      priorityLoadMore: { hidden: false },
+      priorityLoadMoreSentinel: {},
+    },
+    {
+      IntersectionObserver: class {
+        constructor(callback) { observerCallback = callback; }
+        observe() { observed += 1; }
+      },
+    },
+  );
+
+  backlog.bindBacklogLoadMoreObserver();
+  backlog.bindBacklogLoadMoreObserver();
+  assert.equal(observed, 1);
+  observerCallback([{ isIntersecting: true }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  observerCallback([{ isIntersecting: false }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 90);
+  assert.equal(renderCount, 2);
+});
+
+test("el backlog conserva el foco de fecha visible y reinicia al cambiar el dataset", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+  const payloadStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const payloadEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", payloadStart);
+  const applyPayload = app.slice(payloadStart, payloadEnd);
+  const importedStart = app.indexOf("function applyImported(imported, options = {})");
+  const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
+  const applyImported = app.slice(importedStart, importedEnd);
+  const backlogSyncStart = app.indexOf("async function syncBacklogWorkOrders()");
+  const backlogSyncEnd = app.indexOf("async function syncNetSuiteTwoPhase(", backlogSyncStart);
+  const syncBacklog = app.slice(backlogSyncStart, backlogSyncEnd);
+  const twoPhaseStart = backlogSyncEnd;
+  const twoPhaseEnd = app.indexOf("function applyNetSuitePlanningPayload(payload)", twoPhaseStart);
+  const syncTwoPhase = app.slice(twoPhaseStart, twoPhaseEnd);
+
+  assert.match(renderPriorityList, /document\.activeElement\?\.dataset\?\.dueOt/);
+  assert.match(renderPriorityList, /dataset\.dueOt === focusedDueOt[\s\S]*\.focus\(\)/);
+  assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*saveAndRender\(/);
+  assert.match(syncTwoPhase, /resetBacklogWindow\(\)[\s\S]*render\(\)/);
 });
 
 test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {

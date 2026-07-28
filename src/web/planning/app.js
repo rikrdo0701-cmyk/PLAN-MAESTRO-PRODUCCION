@@ -423,6 +423,39 @@ const sampleState = {
   ],
 };
 
+const BACKLOG_PAGE_SIZE = 30;
+let backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+let backlogLoadMoreObserver = null;
+let backlogObserverArmed = true;
+
+function resetBacklogWindow() {
+  backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+  backlogObserverArmed = true;
+}
+
+function showMoreBacklogJobs() {
+  backlogVisibleLimit += BACKLOG_PAGE_SIZE;
+  renderPriorityList();
+}
+
+function handleBacklogIntersection(entries) {
+  const entry = entries[0];
+  if (!entry) return;
+  if (!entry.isIntersecting) {
+    backlogObserverArmed = true;
+    return;
+  }
+  if (!backlogObserverArmed || els.priorityLoadMore.hidden) return;
+  backlogObserverArmed = false;
+  showMoreBacklogJobs();
+}
+
+function bindBacklogLoadMoreObserver() {
+  if (!("IntersectionObserver" in window) || backlogLoadMoreObserver) return;
+  backlogLoadMoreObserver = new window.IntersectionObserver(handleBacklogIntersection);
+  backlogLoadMoreObserver.observe(els.priorityLoadMoreSentinel);
+}
+
 let state = loadState();
 state.matrixSearch = "";
 let drag = null;
@@ -476,6 +509,7 @@ function initializePlanningApp() {
   bindEvents();
   resetDailyReportFiltersToToday();
   render();
+  bindBacklogLoadMoreObserver();
   saveState("ui");
   applyInitialWorkspaceView();
   loadAppStateInBackground();
@@ -530,6 +564,8 @@ function bindElements() {
     "searchInput",
     "statusFilter",
     "priorityList",
+    "priorityLoadMore",
+    "priorityLoadMoreSentinel",
     "priorityQueue",
     "queueSearchInput",
     "selectedJobCount",
@@ -690,7 +726,10 @@ function bindEvents() {
   document.querySelectorAll(".segmented button").forEach((button) => {
     button.onclick = () => setGanttView(button.dataset.view);
   });
-  els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
+  els.searchInput.addEventListener("input", debounce(() => {
+    resetBacklogWindow();
+    renderPriorityList();
+  }, 120));
   els.matrixSearchInput.addEventListener("input", () => {
     state.matrixSearch = els.matrixSearchInput.value;
     renderMatrix();
@@ -701,7 +740,11 @@ function bindEvents() {
     els.matrixSearchInput.focus();
   });
   els.syncBacklogOtsBtn.addEventListener("click", syncBacklogWorkOrders);
-  els.statusFilter.addEventListener("change", renderPriorityList);
+  els.statusFilter.addEventListener("change", () => {
+    resetBacklogWindow();
+    renderPriorityList();
+  });
+  els.priorityLoadMore.addEventListener("click", showMoreBacklogJobs);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
@@ -1628,6 +1671,7 @@ function planAlertItems() {
 }
 
 function renderPriorityList() {
+  const focusedDueOt = document.activeElement?.dataset?.dueOt || "";
   const query = els.searchInput.value.trim().toLowerCase();
   const statusFilter = els.statusFilter.value;
   renderSelectedJobPanel();
@@ -1635,11 +1679,13 @@ function renderPriorityList() {
     .filter((job) => {
       return !job.closed && !isJobSelected(job.ot) && jobMatchesSearch(job, query) && matchesStatusFilter(job, statusFilter);
     });
+  const visibleJobs = jobs.slice(0, backlogVisibleLimit);
 
-  els.priorityCount.textContent = `${jobs.length} trabajos en espera`;
+  els.priorityCount.textContent = `${visibleJobs.length} de ${jobs.length} trabajos en espera`;
+  els.priorityLoadMore.hidden = visibleJobs.length >= jobs.length;
   els.priorityList.innerHTML = "";
 
-  for (const job of jobs) {
+  for (const job of visibleJobs) {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const article = job.parte || "SIN ARTICULO";
@@ -1725,6 +1771,9 @@ function renderPriorityList() {
 
     els.priorityList.appendChild(card);
   }
+  const focusedDueDateInput = Array.from(els.priorityList.querySelectorAll("[data-due-ot]"))
+    .find((input) => input.dataset.dueOt === focusedDueOt);
+  focusedDueDateInput?.focus();
 }
 
 function renderPriorityQueue() {
@@ -5538,6 +5587,7 @@ async function syncBacklogWorkOrders() {
     state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
     invalidateCurrentPlanOperationsCache();
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
+    resetBacklogWindow();
     const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
     state.revision = Number(saved?.revision || state.revision);
     saveAndRender(`${newCount} nuevas; ${updatedCount} actualizadas; ${removedCount} retiradas; ${pendingCount} pendientes`);
@@ -5563,6 +5613,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
     if (payload.plant) state.plant = payload.plant;
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
     workOrdersResult = { ok: true };
+    resetBacklogWindow();
     saveState("ui");
     render();
   } catch (error) {
@@ -5591,6 +5642,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
 }
 
 function applyNetSuitePlanningPayload(payload) {
+  const backlogDatasetChanged = Array.isArray(payload?.operations) || Array.isArray(payload?.materials);
   const selected = new Set((state.selectedOts || []).map(normalizeKey));
   const preservedDraft = state.operations.filter((op) => selected.has(normalizeKey(op.ot)));
   const refreshed = (payload?.operations || []).filter((op) => !selected.has(normalizeKey(op.ot)));
@@ -5600,6 +5652,7 @@ function applyNetSuitePlanningPayload(payload) {
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
   if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
 }
 
 function setNetSuiteSyncPhaseLabel(message) {
@@ -5801,6 +5854,9 @@ async function fetchAppSheetText() {
 }
 
 function applyImported(imported, options = {}) {
+  const backlogDatasetChanged = Array.isArray(imported.operations)
+    || Array.isArray(imported.materials)
+    || Array.isArray(imported.workOrders);
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
@@ -5858,6 +5914,7 @@ function applyImported(imported, options = {}) {
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
   normalizeState();
 }
 
