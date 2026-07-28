@@ -44,7 +44,7 @@ function PP_syncNetSuitePlant_(current) {
 
 function PP_fetchNetSuitePlantData_() {
   const config = PP_netSuiteConfig_();
-  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const plantFilter = PP_buildPlantFilter_(workOrders.rows);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
@@ -103,7 +103,7 @@ function PP_fetchNetSuitePlanningData_(current) {
     return PP_fetchNetSuitePlantData_();
   }
   const config = PP_netSuiteConfig_();
-  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const plantFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
@@ -238,6 +238,24 @@ function PP_invoiceAverageWindow_(endDate) {
     from: Utilities.formatDate(start, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
     to: Utilities.formatDate(end, Session.getScriptTimeZone(), 'yyyy-MM-dd')
   };
+}
+
+function PP_fetchNetSuiteOperationCatalogCached_(config) {
+  const cache = CacheService.getScriptCache();
+  const key = 'NS_OPERATION_CATALOG_V1_' + PP_normalizeKey_(config.accountId + '_' + config.locationId);
+  let cached = '';
+  try { cached = cache.get(key); } catch (_) {}
+  if (cached) {
+    try {
+      const items = JSON.parse(cached);
+      if (Array.isArray(items) && items.length) return { items: items, warning: '' };
+    } catch (_) {}
+  }
+  const result = PP_fetchNetSuiteOperationCatalog_(config);
+  if (result.items.length) {
+    try { cache.put(key, JSON.stringify(result.items), 3600); } catch (_) {}
+  }
+  return result;
 }
 
 function PP_fetchNetSuiteOperationCatalog_(config) {

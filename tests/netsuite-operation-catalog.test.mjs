@@ -5,8 +5,10 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../src/server/08-netsuite.js", import.meta.url), "utf8");
 
-function load(responses = []) {
+function load(responses = [], cacheOptions = {}) {
   const requests = [];
+  const cacheEntries = new Map(Object.entries(cacheOptions.entries || {}));
+  const cachePuts = [];
   const context = {
     console,
     Date,
@@ -34,11 +36,26 @@ function load(responses = []) {
         };
       },
     },
+    CacheService: {
+      getScriptCache() {
+        return {
+          get(key) {
+            if (cacheOptions.getError) throw cacheOptions.getError;
+            return cacheEntries.get(key) || null;
+          },
+          put(key, value, ttl) {
+            cachePuts.push({ key, value, ttl });
+            if (cacheOptions.putError) throw cacheOptions.putError;
+            cacheEntries.set(key, value);
+          },
+        };
+      },
+    },
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "08-netsuite.js" });
   context.PP_normalizeKey_ = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
-  return { context, requests };
+  return { context, requests, cachePuts };
 }
 
 const config = {
@@ -47,7 +64,115 @@ const config = {
   consumerSecret: "consumer-secret",
   token: "token",
   tokenSecret: "token-secret",
+  locationId: 1,
 };
+
+const catalogPage = {
+  body: JSON.stringify({
+    items: [{ work_center: "CT 5467 - Corte", operation_name: "Corte final" }],
+    hasMore: false,
+  }),
+};
+
+test("catálogo maestro reutiliza caché por una hora", () => {
+  const { context, requests, cachePuts } = load([catalogPage]);
+
+  const first = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  const second = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(second.items)), JSON.parse(JSON.stringify(first.items)));
+  assert.equal(cachePuts.length, 1);
+  assert.equal(cachePuts[0].key, "NS_OPERATION_CATALOG_V1_ACME_SB1_1");
+  assert.equal(cachePuts[0].ttl, 3600);
+});
+
+test("caché corrupto provoca una consulta real y se reemplaza", () => {
+  const key = "NS_OPERATION_CATALOG_V1_ACME_SB1_1";
+  const { context, requests, cachePuts } = load([catalogPage], {
+    entries: { [key]: "{json-corrupto" },
+  });
+
+  const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+  assert.equal(result.warning, "");
+  assert.equal(result.items.length, 1);
+  assert.equal(requests.length, 1);
+  assert.equal(cachePuts.length, 1);
+  assert.doesNotThrow(() => JSON.parse(cachePuts[0].value));
+});
+
+test("error HTTP conserva el catálogo anterior mediante fallback no destructivo", () => {
+  const { context } = load([{ status: 500, body: "falló" }]);
+  const previous = [{ key: "1::CORTE", ct: "1", label: "Corte", source: "NETSUITE_MASTER", active: true }];
+
+  const fetched = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  const resolved = context.PP_resolveOperationCatalog_(
+    { operationCatalog: previous },
+    { operationCatalog: fetched.items },
+    [],
+  );
+
+  assert.match(fetched.warning, /catálogo.*NetSuite/i);
+  assert.deepEqual(JSON.parse(JSON.stringify(resolved)), previous);
+});
+
+test("errores de lectura o escritura del caché no bloquean un catálogo válido", () => {
+  for (const cacheOptions of [
+    { getError: new Error("cache get no disponible") },
+    { putError: new Error("payload supera límite") },
+  ]) {
+    const { context, requests } = load([catalogPage], cacheOptions);
+
+    const result = context.PP_fetchNetSuiteOperationCatalogCached_(config);
+
+    assert.equal(result.warning, "");
+    assert.equal(result.items.length, 1);
+    assert.equal(requests.length, 1);
+  }
+});
+
+test("caché aísla catálogos por cuenta y ubicación", () => {
+  const { context, requests, cachePuts } = load([catalogPage, catalogPage, catalogPage]);
+
+  context.PP_fetchNetSuiteOperationCatalogCached_(config);
+  context.PP_fetchNetSuiteOperationCatalogCached_({ ...config, accountId: "OTHER_SB1" });
+  context.PP_fetchNetSuiteOperationCatalogCached_({ ...config, locationId: 2 });
+
+  assert.equal(requests.length, 3);
+  assert.equal(new Set(cachePuts.map((entry) => entry.key)).size, 3);
+});
+
+test("sincronizaciones completa y de planeación usan el catálogo cacheado", () => {
+  const { context } = load();
+  let cachedCalls = 0;
+  let uncachedCalls = 0;
+  context.PP_netSuiteConfig_ = () => config;
+  context.PP_fetchNetSuiteOperationCatalogCached_ = () => {
+    cachedCalls += 1;
+    return { items: [{ key: "5467::CORTE", ct: "5467", label: "Corte", source: "NETSUITE_MASTER", active: true }], warning: "" };
+  };
+  context.PP_fetchNetSuiteOperationCatalog_ = () => {
+    uncachedCalls += 1;
+    return { items: [], warning: "sin caché" };
+  };
+  context.PP_fetchRestletPages_ = () => ({ rows: [] });
+  context.PP_buildPlantFilter_ = () => ({});
+  context.PP_buildPlantFilterFromWorkOrders_ = () => ({});
+  context.PP_belongsToPlant_ = () => true;
+  context.PP_invoiceAverageWindow_ = () => ({ from: "2026-02-01", to: "2026-07-26" });
+  context.PP_fetchInvoiceSalesAverages_ = () => ({ byItem: {}, from: "2026-02-01", to: "2026-07-26", warning: "" });
+  context.PP_buildWorkOrderCatalog_ = () => [];
+  context.PP_applyInvoiceAverages_ = (items) => items;
+  context.PP_enrichWorkOrderPhotos_ = (items) => items;
+  context.PP_assertNetSuiteRows_ = () => {};
+
+  context.PP_fetchNetSuitePlantData_();
+  context.PP_fetchNetSuitePlanningData_({ workOrders: [{ ot: "OT-1" }] });
+
+  assert.equal(cachedCalls, 2);
+  assert.equal(uncachedCalls, 0);
+});
 
 test("catálogo maestro pagina SuiteQL, normaliza CT, deduplica y excluye subcontratos", () => {
   const first = {
