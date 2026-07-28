@@ -450,6 +450,7 @@ let inspectionRouteCatalogRows = [];
 let inspectionRouteCatalogReady = false;
 let inspectionRouteCatalogLoading = false;
 let inspectionRouteCatalogLoadError = "";
+let currentPlanOperationsCache = null;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -1016,6 +1017,7 @@ function normalizeState() {
   state.cts = Array.isArray(state.cts) ? state.cts : [];
   ensureToolChangeCapability();
   state.operations = (Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index));
+  invalidateCurrentPlanOperationsCache();
   for (const op of state.operations) {
     const status = state.operationPlanStatuses[operationCompletionKey(op)];
     op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
@@ -1474,8 +1476,36 @@ function render(options = {}) {
   saveState(options.saveScope || "plan");
 }
 
+function invalidateCurrentPlanOperationsCache() {
+  currentPlanOperationsCache = null;
+  currentPlanOperations.cache = null;
+}
+
 function currentPlanOperations(operations = state.operations) {
-  return window.PlannerCore.filterExcludedOperations(state, operations);
+  if (operations !== state.operations) {
+    return window.PlannerCore.filterExcludedOperations(state, operations);
+  }
+  const excludedSignature = JSON.stringify(typeof normalizeCapabilityKeys === "function"
+    ? normalizeCapabilityKeys(state.excludedCapabilities)
+    : (Array.isArray(state.excludedCapabilities) ? state.excludedCapabilities : [])
+  );
+  const cache = typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache;
+  if (!cache
+      || cache.operations !== operations
+      || cache.excludedSignature !== excludedSignature) {
+    const nextCache = {
+      operations,
+      excludedSignature,
+      result: window.PlannerCore.filterExcludedOperations(state, operations),
+    };
+    if (typeof currentPlanOperationsCache === "undefined") currentPlanOperations.cache = nextCache;
+    else currentPlanOperationsCache = nextCache;
+  }
+  return (typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache).result;
 }
 
 function currentDraftScheduledOperations() {
@@ -3177,6 +3207,7 @@ function renderMatrix() {
       state.excludedCapabilities = excluded
         ? uniq([...state.excludedCapabilities, key])
         : state.excludedCapabilities.filter((item) => item !== key);
+      invalidateCurrentPlanOperationsCache();
       saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
       focusCapabilityPlanState(key);
     });
@@ -3730,6 +3761,7 @@ async function scheduleCurrentPlanImpl() {
   const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
   checkpointState();
   state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
+  invalidateCurrentPlanOperationsCache();
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
@@ -3754,6 +3786,7 @@ async function scheduleCurrentPlanImpl() {
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
     state = { ...result, selectedOts: originalSelectedOts };
+    invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
@@ -5308,6 +5341,7 @@ function removeCapability(key) {
   state.customCapabilities = state.customCapabilities.filter((row) => row.key !== key);
   state.configuredCapabilities = state.configuredCapabilities.filter((configuredKey) => configuredKey !== key);
   state.excludedCapabilities = state.excludedCapabilities.filter((excludedKey) => excludedKey !== key);
+  invalidateCurrentPlanOperationsCache();
   if (!state.hiddenCapabilities.includes(key)) state.hiddenCapabilities.push(key);
   delete state.matrix[key];
   delete state.capacityModes[key];
@@ -5502,6 +5536,7 @@ async function syncBacklogWorkOrders() {
     state.workOrderSyncWarnings = (state.workOrderSyncWarnings || [])
       .filter((warning) => !reconciledOts.has(normalizeKey(warning.ot)));
     state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
+    invalidateCurrentPlanOperationsCache();
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
     const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
     state.revision = Number(saved?.revision || state.revision);
@@ -5523,6 +5558,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
     state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
     if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
     Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+    invalidateCurrentPlanOperationsCache();
     if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
     if (payload.plant) state.plant = payload.plant;
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
@@ -5563,6 +5599,7 @@ function applyNetSuitePlanningPayload(payload) {
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
+  if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
 }
 
 function setNetSuiteSyncPhaseLabel(message) {
@@ -5820,6 +5857,7 @@ function applyImported(imported, options = {}) {
     restoreLocalPlanningState(coherent || preservedLocalPlanning);
   }
   invalidateGanttCache();
+  invalidateCurrentPlanOperationsCache();
   normalizeState();
 }
 

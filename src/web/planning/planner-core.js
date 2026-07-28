@@ -1058,9 +1058,16 @@
     return excluded.some((capability) => normalizedCapabilityKey(capability) === operationKey);
   }
 
-  function filterExcludedOperations(state, operations) {
-    return (Array.isArray(operations) ? operations : [])
-      .filter((operation) => !isOperationCapabilityExcluded(state, operation));
+  function excludedCapabilityKeySet(state) {
+    const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
+    return new Set(excluded.map(normalizedCapabilityKey).filter(Boolean));
+  }
+
+  function filterExcludedOperations(state, operations, excludedSet = excludedCapabilityKeySet(state)) {
+    return (Array.isArray(operations) ? operations : []).filter((operation) => {
+      if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return true;
+      return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {})));
+    });
   }
 
   function isCalendarAvailable(state, start, end, operator, machine) {
@@ -1837,6 +1844,7 @@
     filterCapabilities,
     isSpecialSubcontractCapability,
     isOperationCapabilityExcluded,
+    excludedCapabilityKeySet,
     filterExcludedOperations,
     operatorOverlapConflicts,
     availableMinutes,
