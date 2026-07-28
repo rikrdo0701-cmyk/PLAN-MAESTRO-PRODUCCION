@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
-const CACHE_IDENTITY = "plan-produccion-cache-v2";
+const CACHE_IDENTITY = "plan-produccion-cache-v3";
 
 function coherentLocalState(revision, patch = {}) {
   return JSON.stringify({

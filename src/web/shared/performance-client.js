@@ -5,7 +5,7 @@
   const NETSUITE_REFRESH_MS = 15 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 850;
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
-  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v2";
+  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v3";
   const initialPerformanceMeta = readMeta();
   const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
   let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
