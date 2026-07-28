@@ -249,9 +249,10 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
   const createButton = () => ({
     disabled: false,
     attributes: new Set(),
+    label: { textContent: "" },
     setAttribute(name) { this.attributes.add(name); },
     removeAttribute(name) { this.attributes.delete(name); },
-    querySelector: () => ({ textContent: "" }),
+    querySelector() { return this.label; },
     classList: { toggle: () => {} },
   });
   const buttons = {
@@ -265,13 +266,18 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
     planningActionsBusy: "sync",
     netSuiteSyncInFlight: false,
     netSuitePlanningSyncInFlight: false,
+    setNetSuiteSyncPhaseLabel(message) {
+      buttons.loadNsExerciseBtn.label.textContent = message || "Sincronizar";
+    },
     Boolean,
   };
   vm.createContext(context);
   vm.runInContext(busyStateSource, context, { filename: "planning-busy-state.js" });
 
+  buttons.loadNsExerciseBtn.label.textContent = "Sincronizando...";
   context.setNetSuiteSyncState(false);
   assert.equal(buttons.loadNsExerciseBtn.attributes.has("aria-busy"), true);
+  assert.equal(buttons.loadNsExerciseBtn.label.textContent, "Sincronizando...");
 
   context.planningActionsBusy = "sync";
   context.netSuiteSyncInFlight = true;
@@ -282,11 +288,12 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
   }
 
   context.netSuiteSyncInFlight = false;
-  context.setNetSuiteSyncState(false);
+  context.setPlanningActionsBusy("sync", false);
   for (const button of Object.values(buttons)) {
     assert.equal(button.disabled, false);
     assert.equal(button.attributes.has("aria-busy"), false);
   }
+  assert.equal(buttons.loadNsExerciseBtn.label.textContent, "Sincronizar");
 });
 
 test("Reportes y Restaurar comparten snapshots y conservan la recarga explicita", async () => {

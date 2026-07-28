@@ -5812,6 +5812,7 @@ function setNetSuiteSyncState(inProgress) {
 function setPlanningActionsBusy(action, inProgress) {
   planningActionsBusy = inProgress ? action : "";
   refreshPlanningActionControls();
+  if (!inProgress && !netSuiteSyncInFlight) setNetSuiteSyncPhaseLabel("");
 }
 
 function setNetSuitePlanningSyncState(inProgress) {
