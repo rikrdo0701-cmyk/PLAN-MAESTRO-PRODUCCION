@@ -423,6 +423,39 @@ const sampleState = {
   ],
 };
 
+const BACKLOG_PAGE_SIZE = 30;
+let backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+let backlogLoadMoreObserver = null;
+let backlogObserverArmed = true;
+
+function resetBacklogWindow() {
+  backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+  backlogObserverArmed = true;
+}
+
+function showMoreBacklogJobs() {
+  backlogVisibleLimit += BACKLOG_PAGE_SIZE;
+  renderPriorityList();
+}
+
+function handleBacklogIntersection(entries) {
+  const entry = entries[0];
+  if (!entry) return;
+  if (!entry.isIntersecting) {
+    backlogObserverArmed = true;
+    return;
+  }
+  if (!backlogObserverArmed || els.priorityLoadMore.hidden) return;
+  backlogObserverArmed = false;
+  showMoreBacklogJobs();
+}
+
+function bindBacklogLoadMoreObserver() {
+  if (!("IntersectionObserver" in window) || backlogLoadMoreObserver) return;
+  backlogLoadMoreObserver = new window.IntersectionObserver(handleBacklogIntersection);
+  backlogLoadMoreObserver.observe(els.priorityLoadMoreSentinel);
+}
+
 let state = loadState();
 state.matrixSearch = "";
 let drag = null;
@@ -450,6 +483,7 @@ let inspectionRouteCatalogRows = [];
 let inspectionRouteCatalogReady = false;
 let inspectionRouteCatalogLoading = false;
 let inspectionRouteCatalogLoadError = "";
+let currentPlanOperationsCache = null;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -475,6 +509,7 @@ function initializePlanningApp() {
   bindEvents();
   resetDailyReportFiltersToToday();
   render();
+  bindBacklogLoadMoreObserver();
   saveState("ui");
   applyInitialWorkspaceView();
   loadAppStateInBackground();
@@ -529,6 +564,8 @@ function bindElements() {
     "searchInput",
     "statusFilter",
     "priorityList",
+    "priorityLoadMore",
+    "priorityLoadMoreSentinel",
     "priorityQueue",
     "queueSearchInput",
     "selectedJobCount",
@@ -689,7 +726,10 @@ function bindEvents() {
   document.querySelectorAll(".segmented button").forEach((button) => {
     button.onclick = () => setGanttView(button.dataset.view);
   });
-  els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
+  els.searchInput.addEventListener("input", debounce(() => {
+    resetBacklogWindow();
+    renderPriorityList();
+  }, 120));
   els.matrixSearchInput.addEventListener("input", () => {
     state.matrixSearch = els.matrixSearchInput.value;
     renderMatrix();
@@ -700,7 +740,11 @@ function bindEvents() {
     els.matrixSearchInput.focus();
   });
   els.syncBacklogOtsBtn.addEventListener("click", syncBacklogWorkOrders);
-  els.statusFilter.addEventListener("change", renderPriorityList);
+  els.statusFilter.addEventListener("change", () => {
+    resetBacklogWindow();
+    renderPriorityList();
+  });
+  els.priorityLoadMore.addEventListener("click", showMoreBacklogJobs);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
@@ -1016,6 +1060,7 @@ function normalizeState() {
   state.cts = Array.isArray(state.cts) ? state.cts : [];
   ensureToolChangeCapability();
   state.operations = (Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index));
+  invalidateCurrentPlanOperationsCache();
   for (const op of state.operations) {
     const status = state.operationPlanStatuses[operationCompletionKey(op)];
     op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
@@ -1474,8 +1519,36 @@ function render(options = {}) {
   saveState(options.saveScope || "plan");
 }
 
+function invalidateCurrentPlanOperationsCache() {
+  currentPlanOperationsCache = null;
+  currentPlanOperations.cache = null;
+}
+
 function currentPlanOperations(operations = state.operations) {
-  return window.PlannerCore.filterExcludedOperations(state, operations);
+  if (operations !== state.operations) {
+    return window.PlannerCore.filterExcludedOperations(state, operations);
+  }
+  const excludedSignature = JSON.stringify(typeof normalizeCapabilityKeys === "function"
+    ? normalizeCapabilityKeys(state.excludedCapabilities)
+    : (Array.isArray(state.excludedCapabilities) ? state.excludedCapabilities : [])
+  );
+  const cache = typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache;
+  if (!cache
+      || cache.operations !== operations
+      || cache.excludedSignature !== excludedSignature) {
+    const nextCache = {
+      operations,
+      excludedSignature,
+      result: window.PlannerCore.filterExcludedOperations(state, operations),
+    };
+    if (typeof currentPlanOperationsCache === "undefined") currentPlanOperations.cache = nextCache;
+    else currentPlanOperationsCache = nextCache;
+  }
+  return (typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache).result;
 }
 
 function currentDraftScheduledOperations() {
@@ -1598,6 +1671,7 @@ function planAlertItems() {
 }
 
 function renderPriorityList() {
+  const focusedDueOt = document.activeElement?.dataset?.dueOt || "";
   const query = els.searchInput.value.trim().toLowerCase();
   const statusFilter = els.statusFilter.value;
   renderSelectedJobPanel();
@@ -1605,11 +1679,13 @@ function renderPriorityList() {
     .filter((job) => {
       return !job.closed && !isJobSelected(job.ot) && jobMatchesSearch(job, query) && matchesStatusFilter(job, statusFilter);
     });
+  const visibleJobs = jobs.slice(0, backlogVisibleLimit);
 
-  els.priorityCount.textContent = `${jobs.length} trabajos en espera`;
+  els.priorityCount.textContent = `${visibleJobs.length} de ${jobs.length} trabajos en espera`;
+  els.priorityLoadMore.hidden = visibleJobs.length >= jobs.length;
   els.priorityList.innerHTML = "";
 
-  for (const job of jobs) {
+  for (const job of visibleJobs) {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const article = job.parte || "SIN ARTICULO";
@@ -1695,6 +1771,9 @@ function renderPriorityList() {
 
     els.priorityList.appendChild(card);
   }
+  const focusedDueDateInput = Array.from(els.priorityList.querySelectorAll("[data-due-ot]"))
+    .find((input) => input.dataset.dueOt === focusedDueOt);
+  focusedDueDateInput?.focus();
 }
 
 function renderPriorityQueue() {
@@ -3177,6 +3256,7 @@ function renderMatrix() {
       state.excludedCapabilities = excluded
         ? uniq([...state.excludedCapabilities, key])
         : state.excludedCapabilities.filter((item) => item !== key);
+      invalidateCurrentPlanOperationsCache();
       saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
       focusCapabilityPlanState(key);
     });
@@ -3730,6 +3810,7 @@ async function scheduleCurrentPlanImpl() {
   const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
   checkpointState();
   state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
+  invalidateCurrentPlanOperationsCache();
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
@@ -3754,6 +3835,7 @@ async function scheduleCurrentPlanImpl() {
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
     state = { ...result, selectedOts: originalSelectedOts };
+    invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
@@ -4326,14 +4408,11 @@ async function openRestoreDraftDialog() {
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("restore", true);
   try {
-    const snapshots = isAppsScriptRuntime()
-      ? await callAppsScript("listPlanSnapshots")
-      : await fetchJson(PLAN_SNAPSHOTS_API);
-    planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
-      .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
-  } catch (error) {
-    showToast(`No se pudieron leer los planes publicados: ${error.message}`);
-    return;
+    const loaded = await loadSnapshotsOnce(false);
+    if (!loaded?.ok) {
+      showToast(`No se pudieron leer los planes publicados: ${loaded?.error || "Error desconocido"}`);
+      return;
+    }
   } finally {
     setPlanningActionsBusy("restore", false);
   }
@@ -4452,11 +4531,17 @@ async function loadPlanSnapshots(showMessage) {
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
+    return { ok: true, count: planSnapshots.length };
   } catch (error) {
     planSnapshots = [];
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
+    return { ok: false, count: 0, error: error.message };
   }
+}
+
+function loadSnapshotsOnce(showMessage) {
+  return loadPlanSnapshots(showMessage);
 }
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
@@ -5308,6 +5393,7 @@ function removeCapability(key) {
   state.customCapabilities = state.customCapabilities.filter((row) => row.key !== key);
   state.configuredCapabilities = state.configuredCapabilities.filter((configuredKey) => configuredKey !== key);
   state.excludedCapabilities = state.excludedCapabilities.filter((excludedKey) => excludedKey !== key);
+  invalidateCurrentPlanOperationsCache();
   if (!state.hiddenCapabilities.includes(key)) state.hiddenCapabilities.push(key);
   delete state.matrix[key];
   delete state.capacityModes[key];
@@ -5502,7 +5588,9 @@ async function syncBacklogWorkOrders() {
     state.workOrderSyncWarnings = (state.workOrderSyncWarnings || [])
       .filter((warning) => !reconciledOts.has(normalizeKey(warning.ot)));
     state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
+    invalidateCurrentPlanOperationsCache();
     state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
+    resetBacklogWindow();
     const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
     state.revision = Number(saved?.revision || state.revision);
     saveAndRender(`${newCount} nuevas; ${updatedCount} actualizadas; ${removedCount} retiradas; ${pendingCount} pendientes`);
@@ -5515,23 +5603,13 @@ async function syncBacklogWorkOrders() {
 }
 
 async function syncNetSuiteTwoPhase(options = {}) {
-  let workOrdersResult;
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
-  try {
-    const payload = await fetchNetSuiteWorkOrdersLiteCompat(true);
-    validateNetSuiteImportedData(payload, "workOrders");
-    state.workOrders = Array.isArray(payload.workOrders) ? payload.workOrders : state.workOrders;
-    if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
-    Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
-    if (payload.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
-    if (payload.plant) state.plant = payload.plant;
-    state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
-    workOrdersResult = { ok: true };
-    saveState("ui");
-    render();
-  } catch (error) {
-    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error: error.message }, null);
+  const workOrdersLoaded = await syncWorkOrdersOnce({ showMessage: false, manual: true });
+  if (!workOrdersLoaded) {
+    const error = state.netSuiteSyncAlert?.message || "No se pudieron sincronizar las OTs";
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error }, null);
   }
+  const workOrdersResult = { ok: true };
 
   setNetSuiteSyncPhaseLabel("Sincronizando operaciones...");
   try {
@@ -5555,6 +5633,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
 }
 
 function applyNetSuitePlanningPayload(payload) {
+  const backlogDatasetChanged = Array.isArray(payload?.operations) || Array.isArray(payload?.materials);
   const selected = new Set((state.selectedOts || []).map(normalizeKey));
   const preservedDraft = state.operations.filter((op) => selected.has(normalizeKey(op.ot)));
   const refreshed = (payload?.operations || []).filter((op) => !selected.has(normalizeKey(op.ot)));
@@ -5563,6 +5642,19 @@ function applyNetSuitePlanningPayload(payload) {
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
+  if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
+}
+
+function applyNetSuiteWorkOrdersPayload(payload) {
+  state.workOrders = Array.isArray(payload?.workOrders) ? payload.workOrders : state.workOrders;
+  if (Array.isArray(payload?.selectedOts)) state.selectedOts = payload.selectedOts;
+  Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+  if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
+  if (payload?.plant) state.plant = payload.plant;
+  state.syncedAt = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
 }
 
 function setNetSuiteSyncPhaseLabel(message) {
@@ -5570,13 +5662,19 @@ function setNetSuiteSyncPhaseLabel(message) {
   if (label) label.textContent = message || "Sincronizar";
 }
 
-function syncNetSuiteInBackground(options = {}) {
-  syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
-    if (!loaded) return;
-    saveState("ui");
-    render();
-    applyInitialWorkspaceView();
+function syncWorkOrdersOnce(options = {}) {
+  return syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
+    if (loaded && options.deferPresentation !== true) {
+      saveState("ui");
+      render();
+      applyInitialWorkspaceView();
+    }
+    return loaded;
   });
+}
+
+function syncNetSuiteInBackground(options = {}) {
+  return syncWorkOrdersOnce(options);
 }
 
 async function syncNetSuiteData(showMessage, options = {}) {
@@ -5594,6 +5692,7 @@ async function syncNetSuiteData(showMessage, options = {}) {
         : await callAppsScript("syncNetSuiteWorkOrders");
       validateNetSuiteImportedData(imported, mode);
       applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
     } else {
       const response = await fetchNetSuiteExercise();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -5688,44 +5787,37 @@ async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
   }
 }
 
+function setPlanningControlBusy(control, busy) {
+  if (!control) return;
+  control.disabled = busy;
+  if (busy) control.setAttribute("aria-busy", "true");
+  else control.removeAttribute("aria-busy");
+}
+
+function refreshPlanningActionControls() {
+  const busy = Boolean(planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight);
+  setPlanningControlBusy(els.scheduleBtn, busy);
+  setPlanningControlBusy(els.loadNsExerciseBtn, busy);
+  setPlanningControlBusy(els.syncBacklogOtsBtn, busy);
+  setPlanningControlBusy(els.restoreDraftBtn, busy);
+}
+
 function setNetSuiteSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.loadNsExerciseBtn) return;
-  els.loadNsExerciseBtn.disabled = inProgress || Boolean(planningActionsBusy);
-  if (inProgress) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
-  else els.loadNsExerciseBtn.removeAttribute("aria-busy");
   const label = els.loadNsExerciseBtn.querySelector("[data-sync-label]");
-  if (label) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
-  if (els.restoreDraftBtn) els.restoreDraftBtn.disabled = inProgress || Boolean(planningActionsBusy);
+  if (label && (inProgress || !planningActionsBusy)) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
 }
 
 function setPlanningActionsBusy(action, inProgress) {
   planningActionsBusy = inProgress ? action : "";
-  const busy = Boolean(planningActionsBusy);
-  if (els.scheduleBtn) {
-    els.scheduleBtn.disabled = busy;
-    if (busy) els.scheduleBtn.setAttribute("aria-busy", "true");
-    else els.scheduleBtn.removeAttribute("aria-busy");
-  }
-  if (els.loadNsExerciseBtn) {
-    els.loadNsExerciseBtn.disabled = busy;
-    if (busy) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
-    else els.loadNsExerciseBtn.removeAttribute("aria-busy");
-  }
-  if (els.syncBacklogOtsBtn) {
-    els.syncBacklogOtsBtn.disabled = busy;
-    if (busy) els.syncBacklogOtsBtn.setAttribute("aria-busy", "true");
-    else els.syncBacklogOtsBtn.removeAttribute("aria-busy");
-  }
-  if (els.restoreDraftBtn) {
-    els.restoreDraftBtn.disabled = busy;
-    if (busy) els.restoreDraftBtn.setAttribute("aria-busy", "true");
-    else els.restoreDraftBtn.removeAttribute("aria-busy");
-  }
+  refreshPlanningActionControls();
+  if (!inProgress && !netSuiteSyncInFlight) setNetSuiteSyncPhaseLabel("");
 }
 
 function setNetSuitePlanningSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.scheduleBtn) return;
-  els.scheduleBtn.disabled = inProgress || Boolean(planningActionsBusy);
   els.scheduleBtn.classList.toggle("is-running", inProgress);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
   if (label) label.textContent = inProgress ? "Cargando operaciones..." : "Generar plan";
@@ -5764,6 +5856,9 @@ async function fetchAppSheetText() {
 }
 
 function applyImported(imported, options = {}) {
+  const backlogDatasetChanged = Array.isArray(imported.operations)
+    || Array.isArray(imported.materials)
+    || Array.isArray(imported.workOrders);
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
@@ -5820,6 +5915,8 @@ function applyImported(imported, options = {}) {
     restoreLocalPlanningState(coherent || preservedLocalPlanning);
   }
   invalidateGanttCache();
+  invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
   normalizeState();
 }
 

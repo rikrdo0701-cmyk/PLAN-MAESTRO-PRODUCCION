@@ -5,11 +5,21 @@
   const NETSUITE_REFRESH_MS = 15 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 850;
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
-  const loadedMaterialOts = new Set((state.materials || []).map((item) => materialOtKey(item.ot)));
+  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v2";
+  const initialPerformanceMeta = readMeta();
+  const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
+  let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
+  const loadedMaterialOts = new Set(deferredMaterials
+    ? []
+    : (state.materials || []).map((item) => materialOtKey(item.ot)));
+  const activeCalls = new Map();
   const materialRequests = new Map();
-  let snapshotsRequested = false;
-  let deferredMaterials = false;
-  let deferredRevision = Number(state.revision || 0);
+  let snapshotsLoaded = false;
+  let snapshotsMessageRequested = false;
+  let syncWorkOrdersMessageRequested = false;
+  let syncWorkOrdersManualRequested = false;
+  let initialStateLoadPending = true;
+  let deferredRevision = Number(state.revision || initialLocalCache.revision || 0);
   let localFlushHandle = null;
   let saveIdleHandle = null;
   let saveRetryTimer = null;
@@ -48,7 +58,7 @@
     const next = {
       ...readMeta(),
       ...patch,
-      revision: Number(state.revision || deferredRevision || 0),
+      revision: Number(patch.revision ?? state.revision ?? deferredRevision ?? 0),
       updatedAt: new Date().toISOString(),
     };
     try { localStorage.setItem(META_KEY, JSON.stringify(next)); } catch {}
@@ -76,10 +86,24 @@
 
   function compactLocalState() {
     const { matrixSearch, ...persisted } = state;
+    const revision = Number(state.revision || 0);
     return {
       ...persisted,
       materials: [],
+      performanceCache: {
+        identity: LOCAL_CACHE_IDENTITY,
+        revision,
+      },
     };
+  }
+
+  function singleFlight(key, factory) {
+    if (activeCalls.has(key)) return activeCalls.get(key);
+    const request = Promise.resolve()
+      .then(factory)
+      .finally(() => activeCalls.delete(key));
+    activeCalls.set(key, request);
+    return request;
   }
 
   scheduleLocalStorageFlush = function optimizedScheduleLocalStorageFlush() {
@@ -87,7 +111,14 @@
     localFlushHandle = requestIdle(() => {
       localFlushHandle = null;
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(compactLocalState()));
+        const compacted = compactLocalState();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(compacted));
+        writeMeta({
+          revision: compacted.revision,
+          cacheIdentity: LOCAL_CACHE_IDENTITY,
+          cacheRevision: compacted.performanceCache.revision,
+          deferredMaterials: true,
+        });
       } catch (error) {
         console.warn("No se pudo actualizar el cache local:", error);
       }
@@ -182,8 +213,8 @@
     originalApplyImported(imported, options);
     if (Array.isArray(imported?.materials)) {
       deferredMaterials = Boolean(imported.performance?.deferred?.materials);
+      loadedMaterialOts.clear();
       if (!deferredMaterials) {
-        loadedMaterialOts.clear();
         state.materials.forEach((item) => loadedMaterialOts.add(materialOtKey(item.ot)));
       }
     }
@@ -401,64 +432,168 @@
     }
   };
 
-  loadAppStateInBackground = async function optimizedLoadAppStateInBackground() {
-    let loaded = false;
+  function readUsableLocalStateCache(metadata = readMeta()) {
     try {
-      await root.PPAppsScriptBridge.ensureReady();
-      const imported = await callAppsScript("getAppState");
-      applyImported(imported, { preserveLocalPlanning: false });
-      loaded = true;
-      appSheetAvailable = true;
-      deferredRevision = Number(imported.revision || state.revision || 0);
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return { usable: false, revision: 0, deferredMaterials: false };
+      const cached = JSON.parse(raw);
+      const revision = Number(cached?.revision || 0);
+      const marker = cached?.performanceCache;
+      const usable = Boolean(
+        cached
+        && typeof cached === "object"
+        && !Array.isArray(cached)
+        && Array.isArray(cached.operations)
+        && Array.isArray(cached.workOrders)
+        && revision > 0
+        && Number(state.revision) === revision
+        && marker?.identity === LOCAL_CACHE_IDENTITY
+        && Number(marker.revision) === revision
+        && metadata?.cacheIdentity === LOCAL_CACHE_IDENTITY
+        && Number(metadata.cacheRevision) === revision
+        && Number(metadata.revision) === revision
+      );
+      return {
+        usable,
+        revision: usable ? revision : 0,
+        deferredMaterials: usable && metadata.deferredMaterials === true,
+      };
+    } catch {
+      return { usable: false, revision: 0, deferredMaterials: false };
+    }
+  }
+
+  async function loadInitialStateConditionally(localCache) {
+    const revision = localCache?.usable ? Number(localCache.revision || 0) : 0;
+    const imported = revision > 0
+      ? await callAppsScript("getAppStateIfChanged", revision, { includeMaterials: false })
+      : await callAppsScript("getAppState");
+    if (imported?.unchanged) {
+      const currentRevision = Number(imported.revision || revision);
+      deferredMaterials = localCache.deferredMaterials === true;
+      if (deferredMaterials) loadedMaterialOts.clear();
+      state.revision = currentRevision;
       state.savedAt = imported.savedAt || state.savedAt;
       state.syncedAt = imported.syncedAt || state.syncedAt;
-      state.revision = Number(imported.revision || state.revision || 0);
-      writeMeta({ revision: state.revision, syncedAt: state.syncedAt || "" });
-    } catch (error) {
-      appSheetAvailable = false;
-      console.warn("Se mantiene el cache local porque el backend no respondio:", error);
+      deferredRevision = currentRevision;
+      writeMeta({
+        revision: currentRevision,
+        savedAt: state.savedAt || "",
+        syncedAt: state.syncedAt || "",
+      });
+      return { loaded: false, unchanged: true };
     }
+    applyImported(imported, { preserveLocalPlanning: false });
+    deferredRevision = Number(imported?.revision || state.revision || 0);
+    state.savedAt = imported?.savedAt || state.savedAt;
+    state.syncedAt = imported?.syncedAt || state.syncedAt;
+    state.revision = Number(imported?.revision || state.revision || 0);
+    writeMeta({
+      revision: state.revision,
+      savedAt: state.savedAt || "",
+      syncedAt: state.syncedAt || "",
+    });
+    return { loaded: true, unchanged: false };
+  }
 
-    if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
-    try {
-      await loadPlanSnapshots(false);
-      if (typeof restoreDraftPlanFromSharedState === "function") {
-        const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
-        if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
+  loadAppStateInBackground = function optimizedLoadAppStateInBackground() {
+    return singleFlight("state", async () => {
+      let loaded = false;
+      try {
+        await root.PPAppsScriptBridge.ensureReady();
+        const result = await loadInitialStateConditionally(initialLocalCache);
+        loaded = result.loaded;
+        appSheetAvailable = true;
+      } catch (error) {
+        appSheetAvailable = false;
+        console.warn("Se mantiene el cache local porque el backend no respondio:", error);
       }
-    } catch (error) {
-      console.warn("No se pudieron cargar los borradores compartidos:", error);
-    }
-    state.selectedOperationId = "";
-    saveState("ui");
-    render({ saveScope: "ui" });
-    applyInitialWorkspaceView();
 
-    if (isAppsScriptRuntime() && shouldRefreshNetSuite()) {
-      syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
-    }
+      if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+      initialStateLoadPending = false;
+      state.selectedOperationId = "";
+      saveState("ui");
+      render({ saveScope: "ui" });
+      applyInitialWorkspaceView();
+
+      if (isAppsScriptRuntime() && shouldRefreshNetSuite()) {
+        syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
+      }
+    });
   };
 
-  syncNetSuiteInBackground = function optimizedSyncNetSuiteInBackground(options = {}) {
-    syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
-      if (!loaded) return;
-      saveState("ui");
-      root.requestAnimationFrame(() => {
-        renderTop();
-        renderPlanAlerts();
-        renderPriorityList();
-        renderPriorityQueue();
-      });
+  const originalLoadPlanSnapshots = loadPlanSnapshots;
+  function requestPlanSnapshots(showMessage) {
+    snapshotsMessageRequested ||= showMessage === true;
+    return singleFlight("snapshots", async () => {
+      try {
+        const result = await originalLoadPlanSnapshots(false);
+        snapshotsLoaded = result?.ok === true;
+        if (snapshotsMessageRequested) {
+          const message = result?.ok
+            ? `${Number(result.count || 0)} planes guardados disponibles`
+            : `No se pudieron cargar los planes guardados: ${result?.error || "Error desconocido"}`;
+          showToast(message);
+        }
+        return result;
+      } catch (error) {
+        snapshotsLoaded = false;
+        throw error;
+      } finally {
+        snapshotsMessageRequested = false;
+      }
+    });
+  }
+
+  loadSnapshotsOnce = function optimizedLoadSnapshotsOnce(showMessage) {
+    if (activeCalls.has("snapshots")) return requestPlanSnapshots(showMessage);
+    if (snapshotsLoaded) {
+      return Promise.resolve({ ok: true, count: planSnapshots.length });
+    }
+    return requestPlanSnapshots(showMessage);
+  };
+
+  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage) {
+    return requestPlanSnapshots(showMessage);
+  };
+
+  const originalSyncWorkOrdersOnce = syncWorkOrdersOnce;
+  syncWorkOrdersOnce = function optimizedSyncWorkOrdersOnce(options = {}) {
+    syncWorkOrdersMessageRequested ||= options.showMessage === true;
+    syncWorkOrdersManualRequested ||= options.manual === true;
+    return singleFlight("sync-work-orders", async () => {
+      try {
+        const loaded = await originalSyncWorkOrdersOnce({ showMessage: false, deferPresentation: true });
+        if (loaded) {
+          const showMessage = syncWorkOrdersMessageRequested && !syncWorkOrdersManualRequested;
+          saveState(showMessage ? "plan" : "ui");
+          if (showMessage) {
+            render({ parts: { normalize: false, top: true, alerts: true, priorityList: true, queue: true, gantt: true } });
+            showToast(`${state.workOrders.length} OTs NetSuite cargadas`);
+          } else {
+            root.requestAnimationFrame(() => {
+              renderTop();
+              renderPlanAlerts();
+              renderPriorityList();
+              renderPriorityQueue();
+            });
+          }
+        } else if (syncWorkOrdersMessageRequested && !syncWorkOrdersManualRequested) {
+          showToast(`No se pudo cargar NetSuite: ${state.netSuiteSyncAlert?.message || "Error desconocido"}`, 9000);
+        }
+        return loaded;
+      } finally {
+        syncWorkOrdersMessageRequested = false;
+        syncWorkOrdersManualRequested = false;
+      }
     });
   };
 
   const originalShowWorkspaceView = showWorkspaceView;
   showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
     originalShowWorkspaceView(section, tab);
-    if (section === "reportes" && !snapshotsRequested) {
-      snapshotsRequested = true;
-      loadPlanSnapshots(false).catch((error) => {
-        snapshotsRequested = false;
+    if (section === "reportes" && !snapshotsLoaded && !initialStateLoadPending) {
+      loadSnapshotsOnce(false).catch((error) => {
         console.warn("No se pudieron cargar los historicos:", error);
       });
     }
@@ -518,7 +653,7 @@
   }
 
   writeMeta({
-    revision: Number(state.revision || 0),
+    revision: Number(state.revision || initialPerformanceMeta.revision || 0),
     deferredMaterials,
     syncedAt: state.syncedAt || "",
   });

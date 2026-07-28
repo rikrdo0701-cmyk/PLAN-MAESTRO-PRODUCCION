@@ -1,47 +1,37 @@
-# Task 3 - Fidelidad visual e impresión horizontal
+# Task 3 - Backlog progresivo
 
 ## Estado
 
-Implementación terminada y verificación automatizada aprobada. La comparación visual con PDF real quedó bloqueada y no se presenta como aprobada.
+Implementación terminada y verificada.
 
 ## Cambios
 
-- Panel lateral replicado con tarjetas, radios, tipografía y cuadrícula de acciones; la hoja conserva 1280 px y desplazamiento en pantalla.
-- Documento migrado de tabla plana a cuadrícula de 24 columnas, con bordes negros, encabezados agrupados de setup, inactividad y producción, segunda captura y pie.
-- Impresión horizontal con márgenes `3mm 8mm 5mm 9mm`, ocultamiento del chrome de la app y escala mediante `--inspection-print-scale`.
-- Cálculo previo a imprimir con razones de ancho/alto, límite `Math.min(1, widthRatio, heightRatio)` y limpieza en `afterprint`.
-- Prueba de build actualizada mediante ciclo RED-GREEN para cubrir la cuadrícula, agrupaciones, regla de página y escala.
+- El backlog renderiza 30 tarjetas inicialmente y amplía la ventana en bloques exactos de 30.
+- La búsqueda y el filtro se aplican al dataset completo antes del corte visible.
+- Se agregaron botón accesible y sentinel dentro del área desplazable.
+- Un único `IntersectionObserver` carga un bloque por entrada visible y se rearma al salir, evitando cascadas.
+- La ventana sólo se reinicia al cambiar consulta, filtro o dataset de OTs/operaciones/materiales.
+- El rerender conserva el foco del campo de entrega cuando la OT continúa visible; selección y eventos de drag existentes permanecen en cada tarjeta.
 
-## Pruebas y evidencia
+## TDD y pruebas
 
-- RED: `npm.cmd test -- --test-name-pattern="builds Apps Script"` falló inicialmente porque no existía `.inspection-grid` con 24 columnas.
-- GREEN: el mismo comando pasó después de implementar; 85 pruebas totales, 0 fallas.
-- `npm.cmd test`: 85/85, código 0.
-- `npm.cmd run build`: código 0; Apps Script y GitHub Pages generados.
-- `npm.cmd run check`: código 0; "Validacion correcta".
-- `git diff --check`: código 0.
+- RED inicial: `node --test tests/build.test.mjs` falló en 5 pruebas por constantes, corte, controles, eventos, observer y foco ausentes.
+- RED de sincronización: la prueba focalizada falló al detectar dos rutas directas de reemplazo de dataset sin reinicio.
+- RED de auto-revisión: una advertencia sin cambios de backlog reiniciaba indebidamente la ventana.
+- GREEN focalizado: `node --test tests/build.test.mjs`, 24/24.
+- Suite completa: `npm.cmd test`, 192/192.
+- Build: `npm.cmd run build`, código 0.
+- Validación: `npm.cmd run check`, código 0.
+- Higiene: `git diff --check`, código 0.
 
 ## Auto-revisión
 
-- Cada encabezado, subencabezado y fila de operación suma 24 columnas.
-- Las operaciones ocultas se compactan antes de renderizar por `InspectionCore.inspectionRows`; los huecos sólo se agregan al final.
-- La hoja no se reduce en pantalla y el transform sólo se activa bajo `body.printing-inspection`.
-- No se incorporaron secretos ni archivos de credenciales.
-- La revisión independiente señaló inicialmente una posible fila de materiales de 17 columnas; al recontar el literal completo se confirmó que incluye una celda inicial de 7 columnas y suma 24. El segundo hallazgo sí era válido: la medición ocurría antes de activar estilos de impresión. Se corrigió activando `printing-inspection`, esperando el recálculo de layout y midiendo después.
+- El filtrado ocurre antes de `slice(0, backlogVisibleLimit)`.
+- `showMoreBacklogJobs()` incrementa una sola página y hace un solo render.
+- El observer se crea una vez y bloquea callbacks repetidos mientras el sentinel sigue intersectando.
+- Los reinicios por importación son condicionales a cambios reales del dataset; avisos de catálogo por sí solos no reinician.
+- Los cambios se limitan a los cuatro archivos previstos y este reporte.
 
-## Bloqueo de evidencia PDF
+## Validación visual
 
-No se generó ni se afirmó validar `output/pdf/hoja-inspeccion.pdf`: la pantalla necesita un backend de Apps Script autenticado con una WO que tenga materiales y al menos diez operaciones, datos no disponibles localmente. Además, `pdfinfo` y `pdftoppm` no están instalados en este entorno (`CommandNotFoundException`), por lo que tampoco fue posible renderizar `C:\Users\plane\Documents\Necesidades de Produccion.pdf`. Se verificó la estructura contra el CSS/HTML original indicado en el brief, pero queda pendiente la comparación visual de una página horizontal real.
-
-## Preocupaciones
-
-- La fidelidad visual final y ausencia de recortes en el driver de impresión real requieren la WO/backend y Poppler.
-- El proyecto conserva una sola regla `@page` global para otros reportes; inspección usa una página nombrada aislada.
-
-## Corrección posterior de hallazgos
-
-- La impresión usa la página nombrada `inspection` (`A4 landscape`, márgenes `3mm 8mm 5mm 9mm`) y `page: inspection` se aplica únicamente a `.inspection-sheet` bajo `body.printing-inspection`; la regla global de otros reportes no se sobrescribe.
-- La escala usa A4 horizontal de 297 x 210 mm y un área útil exacta de 280 x 202 mm.
-- La clase de impresión se activa antes del reflow y de medir `scrollWidth/scrollHeight`.
-- La variable de escala y la clase se limpian tanto en `finally` como mediante `afterprint`.
-- TDD RED: la prueba focalizada falló con `2 !== 1` al detectar dos reglas `@page` globales. GREEN: prueba focalizada 85/85 y `npm.cmd run check` con código 0.
+Se generó correctamente la vista local, pero el navegador integrado no estuvo disponible y el proyecto no incluye Playwright. No se instalaron dependencias nuevas. La conducta queda cubierta por pruebas funcionales del controlador/observer y pruebas de integración de fuente/build.

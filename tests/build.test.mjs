@@ -39,6 +39,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
+  assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
+  assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
+  assert.match(bridge, /getAppStateIfChanged: true/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
@@ -150,7 +153,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(restorePreviewSource, /let previewState = createAppSheetPayload\(\);/);
   assert.doesNotMatch(restorePreviewSource, /\bstate\s*=/);
   assert.match(restorePreviewSource, /confirmDraftRestore\(snapshotId, previewState\)/);
-  assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*restoreDraftBtn\.disabled = inProgress \|\| Boolean\(planningActionsBusy\)/);
+  assert.match(pagesIndex, /function refreshPlanningActionControls\(\)[\s\S]*planningActionsBusy \|\| netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight[\s\S]*setPlanningControlBusy\(els\.restoreDraftBtn, busy\)/);
+  assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*refreshPlanningActionControls\(\)/);
   assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
   assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal"\)/);
   assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
@@ -275,6 +279,25 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /\.inspection-actions \.secondary\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
   assert.match(pagesIndex, /id="inspectionReload"[\s\S]*id="inspectionDrawing"[\s\S]*id="inspectionEditLink"[\s\S]*id="inspectionPrint"[\s\S]*id="inspectionSelectOps"/);
   assert.match(pagesIndex, /function initializePlanningApp\(\)\s*\{[\s\S]*applyInitialWorkspaceView\(\);[\s\S]*loadAppStateInBackground\(\);/);
+  const optimizedStartupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)"),
+    pagesIndex.indexOf("const originalLoadPlanSnapshots =", pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)")),
+  );
+  assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshots|loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
+  const initialCacheCaptureIndex = pagesIndex.indexOf("const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta)");
+  assert.ok(
+    initialCacheCaptureIndex >= 0 &&
+      initialCacheCaptureIndex < pagesIndex.indexOf("await root.PPAppsScriptBridge.ensureReady()"),
+    "la cache inicial debe capturarse antes de esperar al bridge",
+  );
+  assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
+  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadSnapshotsOnce\(false\)/);
+  assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
+  assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
+  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
   assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
@@ -366,7 +389,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);
-  assert.match(pagesIndex, /if \(Array\.isArray\(payload\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
+  assert.match(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);
@@ -504,18 +527,20 @@ test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
   const compactStart = performanceClient.indexOf("function compactLocalState()");
   const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
   const compactSource = performanceClient.slice(compactStart, compactEnd);
-  const compactLocalState = Function("state", `${compactSource}; return compactLocalState;`)({
+  const compactLocalState = Function("state", "LOCAL_CACHE_IDENTITY", `${compactSource}; return compactLocalState;`)({
     revision: 7,
     matrixSearch: "soldadura",
     excludedCapabilities: ["5527::SOLDADURA_SOPORTE"],
     materials: [{ ot: "WO-1" }],
-  });
+  }, "plan-produccion-cache-v2");
 
   const persisted = compactLocalState();
 
   assert.equal(persisted.matrixSearch, undefined);
   assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
   assert.deepEqual(persisted.materials, []);
+  assert.match(compactSource, /performanceCache:\s*\{[\s\S]*identity: LOCAL_CACHE_IDENTITY[\s\S]*revision[,:\s]/);
+  assert.match(performanceClient, /const compacted = compactLocalState\(\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\);[\s\S]*writeMeta\(\{[\s\S]*deferredMaterials: true/);
 });
 
 test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {
@@ -589,9 +614,11 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
     netSuiteChangeAlerts: [],
     planStart: "2026-07-26",
   };
-  const applyPayload = Function("state", "normalizeKey", `${applySource}; return applyNetSuitePlanningPayload;`)(
+  let backlogResetCount = 0;
+  const applyPayload = Function("state", "normalizeKey", "resetBacklogWindow", `${applySource}; return applyNetSuitePlanningPayload;`)(
     state,
     (value) => String(value || "").trim().toUpperCase(),
+    () => { backlogResetCount += 1; },
   );
   const planAlertItems = Function(
     "state",
@@ -617,11 +644,140 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
   applyPayload({ operationCatalogWarning: "Catalogo NetSuite no disponible" });
 
   assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.equal(backlogResetCount, 0);
+  applyPayload({ operations: [] });
+  assert.equal(backlogResetCount, 1);
   assert.deepEqual(planAlertItems().find((alert) => alert.title === "Catalogo de operaciones NetSuite"), {
     level: "warning",
     title: "Catalogo de operaciones NetSuite",
     message: "Catalogo NetSuite no disponible",
   });
+});
+
+test("el backlog renderiza una ventana inicial de 30 trabajos con controles progresivos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+
+  assert.match(app, /const BACKLOG_PAGE_SIZE = 30/);
+  assert.match(renderPriorityList, /jobs\.slice\(0,\s*backlogVisibleLimit\)/);
+  assert.match(renderPriorityList, /\$\{visibleJobs\.length\} de \$\{jobs\.length\}/);
+  assert.match(template, /id="priorityLoadMore"/);
+  assert.match(template, /id="priorityLoadMoreSentinel"/);
+});
+
+test("la ventana del backlog avanza exactamente 30 y puede reiniciarse sin render adicional", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      resetBacklogWindow,
+      showMoreBacklogJobs,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {},
+    {},
+  );
+
+  assert.equal(backlog.limit, 30);
+  backlog.showMoreBacklogJobs();
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  backlog.resetBacklogWindow();
+  assert.equal(backlog.limit, 30);
+  assert.equal(renderCount, 1);
+});
+
+test("buscar y filtrar reinician el backlog; el boton carga mas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function setActiveTab(", bindStart);
+  const bindEvents = app.slice(bindStart, bindEnd);
+
+  assert.match(bindEvents, /searchInput\.addEventListener\("input",\s*debounce\(\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\},\s*120\)\)/);
+  assert.match(bindEvents, /statusFilter\.addEventListener\("change",\s*\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\}\)/);
+  assert.match(bindEvents, /priorityLoadMore\.addEventListener\("click",\s*showMoreBacklogJobs\)/);
+});
+
+test("el observer del backlog es unico, no carga en cascada y conserva el fallback", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let observed = 0;
+  let observerCallback;
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      bindBacklogLoadMoreObserver,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {
+      priorityLoadMore: { hidden: false },
+      priorityLoadMoreSentinel: {},
+    },
+    {
+      IntersectionObserver: class {
+        constructor(callback) { observerCallback = callback; }
+        observe() { observed += 1; }
+      },
+    },
+  );
+
+  backlog.bindBacklogLoadMoreObserver();
+  backlog.bindBacklogLoadMoreObserver();
+  assert.equal(observed, 1);
+  observerCallback([{ isIntersecting: true }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  observerCallback([{ isIntersecting: false }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 90);
+  assert.equal(renderCount, 2);
+});
+
+test("el backlog conserva el foco de fecha visible y reinicia al cambiar el dataset", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+  const payloadStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const payloadEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", payloadStart);
+  const applyPayload = app.slice(payloadStart, payloadEnd);
+  const importedStart = app.indexOf("function applyImported(imported, options = {})");
+  const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
+  const applyImported = app.slice(importedStart, importedEnd);
+  const backlogSyncStart = app.indexOf("async function syncBacklogWorkOrders()");
+  const backlogSyncEnd = app.indexOf("async function syncNetSuiteTwoPhase(", backlogSyncStart);
+  const syncBacklog = app.slice(backlogSyncStart, backlogSyncEnd);
+  const twoPhaseStart = backlogSyncEnd;
+  const twoPhaseEnd = app.indexOf("function applyNetSuitePlanningPayload(payload)", twoPhaseStart);
+  const syncTwoPhase = app.slice(twoPhaseStart, twoPhaseEnd);
+
+  assert.match(renderPriorityList, /document\.activeElement\?\.dataset\?\.dueOt/);
+  assert.match(renderPriorityList, /dataset\.dueOt === focusedDueOt[\s\S]*\.focus\(\)/);
+  assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*saveAndRender\(/);
+  assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
 });
 
 test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {

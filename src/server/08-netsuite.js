@@ -44,7 +44,7 @@ function PP_syncNetSuitePlant_(current) {
 
 function PP_fetchNetSuitePlantData_() {
   const config = PP_netSuiteConfig_();
-  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const plantFilter = PP_buildPlantFilter_(workOrders.rows);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
@@ -103,7 +103,7 @@ function PP_fetchNetSuitePlanningData_(current) {
     return PP_fetchNetSuitePlantData_();
   }
   const config = PP_netSuiteConfig_();
-  const operationCatalogResult = PP_fetchNetSuiteOperationCatalog_(config);
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const plantFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
   const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
@@ -238,6 +238,98 @@ function PP_invoiceAverageWindow_(endDate) {
     from: Utilities.formatDate(start, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
     to: Utilities.formatDate(end, Session.getScriptTimeZone(), 'yyyy-MM-dd')
   };
+}
+
+function PP_fetchNetSuiteOperationCatalogCached_(config) {
+  const scope = PP_normalizeKey_(config.accountId + '_' + config.locationId);
+  const cacheKey = 'NS_OPERATION_CATALOG_V1_' + scope;
+  const attemptKey = 'NS_OPERATION_CATALOG_ATTEMPT_V1_' + scope;
+  let cache = PP_getNetSuiteOperationCatalogCache_();
+  let items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+  if (items.length) return { items: items, warning: '' };
+
+  let lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return PP_netSuiteOperationCatalogDeferred_('actualizacion en curso');
+  } catch (_) {
+    return PP_netSuiteOperationCatalogDeferred_('bloqueo temporal no disponible');
+  }
+
+  try {
+    if (!cache) cache = PP_getNetSuiteOperationCatalogCache_();
+    items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+    if (items.length) return { items: items, warning: '' };
+
+    const now = Date.now();
+    let properties;
+    let lastAttemptRaw = '';
+    try {
+      properties = PropertiesService.getScriptProperties();
+      lastAttemptRaw = properties.getProperty(attemptKey) || '';
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('lectura de cooldown no disponible');
+    }
+    const lastAttempt = Number(lastAttemptRaw || 0);
+    if (lastAttemptRaw && (!Number.isFinite(lastAttempt) || lastAttempt <= 0)) {
+      return PP_netSuiteOperationCatalogDeferred_('marcador de cooldown invalido');
+    }
+    if (lastAttempt > 0 && now - lastAttempt < 3600000) {
+      return PP_netSuiteOperationCatalogDeferred_('consulta omitida durante cooldown');
+    }
+    const attemptMarker = String(now);
+    try {
+      properties.setProperty(attemptKey, attemptMarker);
+      if (properties.getProperty(attemptKey) !== attemptMarker) throw new Error('cooldown no persistido');
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('escritura de cooldown no disponible');
+    }
+
+    const result = PP_fetchNetSuiteOperationCatalog_(config);
+    if (result.items.length && cache) {
+      try { cache.put(cacheKey, JSON.stringify(result.items), 3600); } catch (_) {}
+    }
+    return result;
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+function PP_getNetSuiteOperationCatalogCache_() {
+  try { return CacheService.getScriptCache(); } catch (_) { return null; }
+}
+
+function PP_readNetSuiteOperationCatalogCache_(cache, key) {
+  if (!cache) return [];
+  let cached = '';
+  try { cached = cache.get(key); } catch (_) { return []; }
+  if (!cached) return [];
+  try { return PP_validateNetSuiteOperationCatalogCache_(JSON.parse(cached)); } catch (_) { return []; }
+}
+
+function PP_validateNetSuiteOperationCatalogCache_(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const catalog = {};
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+        || typeof item.key !== 'string' || typeof item.ct !== 'string'
+        || typeof item.label !== 'string' || item.source !== 'NETSUITE_MASTER'
+        || item.active !== true) return [];
+    const ct = item.ct.trim();
+    const label = item.label.trim();
+    const key = ct + '::' + PP_normalizeKey_(label);
+    if (!ct || !label || item.key !== key) return [];
+    if (PP_isSpecialNetSuiteOperation_(ct, label)) continue;
+    if (!catalog[key]) {
+      catalog[key] = { key: key, ct: ct, label: label, source: 'NETSUITE_MASTER', active: true };
+    }
+  }
+  return Object.keys(catalog).sort().map(function(key) { return catalog[key]; });
+}
+
+function PP_netSuiteOperationCatalogDeferred_(reason) {
+  return { items: [], warning: 'Catálogo de operaciones NetSuite no disponible: ' + reason };
 }
 
 function PP_fetchNetSuiteOperationCatalog_(config) {

@@ -33,6 +33,38 @@ function isPlannedJobStatus(status) {
   return normalizeStatus(status).includes("PLANIFICAD");
 }
 
+function normalizeCapabilityKeysForApp(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const separator = text.indexOf("::");
+    if (separator < 0) return text;
+    const ct = text.slice(0, separator).trim();
+    const label = normalizeStatus(text.slice(separator + 2).replace(/_/g, " ")).replace(/\s+/g, "_");
+    return ct && label ? `${ct}::${label}` : "";
+  }).filter(Boolean))]
+    .filter((key) => normalizeStatus(key).replace(/\s+/g, "_") !== TOOL_CHANGE_KEY);
+}
+
+function loadCurrentPlanOperations(state, plannerCore = PlannerCore) {
+  const operationsSource = sourceBetween(
+    "function invalidateCurrentPlanOperationsCache",
+    "function currentDraftScheduledOperations(",
+  );
+  return Function(
+    "state", "window", "normalizeCapabilityKeys",
+    `let currentPlanOperationsCache = null;
+      ${operationsSource};
+      return {
+        currentPlanOperations,
+        invalidateCurrentPlanOperationsCache:
+          typeof invalidateCurrentPlanOperationsCache === "function"
+            ? invalidateCurrentPlanOperationsCache
+            : undefined,
+      };`,
+  )(state, { PlannerCore: plannerCore }, normalizeCapabilityKeysForApp);
+}
+
 test("TOOL_CHANGE obligatorio se normaliza y se muestra fijo en la matriz", () => {
   const capability = {
     key: TOOL_CHANGE_KEY,
@@ -191,10 +223,7 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
     ],
     workOrders: [{ ot: "100", status: "PLAN", item: "P-1" }],
   };
-  const currentPlanOperations = Function(
-    "state", "window",
-    `${sourceBetween("function currentPlanOperations(", "function currentDraftScheduledOperations(")}; return currentPlanOperations;`,
-  )(state, { PlannerCore });
+  const { currentPlanOperations } = loadCurrentPlanOperations(state);
   const jobStatusSource = sourceBetween("function jobStatusFromOperations(", "function matchesStatusFilter(");
   const { jobStatusFromOperations, jobStatusForOt } = Function(
     "state", "currentPlanOperations", "workOrderForOt", "isClosedJobStatus",
@@ -259,6 +288,65 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
   assert.equal(finish.getMonth(), 6);
   assert.equal(finish.getDate(), 27);
   assert.equal(finish.getHours(), 8);
+});
+
+test("los consumidores del render comparten operaciones incluidas hasta invalidar cambios relevantes", () => {
+  let filterCalls = 0;
+  const instrumentedPlannerCore = {
+    ...PlannerCore,
+    filterExcludedOperations(...args) {
+      filterCalls += 1;
+      return PlannerCore.filterExcludedOperations(...args);
+    },
+  };
+  const state = {
+    excludedCapabilities: [],
+    operations: [
+      { id: "cut", ct: "100", descripcion: "CORTE" },
+    ],
+  };
+  const { currentPlanOperations, invalidateCurrentPlanOperationsCache } =
+    loadCurrentPlanOperations(state, instrumentedPlannerCore);
+
+  const first = currentPlanOperations();
+  const second = currentPlanOperations();
+
+  assert.equal(first, second);
+  assert.equal(filterCalls, 1);
+  assert.equal(typeof invalidateCurrentPlanOperationsCache, "function");
+
+  state.operations.push({ id: "bend", ct: "5459", descripcion: "DOBLADO" });
+  invalidateCurrentPlanOperationsCache();
+  const afterOperationsChange = currentPlanOperations();
+  assert.notEqual(afterOperationsChange, second);
+  assert.deepEqual(afterOperationsChange.map((operation) => operation.id), ["cut", "bend"]);
+  assert.equal(filterCalls, 2);
+
+  state.excludedCapabilities = ["5459::DOBLADO"];
+  invalidateCurrentPlanOperationsCache();
+  const afterExclusionChange = currentPlanOperations();
+  assert.notEqual(afterExclusionChange, afterOperationsChange);
+  assert.deepEqual(afterExclusionChange.map((operation) => operation.id), ["cut"]);
+  assert.equal(filterCalls, 3);
+});
+
+test("la firma de exclusiones distingue claves que contienen separadores", () => {
+  const state = {
+    excludedCapabilities: ["100::A|B", "200::C"],
+    operations: [
+      { id: "pipe-label", ct: "100", descripcion: "A|B" },
+      { id: "plain-label", ct: "100", descripcion: "A" },
+    ],
+  };
+  const { currentPlanOperations } = loadCurrentPlanOperations(state);
+
+  const first = currentPlanOperations();
+  state.excludedCapabilities = ["100::A", "B|200::C"];
+  const second = currentPlanOperations();
+
+  assert.notEqual(second, first);
+  assert.deepEqual(first.map((operation) => operation.id), ["plain-label"]);
+  assert.deepEqual(second.map((operation) => operation.id), ["pipe-label"]);
 });
 
 test("KPI histórico se calcula solo con el snapshot publicado", () => {

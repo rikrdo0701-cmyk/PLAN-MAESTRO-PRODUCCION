@@ -64,6 +64,25 @@ test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", () =
   assert.deepEqual([...core.filterExcludedOperations({}, operations)], operations);
 });
 
+test("precalcula las exclusiones y permite reutilizarlas al filtrar operaciones", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "excluded", ct: " 54á ", descripcion: "  Dóblez   especial " },
+    { id: "included", ct: "100", descripcion: "CORTE" },
+    { id: "tool-change", ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL" },
+  ];
+  const state = { excludedCapabilities: ["54A::DOBLEZ_ESPECIAL", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"] };
+
+  const excludedSet = core.excludedCapabilityKeySet(state);
+
+  assert.deepEqual([...excludedSet], ["54A::DOBLEZ_ESPECIAL", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"]);
+  assert.deepEqual(
+    [...core.filterExcludedOperations(state, operations, excludedSet)].map((operation) => operation.id),
+    ["included", "tool-change"],
+  );
+  assert.deepEqual([...core.excludedCapabilityKeySet({ excludedCapabilities: "54A::DOBLEZ_ESPECIAL" })], []);
+});
+
 test("PlannerCore acepta un estado vacio", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
