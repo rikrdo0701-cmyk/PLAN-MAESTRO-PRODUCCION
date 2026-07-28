@@ -1975,9 +1975,14 @@ function finishBacklogDrag(commit, pointerId = null) {
   if (commit && toPlanned) selectJob(sourceOt, true);
 }
 
+function jobPlanningOperations(job) {
+  return currentPlanOperations(job?.ops || [])
+    .filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+}
+
 async function selectJob(ot, selected) {
   if (!ot) return;
-  const job = getPriorityJobs().find((item) => item.ot === ot);
+  let job = getPriorityJobs().find((item) => item.ot === ot);
   if (selected && job && !job.movable && !job.programmed) {
     showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
     return;
@@ -1994,6 +1999,14 @@ async function selectJob(ot, selected) {
     }
   }
   const alreadySelected = state.selectedOts.includes(ot);
+  if (selected && !alreadySelected && !jobPlanningOperations(job).length) {
+    await ensurePlanningDataLoaded(true, { force: true });
+    job = getPriorityJobs().find((item) => item.ot === ot);
+    if (!jobPlanningOperations(job).length) {
+      showToast(`La OT ${ot} no devolvio operaciones de NetSuite; no se agrego al plan`, 9000);
+      return;
+    }
+  }
   if (selected && !alreadySelected) {
     state._pendingAddOt = ot;
     state._pendingAddOtSnapshot = [...state.selectedOts];
@@ -2038,7 +2051,7 @@ async function selectJob(ot, selected) {
 
 async function prepareJobForPlanning(job, options = {}) {
   if (!job) return false;
-  const operations = currentPlanOperations(job.ops).filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+  const operations = jobPlanningOperations(job);
   const planningJob = { ...job, ops: operations };
   const issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)

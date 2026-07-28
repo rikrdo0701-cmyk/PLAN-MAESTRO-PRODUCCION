@@ -880,13 +880,13 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
     },
   };
   const prepareJobForPlanning = Function(
-    "state", "window", "currentPlanOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "state", "window", "currentPlanOperations", "jobPlanningOperations", "showPlanningBlockers", "buildPlanningRequirements",
     "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
     "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
     "applyCommercialPlanningRequirement", "assignPlanningOperators",
     `${preparation}; return prepareJobForPlanning;`,
   )(
-    state, window, currentPlanOperations, async () => { dialogs += 1; },
+    state, window, currentPlanOperations, () => [], async () => { dialogs += 1; },
     (_issues, operations) => { preparedOperations = operations; return []; },
     () => ({ needsType: false, needsPlanningType: false }),
     () => "signature", () => true, () => true,
@@ -909,6 +909,19 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
   assert.equal(dialogs, 0);
   assert.equal(validateScheduleConfiguration(new Date()), null);
   assert.deepEqual(validatedOperations, []);
+});
+
+test("agregar una OT sin operaciones carga y valida sus operaciones antes de planearla", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const selection = app.slice(
+    app.indexOf("async function selectJob("),
+    app.indexOf("async function prepareJobForPlanning(", app.indexOf("async function selectJob(")),
+  );
+
+  assert.match(selection, /if \(selected && !alreadySelected && !jobPlanningOperations\(job\)\.length\)/);
+  assert.match(selection, /await ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
+  assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => item\.ot === ot\)/);
+  assert.match(selection, /if \(!jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
 });
 
 test("borrador usa exclusiones actuales y publicado permanece inmutable", async () => {
