@@ -27,6 +27,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
   const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
   const inspectionDrawingService = await readFile(path.join(result.distDir, "17-inspection-drawing-service.js"), "utf8");
+  const planningWorkOrderService = await readFile(path.join(result.distDir, "18-planning-work-order-service.js"), "utf8");
   const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
   const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
   const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
@@ -43,6 +44,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
   assert.match(bridge, /getAppStateIfChanged: true/);
   assert.match(bridge, /saveOperationPlanStatus: true/);
+  assert.match(bridge, /getPlanningWorkOrderData: true/);
+  assert.match(planningWorkOrderService, /function getPlanningWorkOrderData\(ot\)/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
   assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
   assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
