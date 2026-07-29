@@ -97,7 +97,29 @@ function PP_fetchPlanningWorkOrderOperations_(folio) {
     throw new Error('NetSuite excedio el limite de paginas al buscar operaciones de la OT ' + folio);
   }
   const targeted = fetchRows(true);
-  return targeted.length ? targeted : fetchRows(false);
+  const openRows = targeted.length ? targeted : fetchRows(false);
+  if (openRows.length) return openRows;
+
+  const closedResponse = PP_netSuiteRestletRequest_(
+    { script: '1762', deploy: '17' },
+    {
+      locationId: config.locationId,
+      onlyOpen: false,
+      woFolio: folio,
+      workOrderTranId: folio,
+      pageIndex: 0,
+      pageSize: 200
+    },
+    config
+  );
+  if (!closedResponse.ok) {
+    throw new Error('NetSuite operaciones: ' + closedResponse.status + ' ' + closedResponse.raw.slice(0, 300));
+  }
+  const closedHeaders = closedResponse.json.headers || [];
+  return PP_rowsAsObjects_(closedResponse.json, closedHeaders).filter(function(row) {
+    const rowFolio = String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid', 'WO Folio', 'tranid']) || '').trim();
+    return PP_normalizeKey_(rowFolio) === PP_normalizeKey_(folio);
+  });
 }
 
 function PP_planningIndividualOperationValid_(operation) {

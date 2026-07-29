@@ -91,6 +91,36 @@ test("reintenta sin filtro cuando 1762 no reconoce woFolio", () => {
   assert.equal(Object.hasOwn(requests[1], "woFolio"), false);
 });
 
+test("consulta la OT sin onlyOpen cuando NetSuite no devuelve operaciones abiertas", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
+    materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
+  }, []);
+  const requests = [];
+  context.PP_netSuiteRestletRequest_ = (_query, body) => {
+    requests.push(body);
+    const closedFallback = body.woFolio === "2773" && body.onlyOpen === false;
+    return {
+      ok: true,
+      status: 200,
+      raw: "",
+      json: {
+        rows: closedFallback
+          ? [{ workorder_tranid: "2773", Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 25, Estado: "In Process" }]
+          : [],
+        headers: [],
+        hasMore: false,
+      },
+    };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.at(-1).onlyOpen, false);
+  assert.equal(requests.at(-1).woFolio, "2773");
+});
+
 test("adapta una OT individual al contrato del planeador", () => {
   const context = loadService({
     trabajo: {
