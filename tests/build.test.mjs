@@ -918,8 +918,8 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
 test("agregar una OT sin operaciones consulta solo esa OT y valida sus operaciones antes de planearla", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const selection = app.slice(
-    app.indexOf("async function selectJob("),
-    app.indexOf("async function prepareJobForPlanning(", app.indexOf("async function selectJob(")),
+    app.indexOf("function selectJob("),
+    app.indexOf("async function prepareJobForPlanning(", app.indexOf("function selectJob(")),
   );
   const backlog = app.slice(
     app.indexOf("function renderPriorityList()"),
@@ -930,13 +930,13 @@ test("agregar una OT sin operaciones consulta solo esa OT y valida sus operacion
     app.indexOf("function jobPlanningOperations()", app.indexOf("function finishBacklogDrag(")),
   );
 
-  assert.match(selection, /if \(selected && !alreadySelected && !jobPlanningOperations\(job\)\.length\)/);
+  assert.match(selection, /if \(selected && !alreadySelected && !hasIndividualPlanningOperations\(ot\)\)/);
   assert.match(selection, /await ensureWorkOrderPlanningData\(ot\)/);
   assert.doesNotMatch(selection, /ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
   assert.match(selection, /setIndividualPlanningBusy\(ot, true\)/);
   assert.match(selection, /finally[\s\S]*setIndividualPlanningBusy\(ot, false\)/);
   assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => item\.ot === ot\)/);
-  assert.match(selection, /if \(!jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
+  assert.match(selection, /if \(!hasIndividualPlanningOperations\(ot\) \|\| !jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
   assert.match(backlog, /selectJob\(job\.ot, true\)/);
   assert.match(drag, /selectJob\(sourceOt, true\)/);
 });

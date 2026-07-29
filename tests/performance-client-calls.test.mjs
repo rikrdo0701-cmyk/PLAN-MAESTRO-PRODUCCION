@@ -28,17 +28,19 @@ const individualSelectionSource = appSource.slice(
   appSource.indexOf("async function prepareJobForPlanning("),
 );
 
-function loadIndividualSelection({ jobs, loaded, card, state, toasts }) {
+function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
   return new Function(
     "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
     "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
     "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
+    "materialOtKey", "hasIndividualPlanningOperations",
     `${individualSelectionSource}; return selectJob;`,
   )(
     { priorityList: { querySelectorAll: () => [card] } }, () => jobs.value, (message) => toasts.push(message), state,
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
-    (operations) => operations, loaded, async () => true, () => {}, () => {}, () => {}, () => {},
+    (operations) => operations, loaded, prepare, checkpoint, () => {}, () => {}, () => {},
     (callback) => callback(), () => {}, () => {}, () => {},
+    (value) => String(value || ""), (ot) => jobs.value.some((job) => job.ot === ot && job.ops.length > 0),
   );
 }
 
@@ -183,6 +185,7 @@ test("dos solicitudes simultaneas de una OT comparten una sola llamada individua
   let calls = 0;
   const fixture = loadClient({
     installIndividualPlanning: true,
+    state: { workOrders: [{ ot: "2773" }] },
     callAppsScript: async (method, ot) => {
       assert.equal(method, "getPlanningWorkOrderData");
       assert.equal(ot, "2773");
@@ -273,7 +276,17 @@ test("la fusion individual reemplaza solo la OT solicitada y conserva las demas"
     state: {
       operations: [{ id: "old-2773", ot: "2773" }, { id: "keep-2001", ot: "2001", fechaInicio: "2026-07-01" }],
       materials: [{ ot: "2773", component: "OLD" }, { ot: "2001", component: "KEEP" }],
-      workOrders: [{ ot: "2773", item: "OLD" }, { ot: "2001", item: "KEEP" }],
+      workOrders: [
+        {
+          ot: "2773",
+          item: "OLD",
+          dueDateOverride: "2026-08-01",
+          photoUrl: "local.jpg",
+          averageSalePrice: 123,
+          localTag: "KEEP_LOCAL",
+        },
+        { ot: "2001", item: "KEEP" },
+      ],
     },
     invalidateCurrentPlanOperationsCache: () => { cacheInvalidations += 1; },
     resetBacklogWindow: () => { backlogResets += 1; },
@@ -282,15 +295,31 @@ test("la fusion individual reemplaza solo la OT solicitada y conserva las demas"
   const merged = fixture.context.mergeIndividualPlanningData({
     data: {
       workOrder: { ot: "2773", item: "NEW" },
-      operations: [{ id: "new-2773", ot: "2773" }, { id: "unexpected-2001", ot: "2001" }],
+      operations: [
+        { id: "new-2773", ot: "2773", ct: "CORTE", tiempoProd: 10 },
+        { id: "unexpected-2001", ot: "2001", ct: "DOBLEZ", tiempoProd: 20 },
+      ],
       materials: [{ ot: "2773", component: "NEW" }, { ot: "2001", component: "UNEXPECTED" }],
     },
   }, "2773");
 
   assert.equal(merged, true);
-  assert.deepEqual(plain(fixture.state.operations), [{ id: "keep-2001", ot: "2001", fechaInicio: "2026-07-01" }, { id: "new-2773", ot: "2773" }]);
+  assert.deepEqual(plain(fixture.state.operations), [
+    { id: "keep-2001", ot: "2001", fechaInicio: "2026-07-01" },
+    { id: "new-2773", ot: "2773", ct: "CORTE", tiempoProd: 10 },
+  ]);
   assert.deepEqual(plain(fixture.state.materials), [{ ot: "2001", component: "KEEP" }, { ot: "2773", component: "NEW" }]);
-  assert.deepEqual(plain(fixture.state.workOrders), [{ ot: "2001", item: "KEEP" }, { ot: "2773", item: "NEW" }]);
+  assert.deepEqual(plain(fixture.state.workOrders), [
+    { ot: "2001", item: "KEEP" },
+    {
+      ot: "2773",
+      item: "NEW",
+      dueDateOverride: "2026-08-01",
+      photoUrl: "local.jpg",
+      averageSalePrice: 123,
+      localTag: "KEEP_LOCAL",
+    },
+  ]);
   assert.equal(cacheInvalidations, 1);
   assert.equal(backlogResets, 1);
 });
@@ -300,6 +329,7 @@ test("una OT con operaciones incompletas consulta backend", async () => {
   const fixture = loadClient({
     installIndividualPlanning: true,
     state: {
+      workOrders: [{ ot: "2773" }],
       operations: [
         { id: "sin-datos", ot: "2773" },
         { id: "sin-ct", ot: "2773", ct: "SIN_CT", tiempoProd: 10 },
@@ -316,6 +346,136 @@ test("una OT con operaciones incompletas consulta backend", async () => {
   assert.equal(calls, 1);
 });
 
+test("una OT con ruta mixta consulta backend aunque tenga una operacion valida", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773" }],
+      operations: [
+        { id: "valida", ot: "2773", ct: "CORTE", tiempoProd: 10 },
+        { id: "invalida", ot: "2773", ct: "DOBLEZ", tiempoProd: 0 },
+      ],
+    },
+    callAppsScript: async () => {
+      calls += 1;
+      return {
+        ok: true,
+        data: {
+          workOrder: { ot: "2773" },
+          operations: [{ id: "remota", ot: "2773", ct: "CORTE", tiempoProd: 20 }],
+          materials: [],
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.equal(calls, 1);
+});
+
+test("una fusion con ruta mixta falla sin cambiar estado", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773", item: "LOCAL" }],
+      operations: [{ id: "local", ot: "2773", ct: "CORTE", tiempoProd: 0 }],
+      materials: [{ ot: "2773", component: "LOCAL" }],
+    },
+  });
+  const before = plain(fixture.state);
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773", item: "REMOTE" },
+      operations: [
+        { id: "valid", ot: "2773", ct: "CORTE", tiempoProd: 10 },
+        { id: "invalid", ot: "2773", ct: "DOBLEZ", tiempoProd: 0 },
+      ],
+      materials: [{ ot: "2773", component: "REMOTE" }],
+    },
+  }, "2773");
+
+  assert.equal(merged, false);
+  assert.deepEqual(plain(fixture.state), before);
+});
+
+test("una fusion agrega un work order normalizado cuando no existe localmente", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2001", item: "KEEP" }],
+      operations: [],
+    },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773", item: "NEW", quantity: 4, status: "En curso", rawField: "OMIT" },
+      operations: [{ id: "valid", ot: "2773", ct: "CORTE", tiempoProd: 10 }],
+      materials: [],
+    },
+  }, "2773");
+
+  assert.equal(merged, true);
+  assert.deepEqual(plain(fixture.state.workOrders), [
+    { ot: "2001", item: "KEEP" },
+    { ot: "2773", item: "NEW", quantity: 4, status: "En curso" },
+  ]);
+});
+
+test("una respuesta tardia no pisa una ruta valida agregada durante la espera", async () => {
+  const gate = deferredPromise();
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773", item: "LOCAL" }],
+      operations: [],
+      materials: [{ ot: "2773", component: "LOCAL" }],
+    },
+    callAppsScript: async () => gate.promise,
+  });
+
+  const request = fixture.context.ensureWorkOrderPlanningData("2773");
+  fixture.state.operations.push({ id: "synced", ot: "2773", ct: "CORTE", tiempoProd: 30 });
+  gate.resolve({
+    ok: true,
+    data: {
+      workOrder: { ot: "2773", item: "REMOTE" },
+      operations: [{ id: "late", ot: "2773", ct: "DOBLEZ", tiempoProd: 10 }],
+      materials: [{ ot: "2773", component: "REMOTE" }],
+    },
+  });
+
+  assert.deepEqual(plain(await request), { ready: true, source: "cached" });
+  assert.deepEqual(plain(fixture.state.operations), [{ id: "synced", ot: "2773", ct: "CORTE", tiempoProd: 30 }]);
+  assert.deepEqual(plain(fixture.state.workOrders), [{ ot: "2773", item: "LOCAL" }]);
+  assert.deepEqual(plain(fixture.state.materials), [{ ot: "2773", component: "LOCAL" }]);
+});
+
+test("una respuesta tardia no reintroduce una OT eliminada durante la espera", async () => {
+  const gate = deferredPromise();
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { workOrders: [{ ot: "2773", item: "LOCAL" }], operations: [], materials: [] },
+    callAppsScript: async () => gate.promise,
+  });
+
+  const request = fixture.context.ensureWorkOrderPlanningData("2773");
+  fixture.state.workOrders = [];
+  gate.resolve({
+    ok: true,
+    data: {
+      workOrder: { ot: "2773", item: "REMOTE" },
+      operations: [{ id: "late", ot: "2773", ct: "CORTE", tiempoProd: 10 }],
+      materials: [],
+    },
+  });
+
+  assert.deepEqual(plain(await request), { ready: false, error: "La OT 2773 ya no esta disponible" });
+  assert.deepEqual(plain(fixture.state), { revision: 1, workOrders: [], operations: [], materials: [] });
+});
+
 test("una OT con CT y tiempo de planeacion se resuelve desde cache sin backend", async () => {
   let calls = 0;
   const fixture = loadClient({
@@ -328,10 +488,59 @@ test("una OT con CT y tiempo de planeacion se resuelve desde cache sin backend",
   assert.equal(calls, 0);
 });
 
+test("dos acciones simultaneas de agregar una OT preparan y confirman una sola vez", async () => {
+  const gate = deferredPromise();
+  const changes = [];
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    querySelector: () => addButton,
+    setAttribute: () => changes.push("busy"),
+    removeAttribute: () => changes.push("ready"),
+  };
+  const jobs = { value: [{ ot: "100", movable: true, ops: [] }] };
+  const state = { selectedOts: [] };
+  let preparations = 0;
+  let checkpoints = 0;
+  const selectJob = loadIndividualSelection({
+    jobs,
+    loaded: async () => {
+      await gate.promise;
+      jobs.value = [{ ot: "100", movable: true, ops: [{ id: "op-1" }] }];
+      return { ready: true };
+    },
+    prepare: async () => { preparations += 1; return true; },
+    checkpoint: () => { checkpoints += 1; },
+    card,
+    state,
+    toasts: [],
+  });
+
+  const first = selectJob("100", true);
+  const second = selectJob("100", true);
+  gate.resolve();
+  await Promise.all([first, second]);
+
+  assert.equal(preparations, 1);
+  assert.equal(checkpoints, 1);
+  assert.deepEqual(changes, ["busy", "ready"]);
+  assert.deepEqual(state.selectedOts, ["100"]);
+});
+
+test("una tarjeta aria-busy no puede iniciar drag", () => {
+  const canStartBacklogDrag = new Function(`${individualSelectionSource}; return canStartBacklogDrag;`)();
+  const card = { getAttribute: (name) => name === "aria-busy" ? "true" : null };
+  const job = { movable: true };
+  const event = { button: 0, target: { closest: () => null } };
+
+  assert.equal(canStartBacklogDrag(card, job, event), false);
+});
+
 test("un error o respuesta no valida libera la solicitud individual para reintentar", async () => {
   let calls = 0;
   const fixture = loadClient({
     installIndividualPlanning: true,
+    state: { workOrders: [{ ot: "2773" }] },
     callAppsScript: async () => {
       calls += 1;
       if (calls === 1) throw new Error("backend fuera de linea");

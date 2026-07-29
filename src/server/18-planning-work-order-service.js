@@ -7,16 +7,19 @@ function getPlanningWorkOrderData(ot) {
     const workOrder = response.trabajo || response.workOrder;
     if (!workOrder) throw new Error('OT no encontrada en NetSuite');
 
+    const rawOperations = response.operaciones || response.operations || [];
     const current = { operations: [] };
-    const operations = (response.operaciones || response.operations || []).map(function(row, index) {
+    const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {
         'Orden de trabajo': folio,
         'Centro de trabajo': PP_Inspection_value_(row, ['Centro de trabajo', 'centro', 'CT', 'workcenter']),
         'Tiempo estimado (min)': PP_Inspection_value_(row, ['Tiempo estimado (min)', 'remaining_min', 'estimated_min', 'tiempo'])
       });
       return PP_mapNetSuiteOperation_(normalized, index, current);
-    }).filter(PP_planningIndividualOperationValid_);
-    if (!operations.length) throw new Error('NetSuite no devolvio operaciones con CT y tiempo para la OT ' + folio);
+    });
+    if (!operations.length || !operations.every(PP_planningIndividualOperationValid_)) {
+      throw new Error('NetSuite no devolvio una ruta completa con CT y tiempo para la OT ' + folio);
+    }
 
     const materials = (response.materiales || response.materials || []).map(function(row, index) {
       return PP_mapNetSuiteMaterial_(Object.assign({}, row, {
@@ -28,8 +31,25 @@ function getPlanningWorkOrderData(ot) {
       }), index);
     });
 
+    const normalizedWorkOrderRow = Object.assign({}, workOrder, {
+      'WO Folio': folio,
+      'WO Internal ID': PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId', 'id']),
+      'Articulo': PP_Inspection_value_(workOrder, ['Articulo', 'articulo', 'Item', 'item', 'item_name', 'Ensamble']),
+      'Descripcion': PP_Inspection_value_(workOrder, ['Descripcion', 'descripcion', 'Description', 'description']),
+      'Cantidad': PP_Inspection_value_(workOrder, ['Cantidad', 'cantidad', 'Quantity', 'quantity']),
+      'Cantidad ensamblada': PP_Inspection_value_(workOrder, ['Cantidad ensamblada', 'cantidadEnsamblada', 'Quantity Built', 'builtQuantity']),
+      'Estatus': PP_Inspection_value_(workOrder, ['Estatus', 'estatus', 'Estado', 'estado', 'Status', 'status']),
+      'Cliente': PP_Inspection_value_(workOrder, ['Cliente', 'cliente', 'Customer', 'customer']),
+      'Foto URL': PP_Inspection_value_(workOrder, ['Foto URL', 'fotoUrl', 'photoUrl', 'Image URL', 'image_url']),
+      'Fecha inicio programada': PP_Inspection_value_(workOrder, ['Fecha inicio programada', 'fechaInicio', 'startDate', 'start_planned']),
+      'Fecha fin programada': PP_Inspection_value_(workOrder, ['Fecha fin programada', 'fechaFin', 'endDate', 'end_planned']),
+      'Fecha de vencimiento': PP_Inspection_value_(workOrder, ['Fecha de vencimiento', 'fechaEntrega', 'dueDate', 'due_date'])
+    });
+    const normalizedWorkOrder = PP_buildWorkOrderCatalog_([normalizedWorkOrderRow], rawOperations)[0];
+    if (!normalizedWorkOrder) throw new Error('OT no encontrada en NetSuite');
+
     return {
-      workOrder: Object.assign({}, workOrder, { wo: folio, ot: folio }),
+      workOrder: normalizedWorkOrder,
       operations: operations,
       materials: materials
     };

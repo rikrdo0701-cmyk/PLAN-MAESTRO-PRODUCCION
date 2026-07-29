@@ -1732,7 +1732,7 @@ function renderPriorityList() {
       saveState();
     });
     card.addEventListener("pointerdown", (event) => {
-      if (!job.movable || event.button !== 0 || event.target.closest("button, input, select")) return;
+      if (!canStartBacklogDrag(card, job, event)) return;
       backlogPointerDrag = {
         pointerId: event.pointerId,
         sourceOt: job.ot,
@@ -1981,6 +1981,13 @@ function jobPlanningOperations(job) {
     .filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
 }
 
+function canStartBacklogDrag(card, job, event) {
+  return card?.getAttribute("aria-busy") !== "true"
+    && Boolean(job?.movable)
+    && event.button === 0
+    && !event.target.closest("button, input, select");
+}
+
 function setIndividualPlanningBusy(ot, busy) {
   const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
     .find((item) => item.dataset.ot === ot);
@@ -1995,7 +2002,27 @@ function setIndividualPlanningBusy(ot, busy) {
   }
 }
 
-async function selectJob(ot, selected) {
+const individualPlanningActions = new Map();
+
+function selectJob(ot, selected) {
+  const key = materialOtKey(ot);
+  if (!selected || !key) return performSelectJob(ot, selected);
+  if (individualPlanningActions.has(key)) return individualPlanningActions.get(key);
+
+  setIndividualPlanningBusy(ot, true);
+  const action = (async () => {
+    try {
+      return await performSelectJob(ot, selected);
+    } finally {
+      individualPlanningActions.delete(key);
+      setIndividualPlanningBusy(ot, false);
+    }
+  })();
+  individualPlanningActions.set(key, action);
+  return action;
+}
+
+async function performSelectJob(ot, selected) {
   if (!ot) return;
   let job = getPriorityJobs().find((item) => item.ot === ot);
   if (selected && job && !job.movable && !job.programmed) {
@@ -2014,8 +2041,7 @@ async function selectJob(ot, selected) {
     }
   }
   const alreadySelected = state.selectedOts.includes(ot);
-  if (selected && !alreadySelected && !jobPlanningOperations(job).length) {
-    setIndividualPlanningBusy(ot, true);
+  if (selected && !alreadySelected && !hasIndividualPlanningOperations(ot)) {
     try {
       const loaded = await ensureWorkOrderPlanningData(ot);
       job = getPriorityJobs().find((item) => item.ot === ot);
@@ -2023,15 +2049,13 @@ async function selectJob(ot, selected) {
         showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
         return;
       }
-      if (!jobPlanningOperations(job).length) {
+      if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
         showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
         return;
       }
     } catch (error) {
       showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
       return;
-    } finally {
-      setIndividualPlanningBusy(ot, false);
     }
   }
   if (selected && !alreadySelected) {
@@ -5826,24 +5850,53 @@ function normalizeNetSuiteSyncAlert(alert) {
 
 const individualPlanningRequests = new Map();
 
-function hasIndividualPlanningOperations(ot) {
+function individualPlanningOperationValid(operation) {
+  const workCenter = String(operation?.ct || "").trim().toUpperCase();
+  return Boolean(workCenter) && workCenter !== "SIN_CT" && Number(operation?.tiempoProd) > 0;
+}
+
+function individualPlanningOperationsForOt(ot, operations = state.operations) {
   const key = materialOtKey(ot);
-  return Boolean(key) && (state.operations || []).some((operation) =>
+  return (operations || []).filter((operation) =>
     materialOtKey(operation?.ot) === key
       && String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
-      && String(operation?.ct || "").trim().toUpperCase() !== "SIN_CT"
-      && Boolean(String(operation?.ct || "").trim())
-      && Number(operation?.tiempoProd) > 0
   );
+}
+
+function hasIndividualPlanningOperations(ot) {
+  const operations = individualPlanningOperationsForOt(ot);
+  return operations.length > 0 && operations.every(individualPlanningOperationValid);
+}
+
+function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
+  const normalizedFields = [
+    "id", "workOrderId", "ot", "item", "description", "photoUrl", "startDate", "endDate", "dueDate",
+    "quantity", "builtQuantity", "pendingQuantity", "status", "customer", "averageSalePrice",
+    "averageSalePriceFrom", "averageSalePriceTo",
+  ];
+  const protectedLocalFields = new Set([
+    "dueDateOverride", "photoUrl", "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo",
+  ]);
+  const merged = existingWorkOrder ? { ...existingWorkOrder } : { ot: remoteWorkOrder.ot };
+  for (const field of normalizedFields) {
+    const value = remoteWorkOrder?.[field];
+    const useful = typeof value === "number" ? Number.isFinite(value) : Boolean(String(value ?? "").trim());
+    if (!useful || (existingWorkOrder && protectedLocalFields.has(field) && existingWorkOrder[field] != null)) continue;
+    merged[field] = value;
+  }
+  merged.ot = remoteWorkOrder.ot || existingWorkOrder?.ot || key;
+  return merged;
 }
 
 function mergeIndividualPlanningData(payload, ot) {
   const key = materialOtKey(ot);
   const data = payload?.data || payload;
-  const operations = Array.isArray(data?.operations)
-    ? data.operations.filter((operation) => materialOtKey(operation?.ot) === key)
-    : [];
-  if (!key || !operations.length) return false;
+  const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
+  if (existingWorkOrder && hasIndividualPlanningOperations(key)) return true;
+
+  const operations = individualPlanningOperationsForOt(key, Array.isArray(data?.operations) ? data.operations : []);
+  if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
 
   const materials = Array.isArray(data?.materials)
     ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
@@ -5859,7 +5912,7 @@ function mergeIndividualPlanningData(payload, ot) {
   if (data?.workOrder && materialOtKey(data.workOrder.ot) === key) {
     state.workOrders = [
       ...(state.workOrders || []).filter((workOrder) => materialOtKey(workOrder?.ot) !== key),
-      data.workOrder,
+      mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
     ];
   }
   invalidateCurrentPlanOperationsCache();
@@ -5878,6 +5931,10 @@ function ensureWorkOrderPlanningData(ot) {
     try {
       const payload = await callAppsScript("getPlanningWorkOrderData", ot);
       if (!payload?.ok) return { ready: false, error: String(payload?.error || "No se pudieron cargar las operaciones") };
+      if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
+        return { ready: false, error: `La OT ${ot} ya no esta disponible` };
+      }
+      if (hasIndividualPlanningOperations(key)) return { ready: true, source: "cached" };
       if (!mergeIndividualPlanningData(payload, key)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
