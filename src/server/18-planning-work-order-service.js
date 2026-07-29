@@ -91,7 +91,7 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
   const route = PP_fetchDirectWorkOrderSuiteQl_([
     'SELECT id, operationsequence, manufacturingworkcenter,',
     'BUILTIN.DF(manufacturingworkcenter) AS work_center,',
-    'setuptime, runrate, title',
+    'setuptime, runrate, title, status',
     'FROM manufacturingoperationtask',
     "WHERE workorder = '" + PP_directWorkOrderSqlLiteral_(resolvedId) + "'",
     'ORDER BY operationsequence, id'
@@ -104,6 +104,7 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
       'Operacion': row.work_center || row.title,
       'Secuencia': row.operationsequence,
       'Centro de trabajo': row.manufacturingworkcenter,
+      'Estado': row.status,
       'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity
     };
   });

@@ -112,6 +112,30 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   assert.equal(result.data.operations[11].tiempoProd, 4);
 });
 
+test("excluye tareas terminales de la ruta directa", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  let payload = "";
+  context.UrlFetchApp.fetch = (_url, request) => {
+    payload = request.payload;
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({ items: [
+        { id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" },
+        { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "COMPLETED" },
+        { id: "3", operationsequence: 30, manufacturingworkcenter: "5460", work_center: "PINTURA", setuptime: 6, runrate: 0.62, title: "PINTURA", status: "CANCELLED" },
+      ] }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.match(payload, /\bstatus\b/i);
+  assert.equal(result.ok, true);
+  assert.deepEqual(structuredClone(result.data.operations.map((operation) => operation.descripcion)), ["CORTE"]);
+});
+
 test("toma CT y tiempo de la ruta directa aunque inspeccion no los incluya", () => {
   const context = loadService({
     trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },

@@ -30,3 +30,11 @@
 ## Concerns
 
 - The unrelated pre-existing `package-lock.json` modification and task-brief files were not staged.
+
+## Follow-up: terminal operation tasks
+
+- Root cause: the direct SuiteQL query did not select `manufacturingoperationtask.status`, so `PP_isSchedulable_` received no terminal state.
+- RED: `node --test tests/planning-work-order-service.test.mjs` — 8 passed, 1 failed; the regression test showed the SQL payload lacked `status`.
+- Fix: select `status`, map it to `Estado`, and retain the existing terminal-state filter.
+- GREEN: `node --test tests/planning-work-order-service.test.mjs` — 9 passed, 0 failed.
+- Full verification: `npm.cmd test` — 249 passed, 0 failed.
