@@ -107,6 +107,7 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   assert.equal(requests.length, 1);
   assert.equal(result.ok, true);
   assert.equal(result.data.operations.length, 12);
+  assert.equal(result.data.operations[0].id, "ns-2773-1");
   assert.equal(result.data.operations[0].ct, "5458");
   assert.equal(result.data.operations[0].tiempoProd, 6 + (0.62 * 3));
   assert.equal(result.data.operations[11].tiempoProd, 4);

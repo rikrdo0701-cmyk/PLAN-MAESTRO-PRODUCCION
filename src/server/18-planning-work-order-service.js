@@ -13,6 +13,7 @@ function getPlanningWorkOrderData(ot) {
     const current = { operations: [] };
     const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {
+        'ID (link)': folio + '-' + String(PP_Inspection_value_(row, ['ID (link)', 'id']) || (index + 1)),
         'Orden de trabajo': folio,
         'Centro de trabajo': PP_Inspection_value_(row, ['Centro de trabajo', 'centro', 'CT', 'workcenter']),
         'Tiempo estimado (min)': PP_Inspection_value_(row, ['Tiempo estimado (min)', 'remaining_min', 'estimated_min', 'tiempo'])
