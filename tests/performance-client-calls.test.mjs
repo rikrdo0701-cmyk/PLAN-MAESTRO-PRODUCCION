@@ -19,6 +19,10 @@ const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
   appSource.indexOf("async function fetchNetSuiteExercise("),
 );
+const individualPlanningSource = appSource.slice(
+  appSource.indexOf("const individualPlanningRequests"),
+  appSource.indexOf("async function ensurePlanningDataLoaded("),
+);
 
 function deferredPromise() {
   let resolve;
@@ -28,6 +32,10 @@ function deferredPromise() {
 
 async function settleMicrotasks() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
+}
+
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function loadClient(options = {}) {
@@ -51,7 +59,7 @@ function loadClient(options = {}) {
     PPAppsScriptBridge: {
       isConfigured: () => true,
       ensureReady: async () => {},
-      call: async () => ({}),
+      call: async (method, args) => options.callAppsScript?.(method, ...(args || [])),
     },
     PlanningWorkflowCore: {
       withTimeout: (promise) => promise,
@@ -125,8 +133,8 @@ function loadClient(options = {}) {
     syncNetSuiteInBackground: (syncOptions) => context.syncWorkOrdersOnce(syncOptions),
     fetchNetSuiteWorkOrdersLiteCompat: (...args) => options.fetchNetSuiteWorkOrdersLiteCompat?.(...args),
     validateNetSuiteImportedData: () => {},
-    invalidateCurrentPlanOperationsCache: () => {},
-    resetBacklogWindow: () => {},
+    invalidateCurrentPlanOperationsCache: () => options.invalidateCurrentPlanOperationsCache?.(),
+    resetBacklogWindow: () => options.resetBacklogWindow?.(),
     applyNetSuitePlanningPayload: () => {},
     callAppsScript: (...args) => options.callAppsScript?.(...args),
     createAppSheetPayload: () => ({}),
@@ -148,8 +156,94 @@ function loadClient(options = {}) {
   vm.createContext(context);
   if (options.installManualFlow) vm.runInContext(manualFlowSource, context, { filename: "planning-manual-flow.js" });
   vm.runInContext(source, context, { filename: "performance-client.js" });
+  if (options.installIndividualPlanning) vm.runInContext(individualPlanningSource, context, { filename: "planning-individual-work-order.js" });
   return { context, state, toasts, busyStates };
 }
+
+test("dos solicitudes simultaneas de una OT comparten una sola llamada individual", async () => {
+  const gate = deferredPromise();
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    callAppsScript: async (method, ot) => {
+      assert.equal(method, "getPlanningWorkOrderData");
+      assert.equal(ot, "2773");
+      calls += 1;
+      return gate.promise;
+    },
+  });
+
+  const first = fixture.context.ensureWorkOrderPlanningData("2773");
+  const second = fixture.context.ensureWorkOrderPlanningData("2773");
+  assert.strictEqual(first, second);
+  assert.equal(calls, 1);
+
+  gate.resolve({ ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773" }], materials: [] } });
+  assert.deepEqual(plain(await Promise.all([first, second])), [
+    { ready: true, source: "remote" },
+    { ready: true, source: "remote" },
+  ]);
+});
+
+test("la fusion individual reemplaza solo la OT solicitada y conserva las demas", () => {
+  let cacheInvalidations = 0;
+  let backlogResets = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      operations: [{ id: "old-2773", ot: "2773" }, { id: "keep-2001", ot: "2001", fechaInicio: "2026-07-01" }],
+      materials: [{ ot: "2773", component: "OLD" }, { ot: "2001", component: "KEEP" }],
+      workOrders: [{ ot: "2773", item: "OLD" }, { ot: "2001", item: "KEEP" }],
+    },
+    invalidateCurrentPlanOperationsCache: () => { cacheInvalidations += 1; },
+    resetBacklogWindow: () => { backlogResets += 1; },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773", item: "NEW" },
+      operations: [{ id: "new-2773", ot: "2773" }, { id: "unexpected-2001", ot: "2001" }],
+      materials: [{ ot: "2773", component: "NEW" }, { ot: "2001", component: "UNEXPECTED" }],
+    },
+  }, "2773");
+
+  assert.equal(merged, true);
+  assert.deepEqual(plain(fixture.state.operations), [{ id: "keep-2001", ot: "2001", fechaInicio: "2026-07-01" }, { id: "new-2773", ot: "2773" }]);
+  assert.deepEqual(plain(fixture.state.materials), [{ ot: "2001", component: "KEEP" }, { ot: "2773", component: "NEW" }]);
+  assert.deepEqual(plain(fixture.state.workOrders), [{ ot: "2001", item: "KEEP" }, { ot: "2773", item: "NEW" }]);
+  assert.equal(cacheInvalidations, 1);
+  assert.equal(backlogResets, 1);
+});
+
+test("una OT con operaciones validas se resuelve desde cache sin backend", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { operations: [{ id: "2773-1", ot: "2773" }] },
+    callAppsScript: async () => { calls += 1; },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "cached" });
+  assert.equal(calls, 0);
+});
+
+test("un error o respuesta no valida libera la solicitud individual para reintentar", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    callAppsScript: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("backend fuera de linea");
+      if (calls === 2) return { ok: false, error: "sin operaciones" };
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773" }], materials: [] } };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: false, error: "backend fuera de linea" });
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: false, error: "sin operaciones" });
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.equal(calls, 3);
+});
 
 test("sincronizacion manual y de fondo comparten la misma promesa y un solo resultado", async () => {
   const gate = deferredPromise();

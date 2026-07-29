@@ -5798,6 +5798,70 @@ function normalizeNetSuiteSyncAlert(alert) {
   return { message, updatedAt: String(alert.updatedAt || alert.fecha || "") };
 }
 
+const individualPlanningRequests = new Map();
+
+function hasIndividualPlanningOperations(ot) {
+  const key = materialOtKey(ot);
+  return Boolean(key) && (state.operations || []).some((operation) =>
+    materialOtKey(operation?.ot) === key && String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+  );
+}
+
+function mergeIndividualPlanningData(payload, ot) {
+  const key = materialOtKey(ot);
+  const data = payload?.data || payload;
+  const operations = Array.isArray(data?.operations)
+    ? data.operations.filter((operation) => materialOtKey(operation?.ot) === key)
+    : [];
+  if (!key || !operations.length) return false;
+
+  const materials = Array.isArray(data?.materials)
+    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
+    : [];
+  state.operations = [
+    ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
+    ...operations,
+  ];
+  state.materials = [
+    ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
+    ...materials,
+  ];
+  if (data?.workOrder && materialOtKey(data.workOrder.ot) === key) {
+    state.workOrders = [
+      ...(state.workOrders || []).filter((workOrder) => materialOtKey(workOrder?.ot) !== key),
+      data.workOrder,
+    ];
+  }
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+  return true;
+}
+
+function ensureWorkOrderPlanningData(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (hasIndividualPlanningOperations(key)) return Promise.resolve({ ready: true, source: "cached" });
+  if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
+  if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
+
+  const request = (async () => {
+    try {
+      const payload = await callAppsScript("getPlanningWorkOrderData", ot);
+      if (!payload?.ok) return { ready: false, error: String(payload?.error || "No se pudieron cargar las operaciones") };
+      if (!mergeIndividualPlanningData(payload, key)) {
+        return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
+      }
+      return { ready: true, source: "remote" };
+    } catch (error) {
+      return { ready: false, error: String(error?.message || error || "No se pudieron cargar las operaciones") };
+    } finally {
+      individualPlanningRequests.delete(key);
+    }
+  })();
+  individualPlanningRequests.set(key, request);
+  return request;
+}
+
 async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
   const hasData = () => window.PlanningWorkflowCore.hasPlanningData(state, state.selectedOts);
   if (!isAppsScriptRuntime()) return { ready: hasData(), source: hasData() ? "cached" : "none", warning: "" };
