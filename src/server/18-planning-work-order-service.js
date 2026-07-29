@@ -17,8 +17,20 @@ function getPlanningWorkOrderData(ot) {
       });
       return PP_mapNetSuiteOperation_(normalized, index, current);
     });
-    if (!operations.length || !operations.every(PP_planningIndividualOperationValid_)) {
-      throw new Error('NetSuite no devolvio una ruta completa con CT y tiempo para la OT ' + folio);
+    if (!operations.length) {
+      throw new Error('NetSuite 1762/17 devolvio 0 operaciones programables para la OT ' + folio);
+    }
+    const invalidOperations = operations.filter(function(operation) {
+      return !PP_planningIndividualOperationValid_(operation);
+    });
+    if (invalidOperations.length) {
+      const detail = invalidOperations.slice(0, 4).map(function(operation) {
+        const missing = [];
+        if (!operation.ct || operation.ct === 'SIN_CT') missing.push('sin CT');
+        if (!(Number(operation.tiempoProd) > 0)) missing.push('sin tiempo');
+        return 'secuencia ' + operation.secuencia + ' ' + operation.descripcion + ': ' + missing.join(', ');
+      }).join('; ');
+      throw new Error('Ruta incompleta de la OT ' + folio + ': ' + detail);
     }
 
     const materials = (response.materiales || response.materials || []).map(function(row, index) {

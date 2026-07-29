@@ -202,7 +202,7 @@ test("falla cuando no queda ninguna operacion programable", () => {
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, false);
-  assert.match(result.error, /ruta|operaciones|CT|tiempo/i);
+  assert.match(result.error, /1762\/17 devolvio 0 operaciones programables/i);
 });
 
 test("rechaza detalle sin CT o tiempo de planeacion", () => {
@@ -214,5 +214,5 @@ test("rechaza detalle sin CT o tiempo de planeacion", () => {
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, false);
-  assert.match(result.error, /CT|tiempo/i);
+  assert.match(result.error, /secuencia 1.*sin CT.*sin tiempo/i);
 });
