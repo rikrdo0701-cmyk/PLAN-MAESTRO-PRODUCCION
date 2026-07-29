@@ -9,7 +9,7 @@ const [inspectionSource, netSuiteSource, serviceSource] = await Promise.all([
   readFile(new URL("../src/server/18-planning-work-order-service.js", import.meta.url), "utf8"),
 ]);
 
-function loadService(detail) {
+function loadService(detail, planningOperations = detail.operaciones || detail.operations || []) {
   const context = {
     Number,
     String,
@@ -27,8 +27,39 @@ function loadService(detail) {
     assert.deepEqual(structuredClone(request), { action: "detail", woFolio: "2773" });
     return detail;
   };
+  context.PP_netSuiteConfig_ = () => ({ locationId: 1 });
+  context.PP_netSuiteRestletRequest_ = (query, body) => {
+    assert.deepEqual(structuredClone(query), { script: "1762", deploy: "17" });
+    assert.equal(body.woFolio, "2773");
+    return {
+      ok: true,
+      status: 200,
+      raw: "",
+      json: {
+        rows: planningOperations.map((row) => ({ workorder_tranid: "2773", ...row })),
+        headers: [],
+        hasMore: false,
+      },
+    };
+  };
   return context;
 }
+
+test("toma CT y tiempo de 1762 aunque inspeccion no los incluya", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
+    operaciones: [{ Operacion: "CORTE", secuencia: 10, centro: "5461" }],
+    materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
+  }, [
+    { workorder_tranid: "2773", Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 25, Estado: "In Process" },
+  ]);
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.operations[0].ct, "5461");
+  assert.equal(result.data.operations[0].tiempoProd, 25);
+});
 
 test("adapta una OT individual al contrato del planeador", () => {
   const context = loadService({

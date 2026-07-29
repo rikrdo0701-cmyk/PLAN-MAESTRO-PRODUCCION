@@ -7,7 +7,7 @@ function getPlanningWorkOrderData(ot) {
     const workOrder = response.trabajo || response.workOrder;
     if (!workOrder) throw new Error('OT no encontrada en NetSuite');
 
-    const rawOperations = (response.operaciones || response.operations || []).filter(PP_isSchedulable_);
+    const rawOperations = PP_fetchPlanningWorkOrderOperations_(folio).filter(PP_isSchedulable_);
     const current = { operations: [] };
     const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {
@@ -54,6 +54,35 @@ function getPlanningWorkOrderData(ot) {
       materials: materials
     };
   });
+}
+
+function PP_fetchPlanningWorkOrderOperations_(folio) {
+  const config = PP_netSuiteConfig_();
+  const rows = [];
+  let headers = [];
+  const maxPages = 100;
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    const response = PP_netSuiteRestletRequest_(
+      { script: '1762', deploy: '17' },
+      {
+        locationId: config.locationId,
+        onlyOpen: true,
+        woFolio: folio,
+        workOrderTranId: folio,
+        pageIndex: pageIndex,
+        pageSize: 200
+      },
+      config
+    );
+    if (!response.ok) throw new Error('NetSuite operaciones: ' + response.status + ' ' + response.raw.slice(0, 300));
+    headers = response.json.headers || headers;
+    PP_rowsAsObjects_(response.json, headers).forEach(function(row) {
+      const rowFolio = String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid', 'WO Folio', 'tranid']) || '').trim();
+      if (PP_normalizeKey_(rowFolio) === PP_normalizeKey_(folio)) rows.push(row);
+    });
+    if (response.json.hasMore !== true) return rows;
+  }
+  throw new Error('NetSuite excedio el limite de paginas al buscar operaciones de la OT ' + folio);
 }
 
 function PP_planningIndividualOperationValid_(operation) {
