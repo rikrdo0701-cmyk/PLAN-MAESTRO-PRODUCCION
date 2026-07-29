@@ -39,6 +39,14 @@ const selectedJobOtSource = appSource.slice(
   appSource.indexOf("function selectedJobOt("),
   appSource.indexOf("function netSuiteChangeAlertForOt("),
 );
+const startupSource = appSource.slice(
+  appSource.indexOf("async function loadAppStateInBackground("),
+  appSource.indexOf("function bindElements("),
+);
+const undoSource = appSource.slice(
+  appSource.indexOf("function checkpointState("),
+  appSource.indexOf("function addToolCatalogItem("),
+);
 const detailOperationsSource = appSource.slice(
   appSource.indexOf("const individualPlanningRequests"),
   appSource.indexOf("async function ensurePlanningDataLoaded("),
@@ -283,6 +291,7 @@ test("una ruta eliminada despues de configurar la matriz se vuelve a consultar",
 test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", () => {
   const state = {
     selectedOts: [],
+    selectedDetailOt: "1325",
     selectedOperationId: "direct-1325-1",
     operations: [
       { id: "direct-1325-1", ot: "1325" },
@@ -290,10 +299,19 @@ test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", ()
     ],
     materials: [],
   };
+  const selectedJobOt = Function(
+    "state", "materialOtKey", "getPriorityJobs", "findOperation",
+    `${selectedJobOtSource}; return selectedJobOt;`,
+  )(
+    state,
+    String,
+    () => [{ ot: "1325", firstOp: state.operations[0] }],
+    (id) => state.operations.find((operation) => operation.id === id),
+  );
   const applyNetSuitePlanningPayload = Function(
     "state", "normalizeKey", "selectedJobOt", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
     `${applyPlanningPayloadSource}; return applyNetSuitePlanningPayload;`,
-  )(state, String, () => "1325", () => {}, () => {});
+  )(state, String, selectedJobOt, () => {}, () => {});
 
   applyNetSuitePlanningPayload({
     operations: [{ id: "fresh-2001-1", ot: "2001" }],
@@ -302,6 +320,52 @@ test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", ()
 
   assert.deepEqual(state.operations.map((operation) => operation.id), ["direct-1325-1", "fresh-2001-1"]);
   assert.equal(state.selectedOperationId, "direct-1325-1");
+});
+
+test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", async () => {
+  const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
+  const loadAppStateInBackground = Function(
+    "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "resetDailyReportFiltersToToday",
+    "saveState", "render", "applyInitialWorkspaceView", "isAppsScriptRuntime", "syncNetSuiteInBackground",
+    "loadPlanSnapshots",
+    `${startupSource}; return loadAppStateInBackground;`,
+  )(
+    state,
+    async () => true,
+    (callback) => callback(),
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+    () => false,
+    () => {},
+    () => {},
+  );
+
+  await loadAppStateInBackground();
+
+  assert.equal(state.selectedDetailOt, "");
+  assert.equal(state.selectedOperationId, "");
+});
+
+test("undo limpia juntas la OT de detalle y la operacion restaurada", () => {
+  const previous = { selectedDetailOt: "1325", selectedOperationId: "duplicada" };
+  const fixture = Function(
+    "initialState", "history", "structuredClone", "normalizeState", "saveAndRender",
+    `let state = initialState; let stateHistory = history; ${undoSource};
+     return { undoLastChange, getState: () => state };`,
+  )(
+    { selectedDetailOt: "2773", selectedOperationId: "duplicada" },
+    [previous],
+    structuredClone,
+    () => {},
+    () => {},
+  );
+
+  fixture.undoLastChange();
+
+  assert.equal(fixture.getState().selectedDetailOt, "");
+  assert.equal(fixture.getState().selectedOperationId, "");
 });
 
 test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza un marcador", async () => {
@@ -436,6 +500,45 @@ test("la respuesta tardia no cambia el detalle de la OT abierta despues", async 
 
   assert.equal(fixture.state.selectedDetailOt, "2773");
   assert.equal(fixture.state.selectedOperationId, "direct-2773-1");
+});
+
+test("la OT explicita resuelve IDs de operacion duplicados y el estado legacy conserva la inferencia anterior", () => {
+  const fixture = loadClient({
+    installDetailSelection: true,
+    state: {
+      selectedDetailOt: "2773",
+      selectedOperationId: "duplicada",
+      operations: [{ id: "duplicada", ot: "1325" }, { id: "duplicada", ot: "2773" }],
+    },
+  });
+  fixture.context.getPriorityJobs = () => [
+    { ot: "1325", firstOp: { id: "duplicada" } },
+    { ot: "2773", firstOp: { id: "duplicada" } },
+  ];
+  fixture.context.findOperation = (id) => fixture.state.operations.find((operation) => operation.id === id) || null;
+
+  assert.equal(fixture.context.getSelectedPriorityJob().ot, "2773");
+  assert.equal(fixture.context.selectedJobOt(), "2773");
+
+  delete fixture.state.selectedDetailOt;
+  assert.equal(fixture.context.getSelectedPriorityJob().ot, "1325");
+  assert.equal(fixture.context.selectedJobOt(), "1325");
+});
+
+test("cerrar el detalle limpia la OT y la operacion seleccionada", () => {
+  const match = appSource.match(/els\.closeDetailPanelBtn\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\);/);
+  assert.ok(match);
+  const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
+  const close = Function("state", "saveState", "render", `return () => {${match[1]}};`)(
+    state,
+    () => {},
+    () => {},
+  );
+
+  close();
+
+  assert.equal(state.selectedDetailOt, "");
+  assert.equal(state.selectedOperationId, "");
 });
 
 test("abrir el detalle carga operaciones sin perder la seleccion", () => {

@@ -525,6 +525,7 @@ async function loadAppStateInBackground() {
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
+  state.selectedDetailOt = "";
   saveState("ui");
   render();
   applyInitialWorkspaceView();
@@ -4353,6 +4354,8 @@ function undoLastChange() {
   const previous = stateHistory.pop();
   if (!previous) return;
   state = typeof previous === "string" ? JSON.parse(previous) : previous;
+  state.selectedDetailOt = "";
+  state.selectedOperationId = "";
   normalizeState();
   saveAndRender("Ultimo cambio deshecho");
 }
@@ -6191,7 +6194,6 @@ function applyImported(imported, options = {}) {
   if (imported.ganttView) state.ganttView = imported.ganttView;
   if (Number.isFinite(Number(imported.ganttDayWidth))) state.ganttDayWidth = Number(imported.ganttDayWidth);
   if (imported.selectedOperationId) state.selectedOperationId = imported.selectedOperationId;
-  if (typeof imported.selectedDetailOt === "string") state.selectedDetailOt = imported.selectedDetailOt;
   if (Number.isFinite(imported.capacityMinutes)) state.capacityMinutes = imported.capacityMinutes;
   if (imported.planStart) state.planStart = imported.planStart;
   if (Number.isFinite(Number(imported.horizonDays))) state.horizonDays = Number(imported.horizonDays);
@@ -6310,7 +6312,6 @@ function importJson(text) {
     ganttView: parsed.ganttView,
     ganttDayWidth: Number(parsed.ganttDayWidth),
     selectedOperationId: parsed.selectedOperationId,
-    selectedDetailOt: parsed.selectedDetailOt,
     capacityMinutes: Number(parsed.capacityMinutes),
     schemaVersion: Number(parsed.schemaVersion),
     revision: Number(parsed.revision),
@@ -8027,7 +8028,7 @@ function appSheetSaveMethodForScopes(scopes) {
 }
 
 function persistableState() {
-  const { matrixSearch, ...persisted } = state;
+  const { matrixSearch, selectedDetailOt, ...persisted } = state;
   return persisted;
 }
 
