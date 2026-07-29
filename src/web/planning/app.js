@@ -152,6 +152,7 @@ const sampleState = {
   ganttView: "job",
   ganttDayWidth: DEFAULT_GANTT_DAY_WIDTH,
   selectedOperationId: "op-1",
+  selectedDetailOt: "",
   capacityMinutes: DEFAULT_CAPACITY_MINUTES,
   planStart: "2026-06-29",
   horizonDays: DEFAULT_HORIZON_DAYS,
@@ -524,6 +525,7 @@ async function loadAppStateInBackground() {
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
+  state.selectedDetailOt = "";
   saveState("ui");
   render();
   applyInitialWorkspaceView();
@@ -776,6 +778,7 @@ function bindEvents() {
     saveAndRender("Objetivo semanal actualizado", "catalogs");
   });
   els.closeDetailPanelBtn.addEventListener("click", () => {
+    state.selectedDetailOt = "";
     state.selectedOperationId = "";
     saveState();
     render();
@@ -949,6 +952,7 @@ function loadState() {
 function normalizeState() {
   state.schemaVersion = APP_SCHEMA_VERSION;
   state.revision = Number(state.revision || 0);
+  state.selectedDetailOt = String(state.selectedDetailOt || "").trim();
   state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(state.ganttView);
   state.ganttDayWidth = nearestGanttDayWidth(state.ganttDayWidth);
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
@@ -1962,6 +1966,7 @@ function updateBacklogDrag(clientX, clientY) {
 function openSelectedJobDetail(ot) {
   const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
   if (!job) return;
+  state.selectedDetailOt = job.ot;
   state.selectedOperationId = job.firstOp.id;
   state.expandedOts = uniq([...state.expandedOts, job.ot]);
   renderSelectedJobPanel();
@@ -4349,6 +4354,8 @@ function undoLastChange() {
   const previous = stateHistory.pop();
   if (!previous) return;
   state = typeof previous === "string" ? JSON.parse(previous) : previous;
+  state.selectedDetailOt = "";
+  state.selectedOperationId = "";
   normalizeState();
   saveAndRender("Ultimo cambio deshecho");
 }
@@ -6027,13 +6034,16 @@ function loadSelectedJobDetailOperations(ot) {
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
   if (selectedJobDetailOperationLoads.has(key)) return selectedJobDetailOperationLoads.get(key);
   const selectedOperationId = state.selectedOperationId;
+  const selectedDetailOt = materialOtKey(state.selectedDetailOt);
   const selectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
 
   const request = Promise.resolve().then(async () => {
     renderSelectedJobPanel();
     const result = await ensureWorkOrderPlanningData(ot);
     const currentSelectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
-    const selectionStillBelongsToOt = currentSelectedOt === key
+    const selectionStillBelongsToOt = selectedDetailOt
+      ? materialOtKey(state.selectedDetailOt) === key
+      : currentSelectedOt === key
       || (!currentSelectedOt && selectedOt === key && state.selectedOperationId === selectedOperationId);
     if (!selectionStillBelongsToOt) return result;
     if (result.ready) {
@@ -6241,6 +6251,7 @@ function captureLocalPlanningState() {
     "lockedOts",
     "expandedOts",
     "selectedOperationId",
+    "selectedDetailOt",
     "machines",
     "toolCatalog",
     "machineToolHistory",
@@ -7018,9 +7029,11 @@ function getPriorityJobs() {
 }
 
 function getSelectedPriorityJob() {
-  const selectedOp = findOperation(state.selectedOperationId);
   const jobs = getPriorityJobs();
   if (!jobs.length) return null;
+  const detailOt = materialOtKey(state.selectedDetailOt);
+  if (detailOt) return jobs.find((job) => materialOtKey(job.ot) === detailOt) || null;
+  const selectedOp = findOperation(state.selectedOperationId);
   if (selectedOp) return jobs.find((job) => job.ot === selectedOp.ot) || null;
   return jobs.find((job) => job.firstOp?.id === state.selectedOperationId)
     || null;
@@ -7608,6 +7621,8 @@ function matchesStatusFilter(job, filter) {
 }
 
 function selectedJobOt() {
+  const detailOt = materialOtKey(state.selectedDetailOt);
+  if (detailOt) return getPriorityJobs().find((job) => materialOtKey(job.ot) === detailOt)?.ot || "";
   return findOperation(state.selectedOperationId)?.ot
     || getPriorityJobs().find((job) => job.firstOp?.id === state.selectedOperationId)?.ot
     || "";
@@ -8013,7 +8028,7 @@ function appSheetSaveMethodForScopes(scopes) {
 }
 
 function persistableState() {
-  const { matrixSearch, ...persisted } = state;
+  const { matrixSearch, selectedDetailOt, ...persisted } = state;
   return persisted;
 }
 
