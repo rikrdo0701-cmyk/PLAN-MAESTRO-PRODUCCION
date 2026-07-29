@@ -35,6 +35,10 @@ const detailOperationsSource = appSource.slice(
   appSource.indexOf("const individualPlanningRequests"),
   appSource.indexOf("async function ensurePlanningDataLoaded("),
 );
+const applyPlanningPayloadSource = appSource.slice(
+  appSource.indexOf("function applyNetSuitePlanningPayload("),
+  appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
+);
 
 function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
   return new Function(
@@ -261,6 +265,30 @@ test("una ruta eliminada despues de configurar la matriz se vuelve a consultar",
   assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
   assert.equal(calls, 2);
   assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["direct-2773-2"]);
+});
+
+test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", () => {
+  const state = {
+    selectedOts: [],
+    selectedOperationId: "direct-1325-1",
+    operations: [
+      { id: "direct-1325-1", ot: "1325" },
+      { id: "old-2001-1", ot: "2001" },
+    ],
+    materials: [],
+  };
+  const applyNetSuitePlanningPayload = Function(
+    "state", "normalizeKey", "selectedJobOt", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
+    `${applyPlanningPayloadSource}; return applyNetSuitePlanningPayload;`,
+  )(state, String, () => "1325", () => {}, () => {});
+
+  applyNetSuitePlanningPayload({
+    operations: [{ id: "fresh-2001-1", ot: "2001" }],
+    materials: [],
+  });
+
+  assert.deepEqual(state.operations.map((operation) => operation.id), ["direct-1325-1", "fresh-2001-1"]);
+  assert.equal(state.selectedOperationId, "direct-1325-1");
 });
 
 test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza un marcador", async () => {

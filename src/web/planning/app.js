@@ -5741,6 +5741,8 @@ async function syncNetSuiteTwoPhase(options = {}) {
 function applyNetSuitePlanningPayload(payload) {
   const backlogDatasetChanged = Array.isArray(payload?.operations) || Array.isArray(payload?.materials);
   const selected = new Set((state.selectedOts || []).map(normalizeKey));
+  const detailOt = normalizeKey(selectedJobOt());
+  if (detailOt) selected.add(detailOt);
   const preservedDraft = state.operations.filter((op) => selected.has(normalizeKey(op.ot)));
   const refreshed = (payload?.operations || []).filter((op) => !selected.has(normalizeKey(op.ot)));
   if (Array.isArray(payload?.operations)) state.operations = [...preservedDraft, ...refreshed];

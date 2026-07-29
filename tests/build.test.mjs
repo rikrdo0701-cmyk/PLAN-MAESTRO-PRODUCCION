@@ -628,9 +628,10 @@ test("el cliente conserva y muestra operationCatalogWarning", async () => {
     planStart: "2026-07-26",
   };
   let backlogResetCount = 0;
-  const applyPayload = Function("state", "normalizeKey", "resetBacklogWindow", `${applySource}; return applyNetSuitePlanningPayload;`)(
+  const applyPayload = Function("state", "normalizeKey", "selectedJobOt", "resetBacklogWindow", `${applySource}; return applyNetSuitePlanningPayload;`)(
     state,
     (value) => String(value || "").trim().toUpperCase(),
+    () => "",
     () => { backlogResetCount += 1; },
   );
   const planAlertItems = Function(
