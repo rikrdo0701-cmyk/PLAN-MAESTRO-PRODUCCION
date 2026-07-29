@@ -7,7 +7,9 @@ function getPlanningWorkOrderData(ot) {
     const workOrder = response.trabajo || response.workOrder;
     if (!workOrder) throw new Error('OT no encontrada en NetSuite');
 
-    const rawOperations = PP_fetchPlanningWorkOrderOperations_(folio).filter(PP_isSchedulable_);
+    const workOrderId = PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId', 'id']);
+    const pendingQuantity = PP_pendingWorkOrderQuantity_(workOrder);
+    const rawOperations = PP_fetchDirectWorkOrderOperations_(workOrderId, folio, pendingQuantity).filter(PP_isSchedulable_);
     const current = { operations: [] };
     const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {
@@ -18,7 +20,7 @@ function getPlanningWorkOrderData(ot) {
       return PP_mapNetSuiteOperation_(normalized, index, current);
     });
     if (!operations.length) {
-      throw new Error('NetSuite 1762/17 devolvio 0 operaciones programables para la OT ' + folio);
+      throw new Error('Ruta de manufactura vacia para la OT ' + folio);
     }
     const invalidOperations = operations.filter(function(operation) {
       return !PP_planningIndividualOperationValid_(operation);
@@ -68,58 +70,69 @@ function getPlanningWorkOrderData(ot) {
   });
 }
 
-function PP_fetchPlanningWorkOrderOperations_(folio) {
-  const config = PP_netSuiteConfig_();
-  const maxPages = 100;
-  function fetchRows(useFilter) {
-    const rows = [];
-    let headers = [];
-    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-      const body = {
-        locationId: config.locationId,
-        onlyOpen: true,
-        pageIndex: pageIndex,
-        pageSize: 200
-      };
-      if (useFilter) {
-        body.woFolio = folio;
-        body.workOrderTranId = folio;
-      }
-      const response = PP_netSuiteRestletRequest_({ script: '1762', deploy: '17' }, body, config);
-      if (!response.ok) throw new Error('NetSuite operaciones: ' + response.status + ' ' + response.raw.slice(0, 300));
-      headers = response.json.headers || headers;
-      PP_rowsAsObjects_(response.json, headers).forEach(function(row) {
-        const rowFolio = String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid', 'WO Folio', 'tranid']) || '').trim();
-        if (PP_normalizeKey_(rowFolio) === PP_normalizeKey_(folio)) rows.push(row);
-      });
-      if (response.json.hasMore !== true) return rows;
-    }
-    throw new Error('NetSuite excedio el limite de paginas al buscar operaciones de la OT ' + folio);
-  }
-  const targeted = fetchRows(true);
-  const openRows = targeted.length ? targeted : fetchRows(false);
-  if (openRows.length) return openRows;
+function PP_pendingWorkOrderQuantity_(workOrder) {
+  const total = Number(PP_Inspection_value_(workOrder, ['Cantidad', 'cantidad', 'Quantity', 'quantity']) || 0);
+  const built = PP_Inspection_value_(workOrder, ['Cantidad ensamblada', 'cantidadEnsamblada', 'Quantity Built', 'builtQuantity', 'quantitybuilt']);
+  return built === '' ? Math.max(0, total) : Math.max(0, total - Number(built || 0));
+}
 
-  const closedResponse = PP_netSuiteRestletRequest_(
-    { script: '1762', deploy: '17' },
-    {
-      locationId: config.locationId,
-      onlyOpen: false,
-      woFolio: folio,
-      workOrderTranId: folio,
-      pageIndex: 0,
-      pageSize: 200
-    },
-    config
-  );
-  if (!closedResponse.ok) {
-    throw new Error('NetSuite operaciones: ' + closedResponse.status + ' ' + closedResponse.raw.slice(0, 300));
+function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
+  const config = PP_netSuiteConfig_();
+  let resolvedId = String(workOrderId || '').trim();
+  if (!resolvedId) {
+    const lookup = PP_fetchDirectWorkOrderSuiteQl_(
+      "SELECT id, tranid FROM transaction WHERE type = 'WorkOrd' AND tranid = '" + PP_directWorkOrderSqlLiteral_(folio) + "'",
+      config
+    );
+    resolvedId = String((lookup.items || [])[0] && (lookup.items[0].id || lookup.items[0].workorder_id) || '').trim();
   }
-  const closedHeaders = closedResponse.json.headers || [];
-  return PP_rowsAsObjects_(closedResponse.json, closedHeaders).filter(function(row) {
-    const rowFolio = String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid', 'WO Folio', 'tranid']) || '').trim();
-    return PP_normalizeKey_(rowFolio) === PP_normalizeKey_(folio);
+  if (!resolvedId) throw new Error('OT no encontrada en NetSuite: ' + folio);
+
+  const route = PP_fetchDirectWorkOrderSuiteQl_([
+    'SELECT id, operationsequence, manufacturingworkcenter,',
+    'BUILTIN.DF(manufacturingworkcenter) AS work_center,',
+    'setuptime, runrate, title',
+    'FROM manufacturingoperationtask',
+    "WHERE workorder = '" + PP_directWorkOrderSqlLiteral_(resolvedId) + "'",
+    'ORDER BY operationsequence, id'
+  ].join(' '), config);
+  const rows = route.items || [];
+  if (!rows.length) throw new Error('Ruta de manufactura vacia para la OT ' + folio);
+  return rows.map(function(row) {
+    return {
+      'Orden de trabajo': folio,
+      'Operacion': row.work_center || row.title,
+      'Secuencia': row.operationsequence,
+      'Centro de trabajo': row.manufacturingworkcenter,
+      'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity
+    };
   });
+}
+
+function PP_fetchDirectWorkOrderSuiteQl_(sql, config) {
+  const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+  const query = { limit: 1000, offset: 0 };
+  const response = UrlFetchApp.fetch(endpoint + '?limit=1000&offset=0', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: PP_oauthHeader_('POST', endpoint, query, config),
+      Prefer: 'transient'
+    },
+    payload: JSON.stringify({ q: sql }),
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  const raw = response.getContentText();
+  if (status < 200 || status >= 300) throw new Error('SuiteQL operaciones OT: ' + status + ' ' + raw.slice(0, 300));
+  let json;
+  try { json = JSON.parse(raw || '{}'); } catch (_) { throw new Error('SuiteQL operaciones OT: respuesta invalida'); }
+  if (!Array.isArray(json.items)) throw new Error('SuiteQL operaciones OT: respuesta sin items');
+  return json;
+}
+
+function PP_directWorkOrderSqlLiteral_(value) {
+  return String(value || '').replace(/'/g, "''");
 }
 
 function PP_planningIndividualOperationValid_(operation) {
