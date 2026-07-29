@@ -1616,7 +1616,7 @@ function renderPlanAlerts() {
       const ot = button.dataset.alertOt;
       const job = getPriorityJobs().find((item) => item.ot === ot);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
+      openSelectedJobDetail(ot);
       saveState();
       render();
     });
@@ -1725,9 +1725,7 @@ function renderPriorityList() {
 
     card.addEventListener("click", () => {
       if (suppressBacklogClick) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderGantt();
       saveState();
     });
@@ -1872,9 +1870,7 @@ function renderPriorityQueue() {
       if (suppressQueueClick) return;
       const job = jobsByOt.get(item.dataset.queueOt);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderPriorityQueue();
       saveState();
       requestAnimationFrame(renderGantt);
@@ -1961,6 +1957,15 @@ function updateBacklogDrag(clientX, clientY) {
   const point = document.elementFromPoint(clientX, clientY);
   backlogPointerDrag.toPlanned = Boolean(point?.closest(".queue-panel"));
   els.priorityQueue.classList.toggle("drag-target", backlogPointerDrag.toPlanned);
+}
+
+function openSelectedJobDetail(ot) {
+  const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
+  if (!job) return;
+  state.selectedOperationId = job.firstOp.id;
+  state.expandedOts = uniq([...state.expandedOts, job.ot]);
+  renderSelectedJobPanel();
+  void loadSelectedJobDetailOperations(ot);
 }
 
 function finishBacklogDrag(commit, pointerId = null) {
@@ -2574,6 +2579,7 @@ function renderSelectedJobPanel() {
   const detailOps = effectiveTool
     ? job.ops.map((op) => isBendingAppOperation(op) && !cleanToolValue(op.herramental) ? { ...op, herramental: effectiveTool } : op)
     : job.ops;
+  const loadingOperations = selectedJobDetailOperationLoads.has(materialOtKey(job.ot)) && !hasIndividualPlanningOperations(job.ot);
   const toolGroups = getJobToolGroups(detailOps);
   const bulkMachineValue = getBulkMachineValue(job.ops);
   const machineOptions = getMachineOptions(job.ops);
@@ -2669,7 +2675,7 @@ function renderSelectedJobPanel() {
         <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${detailOps.map((op) => {
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
           const key = operationCompletionKey(op);
@@ -5853,6 +5859,7 @@ function normalizeNetSuiteSyncAlert(alert) {
 }
 
 const individualPlanningRequests = new Map();
+const selectedJobDetailOperationLoads = new Map();
 
 function individualPlanningOperationValid(operation) {
   const workCenter = String(operation?.ct || "").trim().toUpperCase();
@@ -5950,6 +5957,25 @@ function ensureWorkOrderPlanningData(ot) {
     }
   })();
   individualPlanningRequests.set(key, request);
+  return request;
+}
+
+function loadSelectedJobDetailOperations(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (selectedJobDetailOperationLoads.has(key)) return selectedJobDetailOperationLoads.get(key);
+
+  const request = Promise.resolve().then(async () => {
+    renderSelectedJobPanel();
+    const result = await ensureWorkOrderPlanningData(ot);
+    if (materialOtKey(getSelectedPriorityJob()?.ot) !== key) return result;
+    renderSelectedJobPanel();
+    if (!result.ready) showToast(result.error || `No se cargaron operaciones de la OT ${ot}`, 9000);
+    return result;
+  }).finally(() => {
+    selectedJobDetailOperationLoads.delete(key);
+  });
+  selectedJobDetailOperationLoads.set(key, request);
   return request;
 }
 

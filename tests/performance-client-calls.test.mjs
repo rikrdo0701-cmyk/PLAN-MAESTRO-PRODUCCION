@@ -27,6 +27,14 @@ const individualSelectionSource = appSource.slice(
   appSource.indexOf("function jobPlanningOperations("),
   appSource.indexOf("async function prepareJobForPlanning("),
 );
+const detailSelectionSource = appSource.slice(
+  appSource.indexOf("function openSelectedJobDetail("),
+  appSource.indexOf("function finishBacklogDrag(", appSource.indexOf("function openSelectedJobDetail(")),
+);
+const detailOperationsSource = appSource.slice(
+  appSource.indexOf("const individualPlanningRequests"),
+  appSource.indexOf("async function ensurePlanningDataLoaded("),
+);
 
 function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
   return new Function(
@@ -177,6 +185,7 @@ function loadClient(options = {}) {
   if (options.installManualFlow) vm.runInContext(manualFlowSource, context, { filename: "planning-manual-flow.js" });
   vm.runInContext(source, context, { filename: "performance-client.js" });
   if (options.installIndividualPlanning) vm.runInContext(individualPlanningSource, context, { filename: "planning-individual-work-order.js" });
+  if (options.installDetailOperations) vm.runInContext(detailOperationsSource, context, { filename: "planning-detail-operations.js" });
   return { context, state, toasts, busyStates };
 }
 
@@ -204,6 +213,65 @@ test("dos solicitudes simultaneas de una OT comparten una sola llamada individua
     { ready: true, source: "remote" },
     { ready: true, source: "remote" },
   ]);
+});
+
+test("abrir el detalle carga operaciones sin perder la seleccion", () => {
+  assert.match(detailSelectionSource, /renderSelectedJobPanel\(\);\s*void loadSelectedJobDetailOperations\(ot\)/);
+  assert.match(detailOperationsSource, /ensureWorkOrderPlanningData\(ot\)/);
+  assert.match(detailOperationsSource, /renderSelectedJobPanel\(\)/);
+});
+
+test("dos aperturas del detalle comparten la carga y muestran las operaciones fusionadas", async () => {
+  const gate = deferredPromise();
+  let calls = 0;
+  let selectedOt = "2773";
+  const renders = [];
+  let mergedOperations = [];
+  const fixture = loadClient({
+    installDetailOperations: true,
+    callAppsScript: async () => { calls += 1; return gate.promise; },
+  });
+  fixture.context.ensureWorkOrderPlanningData = async (ot) => {
+    calls += 1;
+    await gate.promise;
+    mergedOperations = [{ ot, descripcion: "CORTE" }];
+    return { ready: true, source: "remote" };
+  };
+  fixture.context.getSelectedPriorityJob = () => ({ ot: selectedOt });
+  fixture.context.materialOtKey = (value) => String(value || "");
+  fixture.context.renderSelectedJobPanel = () => renders.push(mergedOperations.map((op) => op.descripcion));
+
+  const first = fixture.context.loadSelectedJobDetailOperations("2773");
+  const second = fixture.context.loadSelectedJobDetailOperations("2773");
+  assert.strictEqual(first, second);
+  await settleMicrotasks();
+  assert.equal(calls, 1);
+  gate.resolve();
+  await first;
+
+  assert.deepEqual(renders, [[], ["CORTE"]]);
+});
+
+test("un error del detalle conserva las operaciones existentes", async () => {
+  const rows = [{ id: "2773-1", ot: "2773", ct: "", tiempoProd: 0 }];
+  const toasts = [];
+  let renders = 0;
+  const fixture = loadClient({
+    installDetailOperations: true,
+    state: { operations: structuredClone(rows), workOrders: [{ ot: "2773" }] },
+    callAppsScript: async () => ({ ok: false, error: "backend fuera de linea" }),
+  });
+  fixture.context.isAppsScriptRuntime = () => true;
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "2773" });
+  fixture.context.materialOtKey = (value) => String(value || "");
+  fixture.context.renderSelectedJobPanel = () => { renders += 1; };
+  fixture.context.showToast = (message) => toasts.push(message);
+
+  await fixture.context.loadSelectedJobDetailOperations("2773");
+
+  assert.deepEqual(plain(fixture.state.operations), rows);
+  assert.equal(renders, 2);
+  assert.deepEqual(toasts, ["backend fuera de linea"]);
 });
 
 test("la seleccion individual bloquea solo su tarjeta y libera el estado ocupado en finally", () => {

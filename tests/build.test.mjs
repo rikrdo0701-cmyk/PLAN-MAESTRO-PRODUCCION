@@ -400,6 +400,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(storageService, /BORRADOR_PLAN/);
 });
 
+test("el detalle de OT muestra carga de operaciones mientras espera una ruta valida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSelectedJobPanel()");
+  const renderEnd = app.indexOf("function renderGantt()", renderStart);
+  const renderSelected = app.slice(renderStart, renderEnd);
+  assert.match(renderSelected, /Cargando operaciones\.\.\./);
+  assert.match(renderSelected, /selectedJobDetailOperationLoads\.has\(materialOtKey\(job\.ot\)\)/);
+});
+
 test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina", async () => {
   const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
   const start = inspectionApp.indexOf("function operationRow(operation)");
