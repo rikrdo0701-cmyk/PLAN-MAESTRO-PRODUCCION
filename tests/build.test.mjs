@@ -4,6 +4,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildProject } from "../scripts/build-appscript.mjs";
 
+test("la identidad del detalle se persiste separada de la operacion seleccionada", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(planningApp, /selectedDetailOt:\s*""/);
+  assert.match(planningApp, /"selectedDetailOt"/);
+});
+
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
   const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
   const workflows = await Promise.all(workflowNames.map((name) =>

@@ -31,6 +31,14 @@ const detailSelectionSource = appSource.slice(
   appSource.indexOf("function openSelectedJobDetail("),
   appSource.indexOf("function finishBacklogDrag(", appSource.indexOf("function openSelectedJobDetail(")),
 );
+const selectedPriorityJobSource = appSource.slice(
+  appSource.indexOf("function getSelectedPriorityJob("),
+  appSource.indexOf("function workOrderPlaceholderOperation("),
+);
+const selectedJobOtSource = appSource.slice(
+  appSource.indexOf("function selectedJobOt("),
+  appSource.indexOf("function netSuiteChangeAlertForOt("),
+);
 const detailOperationsSource = appSource.slice(
   appSource.indexOf("const individualPlanningRequests"),
   appSource.indexOf("async function ensurePlanningDataLoaded("),
@@ -192,6 +200,11 @@ function loadClient(options = {}) {
   if (options.installDetailOperations) {
     vm.runInContext(detailOperationsSource, context, { filename: "planning-detail-operations.js" });
     vm.runInContext("globalThis.isSelectedJobDetailOperationLoading = (ot) => selectedJobDetailOperationLoads.has(materialOtKey(ot));", context);
+  }
+  if (options.installDetailSelection) {
+    vm.runInContext(detailSelectionSource, context, { filename: "planning-detail-selection.js" });
+    vm.runInContext(selectedPriorityJobSource, context, { filename: "planning-selected-priority-job.js" });
+    vm.runInContext(selectedJobOtSource, context, { filename: "planning-selected-job-ot.js" });
   }
   return { context, state, toasts, busyStates };
 }
@@ -381,6 +394,48 @@ test("cambiar de OT durante una carga directa no cambia la seleccion actual", as
 
   assert.equal(fixture.state.selectedOperationId, "selected-B");
   assert.equal(fixture.state.operations.find((operation) => operation.id === "direct-A-10")?.ot, "A");
+});
+
+test("la respuesta tardia no cambia el detalle de la OT abierta despues", async () => {
+  const pending = new Map([["1325", deferredPromise()], ["2773", deferredPromise()]]);
+  const fixture = loadClient({
+    installDetailOperations: true,
+    installDetailSelection: true,
+    state: {
+      selectedOperationId: "direct-1325-1",
+      expandedOts: [],
+      operations: [{ id: "direct-1325-1", ot: "1325" }, { id: "direct-2773-1", ot: "2773" }],
+      workOrders: [{ ot: "1325" }, { ot: "2773" }],
+    },
+    callAppsScript: async (_method, ot) => pending.get(ot).promise,
+  });
+  fixture.context.getPriorityJobs = () => [
+    { ot: "1325", firstOp: { id: "direct-1325-1" } },
+    { ot: "2773", firstOp: { id: "direct-2773-1" } },
+  ];
+  fixture.context.findOperation = (id) => fixture.state.operations.find((operation) => operation.id === id) || null;
+  fixture.context.uniq = (items) => [...new Set(items)];
+
+  fixture.context.openSelectedJobDetail("1325");
+  const first = fixture.context.loadSelectedJobDetailOperations("1325");
+  fixture.context.openSelectedJobDetail("2773");
+  const second = fixture.context.loadSelectedJobDetailOperations("2773");
+  assert.equal(fixture.state.selectedDetailOt, "2773");
+  assert.equal(fixture.context.getSelectedPriorityJob().ot, "2773");
+
+  pending.get("2773").resolve({
+    ok: true,
+    data: { workOrder: { ot: "2773" }, operations: [{ id: "direct-2773-1", ot: "2773", ct: "5458", tiempoProd: 12 }], materials: [] },
+  });
+  await second;
+  pending.get("1325").resolve({
+    ok: true,
+    data: { workOrder: { ot: "1325" }, operations: [{ id: "direct-1325-1", ot: "1325", ct: "5458", tiempoProd: 12 }], materials: [] },
+  });
+  await first;
+
+  assert.equal(fixture.state.selectedDetailOt, "2773");
+  assert.equal(fixture.state.selectedOperationId, "direct-2773-1");
 });
 
 test("abrir el detalle carga operaciones sin perder la seleccion", () => {
