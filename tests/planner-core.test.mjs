@@ -18,6 +18,14 @@ test("PlannerCore expone el programador principal", () => {
   assert.equal(typeof core.operationToolKey, "function");
 });
 
+test("una OT cancelada nunca es movible para planeacion", () => {
+  const core = loadPlannerCore();
+  for (const status of ["Cancelada", "Cancelado", "Canceled", "Cancelled"]) {
+    assert.equal(core.isMovablePlanningStatus(status), false, status);
+  }
+  assert.equal(core.isMovablePlanningStatus("En curso"), true);
+});
+
 test("filtra capacidades parcialmente por nombre o CT sin acentos, mayusculas ni espacios extra", () => {
   const core = loadPlannerCore();
   const capabilities = [

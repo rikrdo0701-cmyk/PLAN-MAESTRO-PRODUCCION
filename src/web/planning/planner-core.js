@@ -1600,7 +1600,11 @@
 
   function isMovablePlanningStatus(status) {
     const normalized = normalizeKey(status);
-    return !["CERRAD", "CLOSED", "COMPLETE", "COMPLETADO", "PROGRAMAD", "SCHEDULED", "PLANIFICAD", "PLANNED"]
+    return ![
+      "CERRAD", "CLOSED", "COMPLETE", "COMPLETADO",
+      "CANCELAD", "CANCELED", "CANCELLED",
+      "PROGRAMAD", "SCHEDULED", "PLANIFICAD", "PLANNED"
+    ]
       .some((blocked) => normalized.includes(blocked));
   }
 
