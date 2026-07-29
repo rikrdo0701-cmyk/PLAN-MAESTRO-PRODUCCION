@@ -944,7 +944,7 @@ test("agregar o arrastrar una OT consulta su ruta directa una vez por sesion ant
   assert.doesNotMatch(selection, /ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
   assert.match(selection, /setIndividualPlanningBusy\(ot, true\)/);
   assert.match(selection, /finally[\s\S]*setIndividualPlanningBusy\(ot, false\)/);
-  assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => item\.ot === ot\)/);
+  assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => materialOtKey\(item\.ot\) === otKey\)/);
   assert.match(selection, /if \(!hasIndividualPlanningOperations\(ot\) \|\| !jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
   assert.match(backlog, /selectJob\(job\.ot, true\)/);
   assert.match(drag, /selectJob\(sourceOt, true\)/);

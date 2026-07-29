@@ -2029,7 +2029,8 @@ function selectJob(ot, selected) {
 
 async function performSelectJob(ot, selected) {
   if (!ot) return;
-  let job = getPriorityJobs().find((item) => item.ot === ot);
+  const otKey = materialOtKey(ot);
+  let job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
   if (selected && job && !job.movable && !job.programmed) {
     showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
     return;
@@ -2049,7 +2050,7 @@ async function performSelectJob(ot, selected) {
   if (selected && !alreadySelected) {
     try {
       const loaded = await ensureWorkOrderPlanningData(ot);
-      job = getPriorityJobs().find((item) => item.ot === ot);
+      job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
       if (!loaded?.ready) {
         showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
         return;

@@ -48,7 +48,7 @@ function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = 
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
     (operations) => operations, loaded, prepare, checkpoint, () => {}, () => {}, () => {},
     (callback) => callback(), () => {}, () => {}, () => {},
-    (value) => String(value || ""), (ot) => jobs.value.some((job) => job.ot === ot && job.ops.length > 0),
+    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0),
   );
 }
 
@@ -449,6 +449,31 @@ test("una consulta individual libera la tarjeta al agregar la OT con operaciones
   assert.deepEqual(changes, ["busy", "ready"]);
   assert.equal(addButton.disabled, false);
   assert.deepEqual(state.selectedOts, ["100"]);
+});
+
+test("una consulta individual agrega la OT aunque el folio remoto llegue numerico", async () => {
+  const card = {
+    dataset: { ot: "2773" },
+    querySelector: () => ({ disabled: false }),
+    setAttribute: () => {},
+    removeAttribute: () => {},
+  };
+  const state = { selectedOts: [] };
+  const jobs = { value: [{ ot: "2773", movable: true, ops: [] }] };
+  const toasts = [];
+  const selectJob = loadIndividualSelection({
+    jobs,
+    loaded: async () => {
+      jobs.value = [{ ot: 2773, movable: true, ops: [{ id: "op-1" }] }];
+      return { ready: true };
+    },
+    card, state, toasts,
+  });
+
+  await selectJob("2773", true);
+
+  assert.deepEqual(state.selectedOts, ["2773"]);
+  assert.deepEqual(toasts, ["OT 2773 agregada al plan"]);
 });
 
 test("la fusion individual reemplaza solo la OT solicitada y conserva las demas", () => {
