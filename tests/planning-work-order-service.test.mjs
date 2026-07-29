@@ -27,7 +27,34 @@ function loadService(detail, planningOperations = detail.operaciones || detail.o
     assert.deepEqual(structuredClone(request), { action: "detail", woFolio: "2773" });
     return detail;
   };
-  context.PP_netSuiteConfig_ = () => ({ locationId: 1 });
+  context.PP_netSuiteConfig_ = () => ({ accountId: "test-account", locationId: 1 });
+  context.PP_oauthHeader_ = () => "OAuth test";
+  context.UrlFetchApp = {
+    fetch: (_url, request) => {
+      const sql = JSON.parse(request.payload).q;
+      if (/FROM transaction/i.test(sql)) {
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }] }),
+        };
+      }
+      assert.match(sql, /manufacturingoperationtask/i);
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({
+          items: planningOperations.map((row, index) => ({
+            id: String(index + 1),
+            operationsequence: row.Secuencia || row.secuencia || index + 1,
+            manufacturingworkcenter: row["Centro de trabajo"] || row.centro || row.CT,
+            work_center: row.Operacion || row.operacion,
+            setuptime: row.remaining_min || row["Tiempo estimado (min)"] || row.tiempo || 0,
+            runrate: 0,
+            title: row.Operacion || row.operacion,
+          })),
+        }),
+      };
+    },
+  };
   context.PP_netSuiteRestletRequest_ = (query, body) => {
     assert.deepEqual(structuredClone(query), { script: "1762", deploy: "17" });
     assert.equal(body.woFolio, "2773");
@@ -45,7 +72,71 @@ function loadService(detail, planningOperations = detail.operaciones || detail.o
   return context;
 }
 
-test("toma CT y tiempo de 1762 aunque inspeccion no los incluya", () => {
+test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", Articulo: "C 590 LE", cantidad: 3 },
+    materiales: [],
+  });
+  const operationRows = Array.from({ length: 12 }, (_, index) => ({
+    id: String(index + 1),
+    operationsequence: index + 1,
+    manufacturingworkcenter: index === 0 ? "5458" : String(5500 + index),
+    work_center: index === 0 ? "CORTE" : "OPERACION " + (index + 1),
+    setuptime: index === 0 ? 6 : (index === 11 ? 4 : 1),
+    runrate: index === 0 ? 0.62 : (index === 11 ? 0 : 1),
+    title: "Operacion " + (index + 1),
+  }));
+  const requests = [];
+  context.PP_oauthHeader_ = () => "OAuth test";
+  context.UrlFetchApp = {
+    fetch: (url, request) => {
+      requests.push({ url, request });
+      assert.match(request.payload, /manufacturingoperationtask/i);
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ items: operationRows }),
+      };
+    },
+  };
+  context.PP_netSuiteRestletRequest_ = () => {
+    throw new Error("no debe consultar RESTlet 1762/17");
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(requests.length, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.operations.length, 12);
+  assert.equal(result.data.operations[0].ct, "5458");
+  assert.equal(result.data.operations[0].tiempoProd, 6 + (0.62 * 3));
+  assert.equal(result.data.operations[11].tiempoProd, 4);
+});
+
+test("excluye tareas terminales de la ruta directa", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  let payload = "";
+  context.UrlFetchApp.fetch = (_url, request) => {
+    payload = request.payload;
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({ items: [
+        { id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" },
+        { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "COMPLETED" },
+        { id: "3", operationsequence: 30, manufacturingworkcenter: "5460", work_center: "PINTURA", setuptime: 6, runrate: 0.62, title: "PINTURA", status: "CANCELLED" },
+      ] }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.match(payload, /\bstatus\b/i);
+  assert.equal(result.ok, true);
+  assert.deepEqual(structuredClone(result.data.operations.map((operation) => operation.descripcion)), ["CORTE"]);
+});
+
+test("toma CT y tiempo de la ruta directa aunque inspeccion no los incluya", () => {
   const context = loadService({
     trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
     operaciones: [{ Operacion: "CORTE", secuencia: 10, centro: "5461" }],
@@ -61,64 +152,63 @@ test("toma CT y tiempo de 1762 aunque inspeccion no los incluya", () => {
   assert.equal(result.data.operations[0].tiempoProd, 25);
 });
 
-test("reintenta sin filtro cuando 1762 no reconoce woFolio", () => {
+test("resuelve el ID interno por folio cuando inspeccion no lo incluye", () => {
   const context = loadService({
     trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
     materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
   }, []);
   const requests = [];
-  context.PP_netSuiteRestletRequest_ = (_query, body) => {
-    requests.push(body);
-    return {
-      ok: true,
-      status: 200,
-      raw: "",
-      json: body.woFolio
-        ? { rows: [], headers: [], hasMore: false }
-        : {
-            rows: [{ workorder_tranid: "2773", Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 25, Estado: "In Process" }],
-            headers: [],
-            hasMore: false,
-          },
-    };
+  context.UrlFetchApp.fetch = (_url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    requests.push(sql);
+    const items = /FROM transaction/i.test(sql)
+      ? [{ id: "913", tranid: "2773" }]
+      : [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5461", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE" }];
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
   };
 
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, true);
   assert.equal(requests.length, 2);
-  assert.equal(requests[0].woFolio, "2773");
-  assert.equal(Object.hasOwn(requests[1], "woFolio"), false);
+  assert.match(requests[0], /FROM transaction/i);
+  assert.match(requests[1], /manufacturingoperationtask/i);
 });
 
-test("consulta la OT sin onlyOpen cuando NetSuite no devuelve operaciones abiertas", () => {
+test("calcula setup mas run rate por la cantidad pendiente de la OT", () => {
   const context = loadService({
-    trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
+    trabajo: { wo: "2773", id: "913", Articulo: "C 590 LE", cantidad: 10, cantidadEnsamblada: 3 },
     materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
-  }, []);
-  const requests = [];
-  context.PP_netSuiteRestletRequest_ = (_query, body) => {
-    requests.push(body);
-    const closedFallback = body.woFolio === "2773" && body.onlyOpen === false;
-    return {
-      ok: true,
-      status: 200,
-      raw: "",
-      json: {
-        rows: closedFallback
-          ? [{ workorder_tranid: "2773", Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 25, Estado: "In Process" }]
-          : [],
-        headers: [],
-        hasMore: false,
-      },
-    };
-  };
+  });
+  context.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 200,
+    getContentText: () => JSON.stringify({ items: [{
+      id: "1", operationsequence: 10, manufacturingworkcenter: "5461", work_center: "CORTE",
+      setuptime: 4, runrate: 1.5, title: "CORTE",
+    }] }),
+  });
 
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, true);
-  assert.equal(requests.at(-1).onlyOpen, false);
-  assert.equal(requests.at(-1).woFolio, "2773");
+  assert.equal(result.data.operations[0].tiempoProd, 4 + (1.5 * (10 - 3)));
+});
+
+test("oculta la respuesta cruda de SuiteQL y conserva el diagnostico en servidor", () => {
+  const context = loadService({ trabajo: { wo: "2773", id: "913", cantidad: 3 } });
+  const diagnostics = [];
+  context.Logger = { log: (message) => diagnostics.push(message) };
+  context.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 502,
+    getContentText: () => "token-secreto-netSuite: detalle interno",
+  });
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /SuiteQL operaciones OT: error HTTP 502/);
+  assert.doesNotMatch(result.error, /token-secreto-netSuite/);
+  assert.match(diagnostics.join("\n"), /token-secreto-netSuite/);
 });
 
 test("adapta una OT individual al contrato del planeador", () => {
@@ -185,61 +275,21 @@ test("rechaza toda la ruta cuando mezcla operaciones validas e invalidas", () =>
   assert.match(result.error, /CT|tiempo/i);
 });
 
-test("ignora una operacion terminal sin tiempo y devuelve solo la activa valida", () => {
-  const context = loadService({
-    trabajo: { wo: "2773" },
-    operaciones: [
-      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "In Process" },
-      { Operacion: "DOBLEZ", secuencia: 20, centro: "5459", remaining_min: 0, Estado: "Completado" },
-    ],
-  });
-
-  const result = context.getPlanningWorkOrderData("2773");
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(
-    structuredClone(result.data.operations.map((operation) => operation.descripcion)),
-    ["CORTE"],
-  );
-});
-
-test("una operacion terminal con tiempo nunca se devuelve", () => {
-  const context = loadService({
-    trabajo: { wo: "2773" },
-    operaciones: [
-      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "In Process" },
-      { Operacion: "DOBLEZ", secuencia: 20, centro: "5459", remaining_min: 15, Estado: "Closed" },
-    ],
-  });
-
-  const result = context.getPlanningWorkOrderData("2773");
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(
-    structuredClone(result.data.operations.map((operation) => operation.descripcion)),
-    ["CORTE"],
-  );
-});
-
 test("falla cuando no queda ninguna operacion programable", () => {
   const context = loadService({
-    trabajo: { wo: "2773" },
-    operaciones: [
-      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "Cancelado" },
-    ],
-  });
+    trabajo: { wo: "2773", id: "913" },
+  }, []);
 
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, false);
-  assert.match(result.error, /1762\/17 devolvio 0 operaciones programables/i);
+  assert.match(result.error, /Ruta de manufactura vacia/i);
 });
 
 test("rechaza detalle sin CT o tiempo de planeacion", () => {
   const context = loadService({
-    trabajo: { wo: "2773" },
-    operaciones: [{ Operacion: "CORTE", secuencia: 10 }],
-  });
+    trabajo: { wo: "2773", id: "913" },
+  }, [{}]);
 
   const result = context.getPlanningWorkOrderData("2773");
 

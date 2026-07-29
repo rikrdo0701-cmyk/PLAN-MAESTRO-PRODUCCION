@@ -400,6 +400,15 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(storageService, /BORRADOR_PLAN/);
 });
 
+test("el detalle de OT muestra carga de operaciones mientras espera una ruta valida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSelectedJobPanel()");
+  const renderEnd = app.indexOf("function renderGantt()", renderStart);
+  const renderSelected = app.slice(renderStart, renderEnd);
+  assert.match(renderSelected, /Cargando operaciones\.\.\./);
+  assert.match(renderSelected, /selectedJobDetailOperationLoads\.has\(materialOtKey\(job\.ot\)\)/);
+});
+
 test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina", async () => {
   const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
   const start = inspectionApp.indexOf("function operationRow(operation)");
@@ -915,7 +924,7 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
   assert.deepEqual(validatedOperations, []);
 });
 
-test("agregar una OT sin operaciones consulta solo esa OT y valida sus operaciones antes de planearla", async () => {
+test("agregar o arrastrar una OT consulta su ruta directa una vez por sesion antes de planearla", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const selection = app.slice(
     app.indexOf("function selectJob("),
@@ -930,7 +939,7 @@ test("agregar una OT sin operaciones consulta solo esa OT y valida sus operacion
     app.indexOf("function jobPlanningOperations()", app.indexOf("function finishBacklogDrag(")),
   );
 
-  assert.match(selection, /if \(selected && !alreadySelected && !hasIndividualPlanningOperations\(ot\)\)/);
+  assert.match(selection, /if \(selected && !alreadySelected\) \{/);
   assert.match(selection, /await ensureWorkOrderPlanningData\(ot\)/);
   assert.doesNotMatch(selection, /ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
   assert.match(selection, /setIndividualPlanningBusy\(ot, true\)/);

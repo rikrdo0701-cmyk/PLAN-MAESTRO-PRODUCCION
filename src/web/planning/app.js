@@ -1616,7 +1616,7 @@ function renderPlanAlerts() {
       const ot = button.dataset.alertOt;
       const job = getPriorityJobs().find((item) => item.ot === ot);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
+      openSelectedJobDetail(ot);
       saveState();
       render();
     });
@@ -1725,9 +1725,7 @@ function renderPriorityList() {
 
     card.addEventListener("click", () => {
       if (suppressBacklogClick) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderGantt();
       saveState();
     });
@@ -1872,9 +1870,7 @@ function renderPriorityQueue() {
       if (suppressQueueClick) return;
       const job = jobsByOt.get(item.dataset.queueOt);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderPriorityQueue();
       saveState();
       requestAnimationFrame(renderGantt);
@@ -1963,6 +1959,15 @@ function updateBacklogDrag(clientX, clientY) {
   els.priorityQueue.classList.toggle("drag-target", backlogPointerDrag.toPlanned);
 }
 
+function openSelectedJobDetail(ot) {
+  const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
+  if (!job) return;
+  state.selectedOperationId = job.firstOp.id;
+  state.expandedOts = uniq([...state.expandedOts, job.ot]);
+  renderSelectedJobPanel();
+  void loadSelectedJobDetailOperations(ot);
+}
+
 function finishBacklogDrag(commit, pointerId = null) {
   if (!backlogPointerDrag || (pointerId !== null && backlogPointerDrag.pointerId !== pointerId)) return;
   const { moved, sourceOt, toPlanned, item } = backlogPointerDrag;
@@ -2041,7 +2046,7 @@ async function performSelectJob(ot, selected) {
     }
   }
   const alreadySelected = state.selectedOts.includes(ot);
-  if (selected && !alreadySelected && !hasIndividualPlanningOperations(ot)) {
+  if (selected && !alreadySelected) {
     try {
       const loaded = await ensureWorkOrderPlanningData(ot);
       job = getPriorityJobs().find((item) => item.ot === ot);
@@ -2574,6 +2579,7 @@ function renderSelectedJobPanel() {
   const detailOps = effectiveTool
     ? job.ops.map((op) => isBendingAppOperation(op) && !cleanToolValue(op.herramental) ? { ...op, herramental: effectiveTool } : op)
     : job.ops;
+  const loadingOperations = selectedJobDetailOperationLoads.has(materialOtKey(job.ot)) && !hasIndividualPlanningOperations(job.ot);
   const toolGroups = getJobToolGroups(detailOps);
   const bulkMachineValue = getBulkMachineValue(job.ops);
   const machineOptions = getMachineOptions(job.ops);
@@ -2669,7 +2675,7 @@ function renderSelectedJobPanel() {
         <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${detailOps.map((op) => {
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
           const key = operationCompletionKey(op);
@@ -5853,6 +5859,8 @@ function normalizeNetSuiteSyncAlert(alert) {
 }
 
 const individualPlanningRequests = new Map();
+const individualPlanningLoadCompleted = new Set();
+const selectedJobDetailOperationLoads = new Map();
 
 function individualPlanningOperationValid(operation) {
   const workCenter = String(operation?.ct || "").trim().toUpperCase();
@@ -5870,6 +5878,45 @@ function individualPlanningOperationsForOt(ot, operations = state.operations) {
 function hasIndividualPlanningOperations(ot) {
   const operations = individualPlanningOperationsForOt(ot);
   return operations.length > 0 && operations.every(individualPlanningOperationValid);
+}
+
+function individualPlanningOperationSequenceKey(operation) {
+  const sequence = String(operation?.secuencia ?? "").trim();
+  return sequence ? `${materialOtKey(operation?.ot)}|${sequence}` : "";
+}
+
+function individualPlanningOperationCtKey(operation) {
+  const ct = String(operation?.ct ?? "").trim().toUpperCase();
+  return ct ? `${materialOtKey(operation?.ot)}|${ct}` : "";
+}
+
+function individualPlanningRecordSignature(record) {
+  return Object.keys(record || {}).sort().map((field) => `${field}:${JSON.stringify(record[field])}`).join("\\u001f");
+}
+
+function individualPlanningOtSignature(ot) {
+  const key = materialOtKey(ot);
+  const workOrder = (state.workOrders || []).find((record) => materialOtKey(record?.ot) === key);
+  const operations = (state.operations || []).filter((record) => materialOtKey(record?.ot) === key);
+  const materials = (state.materials || []).filter((record) => materialOtKey(record?.ot) === key);
+  return [
+    `workOrder:${individualPlanningRecordSignature(workOrder)}`,
+    `operations:${operations.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+    `materials:${materials.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+  ].join("\\u001d");
+}
+
+function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
+  if (!existingOperation) return remoteOperation;
+  const routeFields = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tipoInsercion",
+  ];
+  const route = {};
+  routeFields.forEach((field) => {
+    if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+  });
+  return { ...existingOperation, ...route };
 }
 
 function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
@@ -5897,17 +5944,29 @@ function mergeIndividualPlanningData(payload, ot) {
   const data = payload?.data || payload;
   const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
   if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
-  if (existingWorkOrder && hasIndividualPlanningOperations(key)) return true;
-
   const operations = individualPlanningOperationsForOt(key, Array.isArray(data?.operations) ? data.operations : []);
   if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
 
+  const existingOperations = individualPlanningOperationsForOt(key);
+  const existingBySequence = new Map();
+  const existingByCt = new Map();
+  existingOperations.forEach((operation) => {
+    const sequenceKey = individualPlanningOperationSequenceKey(operation);
+    const ctKey = individualPlanningOperationCtKey(operation);
+    if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+    if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+  });
+  const mergedOperations = operations.map((operation) => {
+    const existing = existingBySequence.get(individualPlanningOperationSequenceKey(operation))
+      || existingByCt.get(individualPlanningOperationCtKey(operation));
+    return mergeIndividualPlanningOperation(operation, existing);
+  });
   const materials = Array.isArray(data?.materials)
     ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
     : [];
   state.operations = [
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
-    ...operations,
+    ...mergedOperations,
   ];
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
@@ -5927,9 +5986,10 @@ function mergeIndividualPlanningData(payload, ot) {
 function ensureWorkOrderPlanningData(ot) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
-  if (hasIndividualPlanningOperations(key)) return Promise.resolve({ ready: true, source: "cached" });
+  if (individualPlanningLoadCompleted.has(key)) return Promise.resolve({ ready: true, source: "cached" });
   if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
+  const otSignature = individualPlanningOtSignature(key);
 
   const request = (async () => {
     try {
@@ -5938,10 +5998,13 @@ function ensureWorkOrderPlanningData(ot) {
       if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
         return { ready: false, error: `La OT ${ot} ya no esta disponible` };
       }
-      if (hasIndividualPlanningOperations(key)) return { ready: true, source: "cached" };
+      if (individualPlanningOtSignature(key) !== otSignature) {
+        return { ready: true, source: "cached" };
+      }
       if (!mergeIndividualPlanningData(payload, key)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
+      individualPlanningLoadCompleted.add(key);
       return { ready: true, source: "remote" };
     } catch (error) {
       return { ready: false, error: String(error?.message || error || "No se pudieron cargar las operaciones") };
@@ -5950,6 +6013,34 @@ function ensureWorkOrderPlanningData(ot) {
     }
   })();
   individualPlanningRequests.set(key, request);
+  return request;
+}
+
+function loadSelectedJobDetailOperations(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (selectedJobDetailOperationLoads.has(key)) return selectedJobDetailOperationLoads.get(key);
+  const selectedOperationId = state.selectedOperationId;
+  const selectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
+
+  const request = Promise.resolve().then(async () => {
+    renderSelectedJobPanel();
+    const result = await ensureWorkOrderPlanningData(ot);
+    const currentSelectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
+    const selectionStillBelongsToOt = currentSelectedOt === key
+      || (!currentSelectedOt && selectedOt === key && state.selectedOperationId === selectedOperationId);
+    if (!selectionStillBelongsToOt) return result;
+    if (result.ready) {
+      const operation = individualPlanningOperationsForOt(key)[0];
+      if (operation?.id) state.selectedOperationId = operation.id;
+    }
+    if (!result.ready) showToast(result.error || `No se cargaron operaciones de la OT ${ot}`, 9000);
+    return result;
+  }).finally(() => {
+    selectedJobDetailOperationLoads.delete(key);
+    if (materialOtKey(getSelectedPriorityJob()?.ot) === key) renderSelectedJobPanel();
+  });
+  selectedJobDetailOperationLoads.set(key, request);
   return request;
 }
 
