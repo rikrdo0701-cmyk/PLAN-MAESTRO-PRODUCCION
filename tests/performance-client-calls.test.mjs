@@ -527,6 +527,52 @@ test("dos acciones simultaneas de agregar una OT preparan y confirman una sola v
   assert.deepEqual(state.selectedOts, ["100"]);
 });
 
+test("un cambio remoto a estatus no elegible durante la espera impide preparar y seleccionar", async () => {
+  const gate = deferredPromise();
+  const changes = [];
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    querySelector: () => addButton,
+    setAttribute: () => changes.push("busy"),
+    removeAttribute: () => changes.push("ready"),
+  };
+  const jobs = { value: [{ ot: "100", movable: true, programmed: false, status: "En curso", ops: [] }] };
+  const state = { selectedOts: [] };
+  const toasts = [];
+  let preparations = 0;
+  let checkpoints = 0;
+  const selectJob = loadIndividualSelection({
+    jobs,
+    loaded: async () => {
+      await gate.promise;
+      jobs.value = [{
+        ot: "100",
+        movable: false,
+        programmed: false,
+        status: "Cerrada",
+        ops: [{ id: "op-1" }],
+      }];
+      return { ready: true };
+    },
+    prepare: async () => { preparations += 1; return true; },
+    checkpoint: () => { checkpoints += 1; },
+    card,
+    state,
+    toasts,
+  });
+
+  const action = selectJob("100", true);
+  gate.resolve();
+  await action;
+
+  assert.equal(preparations, 0);
+  assert.equal(checkpoints, 0);
+  assert.deepEqual(state.selectedOts, []);
+  assert.deepEqual(toasts, ["OT 100 no puede agregarse al plan por estatus Cerrada"]);
+  assert.deepEqual(changes, ["busy", "ready"]);
+});
+
 test("una tarjeta aria-busy no puede iniciar drag", () => {
   const canStartBacklogDrag = new Function(`${individualSelectionSource}; return canStartBacklogDrag;`)();
   const card = { getAttribute: (name) => name === "aria-busy" ? "true" : null };

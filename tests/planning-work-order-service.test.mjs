@@ -94,6 +94,56 @@ test("rechaza toda la ruta cuando mezcla operaciones validas e invalidas", () =>
   assert.match(result.error, /CT|tiempo/i);
 });
 
+test("ignora una operacion terminal sin tiempo y devuelve solo la activa valida", () => {
+  const context = loadService({
+    trabajo: { wo: "2773" },
+    operaciones: [
+      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "In Process" },
+      { Operacion: "DOBLEZ", secuencia: 20, centro: "5459", remaining_min: 0, Estado: "Completado" },
+    ],
+  });
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.descripcion)),
+    ["CORTE"],
+  );
+});
+
+test("una operacion terminal con tiempo nunca se devuelve", () => {
+  const context = loadService({
+    trabajo: { wo: "2773" },
+    operaciones: [
+      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "In Process" },
+      { Operacion: "DOBLEZ", secuencia: 20, centro: "5459", remaining_min: 15, Estado: "Closed" },
+    ],
+  });
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.descripcion)),
+    ["CORTE"],
+  );
+});
+
+test("falla cuando no queda ninguna operacion programable", () => {
+  const context = loadService({
+    trabajo: { wo: "2773" },
+    operaciones: [
+      { Operacion: "CORTE", secuencia: 10, centro: "5461", remaining_min: 25, Estado: "Cancelado" },
+    ],
+  });
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /ruta|operaciones|CT|tiempo/i);
+});
+
 test("rechaza detalle sin CT o tiempo de planeacion", () => {
   const context = loadService({
     trabajo: { wo: "2773" },

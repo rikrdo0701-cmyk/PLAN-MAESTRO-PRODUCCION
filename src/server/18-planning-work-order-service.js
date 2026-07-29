@@ -7,7 +7,7 @@ function getPlanningWorkOrderData(ot) {
     const workOrder = response.trabajo || response.workOrder;
     if (!workOrder) throw new Error('OT no encontrada en NetSuite');
 
-    const rawOperations = response.operaciones || response.operations || [];
+    const rawOperations = (response.operaciones || response.operations || []).filter(PP_isSchedulable_);
     const current = { operations: [] };
     const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {

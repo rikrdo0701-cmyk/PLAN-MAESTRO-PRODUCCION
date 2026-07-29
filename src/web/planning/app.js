@@ -2049,6 +2049,10 @@ async function performSelectJob(ot, selected) {
         showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
         return;
       }
+      if (job && !job.movable && !job.programmed) {
+        showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
+        return;
+      }
       if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
         showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
         return;
