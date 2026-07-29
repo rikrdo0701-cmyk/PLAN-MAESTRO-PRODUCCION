@@ -2046,7 +2046,7 @@ async function performSelectJob(ot, selected) {
     }
   }
   const alreadySelected = state.selectedOts.includes(ot);
-  if (selected && !alreadySelected && !hasIndividualPlanningOperations(ot)) {
+  if (selected && !alreadySelected) {
     try {
       const loaded = await ensureWorkOrderPlanningData(ot);
       job = getPriorityJobs().find((item) => item.ot === ot);
@@ -5859,6 +5859,7 @@ function normalizeNetSuiteSyncAlert(alert) {
 }
 
 const individualPlanningRequests = new Map();
+const individualPlanningLoadCompleted = new Set();
 const selectedJobDetailOperationLoads = new Map();
 
 function individualPlanningOperationValid(operation) {
@@ -5904,11 +5905,11 @@ function mergeIndividualPlanningData(payload, ot) {
   const data = payload?.data || payload;
   const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
   if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
-  if (existingWorkOrder && hasIndividualPlanningOperations(key)) return true;
-
   const operations = individualPlanningOperationsForOt(key, Array.isArray(data?.operations) ? data.operations : []);
   if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
 
+  const selectedOperation = (state.operations || []).find((operation) => operation?.id === state.selectedOperationId);
+  const selectedOt = materialOtKey(selectedOperation?.ot);
   const materials = Array.isArray(data?.materials)
     ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
     : [];
@@ -5916,6 +5917,7 @@ function mergeIndividualPlanningData(payload, ot) {
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
     ...operations,
   ];
+  if (selectedOt === key) state.selectedOperationId = operations[0].id;
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
@@ -5934,9 +5936,10 @@ function mergeIndividualPlanningData(payload, ot) {
 function ensureWorkOrderPlanningData(ot) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
-  if (hasIndividualPlanningOperations(key)) return Promise.resolve({ ready: true, source: "cached" });
+  if (individualPlanningLoadCompleted.has(key)) return Promise.resolve({ ready: true, source: "cached" });
   if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
+  const hadIndividualPlanningOperations = hasIndividualPlanningOperations(key);
 
   const request = (async () => {
     try {
@@ -5945,10 +5948,13 @@ function ensureWorkOrderPlanningData(ot) {
       if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
         return { ready: false, error: `La OT ${ot} ya no esta disponible` };
       }
-      if (hasIndividualPlanningOperations(key)) return { ready: true, source: "cached" };
+      if (!hadIndividualPlanningOperations && hasIndividualPlanningOperations(key)) {
+        return { ready: true, source: "cached" };
+      }
       if (!mergeIndividualPlanningData(payload, key)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
+      individualPlanningLoadCompleted.add(key);
       return { ready: true, source: "remote" };
     } catch (error) {
       return { ready: false, error: String(error?.message || error || "No se pudieron cargar las operaciones") };
@@ -5969,11 +5975,11 @@ function loadSelectedJobDetailOperations(ot) {
     renderSelectedJobPanel();
     const result = await ensureWorkOrderPlanningData(ot);
     if (materialOtKey(getSelectedPriorityJob()?.ot) !== key) return result;
-    renderSelectedJobPanel();
     if (!result.ready) showToast(result.error || `No se cargaron operaciones de la OT ${ot}`, 9000);
     return result;
   }).finally(() => {
     selectedJobDetailOperationLoads.delete(key);
+    if (materialOtKey(getSelectedPriorityJob()?.ot) === key) renderSelectedJobPanel();
   });
   selectedJobDetailOperationLoads.set(key, request);
   return request;

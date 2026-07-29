@@ -185,7 +185,10 @@ function loadClient(options = {}) {
   if (options.installManualFlow) vm.runInContext(manualFlowSource, context, { filename: "planning-manual-flow.js" });
   vm.runInContext(source, context, { filename: "performance-client.js" });
   if (options.installIndividualPlanning) vm.runInContext(individualPlanningSource, context, { filename: "planning-individual-work-order.js" });
-  if (options.installDetailOperations) vm.runInContext(detailOperationsSource, context, { filename: "planning-detail-operations.js" });
+  if (options.installDetailOperations) {
+    vm.runInContext(detailOperationsSource, context, { filename: "planning-detail-operations.js" });
+    vm.runInContext("globalThis.isSelectedJobDetailOperationLoading = (ot) => selectedJobDetailOperationLoads.has(materialOtKey(ot));", context);
+  }
   return { context, state, toasts, busyStates };
 }
 
@@ -213,6 +216,51 @@ test("dos solicitudes simultaneas de una OT comparten una sola llamada individua
     { ready: true, source: "remote" },
     { ready: true, source: "remote" },
   ]);
+});
+
+test("las filas validas existentes no sustituyen la primera carga directa de la sesion", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773" }],
+      operations: [{ id: "sync-2773-1", ot: "2773", ct: "5458", tiempoProd: 10 }],
+    },
+    callAppsScript: async () => {
+      calls += 1;
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "direct-2773-1", ot: "2773", ct: "5458", tiempoProd: 12 }], materials: [] } };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "cached" });
+  assert.equal(calls, 1);
+  assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["direct-2773-1"]);
+});
+
+test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza un marcador", async () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773" }],
+      selectedOperationId: "wo-placeholder-2773",
+      operations: [{ id: "wo-placeholder-2773", ot: "2773", ct: "", tiempoProd: 0, tipoInsercion: "PENDIENTE_NETSUITE" }],
+    },
+    callAppsScript: async () => ({
+      ok: true,
+      data: {
+        workOrder: { ot: "2773" },
+        operations: [{ id: "direct-2773-10", ot: "2773", ct: "5458", tiempoProd: 12 }],
+        materials: [],
+      },
+    }),
+  });
+
+  const result = await fixture.context.ensureWorkOrderPlanningData("2773");
+
+  assert.deepEqual(plain(result), { ready: true, source: "remote" });
+  assert.equal(fixture.state.selectedOperationId, "direct-2773-10");
+  assert.equal(fixture.state.operations.find((operation) => operation.id === fixture.state.selectedOperationId)?.ot, "2773");
 });
 
 test("abrir el detalle carga operaciones sin perder la seleccion", () => {
@@ -255,7 +303,7 @@ test("dos aperturas del detalle comparten la carga y muestran las operaciones fu
 test("un error del detalle conserva las operaciones existentes", async () => {
   const rows = [{ id: "2773-1", ot: "2773", ct: "", tiempoProd: 0 }];
   const toasts = [];
-  let renders = 0;
+  const loadingStates = [];
   const fixture = loadClient({
     installDetailOperations: true,
     state: { operations: structuredClone(rows), workOrders: [{ ot: "2773" }] },
@@ -264,13 +312,13 @@ test("un error del detalle conserva las operaciones existentes", async () => {
   fixture.context.isAppsScriptRuntime = () => true;
   fixture.context.getSelectedPriorityJob = () => ({ ot: "2773" });
   fixture.context.materialOtKey = (value) => String(value || "");
-  fixture.context.renderSelectedJobPanel = () => { renders += 1; };
+  fixture.context.renderSelectedJobPanel = () => { loadingStates.push(fixture.context.isSelectedJobDetailOperationLoading("2773")); };
   fixture.context.showToast = (message) => toasts.push(message);
 
   await fixture.context.loadSelectedJobDetailOperations("2773");
 
   assert.deepEqual(plain(fixture.state.operations), rows);
-  assert.equal(renders, 2);
+  assert.deepEqual(loadingStates, [true, false]);
   assert.deepEqual(toasts, ["backend fuera de linea"]);
 });
 
@@ -542,18 +590,6 @@ test("una respuesta tardia no reintroduce una OT eliminada durante la espera", a
 
   assert.deepEqual(plain(await request), { ready: false, error: "La OT 2773 ya no esta disponible" });
   assert.deepEqual(plain(fixture.state), { revision: 1, workOrders: [], operations: [], materials: [] });
-});
-
-test("una OT con CT y tiempo de planeacion se resuelve desde cache sin backend", async () => {
-  let calls = 0;
-  const fixture = loadClient({
-    installIndividualPlanning: true,
-    state: { operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }] },
-    callAppsScript: async () => { calls += 1; },
-  });
-
-  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "cached" });
-  assert.equal(calls, 0);
 });
 
 test("dos acciones simultaneas de agregar una OT preparan y confirman una sola vez", async () => {

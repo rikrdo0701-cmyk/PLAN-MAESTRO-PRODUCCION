@@ -175,16 +175,40 @@ test("resuelve el ID interno por folio cuando inspeccion no lo incluye", () => {
   assert.match(requests[1], /manufacturingoperationtask/i);
 });
 
-test("calcula el tiempo con la cantidad pendiente de la OT", () => {
+test("calcula setup mas run rate por la cantidad pendiente de la OT", () => {
   const context = loadService({
-    trabajo: { wo: "2773", id: "913", Articulo: "C 590 LE", cantidad: 3, cantidadEnsamblada: 2 },
+    trabajo: { wo: "2773", id: "913", Articulo: "C 590 LE", cantidad: 10, cantidadEnsamblada: 3 },
     materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
-  }, [{ Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 6.62 }]);
+  });
+  context.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 200,
+    getContentText: () => JSON.stringify({ items: [{
+      id: "1", operationsequence: 10, manufacturingworkcenter: "5461", work_center: "CORTE",
+      setuptime: 4, runrate: 1.5, title: "CORTE",
+    }] }),
+  });
 
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, true);
-  assert.equal(result.data.operations[0].tiempoProd, 6.62);
+  assert.equal(result.data.operations[0].tiempoProd, 4 + (1.5 * (10 - 3)));
+});
+
+test("oculta la respuesta cruda de SuiteQL y conserva el diagnostico en servidor", () => {
+  const context = loadService({ trabajo: { wo: "2773", id: "913", cantidad: 3 } });
+  const diagnostics = [];
+  context.Logger = { log: (message) => diagnostics.push(message) };
+  context.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 502,
+    getContentText: () => "token-secreto-netSuite: detalle interno",
+  });
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /SuiteQL operaciones OT: error HTTP 502/);
+  assert.doesNotMatch(result.error, /token-secreto-netSuite/);
+  assert.match(diagnostics.join("\n"), /token-secreto-netSuite/);
 });
 
 test("adapta una OT individual al contrato del planeador", () => {

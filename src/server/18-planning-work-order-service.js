@@ -125,7 +125,10 @@ function PP_fetchDirectWorkOrderSuiteQl_(sql, config) {
   });
   const status = response.getResponseCode();
   const raw = response.getContentText();
-  if (status < 200 || status >= 300) throw new Error('SuiteQL operaciones OT: ' + status + ' ' + raw.slice(0, 300));
+  if (status < 200 || status >= 300) {
+    PP_logDirectWorkOrderSuiteQlFailure_(status, raw);
+    throw new Error('SuiteQL operaciones OT: error HTTP ' + status);
+  }
   let json;
   try { json = JSON.parse(raw || '{}'); } catch (_) { throw new Error('SuiteQL operaciones OT: respuesta invalida'); }
   if (!Array.isArray(json.items)) throw new Error('SuiteQL operaciones OT: respuesta sin items');
@@ -134,6 +137,11 @@ function PP_fetchDirectWorkOrderSuiteQl_(sql, config) {
 
 function PP_directWorkOrderSqlLiteral_(value) {
   return String(value || '').replace(/'/g, "''");
+}
+
+function PP_logDirectWorkOrderSuiteQlFailure_(status, raw) {
+  if (typeof Logger === 'undefined' || typeof Logger.log !== 'function') return;
+  Logger.log('SuiteQL operaciones OT fallo HTTP ' + status + ': ' + String(raw || '').slice(0, 1000));
 }
 
 function PP_planningIndividualOperationValid_(operation) {
