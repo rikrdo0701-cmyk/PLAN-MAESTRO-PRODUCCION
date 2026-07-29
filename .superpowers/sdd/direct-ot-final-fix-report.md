@@ -29,6 +29,31 @@
 - `npm.cmd run check` — passed.
 - `git diff --check` — passed.
 
+## OT-wide freshness and selection separation
+
+### Scope
+
+- Replaced the operation-only stale-response guard with a stable, collection-aware OT signature for its work order, all OT operations, and all OT materials. Any concurrent change skips the whole direct merge.
+- `mergeIndividualPlanningData` no longer writes `selectedOperationId`.
+- Only the detail loader remaps selection after a successful result. It re-reads the selection immediately before remapping and requires it to still identify the loaded OT; an unchanged synthetic-placeholder token is retained only to resolve the production placeholder case.
+
+### RED evidence
+
+`node --test tests/performance-client-calls.test.mjs`
+
+- 29 passed, 4 failed before implementation.
+- Expected failures: data merge changed the selected operation; switching from OT A to B was overwritten by A's response; work-order-only and material-only concurrent sync changes were overwritten by a late direct response.
+
+### GREEN and verification
+
+- `node --test tests/planning-work-order-service.test.mjs` — 10 passed, 0 failed.
+- `node --test tests/performance-client-calls.test.mjs` — 33 passed, 0 failed.
+- `node --test tests/build.test.mjs` — 27 passed, 0 failed.
+- `npm.cmd run build` — passed.
+- `npm.cmd test` — 260 passed, 0 failed.
+- `npm.cmd run check` — passed.
+- `git diff --check` — passed.
+
 ## Concern
 
 The pre-existing `package-lock.json` change and untracked earlier task/review artifacts remain outside this fix commit.

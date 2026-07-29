@@ -5890,14 +5890,20 @@ function individualPlanningOperationCtKey(operation) {
   return ct ? `${materialOtKey(operation?.ot)}|${ct}` : "";
 }
 
-function individualPlanningRouteSignature(ot) {
-  return individualPlanningOperationsForOt(ot).map((operation) => [
-    operation?.id, operation?.secuencia, operation?.ct, operation?.descripcion, operation?.parte,
-    operation?.cantTotal, operation?.cantPendiente, operation?.tiempoCiclo, operation?.tiempoSetup, operation?.tiempoProd,
-    operation?.fechaReq, operation?.fechaInicio, operation?.horaInicio, operation?.fechaFin, operation?.horaFin,
-    operation?.operador, operation?.maquina, operation?.herramental, operation?.kitHerramental,
-    operation?.locked, operation?.planStatus, operation?.estatus, operation?.log,
-  ].map((value) => String(value ?? "")).join("\\u001f")).join("\\u001e");
+function individualPlanningRecordSignature(record) {
+  return Object.keys(record || {}).sort().map((field) => `${field}:${JSON.stringify(record[field])}`).join("\\u001f");
+}
+
+function individualPlanningOtSignature(ot) {
+  const key = materialOtKey(ot);
+  const workOrder = (state.workOrders || []).find((record) => materialOtKey(record?.ot) === key);
+  const operations = (state.operations || []).filter((record) => materialOtKey(record?.ot) === key);
+  const materials = (state.materials || []).filter((record) => materialOtKey(record?.ot) === key);
+  return [
+    `workOrder:${individualPlanningRecordSignature(workOrder)}`,
+    `operations:${operations.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+    `materials:${materials.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+  ].join("\\u001d");
 }
 
 function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
@@ -5933,7 +5939,7 @@ function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   return merged;
 }
 
-function mergeIndividualPlanningData(payload, ot, selectedOt = "") {
+function mergeIndividualPlanningData(payload, ot) {
   const key = materialOtKey(ot);
   const data = payload?.data || payload;
   const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
@@ -5955,8 +5961,6 @@ function mergeIndividualPlanningData(payload, ot, selectedOt = "") {
       || existingByCt.get(individualPlanningOperationCtKey(operation));
     return mergeIndividualPlanningOperation(operation, existing);
   });
-  const selectedOperation = (state.operations || []).find((operation) => operation?.id === state.selectedOperationId);
-  const selectedKey = materialOtKey(selectedOt) || materialOtKey(selectedOperation?.ot);
   const materials = Array.isArray(data?.materials)
     ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
     : [];
@@ -5964,7 +5968,6 @@ function mergeIndividualPlanningData(payload, ot, selectedOt = "") {
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
     ...mergedOperations,
   ];
-  if (selectedKey === key) state.selectedOperationId = mergedOperations[0].id;
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
@@ -5986,8 +5989,7 @@ function ensureWorkOrderPlanningData(ot) {
   if (individualPlanningLoadCompleted.has(key)) return Promise.resolve({ ready: true, source: "cached" });
   if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
-  const routeSignature = individualPlanningRouteSignature(key);
-  const selectedOt = materialOtKey(typeof getSelectedPriorityJob === "function" ? getSelectedPriorityJob()?.ot : "");
+  const otSignature = individualPlanningOtSignature(key);
 
   const request = (async () => {
     try {
@@ -5996,10 +5998,10 @@ function ensureWorkOrderPlanningData(ot) {
       if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
         return { ready: false, error: `La OT ${ot} ya no esta disponible` };
       }
-      if (individualPlanningRouteSignature(key) !== routeSignature) {
+      if (individualPlanningOtSignature(key) !== otSignature) {
         return { ready: true, source: "cached" };
       }
-      if (!mergeIndividualPlanningData(payload, key, selectedOt)) {
+      if (!mergeIndividualPlanningData(payload, key)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
       individualPlanningLoadCompleted.add(key);
@@ -6018,11 +6020,20 @@ function loadSelectedJobDetailOperations(ot) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
   if (selectedJobDetailOperationLoads.has(key)) return selectedJobDetailOperationLoads.get(key);
+  const selectedOperationId = state.selectedOperationId;
+  const selectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
 
   const request = Promise.resolve().then(async () => {
     renderSelectedJobPanel();
     const result = await ensureWorkOrderPlanningData(ot);
-    if (materialOtKey(getSelectedPriorityJob()?.ot) !== key) return result;
+    const currentSelectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
+    const selectionStillBelongsToOt = currentSelectedOt === key
+      || (!currentSelectedOt && selectedOt === key && state.selectedOperationId === selectedOperationId);
+    if (!selectionStillBelongsToOt) return result;
+    if (result.ready) {
+      const operation = individualPlanningOperationsForOt(key)[0];
+      if (operation?.id) state.selectedOperationId = operation.id;
+    }
     if (!result.ready) showToast(result.error || `No se cargaron operaciones de la OT ${ot}`, 9000);
     return result;
   }).finally(() => {
