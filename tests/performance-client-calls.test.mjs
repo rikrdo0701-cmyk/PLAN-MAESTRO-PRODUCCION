@@ -238,6 +238,31 @@ test("las filas validas existentes no sustituyen la primera carga directa de la 
   assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["direct-2773-1"]);
 });
 
+test("una ruta eliminada despues de configurar la matriz se vuelve a consultar", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { workOrders: [{ ot: "2773" }] },
+    callAppsScript: async () => {
+      calls += 1;
+      return {
+        ok: true,
+        data: {
+          workOrder: { ot: "2773" },
+          operations: [{ id: `direct-2773-${calls}`, ot: "2773", ct: "5458", tiempoProd: 12 }],
+          materials: [],
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  fixture.state.operations = [];
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.equal(calls, 2);
+  assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["direct-2773-2"]);
+});
+
 test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza un marcador", async () => {
   const fixture = loadClient({
     installDetailOperations: true,

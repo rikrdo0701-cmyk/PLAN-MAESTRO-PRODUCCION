@@ -5987,7 +5987,10 @@ function mergeIndividualPlanningData(payload, ot) {
 function ensureWorkOrderPlanningData(ot) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
-  if (individualPlanningLoadCompleted.has(key)) return Promise.resolve({ ready: true, source: "cached" });
+  if (individualPlanningLoadCompleted.has(key) && hasIndividualPlanningOperations(key)) {
+    return Promise.resolve({ ready: true, source: "cached" });
+  }
+  individualPlanningLoadCompleted.delete(key);
   if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
   const otSignature = individualPlanningOtSignature(key);
