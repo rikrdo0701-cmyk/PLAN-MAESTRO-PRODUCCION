@@ -244,7 +244,7 @@ test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza
     state: {
       workOrders: [{ ot: "2773" }],
       selectedOperationId: "wo-placeholder-2773",
-      operations: [{ id: "wo-placeholder-2773", ot: "2773", ct: "", tiempoProd: 0, tipoInsercion: "PENDIENTE_NETSUITE" }],
+      operations: [],
     },
     callAppsScript: async () => ({
       ok: true,
@@ -255,12 +255,49 @@ test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza
       },
     }),
   });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "2773" });
 
   const result = await fixture.context.ensureWorkOrderPlanningData("2773");
 
   assert.deepEqual(plain(result), { ready: true, source: "remote" });
   assert.equal(fixture.state.selectedOperationId, "direct-2773-10");
   assert.equal(fixture.state.operations.find((operation) => operation.id === fixture.state.selectedOperationId)?.ot, "2773");
+});
+
+test("la fusion directa actualiza la ruta y conserva campos locales de una OT planeada", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773" }],
+      operations: [{
+        id: "planned-2773-10", ot: "2773", secuencia: 10, ct: "5458", descripcion: "CORTE LOCAL",
+        tiempoProd: 8, cantTotal: 5, cantPendiente: 5, fechaReq: "2026-08-01",
+        fechaInicio: "2026-07-30", horaInicio: "08:00", fechaFin: "2026-07-30", horaFin: "09:00",
+        operador: "OPERADOR LOCAL", maquina: "DOB-01", herramental: "H-18", kitHerramental: "K-18",
+        locked: true, planStatus: "COMPLETADA_PLAN", estatus: "COMPLETADA", log: "PLAN_LOCAL", customPlanning: "CONSERVAR",
+      }],
+    },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773" },
+      operations: [{
+        id: "direct-2773-10", ot: "2773", secuencia: 10, ct: "5458", descripcion: "CORTE NETSUITE",
+        tiempoProd: 15, cantTotal: 9, cantPendiente: 7, fechaReq: "2026-08-15",
+      }],
+      materials: [],
+    },
+  }, "2773");
+
+  assert.equal(merged, true);
+  assert.deepEqual(plain(fixture.state.operations), [{
+    id: "direct-2773-10", ot: "2773", secuencia: 10, ct: "5458", descripcion: "CORTE NETSUITE",
+    tiempoProd: 15, cantTotal: 9, cantPendiente: 7, fechaReq: "2026-08-15",
+    fechaInicio: "2026-07-30", horaInicio: "08:00", fechaFin: "2026-07-30", horaFin: "09:00",
+    operador: "OPERADOR LOCAL", maquina: "DOB-01", herramental: "H-18", kitHerramental: "K-18",
+    locked: true, planStatus: "COMPLETADA_PLAN", estatus: "COMPLETADA", log: "PLAN_LOCAL", customPlanning: "CONSERVAR",
+  }]);
 });
 
 test("abrir el detalle carga operaciones sin perder la seleccion", () => {
@@ -565,6 +602,35 @@ test("una respuesta tardia no pisa una ruta valida agregada durante la espera", 
 
   assert.deepEqual(plain(await request), { ready: true, source: "cached" });
   assert.deepEqual(plain(fixture.state.operations), [{ id: "synced", ot: "2773", ct: "CORTE", tiempoProd: 30 }]);
+  assert.deepEqual(plain(fixture.state.workOrders), [{ ot: "2773", item: "LOCAL" }]);
+  assert.deepEqual(plain(fixture.state.materials), [{ ot: "2773", component: "LOCAL" }]);
+});
+
+test("una respuesta directa tardia no pisa una sincronizacion nueva cuando ya habia ruta valida", async () => {
+  const gate = deferredPromise();
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773", item: "LOCAL" }],
+      operations: [{ id: "persisted", ot: "2773", secuencia: 10, ct: "CORTE", tiempoProd: 10 }],
+      materials: [{ ot: "2773", component: "LOCAL" }],
+    },
+    callAppsScript: async () => gate.promise,
+  });
+
+  const request = fixture.context.ensureWorkOrderPlanningData("2773");
+  fixture.state.operations = [{ id: "new-sync", ot: "2773", secuencia: 10, ct: "CORTE", tiempoProd: 30 }];
+  gate.resolve({
+    ok: true,
+    data: {
+      workOrder: { ot: "2773", item: "REMOTE" },
+      operations: [{ id: "late-direct", ot: "2773", secuencia: 10, ct: "CORTE", tiempoProd: 12 }],
+      materials: [{ ot: "2773", component: "REMOTE" }],
+    },
+  });
+
+  assert.deepEqual(plain(await request), { ready: true, source: "cached" });
+  assert.deepEqual(plain(fixture.state.operations), [{ id: "new-sync", ot: "2773", secuencia: 10, ct: "CORTE", tiempoProd: 30 }]);
   assert.deepEqual(plain(fixture.state.workOrders), [{ ot: "2773", item: "LOCAL" }]);
   assert.deepEqual(plain(fixture.state.materials), [{ ot: "2773", component: "LOCAL" }]);
 });

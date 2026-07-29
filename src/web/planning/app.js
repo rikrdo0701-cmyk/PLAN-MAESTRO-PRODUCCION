@@ -5880,6 +5880,39 @@ function hasIndividualPlanningOperations(ot) {
   return operations.length > 0 && operations.every(individualPlanningOperationValid);
 }
 
+function individualPlanningOperationSequenceKey(operation) {
+  const sequence = String(operation?.secuencia ?? "").trim();
+  return sequence ? `${materialOtKey(operation?.ot)}|${sequence}` : "";
+}
+
+function individualPlanningOperationCtKey(operation) {
+  const ct = String(operation?.ct ?? "").trim().toUpperCase();
+  return ct ? `${materialOtKey(operation?.ot)}|${ct}` : "";
+}
+
+function individualPlanningRouteSignature(ot) {
+  return individualPlanningOperationsForOt(ot).map((operation) => [
+    operation?.id, operation?.secuencia, operation?.ct, operation?.descripcion, operation?.parte,
+    operation?.cantTotal, operation?.cantPendiente, operation?.tiempoCiclo, operation?.tiempoSetup, operation?.tiempoProd,
+    operation?.fechaReq, operation?.fechaInicio, operation?.horaInicio, operation?.fechaFin, operation?.horaFin,
+    operation?.operador, operation?.maquina, operation?.herramental, operation?.kitHerramental,
+    operation?.locked, operation?.planStatus, operation?.estatus, operation?.log,
+  ].map((value) => String(value ?? "")).join("\\u001f")).join("\\u001e");
+}
+
+function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
+  if (!existingOperation) return remoteOperation;
+  const routeFields = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tipoInsercion",
+  ];
+  const route = {};
+  routeFields.forEach((field) => {
+    if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+  });
+  return { ...existingOperation, ...route };
+}
+
 function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   const normalizedFields = [
     "id", "workOrderId", "ot", "item", "description", "photoUrl", "startDate", "endDate", "dueDate",
@@ -5900,7 +5933,7 @@ function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   return merged;
 }
 
-function mergeIndividualPlanningData(payload, ot) {
+function mergeIndividualPlanningData(payload, ot, selectedOt = "") {
   const key = materialOtKey(ot);
   const data = payload?.data || payload;
   const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
@@ -5908,16 +5941,30 @@ function mergeIndividualPlanningData(payload, ot) {
   const operations = individualPlanningOperationsForOt(key, Array.isArray(data?.operations) ? data.operations : []);
   if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
 
+  const existingOperations = individualPlanningOperationsForOt(key);
+  const existingBySequence = new Map();
+  const existingByCt = new Map();
+  existingOperations.forEach((operation) => {
+    const sequenceKey = individualPlanningOperationSequenceKey(operation);
+    const ctKey = individualPlanningOperationCtKey(operation);
+    if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+    if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+  });
+  const mergedOperations = operations.map((operation) => {
+    const existing = existingBySequence.get(individualPlanningOperationSequenceKey(operation))
+      || existingByCt.get(individualPlanningOperationCtKey(operation));
+    return mergeIndividualPlanningOperation(operation, existing);
+  });
   const selectedOperation = (state.operations || []).find((operation) => operation?.id === state.selectedOperationId);
-  const selectedOt = materialOtKey(selectedOperation?.ot);
+  const selectedKey = materialOtKey(selectedOt) || materialOtKey(selectedOperation?.ot);
   const materials = Array.isArray(data?.materials)
     ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
     : [];
   state.operations = [
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
-    ...operations,
+    ...mergedOperations,
   ];
-  if (selectedOt === key) state.selectedOperationId = operations[0].id;
+  if (selectedKey === key) state.selectedOperationId = mergedOperations[0].id;
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
@@ -5939,7 +5986,8 @@ function ensureWorkOrderPlanningData(ot) {
   if (individualPlanningLoadCompleted.has(key)) return Promise.resolve({ ready: true, source: "cached" });
   if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
-  const hadIndividualPlanningOperations = hasIndividualPlanningOperations(key);
+  const routeSignature = individualPlanningRouteSignature(key);
+  const selectedOt = materialOtKey(typeof getSelectedPriorityJob === "function" ? getSelectedPriorityJob()?.ot : "");
 
   const request = (async () => {
     try {
@@ -5948,10 +5996,10 @@ function ensureWorkOrderPlanningData(ot) {
       if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
         return { ready: false, error: `La OT ${ot} ya no esta disponible` };
       }
-      if (!hadIndividualPlanningOperations && hasIndividualPlanningOperations(key)) {
+      if (individualPlanningRouteSignature(key) !== routeSignature) {
         return { ready: true, source: "cached" };
       }
-      if (!mergeIndividualPlanningData(payload, key)) {
+      if (!mergeIndividualPlanningData(payload, key, selectedOt)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
       individualPlanningLoadCompleted.add(key);
