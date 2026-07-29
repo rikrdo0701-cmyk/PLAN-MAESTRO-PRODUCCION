@@ -7,7 +7,7 @@ function getPlanningWorkOrderData(ot) {
     const workOrder = response.trabajo || response.workOrder;
     if (!workOrder) throw new Error('OT no encontrada en NetSuite');
 
-    const workOrderId = PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId', 'id']);
+    const workOrderId = PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId']);
     const pendingQuantity = PP_pendingWorkOrderQuantity_(workOrder);
     const rawOperations = PP_fetchDirectWorkOrderOperations_(workOrderId, folio, pendingQuantity).filter(PP_isSchedulable_);
     const current = { operations: [] };
@@ -47,7 +47,7 @@ function getPlanningWorkOrderData(ot) {
 
     const normalizedWorkOrderRow = Object.assign({}, workOrder, {
       'WO Folio': folio,
-      'WO Internal ID': PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId', 'id']),
+      'WO Internal ID': PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId']),
       'Articulo': PP_Inspection_value_(workOrder, ['Articulo', 'articulo', 'Item', 'item', 'item_name', 'Ensamble']),
       'Descripcion': PP_Inspection_value_(workOrder, ['Descripcion', 'descripcion', 'Description', 'description']),
       'Cantidad': PP_Inspection_value_(workOrder, ['Cantidad', 'cantidad', 'Quantity', 'quantity']),

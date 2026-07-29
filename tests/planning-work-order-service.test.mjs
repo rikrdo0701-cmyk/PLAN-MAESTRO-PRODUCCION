@@ -74,7 +74,7 @@ function loadService(detail, planningOperations = detail.operaciones || detail.o
 
 test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   const context = loadService({
-    trabajo: { wo: "2773", id: "913", Articulo: "C 590 LE", cantidad: 3 },
+    trabajo: { wo: "2773", "WO Internal ID": "913", Articulo: "C 590 LE", cantidad: 3 },
     materiales: [],
   });
   const operationRows = Array.from({ length: 12 }, (_, index) => ({
@@ -173,6 +173,32 @@ test("resuelve el ID interno por folio cuando inspeccion no lo incluye", () => {
   assert.equal(requests.length, 2);
   assert.match(requests[0], /FROM transaction/i);
   assert.match(requests[1], /manufacturingoperationtask/i);
+});
+
+test("ignora el id generico de inspeccion y resuelve el Work Order por folio", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "MP00098", Articulo: "C 590 LE", cantidad: 3 },
+    materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
+  }, []);
+  const requests = [];
+  context.UrlFetchApp.fetch = (_url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    requests.push(sql);
+    const items = /FROM transaction/i.test(sql)
+      ? [{ id: "29445", tranid: "2773" }]
+      : /WHERE workorder = '29445'/i.test(sql)
+        ? [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "3OTD : CORTE DE TUBO", setuptime: 6, runrate: 0.62, title: "3OTD" }]
+        : [];
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /FROM transaction/i);
+  assert.match(requests[1], /WHERE workorder = '29445'/i);
+  assert.equal(result.data.operations[0].ct, "5458");
 });
 
 test("calcula setup mas run rate por la cantidad pendiente de la OT", () => {
