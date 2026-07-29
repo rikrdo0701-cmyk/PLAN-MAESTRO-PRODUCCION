@@ -348,6 +348,31 @@ test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", a
   assert.equal(state.selectedOperationId, "");
 });
 
+test("el arranque optimizado limpia la OT de detalle y la operacion seleccionada", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      selectedDetailOt: "2773",
+      selectedOperationId: "duplicada",
+      operations: [],
+      workOrders: [],
+    },
+    callAppsScript: async () => ({
+      revision: 2,
+      selectedOperationId: "remota",
+      operations: [],
+      workOrders: [],
+      materials: [],
+    }),
+  });
+  fixture.context.window.PPAppsScriptBridge.isConfigured = () => false;
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(fixture.state.selectedDetailOt, "");
+  assert.equal(fixture.state.selectedOperationId, "");
+});
+
 test("undo limpia juntas la OT de detalle y la operacion restaurada", () => {
   const previous = { selectedDetailOt: "1325", selectedOperationId: "duplicada" };
   const fixture = Function(
@@ -366,6 +391,27 @@ test("undo limpia juntas la OT de detalle y la operacion restaurada", () => {
 
   assert.equal(fixture.getState().selectedDetailOt, "");
   assert.equal(fixture.getState().selectedOperationId, "");
+});
+
+test("undo optimizado limpia juntas la OT de detalle y la operacion restaurada", () => {
+  const fixture = loadClient({
+    state: {
+      selectedDetailOt: "1325",
+      selectedOperationId: "duplicada",
+      operations: [],
+      workOrders: [],
+    },
+  });
+  fixture.context.normalizeState = () => {};
+  fixture.context.saveAndRender = () => {};
+  fixture.context.checkpointState();
+  fixture.state.selectedDetailOt = "2773";
+  fixture.state.selectedOperationId = "otra-duplicada";
+
+  fixture.context.undoLastChange();
+
+  assert.equal(fixture.state.selectedDetailOt, "");
+  assert.equal(fixture.state.selectedOperationId, "");
 });
 
 test("la fusion directa conserva el detalle seleccionado por OT cuando reemplaza un marcador", async () => {

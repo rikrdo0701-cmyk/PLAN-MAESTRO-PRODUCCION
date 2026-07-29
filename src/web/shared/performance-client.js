@@ -159,6 +159,8 @@
         dueDateOverride: overrides.has(materialOtKey(item.ot)) ? overrides.get(materialOtKey(item.ot)) : (item.dueDateOverride || ""),
       }));
     }
+    state.selectedDetailOt = "";
+    state.selectedOperationId = "";
     normalizeState();
     saveAndRender("Ultimo cambio deshecho");
   };
@@ -525,6 +527,7 @@
 
       if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
       initialStateLoadPending = false;
+      state.selectedDetailOt = "";
       state.selectedOperationId = "";
       saveState("ui");
       render({ saveScope: "ui" });
