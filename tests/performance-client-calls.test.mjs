@@ -23,6 +23,24 @@ const individualPlanningSource = appSource.slice(
   appSource.indexOf("const individualPlanningRequests"),
   appSource.indexOf("async function ensurePlanningDataLoaded("),
 );
+const individualSelectionSource = appSource.slice(
+  appSource.indexOf("function jobPlanningOperations("),
+  appSource.indexOf("async function prepareJobForPlanning("),
+);
+
+function loadIndividualSelection({ jobs, loaded, card, state, toasts }) {
+  return new Function(
+    "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
+    "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
+    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
+    `${individualSelectionSource}; return selectJob;`,
+  )(
+    { priorityList: { querySelectorAll: () => [card] } }, () => jobs.value, (message) => toasts.push(message), state,
+    { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
+    (operations) => operations, loaded, async () => true, () => {}, () => {}, () => {}, () => {},
+    (callback) => callback(), () => {}, () => {}, () => {},
+  );
+}
 
 function deferredPromise() {
   let resolve;
@@ -183,6 +201,68 @@ test("dos solicitudes simultaneas de una OT comparten una sola llamada individua
     { ready: true, source: "remote" },
     { ready: true, source: "remote" },
   ]);
+});
+
+test("la seleccion individual bloquea solo su tarjeta y libera el estado ocupado en finally", () => {
+  assert.match(individualSelectionSource, /const card = Array\.from\(els\.priorityList\.querySelectorAll\("\.priority-card"\)\)[\s\S]*item\.dataset\.ot === ot/);
+  assert.match(individualSelectionSource, /card\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(individualSelectionSource, /addButton\.disabled = true/);
+  assert.match(individualSelectionSource, /card\.removeAttribute\("aria-busy"\)/);
+  assert.match(individualSelectionSource, /addButton\.disabled = false/);
+  assert.match(individualSelectionSource, /const loaded = await ensureWorkOrderPlanningData\(ot\)/);
+  assert.match(individualSelectionSource, /if \(!loaded\?\.ready\)[\s\S]*return;/);
+  assert.match(individualSelectionSource, /finally \{[\s\S]*setIndividualPlanningBusy\(ot, false\)/);
+});
+
+test("una consulta individual libera la tarjeta y no agrega la OT cuando falla", async () => {
+  const changes = [];
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    querySelector: () => addButton,
+    setAttribute: () => changes.push("busy"),
+    removeAttribute: () => changes.push("ready"),
+  };
+  const state = { selectedOts: [] };
+  const toasts = [];
+  const selectJob = loadIndividualSelection({
+    jobs: { value: [{ ot: "100", movable: true, ops: [] }] },
+    loaded: async () => ({ ready: false, error: "backend fuera de linea" }), card, state, toasts,
+  });
+
+  await selectJob("100", true);
+
+  assert.deepEqual(changes, ["busy", "ready"]);
+  assert.equal(addButton.disabled, false);
+  assert.deepEqual(state.selectedOts, []);
+  assert.deepEqual(toasts, ["backend fuera de linea"]);
+});
+
+test("una consulta individual libera la tarjeta al agregar la OT con operaciones validas", async () => {
+  const changes = [];
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    querySelector: () => addButton,
+    setAttribute: () => changes.push("busy"),
+    removeAttribute: () => changes.push("ready"),
+  };
+  const jobs = { value: [{ ot: "100", movable: true, ops: [] }] };
+  const state = { selectedOts: [] };
+  const selectJob = loadIndividualSelection({
+    jobs,
+    loaded: async () => {
+      jobs.value = [{ ot: "100", movable: true, ops: [{ id: "op-1" }] }];
+      return { ready: true };
+    },
+    card, state, toasts: [],
+  });
+
+  await selectJob("100", true);
+
+  assert.deepEqual(changes, ["busy", "ready"]);
+  assert.equal(addButton.disabled, false);
+  assert.deepEqual(state.selectedOts, ["100"]);
 });
 
 test("la fusion individual reemplaza solo la OT solicitada y conserva las demas", () => {

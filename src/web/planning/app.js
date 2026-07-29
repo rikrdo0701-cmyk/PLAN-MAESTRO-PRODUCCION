@@ -1981,6 +1981,20 @@ function jobPlanningOperations(job) {
     .filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
 }
 
+function setIndividualPlanningBusy(ot, busy) {
+  const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
+    .find((item) => item.dataset.ot === ot);
+  if (!card) return;
+  const addButton = card.querySelector(".job-add");
+  if (busy) {
+    card.setAttribute("aria-busy", "true");
+    if (addButton) addButton.disabled = true;
+  } else {
+    card.removeAttribute("aria-busy");
+    if (addButton) addButton.disabled = false;
+  }
+}
+
 async function selectJob(ot, selected) {
   if (!ot) return;
   let job = getPriorityJobs().find((item) => item.ot === ot);
@@ -2001,11 +2015,23 @@ async function selectJob(ot, selected) {
   }
   const alreadySelected = state.selectedOts.includes(ot);
   if (selected && !alreadySelected && !jobPlanningOperations(job).length) {
-    await ensurePlanningDataLoaded(true, { force: true });
-    job = getPriorityJobs().find((item) => item.ot === ot);
-    if (!jobPlanningOperations(job).length) {
-      showToast(`La OT ${ot} no devolvio operaciones de NetSuite; no se agrego al plan`, 9000);
+    setIndividualPlanningBusy(ot, true);
+    try {
+      const loaded = await ensureWorkOrderPlanningData(ot);
+      job = getPriorityJobs().find((item) => item.ot === ot);
+      if (!loaded?.ready) {
+        showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
+        return;
+      }
+      if (!jobPlanningOperations(job).length) {
+        showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
+        return;
+      }
+    } catch (error) {
+      showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
       return;
+    } finally {
+      setIndividualPlanningBusy(ot, false);
     }
   }
   if (selected && !alreadySelected) {

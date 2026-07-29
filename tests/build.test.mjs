@@ -96,7 +96,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
-  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)[\s\S]{0,1200}PlanningWorkflowCore\.removeOtFromDraft/);
+  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)[\s\S]{0,2400}PlanningWorkflowCore\.removeOtFromDraft/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
   assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
@@ -915,17 +915,30 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
   assert.deepEqual(validatedOperations, []);
 });
 
-test("agregar una OT sin operaciones carga y valida sus operaciones antes de planearla", async () => {
+test("agregar una OT sin operaciones consulta solo esa OT y valida sus operaciones antes de planearla", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const selection = app.slice(
     app.indexOf("async function selectJob("),
     app.indexOf("async function prepareJobForPlanning(", app.indexOf("async function selectJob(")),
   );
+  const backlog = app.slice(
+    app.indexOf("function renderPriorityList()"),
+    app.indexOf("function renderPriorityQueue()", app.indexOf("function renderPriorityList()")),
+  );
+  const drag = app.slice(
+    app.indexOf("function finishBacklogDrag("),
+    app.indexOf("function jobPlanningOperations()", app.indexOf("function finishBacklogDrag(")),
+  );
 
   assert.match(selection, /if \(selected && !alreadySelected && !jobPlanningOperations\(job\)\.length\)/);
-  assert.match(selection, /await ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
+  assert.match(selection, /await ensureWorkOrderPlanningData\(ot\)/);
+  assert.doesNotMatch(selection, /ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
+  assert.match(selection, /setIndividualPlanningBusy\(ot, true\)/);
+  assert.match(selection, /finally[\s\S]*setIndividualPlanningBusy\(ot, false\)/);
   assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => item\.ot === ot\)/);
   assert.match(selection, /if \(!jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
+  assert.match(backlog, /selectJob\(job\.ot, true\)/);
+  assert.match(drag, /selectJob\(sourceOt, true\)/);
 });
 
 test("completar una operacion usa guardado atomico y render parcial", async () => {
