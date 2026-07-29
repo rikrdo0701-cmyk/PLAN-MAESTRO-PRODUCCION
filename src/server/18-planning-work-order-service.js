@@ -9,7 +9,7 @@ function getPlanningWorkOrderData(ot) {
 
     const workOrderId = PP_Inspection_value_(workOrder, ['WO Internal ID', 'workorder_id', 'workOrderId']);
     const pendingQuantity = PP_pendingWorkOrderQuantity_(workOrder);
-    const rawOperations = PP_fetchDirectWorkOrderOperations_(workOrderId, folio, pendingQuantity).filter(PP_isSchedulable_);
+    const rawOperations = PP_fetchDirectWorkOrderOperations_(workOrderId, folio, pendingQuantity);
     const current = { operations: [] };
     const operations = rawOperations.map(function(row, index) {
       const normalized = Object.assign({}, row, {
@@ -91,7 +91,7 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
   const route = PP_fetchDirectWorkOrderSuiteQl_([
     'SELECT id, operationsequence, manufacturingworkcenter,',
     'BUILTIN.DF(manufacturingworkcenter) AS work_center,',
-    'setuptime, runrate, title, status',
+    'setuptime, runrate, title',
     'FROM manufacturingoperationtask',
     "WHERE workorder = '" + PP_directWorkOrderSqlLiteral_(resolvedId) + "'",
     'ORDER BY operationsequence, id'
@@ -104,7 +104,7 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
       'Operacion': row.work_center || row.title,
       'Secuencia': row.operationsequence,
       'Centro de trabajo': row.manufacturingworkcenter,
-      'Estado': row.status,
+      'Estado': 'No iniciado',
       'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity
     };
   });

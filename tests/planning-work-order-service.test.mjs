@@ -112,7 +112,7 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   assert.equal(result.data.operations[11].tiempoProd, 4);
 });
 
-test("excluye tareas terminales de la ruta directa", () => {
+test("conserva la ruta de una OT activa aunque sus tareas aparezcan terminales", () => {
   const context = loadService({
     trabajo: { wo: "2773", id: "913", cantidad: 3 },
   });
@@ -131,9 +131,16 @@ test("excluye tareas terminales de la ruta directa", () => {
 
   const result = context.getPlanningWorkOrderData("2773");
 
-  assert.match(payload, /\bstatus\b/i);
+  assert.match(payload, /manufacturingoperationtask/i);
   assert.equal(result.ok, true);
-  assert.deepEqual(structuredClone(result.data.operations.map((operation) => operation.descripcion)), ["CORTE"]);
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.descripcion)),
+    ["CORTE", "DOBLEZ", "PINTURA"],
+  );
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.estatus)),
+    ["No iniciado", "No iniciado", "No iniciado"],
+  );
 });
 
 test("toma CT y tiempo de la ruta directa aunque inspeccion no los incluya", () => {
