@@ -61,6 +61,36 @@ test("toma CT y tiempo de 1762 aunque inspeccion no los incluya", () => {
   assert.equal(result.data.operations[0].tiempoProd, 25);
 });
 
+test("reintenta sin filtro cuando 1762 no reconoce woFolio", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", Articulo: "C 590 LE", cantidad: 3 },
+    materiales: [{ componente: "MP00098", requerido: 3, pendiente: 3 }],
+  }, []);
+  const requests = [];
+  context.PP_netSuiteRestletRequest_ = (_query, body) => {
+    requests.push(body);
+    return {
+      ok: true,
+      status: 200,
+      raw: "",
+      json: body.woFolio
+        ? { rows: [], headers: [], hasMore: false }
+        : {
+            rows: [{ workorder_tranid: "2773", Operacion: "CORTE", Secuencia: 10, "Centro de trabajo": "5461", remaining_min: 25, Estado: "In Process" }],
+            headers: [],
+            hasMore: false,
+          },
+    };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].woFolio, "2773");
+  assert.equal(Object.hasOwn(requests[1], "woFolio"), false);
+});
+
 test("adapta una OT individual al contrato del planeador", () => {
   const context = loadService({
     trabajo: {
