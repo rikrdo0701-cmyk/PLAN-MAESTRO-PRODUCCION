@@ -178,7 +178,7 @@ test("dos solicitudes simultaneas de una OT comparten una sola llamada individua
   assert.strictEqual(first, second);
   assert.equal(calls, 1);
 
-  gate.resolve({ ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773" }], materials: [] } });
+  gate.resolve({ ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }], materials: [] } });
   assert.deepEqual(plain(await Promise.all([first, second])), [
     { ready: true, source: "remote" },
     { ready: true, source: "remote" },
@@ -215,11 +215,32 @@ test("la fusion individual reemplaza solo la OT solicitada y conserva las demas"
   assert.equal(backlogResets, 1);
 });
 
-test("una OT con operaciones validas se resuelve desde cache sin backend", async () => {
+test("una OT con operaciones incompletas consulta backend", async () => {
   let calls = 0;
   const fixture = loadClient({
     installIndividualPlanning: true,
-    state: { operations: [{ id: "2773-1", ot: "2773" }] },
+    state: {
+      operations: [
+        { id: "sin-datos", ot: "2773" },
+        { id: "sin-ct", ot: "2773", ct: "SIN_CT", tiempoProd: 10 },
+        { id: "sin-tiempo", ot: "2773", ct: "CORTE", tiempoProd: 0 },
+      ],
+    },
+    callAppsScript: async () => {
+      calls += 1;
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }], materials: [] } };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.equal(calls, 1);
+});
+
+test("una OT con CT y tiempo de planeacion se resuelve desde cache sin backend", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }] },
     callAppsScript: async () => { calls += 1; },
   });
 
@@ -235,7 +256,7 @@ test("un error o respuesta no valida libera la solicitud individual para reinten
       calls += 1;
       if (calls === 1) throw new Error("backend fuera de linea");
       if (calls === 2) return { ok: false, error: "sin operaciones" };
-      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773" }], materials: [] } };
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }], materials: [] } };
     },
   });
 

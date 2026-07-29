@@ -5803,7 +5803,11 @@ const individualPlanningRequests = new Map();
 function hasIndividualPlanningOperations(ot) {
   const key = materialOtKey(ot);
   return Boolean(key) && (state.operations || []).some((operation) =>
-    materialOtKey(operation?.ot) === key && String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+    materialOtKey(operation?.ot) === key
+      && String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+      && String(operation?.ct || "").trim().toUpperCase() !== "SIN_CT"
+      && Boolean(String(operation?.ct || "").trim())
+      && Number(operation?.tiempoProd) > 0
   );
 }
 
