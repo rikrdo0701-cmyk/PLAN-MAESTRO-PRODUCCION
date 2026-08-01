@@ -339,6 +339,9 @@ function loadClient(options = {}) {
       reconcileActiveWorkOrders: (...args) => options.reconcileActiveWorkOrders?.(...args),
       purgeClosedWorkOrderRetention: (...args) => options.purgeClosedWorkOrderRetention?.(...args),
     },
+    PlannerCore: {
+      isSpecialSubcontractCapability: (capability) => String(capability?.ct) === "6462" || /SUBCONTRATO/i.test(String(capability?.label || "")),
+    },
   };
   const context = {
     window: root,
@@ -359,6 +362,12 @@ function loadClient(options = {}) {
     state,
     stateHistory: [],
     materialOtKey: (value) => String(value || ""),
+    capabilityFromOperation: (operation) => {
+      const ct = String(operation?.ct || "SIN_CT").trim();
+      const label = String(operation?.descripcion || operation?.tipoInsercion || "OPERACION").trim();
+      const normalized = label.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_");
+      return { key: `${ct}::${normalized}`, ct, label };
+    },
     normalizeCapabilityKeys: (values) => [...new Set(values || [])],
     scheduleLocalStorageFlush: () => {},
     checkpointState: () => options.checkpointState?.(),
@@ -1356,6 +1365,34 @@ test("la fusion individual reemplaza solo la OT solicitada y conserva las demas"
   ]);
   assert.equal(cacheInvalidations, 1);
   assert.equal(backlogResets, 1);
+});
+
+test("la ruta individual agrega sus operaciones programables al catalogo de la matriz", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2889", item: "COPLE 1 AMC" }],
+      operations: [],
+      operationCatalog: [{ key: "5514::10C_CORTE_DE_DIMENSION", ct: "5514", label: "10C: CORTE DE DIMENSION", active: true }],
+    },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2889", item: "COPLE 1 AMC" },
+      operations: [
+        { id: "2889-120c", ot: "2889", ct: "5527", descripcion: "120C: DOBLADO", tiempoProd: 22 },
+        { id: "2889-sub", ot: "2889", ct: "6462", descripcion: "500: SUBCONTRATO", tiempoProd: 10 },
+      ],
+      materials: [],
+    },
+  }, "2889");
+
+  assert.equal(merged, true);
+  assert.deepEqual(
+    plain(fixture.state.operationCatalog.map((item) => item.key)),
+    ["5514::10C_CORTE_DE_DIMENSION", "5527::120C:_DOBLADO"],
+  );
 });
 
 test("una OT con operaciones incompletas consulta backend", async () => {

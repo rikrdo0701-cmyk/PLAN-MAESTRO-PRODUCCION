@@ -6219,6 +6219,19 @@ function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   return merged;
 }
 
+function mergeIndividualPlanningOperationCatalog(operations) {
+  const catalog = new Map((state.operationCatalog || []).map((item) => [item.key, item]));
+  for (const operation of operations) {
+    const capability = capabilityFromOperation(operation);
+    if (!capability.key || window.PlannerCore.isSpecialSubcontractCapability(capability)) continue;
+    if (!catalog.has(capability.key)) {
+      catalog.set(capability.key, { ...capability, source: "NETSUITE", active: true });
+    }
+  }
+  state.operationCatalog = [...catalog.values()]
+    .sort((a, b) => a.ct.localeCompare(b.ct, "es", { numeric: true }) || a.label.localeCompare(b.label, "es"));
+}
+
 function mergeIndividualPlanningData(payload, ot) {
   const key = materialOtKey(ot);
   const data = payload?.data || payload;
@@ -6251,6 +6264,7 @@ function mergeIndividualPlanningData(payload, ot) {
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
     ...mergedOperations,
   ];
+  mergeIndividualPlanningOperationCatalog(mergedOperations);
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
