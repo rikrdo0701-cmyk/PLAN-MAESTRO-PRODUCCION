@@ -25,3 +25,24 @@ GREEN:
 - `tests/performance-client-calls.test.mjs`
 
 No se modifico el Apps Script protegido.
+
+## Revision posterior
+
+- La cola de precarga ahora es global: todas las invocaciones de render/busqueda comparten el limite de 2 solicitudes activas.
+- `Guardado` y `Error` se conservan por 3 segundos en el estado de la accion, por lo que un rerender de la tarjeta vuelve a mostrar el resultado.
+- Invariante de recencia: se ordena por `workOrder.startDate` descendente, que es el campo normalizado disponible para cada OT. Si dos fechas son iguales o faltan, se conserva el orden recibido del backend; no se infiere recencia desde el folio de OT.
+
+### RED exacto
+
+`node --test tests/performance-client-calls.test.mjs` fallo antes de la correccion:
+
+- `las precargas repetidas comparten el limite global de dos solicitudes`: `3 !== 2`.
+- `la precarga usa startDate descendente y conserva el orden recibido cuando empata`: el orden recibido no priorizaba `startDate`.
+- `la accion individual conserva Guardado para el siguiente render de su tarjeta`: se obtuvo `typeof actionStatus === "object"` en lugar de `"function"`.
+
+### GREEN exacto
+
+- `node --test tests/performance-client-calls.test.mjs` — 67/67.
+- `npm.cmd test` — 310/310.
+- `npm.cmd run check` — correcto.
+- `git diff --check` — correcto.

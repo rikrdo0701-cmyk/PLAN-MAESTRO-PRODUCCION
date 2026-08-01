@@ -1704,6 +1704,7 @@ function renderPriorityList() {
     const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
     const quantityLabel = quantity ? `${formatMaterialQuantity(quantity)} pzas` : "Sin dato";
     const toolMini = jobToolMiniHtml(job);
+    const actionStatus = individualPlanningActionStatus(job.ot);
     const photoMarkup = job.photoUrl
       ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
@@ -1719,7 +1720,7 @@ function renderPriorityList() {
         <div class="priority-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
-          <span class="job-action-status" aria-live="polite"></span>
+          <span class="job-action-status" aria-live="polite">${individualPlanningActionStatusLabel(actionStatus)}</span>
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
           ${toolMini}
@@ -2007,19 +2008,44 @@ function canStartBacklogDrag(card, job, event) {
 }
 
 function setIndividualPlanningActionStatus(ot, status) {
+  const key = materialOtKey(ot);
+  if (!key) return;
+  if (status) {
+    individualPlanningActionFeedback.set(key, {
+      status,
+      expiresAt: ["saved", "error"].includes(status) ? Date.now() + INDIVIDUAL_PLANNING_FEEDBACK_MS : Infinity,
+    });
+  } else {
+    individualPlanningActionFeedback.delete(key);
+  }
   const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
-    .find((item) => item.dataset.ot === ot);
+    .find((item) => materialOtKey(item.dataset.ot) === key);
   if (!card) return;
   const statusNode = card.querySelector(".job-action-status");
-  const statusLabel = {
+  const statusLabel = individualPlanningActionStatusLabel(status);
+  if (statusNode) statusNode.textContent = statusLabel;
+  if (statusLabel) card.dataset.individualPlanningStatus = status;
+  else delete card.dataset.individualPlanningStatus;
+}
+
+function individualPlanningActionStatus(ot) {
+  const key = materialOtKey(ot);
+  const feedback = individualPlanningActionFeedback.get(key);
+  if (!feedback) return "";
+  if (feedback.expiresAt <= Date.now()) {
+    individualPlanningActionFeedback.delete(key);
+    return "";
+  }
+  return feedback.status;
+}
+
+function individualPlanningActionStatusLabel(status) {
+  return {
     loading: "Cargando",
     saving: "Guardando",
     saved: "Guardado",
     error: "Error",
   }[status] || "";
-  if (statusNode) statusNode.textContent = statusLabel;
-  if (statusLabel) card.dataset.individualPlanningStatus = status;
-  else delete card.dataset.individualPlanningStatus;
 }
 
 function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
@@ -2038,6 +2064,8 @@ function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
 }
 
 const individualPlanningActions = new Map();
+const individualPlanningActionFeedback = new Map();
+const INDIVIDUAL_PLANNING_FEEDBACK_MS = 3000;
 
 function selectJob(ot, selected) {
   const key = materialOtKey(ot);
@@ -5904,6 +5932,9 @@ const INDIVIDUAL_PLANNING_PREFETCH_LIMIT = 5;
 const INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY = 2;
 const INDIVIDUAL_PLANNING_CACHE_TTL_MS = 10 * 60 * 1000;
 const INDIVIDUAL_PLANNING_TIMEOUT_MS = 30 * 1000;
+const individualPlanningPrefetchTasks = new Map();
+const individualPlanningPrefetchQueue = [];
+let individualPlanningPrefetchActive = 0;
 
 function normalizeIndividualPlanningOperation(operation) {
   if (Number(operation?.tiempoProd) > 0) return operation;
@@ -5930,7 +5961,9 @@ function hasIndividualPlanningOperations(ot) {
 
 function prefetchRecentPlanningWorkOrders(options = {}) {
   const exactKey = materialOtKey(options.exactOt || els.searchInput?.value);
-  const recentOts = (state.workOrders || []).map((workOrder) => workOrder?.ot);
+  const recentOts = (state.workOrders || []).map((workOrder, index) => ({ workOrder, index }))
+    .sort((left, right) => String(right.workOrder?.startDate || "").localeCompare(String(left.workOrder?.startDate || "")) || left.index - right.index)
+    .map(({ workOrder }) => workOrder?.ot);
   const exactOt = recentOts.find((ot) => materialOtKey(ot) === exactKey);
   const candidates = [
     exactOt,
@@ -5939,15 +5972,42 @@ function prefetchRecentPlanningWorkOrders(options = {}) {
     const key = materialOtKey(ot);
     return key && values.findIndex((candidate) => materialOtKey(candidate) === key) === index;
   }).slice(0, INDIVIDUAL_PLANNING_PREFETCH_LIMIT);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY, candidates.length) }, async () => {
-    while (nextIndex < candidates.length) {
-      const ot = candidates[nextIndex];
-      nextIndex += 1;
-      await ensureWorkOrderPlanningData(ot);
+  return Promise.all(candidates.map((ot) => queuePlanningWorkOrderPrefetch(ot, materialOtKey(ot) === exactKey)));
+}
+
+function queuePlanningWorkOrderPrefetch(ot, priority) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  const existing = individualPlanningPrefetchTasks.get(key);
+  if (existing) {
+    if (priority) {
+      const queuedIndex = individualPlanningPrefetchQueue.indexOf(existing);
+      if (queuedIndex >= 0) individualPlanningPrefetchQueue.unshift(individualPlanningPrefetchQueue.splice(queuedIndex, 1)[0]);
     }
-  });
-  return Promise.all(workers);
+    return existing.promise;
+  }
+  const task = { key, ot, resolve: null, promise: null };
+  task.promise = new Promise((resolve) => { task.resolve = resolve; });
+  individualPlanningPrefetchTasks.set(key, task);
+  if (priority) individualPlanningPrefetchQueue.unshift(task);
+  else individualPlanningPrefetchQueue.push(task);
+  flushPlanningWorkOrderPrefetchQueue();
+  return task.promise;
+}
+
+function flushPlanningWorkOrderPrefetchQueue() {
+  while (individualPlanningPrefetchActive < INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY && individualPlanningPrefetchQueue.length) {
+    const task = individualPlanningPrefetchQueue.shift();
+    individualPlanningPrefetchActive += 1;
+    Promise.resolve()
+      .then(() => ensureWorkOrderPlanningData(task.ot))
+      .then(task.resolve, (error) => task.resolve({ ready: false, error: String(error?.message || error) }))
+      .finally(() => {
+        individualPlanningPrefetchActive -= 1;
+        individualPlanningPrefetchTasks.delete(task.key);
+        flushPlanningWorkOrderPrefetchQueue();
+      });
+  }
 }
 
 function individualPlanningOperationSequenceKey(operation) {

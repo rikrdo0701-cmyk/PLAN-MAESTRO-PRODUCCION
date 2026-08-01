@@ -92,6 +92,25 @@ function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = 
   );
 }
 
+function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prepare = async () => true }) {
+  return new Function(
+    "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
+    "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
+    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
+    "materialOtKey", "hasIndividualPlanningOperations",
+    `${individualSelectionSource}; return {
+      selectJob,
+      actionStatus: typeof individualPlanningActionStatus === "function" ? individualPlanningActionStatus : null,
+    };`,
+  )(
+    { priorityList: { querySelectorAll: () => [card] } }, () => jobs.value, (message) => toasts.push(message), state,
+    { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
+    (operations) => operations, loaded, prepare, () => {}, () => {}, () => {}, () => {},
+    (callback) => callback(), () => {}, () => {}, () => {},
+    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0),
+  );
+}
+
 function deferredPromise() {
   let resolve;
   const promise = new Promise((onResolve) => { resolve = onResolve; });
@@ -139,6 +158,55 @@ test("la precarga limita cinco OTs, usa dos solicitudes y prioriza la busqueda e
   assert.deepEqual(started, ["6", "1", "2", "3", "4"]);
 });
 
+test("las precargas repetidas comparten el limite global de dos solicitudes", async () => {
+  const gates = new Map();
+  let active = 0;
+  let maximumActive = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { workOrders: ["1", "2", "3", "4", "5", "6"].map((ot) => ({ ot })) },
+    callAppsScript: (_method, ot) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      const gate = deferredPromise();
+      gates.set(ot, gate);
+      return gate.promise.finally(() => { active -= 1; });
+    },
+  });
+
+  const first = fixture.context.prefetchRecentPlanningWorkOrders();
+  await settleMicrotasks();
+  const second = fixture.context.prefetchRecentPlanningWorkOrders({ exactOt: "6" });
+  await settleMicrotasks();
+  assert.equal(maximumActive, 2);
+  assert.ok(first instanceof Promise);
+  assert.ok(second instanceof Promise);
+});
+
+test("la precarga usa startDate descendente y conserva el orden recibido cuando empata", async () => {
+  const started = [];
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [
+        { ot: "OLD", startDate: "2026-01-01" },
+        { ot: "TIE-A", startDate: "2026-06-10" },
+        { ot: "NEW", startDate: "2026-08-01" },
+        { ot: "TIE-B", startDate: "2026-06-10" },
+        { ot: "MID", startDate: "2026-04-01" },
+        { ot: "OLDER", startDate: "2025-12-01" },
+      ],
+    },
+    callAppsScript: async (_method, ot) => {
+      started.push(ot);
+      return { ok: true, data: { workOrder: { ot }, operations: [{ ot, ct: "CORTE", tiempoProd: 10 }], materials: [] } };
+    },
+  });
+
+  await fixture.context.prefetchRecentPlanningWorkOrders();
+  assert.deepEqual(started, ["NEW", "TIE-A", "TIE-B", "MID", "OLD"]);
+});
+
 test("la cache individual vence en diez minutos", async () => {
   let now = 0;
   let calls = 0;
@@ -183,13 +251,24 @@ test("la carga individual vence en treinta segundos y permite reintentar", async
   assert.deepEqual(timeouts, [30 * 1000, 30 * 1000]);
 });
 
-test("la accion individual expone Cargando, Guardando, Guardado y Error en su tarjeta", () => {
-  assert.match(appSource, /job-action-status/);
-  assert.match(appSource, /Cargando/);
-  assert.match(appSource, /Guardando/);
-  assert.match(appSource, /Guardado/);
-  assert.match(appSource, /Error/);
-  assert.match(individualSelectionSource, /catch \(error\) \{[\s\S]*showToast\(/);
+test("la accion individual conserva Guardado para el siguiente render de su tarjeta", async () => {
+  const statusNode = { textContent: "" };
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    setAttribute: () => {}, removeAttribute: () => {},
+    querySelector: (selector) => selector === ".job-add" ? addButton : statusNode,
+  };
+  const fixture = loadIndividualActionInternals({
+    jobs: { value: [{ ot: "100", movable: true, ops: [{ ot: "100", ct: "CORTE" }] }] },
+    loaded: async () => ({ ready: true }), card,
+    state: { selectedOts: [], operations: [{ ot: "100", ct: "CORTE" }], preparedPlanningByOt: {} }, toasts: [],
+  });
+
+  assert.equal(typeof fixture.actionStatus, "function");
+  await fixture.selectJob("100", true);
+  assert.equal(statusNode.textContent, "Guardado");
+  assert.equal(fixture.actionStatus("100"), "saved");
 });
 
 function plain(value) {
