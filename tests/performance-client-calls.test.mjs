@@ -75,6 +75,10 @@ const adjustedProductionSource = appSource.slice(
   appSource.indexOf("function adjustedProductionMinutes("),
   appSource.indexOf("function opStart("),
 );
+const planStatusSource = appSource.slice(
+  appSource.indexOf("function planStatusActionCell("),
+  appSource.indexOf("function renderProductionReportTable("),
+);
 
 function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
   return new Function(
@@ -113,8 +117,9 @@ function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prep
 
 function deferredPromise() {
   let resolve;
-  const promise = new Promise((onResolve) => { resolve = onResolve; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+  return { promise, resolve, reject };
 }
 
 async function settleMicrotasks() {
@@ -443,6 +448,117 @@ function loadClient(options = {}) {
   }
   return { context, state, toasts, busyStates, backlogBusyStates };
 }
+
+function loadPlanStatus(options = {}) {
+  const rows = options.rows || [];
+  const deferredWork = [];
+  const broadRenders = [];
+  const toasts = [];
+  const buttons = rows.map((key) => {
+    const classes = new Set(["plan-status-action", "complete"]);
+    const button = {
+      dataset: { planStatusKey: key },
+      classList: { toggle: (name, enabled) => (enabled ? classes.add(name) : classes.delete(name)) },
+      setAttribute: () => {},
+      addEventListener: (_type, listener) => { button.listener = listener; },
+      textContent: "Completar",
+      get classes() { return [...classes].sort(); },
+    };
+    return button;
+  });
+  const state = {
+    revision: 1,
+    operations: options.operations || [],
+    operationPlanStatuses: options.operationPlanStatuses || {},
+    ...(options.state || {}),
+  };
+  const els = {
+    operatorReport: { querySelectorAll: () => buttons },
+    adjusterReport: { querySelectorAll: () => [] },
+  };
+  const api = new Function(
+    "state", "els", "window", "isReportSnapshotEditable", "isPlanCompletedOperation", "operationCompletionKey",
+    "deepClone", "appendLog", "isToolChangeReportOperation", "workOrderForOt", "checkpointState",
+    "invalidateGanttCache", "renderTop", "renderPlanAlerts", "renderSelectedJobPanel", "renderDraftExecutiveSummary",
+    "renderGantt", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
+    "isAppsScriptRuntime", "appSheetSaveTimer", "operationStatusSavesInFlight", "callAppsScript",
+    "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
+    "selectedJobOt", "escapeHtml",
+    `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
+  )(
+    state, els, {
+      clearTimeout: () => {},
+      schedulePlanStatusBackgroundRefresh: (callback) => deferredWork.push(callback),
+      PlannerCore: { operationToolKey: () => "" },
+    }, () => true,
+    (operation) => operation?.planStatus === "COMPLETADA_PLAN", (operation) => operation?.id || "",
+    structuredClone, (log, entry) => [log, entry].filter(Boolean).join(" | "), () => false, () => null,
+    () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), () => {},
+    () => broadRenders.push("summary"), () => broadRenders.push("gantt"), (callback) => { callback(); return 1; },
+    () => {}, (message) => toasts.push(message), true, () => true, null, 0,
+    (...args) => options.callAppsScript?.(...args), new Set(), () => {}, () => {}, async () => false,
+    { warn: () => {} }, () => broadRenders.push("render"), () => "", (value) => String(value || ""),
+  );
+  return { api, buttons, state, deferredWork, broadRenders, toasts };
+}
+
+test("completar actualiza solo la fila, guarda atomico y confirma en segundo plano", async () => {
+  const gate = deferredPromise();
+  const calls = [];
+  const fixture = loadPlanStatus({
+    rows: ["op-1", "op-2"],
+    operations: [{ id: "op-1", ot: "100", ct: "CORTE" }, { id: "op-2", ot: "100", ct: "DOBLEZ" }],
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return gate.promise;
+    },
+  });
+
+  fixture.api.bindPlanStatusActions(fixture.buttons[0].dataset.planStatusKey ? { querySelectorAll: () => fixture.buttons } : null);
+  assert.equal(typeof fixture.buttons[0].listener, "function");
+  const saved = fixture.buttons[0].listener();
+  await settleMicrotasks();
+
+  assert.ok(fixture.state.operationPlanStatuses["op-1"], JSON.stringify({ state: fixture.state, toasts: fixture.toasts }));
+  assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.buttons[0].textContent, "Reabrir");
+  assert.equal(fixture.buttons[1].textContent, "Completar");
+  assert.deepEqual(fixture.broadRenders, []);
+  assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
+  assert.equal(calls[0][1].status.operationId, "op-1");
+  assert.equal(fixture.deferredWork.length, 1);
+
+  gate.resolve({ revision: 2, savedAt: "2026-08-01T00:00:00.000Z" });
+  await saved;
+
+  assert.equal(fixture.state.revision, 2);
+  fixture.deferredWork.forEach((callback) => callback());
+  assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt"]);
+});
+
+test("un error revierte unicamente la fila editada", async () => {
+  const gate = deferredPromise();
+  const fixture = loadPlanStatus({
+    rows: ["op-1", "op-2"],
+    operations: [
+      { id: "op-1", ot: "100", ct: "CORTE", planStatus: "PENDIENTE" },
+      { id: "op-2", ot: "100", ct: "DOBLEZ", planStatus: "COMPLETADA_PLAN" },
+    ],
+    operationPlanStatuses: { "op-2": { key: "op-2", status: "COMPLETADA_PLAN" } },
+    callAppsScript: () => gate.promise,
+  });
+
+  const result = fixture.api.toggleOperationPlanStatus("op-1");
+  gate.reject(new Error("sin conexion"));
+
+  assert.equal(await result, false);
+  assert.equal(fixture.state.operations[0].planStatus, "PENDIENTE");
+  assert.equal(fixture.state.operationPlanStatuses["op-1"], undefined);
+  assert.equal(fixture.state.operations[1].planStatus, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operationPlanStatuses["op-2"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.buttons[0].textContent, "Completar");
+  assert.equal(fixture.buttons[1].textContent, "Completar");
+});
 
 test("el cliente conserva un segundo en la duracion ajustada solo con la marca de fallback", () => {
   assert.match(adjustedProductionSource, /if \(op\?\.tiempoFallback === true\) return production;/);

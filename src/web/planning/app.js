@@ -5135,7 +5135,7 @@ function renderAdjusterReport() {
     const change = toolChangeReportData(op);
     const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
     const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-    return `<tr>
+    return `<tr data-plan-status-row="${escapeHtml(operationCompletionKey(op))}">
       <td>${escapeHtml(op.ot)}</td>
       <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
       <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
@@ -5336,6 +5336,35 @@ function bindPlanStatusActions(container) {
   });
 }
 
+function renderPlanStatusRow(key) {
+  const operation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const current = state.operationPlanStatuses?.[key];
+  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
+  [els.operatorReport, els.adjusterReport].forEach((container) => {
+    container?.querySelectorAll("[data-plan-status-key]").forEach((button) => {
+      if (button.dataset.planStatusKey !== key) return;
+      button.classList.toggle("complete", !completed);
+      button.classList.toggle("reopen", completed);
+      button.setAttribute("aria-label", completed ? "Cambiar a pendiente" : "Marcar completada");
+      button.setAttribute("title", completed ? "Reabrir operacion" : "Marcar completada");
+      button.textContent = completed ? "Reabrir" : "Completar";
+    });
+  });
+  if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
+}
+
+function schedulePlanStatusBackgroundWork() {
+  const refresh = () => {
+    invalidateGanttCache();
+    renderTop();
+    renderPlanAlerts();
+    renderDraftExecutiveSummary();
+    renderGantt();
+  };
+  if (typeof window.schedulePlanStatusBackgroundRefresh === "function") window.schedulePlanStatusBackgroundRefresh(refresh);
+  else window.setTimeout(refresh, 24);
+}
+
 async function toggleOperationPlanStatus(key) {
   const operation = state.operations.find((op) => operationCompletionKey(op) === key);
   const current = state.operationPlanStatuses?.[key];
@@ -5400,14 +5429,8 @@ async function toggleOperationPlanStatus(key) {
 
 async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, message) {
   const renderPlanStatusChange = () => {
-    invalidateGanttCache();
-    renderTop();
-    renderPlanAlerts();
-    renderSelectedJobPanel();
-    requestAnimationFrame(() => {
-      renderDraftExecutiveSummary();
-      renderGantt();
-    });
+    renderPlanStatusRow(key);
+    schedulePlanStatusBackgroundWork();
   };
 
   renderPlanStatusChange();
@@ -5460,7 +5483,7 @@ function renderProductionReportTable(operations, options = {}) {
       ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
       : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
     const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
-    return `<tr>
+    return `<tr data-plan-status-row="${escapeHtml(operationCompletionKey(op))}">
       <td>${index + 1}</td>
       <td>${escapeHtml(op.ot)}</td>
       <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>

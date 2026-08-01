@@ -27,6 +27,8 @@
   let priorityRenderFrame = 0;
   let priorityListRequested = false;
   let priorityQueueRequested = false;
+  let planStatusRefreshHandle = null;
+  let planStatusRefreshCallback = null;
 
   function clone(value) {
     if (typeof structuredClone === "function") return structuredClone(value);
@@ -45,6 +47,18 @@
     if (handle.type === "idle" && typeof root.cancelIdleCallback === "function") root.cancelIdleCallback(handle.id);
     else root.clearTimeout(handle.id);
   }
+
+  root.schedulePlanStatusBackgroundRefresh = function optimizedSchedulePlanStatusBackgroundRefresh(callback) {
+    if (typeof callback !== "function") return;
+    planStatusRefreshCallback = callback;
+    if (planStatusRefreshHandle) return;
+    planStatusRefreshHandle = requestIdle(() => {
+      planStatusRefreshHandle = null;
+      const refresh = planStatusRefreshCallback;
+      planStatusRefreshCallback = null;
+      refresh?.();
+    }, 900);
+  };
 
   function readMeta() {
     try {
