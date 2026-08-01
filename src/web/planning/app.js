@@ -5391,7 +5391,7 @@ function setDetachedPlanStatusRow(container, key, value) {
   else rows.delete(key);
 }
 
-function updatePlanStatusReportRow(container, key, selection, renderRow, bindComments = false) {
+function updatePlanStatusReportRow(container, key, selection, renderRow, rerenderReport, bindComments = false) {
   let row = findPlanStatusReportRow(container, key);
   const detached = detachedPlanStatusRow(container, key);
   const index = selection.rows.findIndex((operation) => operationCompletionKey(operation) === key);
@@ -5403,6 +5403,11 @@ function updatePlanStatusReportRow(container, key, selection, renderRow, bindCom
     return;
   }
   if (!row && detached?.parent) {
+    if (typeof container.contains !== "function" || !container.contains(detached.parent)) {
+      setDetachedPlanStatusRow(container, key, null);
+      rerenderReport();
+      return;
+    }
     const nextSibling = detached.nextSibling?.parentNode === detached.parent ? detached.nextSibling : null;
     detached.parent.insertBefore(detached.row, nextSibling);
     row = detached.row;
@@ -5416,11 +5421,11 @@ function updatePlanStatusReportRow(container, key, selection, renderRow, bindCom
   bindPlanStatusActions(replacement);
 }
 
-function updatePlanStatusReport(container, key, selectionFactory, filterType, input, futureDays, count, renderRow, bindComments = false) {
+function updatePlanStatusReport(container, key, selectionFactory, filterType, input, futureDays, count, renderRow, rerenderReport, bindComments = false) {
   if (!findPlanStatusReportRow(container, key) && !detachedPlanStatusRow(container, key)) return;
   const selection = selectionFactory();
   renderReportFilterStatus(filterType, input, futureDays, count, selection);
-  updatePlanStatusReportRow(container, key, selection, renderRow, bindComments);
+  updatePlanStatusReportRow(container, key, selection, renderRow, rerenderReport, bindComments);
 }
 
 function discardDetachedPlanStatusRows(key) {
@@ -5441,12 +5446,13 @@ function renderPlanStatusRow(key) {
   updatePlanStatusReport(
     els.operatorReport, key, operatorReportSelection, "operator",
     els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount,
-    (op, index) => renderProductionReportRow(op, index, { statusActions: isReportSnapshotEditable() }), true
+    (op, index) => renderProductionReportRow(op, index, { statusActions: isReportSnapshotEditable() }),
+    renderOperatorReport, true
   );
   updatePlanStatusReport(
     els.adjusterReport, key, adjusterReportSelection, "adjuster",
     els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount,
-    renderAdjusterReportRow
+    renderAdjusterReportRow, renderAdjusterReport
   );
   if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
 }

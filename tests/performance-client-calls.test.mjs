@@ -501,21 +501,31 @@ function loadPlanStatus(options = {}) {
     };
     return button;
   });
-  const reportRows = rows.map((key) => ({
-    dataset: { planStatusRowKey: key },
-    removed: false,
-    html: "",
+  const createReportRow = (key) => ({
+    dataset: { planStatusRowKey: key }, removed: false, html: "", nextSibling: null,
     remove() { this.removed = true; },
     querySelectorAll: () => buttons.filter((button) => button.dataset.planStatusKey === key),
     set outerHTML(value) { this.html = value; },
-  }));
+  });
+  const reportRows = rows.map(createReportRow);
+  let activeReportRows = reportRows;
+  let currentBody = null;
+  const createBody = () => {
+    const body = { insertBefore: (row) => {
+      row.removed = false;
+      row.parentNode = body;
+      if (body === currentBody && !activeReportRows.includes(row)) activeReportRows.push(row);
+    } };
+    return body;
+  };
+  currentBody = createBody();
   const operatorReport = {
     querySelectorAll: (selector) => selector === "[data-plan-status-row-key]"
-      ? reportRows.filter((row) => !row.removed)
-      : buttons.filter((button) => !reportRows.find((row) => row.dataset.planStatusRowKey === button.dataset.planStatusKey)?.removed),
-    insertBefore: (row) => { row.removed = false; },
+      ? activeReportRows.filter((row) => !row.removed)
+      : buttons.filter((button) => !activeReportRows.find((row) => row.dataset.planStatusRowKey === button.dataset.planStatusKey)?.removed),
+    contains: (node) => node === currentBody,
   };
-  reportRows.forEach((row) => { row.parentNode = operatorReport; row.nextSibling = null; });
+  reportRows.forEach((row) => { row.parentNode = currentBody; });
   const els = {
     operatorReport,
     adjusterReport: { querySelectorAll: () => [] },
@@ -535,6 +545,16 @@ function loadPlanStatus(options = {}) {
     });
     return { rows: selected, total: selected.length, date: "2026-08-01", futureDays: 1 };
   };
+  let reportRenders = 0;
+  const rerenderReport = () => {
+    reportRenders += 1;
+    currentBody = createBody();
+    activeReportRows = reportSelection().rows.map((operation) => {
+      const row = createReportRow(operation.id);
+      row.parentNode = currentBody;
+      return row;
+    });
+  };
   const api = new Function(
     "state", "els", "window", "isReportSnapshotEditable", "isPlanCompletedOperation", "operationCompletionKey",
     "deepClone", "appendLog", "isToolChangeReportOperation", "workOrderForOt", "checkpointState",
@@ -543,7 +563,7 @@ function loadPlanStatus(options = {}) {
     "isAppsScriptRuntime", "appSheetSaveTimer", "operationStatusSavesInFlight", "callAppsScript",
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
     "selectedJobOt", "escapeHtml", "operatorReportSelection", "adjusterReportSelection", "renderReportFilterStatus",
-    "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs",
+    "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -565,9 +585,13 @@ function loadPlanStatus(options = {}) {
       output.textContent = `${selection.rows.length} de ${selection.total} · max. 25`;
     },
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`,
-    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {},
+    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {}, rerenderReport, () => {},
   );
-  return { api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts };
+  return {
+    api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport,
+    visibleReportKeys: () => activeReportRows.filter((row) => !row.removed).map((row) => row.dataset.planStatusRowKey),
+    reportRenderCount: () => reportRenders,
+  };
 }
 
 test("completar actualiza solo la fila, guarda atomico y confirma en segundo plano", async () => {
@@ -637,6 +661,31 @@ test("un error revierte unicamente la fila editada", async () => {
   assert.equal(fixture.buttons[0].textContent, "Completar");
   assert.equal(fixture.buttons[1].textContent, "Reabrir");
   assert.deepEqual(fixture.buttons[1].classes, ["plan-status-action", "reopen"]);
+});
+
+test("rollback reconstruye la fila si el reporte se renderizo durante el guardado", async () => {
+  const gate = deferredPromise();
+  const fixture = loadPlanStatus({
+    rows: ["op-1", "op-2"],
+    reportStatus: "PENDIENTES",
+    operations: [
+      { id: "op-1", ot: "100", planStatus: "PENDIENTE", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "100", planStatus: "PENDIENTE", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+    ],
+    callAppsScript: () => gate.promise,
+  });
+
+  const result = fixture.api.toggleOperationPlanStatus("op-1");
+  assert.deepEqual(fixture.visibleReportKeys(), ["op-2"]);
+  fixture.rerenderReport();
+  assert.deepEqual(fixture.visibleReportKeys(), ["op-2"]);
+
+  gate.reject(new Error("sin conexion"));
+  assert.equal(await result, false);
+
+  assert.deepEqual(fixture.visibleReportKeys(), ["op-1", "op-2"]);
+  assert.equal(fixture.reportRenderCount(), 2);
+  assert.match(fixture.els.operatorReportCount.textContent, /^2 de 2 .* max\. 25$/);
 });
 
 test("reabrir limpia fechas y retira solo su fila del reporte completado", async () => {
