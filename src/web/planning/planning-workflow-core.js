@@ -368,6 +368,13 @@
     const compactRows = (rows) => (rows || []).filter((row) => keepOt(row?.ot)).map((row) => ({ ...row }));
     const currentOperations = (source.operations || []).filter((operation) =>
       keepOt(operation?.ot) || !isPendingDraftOperation(operation)).map((operation) => ({ ...operation }));
+    const operationPlanStatuses = Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
+      .filter(([, status]) => keepOt(status?.ot) || normalize(status?.status || status?.planStatus) === "COMPLETADA_PLAN")
+      .map(([key, status]) => [key, { ...status }]));
+    const selectedOperation = (source.operations || []).find((operation) => String(operation?.id) === String(source.selectedOperationId || ""));
+    const selectedOperationRemoved = Boolean(source.selectedOperationId) && !currentOperations
+      .some((operation) => String(operation?.id) === String(source.selectedOperationId));
+    const selectedOperationId = closed.has(normalize(selectedOperation?.ot)) || selectedOperationRemoved ? "" : source.selectedOperationId;
     const nextWorkOrders = incoming.map((item) => ({ ...mergeLiteWorkOrder(currentByOt.get(normalize(item.ot)), item) }));
     return {
       ...source,
@@ -376,6 +383,7 @@
       expandedOts: (source.expandedOts || []).filter(keepOt),
       workOrders: nextWorkOrders,
       operations: currentOperations,
+      operationPlanStatuses,
       materials: compactRows(source.materials),
       otConfigurations: withoutOtKeyedValues(source.otConfigurations, closed),
       planningConfigByOt: withoutOtKeyedValues(source.planningConfigByOt, closed),
@@ -384,6 +392,8 @@
         ...source.lastSchedule,
         scheduledOts: (source.lastSchedule.scheduledOts || []).filter(keepOt),
       } : source.lastSchedule,
+      selectedDetailOt: closed.has(normalize(source.selectedDetailOt)) ? "" : source.selectedDetailOt,
+      selectedOperationId,
       closedWorkOrderSummaries: summaries,
     };
   }
@@ -394,9 +404,17 @@
     const expired = new Set(Object.entries(source.closedWorkOrderSummaries || {})
       .filter(([, summary]) => Number.isFinite(now) && now - new Date(summary?.closedDetectedAt).getTime() >= 5 * 86400000)
       .map(([ot]) => normalize(ot)));
+    const operations = (source.operations || []).filter((operation) => !expired.has(normalize(operation?.ot))).map((operation) => ({ ...operation }));
+    const selectedOperationRemoved = Boolean(source.selectedOperationId) && !operations
+      .some((operation) => String(operation?.id) === String(source.selectedOperationId));
     return {
       ...source,
-      operations: (source.operations || []).filter((operation) => !expired.has(normalize(operation?.ot))).map((operation) => ({ ...operation })),
+      operations,
+      operationPlanStatuses: Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
+        .filter(([, status]) => !expired.has(normalize(status?.ot)))
+        .map(([key, status]) => [key, { ...status }])),
+      selectedDetailOt: expired.has(normalize(source.selectedDetailOt)) ? "" : source.selectedDetailOt,
+      selectedOperationId: selectedOperationRemoved ? "" : source.selectedOperationId,
       closedWorkOrderSummaries: { ...(source.closedWorkOrderSummaries || {}) },
     };
   }

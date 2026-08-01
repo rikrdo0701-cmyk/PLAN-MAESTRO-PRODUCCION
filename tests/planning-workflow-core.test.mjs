@@ -351,6 +351,12 @@ test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus comple
     otConfigurations: { 100: { machine: "A" }, 200: { machine: "B" } },
     planningConfigByOt: { 100: { priority: 1 }, 200: { priority: 2 } },
     preparedPlanningByOt: { 200: "obsolete" },
+    operationPlanStatuses: {
+      "200-p": { ot: "200", status: "PENDIENTE" },
+      "200-c": { ot: "200", status: "COMPLETADA_PLAN" },
+      "100-p": { ot: "100", status: "PENDIENTE" },
+    },
+    selectedDetailOt: "200", selectedOperationId: "200-p",
   };
   const original = structuredClone(state);
 
@@ -366,6 +372,12 @@ test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus comple
   assert.deepEqual(structuredClone(next.otConfigurations), { 100: { machine: "A" } });
   assert.deepEqual(structuredClone(next.planningConfigByOt), { 100: { priority: 1 } });
   assert.equal(next.preparedPlanningByOt[200], undefined);
+  assert.deepEqual(structuredClone(next.operationPlanStatuses), {
+    "200-c": { ot: "200", status: "COMPLETADA_PLAN" },
+    "100-p": { ot: "100", status: "PENDIENTE" },
+  });
+  assert.equal(next.selectedDetailOt, "");
+  assert.equal(next.selectedOperationId, "");
   assert.deepEqual(structuredClone(next.closedWorkOrderSummaries[200]), {
     ot: "200", item: "CERRADA", quantity: 7,
     scheduledStart: "2026-07-20T07:00:00Z", scheduledEnd: "2026-07-20T09:00:00Z",
@@ -387,6 +399,11 @@ test("reconcileActiveWorkOrders conserva la marca de cierre inicial", () => {
 test("purgeClosedWorkOrderRetention conserva antes de cinco dias y elimina exactamente al quinto", () => {
   const state = {
     operations: [{ id: "closed", ot: "200", planStatus: "COMPLETADA_PLAN" }, { id: "active", ot: "100", planStatus: "PENDIENTE" }],
+    operationPlanStatuses: {
+      closed: { ot: "200", status: "COMPLETADA_PLAN" },
+      active: { ot: "100", status: "PENDIENTE" },
+    },
+    selectedDetailOt: "", selectedOperationId: "closed",
     closedWorkOrderSummaries: { 200: { ot: "200", item: "CERRADA", quantity: 7, scheduledStart: "", scheduledEnd: "", weekStart: "", finalStatus: "CERRADA", closedDetectedAt: "2026-07-20T10:00:00Z" } },
   };
 
@@ -394,7 +411,10 @@ test("purgeClosedWorkOrderRetention conserva antes de cinco dias y elimina exact
   const purged = core.purgeClosedWorkOrderRetention(state, "2026-07-25T10:00:00Z");
 
   assert.deepEqual(structuredClone(retained.operations.map((row) => row.id)), ["closed", "active"]);
+  assert.deepEqual(structuredClone(retained.operationPlanStatuses), structuredClone(state.operationPlanStatuses));
   assert.deepEqual(structuredClone(purged.operations.map((row) => row.id)), ["active"]);
+  assert.deepEqual(structuredClone(purged.operationPlanStatuses), { active: { ot: "100", status: "PENDIENTE" } });
+  assert.equal(purged.selectedOperationId, "");
   assert.deepEqual(structuredClone(purged.closedWorkOrderSummaries), structuredClone(state.closedWorkOrderSummaries));
 });
 
