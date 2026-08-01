@@ -1027,7 +1027,7 @@ test("desactivar flow balanced conserva operaciones, fechas y recursos existente
   );
 });
 
-test("las metricas cuentan hueco evitable y cambio de herramental", () => {
+test("las metricas no cuentan como evitable la espera obligatoria por cambio de herramental", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
@@ -1042,8 +1042,50 @@ test("las metricas cuentan hueco evitable y cambio de herramental", () => {
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
   const metrics = result.lastSchedule.optimization.metrics;
 
-  assert.equal(metrics.avoidableIdleMinutes, 30);
+  assert.equal(metrics.avoidableIdleMinutes, 0);
   assert.equal(metrics.toolChanges, 1);
+});
+
+test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", () => {
+  const core = loadPlannerCore();
+  const metrics = core.evaluatePlan({
+    operations: [
+      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "10:30" },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1"] }, configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"], settings: {}, workSchedule: {}, lastSchedule: { changes: 0, unscheduled: 0, operatorConflicts: 0 },
+  });
+
+  assert.equal(metrics.avoidableIdleMinutes, 30);
+});
+
+test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", () => {
+  const core = loadPlannerCore();
+  const fixed = [
+    { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+  ];
+  const deferred = { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "10:30" };
+  const base = (operations, extra = {}) => ({
+    operations, workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }], matrix: { "CORTE::CORTE": ["OP 1"] },
+    configuredCapabilities: ["CORTE::CORTE"], operators: ["OP 1", "OP 2"], settings: {}, workSchedule: {},
+    lastSchedule: { changes: 0, unscheduled: 0, operatorConflicts: 0 }, ...extra,
+  });
+
+  const calendar = core.evaluatePlan(base([...fixed, deferred], {
+    calendarExceptions: [{ date: "2026-07-13", concept: "OPERADOR", resource: "OP 1", start: "08:00", end: "09:00" }],
+  }));
+  const machine = core.evaluatePlan(base([...fixed, { ...deferred, maquina: "M1" }, {
+    id: "machine-block", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 2", maquina: "M1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00",
+  }]));
+  const noWork = core.evaluatePlan(base(fixed));
+
+  assert.equal(calendar.avoidableIdleMinutes, 0);
+  assert.equal(machine.avoidableIdleMinutes, 0);
+  assert.equal(noWork.avoidableIdleMinutes, 0);
 });
 
 test("un empate de puntuacion conserva la estrategia existente", () => {

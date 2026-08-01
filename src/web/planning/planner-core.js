@@ -1471,7 +1471,7 @@
         loadByOperator.set(operator, (loadByOperator.get(operator) || 0) + duration);
         loadByResource.set(`OPERADOR:${operator}`, (loadByResource.get(`OPERADOR:${operator}`) || 0) + duration);
         if (!intervalsByOperator.has(operator)) intervalsByOperator.set(operator, []);
-        intervalsByOperator.get(operator).push({ start, end });
+        intervalsByOperator.get(operator).push({ op, start, end });
       }
       if (hasMachineResource(op.maquina)) {
         const machine = String(op.maquina);
@@ -1493,11 +1493,15 @@
       }
     }
     let idleMinutes = 0;
+    let avoidableIdleMinutes = 0;
     for (const intervals of intervalsByOperator.values()) {
       intervals.sort((a, b) => a.start - b.start);
       for (let index = 1; index < intervals.length; index++) {
         if (formatDate(intervals[index - 1].end) === formatDate(intervals[index].start)) {
-          idleMinutes += Math.max(0, diffMinutes(intervals[index - 1].end, intervals[index].start));
+          const previous = intervals[index - 1];
+          const next = intervals[index];
+          idleMinutes += Math.max(0, diffMinutes(previous.end, next.start));
+          avoidableIdleMinutes += avoidableGapMinutes(state, operations, String(next.op.operador || ""), previous, next);
         }
       }
     }
@@ -1532,7 +1536,7 @@
       tardinessMinutes: Math.round(tardinessMinutes),
       weightedTardinessMinutes: Math.round(weightedTardinessMinutes),
       averageFlowMinutes: Math.round(averageFlowMinutes),
-      avoidableIdleMinutes: Math.round(idleMinutes),
+      avoidableIdleMinutes: Math.round(avoidableIdleMinutes),
       toolChanges: changes,
       maxWip: maxConcurrentWip(flowByOt),
       resourceUtilization,
@@ -1542,6 +1546,45 @@
       loadStdDevMinutes: Math.round(Math.sqrt(loadVariance)),
       changes,
     };
+  }
+
+  function avoidableGapMinutes(state, operations, operator, previous, next) {
+    const gapMinutes = availableGapMinutes(state, previous.end, next.start, operator, "");
+    if (!gapMinutes) return 0;
+    const candidates = operations.filter((op) => isGapFillCandidate(state, operations, op, operator, previous.end, next.start));
+    let remaining = gapMinutes;
+    for (const candidate of candidates) {
+      const available = availableGapMinutes(state, previous.end, next.start, operator, candidate.maquina);
+      const duration = Math.max(0, operationDuration(candidate, 100, 100));
+      if (!available || !duration) continue;
+      remaining -= Math.min(remaining, available, duration);
+      if (!remaining) break;
+    }
+    return gapMinutes - remaining;
+  }
+
+  function isGapFillCandidate(state, operations, op, operator, gapStart, gapEnd) {
+    const start = operationStart(op);
+    if (!start || start < gapEnd || isFixedOperation(op) || !isAssignableOperation(state, op)) return false;
+    if (operationToolKey(op) || isHardWaitCause(op.causaEspera)) return false;
+    if (!operatorCandidates(state, op, isFiniteOperation(state, op)).includes(operator)) return false;
+    const predecessors = operations.filter((candidate) => normalizeKey(candidate.ot) === normalizeKey(op.ot) &&
+      compareOperationSequence(candidate, op) < 0);
+    if (predecessors.some((candidate) => !operationEnd(candidate) || operationEnd(candidate) > gapStart)) return false;
+    return !hasMachineResource(op.maquina) || !operations.some((candidate) => candidate !== op &&
+      String(candidate.maquina || "") === String(op.maquina) && operationStart(candidate) < gapEnd && operationEnd(candidate) > gapStart);
+  }
+
+  function availableGapMinutes(state, start, end, operator, machine) {
+    if (start >= end || formatDate(start) !== formatDate(end)) return 0;
+    const startMinute = minuteOfDay(start);
+    const endMinute = minuteOfDay(end);
+    return effectiveWindows(state, start, operator, machine)
+      .reduce((sum, window) => sum + Math.max(0, Math.min(endMinute, window.end) - Math.max(startMinute, window.start)), 0);
+  }
+
+  function isHardWaitCause(cause) {
+    return ["CALENDARIO", "MAQUINA", "CAMBIO_HERRAMENTAL"].includes(normalizeKey(cause));
   }
 
   function applyComparableScores(evaluated) {
@@ -1949,6 +1992,7 @@
     isSubcontractOperation,
     operationDuration,
     productionMinutes,
+    evaluatePlan,
     operationToolKey,
     operationCompletionKey,
     isPlanCompletedOperation,
