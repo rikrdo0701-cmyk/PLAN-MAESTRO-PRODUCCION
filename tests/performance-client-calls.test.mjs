@@ -15,6 +15,10 @@ const manualFlowSource = [
     appSource.indexOf("function applyNetSuitePlanningPayload("),
   ),
 ].join("\n");
+const backlogSyncSource = appSource.slice(
+  appSource.indexOf("async function syncBacklogWorkOrders()"),
+  appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
+);
 const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
   appSource.indexOf("async function fetchNetSuiteExercise("),
@@ -114,12 +118,14 @@ function loadClient(options = {}) {
       call: async (method, args) => options.callAppsScript?.(method, ...(args || [])),
     },
     PlanningWorkflowCore: {
-      withTimeout: (promise) => promise,
+      withTimeout: (promise, timeoutMs) => options.withTimeout?.(promise, timeoutMs) ?? promise,
       netSuiteSyncOutcome: (workOrders, planning) => ({
         status: workOrders?.ok && planning?.ok ? "complete" : "failed",
         message: workOrders?.ok && planning?.ok ? "Sincronizacion completa" : (workOrders?.error || planning?.error || "Fallo"),
       }),
       pruneDraftToOpenWorkOrders: () => ({}),
+      reconcileActiveWorkOrders: (...args) => options.reconcileActiveWorkOrders?.(...args),
+      purgeClosedWorkOrderRetention: (...args) => options.purgeClosedWorkOrderRetention?.(...args),
     },
   };
   const context = {
@@ -137,12 +143,13 @@ function loadClient(options = {}) {
     },
     STORAGE_KEY: "test",
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
+    NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 60000,
     state,
     stateHistory: [],
     materialOtKey: (value) => String(value || ""),
     normalizeCapabilityKeys: (values) => [...new Set(values || [])],
     scheduleLocalStorageFlush: () => {},
-    checkpointState: () => {},
+    checkpointState: () => options.checkpointState?.(),
     undoLastChange: () => {},
     renderPriorityList: () => {},
     renderPriorityQueue: () => {},
@@ -177,8 +184,9 @@ function loadClient(options = {}) {
     loadSnapshotsOnce: (...args) => options.loadPlanSnapshots(...args),
     restoreDraftPlanFromSharedState: async () => false,
     openRestoreDraftDialog: async () => context.loadSnapshotsOnce(false),
-    saveState: () => {},
-    render: () => {},
+    saveState: () => options.saveState?.(),
+    saveAndRender: () => options.saveAndRender?.(),
+    render: (...args) => options.render?.(...args),
     applyInitialWorkspaceView: () => {},
     syncNetSuiteData: (...args) => options.syncNetSuiteData(...args),
     syncWorkOrdersOnce: (syncOptions = {}) => context.syncNetSuiteData(syncOptions.showMessage === true, { mode: "workOrders" }),
@@ -206,6 +214,7 @@ function loadClient(options = {}) {
     requestAnimationFrame: root.requestAnimationFrame,
   };
   vm.createContext(context);
+  if (options.installBacklogSync) vm.runInContext(backlogSyncSource, context, { filename: "planning-backlog-sync.js" });
   if (options.installManualFlow) vm.runInContext(manualFlowSource, context, { filename: "planning-manual-flow.js" });
   vm.runInContext(source, context, { filename: "performance-client.js" });
   if (options.installIndividualPlanning) vm.runInContext(individualPlanningSource, context, { filename: "planning-individual-work-order.js" });
@@ -333,10 +342,11 @@ test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", ()
 
 test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", async () => {
   const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
+  const renderOptions = [];
   const loadAppStateInBackground = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "resetDailyReportFiltersToToday",
     "saveState", "render", "applyInitialWorkspaceView", "isAppsScriptRuntime", "syncNetSuiteInBackground",
-    "loadPlanSnapshots",
+    "loadPlanSnapshots", "purgeClosedWorkOrderRetention",
     `${startupSource}; return loadAppStateInBackground;`,
   )(
     state,
@@ -344,9 +354,10 @@ test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", a
     (callback) => callback(),
     () => {},
     () => {},
-    () => {},
+    (options) => renderOptions.push(options),
     () => {},
     () => false,
+    () => {},
     () => {},
     () => {},
   );
@@ -355,6 +366,7 @@ test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", a
 
   assert.equal(state.selectedDetailOt, "");
   assert.equal(state.selectedOperationId, "");
+  assert.deepEqual(renderOptions, [{ save: false }]);
 });
 
 test("el arranque optimizado limpia la OT de detalle y la operacion seleccionada", async () => {
@@ -1203,6 +1215,86 @@ test("un fallo libera la sincronizacion compartida para reintentar", async () =>
   assert.equal(retried, true);
   assert.equal(syncCalls, 2);
   assert.deepEqual(fixture.toasts, ["No se pudo cargar NetSuite: backend fuera de linea"]);
+});
+
+test("la sincronizacion manual ligera reconcilia y guarda una vez sin dialogos", async () => {
+  const calls = [];
+  const timeouts = [];
+  let dialogs = 0;
+  let reconciliations = 0;
+  let purges = 0;
+  const renders = [];
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: {
+      workOrders: [{ ot: "WO-CERRADA", item: "CERRADA" }],
+      operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
+      materials: [{ ot: "WO-CERRADA", component: "MAT" }],
+    },
+    fetchNetSuiteWorkOrdersLiteCompat: async () => ({ workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }] }),
+    withTimeout: (promise, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      return promise;
+    },
+    reconcileActiveWorkOrders: (current, incoming) => {
+      reconciliations += 1;
+      return {
+        ...current,
+        workOrders: incoming,
+        operations: current.operations.filter((operation) => operation.status === "COMPLETADA_PLAN"),
+        materials: [],
+      };
+    },
+    purgeClosedWorkOrderRetention: (current) => {
+      purges += 1;
+      return { ...current, retentionPurged: true };
+    },
+    callAppsScript: async (method, payload) => {
+      calls.push([method, payload]);
+      return { revision: 2 };
+    },
+    render: (options) => renders.push(options),
+  });
+  fixture.context.openPlanningDialog = async () => { dialogs += 1; return {}; };
+
+  await fixture.context.syncBacklogWorkOrders();
+
+  assert.deepEqual(timeouts, [60000]);
+  assert.equal(reconciliations, 1);
+  assert.equal(purges, 1);
+  assert.equal(dialogs, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "savePlanningStateOptimized");
+  assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA", item: "ACTIVA" }]);
+  assert.deepEqual(plain(fixture.context.state.operations), [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }]);
+  assert.deepEqual(plain(fixture.context.state.materials), []);
+  assert.equal(fixture.context.state.retentionPurged, true);
+  assert.equal(fixture.context.state.revision, 2);
+  assert.deepEqual(plain(renders), [{ save: false }]);
+  assert.deepEqual(fixture.busyStates, [true, false]);
+});
+
+test("un timeout de sincronizacion manual no modifica ni guarda el estado", async () => {
+  let saveCalls = 0;
+  let checkpoints = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-LOCAL" }], operations: [{ id: "local", ot: "WO-LOCAL" }] },
+    fetchNetSuiteWorkOrdersLiteCompat: async () => ({ workOrders: [{ ot: "WO-REMOTA" }] }),
+    withTimeout: async () => { throw new Error("timeout"); },
+    reconcileActiveWorkOrders: () => { throw new Error("no debe reconciliar"); },
+    purgeClosedWorkOrderRetention: () => { throw new Error("no debe depurar"); },
+    checkpointState: () => { checkpoints += 1; },
+    callAppsScript: async () => { saveCalls += 1; },
+  });
+  const before = plain(fixture.context.state);
+
+  await fixture.context.syncBacklogWorkOrders();
+
+  assert.deepEqual(plain(fixture.context.state), before);
+  assert.equal(checkpoints, 0);
+  assert.equal(saveCalls, 0);
+  assert.deepEqual(fixture.busyStates, [true, false]);
 });
 
 test("el boton manual y el fondo comparten la llamada backend de OTs", async () => {

@@ -4,6 +4,7 @@ const STORAGE_KEY = "plan-produccion-app-v1";
 const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
+const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const MIN_OPERATION_MINUTES = 1;
@@ -509,6 +510,7 @@ window.addEventListener("beforeunload", () => {
 function initializePlanningApp() {
   bindElements();
   bindEvents();
+  purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
   render();
   bindBacklogLoadMoreObserver();
@@ -523,11 +525,12 @@ else initializePlanningApp();
 async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
   state.selectedDetailOt = "";
   saveState("ui");
-  render();
+  render({ save: false });
   applyInitialWorkspaceView();
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
   loadPlanSnapshots(false);
@@ -1521,7 +1524,7 @@ function render(options = {}) {
   if (all || parts.matrix) renderMatrix();
   if (all || parts.catalogs) renderConfiguration();
   if (all || parts.reports) renderReports();
-  saveState(options.saveScope || "plan");
+  if (options.save !== false) saveState(options.saveScope || "plan");
 }
 
 function invalidateCurrentPlanOperationsCache() {
@@ -4049,6 +4052,7 @@ async function persistPlanSnapshot() {
 }
 
 async function publishCurrentPlan() {
+  purgeClosedWorkOrderRetention();
   const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   if (!scheduled.length) {
     showToast("Genera el plan antes de publicarlo");
@@ -5661,53 +5665,22 @@ async function syncBacklogWorkOrders() {
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
       fetchNetSuiteWorkOrdersLiteCompat(true),
-      NETSUITE_PLANNING_TIMEOUT_MS
+      NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
-    const incomingWorkOrders = payload.workOrders;
-    const comparison = window.PlanningWorkflowCore.compareWorkOrderLite(state, incomingWorkOrders);
-    const planned = [...comparison.plannedQuantityChanges, ...comparison.plannedClosed];
-    let values = {};
-    if (planned.length) {
-      values = await openPlanningDialog({
-        title: "Confirmar cambios de OTs planeadas",
-        summary: `${comparison.plannedQuantityChanges.length} cantidades; ${comparison.plannedClosed.length} cerradas o ausentes`,
-        confirmLabel: "Aplicar decisiones",
-        body: `<div class="planning-fields">${comparison.plannedQuantityChanges.map((change, index) => `
-          <label><input type="checkbox" name="quantity_${index}" value="${escapeHtml(change.ot)}"> Aceptar cantidad de OT ${escapeHtml(change.ot)} (${escapeHtml(change.current.quantity)} → ${escapeHtml(change.incoming.quantity)})</label>`).join("")}
-          ${comparison.plannedClosed.map((change, index) => `
-          <label><input type="checkbox" name="closed_${index}" value="${escapeHtml(change.ot)}"> Retirar OT ${escapeHtml(change.ot)} cerrada o ausente</label>`).join("")}</div>`,
-      });
-      if (!values) values = {};
-    }
-    const decisions = {
-      acceptQuantityOts: Object.entries(values).filter(([key]) => key.startsWith("quantity_")).map(([, value]) => value),
-      removeClosedOts: Object.entries(values).filter(([key]) => key.startsWith("closed_")).map(([, value]) => value),
-      keepClosedOts: comparison.plannedClosed.map((item) => item.ot).filter((ot) => !Object.values(values).includes(ot)),
-    };
-    const currentKeys = new Set((state.workOrders || []).map((item) => normalizeKey(item.ot)));
-    const incomingKeys = new Set(incomingWorkOrders.map((item) => normalizeKey(item.ot)));
-    const newCount = comparison.direct.filter((item) => !item.current).length;
-    const updatedCount = comparison.direct.length - newCount + decisions.acceptQuantityOts.length;
-    const absentCount = [...currentKeys].filter((key) => !incomingKeys.has(key)).length;
-    const removedCount = absentCount - decisions.keepClosedOts.length;
-    const pendingCount = comparison.plannedQuantityChanges.length - decisions.acceptQuantityOts.length
-      + comparison.plannedClosed.length - decisions.removeClosedOts.length;
-    checkpointState();
-    const reconciledOts = new Set([
-      ...comparison.plannedQuantityChanges.map((item) => normalizeKey(item.ot)),
-      ...comparison.plannedClosed.map((item) => normalizeKey(item.ot)),
-    ]);
-    state.workOrderSyncWarnings = (state.workOrderSyncWarnings || [])
-      .filter((warning) => !reconciledOts.has(normalizeKey(warning.ot)));
-    state = window.PlanningWorkflowCore.applyConfirmedWorkOrderChanges(state, comparison, decisions);
-    invalidateCurrentPlanOperationsCache();
-    state.syncedAt = payload.syncedAt || payload.savedAt || new Date().toISOString();
-    resetBacklogWindow();
-    const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
+    const nowIso = new Date().toISOString();
+    const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
+      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
+      nowIso,
+    );
+    nextState.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
+    const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload(nextState));
+    state = nextState;
     state.revision = Number(saved?.revision || state.revision);
-    saveAndRender(`${newCount} nuevas; ${updatedCount} actualizadas; ${removedCount} retiradas; ${pendingCount} pendientes`);
-    await persistPlanSnapshot();
+    invalidateCurrentPlanOperationsCache();
+    resetBacklogWindow();
+    render({ save: false });
+    showToast(`${state.workOrders.length} OTs activas sincronizadas`);
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
   } finally {
@@ -8039,14 +8012,18 @@ function appSheetSaveMethodForScopes(scopes) {
   return method;
 }
 
-function persistableState() {
-  const { matrixSearch, selectedDetailOt, ...persisted } = state;
+function purgeClosedWorkOrderRetention() {
+  state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(state, new Date().toISOString());
+}
+
+function persistableState(source = state) {
+  const { matrixSearch, selectedDetailOt, ...persisted } = source;
   return persisted;
 }
 
-function createAppSheetPayload() {
+function createAppSheetPayload(source = state) {
   return {
-    ...deepClone(persistableState()),
+    ...deepClone(persistableState(source)),
     source: "plan-app-sheet",
     savedAt: new Date().toISOString(),
   };

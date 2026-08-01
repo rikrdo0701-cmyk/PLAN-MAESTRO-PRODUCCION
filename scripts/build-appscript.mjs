@@ -58,11 +58,12 @@ function patchPlanningApp(app) {
   const startupMarker = `async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+  purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
   state.selectedDetailOt = "";
   saveState("ui");
-  render();
+  render({ save: false });
   applyInitialWorkspaceView();
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
   loadPlanSnapshots(false);
@@ -76,7 +77,7 @@ function patchPlanningApp(app) {
   state.selectedOperationId = "";
   state.selectedDetailOt = "";
   saveState("ui");
-  render();
+  render({ save: false });
   applyInitialWorkspaceView();
   if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });

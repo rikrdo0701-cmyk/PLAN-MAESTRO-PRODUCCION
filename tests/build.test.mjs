@@ -134,8 +134,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
   assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
   assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
-  assert.match(pagesIndex, /PlanningWorkflowCore\.compareWorkOrderLite\(state, incomingWorkOrders\)/);
-  assert.match(pagesIndex, /PlanningWorkflowCore\.applyConfirmedWorkOrderChanges\(state, comparison, decisions\)/);
+  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.purgeClosedWorkOrderRetention\(/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", false\)/);
   assert.match(pagesIndex, /id="restoreDraftBtn"[^>]*>Restaurar borrador<\/button>/);
@@ -178,8 +179,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
   assert.match(backlogSyncSource, /fetchNetSuiteWorkOrdersLiteCompat\(true\)/);
-  assert.match(backlogSyncSource, /if \(!values\) values = \{\};/);
-  assert.match(backlogSyncSource, /callAppsScript\("savePlanningStateOptimized", createAppSheetPayload\(\)\)/);
+  assert.match(backlogSyncSource, /NETSUITE_BACKLOG_SYNC_TIMEOUT_MS/);
+  assert.match(backlogSyncSource, /callAppsScript\("savePlanningStateOptimized", createAppSheetPayload\(nextState\)\)/);
+  assert.doesNotMatch(backlogSyncSource, /openPlanningDialog|compareWorkOrderLite|applyConfirmedWorkOrderChanges|persistPlanSnapshot/);
   assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders"/);
   assert.match(pagesIndex, /async function fetchNetSuiteWorkOrdersLiteCompat\(allowPersistedFallback = false\)[\s\S]*Metodo no permitido:[\s\S]*syncNetSuiteWorkOrdersLite/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
@@ -521,7 +523,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   const bindStart = app.indexOf("function bindEvents()");
   const bindEnd = app.indexOf("function showWorkspaceView(", bindStart);
   const bindings = app.slice(bindStart, bindEnd);
-  const persistStart = app.indexOf("function persistableState()");
+  const persistStart = app.indexOf("function persistableState(");
   const persistEnd = app.indexOf("function isAppsScriptRuntime()", persistStart);
   const persistence = app.slice(persistStart, persistEnd);
 
@@ -540,9 +542,9 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
-  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, \.\.\.persisted \} = state;/);
+  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, \.\.\.persisted \} = source;/);
   assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
-  assert.match(persistence, /\.\.\.deepClone\(persistableState\(\)\)/);
+  assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
 });
 
 test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
@@ -800,7 +802,7 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
   assert.match(renderPriorityList, /dataset\.dueOt === focusedDueOt[\s\S]*\.focus\(\)/);
   assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
   assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
-  assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*saveAndRender\(/);
+  assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*render\(\{ save: false \}\)/);
   assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
 });
 
