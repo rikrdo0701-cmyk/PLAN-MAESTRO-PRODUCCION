@@ -317,6 +317,49 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
   });
 }
 
+function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
+  const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
+  const savedAt = new Date().toISOString();
+  const revision = currentRevision + 1;
+  const removedOts = (payload.removedWorkOrderOts || []).reduce(function(out, ot) {
+    const key = String(ot || '').trim().toUpperCase();
+    if (key) out[key] = true;
+    return out;
+  }, {});
+  const activeMaterials = PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_).filter(function(item) {
+    return !removedOts[String(item.ot || '').trim().toUpperCase()];
+  });
+
+  PP_writeConfigPatch_(spreadsheet, {
+    schemaVersion: PP_SCHEMA_VERSION,
+    appVersion: PP_APP_VERSION,
+    revision: revision,
+    savedAt: savedAt,
+    source: payload.source || 'Sincronizacion ligera de OTs',
+    syncedAt: payload.syncedAt || savedAt,
+    selectedOperationId: payload.selectedOperationId || '',
+    selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
+    lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
+    expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
+    preparedPlanningByOt: payload.preparedPlanningByOt || {},
+    closedWorkOrderSummaries: payload.closedWorkOrderSummaries || {},
+    lastSchedule: payload.lastSchedule || null
+  });
+  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('MATERIALES'), PP_SHEETS.MATERIALES, PP_materialRows_({ materials: activeMaterials }));
+  spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_OT_LIGERA', revision, JSON.stringify({
+    operations: (payload.operations || []).length,
+    workOrders: (payload.workOrders || []).length,
+    materials: activeMaterials.length,
+    removedWorkOrderOts: Object.keys(removedOts).length
+  })]);
+  SpreadsheetApp.flush();
+  return PP_writeStateAck_(revision, savedAt, { syncedAt: payload.syncedAt || savedAt });
+}
+
 function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail) {
   const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
   const savedAt = new Date().toISOString();

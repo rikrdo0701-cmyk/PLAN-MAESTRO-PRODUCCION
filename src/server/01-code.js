@@ -94,6 +94,18 @@ function saveAppState(payload) {
   }
 }
 
+function saveWorkOrderSyncState(payload) {
+  if (!payload || !Array.isArray(payload.operations) || !Array.isArray(payload.workOrders)) throw new Error('La sincronizacion no contiene OTs u operaciones');
+  const lock = PP_acquireScriptLock_('guardar sincronizacion de OTs', 30000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_writeWorkOrderSyncState_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function saveCatalogState(payload) {
   if (!payload) throw new Error('El plan no contiene catalogos');
   const lock = PP_acquireScriptLock_('guardar catalogos', 15000);

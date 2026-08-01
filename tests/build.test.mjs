@@ -50,10 +50,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
+  assert.match(codeService, /function saveWorkOrderSyncState\(payload\)/);
   assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
   assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
   assert.match(bridge, /getAppStateIfChanged: true/);
   assert.match(bridge, /saveOperationPlanStatus: true/);
+  assert.match(bridge, /saveWorkOrderSyncState: true/);
   assert.match(bridge, /getPlanningWorkOrderData: true/);
   assert.match(planningWorkOrderService, /function getPlanningWorkOrderData\(ot\)/);
   assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
@@ -180,7 +182,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   );
   assert.match(backlogSyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
   assert.match(backlogSyncSource, /NETSUITE_BACKLOG_SYNC_TIMEOUT_MS/);
-  assert.match(backlogSyncSource, /callAppsScript\("saveAppState", createAppSheetPayload\(nextState\)\)/);
+  assert.match(backlogSyncSource, /callAppsScript\("saveWorkOrderSyncState", syncPayload\)/);
+  assert.doesNotMatch(backlogSyncSource, /saveAppState|createAppSheetPayload\(nextState\)/);
   assert.doesNotMatch(backlogSyncSource, /openPlanningDialog|compareWorkOrderLite|applyConfirmedWorkOrderChanges|persistPlanSnapshot/);
   assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
   assert.doesNotMatch(pagesIndex, /function fetchNetSuiteWorkOrdersLiteCompat/);
@@ -193,7 +196,25 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("async function loadAppStateInBackground()"),
     pagesIndex.indexOf("async function restoreDraftPlanFromSharedState()"),
   );
-  assert.match(builtStartupSource, /await loadPlanSnapshots\(false\);[\s\S]*purgeClosedWorkOrderRetention\(\)/);
+  assert.ok(
+    builtStartupSource.indexOf("await restoreDraftPlanFromSharedState()") < builtStartupSource.indexOf("purgeClosedWorkOrderRetention()"),
+    "la purga debe ejecutarse despues de restaurar el borrador compartido",
+  );
+  const startupState = { operations: [] };
+  let operationsSeenByPurge = [];
+  const generatedStartup = Function(
+    "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "loadPlanSnapshots", "restoreDraftPlanFromSharedState",
+    "purgeClosedWorkOrderRetention", "resetDailyReportFiltersToToday", "saveState", "render", "applyInitialWorkspaceView",
+    "showToast", "isAppsScriptRuntime", "syncNetSuiteInBackground",
+    `${builtStartupSource}; return loadAppStateInBackground;`,
+  )(
+    startupState, async () => true, (callback) => callback(), async () => {},
+    async () => { startupState.operations = [{ ot: "OT-CERRADA" }]; return true; },
+    () => { operationsSeenByPurge = [...startupState.operations]; startupState.operations = []; },
+    () => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {},
+  );
+  await generatedStartup();
+  assert.deepEqual(operationsSeenByPurge, [{ ot: "OT-CERRADA" }]);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);

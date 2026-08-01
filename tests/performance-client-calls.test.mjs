@@ -1270,20 +1270,26 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
   await fixture.context.syncBacklogWorkOrders();
 
   assert.deepEqual(timeouts, [60000]);
-  assert.equal(reconciliations, 1);
-  assert.equal(purges, 1);
+  assert.equal(reconciliations, 2);
+  assert.equal(purges, 2);
   assert.equal(dialogs, 0);
-  assert.deepEqual(calls.map(([method]) => method), ["fetchNetSuiteWorkOrdersLite", "saveAppState"]);
+  assert.deepEqual(calls.map(([method]) => method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
   assert.deepEqual(plain(calls[1][1]), {
     revision: 1,
     workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }],
     operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
-    materials: [],
-    retentionPurged: true,
+    operationPlanStatuses: {},
+    otConfigurations: {},
+    planningConfigByOt: {},
+    preparedPlanningByOt: {},
+    selectedOts: [],
+    lockedOts: [],
+    expandedOts: [],
+    selectedOperationId: "",
     closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
+    lastSchedule: null,
     syncedAt: "2026-08-01T00:00:00.000Z",
-    source: "plan-app-sheet",
-    savedAt: "2026-08-01T00:00:00.000Z",
+    removedWorkOrderOts: ["WO-CERRADA"],
   });
   assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA", item: "ACTIVA" }]);
   assert.deepEqual(plain(fixture.context.state.operations), [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }]);
@@ -1343,8 +1349,50 @@ test("la sincronizacion manual ignora un segundo clic mientras la consulta liger
   assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
   gate.resolve({ workOrders: [{ ot: "WO-ACTIVA" }] });
   await first;
-  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveAppState"]);
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
   assert.deepEqual(fixture.backlogBusyStates, [true, false]);
+});
+
+test("la sincronizacion conserva una edicion local hecha mientras espera el guardado dedicado", async () => {
+  const gate = deferredPromise();
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-CERRADA" }], settings: { local: "antes" } },
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      return gate.promise;
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, closedWorkOrderSummaries: {} }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+
+  const sync = fixture.context.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  fixture.context.state.settings = { local: "durante" };
+  gate.resolve({ revision: 2 });
+  await sync;
+
+  assert.equal(fixture.context.state.revision, 2);
+  assert.deepEqual(plain(fixture.context.state.settings), { local: "durante" });
+  assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA" }]);
+});
+
+test("un rechazo del guardado dedicado no modifica el estado local", async () => {
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-LOCAL" }], settings: { local: "conservar" } },
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-REMOTA" }] };
+      throw new Error("guardar fallo");
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  const before = plain(fixture.context.state);
+
+  await fixture.context.syncBacklogWorkOrders();
+
+  assert.deepEqual(plain(fixture.context.state), before);
 });
 
 test("el boton manual y el fondo comparten la llamada backend de OTs", async () => {

@@ -5665,8 +5665,30 @@ async function syncBacklogWorkOrders() {
       nowIso,
     );
     nextState.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
-    const saved = await callAppsScript("saveAppState", createAppSheetPayload(nextState));
-    state = nextState;
+    const syncPayload = {
+      revision: Number(nextState.revision || 0),
+      workOrders: nextState.workOrders || [],
+      operations: nextState.operations || [],
+      operationPlanStatuses: nextState.operationPlanStatuses || {},
+      otConfigurations: nextState.otConfigurations || {},
+      planningConfigByOt: nextState.planningConfigByOt || {},
+      preparedPlanningByOt: nextState.preparedPlanningByOt || {},
+      selectedOts: nextState.selectedOts || [],
+      lockedOts: nextState.lockedOts || [],
+      expandedOts: nextState.expandedOts || [],
+      selectedOperationId: nextState.selectedOperationId || "",
+      closedWorkOrderSummaries: nextState.closedWorkOrderSummaries || {},
+      lastSchedule: nextState.lastSchedule || null,
+      syncedAt: nextState.syncedAt,
+      removedWorkOrderOts: Object.keys(nextState.closedWorkOrderSummaries || {}),
+    };
+    const saved = await callAppsScript("saveWorkOrderSyncState", syncPayload);
+    const committedAt = new Date().toISOString();
+    state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
+      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, committedAt),
+      committedAt,
+    );
+    state.syncedAt = payload.syncedAt || payload.savedAt || committedAt;
     state.revision = Number(saved?.revision || state.revision);
     invalidateCurrentPlanOperationsCache();
     resetBacklogWindow();

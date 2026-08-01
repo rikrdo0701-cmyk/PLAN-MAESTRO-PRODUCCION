@@ -99,6 +99,33 @@ test("persiste los resumenes de OTs cerradas mediante CONFIG", () => {
   assert.deepEqual(restored.closedWorkOrderSummaries, summaries);
 });
 
+test("el guardado de sincronizacion conserva materiales remotos activos y retira solo OTs cerradas", () => {
+  const fixture = loadStorage([["revision", "3"]]);
+  fixture.sheets.MATERIALES = createSheet(fixture.sheets.MATERIALES.rows()[0], [
+    ["mat-active", "OT-ACTIVA", "", "", "COMP-A", "ACTIVO", "", "PZA", 5, 0, 5],
+    ["mat-closed", "OT-CERRADA", "", "", "COMP-C", "CERRADO", "", "PZA", 3, 0, 3],
+  ]);
+
+  const saved = structuredClone(fixture.context.PP_writeWorkOrderSyncState_(fixture.spreadsheet, {
+    revision: 3,
+    workOrders: [{ ot: "OT-ACTIVA", item: "ACTIVA" }],
+    operations: [{ id: "op-active", ot: "OT-ACTIVA", ct: "CORTE" }],
+    materials: [{ ot: "OT-CLIENTE", component: "NO_CONFIAR" }],
+    operationPlanStatuses: { active: { ot: "OT-ACTIVA", status: "PENDIENTE" } },
+    closedWorkOrderSummaries: { "OT-CERRADA": { ot: "OT-CERRADA", finalStatus: "CERRADA" } },
+    removedWorkOrderOts: ["OT-CERRADA"],
+  }, "pruebas"));
+
+  const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(saved.revision, 4);
+  assert.deepEqual(restored.materials, [{
+    id: "mat-active", ot: "OT-ACTIVA", workOrderId: "", assembly: "", componentId: "COMP-A", component: "ACTIVO", description: "", unit: "PZA", required: 5, issued: 0, pending: 5,
+  }]);
+  assert.deepEqual(restored.workOrders.map((item) => item.ot), ["OT-ACTIVA"]);
+  assert.deepEqual(restored.operations.map((item) => item.ot), ["OT-ACTIVA"]);
+  assert.deepEqual(restored.closedWorkOrderSummaries, { "OT-CERRADA": { ot: "OT-CERRADA", finalStatus: "CERRADA" } });
+});
+
 test("usa un objeto vacio para resumenes de OTs cerradas en CONFIG legacy", () => {
   const fixture = loadStorage();
   const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
