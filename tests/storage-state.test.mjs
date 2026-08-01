@@ -75,6 +75,37 @@ test("persiste tiempoFallback y trata filas antiguas como no fallback", () => {
   assert.equal(legacy.operations[0].tiempoFallback, false);
 });
 
+test("persiste los resumenes de OTs cerradas mediante CONFIG", () => {
+  const fixture = loadStorage();
+  const summaries = {
+    "OT-100": {
+      ot: "OT-100",
+      item: "ART-100",
+      quantity: 8,
+      scheduledStart: "2026-08-01T08:00:00.000Z",
+      scheduledEnd: "2026-08-01T12:00:00.000Z",
+      weekStart: "2026-07-27",
+      finalStatus: "CERRADA",
+      closedDetectedAt: "2026-08-01T12:00:00.000Z",
+    },
+  };
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 0,
+    closedWorkOrderSummaries: summaries,
+  }, "pruebas", true);
+
+  const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.deepEqual(restored.closedWorkOrderSummaries, summaries);
+});
+
+test("usa un objeto vacio para resumenes de OTs cerradas en CONFIG legacy", () => {
+  const fixture = loadStorage();
+  const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+
+  assert.deepEqual(restored.closedWorkOrderSummaries, {});
+});
+
 test("carga exclusiones normalizadas desde CONFIG y usa lista vacia para estado legacy", () => {
   const stored = [
     "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
