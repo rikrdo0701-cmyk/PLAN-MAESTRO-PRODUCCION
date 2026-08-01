@@ -787,7 +787,7 @@
 
   function toolCatalogForOperation(state, op) {
     if (!isBendingOperation(op)) return null;
-    const part = String(op.parte || state.__workOrdersByOt?.get(normalizeKey(op.ot))?.item || "").trim();
+    const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
     const candidates = (state.toolCatalog || []).filter((item) => {
       return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(part);
     });
@@ -1599,8 +1599,17 @@
 
   function isAssignableOperation(state, op) {
     const key = normalizeKey(op.ot);
-    const workOrder = state.__workOrdersByOt?.get(key);
+    const workOrder = indexedWorkOrder(state, key);
     return isMovablePlanningStatus(op.estatus) && (!workOrder || isMovablePlanningStatus(workOrder.status));
+  }
+
+  function indexedWorkOrder(state, ot) {
+    const key = normalizeKey(ot);
+    const index = state?.__workOrdersByOt;
+    if (index && typeof index.get === "function") return index.get(key);
+    if (index && typeof index === "object" && index[key]) return index[key];
+    return (Array.isArray(state?.workOrders) ? state.workOrders : [])
+      .find((workOrder) => normalizeKey(workOrder?.ot) === key);
   }
 
   function isMovablePlanningStatus(status) {

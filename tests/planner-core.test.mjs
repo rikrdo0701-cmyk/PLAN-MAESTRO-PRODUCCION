@@ -930,6 +930,26 @@ test("un doblado sin recursos conserva identidad y diagnostica maquina y herrame
   assert.ok(issues.some((issue) => issue.code === "MISSING_TOOL" && issue.operationId === operation.id));
 });
 
+test("la validacion reconstruye el indice de OTs serializado como objeto", () => {
+  const core = loadPlannerCore();
+  const operation = {
+    id: "bend-2786", ot: "2786", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBO",
+    parte: "", estatus: "PLAN", maquina: "211", herramental: "",
+  };
+  const state = {
+    __workOrdersByOt: {},
+    workOrders: [{ ot: "2786", item: "E01980780MS" }],
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBO"],
+    matrix: { "5459::DOBLEZ_DE_TUBO": ["OPERADOR 2"] },
+    operators: ["OPERADOR 2"],
+    toolCatalog: [{ part: "E01980780MS", herramental: "H-2786" }],
+  };
+
+  const issues = core.planningConfigurationIssues(state, [operation]);
+
+  assert.equal(issues.some((issue) => issue.code === "MISSING_TOOL"), false);
+});
+
 test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
