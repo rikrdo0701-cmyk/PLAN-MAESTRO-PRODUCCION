@@ -21,21 +21,23 @@
 
   function schedulePlan(inputState, options) {
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
+    const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
     const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle"];
     const strategies = strategyPool.slice(0, Math.min(passCount + 2, strategyPool.length));
-    const evaluated = strategies.map((strategy) => {
+    const evaluated = strategies.map((strategy, index) => {
       const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
-      return { strategy, result, metrics: evaluatePlan(result) };
+      return { strategy, index, result, metrics: evaluatePlan(result) };
     });
-    evaluated.sort((a, b) => a.metrics.objective - b.metrics.objective || strategies.indexOf(a.strategy) - strategies.indexOf(b.strategy));
+    applyComparableScores(evaluated);
+    evaluated.sort((a, b) => compareEvaluatedPlans(a, b, flowBalancedEnabled));
     const selected = evaluated[0];
     selected.result.lastSchedule.optimization = {
       method: "MULTI_STRATEGY_HEURISTIC",
       globalOptimalityGuaranteed: false,
-      strategiesEvaluated: evaluated.map((item) => ({ strategy: item.strategy, objective: item.metrics.objective })),
+      strategiesEvaluated: evaluated.map((item) => ({ strategy: item.strategy, objective: item.metrics.objective, score: item.metrics.score })),
       volumePassLimit,
       selectedStrategy: selected.strategy,
       metrics: selected.metrics,
@@ -1455,8 +1457,11 @@
     const ends = operations.map((op) => operationEnd(op).getTime());
     const makespanMinutes = starts.length ? Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 60000) : 0;
     let tardinessMinutes = 0;
+    let weightedTardinessMinutes = 0;
     const loadByOperator = new Map();
     const intervalsByOperator = new Map();
+    const loadByResource = new Map();
+    const flowByOt = new Map();
     for (const op of operations) {
       const start = operationStart(op);
       const end = operationEnd(op);
@@ -1464,13 +1469,27 @@
       const operator = String(op.operador || "SIN_OPERADOR");
       if (isLoadBearingOperator(operator)) {
         loadByOperator.set(operator, (loadByOperator.get(operator) || 0) + duration);
+        loadByResource.set(`OPERADOR:${operator}`, (loadByResource.get(`OPERADOR:${operator}`) || 0) + duration);
         if (!intervalsByOperator.has(operator)) intervalsByOperator.set(operator, []);
         intervalsByOperator.get(operator).push({ start, end });
       }
+      if (hasMachineResource(op.maquina)) {
+        const machine = String(op.maquina);
+        loadByResource.set(`MAQUINA:${machine}`, (loadByResource.get(`MAQUINA:${machine}`) || 0) + duration);
+      }
+      const ot = normalizeKey(op.ot);
+      const flow = flowByOt.get(ot) || { start, end };
+      flow.start = flow.start < start ? flow.start : start;
+      flow.end = flow.end > end ? flow.end : end;
+      flowByOt.set(ot, flow);
       const due = op.tipoInsercion === "CAMBIO_HERRAMENTAL" ? null : parseDateOnly(op.fechaReq);
       if (due) {
         const dueEnd = atMinute(due, DEFAULT_END_MINUTE);
-        if (end > dueEnd) tardinessMinutes += diffMinutes(dueEnd, end);
+        if (end > dueEnd) {
+          const lateness = diffMinutes(dueEnd, end);
+          tardinessMinutes += lateness;
+          weightedTardinessMinutes += lateness * priorityWeight(op.prioridad);
+        }
       }
     }
     let idleMinutes = 0;
@@ -1490,6 +1509,13 @@
     const unscheduled = Number(state.lastSchedule?.unscheduled || 0);
     const changes = Number(state.lastSchedule?.changes || 0);
     const operatorConflicts = Number(state.lastSchedule?.operatorConflicts ?? operatorOverlapConflicts(operations).length);
+    const averageFlowMinutes = flowByOt.size
+      ? [...flowByOt.values()].reduce((sum, flow) => sum + diffMinutes(flow.start, flow.end), 0) / flowByOt.size
+      : 0;
+    const resourceUtilization = {};
+    for (const [resource, minutes] of loadByResource) {
+      resourceUtilization[resource] = makespanMinutes > 0 ? Math.round(minutes / makespanMinutes * 10000) / 10000 : 0;
+    }
     const objective = Math.round(
       operatorConflicts * 1e13 +
       unscheduled * 1e12 +
@@ -1504,11 +1530,55 @@
       operatorConflicts,
       unscheduled,
       tardinessMinutes: Math.round(tardinessMinutes),
+      weightedTardinessMinutes: Math.round(weightedTardinessMinutes),
+      averageFlowMinutes: Math.round(averageFlowMinutes),
+      avoidableIdleMinutes: Math.round(idleMinutes),
+      toolChanges: changes,
+      maxWip: maxConcurrentWip(flowByOt),
+      resourceUtilization,
+      score: 0,
       makespanMinutes: Math.round(makespanMinutes),
       idleMinutes: Math.round(idleMinutes),
       loadStdDevMinutes: Math.round(Math.sqrt(loadVariance)),
       changes,
     };
+  }
+
+  function applyComparableScores(evaluated) {
+    const components = [
+      ["weightedTardinessMinutes", 0.45],
+      ["averageFlowMinutes", 0.30],
+      ["avoidableIdleMinutes", 0.15],
+      ["toolChanges", 0.10],
+    ];
+    const denominators = Object.fromEntries(components.map(([key]) => [key, Math.max(1, ...evaluated.map((item) => finiteNumber(item.metrics[key])))]));
+    for (const item of evaluated) {
+      item.metrics.score = Math.round(components.reduce((sum, [key, weight]) =>
+        sum + weight * finiteNumber(item.metrics[key]) / denominators[key], 0) * 1e8) / 1e8;
+    }
+  }
+
+  function compareEvaluatedPlans(a, b, useComparableScore) {
+    return a.metrics.operatorConflicts - b.metrics.operatorConflicts ||
+      a.metrics.unscheduled - b.metrics.unscheduled ||
+      (useComparableScore ? a.metrics.score - b.metrics.score : a.metrics.objective - b.metrics.objective) ||
+      a.index - b.index;
+  }
+
+  function maxConcurrentWip(flowByOt) {
+    const events = [];
+    for (const flow of flowByOt.values()) {
+      events.push({ time: flow.start.getTime(), change: 1 });
+      events.push({ time: flow.end.getTime(), change: -1 });
+    }
+    events.sort((a, b) => a.time - b.time || a.change - b.change);
+    let active = 0;
+    let maximum = 0;
+    for (const event of events) {
+      active += event.change;
+      maximum = Math.max(maximum, active);
+    }
+    return maximum;
   }
 
   function operationKey(op) {
@@ -1840,6 +1910,14 @@
   function numberOr(value, fallback) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function finiteNumber(value) {
+    return numberOr(value, 0);
+  }
+
+  function priorityWeight(value) {
+    return Math.max(1, 101 - normalizePriority(value));
   }
 
   function clampInteger(value, min, max) {

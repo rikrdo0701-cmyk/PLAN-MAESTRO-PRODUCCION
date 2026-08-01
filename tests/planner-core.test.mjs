@@ -961,3 +961,96 @@ test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () =>
   assert.equal(diagnostic.sequence, 7);
   assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
 });
+
+test("expone metricas comunes finitas para comparar estrategias", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"],
+    operations: [
+      { id: "first", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaReq: "2026-07-12", prioridad: 1, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "second", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaReq: "2026-07-13", prioridad: 50, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }], matrix: { "CORTE::CORTE": ["OP 1", "OP 2"] }, configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1", "OP 2"], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const metrics = result.lastSchedule.optimization.metrics;
+
+  for (const key of ["weightedTardinessMinutes", "averageFlowMinutes", "avoidableIdleMinutes", "toolChanges", "maxWip", "score"]) {
+    assert.equal(Number.isFinite(metrics[key]), true, key);
+  }
+  assert.deepEqual(
+    JSON.parse(JSON.stringify({
+      weightedTardinessMinutes: metrics.weightedTardinessMinutes,
+      averageFlowMinutes: metrics.averageFlowMinutes,
+      avoidableIdleMinutes: metrics.avoidableIdleMinutes,
+      toolChanges: metrics.toolChanges,
+      maxWip: metrics.maxWip,
+      resourceUtilization: metrics.resourceUtilization,
+    })),
+    {
+      weightedTardinessMinutes: 90000,
+      averageFlowMinutes: 60,
+      avoidableIdleMinutes: 0,
+      toolChanges: 0,
+      maxWip: 2,
+      resourceUtilization: { "OPERADOR:OP 1": 1, "OPERADOR:OP 2": 1 },
+    },
+  );
+});
+
+test("desactivar flow balanced conserva operaciones, fechas y recursos existentes", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "101", "102", "103", "104"],
+    operations: [
+      { id: "o0", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 183, prioridad: 67, fechaReq: "2026-07-13" },
+      { id: "o1", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 234, prioridad: 1, fechaReq: "2026-07-13" },
+      { id: "o2", ot: "102", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 45, prioridad: 34, fechaReq: "2026-07-13" },
+      { id: "o3", ot: "103", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 96, prioridad: 67, fechaReq: "2026-07-13" },
+      { id: "o4", ot: "104", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 147, prioridad: 1, fechaReq: "2026-07-13" },
+    ],
+    workOrders: ["100", "101", "102", "103", "104"].map((ot) => ({ ot })),
+    matrix: { "CORTE::CORTE": ["OP 1", "OP 2"] }, configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1", "OP 2"], settings: { optimizationPasses: 3, flowBalancedEnabled: false }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "makespan");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.operations.map(({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin }) => ({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin })))),
+    [
+      { id: "o1", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:54" },
+      { id: "o4", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:27" },
+      { id: "o2", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "09:27", fechaFin: "2026-07-13", horaFin: "10:12" },
+      { id: "o0", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "10:12", fechaFin: "2026-07-13", horaFin: "13:15" },
+      { id: "o3", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "10:54", fechaFin: "2026-07-13", horaFin: "12:30" },
+    ],
+  );
+});
+
+test("las metricas cuentan hueco evitable y cambio de herramental", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"], lockedOts: ["100"],
+    operations: [
+      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
+      { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H2", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP B", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const metrics = result.lastSchedule.optimization.metrics;
+
+  assert.equal(metrics.avoidableIdleMinutes, 30);
+  assert.equal(metrics.toolChanges, 1);
+});
+
+test("un empate de puntuacion conserva la estrategia existente", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({ operations: [], workOrders: [], settings: { optimizationPasses: 1 }, workSchedule: {} }, {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
+});
