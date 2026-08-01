@@ -57,6 +57,24 @@ function configObject(context, sheet) {
   return structuredClone(context.PP_readConfig_(sheet));
 }
 
+test("persiste tiempoFallback y trata filas antiguas como no fallback", () => {
+  const fixture = loadStorage();
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 0,
+    operations: [{ id: "fallback-1", ot: "100", ct: "CORTE", tiempoProd: 1 / 60, tiempoFallback: true }],
+  }, "pruebas", true);
+
+  const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(restored.operations[0].tiempoFallback, true);
+
+  const legacyHeaders = fixture.sheets.OPERACIONES.rows()[0].filter((header) => header !== "TIEMPO_FALLBACK");
+  fixture.sheets.OPERACIONES = createSheet(legacyHeaders, [
+    legacyHeaders.map((header) => header === "ID" ? "legacy-1" : ""),
+  ]);
+  const legacy = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(legacy.operations[0].tiempoFallback, false);
+});
+
 test("carga exclusiones normalizadas desde CONFIG y usa lista vacia para estado legacy", () => {
   const stored = [
     "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",

@@ -39,6 +39,10 @@ const applyPlanningPayloadSource = appSource.slice(
   appSource.indexOf("function applyNetSuitePlanningPayload("),
   appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
 );
+const adjustedProductionSource = appSource.slice(
+  appSource.indexOf("function adjustedProductionMinutes("),
+  appSource.indexOf("function opStart("),
+);
 
 function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
   return new Function(
@@ -195,6 +199,11 @@ function loadClient(options = {}) {
   }
   return { context, state, toasts, busyStates };
 }
+
+test("el cliente conserva un segundo en la duracion ajustada solo con la marca de fallback", () => {
+  assert.match(adjustedProductionSource, /if \(op\?\.tiempoFallback === true\) return production;/);
+  assert.match(adjustedProductionSource, /return Math\.ceil\(production \* \(2 - efficiency \/ 100\) \* 100 \/ performance\);/);
+});
 
 test("dos solicitudes simultaneas de una OT comparten una sola llamada individual", async () => {
   const gate = deferredPromise();
@@ -635,30 +644,39 @@ test("una OT con ruta mixta consulta backend aunque tenga una operacion valida",
   assert.equal(calls, 1);
 });
 
-test("una fusion con ruta mixta falla sin cambiar estado", () => {
+test("una fusion normaliza tiempos invalidos y conserva tiempos validos", () => {
   const fixture = loadClient({
     installIndividualPlanning: true,
     state: {
       workOrders: [{ ot: "2773", item: "LOCAL" }],
-      operations: [{ id: "local", ot: "2773", ct: "CORTE", tiempoProd: 0 }],
+      operations: [{ id: "old-valid", ot: "2773", secuencia: 50, ct: "SOLDADURA", tiempoProd: 1 / 60, tiempoFallback: true }],
       materials: [{ ot: "2773", component: "LOCAL" }],
     },
   });
-  const before = plain(fixture.state);
 
   const merged = fixture.context.mergeIndividualPlanningData({
     data: {
       workOrder: { ot: "2773", item: "REMOTE" },
       operations: [
-        { id: "valid", ot: "2773", ct: "CORTE", tiempoProd: 10 },
-        { id: "invalid", ot: "2773", ct: "DOBLEZ", tiempoProd: 0 },
+        { id: "missing", ot: "2773", ct: "CORTE" },
+        { id: "zero", ot: "2773", ct: "DOBLEZ", tiempoProd: 0 },
+        { id: "negative", ot: "2773", ct: "PINTURA", tiempoProd: -2 },
+        { id: "invalid", ot: "2773", ct: "LASER", tiempoProd: "no numerico" },
+        { id: "valid", ot: "2773", ct: "SOLDADURA", tiempoProd: 10 },
       ],
       materials: [{ ot: "2773", component: "REMOTE" }],
     },
   }, "2773");
 
-  assert.equal(merged, false);
-  assert.deepEqual(plain(fixture.state), before);
+  assert.equal(merged, true);
+  assert.deepEqual(
+    plain(fixture.state.operations.map((operation) => operation.tiempoProd)),
+    [1 / 60, 1 / 60, 1 / 60, 1 / 60, 10],
+  );
+  assert.deepEqual(
+    plain(fixture.state.operations.map((operation) => operation.tiempoFallback === true)),
+    [true, true, true, true, false],
+  );
 });
 
 test("una fusion agrega un work order normalizado cuando no existe localmente", () => {

@@ -5,7 +5,7 @@ const PP_SHEETS = {
     'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'CANT_PENDIENTE',
     'TIEMPO_CICLO', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN',
     'HORA_FIN', 'TIPO_INSERCION', 'ESTATUS', 'LOG', 'GENERATED_BY', 'LOCKED', 'DIAS_SUBCONTRATO', 'KIT_PENDIENTE', 'AUTO_FROZEN', 'TIPO_SUBCONTRATO',
-    'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'COMENTARIO'
+    'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'COMENTARIO', 'TIEMPO_FALLBACK'
   ],
   OPERADORES: ['OPERADOR', 'ACTIVO', 'MINUTOS_CAPACIDAD', 'RENDIMIENTO_PCT', 'NOMBRE', 'CATEGORIA'],
   CAPACIDADES: ['KEY', 'CT', 'OPERACION', 'ACTIVA', 'CAPACIDAD', 'SOLAPAMIENTO', 'PALABRAS_CLAVE', 'REQUIERE_HERRAMENTAL', 'REQUIERE_KIT', 'CUSTOM', 'EFICIENCIA_PCT'],
@@ -36,7 +36,8 @@ const PP_OPERATION_FIELDS = {
   HORA_FIN: 'horaFin', TIPO_INSERCION: 'tipoInsercion', ESTATUS: 'estatus', LOG: 'log',
   GENERATED_BY: 'generatedBy', LOCKED: 'locked', DIAS_SUBCONTRATO: 'subcontractDays', KIT_PENDIENTE: 'kitPending', AUTO_FROZEN: 'autoFrozen', TIPO_SUBCONTRATO: 'subcontractType',
   HERRAMENTAL_ORIGEN: 'toolChangeFromHerramental', KIT_ORIGEN: 'toolChangeFromKit',
-  HERRAMENTAL_DESTINO: 'toolChangeToHerramental', KIT_DESTINO: 'toolChangeToKit', COMENTARIO: 'comentario'
+  HERRAMENTAL_DESTINO: 'toolChangeToHerramental', KIT_DESTINO: 'toolChangeToKit', COMENTARIO: 'comentario',
+  TIEMPO_FALLBACK: 'tiempoFallback'
 };
 
 function PP_getWorkbook_() {
@@ -1005,7 +1006,7 @@ function PP_mapOperation_(row) {
     const field = PP_OPERATION_FIELDS[header];
     let value = row[header];
     if (['num', 'prioridad', 'cantTotal', 'secuencia', 'cantPendiente', 'tiempoCiclo', 'tiempoSetup', 'tiempoProd', 'subcontractDays'].indexOf(field) >= 0) value = Number(value || 0);
-    if (field === 'locked' || field === 'kitPending' || field === 'autoFrozen') value = PP_bool_(value, false);
+    if (field === 'locked' || field === 'kitPending' || field === 'autoFrozen' || field === 'tiempoFallback') value = PP_bool_(value, false);
     out[field] = value;
     return out;
   }, {});

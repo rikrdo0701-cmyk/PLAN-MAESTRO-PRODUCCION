@@ -685,6 +685,68 @@ test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tie
   assert.equal(core.operationDuration(operation, 100, 100), 60);
 });
 
+test("la capacidad programada conserva un segundo solo con la marca de fallback", () => {
+  const core = loadPlannerCore();
+
+  assert.equal(core.operationDuration({ tiempoProd: 1 / 60, tiempoFallback: true }, 100, 100), 1 / 60);
+  assert.equal(core.operationDuration({ tiempoProd: 0.5 }, 100, 100), 1);
+});
+
+test("una operacion marcada como fallback conserva setup fraccional y un segundo", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{
+      id: "setup-fallback", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
+      estatus: "PLAN", operador: "OP 1", tiempoSetup: 0.5, tiempoProd: 1 / 60, tiempoFallback: true,
+    }],
+    workOrders: [{ ot: "100" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const operation = result.operations.find((item) => item.id === "setup-fallback");
+  assert.deepEqual(
+    [operation.fechaInicio, operation.horaInicio, operation.fechaFin, operation.horaFin],
+    ["2026-07-13", "07:00", "2026-07-13", "07:00:31"],
+  );
+});
+
+test("un setup de un segundo sin fallback conserva el redondeo de produccion normal", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    operations: [{
+      id: "normal-one-second-setup", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
+      estatus: "PLAN", operador: "OP 1", tiempoSetup: 1 / 60, tiempoProd: 1,
+    }],
+    workOrders: [{ ot: "100" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const operation = result.operations.find((item) => item.id === "normal-one-second-setup");
+  assert.equal(operation.horaFin, "07:02");
+});
+
+test("una asignacion bloqueada conserva segundos y bloquea la recarga siguiente", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"], lockedOts: ["100"],
+    operations: [
+      {
+        id: "fixed-fallback", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
+        estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 1 / 60,
+        fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:00:01",
+      },
+      { id: "pending-after-fallback", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const fixed = result.operations.find((item) => item.id === "fixed-fallback");
+  const pending = result.operations.find((item) => item.id === "pending-after-fallback");
+  assert.equal(fixed.horaFin, "07:00:01");
+  assert.equal(pending.horaInicio, "07:01");
+});
+
 test("el motor toma el herramental guardado en la configuracion de la OT", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

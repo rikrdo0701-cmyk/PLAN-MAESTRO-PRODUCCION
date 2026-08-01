@@ -18,7 +18,7 @@ function getPlanningWorkOrderData(ot) {
         'Centro de trabajo': PP_Inspection_value_(row, ['Centro de trabajo', 'centro', 'CT', 'workcenter']),
         'Tiempo estimado (min)': PP_Inspection_value_(row, ['Tiempo estimado (min)', 'remaining_min', 'estimated_min', 'tiempo'])
       });
-      return PP_mapNetSuiteOperation_(normalized, index, current);
+      return PP_planningOperationWithTimeFallback_(PP_mapNetSuiteOperation_(normalized, index, current));
     });
     if (!operations.length) {
       throw new Error('Ruta de manufactura vacia para la OT ' + folio);
@@ -145,6 +145,16 @@ function PP_logDirectWorkOrderSuiteQlFailure_(status, raw) {
   Logger.log('SuiteQL operaciones OT fallo HTTP ' + status + ': ' + String(raw || '').slice(0, 1000));
 }
 
+const PP_PLANNING_FALLBACK_MINUTES_ = 1 / 60;
+
+function PP_planningOperationWithTimeFallback_(operation) {
+  if (Number(operation.tiempoProd) > 0) return operation;
+  return Object.assign({}, operation, {
+    tiempoProd: PP_PLANNING_FALLBACK_MINUTES_,
+    tiempoFallback: true
+  });
+}
+
 function PP_planningIndividualOperationValid_(operation) {
-  return Boolean(operation && operation.ct && operation.ct !== 'SIN_CT' && Number(operation.tiempoProd) > 0);
+  return Boolean(operation && operation.ct && operation.ct !== 'SIN_CT');
 }

@@ -320,7 +320,31 @@ test("falla cuando no queda ninguna operacion programable", () => {
   assert.match(result.error, /Ruta de manufactura vacia/i);
 });
 
-test("rechaza detalle sin CT o tiempo de planeacion", () => {
+test("asigna un segundo a operaciones sin tiempo y conserva tiempos validos", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913" },
+  }, [
+    { Operacion: "SIN_TIEMPO", Secuencia: 10, "Centro de trabajo": "5461" },
+    { Operacion: "CERO", Secuencia: 20, "Centro de trabajo": "5462", remaining_min: 0 },
+    { Operacion: "NEGATIVO", Secuencia: 30, "Centro de trabajo": "5463", remaining_min: -2 },
+    { Operacion: "INVALIDO", Secuencia: 40, "Centro de trabajo": "5464", remaining_min: "no numerico" },
+    { Operacion: "VALIDO", Secuencia: 50, "Centro de trabajo": "5465", remaining_min: 12 },
+  ]);
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.tiempoProd)),
+    [1 / 60, 1 / 60, 1 / 60, 1 / 60, 12],
+  );
+  assert.deepEqual(
+    structuredClone(result.data.operations.map((operation) => operation.tiempoFallback)),
+    [true, true, true, true, undefined],
+  );
+});
+
+test("rechaza detalle sin CT", () => {
   const context = loadService({
     trabajo: { wo: "2773", id: "913" },
   }, [{}]);
@@ -328,5 +352,6 @@ test("rechaza detalle sin CT o tiempo de planeacion", () => {
   const result = context.getPlanningWorkOrderData("2773");
 
   assert.equal(result.ok, false);
-  assert.match(result.error, /secuencia 1.*sin CT.*sin tiempo/i);
+  assert.match(result.error, /secuencia 1.*sin CT/i);
+  assert.doesNotMatch(result.error, /sin tiempo/i);
 });

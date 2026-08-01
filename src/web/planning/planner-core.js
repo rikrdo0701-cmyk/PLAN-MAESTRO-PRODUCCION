@@ -305,6 +305,7 @@
       const performance = operatorPerformanceForOperation(context.state, op, operator);
       const efficiency = operationEfficiencyForOperation(context.state, op);
       const productionMinutes = operationDuration(op, performance, efficiency);
+      const preserveFractionalDuration = op?.tiempoFallback === true;
       let allocation;
       let setupOperator = "";
       if (toolChange.required && setupMinutes > 0) {
@@ -321,6 +322,7 @@
           machine,
           finite,
           setupMinutes: 0,
+          preserveFractionalDuration,
         });
         if (setupAllocation && productionAllocation && setupAllocation.end.getTime() === productionAllocation.start.getTime()) {
           allocation = {
@@ -339,6 +341,7 @@
           machine,
           finite,
           setupMinutes: 0,
+          preserveFractionalDuration,
         });
         if (productionAllocation) {
           allocation = {
@@ -387,7 +390,7 @@
   }
 
   function allocateWork(context, requestedStart, totalMinutes, resources) {
-    const duration = Math.max(1, Math.ceil(totalMinutes));
+    const duration = resources.preserveFractionalDuration ? totalMinutes : Math.max(1, Math.ceil(totalMinutes));
     let remaining = duration;
     let cursor = ceilToSnap(requestedStart);
     let first = null;
@@ -411,8 +414,8 @@
 
       if (!first) first = new Date(cursor);
       segments.push({ start: new Date(cursor), end: new Date(segmentEnd) });
-      consumed += diffMinutes(cursor, segmentEnd);
-      remaining -= diffMinutes(cursor, segmentEnd);
+      consumed += segmentMinutes;
+      remaining -= segmentMinutes;
       if (!operationStart && consumed >= resources.setupMinutes) operationStart = new Date(segmentEnd);
       cursor = segmentEnd;
 
@@ -1538,7 +1541,9 @@
     const production = productionMinutes(op);
     const performance = Math.max(1, numberOr(performancePercent, 100));
     const efficiency = Math.max(1, Math.min(100, numberOr(efficiencyPercent, 100)));
-    const adjustedProduction = Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
+    const adjustedProduction = op?.tiempoFallback === true
+      ? production
+      : Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
     const explicit = setup + adjustedProduction;
     if (explicit > 0) return explicit;
     const start = operationStart(op);
@@ -1703,8 +1708,8 @@
   }
 
   function parseClock(value, fallback) {
-    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
-    return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
+    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    return match ? Number(match[1]) * 60 + Number(match[2]) + Number(match[3] || 0) / 60 : fallback;
   }
 
   function formatDate(date) {
@@ -1712,7 +1717,8 @@
   }
 
   function formatTime(date) {
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    return date.getSeconds() || date.getMilliseconds() ? `${time}:${String(date.getSeconds()).padStart(2, "0")}` : time;
   }
 
   function startOfDay(date) {
@@ -1722,9 +1728,7 @@
   }
 
   function atMinute(date, minute) {
-    const next = startOfDay(date);
-    next.setMinutes(minute);
-    return next;
+    return addMinutes(startOfDay(date), minute);
   }
 
   function minuteOfDay(date) {

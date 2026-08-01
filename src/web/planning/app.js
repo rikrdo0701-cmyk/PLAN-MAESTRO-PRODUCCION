@@ -5864,10 +5864,16 @@ function normalizeNetSuiteSyncAlert(alert) {
 const individualPlanningRequests = new Map();
 const individualPlanningLoadCompleted = new Set();
 const selectedJobDetailOperationLoads = new Map();
+const INDIVIDUAL_PLANNING_FALLBACK_MINUTES = 1 / 60;
+
+function normalizeIndividualPlanningOperation(operation) {
+  if (Number(operation?.tiempoProd) > 0) return operation;
+  return { ...operation, tiempoProd: INDIVIDUAL_PLANNING_FALLBACK_MINUTES, tiempoFallback: true };
+}
 
 function individualPlanningOperationValid(operation) {
   const workCenter = String(operation?.ct || "").trim().toUpperCase();
-  return Boolean(workCenter) && workCenter !== "SIN_CT" && Number(operation?.tiempoProd) > 0;
+  return Boolean(workCenter) && workCenter !== "SIN_CT";
 }
 
 function individualPlanningOperationsForOt(ot, operations = state.operations) {
@@ -5913,13 +5919,15 @@ function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
   if (!existingOperation) return remoteOperation;
   const routeFields = [
     "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
-    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tipoInsercion",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tiempoFallback", "tipoInsercion",
   ];
   const route = {};
   routeFields.forEach((field) => {
     if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
   });
-  return { ...existingOperation, ...route };
+  const merged = { ...existingOperation, ...route };
+  if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+  return merged;
 }
 
 function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
@@ -5947,7 +5955,10 @@ function mergeIndividualPlanningData(payload, ot) {
   const data = payload?.data || payload;
   const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
   if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
-  const operations = individualPlanningOperationsForOt(key, Array.isArray(data?.operations) ? data.operations : []);
+  const remoteOperations = Array.isArray(data?.operations)
+    ? data.operations.map(normalizeIndividualPlanningOperation)
+    : [];
+  const operations = individualPlanningOperationsForOt(key, remoteOperations);
   if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
 
   const existingOperations = individualPlanningOperationsForOt(key);
@@ -6675,6 +6686,7 @@ function adjustedProductionMinutes(op) {
   const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
   const efficiency = Math.max(1, Math.min(100, Number(rule.efficiency ?? rule.eficiencia) || 100));
   const production = window.PlannerCore?.productionMinutes?.(op) ?? Number(op.tiempoProd || 0);
+  if (op?.tiempoFallback === true) return production;
   return Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
 }
 
