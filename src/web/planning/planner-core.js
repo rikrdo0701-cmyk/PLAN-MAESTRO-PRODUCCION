@@ -31,6 +31,15 @@
       const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
       return { strategy, index, result, metrics: evaluatePlan(result) };
     });
+    if (flowBalancedEnabled) {
+      try {
+        const strategy = "flow_balanced";
+        const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
+        evaluated.push({ strategy, index: evaluated.length, result, metrics: evaluatePlan(result) });
+      } catch (_error) {
+        // La estrategia adicional es opcional; las heuristicas existentes siguen disponibles.
+      }
+    }
     applyComparableScores(evaluated);
     evaluated.sort((a, b) => compareEvaluatedPlans(a, b, flowBalancedEnabled));
     const selected = evaluated[0];
@@ -93,6 +102,9 @@
       changeCounter: 0,
       gapFilled: 0,
       strategy: options?.strategy || "balanced",
+      flowWipTarget: options?.strategy === "flow_balanced"
+        ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
+        : 10,
     };
 
     const authorizedStatuses = selectionDefined
@@ -141,7 +153,9 @@
 
       if (!ready.length) break;
       const firstOperations = ready.filter((candidate) => candidate.job.index === 0);
-      const candidates = firstOperations.length ? firstOperations : ready;
+      const candidates = context.strategy === "flow_balanced"
+        ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
+        : (firstOperations.length ? firstOperations : ready);
       candidates.sort((a, b) => compareReadyCandidates(a, b, firstOperations.length > 0, context.strategy));
       const chosen = candidates[0];
       chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
@@ -372,6 +386,7 @@
             postToolChange,
             toolPenalty: toolChange.required ? 1 : 0,
             operatorLoad: context.operatorLoad.get(operator) || 0,
+            projectedOperatorLoad: (context.operatorLoad.get(operator) || 0) + productionMinutes,
           };
         }
       }
@@ -459,6 +474,7 @@
       toolChange: { required: false, minutes: 0 },
       toolPenalty: 0,
       operatorLoad: 0,
+      projectedOperatorLoad: 0,
       subcontractRule: {
         name: op.subcontractType || rule?.name || "SUBCONTRATO",
         days,
@@ -1396,6 +1412,7 @@
   }
 
   function compareReadyCandidates(a, b, firstOperation, strategy) {
+    if (strategy === "flow_balanced") return compareFlowReadyCandidates(a, b);
     if (firstOperation) {
       const priorityDifference = normalizePriority(a.op.prioridad) - normalizePriority(b.op.prioridad);
       if (priorityDifference) return priorityDifference;
@@ -1427,10 +1444,86 @@
 
   function compareAssignments(a, b, strategy) {
     const tie = String(a.operator).localeCompare(String(b.operator), "es", { numeric: true });
+    if (strategy === "flow_balanced") {
+      return a.projectedOperatorLoad - b.projectedOperatorLoad ||
+        a.end - b.end ||
+        a.start - b.start ||
+        a.toolPenalty - b.toolPenalty ||
+        String(a.machine).localeCompare(String(b.machine), "es", { numeric: true }) ||
+        tie;
+    }
     if (strategy === "finish") return a.end - b.end || a.start - b.start || a.toolPenalty - b.toolPenalty || a.operatorLoad - b.operatorLoad || tie;
     if (strategy === "load") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || tie;
     if (strategy === "tools") return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
     return a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || a.toolPenalty - b.toolPenalty || tie;
+  }
+
+  function flowReadyCandidates(ready, jobs, wipTarget) {
+    const activeReady = ready.filter((candidate) => isFlowActiveJob(candidate.job));
+    const activeWip = jobs.filter((job) => job.operations[job.index] && isFlowActiveJob(job)).length;
+    return activeWip >= wipTarget && activeReady.length ? activeReady : ready;
+  }
+
+  function isFlowActiveJob(job) {
+    return job.index > 0 || job.fixedOperations.length > 0;
+  }
+
+  function compareFlowReadyCandidates(a, b) {
+    const slack = flowSlackMinutes(a) - flowSlackMinutes(b);
+    if (slack) return slack;
+    const remaining = flowActiveProjectedFinish(a) - flowActiveProjectedFinish(b);
+    if (remaining) return remaining;
+    const unlocked = flowUnlockedSuccessorWork(b) - flowUnlockedSuccessorWork(a);
+    if (unlocked) return unlocked;
+    const gapFit = compareFlowGapFit(a, b);
+    if (gapFit) return gapFit;
+    return a.assignment.toolPenalty - b.assignment.toolPenalty ||
+      a.assignment.end - b.assignment.end ||
+      a.assignment.start - b.assignment.start ||
+      String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
+  }
+
+  function flowSlackMinutes(candidate) {
+    const due = parseDateOnly(candidate.op.fechaReq);
+    if (!due) return Number.MAX_SAFE_INTEGER;
+    return diffMinutes(new Date(flowProjectedFinish(candidate)), atMinute(due, DEFAULT_END_MINUTE));
+  }
+
+  function flowActiveProjectedFinish(candidate) {
+    if (!isFlowActiveJob(candidate.job)) return Number.MAX_SAFE_INTEGER;
+    return flowProjectedFinish(candidate);
+  }
+
+  function flowProjectedFinish(candidate) {
+    let finish = new Date(candidate.assignment.end);
+    const fixed = new Set(candidate.job.fixedOperations);
+    const future = [
+      ...candidate.job.operations.slice(candidate.job.index + 1),
+      ...candidate.job.fixedOperations.filter((operation) => compareOperationSequence(operation, candidate.op) > 0),
+    ].sort(compareOperationSequence);
+    for (const operation of future) {
+      if (fixed.has(operation)) {
+        const fixedEnd = operationEnd(operation);
+        if (fixedEnd && fixedEnd > finish) finish = fixedEnd;
+      } else {
+        finish = addMinutes(finish, operationDuration(operation, 100, 100));
+      }
+    }
+    return finish.getTime();
+  }
+
+  function flowUnlockedSuccessorWork(candidate) {
+    const successor = [
+      ...candidate.job.operations.slice(candidate.job.index + 1),
+      ...candidate.job.fixedOperations.filter((operation) => compareOperationSequence(operation, candidate.op) > 0),
+    ].sort(compareOperationSequence)[0];
+    return successor ? operationDuration(successor, 100, 100) : 0;
+  }
+
+  function compareFlowGapFit(a, b) {
+    const aFitsBeforeB = a.assignment.start < b.assignment.start && a.assignment.end <= b.assignment.start;
+    const bFitsBeforeA = b.assignment.start < a.assignment.start && b.assignment.end <= a.assignment.start;
+    return aFitsBeforeB === bFitsBeforeA ? 0 : (aFitsBeforeB ? -1 : 1);
   }
 
   function compareInterleavedCandidates(a, b) {

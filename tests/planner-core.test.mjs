@@ -1015,6 +1015,7 @@ test("desactivar flow balanced conserva operaciones, fechas y recursos existente
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
 
   assert.equal(result.lastSchedule.optimization.selectedStrategy, "makespan");
+  assert.equal(result.lastSchedule.optimization.strategiesEvaluated.some((item) => item.strategy === "flow_balanced"), false);
   assert.deepEqual(
     JSON.parse(JSON.stringify(result.operations.map(({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin }) => ({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin })))),
     [
@@ -1129,4 +1130,173 @@ test("un empate de puntuacion conserva la estrategia existente", () => {
   });
 
   assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
+});
+
+function flowFixture(operations, extra = {}) {
+  const capabilities = [...new Set(operations.map((op) => `${op.ct}::${op.descripcion}`))];
+  return {
+    selectedOts: [...new Set(operations.map((op) => op.ot))],
+    operations,
+    workOrders: [...new Set(operations.map((op) => op.ot))].map((ot) => ({ ot })),
+    matrix: Object.fromEntries(capabilities.map((key) => [key, ["OP 1"]])),
+    configuredCapabilities: capabilities,
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowWipTarget: 1 },
+    workSchedule: {},
+    ...extra,
+  };
+}
+
+function assertFlowEvaluated(result) {
+  assert.ok(
+    result.lastSchedule.optimization.strategiesEvaluated.some((item) => item.strategy === "flow_balanced"),
+    "flow_balanced no fue evaluada",
+  );
+}
+
+test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir otra", () => {
+  const core = loadPlannerCore();
+  const operations = ["100", "200"].flatMap((ot) => [1, 2].map((secuencia) => ({
+    id: `${ot}-${secuencia}`, ot, secuencia, ct: "CORTE", descripcion: "CORTE",
+    estatus: "PLAN", tiempoProd: 60, prioridad: 10, fechaReq: "2026-07-20",
+  })));
+  const result = core.schedulePlan(flowFixture(operations), {
+    planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assertFlowEvaluated(result);
+  assert.equal(result.lastSchedule.optimization.strategiesEvaluated.length, 4);
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.equal(result.lastSchedule.optimization.metrics.averageFlowMinutes, 120);
+  assert.equal(result.lastSchedule.optimization.metrics.maxWip, 1);
+});
+
+test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "active-first", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    { id: "active-blocked", ot: "100", secuencia: 2, ct: "PINTURA", descripcion: "PINTURA", estatus: "PLAN", tiempoProd: 60 },
+    { id: "other", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "other-second", ot: "200", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "third", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "third-second", ot: "300", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+  ];
+  const state = flowFixture(operations);
+  state.matrix["PINTURA::PINTURA"] = [];
+  const result = core.schedulePlan(state, {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assertFlowEvaluated(result);
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.ok(result.operations.find((op) => op.id === "other").fechaInicio);
+  assert.equal(result.operations.find((op) => op.id === "active-blocked").fechaInicio, undefined);
+});
+
+test("flow balanced reparte trabajo entre operadores equivalentes por carga proyectada", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    ...["100", "200"].flatMap((ot) => [1, 2].map((secuencia) => ({
+      id: `serial-${ot}-${secuencia}`, ot, secuencia, ct: "SERIAL", descripcion: "SERIAL",
+      estatus: "PLAN", tiempoProd: 60, prioridad: 1, fechaReq: "2026-07-14",
+    }))),
+    ...["300", "400"].map((ot) => ({
+      id: `flex-${ot}`, ot, secuencia: 1, ct: "FLEX", descripcion: "FLEX",
+      estatus: "PLAN", tiempoProd: 60, prioridad: 50, fechaReq: "2026-07-20",
+    })),
+  ];
+  const state = flowFixture(operations, {
+    matrix: { "SERIAL::SERIAL": ["OP 0"], "FLEX::FLEX": ["OP 1", "OP 2"] },
+    configuredCapabilities: ["SERIAL::SERIAL", "FLEX::FLEX"],
+    operators: ["OP 0", "OP 1", "OP 2"],
+  });
+  const result = core.schedulePlan(state, {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assertFlowEvaluated(result);
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.deepEqual([...new Set(result.operations.filter((op) => op.ct === "FLEX").map((op) => op.operador))].sort(), ["OP 1", "OP 2"]);
+});
+
+test("flow balanced conserva el fallback de un minuto para una operacion sin tiempo", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "without-time", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN" },
+    { id: "second", ot: "100", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 1 },
+    { id: "other", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    { id: "other-second", ot: "200", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+  ];
+  const result = core.schedulePlan(flowFixture(operations), {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+  const fallback = result.operations.find((op) => op.id === "without-time");
+
+  assertFlowEvaluated(result);
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.equal(
+    new Date(`${fallback.fechaFin}T${fallback.horaFin}:00`) - new Date(`${fallback.fechaInicio}T${fallback.horaInicio}:00`),
+    60000,
+  );
+});
+
+test("flow balanced conserva precedencia y bloqueos", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "fixed", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 120, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+    { id: "successor", ot: "100", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "other-first", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "other-second", ot: "200", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "third-first", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    { id: "third-second", ot: "300", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+  ];
+  const result = core.schedulePlan(flowFixture(operations), {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+  const fixed = result.operations.find((op) => op.id === "fixed");
+  const successor = result.operations.find((op) => op.id === "successor");
+
+  assertFlowEvaluated(result);
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.equal(`${fixed.fechaInicio} ${fixed.horaInicio}-${fixed.horaFin}`, "2026-07-13 07:00-09:00");
+  assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date("2026-07-13T09:00:00"));
+});
+
+test("flow balanced incluye operaciones fijas futuras al estimar que OT termina primero", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "long-current", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
+    { id: "long-fixed", ot: "100", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-14", horaInicio: "16:00", fechaFin: "2026-07-14", horaFin: "17:00" },
+    { id: "short-current", ot: "200", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
+    { id: "short-fixed", ot: "200", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    ...["300", "400"].flatMap((ot) => [1, 2].map((secuencia) => ({
+      id: `serial-${ot}-${secuencia}`, ot, secuencia, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60,
+    }))),
+  ];
+  const result = core.schedulePlan(flowFixture(operations, {
+    matrix: { "SERIAL::SERIAL": ["OP 1"] },
+    configuredCapabilities: ["SERIAL::SERIAL"],
+    operators: ["OP 1", "OP 2"],
+  }), {
+    planStart: "2026-07-13", horizonDays: 2, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
+  assert.equal(result.operations.find((op) => op.id === "short-current").horaInicio, "07:00");
+  assert.equal(result.operations.find((op) => op.id === "long-current").horaInicio, "08:00");
+});
+
+test("si flow balanced falla se excluye y las estrategias existentes continuan", () => {
+  const core = loadPlannerCore();
+  const settings = { optimizationPasses: 1 };
+  Object.defineProperty(settings, "flowWipTarget", {
+    get() { throw new Error("configuracion flow invalida"); },
+  });
+
+  const result = core.schedulePlan({ operations: [], workOrders: [], settings, workSchedule: {} }, {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
+  assert.deepEqual([...result.lastSchedule.optimization.strategiesEvaluated].map((item) => item.strategy), ["balanced", "finish", "load"]);
 });

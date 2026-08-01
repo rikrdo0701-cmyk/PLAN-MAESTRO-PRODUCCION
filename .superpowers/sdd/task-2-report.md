@@ -1,45 +1,33 @@
-# Task 2 — Reporte
+# Task 2 report: `flow_balanced`
 
-## Estado
+## Alcance
 
-Implementada la conservación de OTs seleccionadas y bloqueadas, su reserva de capacidad y el rechazo centralizado de retiro al backlog.
+- Se añadió una única evaluación opcional `flow_balanced`, habilitada por defecto y aislada con `try/catch`.
+- WIP flexible con `flowWipTarget` predeterminado 10 y limitado a 1–50; una OT nueva puede abrirse cuando ninguna activa es elegible.
+- Priorización por holgura, cercanía a terminar, trabajo sucesor, encaje en hueco y cambio de herramienta.
+- Recursos equivalentes se comparan por carga proyectada sin alterar filtros de capacidad, rendimiento, calendario, matriz o máquina.
+- No se modificó UI, Apps Script remoto ni selección de Backlog.
 
-## RED
+## TDD
 
-Comando:
+- RED inicial: `node --test tests/planner-core.test.mjs` → 55 pass, 5 fail; todos fallaron porque `flow_balanced` no se evaluaba.
+- GREEN inicial: mismo comando → 60 pass, 0 fail.
+- RED de aislamiento: prueba focal `si flow balanced falla...` → 0 pass, 1 fail por lectura de configuración fuera de la evaluación nueva.
+- GREEN de aislamiento: misma prueba → 1 pass, 0 fail; la estrategia defectuosa se excluye y continúan `balanced`, `finish`, `load`.
 
-```powershell
-node --test tests/planner-core.test.mjs tests/planning-workflow-core.test.mjs tests/build.test.mjs
-```
+## Verificación final
 
-Resultado inicial: 39 aprobadas, 3 fallidas.
+- Focal final fresca: `node --test tests/planner-core.test.mjs` → 62 pass, 0 fail.
+- Suite final fresca: `npm.cmd test` → 336 pass, 0 fail.
+- `git diff --check` → limpio.
 
-- Planner core: la OT bloqueada conservaba fechas, horas y operador, pero perdía la máquina.
-- Workflow core: `canRemoveSelectedOt` no existía.
-- Build: `app.js` no consultaba el helper ni mostraba `showToast(removal.reason)`.
+## Archivos de producto
 
-## GREEN
-
-Cambios mínimos:
-
-- Las operaciones fijas conservan máquina, herramental y kit durante normalización/configuración.
-- `canRemoveSelectedOt(state, ot)` normaliza OT y `lockedOts`, y devuelve el motivo exacto requerido.
-- `selectJob` consulta el helper antes de checkpoint, prioridades, operaciones o retiro.
-- Se añadieron pruebas de capacidad, workflow y estructura del build.
-
-Verificación final:
-
-```powershell
-node --test tests/planner-core.test.mjs tests/planning-workflow-core.test.mjs tests/build.test.mjs
-git diff --check
-```
-
-Resultado: 42 aprobadas, 0 fallidas; `git diff --check` sin errores.
+- `src/web/planning/planner-core.js`
+- `tests/planner-core.test.mjs`
 
 ## Auto-revisión
 
-- El rechazo ocurre antes de cualquier mutación, por lo que conserva `selectedOts`, prioridades y operaciones.
-- La regla de bloqueo está centralizada en workflow core y usa claves normalizadas.
-- La capacidad del operador bloqueado queda reservada y la OT movible no se solapa.
-- No se implementó trazabilidad de espera ni tooltip.
-- No se detectaron cambios fuera del alcance funcional de Task 2.
+- Primera revisión independiente: sin Critical; detectó dos Important (fijas futuras omitidas del fin proyectado y tres fixtures que inspeccionaban un ganador distinto de flow).
+- Correcciones TDD: fin proyectado/sucesor fusionan movibles y fijas futuras en secuencia; los tres fixtures exigen `selectedStrategy === "flow_balanced"`; se añadió regresión de fija futura.
+- Segunda revisión independiente: ambos hallazgos cerrados, sin nuevos Critical/Important; veredicto listo.
