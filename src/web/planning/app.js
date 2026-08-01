@@ -467,6 +467,7 @@ let appSheetSaveInFlight = false;
 let appSheetSavePending = false;
 let appSheetSaveCompletion = Promise.resolve();
 let resolveAppSheetSaveCompletion = null;
+let appSheetSaveOwner = null;
 let appSheetDirtyScopes = new Set();
 let operationStatusSavesInFlight = 0;
 let netSuiteSyncInFlight = false;
@@ -515,7 +516,7 @@ function initializePlanningApp() {
   bindEvents();
   purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
-  render();
+  render({ save: false });
   bindBacklogLoadMoreObserver();
   saveState("ui");
   applyInitialWorkspaceView();
@@ -5655,17 +5656,17 @@ async function syncBacklogWorkOrders() {
     return showToast("La sincronizacion de OTs ya esta en curso");
   }
   setBacklogSyncInFlight(true);
-  let syncSaveInFlight = false;
+  let syncSaveGate = null;
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
       callAppsScript("fetchNetSuiteWorkOrdersLite"),
       NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
-    await appSheetWaitForIdle();
+    if (appSheetSaveTimer != null || appSheetDirtyScopes.size) appSheetSavePending = true;
     window.clearTimeout(appSheetSaveTimer);
-    appSheetBeginSave();
-    syncSaveInFlight = true;
+    appSheetSaveTimer = null;
+    syncSaveGate = await appSheetAcquireSaveGate();
     const nowIso = new Date().toISOString();
     const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
       window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
@@ -5703,8 +5704,7 @@ async function syncBacklogWorkOrders() {
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
   } finally {
-    if (syncSaveInFlight) {
-      appSheetEndSave();
+    if (syncSaveGate && appSheetReleaseSaveGate(syncSaveGate)) {
       if (appSheetSavePending) {
         appSheetSavePending = false;
         queueAppSheetSave();
@@ -7965,16 +7965,32 @@ function queueAppSheetSave(saveScope = "plan") {
   appSheetSaveTimer = window.setTimeout(() => saveAppSheet(false), 900);
 }
 
-function appSheetBeginSave() {
+function appSheetTryAcquireSaveGate() {
+  if (appSheetSaveOwner) return null;
+  const owner = {};
+  appSheetSaveOwner = owner;
   appSheetSaveInFlight = true;
   appSheetSaveCompletion = new Promise((resolve) => { resolveAppSheetSaveCompletion = resolve; });
+  return owner;
 }
 
-function appSheetEndSave() {
+async function appSheetAcquireSaveGate() {
+  let owner = appSheetTryAcquireSaveGate();
+  while (!owner) {
+    await appSheetWaitForIdle();
+    owner = appSheetTryAcquireSaveGate();
+  }
+  return owner;
+}
+
+function appSheetReleaseSaveGate(owner) {
+  if (!owner || owner !== appSheetSaveOwner) return false;
+  appSheetSaveOwner = null;
   appSheetSaveInFlight = false;
   const resolve = resolveAppSheetSaveCompletion;
   resolveAppSheetSaveCompletion = null;
   resolve?.();
+  return true;
 }
 
 async function appSheetWaitForIdle() {
@@ -7987,7 +8003,11 @@ async function saveAppSheet(showMessage) {
     if (showMessage) showToast("Guardado en curso");
     return false;
   }
-  appSheetBeginSave();
+  const saveGate = appSheetTryAcquireSaveGate();
+  if (!saveGate) {
+    appSheetSavePending = true;
+    return false;
+  }
   const scopes = appSheetConsumeDirtyScopes();
   try {
     if (isAppsScriptRuntime()) {
@@ -8029,7 +8049,7 @@ async function saveAppSheet(showMessage) {
     }
     return false;
   } finally {
-    appSheetEndSave();
+    appSheetReleaseSaveGate(saveGate);
     if (appSheetSavePending) {
       appSheetSavePending = false;
       queueAppSheetSave();

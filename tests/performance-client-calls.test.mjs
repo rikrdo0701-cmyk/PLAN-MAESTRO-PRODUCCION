@@ -23,6 +23,10 @@ const appSheetSaveFlowSource = appSource.slice(
   appSource.indexOf("function saveState(saveScope = \"plan\")"),
   appSource.indexOf("function purgeClosedWorkOrderRetention()"),
 );
+const appSheetGateSource = appSource.slice(
+  appSource.indexOf("function appSheetTryAcquireSaveGate()"),
+  appSource.indexOf("async function saveAppSheet("),
+);
 const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
   appSource.indexOf("async function fetchNetSuiteExercise("),
@@ -50,6 +54,10 @@ const selectedJobOtSource = appSource.slice(
 const startupSource = appSource.slice(
   appSource.indexOf("async function loadAppStateInBackground("),
   appSource.indexOf("function bindElements("),
+);
+const initializeSource = appSource.slice(
+  appSource.indexOf("function initializePlanningApp()"),
+  appSource.indexOf("if (document.readyState === \"loading\")"),
 );
 const undoSource = appSource.slice(
   appSource.indexOf("function checkpointState("),
@@ -167,16 +175,39 @@ function loadClient(options = {}) {
     applyImported: (imported) => Object.assign(state, imported),
     saveAppSheet: async () => false,
     queueAppSheetSave: () => {},
-    appSheetMarkDirtyScope: () => {},
-    appSheetConsumeDirtyScopes: () => [],
+    appSheetMarkDirtyScope: (scope) => {
+      const value = String(scope || "plan").trim().toLowerCase();
+      if (value !== "local" && value !== "ui") context.appSheetDirtyScopes.add(value || "plan");
+    },
+    appSheetConsumeDirtyScopes: () => {
+      const scopes = context.appSheetDirtyScopes.size ? [...context.appSheetDirtyScopes] : ["plan"];
+      context.appSheetDirtyScopes.clear();
+      return scopes;
+    },
     appSheetDirtyScopes: new Set(),
     appSheetAvailable: true,
     appSheetSaveInFlight: false,
     appSheetSavePending: false,
     appSheetSaveTimer: null,
+    appSheetSaveCompletion: Promise.resolve(),
+    resolveAppSheetSaveCompletion: null,
+    appSheetSaveOwner: null,
+    operationStatusSavesInFlight: 0,
     appSheetWaitForIdle: async () => {},
-    appSheetBeginSave: () => { context.appSheetSaveInFlight = true; },
-    appSheetEndSave: () => { context.appSheetSaveInFlight = false; },
+    appSheetTryAcquireSaveGate: () => {
+      if (context.appSheetSaveOwner) return null;
+      const owner = {};
+      context.appSheetSaveOwner = owner;
+      context.appSheetSaveInFlight = true;
+      return owner;
+    },
+    appSheetAcquireSaveGate: async () => context.appSheetTryAcquireSaveGate(),
+    appSheetReleaseSaveGate: (owner) => {
+      if (!owner || owner !== context.appSheetSaveOwner) return false;
+      context.appSheetSaveOwner = null;
+      context.appSheetSaveInFlight = false;
+      return true;
+    },
     netSuiteSyncInFlight: false,
     netSuitePlanningSyncInFlight: false,
     backlogSyncInFlight: false,
@@ -228,6 +259,7 @@ function loadClient(options = {}) {
   vm.createContext(context);
   if (options.installBacklogSync) vm.runInContext(backlogSyncSource, context, { filename: "planning-backlog-sync.js" });
   if (options.installManualFlow) vm.runInContext(manualFlowSource, context, { filename: "planning-manual-flow.js" });
+  if (options.installSaveGate) vm.runInContext(appSheetGateSource, context, { filename: "planning-save-gate.js" });
   vm.runInContext(source, context, { filename: "performance-client.js" });
   if (options.installIndividualPlanning) vm.runInContext(individualPlanningSource, context, { filename: "planning-individual-work-order.js" });
   if (options.installDetailOperations) {
@@ -1238,6 +1270,7 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
   const renders = [];
   const fixture = loadClient({
     installBacklogSync: true,
+    installSaveGate: true,
     state: {
       workOrders: [{ ot: "WO-CERRADA", item: "CERRADA" }],
       operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
@@ -1415,6 +1448,133 @@ test("la sincronizacion conserva closedDetectedAt al demorarse el guardado dedic
   assert.equal(fixture.context.state.closedWorkOrderSummaries["WO-CERRADA"].closedDetectedAt, detectionTimes[0]);
 });
 
+test("el sync espera el guardado optimizado instalado antes de tomar la compuerta", async () => {
+  const optimized = deferredPromise();
+  const dedicated = deferredPromise();
+  const calls = [];
+  const fixture = loadClient({
+    installBacklogSync: true,
+    installSaveGate: true,
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "savePlanningStateOptimized") return optimized.promise;
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      if (method === "saveWorkOrderSyncState") return dedicated.promise;
+      return { revision: 3 };
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  fixture.context.window.requestIdleCallback = (callback) => { callback(); return 1; };
+  fixture.context.appSheetDirtyScopes.add("plan");
+  const normalSave = fixture.context.saveAppSheet(false);
+  await settleMicrotasks();
+
+  const sync = fixture.context.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  assert.deepEqual(calls, ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite"]);
+
+  optimized.resolve({ revision: 2 });
+  await normalSave;
+  await settleMicrotasks();
+  assert.deepEqual(calls, ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  dedicated.resolve({ revision: 3 });
+  await sync;
+});
+
+test("la limpieza inicial renderiza sin solicitar guardado remoto", () => {
+  const renders = [];
+  const initializePlanningApp = Function(
+    "bindElements", "bindEvents", "purgeClosedWorkOrderRetention", "resetDailyReportFiltersToToday", "render", "bindBacklogLoadMoreObserver", "saveState", "applyInitialWorkspaceView", "loadAppStateInBackground",
+    `${initializeSource}; return initializePlanningApp;`,
+  )(
+    () => {}, () => {}, () => {}, () => {}, (options) => renders.push(options), () => {}, () => {}, () => {}, () => {},
+  );
+
+  initializePlanningApp();
+
+  assert.deepEqual(renders, [{ save: false }]);
+});
+
+test("la edicion pendiente antes y durante el sync optimizado se guarda despues del acuse", async () => {
+  const timers = new Map();
+  const calls = [];
+  const dedicated = deferredPromise();
+  let timerId = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    installSaveGate: true,
+    callAppsScript: async (method, payload) => {
+      calls.push({ method, payload });
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      if (method === "saveWorkOrderSyncState") return dedicated.promise;
+      return { revision: 3 };
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  fixture.context.window.setTimeout = (callback) => { timerId += 1; timers.set(timerId, callback); return timerId; };
+  fixture.context.window.clearTimeout = (id) => timers.delete(id);
+  fixture.context.window.requestIdleCallback = (callback) => { callback(); return 1; };
+  const runTimers = async () => {
+    for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+    await settleMicrotasks();
+  };
+
+  fixture.context.queueAppSheetSave("plan");
+  const sync = fixture.context.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  fixture.context.queueAppSheetSave("plan");
+  await runTimers();
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+
+  dedicated.resolve({ revision: 2 });
+  await sync;
+  await runTimers();
+
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "savePlanningStateOptimized"]);
+  assert.equal(calls[2].payload.revision, 2);
+});
+
+test("un fallo del sync libera la compuerta para el siguiente guardado optimizado", async () => {
+  const timers = new Map();
+  const calls = [];
+  let timerId = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    installSaveGate: true,
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      if (method === "saveWorkOrderSyncState") throw new Error("fallo dedicado");
+      return { revision: 2 };
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  fixture.context.window.setTimeout = (callback) => { timerId += 1; timers.set(timerId, callback); return timerId; };
+  fixture.context.window.clearTimeout = (id) => timers.delete(id);
+  fixture.context.window.requestIdleCallback = (callback) => { callback(); return 1; };
+
+  await fixture.context.syncBacklogWorkOrders();
+  assert.equal(fixture.context.appSheetSaveInFlight, false);
+  fixture.context.queueAppSheetSave("plan");
+  for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+  await settleMicrotasks();
+
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "savePlanningStateOptimized"]);
+});
+
+test("solo el propietario puede liberar la compuerta de guardado", () => {
+  const fixture = loadClient({ installSaveGate: true });
+  const owner = fixture.context.appSheetTryAcquireSaveGate();
+
+  assert.equal(fixture.context.appSheetReleaseSaveGate({}), false);
+  assert.equal(fixture.context.appSheetSaveInFlight, true);
+  assert.equal(fixture.context.appSheetReleaseSaveGate(owner), true);
+  assert.equal(fixture.context.appSheetSaveInFlight, false);
+});
+
 test("una edicion durante la sincronizacion espera el acuse antes del guardado normal", async () => {
   const timers = new Map();
   let nextTimer = 1;
@@ -1431,7 +1591,7 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
     },
   };
   const flow = Function(
-    "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight",
+    "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
     "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
     "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
     `${appSheetSaveFlowSource}\n${backlogSyncSource}\nreturn {
@@ -1442,7 +1602,7 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
     };`,
   )(
     window, { revision: 1, workOrders: [{ ot: "WO-LOCAL" }], operations: [], materials: [] }, { setItem: () => {} }, "test",
-    true, false, false, null, new Set(), false, 0, () => true,
+    true, false, false, null, new Set(), false, Promise.resolve(), null, null, 0, () => true,
     async (method, payload) => {
       calls.push({ method, payload, concurrent: dedicatedPending });
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };

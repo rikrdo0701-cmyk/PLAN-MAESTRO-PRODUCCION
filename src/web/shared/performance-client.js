@@ -399,9 +399,13 @@
 
     root.clearTimeout(appSheetSaveTimer);
     root.clearTimeout(saveRetryTimer);
+    const saveGate = appSheetTryAcquireSaveGate();
+    if (!saveGate) {
+      appSheetSavePending = true;
+      return false;
+    }
     const scopes = appSheetConsumeDirtyScopes();
     const jobs = saveJobsForScopes(scopes);
-    appSheetSaveInFlight = true;
     document.body.dataset.saveStatus = "saving";
 
     try {
@@ -436,7 +440,7 @@
       if (showMessage) showToast("Guardado pendiente; se reintentara en segundo plano", 4200);
       return false;
     } finally {
-      appSheetSaveInFlight = false;
+      appSheetReleaseSaveGate(saveGate);
       if (document.body.dataset.saveStatus === "saving") document.body.dataset.saveStatus = "saved";
       if (appSheetSavePending || appSheetDirtyScopes.size) {
         appSheetSavePending = false;

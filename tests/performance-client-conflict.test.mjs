@@ -138,6 +138,20 @@ function loadClient(options = {}) {
     appSheetSaveInFlight: false,
     appSheetSavePending: false,
     appSheetSaveTimer: null,
+    appSheetSaveOwner: null,
+    appSheetTryAcquireSaveGate: () => {
+      if (context.appSheetSaveOwner) return null;
+      const owner = {};
+      context.appSheetSaveOwner = owner;
+      context.appSheetSaveInFlight = true;
+      return owner;
+    },
+    appSheetReleaseSaveGate: (owner) => {
+      if (!owner || owner !== context.appSheetSaveOwner) return false;
+      context.appSheetSaveOwner = null;
+      context.appSheetSaveInFlight = false;
+      return true;
+    },
     netSuiteSyncInFlight: options.netSuiteSyncInFlight === true,
     netSuitePlanningSyncInFlight: options.netSuitePlanningSyncInFlight === true,
     planningActionsBusy: options.planningActionsBusy || "",
