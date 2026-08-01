@@ -465,6 +465,8 @@ let appSheetAvailable = false;
 let appSheetSaveTimer = null;
 let appSheetSaveInFlight = false;
 let appSheetSavePending = false;
+let appSheetSaveCompletion = Promise.resolve();
+let resolveAppSheetSaveCompletion = null;
 let appSheetDirtyScopes = new Set();
 let operationStatusSavesInFlight = 0;
 let netSuiteSyncInFlight = false;
@@ -5653,12 +5655,17 @@ async function syncBacklogWorkOrders() {
     return showToast("La sincronizacion de OTs ya esta en curso");
   }
   setBacklogSyncInFlight(true);
+  let syncSaveInFlight = false;
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
       callAppsScript("fetchNetSuiteWorkOrdersLite"),
       NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
+    await appSheetWaitForIdle();
+    window.clearTimeout(appSheetSaveTimer);
+    appSheetBeginSave();
+    syncSaveInFlight = true;
     const nowIso = new Date().toISOString();
     const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
       window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
@@ -5683,12 +5690,11 @@ async function syncBacklogWorkOrders() {
       removedWorkOrderOts: Object.keys(nextState.closedWorkOrderSummaries || {}),
     };
     const saved = await callAppsScript("saveWorkOrderSyncState", syncPayload);
-    const committedAt = new Date().toISOString();
     state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
-      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, committedAt),
-      committedAt,
+      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
+      nowIso,
     );
-    state.syncedAt = payload.syncedAt || payload.savedAt || committedAt;
+    state.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
     state.revision = Number(saved?.revision || state.revision);
     invalidateCurrentPlanOperationsCache();
     resetBacklogWindow();
@@ -5697,6 +5703,13 @@ async function syncBacklogWorkOrders() {
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
   } finally {
+    if (syncSaveInFlight) {
+      appSheetEndSave();
+      if (appSheetSavePending) {
+        appSheetSavePending = false;
+        queueAppSheetSave();
+      }
+    }
     setBacklogSyncInFlight(false);
   }
 }
@@ -7952,13 +7965,29 @@ function queueAppSheetSave(saveScope = "plan") {
   appSheetSaveTimer = window.setTimeout(() => saveAppSheet(false), 900);
 }
 
+function appSheetBeginSave() {
+  appSheetSaveInFlight = true;
+  appSheetSaveCompletion = new Promise((resolve) => { resolveAppSheetSaveCompletion = resolve; });
+}
+
+function appSheetEndSave() {
+  appSheetSaveInFlight = false;
+  const resolve = resolveAppSheetSaveCompletion;
+  resolveAppSheetSaveCompletion = null;
+  resolve?.();
+}
+
+async function appSheetWaitForIdle() {
+  if (appSheetSaveInFlight) await appSheetSaveCompletion;
+}
+
 async function saveAppSheet(showMessage) {
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     if (showMessage) showToast("Guardado en curso");
     return false;
   }
-  appSheetSaveInFlight = true;
+  appSheetBeginSave();
   const scopes = appSheetConsumeDirtyScopes();
   try {
     if (isAppsScriptRuntime()) {
@@ -8000,7 +8029,7 @@ async function saveAppSheet(showMessage) {
     }
     return false;
   } finally {
-    appSheetSaveInFlight = false;
+    appSheetEndSave();
     if (appSheetSavePending) {
       appSheetSavePending = false;
       queueAppSheetSave();

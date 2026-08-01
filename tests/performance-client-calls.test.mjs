@@ -19,6 +19,10 @@ const backlogSyncSource = appSource.slice(
   appSource.indexOf("async function syncBacklogWorkOrders()"),
   appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
 );
+const appSheetSaveFlowSource = appSource.slice(
+  appSource.indexOf("function saveState(saveScope = \"plan\")"),
+  appSource.indexOf("function purgeClosedWorkOrderRetention()"),
+);
 const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
   appSource.indexOf("async function fetchNetSuiteExercise("),
@@ -170,6 +174,9 @@ function loadClient(options = {}) {
     appSheetSaveInFlight: false,
     appSheetSavePending: false,
     appSheetSaveTimer: null,
+    appSheetWaitForIdle: async () => {},
+    appSheetBeginSave: () => { context.appSheetSaveInFlight = true; },
+    appSheetEndSave: () => { context.appSheetSaveInFlight = false; },
     netSuiteSyncInFlight: false,
     netSuitePlanningSyncInFlight: false,
     backlogSyncInFlight: false,
@@ -212,7 +219,7 @@ function loadClient(options = {}) {
     ensurePlanningDataLoaded: async () => ({ ready: false }),
     console: { warn: () => {} },
     structuredClone,
-    Date,
+    Date: options.Date || Date,
     Set,
     Map,
     Promise,
@@ -1375,6 +1382,94 @@ test("la sincronizacion conserva una edicion local hecha mientras espera el guar
   assert.equal(fixture.context.state.revision, 2);
   assert.deepEqual(plain(fixture.context.state.settings), { local: "durante" });
   assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA" }]);
+});
+
+test("la sincronizacion conserva closedDetectedAt al demorarse el guardado dedicado", async () => {
+  const detectionTimes = [];
+  const clock = ["2026-08-01T10:00:00.000Z", "2026-08-01T10:01:00.000Z"];
+  const dedicated = deferredPromise();
+  function ControlledDate() {
+    return { toISOString: () => clock.shift() };
+  }
+  const fixture = loadClient({
+    installBacklogSync: true,
+    Date: ControlledDate,
+    state: { workOrders: [{ ot: "WO-CERRADA" }] },
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      return dedicated.promise;
+    },
+    reconcileActiveWorkOrders: (current, workOrders, nowIso) => {
+      detectionTimes.push(nowIso);
+      return { ...current, workOrders, closedWorkOrderSummaries: { "WO-CERRADA": { closedDetectedAt: nowIso } } };
+    },
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+
+  const sync = fixture.context.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  dedicated.resolve({ revision: 2 });
+  await sync;
+
+  assert.equal(detectionTimes[0], detectionTimes[1]);
+  assert.equal(fixture.context.state.closedWorkOrderSummaries["WO-CERRADA"].closedDetectedAt, detectionTimes[0]);
+});
+
+test("una edicion durante la sincronizacion espera el acuse antes del guardado normal", async () => {
+  const timers = new Map();
+  let nextTimer = 1;
+  const calls = [];
+  const dedicated = deferredPromise();
+  let dedicatedPending = false;
+  const window = {
+    setTimeout(callback) { const id = nextTimer += 1; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    PlanningWorkflowCore: {
+      withTimeout: (promise) => promise,
+      reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+      purgeClosedWorkOrderRetention: (current) => current,
+    },
+  };
+  const flow = Function(
+    "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight",
+    "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
+    "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
+    `${appSheetSaveFlowSource}\n${backlogSyncSource}\nreturn {
+      syncBacklogWorkOrders, saveState,
+      get state() { return state; },
+      get inFlight() { return appSheetSaveInFlight; },
+      get pending() { return appSheetSavePending; },
+    };`,
+  )(
+    window, { revision: 1, workOrders: [{ ot: "WO-LOCAL" }], operations: [], materials: [] }, { setItem: () => {} }, "test",
+    true, false, false, null, new Set(), false, 0, () => true,
+    async (method, payload) => {
+      calls.push({ method, payload, concurrent: dedicatedPending });
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      if (method === "saveWorkOrderSyncState") { dedicatedPending = true; const saved = await dedicated.promise; dedicatedPending = false; return saved; }
+      return { revision: 3 };
+    },
+    () => ({ revision: flow?.state?.revision }), () => {}, 60000,
+    () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
+  );
+  const runTimers = async () => {
+    for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+    await settleMicrotasks();
+  };
+
+  const sync = flow.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  flow.saveState("plan");
+  await runTimers();
+
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  dedicated.resolve({ revision: 2 });
+  await sync;
+  await runTimers();
+
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "saveAppState"]);
+  assert.equal(calls[2].concurrent, false);
+  assert.equal(calls[2].payload.revision, 2);
 });
 
 test("un rechazo del guardado dedicado no modifica el estado local", async () => {
