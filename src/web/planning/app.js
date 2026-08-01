@@ -5701,8 +5701,10 @@ async function syncBacklogWorkOrders() {
     resetBacklogWindow();
     render({ save: false });
     showToast(`${state.workOrders.length} OTs activas sincronizadas`);
+    return { ok: true };
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
+    return { ok: false, error };
   } finally {
     if (syncSaveGate && appSheetReleaseSaveGate(syncSaveGate)) {
       if (appSheetSavePending) {

@@ -1419,6 +1419,83 @@ test("una OT reabierta vuelve a consultar sus materiales bajo demanda", async ()
   assert.deepEqual(plain(fixture.context.state.materials), [{ ot: "WO-1", component: "MAT-2" }]);
 });
 
+test("un timeout de sincronizacion conserva materiales y su cache de una lista legacy", async () => {
+  let materialCalls = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-1" }], materials: [] },
+    withTimeout: async () => { throw new Error("timeout"); },
+    reconcileActiveWorkOrders: (current) => current,
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "getMaterialsForOt") {
+        materialCalls += 1;
+        return { materials: [{ ot: "WO-1", component: "CONSERVAR" }] };
+      }
+      return {};
+    },
+  });
+  fixture.context.applyImported({
+    revision: 1,
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    performance: { deferred: { materials: true }, revision: 1 },
+  });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "WO-1" });
+  fixture.context.selectedJobOt = () => "WO-1";
+
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+  fixture.context.state.workOrders = [];
+  const beforeFailure = plain(fixture.context.state);
+
+  await fixture.context.syncBacklogWorkOrders();
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+
+  assert.deepEqual(plain(fixture.context.state), beforeFailure);
+  assert.equal(materialCalls, 1);
+});
+
+test("un fallo al guardar sincronizacion conserva materiales y su cache", async () => {
+  let materialCalls = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-1" }], materials: [] },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, materials: current.materials }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "getMaterialsForOt") {
+        materialCalls += 1;
+        return { materials: [{ ot: "WO-1", component: "CONSERVAR" }] };
+      }
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-2" }] };
+      if (method === "saveWorkOrderSyncState") throw new Error("sin permiso");
+      return {};
+    },
+  });
+  fixture.context.applyImported({
+    revision: 1,
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    performance: { deferred: { materials: true }, revision: 1 },
+  });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "WO-1" });
+  fixture.context.selectedJobOt = () => "WO-1";
+
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+  fixture.context.state.workOrders = [];
+  const beforeFailure = plain(fixture.context.state);
+
+  await fixture.context.syncBacklogWorkOrders();
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+
+  assert.deepEqual(plain(fixture.context.state), beforeFailure);
+  assert.equal(materialCalls, 1);
+});
+
 test("un timeout de sincronizacion manual no modifica ni guarda el estado", async () => {
   let saveCalls = 0;
   let checkpoints = 0;

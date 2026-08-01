@@ -622,7 +622,7 @@
   if (originalSyncBacklogWorkOrders) {
     syncBacklogWorkOrders = async function optimizedSyncBacklogWorkOrders(...args) {
       const result = await originalSyncBacklogWorkOrders(...args);
-      invalidateInactiveMaterialOts();
+      if (result?.ok === true) invalidateInactiveMaterialOts();
       return result;
     };
   }
