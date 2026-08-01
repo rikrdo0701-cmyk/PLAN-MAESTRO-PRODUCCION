@@ -179,6 +179,11 @@
       priorityListRequested = false;
       originalRenderPriorityList();
       enhanceRenderedImages(els.priorityList);
+      if (typeof prefetchRecentPlanningWorkOrders === "function") {
+        void prefetchRecentPlanningWorkOrders().catch((error) => {
+          console.warn("No se pudieron precargar rutas de OTs:", error);
+        });
+      }
     }
     if (priorityQueueRequested) {
       priorityQueueRequested = false;

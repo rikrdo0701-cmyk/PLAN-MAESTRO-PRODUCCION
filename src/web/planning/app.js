@@ -1719,6 +1719,7 @@ function renderPriorityList() {
         <div class="priority-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
+          <span class="job-action-status" aria-live="polite"></span>
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
           ${toolMini}
@@ -2005,11 +2006,28 @@ function canStartBacklogDrag(card, job, event) {
     && !event.target.closest("button, input, select");
 }
 
-function setIndividualPlanningBusy(ot, busy) {
+function setIndividualPlanningActionStatus(ot, status) {
+  const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
+    .find((item) => item.dataset.ot === ot);
+  if (!card) return;
+  const statusNode = card.querySelector(".job-action-status");
+  const statusLabel = {
+    loading: "Cargando",
+    saving: "Guardando",
+    saved: "Guardado",
+    error: "Error",
+  }[status] || "";
+  if (statusNode) statusNode.textContent = statusLabel;
+  if (statusLabel) card.dataset.individualPlanningStatus = status;
+  else delete card.dataset.individualPlanningStatus;
+}
+
+function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
   const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
     .find((item) => item.dataset.ot === ot);
   if (!card) return;
   const addButton = card.querySelector(".job-add");
+  if (status !== null) setIndividualPlanningActionStatus(ot, status);
   if (busy) {
     card.setAttribute("aria-busy", "true");
     if (addButton) addButton.disabled = true;
@@ -2028,10 +2046,17 @@ function selectJob(ot, selected) {
 
   setIndividualPlanningBusy(ot, true);
   const action = (async () => {
+    let status = "error";
     try {
-      return await performSelectJob(ot, selected);
+      const completed = await performSelectJob(ot, selected);
+      status = completed === true ? "saved" : "error";
+      return completed;
+    } catch (error) {
+      showToast(error?.message || `No se pudo procesar la OT ${ot}`, 9000);
+      return false;
     } finally {
       individualPlanningActions.delete(key);
+      setIndividualPlanningActionStatus(ot, status);
       setIndividualPlanningBusy(ot, false);
     }
   })();
@@ -2040,22 +2065,22 @@ function selectJob(ot, selected) {
 }
 
 async function performSelectJob(ot, selected) {
-  if (!ot) return;
+  if (!ot) return false;
   const otKey = materialOtKey(ot);
   let job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
   if (selected && job && !job.movable && !job.programmed) {
     showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
-    return;
+    return false;
   }
   if (!selected && job?.programmed) {
     showToast(`OT ${ot} esta programada y debe permanecer en el plan`);
-    return;
+    return false;
   }
   if (!selected) {
     const removal = window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot);
     if (!removal.allowed) {
       showToast(removal.reason);
-      return;
+      return false;
     }
   }
   const alreadySelected = state.selectedOts.includes(ot);
@@ -2069,7 +2094,7 @@ async function performSelectJob(ot, selected) {
       }
       if (job && !job.movable && !job.programmed) {
         showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
-        return;
+        return false;
       }
       if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
         showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
@@ -2077,17 +2102,18 @@ async function performSelectJob(ot, selected) {
       }
     } catch (error) {
       showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
-      return;
+      return false;
     }
   }
   if (selected && !alreadySelected) {
+    setIndividualPlanningActionStatus(ot, "saving");
     state._pendingAddOt = ot;
     state._pendingAddOtSnapshot = [...state.selectedOts];
     const prepared = await prepareJobForPlanning(job, { forceConfirm: true });
     if (!prepared) {
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
-      return;
+      return false;
     }
     checkpointState();
   } else {
@@ -2108,7 +2134,7 @@ async function performSelectJob(ot, selected) {
     renderPriorityQueue();
     showToast(`OT ${ot} devuelta al backlog`);
     saveState("plan");
-    return;
+    return true;
   }
   requestAnimationFrame(() => {
     renderPriorityQueue();
@@ -2120,6 +2146,7 @@ async function performSelectJob(ot, selected) {
     });
   });
   saveState("plan");
+  return true;
 }
 
 async function prepareJobForPlanning(job, options = {}) {
@@ -5870,9 +5897,13 @@ function normalizeNetSuiteSyncAlert(alert) {
 }
 
 const individualPlanningRequests = new Map();
-const individualPlanningLoadCompleted = new Set();
+const individualPlanningLoadCompleted = new Map();
 const selectedJobDetailOperationLoads = new Map();
 const INDIVIDUAL_PLANNING_FALLBACK_MINUTES = 1 / 60;
+const INDIVIDUAL_PLANNING_PREFETCH_LIMIT = 5;
+const INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY = 2;
+const INDIVIDUAL_PLANNING_CACHE_TTL_MS = 10 * 60 * 1000;
+const INDIVIDUAL_PLANNING_TIMEOUT_MS = 30 * 1000;
 
 function normalizeIndividualPlanningOperation(operation) {
   if (Number(operation?.tiempoProd) > 0) return operation;
@@ -5895,6 +5926,28 @@ function individualPlanningOperationsForOt(ot, operations = state.operations) {
 function hasIndividualPlanningOperations(ot) {
   const operations = individualPlanningOperationsForOt(ot);
   return operations.length > 0 && operations.every(individualPlanningOperationValid);
+}
+
+function prefetchRecentPlanningWorkOrders(options = {}) {
+  const exactKey = materialOtKey(options.exactOt || els.searchInput?.value);
+  const recentOts = (state.workOrders || []).map((workOrder) => workOrder?.ot);
+  const exactOt = recentOts.find((ot) => materialOtKey(ot) === exactKey);
+  const candidates = [
+    exactOt,
+    ...recentOts,
+  ].filter((ot, index, values) => {
+    const key = materialOtKey(ot);
+    return key && values.findIndex((candidate) => materialOtKey(candidate) === key) === index;
+  }).slice(0, INDIVIDUAL_PLANNING_PREFETCH_LIMIT);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY, candidates.length) }, async () => {
+    while (nextIndex < candidates.length) {
+      const ot = candidates[nextIndex];
+      nextIndex += 1;
+      await ensureWorkOrderPlanningData(ot);
+    }
+  });
+  return Promise.all(workers);
 }
 
 function individualPlanningOperationSequenceKey(operation) {
@@ -6008,7 +6061,7 @@ function mergeIndividualPlanningData(payload, ot) {
 function ensureWorkOrderPlanningData(ot) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
-  if (individualPlanningLoadCompleted.has(key) && hasIndividualPlanningOperations(key)) {
+  if (Number(individualPlanningLoadCompleted.get(key) || 0) > Date.now() && hasIndividualPlanningOperations(key)) {
     return Promise.resolve({ ready: true, source: "cached" });
   }
   individualPlanningLoadCompleted.delete(key);
@@ -6018,7 +6071,10 @@ function ensureWorkOrderPlanningData(ot) {
 
   const request = (async () => {
     try {
-      const payload = await callAppsScript("getPlanningWorkOrderData", ot);
+      const payload = await window.PlanningWorkflowCore.withTimeout(
+        callAppsScript("getPlanningWorkOrderData", ot),
+        INDIVIDUAL_PLANNING_TIMEOUT_MS,
+      );
       if (!payload?.ok) return { ready: false, error: String(payload?.error || "No se pudieron cargar las operaciones") };
       if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
         return { ready: false, error: `La OT ${ot} ya no esta disponible` };
@@ -6029,7 +6085,7 @@ function ensureWorkOrderPlanningData(ot) {
       if (!mergeIndividualPlanningData(payload, key)) {
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
-      individualPlanningLoadCompleted.add(key);
+      individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
       return { ready: true, source: "remote" };
     } catch (error) {
       return { ready: false, error: String(error?.message || error || "No se pudieron cargar las operaciones") };

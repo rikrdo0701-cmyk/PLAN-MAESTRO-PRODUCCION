@@ -102,6 +102,96 @@ async function settleMicrotasks() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
 
+test("la precarga limita cinco OTs, usa dos solicitudes y prioriza la busqueda exacta", async () => {
+  const started = [];
+  const gates = new Map();
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { workOrders: ["1", "2", "3", "4", "5", "6"].map((ot) => ({ ot })) },
+    callAppsScript: (_method, ot) => {
+      started.push(ot);
+      const gate = deferredPromise();
+      gates.set(ot, gate);
+      return gate.promise;
+    },
+  });
+
+  const prefetch = fixture.context.prefetchRecentPlanningWorkOrders({ exactOt: "6" });
+  await settleMicrotasks();
+  assert.deepEqual(started, ["6", "1"]);
+
+  const resolveNext = () => {
+    const ot = started.find((candidate) => gates.has(candidate));
+    const gate = gates.get(ot);
+    gates.delete(ot);
+    gate.resolve({ ok: true, data: { workOrder: { ot }, operations: [{ ot, ct: "CORTE", tiempoProd: 10 }], materials: [] } });
+  };
+  while (started.length < 5) {
+    resolveNext();
+    await settleMicrotasks();
+  }
+  for (const [ot, gate] of gates) {
+    gate.resolve({ ok: true, data: { workOrder: { ot }, operations: [{ ot, ct: "CORTE", tiempoProd: 10 }], materials: [] } });
+  }
+  await prefetch;
+
+  assert.equal(started.length, 5);
+  assert.deepEqual(started, ["6", "1", "2", "3", "4"]);
+});
+
+test("la cache individual vence en diez minutos", async () => {
+  let now = 0;
+  let calls = 0;
+  class Clock extends Date { static now() { return now; } }
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    Date: Clock,
+    state: { workOrders: [{ ot: "2773" }] },
+    callAppsScript: async () => {
+      calls += 1;
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ ot: "2773", ct: "CORTE", tiempoProd: 10 }], materials: [] } };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  now = 10 * 60 * 1000 - 1;
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "cached" });
+  now += 1;
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.equal(calls, 2);
+});
+
+test("la carga individual vence en treinta segundos y permite reintentar", async () => {
+  const timeouts = [];
+  let calls = 0;
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: { workOrders: [{ ot: "2773" }] },
+    withTimeout: async (promise, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      if (calls === 1) throw new Error("timeout");
+      return promise;
+    },
+    callAppsScript: async () => {
+      calls += 1;
+      return { ok: true, data: { workOrder: { ot: "2773" }, operations: [{ ot: "2773", ct: "CORTE", tiempoProd: 10 }], materials: [] } };
+    },
+  });
+
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: false, error: "timeout" });
+  assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
+  assert.deepEqual(timeouts, [30 * 1000, 30 * 1000]);
+});
+
+test("la accion individual expone Cargando, Guardando, Guardado y Error en su tarjeta", () => {
+  assert.match(appSource, /job-action-status/);
+  assert.match(appSource, /Cargando/);
+  assert.match(appSource, /Guardando/);
+  assert.match(appSource, /Guardado/);
+  assert.match(appSource, /Error/);
+  assert.match(individualSelectionSource, /catch \(error\) \{[\s\S]*showToast\(/);
+});
+
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
