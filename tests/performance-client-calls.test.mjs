@@ -1536,6 +1536,39 @@ test("la edicion pendiente antes y durante el sync optimizado se guarda despues 
   assert.equal(calls[2].payload.revision, 2);
 });
 
+test("un debounce optimizado completado no programa un guardado extra al sincronizar OTs", async () => {
+  const timers = new Map();
+  const calls = [];
+  let timerId = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    installSaveGate: true,
+    callAppsScript: async (method, payload) => {
+      calls.push({ method, payload });
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+      if (method === "saveWorkOrderSyncState") return { revision: 3 };
+      return { revision: 2 };
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  fixture.context.window.setTimeout = (callback) => { timerId += 1; timers.set(timerId, callback); return timerId; };
+  fixture.context.window.clearTimeout = (id) => timers.delete(id);
+  fixture.context.window.requestIdleCallback = (callback) => { callback(); return 1; };
+  const runTimers = async () => {
+    for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+    await settleMicrotasks();
+  };
+
+  fixture.context.queueAppSheetSave("plan");
+  await runTimers();
+  await fixture.context.syncBacklogWorkOrders();
+  await runTimers();
+
+  assert.deepEqual(calls.map((call) => call.method), ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  assert.equal(calls[2].payload.revision, 2);
+});
+
 test("un fallo del sync libera la compuerta para el siguiente guardado optimizado", async () => {
   const timers = new Map();
   const calls = [];

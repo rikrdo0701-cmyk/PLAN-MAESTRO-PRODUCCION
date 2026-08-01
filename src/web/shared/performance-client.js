@@ -384,7 +384,10 @@
       return;
     }
     root.clearTimeout(appSheetSaveTimer);
-    appSheetSaveTimer = root.setTimeout(() => saveAppSheet(false), SAVE_DEBOUNCE_MS);
+    appSheetSaveTimer = root.setTimeout(() => {
+      appSheetSaveTimer = null;
+      saveAppSheet(false);
+    }, SAVE_DEBOUNCE_MS);
   };
 
   saveAppSheet = async function optimizedSaveAppSheet(showMessage) {
@@ -445,7 +448,10 @@
       if (appSheetSavePending || appSheetDirtyScopes.size) {
         appSheetSavePending = false;
         root.clearTimeout(appSheetSaveTimer);
-        appSheetSaveTimer = root.setTimeout(() => saveAppSheet(false), SAVE_DEBOUNCE_MS);
+        appSheetSaveTimer = root.setTimeout(() => {
+          appSheetSaveTimer = null;
+          saveAppSheet(false);
+        }, SAVE_DEBOUNCE_MS);
       }
     }
   };

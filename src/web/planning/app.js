@@ -7962,7 +7962,10 @@ function queueAppSheetSave(saveScope = "plan") {
     return;
   }
   window.clearTimeout(appSheetSaveTimer);
-  appSheetSaveTimer = window.setTimeout(() => saveAppSheet(false), 900);
+  appSheetSaveTimer = window.setTimeout(() => {
+    appSheetSaveTimer = null;
+    saveAppSheet(false);
+  }, 900);
 }
 
 function appSheetTryAcquireSaveGate() {
