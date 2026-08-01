@@ -344,7 +344,7 @@ test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus comple
     ],
     operations: [
       { id: "100-p", ot: "100", planStatus: "PENDIENTE" },
-      { id: "200-p", ot: "200", planStatus: "PENDIENTE" },
+      { id: "200-p", ot: "200", planStatus: "PENDIENTE", fechaInicio: "2026-07-20", horaInicio: "10:00", fechaFin: "2026-07-20", horaFin: "12:00" },
       { id: "200-c", ot: "200", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-20", horaInicio: "07:00", fechaFin: "2026-07-20", horaFin: "09:00" },
     ],
     materials: [{ ot: "100" }, { ot: "200" }],
@@ -380,7 +380,7 @@ test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus comple
   assert.equal(next.selectedOperationId, "");
   assert.deepEqual(structuredClone(next.closedWorkOrderSummaries[200]), {
     ot: "200", item: "CERRADA", quantity: 7,
-    scheduledStart: "2026-07-20T07:00:00Z", scheduledEnd: "2026-07-20T09:00:00Z",
+    scheduledStart: "2026-07-20T07:00:00Z", scheduledEnd: "2026-07-20T12:00:00Z",
     weekStart: "2026-07-20", finalStatus: "CERRADA", closedDetectedAt: "2026-07-22T10:00:00Z",
   });
 });

@@ -359,8 +359,8 @@
       const current = currentByOt.get(ot) || { ot };
       const existingKey = Object.keys(summaries).find((key) => normalize(key) === ot);
       if (!existingKey) {
-        const completed = (source.operations || []).filter((operation) => normalize(operation?.ot) === ot && !isPendingDraftOperation(operation));
-        summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, completed, nowIso);
+        const relatedOperations = (source.operations || []).filter((operation) => normalize(operation?.ot) === ot);
+        summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
       }
     }
 
