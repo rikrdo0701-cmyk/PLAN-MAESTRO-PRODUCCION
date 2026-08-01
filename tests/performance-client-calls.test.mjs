@@ -454,24 +454,26 @@ function loadPlanStatus(options = {}) {
   const deferredWork = [];
   const broadRenders = [];
   const toasts = [];
-  const buttons = rows.map((key) => {
-    const classes = new Set(["plan-status-action", "complete"]);
-    const button = {
-      dataset: { planStatusKey: key },
-      classList: { toggle: (name, enabled) => (enabled ? classes.add(name) : classes.delete(name)) },
-      setAttribute: () => {},
-      addEventListener: (_type, listener) => { button.listener = listener; },
-      textContent: "Completar",
-      get classes() { return [...classes].sort(); },
-    };
-    return button;
-  });
   const state = {
     revision: 1,
     operations: options.operations || [],
     operationPlanStatuses: options.operationPlanStatuses || {},
     ...(options.state || {}),
   };
+  const buttons = rows.map((key) => {
+    const operation = state.operations.find((item) => item.id === key);
+    const completed = state.operationPlanStatuses[key]?.status === "COMPLETADA_PLAN" || operation?.planStatus === "COMPLETADA_PLAN";
+    const classes = new Set(["plan-status-action", completed ? "reopen" : "complete"]);
+    const button = {
+      dataset: { planStatusKey: key },
+      classList: { toggle: (name, enabled) => (enabled ? classes.add(name) : classes.delete(name)) },
+      setAttribute: () => {},
+      addEventListener: (_type, listener) => { button.listener = listener; },
+      textContent: completed ? "Reabrir" : "Completar",
+      get classes() { return [...classes].sort(); },
+    };
+    return button;
+  });
   const els = {
     operatorReport: { querySelectorAll: () => buttons },
     adjusterReport: { querySelectorAll: () => [] },
@@ -480,7 +482,7 @@ function loadPlanStatus(options = {}) {
     "state", "els", "window", "isReportSnapshotEditable", "isPlanCompletedOperation", "operationCompletionKey",
     "deepClone", "appendLog", "isToolChangeReportOperation", "workOrderForOt", "checkpointState",
     "invalidateGanttCache", "renderTop", "renderPlanAlerts", "renderSelectedJobPanel", "renderDraftExecutiveSummary",
-    "renderGantt", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
+    "renderGantt", "renderLoads", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
     "isAppsScriptRuntime", "appSheetSaveTimer", "operationStatusSavesInFlight", "callAppsScript",
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
     "selectedJobOt", "escapeHtml",
@@ -494,7 +496,7 @@ function loadPlanStatus(options = {}) {
     (operation) => operation?.planStatus === "COMPLETADA_PLAN", (operation) => operation?.id || "",
     structuredClone, (log, entry) => [log, entry].filter(Boolean).join(" | "), () => false, () => null,
     () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), () => {},
-    () => broadRenders.push("summary"), () => broadRenders.push("gantt"), (callback) => { callback(); return 1; },
+    () => broadRenders.push("summary"), () => broadRenders.push("gantt"), () => broadRenders.push("loads"), (callback) => { callback(); return 1; },
     () => {}, (message) => toasts.push(message), true, () => true, null, 0,
     (...args) => options.callAppsScript?.(...args), new Set(), () => {}, () => {}, async () => false,
     { warn: () => {} }, () => broadRenders.push("render"), () => "", (value) => String(value || ""),
@@ -533,7 +535,7 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
 
   assert.equal(fixture.state.revision, 2);
   fixture.deferredWork.forEach((callback) => callback());
-  assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt"]);
+  assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt", "loads"]);
 });
 
 test("un error revierte unicamente la fila editada", async () => {
@@ -548,6 +550,8 @@ test("un error revierte unicamente la fila editada", async () => {
     callAppsScript: () => gate.promise,
   });
 
+  assert.equal(fixture.buttons[1].textContent, "Reabrir");
+  assert.deepEqual(fixture.buttons[1].classes, ["plan-status-action", "reopen"]);
   const result = fixture.api.toggleOperationPlanStatus("op-1");
   gate.reject(new Error("sin conexion"));
 
@@ -557,7 +561,13 @@ test("un error revierte unicamente la fila editada", async () => {
   assert.equal(fixture.state.operations[1].planStatus, "COMPLETADA_PLAN");
   assert.equal(fixture.state.operationPlanStatuses["op-2"].status, "COMPLETADA_PLAN");
   assert.equal(fixture.buttons[0].textContent, "Completar");
-  assert.equal(fixture.buttons[1].textContent, "Completar");
+  assert.equal(fixture.buttons[1].textContent, "Reabrir");
+  assert.deepEqual(fixture.buttons[1].classes, ["plan-status-action", "reopen"]);
+});
+
+test("las fotos de prioridad y cola usan carga diferida nativa", () => {
+  assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-backlog-photo/);
+  assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-queue-photo/);
 });
 
 test("el cliente conserva un segundo en la duracion ajustada solo con la marca de fallback", () => {

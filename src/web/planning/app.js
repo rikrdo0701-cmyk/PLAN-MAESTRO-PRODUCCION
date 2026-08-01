@@ -1706,7 +1706,7 @@ function renderPriorityList() {
     const toolMini = jobToolMiniHtml(job);
     const actionStatus = individualPlanningActionStatus(job.ot);
     const photoMarkup = job.photoUrl
-      ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
+      ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
     const card = document.createElement("article");
     card.className = `priority-card ${jobRiskCardClass(job)}${job.ot === selectedJobOt() ? " focused" : ""}${job.movable ? "" : " ineligible"}`;
@@ -1841,7 +1841,7 @@ function renderPriorityQueue() {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const photoMarkup = job.photoUrl
-      ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
+      ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
       : "";
     const positionLabel = job.programmed
       ? "Trabajo programado fijo"
@@ -5135,7 +5135,7 @@ function renderAdjusterReport() {
     const change = toolChangeReportData(op);
     const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
     const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-    return `<tr data-plan-status-row="${escapeHtml(operationCompletionKey(op))}">
+    return `<tr>
       <td>${escapeHtml(op.ot)}</td>
       <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
       <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
@@ -5360,6 +5360,7 @@ function schedulePlanStatusBackgroundWork() {
     renderPlanAlerts();
     renderDraftExecutiveSummary();
     renderGantt();
+    renderLoads();
   };
   if (typeof window.schedulePlanStatusBackgroundRefresh === "function") window.schedulePlanStatusBackgroundRefresh(refresh);
   else window.setTimeout(refresh, 24);
@@ -5483,7 +5484,7 @@ function renderProductionReportTable(operations, options = {}) {
       ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
       : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
     const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
-    return `<tr data-plan-status-row="${escapeHtml(operationCompletionKey(op))}">
+    return `<tr>
       <td>${index + 1}</td>
       <td>${escapeHtml(op.ot)}</td>
       <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
