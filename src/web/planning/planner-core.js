@@ -1494,16 +1494,22 @@
     }
     let idleMinutes = 0;
     let avoidableIdleMinutes = 0;
-    for (const intervals of intervalsByOperator.values()) {
+    const gaps = [];
+    for (const [operator, intervals] of intervalsByOperator.entries()) {
       intervals.sort((a, b) => a.start - b.start);
       for (let index = 1; index < intervals.length; index++) {
         if (formatDate(intervals[index - 1].end) === formatDate(intervals[index].start)) {
           const previous = intervals[index - 1];
           const next = intervals[index];
           idleMinutes += Math.max(0, diffMinutes(previous.end, next.start));
-          avoidableIdleMinutes += avoidableGapMinutes(state, operations, String(next.op.operador || ""), previous, next);
+          gaps.push({ operator, previous, next });
         }
       }
+    }
+    const remainingCandidateMinutes = new Map(operations.map((op) => [op, Math.max(0, operationDuration(op, 100, 100))]));
+    gaps.sort((a, b) => a.previous.end - b.previous.end || String(a.operator).localeCompare(String(b.operator), "es", { numeric: true }) || a.next.start - b.next.start);
+    for (const gap of gaps) {
+      avoidableIdleMinutes += avoidableGapMinutes(state, operations, gap.operator, gap.previous, gap.next, remainingCandidateMinutes);
     }
     const loads = [...loadByOperator.entries()]
       .filter(([operator]) => isLoadBearingOperator(operator))
@@ -1548,16 +1554,20 @@
     };
   }
 
-  function avoidableGapMinutes(state, operations, operator, previous, next) {
+  function avoidableGapMinutes(state, operations, operator, previous, next, remainingCandidateMinutes) {
     const gapMinutes = availableGapMinutes(state, previous.end, next.start, operator, "");
     if (!gapMinutes) return 0;
-    const candidates = operations.filter((op) => isGapFillCandidate(state, operations, op, operator, previous.end, next.start));
+    const candidates = operations
+      .filter((op) => isGapFillCandidate(state, operations, op, operator, previous.end, next.start))
+      .sort((a, b) => operationStart(a) - operationStart(b) || compareOperationSequence(a, b) || String(a.id).localeCompare(String(b.id)));
     let remaining = gapMinutes;
     for (const candidate of candidates) {
       const available = availableGapMinutes(state, previous.end, next.start, operator, candidate.maquina);
-      const duration = Math.max(0, operationDuration(candidate, 100, 100));
+      const duration = remainingCandidateMinutes.get(candidate) || 0;
       if (!available || !duration) continue;
-      remaining -= Math.min(remaining, available, duration);
+      const consumed = Math.min(remaining, available, duration);
+      remainingCandidateMinutes.set(candidate, duration - consumed);
+      remaining -= consumed;
       if (!remaining) break;
     }
     return gapMinutes - remaining;

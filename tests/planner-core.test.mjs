@@ -1062,6 +1062,23 @@ test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", ()
   assert.equal(metrics.avoidableIdleMinutes, 30);
 });
 
+test("las metricas no reutilizan una operacion diferida entre dos huecos", () => {
+  const core = loadPlannerCore();
+  const metrics = core.evaluatePlan({
+    operations: [
+      { id: "before-first-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "between-gaps", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "after-second-gap", ot: "102", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "11:00", fechaFin: "2026-07-13", horaFin: "12:00" },
+      { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "12:00", fechaFin: "2026-07-13", horaFin: "12:30" },
+    ],
+    workOrders: ["100", "101", "102", "200"].map((ot) => ({ ot })),
+    matrix: { "CORTE::CORTE": ["OP 1"] }, configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"], settings: {}, workSchedule: {}, lastSchedule: { changes: 0, unscheduled: 0, operatorConflicts: 0 },
+  });
+
+  assert.equal(metrics.avoidableIdleMinutes, 30);
+});
+
 test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", () => {
   const core = loadPlannerCore();
   const fixed = [
