@@ -60,6 +60,7 @@ function patchPlanningApp(app) {
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
+  state.selectedDetailOt = "";
   saveState("ui");
   render();
   applyInitialWorkspaceView();
@@ -73,6 +74,7 @@ function patchPlanningApp(app) {
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
+  state.selectedDetailOt = "";
   saveState("ui");
   render();
   applyInitialWorkspaceView();

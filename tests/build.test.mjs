@@ -4,6 +4,16 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildProject } from "../scripts/build-appscript.mjs";
 
+test("la identidad del detalle es UI local y no se envia al estado compartido", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(planningApp, /selectedDetailOt:\s*""/);
+  const persistableSource = planningApp.slice(
+    planningApp.indexOf("function persistableState("),
+    planningApp.indexOf("function createAppSheetPayload("),
+  );
+  assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*\.\.\.persisted\s*\}/);
+});
+
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
   const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
   const workflows = await Promise.all(workflowNames.map((name) =>
@@ -530,7 +540,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
-  assert.match(persistence, /const \{ matrixSearch, \.\.\.persisted \} = state;/);
+  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, \.\.\.persisted \} = state;/);
   assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(\)\)/);
 });
