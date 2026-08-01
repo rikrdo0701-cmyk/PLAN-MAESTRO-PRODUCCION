@@ -1079,6 +1079,23 @@ test("las metricas no reutilizan una operacion diferida entre dos huecos", () =>
   assert.equal(metrics.avoidableIdleMinutes, 30);
 });
 
+test("las metricas no inflan un hueco con una operacion que tarda mas por rendimiento", () => {
+  const core = loadPlannerCore();
+  const metrics = core.evaluatePlan({
+    operations: [
+      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00" },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1"] }, configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"], operatorPerformance: { "OP 1": 50 }, settings: {}, workSchedule: {},
+    lastSchedule: { changes: 0, unscheduled: 0, operatorConflicts: 0 },
+  });
+
+  assert.equal(metrics.avoidableIdleMinutes, 0);
+});
+
 test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", () => {
   const core = loadPlannerCore();
   const fixed = [

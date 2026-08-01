@@ -1506,7 +1506,7 @@
         }
       }
     }
-    const remainingCandidateMinutes = new Map(operations.map((op) => [op, Math.max(0, operationDuration(op, 100, 100))]));
+    const remainingCandidateMinutes = new Map();
     gaps.sort((a, b) => a.previous.end - b.previous.end || String(a.operator).localeCompare(String(b.operator), "es", { numeric: true }) || a.next.start - b.next.start);
     for (const gap of gaps) {
       avoidableIdleMinutes += avoidableGapMinutes(state, operations, gap.operator, gap.previous, gap.next, remainingCandidateMinutes);
@@ -1563,9 +1563,15 @@
     let remaining = gapMinutes;
     for (const candidate of candidates) {
       const available = availableGapMinutes(state, previous.end, next.start, operator, candidate.maquina);
-      const duration = remainingCandidateMinutes.get(candidate) || 0;
-      if (!available || !duration) continue;
-      const consumed = Math.min(remaining, available, duration);
+      const duration = remainingCandidateMinutes.has(candidate)
+        ? remainingCandidateMinutes.get(candidate)
+        : Math.max(0, operationDuration(
+          candidate,
+          operatorPerformanceForOperation(state, candidate, operator),
+          operationEfficiencyForOperation(state, candidate),
+        ));
+      if (!available || !duration || duration > available || duration > remaining) continue;
+      const consumed = duration;
       remainingCandidateMinutes.set(candidate, duration - consumed);
       remaining -= consumed;
       if (!remaining) break;
