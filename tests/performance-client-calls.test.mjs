@@ -80,8 +80,8 @@ const adjustedProductionSource = appSource.slice(
   appSource.indexOf("function opStart("),
 );
 const planStatusSource = appSource.slice(
-  appSource.indexOf("function planStatusActionCell("),
-  appSource.indexOf("function renderProductionReportTable("),
+  appSource.indexOf("const operationPlanStatusActions"),
+  appSource.indexOf("function renderProductionReportRow("),
 );
 
 function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
@@ -280,6 +280,27 @@ test("la accion individual conserva Guardado para el siguiente render de su tarj
   assert.equal(fixture.actionStatus("100"), "saved");
 });
 
+test("cancelar el dialogo de planeacion libera la tarjeta sin mostrar Error", async () => {
+  const statusNode = { textContent: "" };
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    setAttribute: () => {}, removeAttribute: () => {},
+    querySelector: (selector) => selector === ".job-add" ? addButton : statusNode,
+  };
+  const state = { selectedOts: [], operations: [{ ot: "100", ct: "CORTE" }], preparedPlanningByOt: {} };
+  const fixture = loadIndividualActionInternals({
+    jobs: { value: [{ ot: "100", movable: true, ops: [{ ot: "100", ct: "CORTE" }] }] },
+    loaded: async () => ({ ready: true }), card, state, toasts: [],
+    prepare: async (_job, options) => { options.onCancel?.(); return false; },
+  });
+
+  assert.equal(await fixture.selectJob("100", true), false);
+  assert.equal(statusNode.textContent, "");
+  assert.equal(fixture.actionStatus("100"), "");
+  assert.deepEqual(state.selectedOts, []);
+});
+
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -455,6 +476,7 @@ function loadClient(options = {}) {
 
 function loadPlanStatus(options = {}) {
   const rows = options.rows || [];
+  const buttonKeys = options.buttonKeys || rows;
   const deferredWork = [];
   const broadRenders = [];
   const toasts = [];
@@ -464,7 +486,7 @@ function loadPlanStatus(options = {}) {
     operationPlanStatuses: options.operationPlanStatuses || {},
     ...(options.state || {}),
   };
-  const buttons = rows.map((key) => {
+  const buttons = buttonKeys.map((key) => {
     const operation = state.operations.find((item) => item.id === key);
     const completed = state.operationPlanStatuses[key]?.status === "COMPLETADA_PLAN" || operation?.planStatus === "COMPLETADA_PLAN";
     const classes = new Set(["plan-status-action", completed ? "reopen" : "complete"]);
@@ -474,13 +496,44 @@ function loadPlanStatus(options = {}) {
       setAttribute: () => {},
       addEventListener: (_type, listener) => { button.listener = listener; },
       textContent: completed ? "Reabrir" : "Completar",
+      disabled: false,
       get classes() { return [...classes].sort(); },
     };
     return button;
   });
+  const reportRows = rows.map((key) => ({
+    dataset: { planStatusRowKey: key },
+    removed: false,
+    html: "",
+    remove() { this.removed = true; },
+    querySelectorAll: () => buttons.filter((button) => button.dataset.planStatusKey === key),
+    set outerHTML(value) { this.html = value; },
+  }));
+  const operatorReport = {
+    querySelectorAll: (selector) => selector === "[data-plan-status-row-key]"
+      ? reportRows.filter((row) => !row.removed)
+      : buttons.filter((button) => !reportRows.find((row) => row.dataset.planStatusRowKey === button.dataset.planStatusKey)?.removed),
+    insertBefore: (row) => { row.removed = false; },
+  };
+  reportRows.forEach((row) => { row.parentNode = operatorReport; row.nextSibling = null; });
   const els = {
-    operatorReport: { querySelectorAll: () => buttons },
+    operatorReport,
     adjusterReport: { querySelectorAll: () => [] },
+    operatorReportStartInput: { value: "" },
+    operatorReportFutureDays: { value: "" },
+    operatorReportCount: { textContent: "", title: "" },
+    adjusterReportStartInput: { value: "" },
+    adjusterReportFutureDays: { value: "" },
+    adjusterReportCount: { textContent: "", title: "" },
+  };
+  const reportSelection = () => {
+    const status = options.reportStatus || "TODAS";
+    const selected = state.operations.filter((operation) => {
+      const completed = state.operationPlanStatuses[operation.id]?.status === "COMPLETADA_PLAN" || operation.planStatus === "COMPLETADA_PLAN";
+      if (!operation.fechaInicio || !operation.fechaFin) return false;
+      return status === "TODAS" || (status === "COMPLETADAS" ? completed : !completed);
+    });
+    return { rows: selected, total: selected.length, date: "2026-08-01", futureDays: 1 };
   };
   const api = new Function(
     "state", "els", "window", "isReportSnapshotEditable", "isPlanCompletedOperation", "operationCompletionKey",
@@ -489,7 +542,8 @@ function loadPlanStatus(options = {}) {
     "renderGantt", "renderLoads", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
     "isAppsScriptRuntime", "appSheetSaveTimer", "operationStatusSavesInFlight", "callAppsScript",
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
-    "selectedJobOt", "escapeHtml",
+    "selectedJobOt", "escapeHtml", "operatorReportSelection", "adjusterReportSelection", "renderReportFilterStatus",
+    "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -504,8 +558,16 @@ function loadPlanStatus(options = {}) {
     () => {}, (message) => toasts.push(message), true, () => true, null, 0,
     (...args) => options.callAppsScript?.(...args), new Set(), () => {}, () => {}, async () => false,
     { warn: () => {} }, () => broadRenders.push("render"), () => "", (value) => String(value || ""),
+    reportSelection, () => ({ rows: [], total: 0, date: "2026-08-01", futureDays: 1 }),
+    (_type, input, future, output, selection) => {
+      input.value = selection.date;
+      future.value = String(selection.futureDays);
+      output.textContent = `${selection.rows.length} de ${selection.total} · max. 25`;
+    },
+    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`,
+    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {},
   );
-  return { api, buttons, state, deferredWork, broadRenders, toasts };
+  return { api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts };
 }
 
 test("completar actualiza solo la fila, guarda atomico y confirma en segundo plano", async () => {
@@ -513,7 +575,11 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
   const calls = [];
   const fixture = loadPlanStatus({
     rows: ["op-1", "op-2"],
-    operations: [{ id: "op-1", ot: "100", ct: "CORTE" }, { id: "op-2", ot: "100", ct: "DOBLEZ" }],
+    reportStatus: "PENDIENTES",
+    operations: [
+      { id: "op-1", ot: "100", ct: "CORTE", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "100", ct: "DOBLEZ", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+    ],
     callAppsScript: (method, payload) => {
       calls.push([method, payload]);
       return gate.promise;
@@ -529,6 +595,9 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
   assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "COMPLETADA_PLAN");
   assert.equal(fixture.buttons[0].textContent, "Reabrir");
   assert.equal(fixture.buttons[1].textContent, "Completar");
+  assert.equal(fixture.reportRows[0].removed, true);
+  assert.equal(fixture.reportRows[1].removed, false);
+  assert.equal(fixture.els.operatorReportCount.textContent, "1 de 1 · max. 25");
   assert.deepEqual(fixture.broadRenders, []);
   assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
   assert.equal(calls[0][1].status.operationId, "op-1");
@@ -546,9 +615,10 @@ test("un error revierte unicamente la fila editada", async () => {
   const gate = deferredPromise();
   const fixture = loadPlanStatus({
     rows: ["op-1", "op-2"],
+    reportStatus: "TODAS",
     operations: [
-      { id: "op-1", ot: "100", ct: "CORTE", planStatus: "PENDIENTE" },
-      { id: "op-2", ot: "100", ct: "DOBLEZ", planStatus: "COMPLETADA_PLAN" },
+      { id: "op-1", ot: "100", ct: "CORTE", planStatus: "PENDIENTE", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "100", ct: "DOBLEZ", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
     ],
     operationPlanStatuses: { "op-2": { key: "op-2", status: "COMPLETADA_PLAN" } },
     callAppsScript: () => gate.promise,
@@ -567,6 +637,54 @@ test("un error revierte unicamente la fila editada", async () => {
   assert.equal(fixture.buttons[0].textContent, "Completar");
   assert.equal(fixture.buttons[1].textContent, "Reabrir");
   assert.deepEqual(fixture.buttons[1].classes, ["plan-status-action", "reopen"]);
+});
+
+test("reabrir limpia fechas y retira solo su fila del reporte completado", async () => {
+  const fixture = loadPlanStatus({
+    rows: ["op-1", "op-2"],
+    reportStatus: "COMPLETADAS",
+    operations: [
+      { id: "op-1", ot: "100", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "100", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+    ],
+    operationPlanStatuses: {
+      "op-1": { key: "op-1", status: "COMPLETADA_PLAN" },
+      "op-2": { key: "op-2", status: "COMPLETADA_PLAN" },
+    },
+    callAppsScript: async () => ({ revision: 2 }),
+  });
+
+  assert.equal(await fixture.api.toggleOperationPlanStatus("op-1"), true);
+
+  assert.equal(fixture.state.operations[0].fechaInicio, "");
+  assert.equal(fixture.state.operations[0].fechaFin, "");
+  assert.equal(fixture.reportRows[0].removed, true);
+  assert.equal(fixture.reportRows[1].removed, false);
+  assert.equal(fixture.els.operatorReportCount.textContent, "1 de 1 · max. 25");
+});
+
+test("dos clics rapidos comparten guardado y deshabilitan controles de la misma operacion", async () => {
+  const gate = deferredPromise();
+  let calls = 0;
+  const fixture = loadPlanStatus({
+    rows: ["op-1"],
+    buttonKeys: ["op-1", "op-1"],
+    operations: [{ id: "op-1", ot: "100", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" }],
+    callAppsScript: () => { calls += 1; return gate.promise; },
+  });
+  fixture.api.bindPlanStatusActions({ querySelectorAll: () => fixture.buttons });
+
+  const first = fixture.buttons[0].listener();
+  const second = fixture.buttons[1].listener();
+
+  assert.strictEqual(first, second);
+  assert.equal(calls, 1);
+  assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "COMPLETADA_PLAN");
+  assert.deepEqual(fixture.buttons.map((button) => button.disabled), [true, true]);
+
+  gate.resolve({ revision: 2 });
+  assert.equal(await first, true);
+  assert.deepEqual(fixture.buttons.map((button) => button.disabled), [false, false]);
 });
 
 test("las fotos de prioridad y cola usan carga diferida nativa", () => {

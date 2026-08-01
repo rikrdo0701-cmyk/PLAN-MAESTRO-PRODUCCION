@@ -2077,9 +2077,10 @@ function selectJob(ot, selected) {
   setIndividualPlanningBusy(ot, true);
   const action = (async () => {
     let status = "error";
+    const outcome = { cancelled: false };
     try {
-      const completed = await performSelectJob(ot, selected);
-      status = completed === true ? "saved" : "error";
+      const completed = await performSelectJob(ot, selected, outcome);
+      status = completed === true ? "saved" : (outcome.cancelled ? "" : "error");
       return completed;
     } catch (error) {
       showToast(error?.message || `No se pudo procesar la OT ${ot}`, 9000);
@@ -2094,7 +2095,7 @@ function selectJob(ot, selected) {
   return action;
 }
 
-async function performSelectJob(ot, selected) {
+async function performSelectJob(ot, selected, outcome = {}) {
   if (!ot) return false;
   const otKey = materialOtKey(ot);
   let job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
@@ -2139,7 +2140,10 @@ async function performSelectJob(ot, selected) {
     setIndividualPlanningActionStatus(ot, "saving");
     state._pendingAddOt = ot;
     state._pendingAddOtSnapshot = [...state.selectedOts];
-    const prepared = await prepareJobForPlanning(job, { forceConfirm: true });
+    const prepared = await prepareJobForPlanning(job, {
+      forceConfirm: true,
+      onCancel: () => { outcome.cancelled = true; },
+    });
     if (!prepared) {
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
@@ -2207,7 +2211,10 @@ async function prepareJobForPlanning(job, options = {}) {
     return true;
   }
   const values = await showPlanningRequirements(planningJob, requirements, commercial);
-  if (!values) return false;
+  if (!values) {
+    options.onCancel?.();
+    return false;
+  }
 
   applyPlanningRequirements(requirements, values, operations);
   applyCommercialPlanningRequirement(job, values, commercial);
@@ -5105,10 +5112,15 @@ function renderOperatorSelect() {
   els.operatorReportSelect.value = operators.includes(current) ? current : operators[0] || "";
 }
 
-function renderOperatorReport() {
+function operatorReportSelection() {
   const operator = els.operatorReportSelect.value || state.operators[0] || "";
   const filter = reportFilter("operator");
-  const selection = filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
+  return filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
+}
+
+function renderOperatorReport() {
+  const filter = reportFilter("operator");
+  const selection = operatorReportSelection();
   els.operatorReportStatus.value = filter.status;
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
   els.operatorPrintContext.textContent = formatReportDateTime(new Date());
@@ -5118,39 +5130,46 @@ function renderOperatorReport() {
   bindPlanStatusActions(els.operatorReport);
 }
 
-function renderAdjusterReport() {
+function adjusterReportSelection() {
   const filter = reportFilter("adjuster");
-  const selection = filteredReportRows(
+  return filteredReportRows(
     operationsForReportWeek("", filter.date).filter(isToolChangeReportOperation),
     "adjuster",
     opStart
   );
+}
+
+function renderAdjusterReportRow(op) {
+  const start = opStart(op);
+  const end = opEnd(op);
+  const workOrder = workOrderForOt(op.ot);
+  const change = toolChangeReportData(op);
+  const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
+  const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
+  return `<tr data-plan-status-row-key="${escapeHtml(operationCompletionKey(op))}">
+    <td>${escapeHtml(op.ot)}</td>
+    <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
+    <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
+    <td>${escapeHtml(destinationHerramental)}</td>
+    <td>${escapeHtml(destinationKit)}</td>
+    <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
+    <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
+    <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
+    <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
+    <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
+    <td class="report-status-action-column">${planStatusActionCell(op)}</td>
+  </tr>`;
+}
+
+function renderAdjusterReport() {
+  const filter = reportFilter("adjuster");
+  const selection = adjusterReportSelection();
   els.adjusterReportStatus.value = filter.status;
   renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
   els.adjusterPrintContext.textContent = formatReportDateTime(new Date());
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
   const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
-  const body = selection.rows.map((op) => {
-    const start = opStart(op);
-    const end = opEnd(op);
-    const workOrder = workOrderForOt(op.ot);
-    const change = toolChangeReportData(op);
-    const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
-    const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-    return `<tr>
-      <td>${escapeHtml(op.ot)}</td>
-      <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
-      <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
-      <td>${escapeHtml(destinationHerramental)}</td>
-      <td>${escapeHtml(destinationKit)}</td>
-      <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
-      <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
-      <td class="report-status-action-column">${planStatusActionCell(op)}</td>
-    </tr>`;
-  }).join("");
+  const body = selection.rows.map(renderAdjusterReportRow).join("");
   els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
   bindPlanStatusActions(els.adjusterReport);
 }
@@ -5325,11 +5344,14 @@ function isReportSnapshotEditable() {
   return !reportSnapshot || reportSnapshot.snapshotId === "draft";
 }
 
+const operationPlanStatusActions = new Map();
+const detachedPlanStatusRows = new WeakMap();
+
 function planStatusActionCell(op) {
   if (!isReportSnapshotEditable()) return escapeHtml(isPlanCompletedOperation(op) ? "Completada" : "Pendiente");
   const completed = isPlanCompletedOperation(op);
   const key = operationCompletionKey(op);
-  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}">${completed ? "Reabrir" : "Completar"}</button>`;
+  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
 }
 
 function bindPlanStatusActions(container) {
@@ -5338,20 +5360,94 @@ function bindPlanStatusActions(container) {
   });
 }
 
+function planStatusButtons(key) {
+  return [els.operatorReport, els.adjusterReport].flatMap((container) =>
+    Array.from(container?.querySelectorAll("[data-plan-status-key]") || [])
+  ).filter((button) => button.dataset.planStatusKey === key);
+}
+
+function setPlanStatusButtonsDisabled(key, disabled) {
+  planStatusButtons(key).forEach((button) => { button.disabled = disabled; });
+}
+
+function findPlanStatusReportRow(container, key) {
+  return Array.from(container?.querySelectorAll("[data-plan-status-row-key]") || [])
+    .find((row) => row.dataset.planStatusRowKey === key) || null;
+}
+
+function detachedPlanStatusRow(container, key) {
+  if (!container) return null;
+  return detachedPlanStatusRows.get(container)?.get(key) || null;
+}
+
+function setDetachedPlanStatusRow(container, key, value) {
+  if (!container) return;
+  let rows = detachedPlanStatusRows.get(container);
+  if (!rows) {
+    rows = new Map();
+    detachedPlanStatusRows.set(container, rows);
+  }
+  if (value) rows.set(key, value);
+  else rows.delete(key);
+}
+
+function updatePlanStatusReportRow(container, key, selection, renderRow, bindComments = false) {
+  let row = findPlanStatusReportRow(container, key);
+  const detached = detachedPlanStatusRow(container, key);
+  const index = selection.rows.findIndex((operation) => operationCompletionKey(operation) === key);
+  if (index < 0) {
+    if (row) {
+      setDetachedPlanStatusRow(container, key, { row, parent: row.parentNode, nextSibling: row.nextSibling });
+      row.remove();
+    }
+    return;
+  }
+  if (!row && detached?.parent) {
+    const nextSibling = detached.nextSibling?.parentNode === detached.parent ? detached.nextSibling : null;
+    detached.parent.insertBefore(detached.row, nextSibling);
+    row = detached.row;
+    setDetachedPlanStatusRow(container, key, null);
+  }
+  if (!row) return;
+  row.outerHTML = renderRow(selection.rows[index], index);
+  const replacement = findPlanStatusReportRow(container, key);
+  if (!replacement) return;
+  if (bindComments) bindReportCommentInputs(replacement);
+  bindPlanStatusActions(replacement);
+}
+
+function updatePlanStatusReport(container, key, selectionFactory, filterType, input, futureDays, count, renderRow, bindComments = false) {
+  if (!findPlanStatusReportRow(container, key) && !detachedPlanStatusRow(container, key)) return;
+  const selection = selectionFactory();
+  renderReportFilterStatus(filterType, input, futureDays, count, selection);
+  updatePlanStatusReportRow(container, key, selection, renderRow, bindComments);
+}
+
+function discardDetachedPlanStatusRows(key) {
+  [els.operatorReport, els.adjusterReport].forEach((container) => setDetachedPlanStatusRow(container, key, null));
+}
+
 function renderPlanStatusRow(key) {
   const operation = state.operations.find((op) => operationCompletionKey(op) === key);
   const current = state.operationPlanStatuses?.[key];
   const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
-  [els.operatorReport, els.adjusterReport].forEach((container) => {
-    container?.querySelectorAll("[data-plan-status-key]").forEach((button) => {
-      if (button.dataset.planStatusKey !== key) return;
-      button.classList.toggle("complete", !completed);
-      button.classList.toggle("reopen", completed);
-      button.setAttribute("aria-label", completed ? "Cambiar a pendiente" : "Marcar completada");
-      button.setAttribute("title", completed ? "Reabrir operacion" : "Marcar completada");
-      button.textContent = completed ? "Reabrir" : "Completar";
-    });
+  planStatusButtons(key).forEach((button) => {
+    button.classList.toggle("complete", !completed);
+    button.classList.toggle("reopen", completed);
+    button.setAttribute("aria-label", completed ? "Cambiar a pendiente" : "Marcar completada");
+    button.setAttribute("title", completed ? "Reabrir operacion" : "Marcar completada");
+    button.textContent = completed ? "Reabrir" : "Completar";
   });
+  updatePlanStatusReport(
+    els.operatorReport, key, operatorReportSelection, "operator",
+    els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount,
+    (op, index) => renderProductionReportRow(op, index, { statusActions: isReportSnapshotEditable() }), true
+  );
+  updatePlanStatusReport(
+    els.adjusterReport, key, adjusterReportSelection, "adjuster",
+    els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount,
+    renderAdjusterReportRow
+  );
   if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
 }
 
@@ -5368,7 +5464,21 @@ function schedulePlanStatusBackgroundWork() {
   else window.setTimeout(refresh, 24);
 }
 
-async function toggleOperationPlanStatus(key) {
+function toggleOperationPlanStatus(key) {
+  if (operationPlanStatusActions.has(key)) return operationPlanStatusActions.get(key);
+  operationPlanStatusActions.set(key, true);
+  setPlanStatusButtonsDisabled(key, true);
+  const action = performToggleOperationPlanStatus(key);
+  const tracked = action.finally(() => {
+    if (operationPlanStatusActions.get(key) !== tracked) return;
+    operationPlanStatusActions.delete(key);
+    setPlanStatusButtonsDisabled(key, false);
+  });
+  operationPlanStatusActions.set(key, tracked);
+  return tracked;
+}
+
+async function performToggleOperationPlanStatus(key) {
   const operation = state.operations.find((op) => operationCompletionKey(op) === key);
   const current = state.operationPlanStatuses?.[key];
   const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
@@ -5439,7 +5549,10 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
   renderPlanStatusChange();
   showToast(message);
   scheduleLocalStorageFlush();
-  if (!appSheetAvailable) return true;
+  if (!appSheetAvailable) {
+    discardDetachedPlanStatusRows(key);
+    return true;
+  }
   try {
     let saved;
     if (isAppsScriptRuntime()) {
@@ -5461,6 +5574,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
     }
     scheduleLocalStorageFlush();
+    discardDetachedPlanStatusRows(key);
     return true;
   } catch (error) {
     console.warn("No se pudo guardar el estado de la operacion:", error);
@@ -5474,37 +5588,39 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
   return false;
 }
 
+function renderProductionReportRow(op, index, options = {}) {
+  const start = opStart(op);
+  const end = opEnd(op);
+  const workOrder = workOrderForOt(op.ot);
+  const machineArea = cleanResourceValue(op.maquina);
+  const effectiveReportTool = isToolChangeReportOperation(op)
+    ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
+    : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
+  const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
+  return `<tr data-plan-status-row-key="${escapeHtml(operationCompletionKey(op))}">
+    <td>${index + 1}</td>
+    <td>${escapeHtml(op.ot)}</td>
+    <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
+    <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
+    <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
+    <td>${escapeHtml(machineArea)}</td>
+    <td>${escapeHtml(effectiveReportTool)}</td>
+    <td>${formatReportDuration(op.tiempoCiclo)}</td>
+    <td>${formatReportDuration(op.tiempoSetup)}</td>
+    <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
+    <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
+    <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
+    <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
+    <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
+    <td>${reportOperationCommentCell(op)}</td>
+    ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
+  </tr>`;
+}
+
 function renderProductionReportTable(operations, options = {}) {
   const headers = ["Num", "O.T.", "Parte", "OP", "Piezas", "Maq/Area", "Herramental", "TC (min)", "Tiempo setup", "Tiempo prod.", "F. inicio", "H. inicio", "F. fin", "H. fin", "Comentarios"];
   if (options.statusActions) headers.push("Estado");
-  const body = operations.map((op, index) => {
-    const start = opStart(op);
-    const end = opEnd(op);
-    const workOrder = workOrderForOt(op.ot);
-    const machineArea = cleanResourceValue(op.maquina);
-    const effectiveReportTool = isToolChangeReportOperation(op)
-      ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
-      : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
-    const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
-    return `<tr>
-      <td>${index + 1}</td>
-      <td>${escapeHtml(op.ot)}</td>
-      <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
-      <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
-      <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
-      <td>${escapeHtml(machineArea)}</td>
-      <td>${escapeHtml(effectiveReportTool)}</td>
-      <td>${formatReportDuration(op.tiempoCiclo)}</td>
-      <td>${formatReportDuration(op.tiempoSetup)}</td>
-      <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
-      <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
-      <td>${reportOperationCommentCell(op)}</td>
-      ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
-    </tr>`;
-  }).join("");
+  const body = operations.map((op, index) => renderProductionReportRow(op, index, options)).join("");
   return `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin operaciones programadas en esta semana")}</tbody>`;
 }
 
