@@ -55,6 +55,10 @@ const startupSource = appSource.slice(
   appSource.indexOf("async function loadAppStateInBackground("),
   appSource.indexOf("function bindElements("),
 );
+const workspaceViewSource = appSource.slice(
+  appSource.indexOf("function applyInitialWorkspaceView("),
+  appSource.indexOf("function loadState()"),
+);
 const initializeSource = appSource.slice(
   appSource.indexOf("function initializePlanningApp()"),
   appSource.indexOf("if (document.readyState === \"loading\")"),
@@ -680,9 +684,38 @@ test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", ()
   assert.equal(state.selectedOperationId, "direct-1325-1");
 });
 
-test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", async () => {
+test("la navegacion manual desplaza el espacio de trabajo al inicio", () => {
+  const scrolls = [];
+  const workspace = { dataset: {} };
+  const item = {
+    dataset: { section: "plan-semanal", tab: "" },
+    getAttribute: () => "#plan-semanal",
+    classList: { toggle: () => {} },
+    setAttribute: () => {},
+    removeAttribute: () => {},
+  };
+  const { applyInitialWorkspaceView } = Function(
+    "window", "document", "els", "WORKSPACE_TITLES",
+    `${workspaceViewSource}; return { applyInitialWorkspaceView, showWorkspaceView };`,
+  )(
+    { location: { hash: "#plan-semanal" }, scrollTo: (options) => scrolls.push(options) },
+    {
+      querySelector: (selector) => selector === ".workspace" ? workspace : null,
+      querySelectorAll: () => [item],
+    },
+    { workspaceTitle: null },
+    {},
+  );
+
+  applyInitialWorkspaceView({ scrollToTop: true });
+
+  assert.deepEqual(scrolls, [{ top: 0, behavior: "auto" }]);
+});
+
+test("el arranque remoto conserva la OT de detalle y la operacion seleccionada", async () => {
   const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
   const renderOptions = [];
+  const workspaceOptions = [];
   const loadAppStateInBackground = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "resetDailyReportFiltersToToday",
     "saveState", "render", "applyInitialWorkspaceView", "isAppsScriptRuntime", "syncNetSuiteInBackground",
@@ -690,12 +723,16 @@ test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", a
     `${startupSource}; return loadAppStateInBackground;`,
   )(
     state,
-    async () => true,
+    async () => {
+      state.selectedDetailOt = "remota";
+      state.selectedOperationId = "remota";
+      return true;
+    },
     (callback) => callback(),
     () => {},
     () => {},
     (options) => renderOptions.push(options),
-    () => {},
+    (options) => workspaceOptions.push(options),
     () => false,
     () => {},
     () => {},
@@ -704,12 +741,14 @@ test("el arranque remoto limpia la OT de detalle y la operacion seleccionada", a
 
   await loadAppStateInBackground();
 
-  assert.equal(state.selectedDetailOt, "");
-  assert.equal(state.selectedOperationId, "");
+  assert.equal(state.selectedDetailOt, "2773");
+  assert.equal(state.selectedOperationId, "duplicada");
   assert.deepEqual(renderOptions, [{ save: false }]);
+  assert.deepEqual(plain(workspaceOptions), [{ scrollToTop: false }]);
 });
 
-test("el arranque optimizado limpia la OT de detalle y la operacion seleccionada", async () => {
+test("el arranque optimizado conserva la OT de detalle y la operacion seleccionada", async () => {
+  const workspaceOptions = [];
   const fixture = loadClient({
     state: {
       revision: 1,
@@ -727,11 +766,13 @@ test("el arranque optimizado limpia la OT de detalle y la operacion seleccionada
     }),
   });
   fixture.context.window.PPAppsScriptBridge.isConfigured = () => false;
+  fixture.context.applyInitialWorkspaceView = (options) => workspaceOptions.push(options);
 
   await fixture.context.loadAppStateInBackground();
 
-  assert.equal(fixture.state.selectedDetailOt, "");
-  assert.equal(fixture.state.selectedOperationId, "");
+  assert.equal(fixture.state.selectedDetailOt, "2773");
+  assert.equal(fixture.state.selectedOperationId, "duplicada");
+  assert.deepEqual(plain(workspaceOptions), [{ scrollToTop: false }]);
 });
 
 test("undo limpia juntas la OT de detalle y la operacion restaurada", () => {

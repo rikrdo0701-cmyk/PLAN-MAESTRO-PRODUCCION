@@ -173,7 +173,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function refreshPlanningActionControls\(\)[\s\S]*planningActionsBusy \|\| netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight[\s\S]*setPlanningControlBusy\(els\.restoreDraftBtn, busy\)/);
   assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*refreshPlanningActionControls\(\)/);
   assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
-  assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal"\)/);
+  assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal", "", \{ scrollToTop: true \}\)/);
   assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
   assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
   const backlogSyncSource = pagesIndex.slice(
@@ -191,7 +191,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
   assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
-  assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz"\)/);
+  assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz", "", \{ scrollToTop: true \}\)/);
   const builtStartupSource = pagesIndex.slice(
     pagesIndex.indexOf("async function loadAppStateInBackground()"),
     pagesIndex.indexOf("async function restoreDraftPlanFromSharedState()"),
@@ -202,6 +202,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   );
   const startupState = { operations: [] };
   let operationsSeenByPurge = [];
+  const workspaceOptions = [];
   const generatedStartup = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "loadPlanSnapshots", "restoreDraftPlanFromSharedState",
     "purgeClosedWorkOrderRetention", "resetDailyReportFiltersToToday", "saveState", "render", "applyInitialWorkspaceView",
@@ -211,10 +212,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     startupState, async () => true, (callback) => callback(), async () => {},
     async () => { startupState.operations = [{ ot: "OT-CERRADA" }]; return true; },
     () => { operationsSeenByPurge = [...startupState.operations]; startupState.operations = []; },
-    () => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {},
+    () => {}, () => {}, () => {}, (options) => workspaceOptions.push(options), () => {}, () => false, () => {},
   );
   await generatedStartup();
   assert.deepEqual(operationsSeenByPurge, [{ ot: "OT-CERRADA" }]);
+  assert.deepEqual(workspaceOptions, [{ scrollToTop: false }]);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
@@ -334,6 +336,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     "la cache inicial debe capturarse antes de esperar al bridge",
   );
   assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
+  assert.match(optimizedStartupSource, /applyInitialWorkspaceView\(\{ scrollToTop: false \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /state\.selectedDetailOt = ""|state\.selectedOperationId = ""/);
+  assert.match(pagesIndex, /function showWorkspaceView\(section, tab = "", \{ scrollToTop = false \} = \{\}\)[\s\S]*if \(scrollToTop\) window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/);
   assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadSnapshotsOnce\(false\)/);
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
   assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);

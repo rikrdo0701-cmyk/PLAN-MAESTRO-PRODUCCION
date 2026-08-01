@@ -56,30 +56,34 @@ function patchPlanningApp(app) {
   patched = sharedStatePatched;
 
   const startupMarker = `async function loadAppStateInBackground() {
+  const selectedDetailOt = state.selectedDetailOt;
+  const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
-  state.selectedOperationId = "";
-  state.selectedDetailOt = "";
+  if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
+  if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
   render({ save: false });
-  applyInitialWorkspaceView();
+  applyInitialWorkspaceView({ scrollToTop: false });
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
   loadPlanSnapshots(false);
 }`;
   const startupReplacement = `async function loadAppStateInBackground() {
+  const selectedDetailOt = state.selectedDetailOt;
+  const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   await loadPlanSnapshots(false);
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
   purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
-  state.selectedOperationId = "";
-  state.selectedDetailOt = "";
+  if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
+  if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
   render({ save: false });
-  applyInitialWorkspaceView();
+  applyInitialWorkspaceView({ scrollToTop: false });
   if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
 }

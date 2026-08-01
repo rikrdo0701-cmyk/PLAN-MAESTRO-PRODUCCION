@@ -527,15 +527,17 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else initializePlanningApp();
 
 async function loadAppStateInBackground() {
+  const selectedDetailOt = state.selectedDetailOt;
+  const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
-  state.selectedOperationId = "";
-  state.selectedDetailOt = "";
+  if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
+  if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
   render({ save: false });
-  applyInitialWorkspaceView();
+  applyInitialWorkspaceView({ scrollToTop: false });
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
   loadPlanSnapshots(false);
 }
@@ -908,22 +910,22 @@ function bindEvents() {
     item.addEventListener("click", (event) => {
       event.preventDefault();
       const targetHash = item.getAttribute("href") || "#plan-semanal";
-      if (window.location.hash === targetHash) applyInitialWorkspaceView();
+      if (window.location.hash === targetHash) applyInitialWorkspaceView({ scrollToTop: true });
       else window.location.hash = targetHash;
     });
   });
-  window.addEventListener("hashchange", applyInitialWorkspaceView);
+  window.addEventListener("hashchange", () => applyInitialWorkspaceView({ scrollToTop: true }));
 }
 
-function applyInitialWorkspaceView() {
+function applyInitialWorkspaceView({ scrollToTop = false } = {}) {
   const hash = window.location.hash || "#plan-semanal";
   const items = [...document.querySelectorAll(".nav-item")];
   const item = items.find((candidate) => candidate.getAttribute("href") === hash) || items.find((candidate) => candidate.getAttribute("href") === "#plan-semanal");
   if (!item) return;
-  showWorkspaceView(item.dataset.section, item.dataset.tab || "");
+  showWorkspaceView(item.dataset.section, item.dataset.tab || "", { scrollToTop });
 }
 
-function showWorkspaceView(section, tab = "") {
+function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
   const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config")));
@@ -943,7 +945,7 @@ function showWorkspaceView(section, tab = "") {
     renderConfiguration();
     loadInspectionRouteCatalog();
   }
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (scrollToTop) window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function loadState() {
@@ -2321,7 +2323,7 @@ async function showPlanningBlockers(job, blockers) {
     confirmLabel: "Ir a matriz",
     cancelVisible: false,
   });
-  if (result) showWorkspaceView("matriz");
+  if (result) showWorkspaceView("matriz", "", { scrollToTop: true });
 }
 
 function planningCatalogSelectMarkup(name, field, currentValue, options = {}) {
@@ -3945,7 +3947,7 @@ async function scheduleCurrentPlanImpl() {
     if (validation.operationId) state.selectedOperationId = validation.operationId;
     showToast(validation.message);
     showTab(validation.tab || "matrix");
-    showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz");
+    showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz", "", { scrollToTop: true });
     return;
   }
   const originalSelectedOts = [...state.selectedOts];
@@ -4234,7 +4236,7 @@ async function generatePlanPdf() {
     reportSnapshot = { operations: currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
-  showWorkspaceView("reportes", "week");
+  showWorkspaceView("reportes", "week", { scrollToTop: true });
   state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
   syncReportFilterDates(state.reportWeekStart);
   renderReports();
@@ -4653,7 +4655,7 @@ async function confirmDraftRestore(snapshotId, previewState) {
   normalizeState();
   await loadPlanSnapshots(false);
   reportSnapshot = null;
-  showWorkspaceView("plan-semanal");
+  showWorkspaceView("plan-semanal", "", { scrollToTop: true });
   saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
 }
 
@@ -5862,7 +5864,7 @@ function syncWorkOrdersOnce(options = {}) {
     if (loaded && options.deferPresentation !== true) {
       saveState("ui");
       render();
-      applyInitialWorkspaceView();
+      applyInitialWorkspaceView({ scrollToTop: options.manual === true });
     }
     return loaded;
   });

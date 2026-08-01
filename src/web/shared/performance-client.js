@@ -543,6 +543,8 @@
   loadAppStateInBackground = function optimizedLoadAppStateInBackground() {
     return singleFlight("state", async () => {
       let loaded = false;
+      const selectedDetailOt = state.selectedDetailOt;
+      const selectedOperationId = state.selectedOperationId;
       try {
         await root.PPAppsScriptBridge.ensureReady();
         const result = await loadInitialStateConditionally(initialLocalCache);
@@ -556,11 +558,11 @@
       if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
       purgeClosedWorkOrderRetention();
       initialStateLoadPending = false;
-      state.selectedDetailOt = "";
-      state.selectedOperationId = "";
+      if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
+      if (selectedOperationId) state.selectedOperationId = selectedOperationId;
       saveState("ui");
       render({ save: false });
-      applyInitialWorkspaceView();
+      applyInitialWorkspaceView({ scrollToTop: false });
 
       if (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded)) {
         syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
@@ -647,8 +649,8 @@
   }
 
   const originalShowWorkspaceView = showWorkspaceView;
-  showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
-    originalShowWorkspaceView(section, tab);
+  showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "", options = {}) {
+    originalShowWorkspaceView(section, tab, options);
     if (section === "reportes" && !snapshotsLoaded && !initialStateLoadPending) {
       loadSnapshotsOnce(false).catch((error) => {
         console.warn("No se pudieron cargar los historicos:", error);
