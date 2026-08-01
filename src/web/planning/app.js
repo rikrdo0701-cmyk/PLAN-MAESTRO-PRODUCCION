@@ -4024,6 +4024,8 @@ function renderLoadSourceSelect() {
 async function loadSelectedLoadPlan(snapshotId) {
   if (!snapshotId || snapshotId === "draft") {
     loadSnapshot = null;
+    const scheduledStart = scheduledPlanWindowStart();
+    state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
     renderLoads();
     return;
   }
@@ -4033,6 +4035,10 @@ async function loadSelectedLoadPlan(snapshotId) {
       ? await callAppsScript("getPlanSnapshot", snapshotId)
       : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
     loadSnapshot.snapshotId = snapshotId;
+    const source = loadSnapshot.fullState || loadSnapshot;
+    if (source.weekStart || source.planStart) {
+      state.loadWeekStart = normalizeWeekStartValue(source.weekStart || source.planStart);
+    }
     renderLoads();
   } catch (error) {
     loadSnapshot = null;

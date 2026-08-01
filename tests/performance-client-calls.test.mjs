@@ -75,6 +75,10 @@ const applyPlanningPayloadSource = appSource.slice(
   appSource.indexOf("function applyNetSuitePlanningPayload("),
   appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
 );
+const loadSourceSelectionSource = appSource.slice(
+  appSource.indexOf("async function loadSelectedLoadPlan("),
+  appSource.indexOf("async function loadIncrementalPlanningBase("),
+);
 const adjustedProductionSource = appSource.slice(
   appSource.indexOf("function adjustedProductionMinutes("),
   appSource.indexOf("function opStart("),
@@ -748,6 +752,28 @@ test("dos clics rapidos comparten guardado y deshabilitan controles de la misma 
 test("las fotos de prioridad y cola usan carga diferida nativa", () => {
   assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-backlog-photo/);
   assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-queue-photo/);
+});
+
+test("seleccionar Borrador alinea Cargas con la semana realmente programada", async () => {
+  const state = { loadWeekStart: "2026-06-29", planStart: "2026-08-03" };
+  let renders = 0;
+  const loadSelectedLoadPlan = Function(
+    "state", "scheduledPlanWindowStart", "normalizeWeekStartValue", "formatDate", "renderLoads",
+    `let loadSnapshot = { snapshotId: "anterior" };
+     ${loadSourceSelectionSource}
+     return loadSelectedLoadPlan;`,
+  )(
+    state,
+    () => new Date(2026, 7, 3),
+    (value) => String(value),
+    (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
+    () => { renders += 1; },
+  );
+
+  await loadSelectedLoadPlan("draft");
+
+  assert.equal(state.loadWeekStart, "2026-08-03");
+  assert.equal(renders, 1);
 });
 
 test("el cliente conserva un segundo en la duracion ajustada solo con la marca de fallback", () => {
