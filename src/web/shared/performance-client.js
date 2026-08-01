@@ -222,6 +222,7 @@
       deferredMaterials = true;
       deferredRevision = Number(imported.performance.revision || imported.revision || state.revision || 0);
     }
+    invalidateInactiveMaterialOts();
     writeMeta({
       revision: Number(state.revision || 0),
       deferredMaterials,
@@ -534,11 +535,12 @@
       }
 
       if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
+      purgeClosedWorkOrderRetention();
       initialStateLoadPending = false;
       state.selectedDetailOt = "";
       state.selectedOperationId = "";
       saveState("ui");
-      render({ saveScope: "ui" });
+      render({ save: false });
       applyInitialWorkspaceView();
 
       if (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded)) {
@@ -614,6 +616,17 @@
     });
   };
 
+  const originalSyncBacklogWorkOrders = typeof syncBacklogWorkOrders === "function"
+    ? syncBacklogWorkOrders
+    : null;
+  if (originalSyncBacklogWorkOrders) {
+    syncBacklogWorkOrders = async function optimizedSyncBacklogWorkOrders(...args) {
+      const result = await originalSyncBacklogWorkOrders(...args);
+      invalidateInactiveMaterialOts();
+      return result;
+    };
+  }
+
   const originalShowWorkspaceView = showWorkspaceView;
   showWorkspaceView = function optimizedShowWorkspaceView(section, tab = "") {
     originalShowWorkspaceView(section, tab);
@@ -635,6 +648,7 @@
           root.setTimeout(() => loadAppStateInBackground(), 0);
           return;
         }
+        if (materialRequests.get(key) !== request || !isMaterialOtActive(key)) return;
         state.materials = [
           ...(state.materials || []).filter((item) => materialOtKey(item.ot) !== key),
           ...(Array.isArray(result?.materials) ? result.materials : []),
@@ -644,9 +658,26 @@
         if (selectedJobOt() && materialOtKey(selectedJobOt()) === key) originalRenderSelectedJobPanel();
       })
       .catch((error) => console.warn(`No se pudieron cargar materiales de ${ot}:`, error))
-      .finally(() => materialRequests.delete(key));
+      .finally(() => {
+        if (materialRequests.get(key) === request) materialRequests.delete(key);
+      });
     materialRequests.set(key, request);
     return request;
+  }
+
+  function isMaterialOtActive(key) {
+    return (state.workOrders || []).some((item) => materialOtKey(item.ot) === key);
+  }
+
+  function invalidateInactiveMaterialOts() {
+    const activeOts = new Set((state.workOrders || []).map((item) => materialOtKey(item.ot)).filter(Boolean));
+    loadedMaterialOts.forEach((key) => {
+      if (!activeOts.has(key)) loadedMaterialOts.delete(key);
+    });
+    materialRequests.forEach((_request, key) => {
+      if (!activeOts.has(key)) materialRequests.delete(key);
+    });
+    state.materials = (state.materials || []).filter((item) => activeOts.has(materialOtKey(item.ot)));
   }
 
   const originalRenderSelectedJobPanel = renderSelectedJobPanel;

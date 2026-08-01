@@ -124,6 +124,7 @@ function loadClient(options = {}) {
     applyImported: (imported, importedOptions) => {
       applyImportedCalls.push({ imported: structuredClone(imported), options: importedOptions });
       Object.assign(state, structuredClone(imported));
+      options.onApplyImported?.(state);
     },
     saveAppSheet: async () => false,
     queueAppSheetSave: () => {},
@@ -173,7 +174,8 @@ function loadClient(options = {}) {
     saveState: () => {
       if (options.saveStateFlush) context.scheduleLocalStorageFlush();
     },
-    render: () => {},
+    render: (renderOptions) => options.onRender?.(renderOptions),
+    purgeClosedWorkOrderRetention: () => options.onPurge?.(state),
     applyInitialWorkspaceView: () => {
       if (options.initialSection) context.showWorkspaceView(options.initialSection);
     },
@@ -225,6 +227,21 @@ test("un conflicto recarga la coleccion remota y no reintenta el payload obsolet
   assert.deepEqual(fixture.state.excludedCapabilities, ["5527::SOLDADURA"]);
   assert.equal(fixture.context.appSheetDirtyScopes.size, 0);
   assert.equal(fixture.timers.length, 0);
+});
+
+test("el arranque optimizado purga despues de importar y renderiza sin guardar", async () => {
+  const events = [];
+  const fixture = loadClient({
+    revision: 0,
+    remote: { revision: 2, operations: [{ id: "remote" }], workOrders: [{ ot: "WO-2" }] },
+    onApplyImported: (state) => events.push(`import:${state.revision}`),
+    onPurge: (state) => events.push(`purge:${state.revision}`),
+    onRender: (options) => events.push(`render:${JSON.stringify(options)}`),
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(events.slice(0, 3), ["import:2", "purge:2", "render:{\"save\":false}"]);
 });
 
 test("el arranque evita descargar el estado cuando la revision y la cache utilizable no cambiaron", async () => {
@@ -390,8 +407,9 @@ test("un fallo condicional conserva el estado local y no carga historicos en el 
 test("unchanged restaura materiales diferidos desde metadata y los carga bajo demanda", async () => {
   const fixture = loadClient({
     revision: 12,
+    state: { workOrders: [{ ot: "WO-12" }] },
     selectedJob: { ot: "WO-12" },
-    localState: coherentLocalState(12),
+    localState: coherentLocalState(12, { workOrders: [{ ot: "WO-12" }] }),
     metadata: coherentMetadata(12, { deferredMaterials: true }),
     bridgeResults: {
       getAppStateIfChanged: { unchanged: true, revision: 12 },
@@ -417,7 +435,7 @@ test("un payload cambiado que difiere materiales limpia las OTs marcadas como ca
     localState: JSON.stringify({
       revision: 12,
       operations: [],
-      workOrders: [],
+      workOrders: [{ ot: "WO-12" }],
       materials: [{ ot: "WO-12", material: "LOCAL" }],
       performanceCache: { identity: CACHE_IDENTITY, revision: 12 },
     }),
@@ -426,7 +444,7 @@ test("un payload cambiado que difiere materiales limpia las OTs marcadas como ca
       getAppStateIfChanged: {
         revision: 13,
         operations: [],
-        workOrders: [],
+        workOrders: [{ ot: "WO-12" }],
         materials: [],
         performance: { deferred: { materials: true }, revision: 13 },
       },

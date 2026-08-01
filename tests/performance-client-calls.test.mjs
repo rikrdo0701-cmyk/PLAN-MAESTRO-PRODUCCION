@@ -231,6 +231,7 @@ function loadClient(options = {}) {
     saveState: () => options.saveState?.(),
     saveAndRender: () => options.saveAndRender?.(),
     render: (...args) => options.render?.(...args),
+    purgeClosedWorkOrderRetention: () => {},
     applyInitialWorkspaceView: () => {},
     syncNetSuiteData: (...args) => options.syncNetSuiteData(...args),
     syncWorkOrdersOnce: (syncOptions = {}) => context.syncNetSuiteData(syncOptions.showMessage === true, { mode: "workOrders" }),
@@ -1339,6 +1340,83 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
   assert.deepEqual(plain(renders), [{ save: false }]);
   assert.deepEqual(fixture.busyStates, []);
   assert.deepEqual(fixture.backlogBusyStates, [true, false]);
+});
+
+test("una respuesta tardia de materiales no se fusiona cuando la OT se cerro", async () => {
+  const materialResponse = deferredPromise();
+  let materialCalls = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-1" }], materials: [] },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, materials: current.materials }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "getMaterialsForOt") {
+        materialCalls += 1;
+        return materialResponse.promise;
+      }
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [] };
+      return { revision: 2 };
+    },
+  });
+  fixture.context.applyImported({
+    revision: 1,
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    performance: { deferred: { materials: true }, revision: 1 },
+  });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "WO-1" });
+  fixture.context.selectedJobOt = () => "WO-1";
+
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+  assert.equal(materialCalls, 1);
+
+  await fixture.context.syncBacklogWorkOrders();
+  materialResponse.resolve({ materials: [{ ot: "WO-1", component: "TARDIO" }] });
+  await settleMicrotasks();
+
+  assert.deepEqual(plain(fixture.context.state.materials), []);
+});
+
+test("una OT reabierta vuelve a consultar sus materiales bajo demanda", async () => {
+  let materialCalls = 0;
+  let backlogCalls = 0;
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-1" }], materials: [] },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, materials: current.materials }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "getMaterialsForOt") {
+        materialCalls += 1;
+        return { materials: [{ ot: "WO-1", component: `MAT-${materialCalls}` }] };
+      }
+      if (method === "fetchNetSuiteWorkOrdersLite") {
+        backlogCalls += 1;
+        return { workOrders: backlogCalls === 1 ? [] : [{ ot: "WO-1" }] };
+      }
+      return { revision: 2 };
+    },
+  });
+  fixture.context.applyImported({
+    revision: 1,
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    performance: { deferred: { materials: true }, revision: 1 },
+  });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "WO-1" });
+  fixture.context.selectedJobOt = () => "WO-1";
+
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+  await fixture.context.syncBacklogWorkOrders();
+  await fixture.context.syncBacklogWorkOrders();
+  fixture.context.renderSelectedJobPanel();
+  await settleMicrotasks();
+
+  assert.equal(materialCalls, 2);
+  assert.deepEqual(plain(fixture.context.state.materials), [{ ot: "WO-1", component: "MAT-2" }]);
 });
 
 test("un timeout de sincronizacion manual no modifica ni guarda el estado", async () => {
