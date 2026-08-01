@@ -71,9 +71,7 @@
 
   function bridgeCall(method, ...args) {
     if (!root.PPAppsScriptBridge?.call) return Promise.reject(new Error("El puente con Apps Script no esta disponible"));
-    const mappedMethod = method === "saveAppState"
-      ? "savePlanningStateOptimized"
-      : (method === "syncNetSuiteWorkOrders" ? "syncNetSuiteWorkOrdersLite" : method);
+    const mappedMethod = method === "syncNetSuiteWorkOrders" ? "syncNetSuiteWorkOrdersLite" : method;
     return root.PPAppsScriptBridge.call(mappedMethod, args);
   }
 

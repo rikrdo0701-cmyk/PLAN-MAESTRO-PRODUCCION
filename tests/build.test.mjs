@@ -137,8 +137,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.purgeClosedWorkOrderRetention\(/);
-  assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", true\)/);
-  assert.match(pagesIndex, /setPlanningActionsBusy\("backlog-sync", false\)/);
+  assert.match(pagesIndex, /setBacklogSyncInFlight\(true\)/);
+  assert.match(pagesIndex, /setBacklogSyncInFlight\(false\)/);
   assert.match(pagesIndex, /id="restoreDraftBtn"[^>]*>Restaurar borrador<\/button>/);
   assert.equal((pagesIndex.match(/id="restoreDraftBtn"/g) || []).length, 1);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)/);
@@ -178,17 +178,22 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
     pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
-  assert.match(backlogSyncSource, /fetchNetSuiteWorkOrdersLiteCompat\(true\)/);
+  assert.match(backlogSyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
   assert.match(backlogSyncSource, /NETSUITE_BACKLOG_SYNC_TIMEOUT_MS/);
-  assert.match(backlogSyncSource, /callAppsScript\("savePlanningStateOptimized", createAppSheetPayload\(nextState\)\)/);
+  assert.match(backlogSyncSource, /callAppsScript\("saveAppState", createAppSheetPayload\(nextState\)\)/);
   assert.doesNotMatch(backlogSyncSource, /openPlanningDialog|compareWorkOrderLite|applyConfirmedWorkOrderChanges|persistPlanSnapshot/);
-  assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders"/);
-  assert.match(pagesIndex, /async function fetchNetSuiteWorkOrdersLiteCompat\(allowPersistedFallback = false\)[\s\S]*Metodo no permitido:[\s\S]*syncNetSuiteWorkOrdersLite/);
+  assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
+  assert.doesNotMatch(pagesIndex, /function fetchNetSuiteWorkOrdersLiteCompat/);
   assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
   assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
   assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz"\)/);
+  const builtStartupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function loadAppStateInBackground()"),
+    pagesIndex.indexOf("async function restoreDraftPlanFromSharedState()"),
+  );
+  assert.match(builtStartupSource, /await loadPlanSnapshots\(false\);[\s\S]*purgeClosedWorkOrderRetention\(\)/);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);

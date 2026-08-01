@@ -98,6 +98,7 @@ function loadClient(options = {}) {
   const storage = new Map();
   const toasts = [];
   const busyStates = [];
+  const backlogBusyStates = [];
   const state = {
     revision: 1,
     materials: [],
@@ -171,12 +172,17 @@ function loadClient(options = {}) {
     appSheetSaveTimer: null,
     netSuiteSyncInFlight: false,
     netSuitePlanningSyncInFlight: false,
+    backlogSyncInFlight: false,
     planningActionsBusy: "",
     planSnapshots: [],
     showToast: (message) => toasts.push(message),
     setPlanningActionsBusy: (_action, inProgress) => {
       context.planningActionsBusy = inProgress ? "sync" : "";
       busyStates.push(inProgress);
+    },
+    setBacklogSyncInFlight: (inProgress) => {
+      context.backlogSyncInFlight = inProgress;
+      backlogBusyStates.push(inProgress);
     },
     setNetSuiteSyncPhaseLabel: () => {},
     loadAppStateInBackground: async () => {},
@@ -191,13 +197,12 @@ function loadClient(options = {}) {
     syncNetSuiteData: (...args) => options.syncNetSuiteData(...args),
     syncWorkOrdersOnce: (syncOptions = {}) => context.syncNetSuiteData(syncOptions.showMessage === true, { mode: "workOrders" }),
     syncNetSuiteInBackground: (syncOptions) => context.syncWorkOrdersOnce(syncOptions),
-    fetchNetSuiteWorkOrdersLiteCompat: (...args) => options.fetchNetSuiteWorkOrdersLiteCompat?.(...args),
     validateNetSuiteImportedData: () => {},
     invalidateCurrentPlanOperationsCache: () => options.invalidateCurrentPlanOperationsCache?.(),
     resetBacklogWindow: () => options.resetBacklogWindow?.(),
     applyNetSuitePlanningPayload: () => {},
     callAppsScript: (...args) => options.callAppsScript?.(...args),
-    createAppSheetPayload: () => ({}),
+    createAppSheetPayload: (source) => options.createAppSheetPayload?.(source) ?? {},
     renderTop: () => {},
     renderPlanAlerts: () => {},
     showWorkspaceView: () => {},
@@ -227,7 +232,7 @@ function loadClient(options = {}) {
     vm.runInContext(selectedPriorityJobSource, context, { filename: "planning-selected-priority-job.js" });
     vm.runInContext(selectedJobOtSource, context, { filename: "planning-selected-job-ot.js" });
   }
-  return { context, state, toasts, busyStates };
+  return { context, state, toasts, busyStates, backlogBusyStates };
 }
 
 test("el cliente conserva un segundo en la duracion ajustada solo con la marca de fallback", () => {
@@ -1217,7 +1222,7 @@ test("un fallo libera la sincronizacion compartida para reintentar", async () =>
   assert.deepEqual(fixture.toasts, ["No se pudo cargar NetSuite: backend fuera de linea"]);
 });
 
-test("la sincronizacion manual ligera reconcilia y guarda una vez sin dialogos", async () => {
+test("la sincronizacion manual ligera usa el contrato completo y guarda una vez sin dialogos", async () => {
   const calls = [];
   const timeouts = [];
   let dialogs = 0;
@@ -1231,7 +1236,6 @@ test("la sincronizacion manual ligera reconcilia y guarda una vez sin dialogos",
       operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
       materials: [{ ot: "WO-CERRADA", component: "MAT" }],
     },
-    fetchNetSuiteWorkOrdersLiteCompat: async () => ({ workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }] }),
     withTimeout: (promise, timeoutMs) => {
       timeouts.push(timeoutMs);
       return promise;
@@ -1247,12 +1251,18 @@ test("la sincronizacion manual ligera reconcilia y guarda una vez sin dialogos",
     },
     purgeClosedWorkOrderRetention: (current) => {
       purges += 1;
-      return { ...current, retentionPurged: true };
+      return {
+        ...current,
+        retentionPurged: true,
+        closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
+      };
     },
     callAppsScript: async (method, payload) => {
       calls.push([method, payload]);
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }], syncedAt: "2026-08-01T00:00:00.000Z" };
       return { revision: 2 };
     },
+    createAppSheetPayload: (source) => ({ ...plain(source), source: "plan-app-sheet", savedAt: "2026-08-01T00:00:00.000Z" }),
     render: (options) => renders.push(options),
   });
   fixture.context.openPlanningDialog = async () => { dialogs += 1; return {}; };
@@ -1263,15 +1273,26 @@ test("la sincronizacion manual ligera reconcilia y guarda una vez sin dialogos",
   assert.equal(reconciliations, 1);
   assert.equal(purges, 1);
   assert.equal(dialogs, 0);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], "savePlanningStateOptimized");
+  assert.deepEqual(calls.map(([method]) => method), ["fetchNetSuiteWorkOrdersLite", "saveAppState"]);
+  assert.deepEqual(plain(calls[1][1]), {
+    revision: 1,
+    workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }],
+    operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
+    materials: [],
+    retentionPurged: true,
+    closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
+    syncedAt: "2026-08-01T00:00:00.000Z",
+    source: "plan-app-sheet",
+    savedAt: "2026-08-01T00:00:00.000Z",
+  });
   assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA", item: "ACTIVA" }]);
   assert.deepEqual(plain(fixture.context.state.operations), [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }]);
   assert.deepEqual(plain(fixture.context.state.materials), []);
   assert.equal(fixture.context.state.retentionPurged, true);
   assert.equal(fixture.context.state.revision, 2);
   assert.deepEqual(plain(renders), [{ save: false }]);
-  assert.deepEqual(fixture.busyStates, [true, false]);
+  assert.deepEqual(fixture.busyStates, []);
+  assert.deepEqual(fixture.backlogBusyStates, [true, false]);
 });
 
 test("un timeout de sincronizacion manual no modifica ni guarda el estado", async () => {
@@ -1280,12 +1301,14 @@ test("un timeout de sincronizacion manual no modifica ni guarda el estado", asyn
   const fixture = loadClient({
     installBacklogSync: true,
     state: { workOrders: [{ ot: "WO-LOCAL" }], operations: [{ id: "local", ot: "WO-LOCAL" }] },
-    fetchNetSuiteWorkOrdersLiteCompat: async () => ({ workOrders: [{ ot: "WO-REMOTA" }] }),
     withTimeout: async () => { throw new Error("timeout"); },
     reconcileActiveWorkOrders: () => { throw new Error("no debe reconciliar"); },
     purgeClosedWorkOrderRetention: () => { throw new Error("no debe depurar"); },
     checkpointState: () => { checkpoints += 1; },
-    callAppsScript: async () => { saveCalls += 1; },
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-REMOTA" }] };
+      saveCalls += 1;
+    },
   });
   const before = plain(fixture.context.state);
 
@@ -1294,7 +1317,34 @@ test("un timeout de sincronizacion manual no modifica ni guarda el estado", asyn
   assert.deepEqual(plain(fixture.context.state), before);
   assert.equal(checkpoints, 0);
   assert.equal(saveCalls, 0);
-  assert.deepEqual(fixture.busyStates, [true, false]);
+  assert.deepEqual(fixture.busyStates, []);
+  assert.deepEqual(fixture.backlogBusyStates, [true, false]);
+});
+
+test("la sincronizacion manual ignora un segundo clic mientras la consulta ligera sigue activa", async () => {
+  const gate = deferredPromise();
+  const calls = [];
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { workOrders: [{ ot: "WO-LOCAL" }] },
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "fetchNetSuiteWorkOrdersLite") return gate.promise;
+      return { revision: 2 };
+    },
+    reconcileActiveWorkOrders: (state, workOrders) => ({ ...state, workOrders }),
+    purgeClosedWorkOrderRetention: (state) => state,
+  });
+
+  const first = fixture.context.syncBacklogWorkOrders();
+  await settleMicrotasks();
+  await fixture.context.syncBacklogWorkOrders();
+
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  gate.resolve({ workOrders: [{ ot: "WO-ACTIVA" }] });
+  await first;
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveAppState"]);
+  assert.deepEqual(fixture.backlogBusyStates, [true, false]);
 });
 
 test("el boton manual y el fondo comparten la llamada backend de OTs", async () => {
@@ -1358,6 +1408,7 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
     planningActionsBusy: "sync",
     netSuiteSyncInFlight: false,
     netSuitePlanningSyncInFlight: false,
+    backlogSyncInFlight: false,
     setNetSuiteSyncPhaseLabel(message) {
       buttons.loadNsExerciseBtn.label.textContent = message || "Sincronizar";
     },
@@ -1374,10 +1425,12 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
   context.planningActionsBusy = "sync";
   context.netSuiteSyncInFlight = true;
   context.setPlanningActionsBusy("sync", false);
-  for (const button of Object.values(buttons)) {
+  for (const button of [buttons.loadNsExerciseBtn, buttons.scheduleBtn, buttons.restoreDraftBtn]) {
     assert.equal(button.disabled, true);
     assert.equal(button.attributes.has("aria-busy"), true);
   }
+  assert.equal(buttons.syncBacklogOtsBtn.disabled, false);
+  assert.equal(buttons.syncBacklogOtsBtn.attributes.has("aria-busy"), false);
 
   context.netSuiteSyncInFlight = false;
   context.setPlanningActionsBusy("sync", false);

@@ -469,6 +469,7 @@ let appSheetDirtyScopes = new Set();
 let operationStatusSavesInFlight = 0;
 let netSuiteSyncInFlight = false;
 let netSuitePlanningSyncInFlight = false;
+let backlogSyncInFlight = false;
 let planningActionsBusy = "";
 let stateHistory = [];
 let queuePointerDrag = null;
@@ -5647,24 +5648,14 @@ function formatReportDuration(minutes) {
   return `${seconds} s`;
 }
 
-async function fetchNetSuiteWorkOrdersLiteCompat(allowPersistedFallback = false) {
-  try {
-    return await callAppsScript("fetchNetSuiteWorkOrdersLite");
-  } catch (error) {
-    const unsupported = /Metodo no permitido:\s*fetchNetSuiteWorkOrdersLite/i.test(String(error?.message || error || ""));
-    if (!allowPersistedFallback || !unsupported) throw error;
-    return callAppsScript("syncNetSuiteWorkOrdersLite");
-  }
-}
-
 async function syncBacklogWorkOrders() {
-  if (planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight) {
-    return showToast("La planificacion, sincronizacion o restauracion ya esta en curso");
+  if (backlogSyncInFlight) {
+    return showToast("La sincronizacion de OTs ya esta en curso");
   }
-  setPlanningActionsBusy("backlog-sync", true);
+  setBacklogSyncInFlight(true);
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
-      fetchNetSuiteWorkOrdersLiteCompat(true),
+      callAppsScript("fetchNetSuiteWorkOrdersLite"),
       NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
@@ -5674,7 +5665,7 @@ async function syncBacklogWorkOrders() {
       nowIso,
     );
     nextState.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
-    const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload(nextState));
+    const saved = await callAppsScript("saveAppState", createAppSheetPayload(nextState));
     state = nextState;
     state.revision = Number(saved?.revision || state.revision);
     invalidateCurrentPlanOperationsCache();
@@ -5684,7 +5675,7 @@ async function syncBacklogWorkOrders() {
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
   } finally {
-    setPlanningActionsBusy("backlog-sync", false);
+    setBacklogSyncInFlight(false);
   }
 }
 
@@ -6089,8 +6080,13 @@ function refreshPlanningActionControls() {
   const busy = Boolean(planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight);
   setPlanningControlBusy(els.scheduleBtn, busy);
   setPlanningControlBusy(els.loadNsExerciseBtn, busy);
-  setPlanningControlBusy(els.syncBacklogOtsBtn, busy);
+  setPlanningControlBusy(els.syncBacklogOtsBtn, backlogSyncInFlight);
   setPlanningControlBusy(els.restoreDraftBtn, busy);
+}
+
+function setBacklogSyncInFlight(inProgress) {
+  backlogSyncInFlight = inProgress;
+  refreshPlanningActionControls();
 }
 
 function setNetSuiteSyncState(inProgress) {

@@ -72,6 +72,7 @@ function patchPlanningApp(app) {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   await loadPlanSnapshots(false);
+  purgeClosedWorkOrderRetention();
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
   resetDailyReportFiltersToToday();
   state.selectedOperationId = "";
