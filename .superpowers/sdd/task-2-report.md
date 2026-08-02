@@ -31,3 +31,11 @@
 - Primera revisión independiente: sin Critical; detectó dos Important (fijas futuras omitidas del fin proyectado y tres fixtures que inspeccionaban un ganador distinto de flow).
 - Correcciones TDD: fin proyectado/sucesor fusionan movibles y fijas futuras en secuencia; los tres fixtures exigen `selectedStrategy === "flow_balanced"`; se añadió regresión de fija futura.
 - Segunda revisión independiente: ambos hallazgos cerrados, sin nuevos Critical/Important; veredicto listo.
+
+## Apéndice TDD — factibilidad ante sucesora fija
+
+- Hallazgo Critical: una predecesora movible podía rebasar el inicio de una sucesora fija; `flowProjectedFinish` sólo afectaba el ranking.
+- RED: `node --test --test-name-pattern="predecesora movible" tests/planner-core.test.mjs` → 0 pass, 2 fail; la operación de 180 minutos se programaba sobre la sucesora fija 08:00–09:00, con precedencia completa y con `overlap: 0.5`.
+- GREEN: el mismo comando → 2 pass, 0 fail.
+- Corrección: `findBestAssignment` rechaza asignaciones cuyo hito de liberación rebasa el inicio de la sucesora fija inmediata; el hito reutiliza la misma regla de precedencia/solapamiento de `computeEarliestStart`.
+- Verificación final del apéndice: focal 64 pass, 0 fail; suite completa 338 pass, 0 fail; `git diff --check` limpio.

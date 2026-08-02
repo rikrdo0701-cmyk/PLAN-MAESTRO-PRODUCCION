@@ -147,7 +147,7 @@
         const op = job.operations[job.index];
         if (!op) continue;
         const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
-        const assignment = findBestAssignment(context, op, previous);
+        const assignment = findBestAssignment(context, job, op, previous);
         if (assignment) ready.push({ job, op, assignment });
       }
 
@@ -289,10 +289,13 @@
     return `${herramental || "SIN_HERR"}/${kit || "SIN_KIT"}`;
   }
 
-  function findBestAssignment(context, op, previous) {
+  function findBestAssignment(context, job, op, previous) {
     const earliest = computeEarliestStart(context, op, previous);
     if (earliest >= context.windowEnd) return null;
-    if (isSubcontractOperation(context.state, op)) return findSubcontractAssignment(context, op, earliest);
+    if (isSubcontractOperation(context.state, op)) {
+      const assignment = findSubcontractAssignment(context, op, earliest);
+      return assignment && respectsFixedSuccessor(context, job, op, assignment) ? assignment : null;
+    }
     const finite = isFiniteOperation(context.state, op);
     const operators = operatorCandidates(context.state, op, finite);
     if (!operators.length) return null;
@@ -304,7 +307,9 @@
     for (const operator of operators) {
       for (const machine of machines) {
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
-        if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
+        if (assignment && respectsFixedSuccessor(context, job, op, assignment)) {
+          assignments.push({ ...assignment, earliest: new Date(earliest) });
+        }
       }
     }
 
@@ -675,17 +680,40 @@
   function computeEarliestStart(context, op, previous) {
     let earliest = new Date(context.windowStart);
     if (previous?.operation) {
-      const ratio = overlapForOperation(context.state, previous.operation);
-      const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
-      let predecessorLimit = previous.end;
-      if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
-        const partialMilestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-        if (partialMilestone && partialMilestone < previous.end) predecessorLimit = partialMilestone;
-      }
+      const predecessorLimit = predecessorReleaseMoment(context, previous);
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
     }
 
     return nextAvailableMoment(context.state, earliest, "", "", context.windowEnd);
+  }
+
+  function predecessorReleaseMoment(context, previous) {
+    const ratio = overlapForOperation(context.state, previous.operation);
+    const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
+    let limit = previous.end;
+    if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
+      const partialMilestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
+      if (partialMilestone && partialMilestone < previous.end) limit = partialMilestone;
+    }
+    return limit;
+  }
+
+  function respectsFixedSuccessor(context, job, op, assignment) {
+    const fixed = new Set(job.fixedOperations);
+    const successor = [
+      ...job.operations.slice(job.index + 1),
+      ...job.fixedOperations.filter((operation) => compareOperationSequence(operation, op) > 0),
+    ].sort(compareOperationSequence)[0];
+    if (!successor || !fixed.has(successor)) return true;
+    const fixedStart = operationStart(successor);
+    if (!fixedStart) return true;
+    const release = predecessorReleaseMoment(context, {
+      operation: op,
+      start: assignment.operationStart,
+      end: assignment.end,
+      duration: assignment.productionMinutes,
+    });
+    return Boolean(release && release <= fixedStart);
   }
 
   function isLaterOperationGapFill(context, job, assignment) {

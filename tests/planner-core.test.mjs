@@ -1300,3 +1300,41 @@ test("si flow balanced falla se excluye y las estrategias existentes continuan",
   assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
   assert.deepEqual([...result.lastSchedule.optimization.strategiesEvaluated].map((item) => item.strategy), ["balanced", "finish", "load"]);
 });
+
+function scheduleBeforeFixedSuccessor(operationRules = {}) {
+  const core = loadPlannerCore();
+  return core.schedulePlan({
+    selectedOts: ["500"],
+    operations: [
+      { id: "movable-predecessor", ot: "500", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 180 },
+      { id: "fixed-successor", ot: "500", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+    ],
+    workOrders: [{ ot: "500" }],
+    matrix: { "CORTE::CORTE": ["OP 1"], "EMPAQUE::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["CORTE::CORTE", "EMPAQUE::EMPAQUE"],
+    operationRules,
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+}
+
+test("una predecesora movible no se agenda despues del inicio de su sucesora fija", () => {
+  const result = scheduleBeforeFixedSuccessor();
+  const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
+  const successor = result.operations.find((op) => op.id === "fixed-successor");
+
+  assert.equal(predecessor.fechaInicio, undefined);
+  assert.deepEqual([successor.fechaInicio, successor.horaInicio, successor.fechaFin, successor.horaFin], ["2026-07-13", "08:00", "2026-07-13", "09:00"]);
+  assert.equal(result.lastSchedule.unscheduled, 1);
+});
+
+test("una predecesora movible respeta el hito de solapamiento antes de su sucesora fija", () => {
+  const result = scheduleBeforeFixedSuccessor({ "CORTE::CORTE": { overlap: 0.5 } });
+  const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
+
+  assert.equal(predecessor.fechaInicio, undefined);
+  assert.equal(result.lastSchedule.unscheduled, 1);
+});
