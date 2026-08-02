@@ -12,6 +12,13 @@ function loadPlannerCore() {
   return context.globalThis.PlannerCore;
 }
 
+function loadPlannerCoreWithSinglePass() {
+  const context = { globalThis: {} };
+  const instrumented = source.replace("\n    evaluatePlan,", "\n    schedulePlanOnce,\n    evaluatePlan,");
+  vm.runInNewContext(instrumented, context, { filename: "planner-core.js" });
+  return context.globalThis.PlannerCore;
+}
+
 test("PlannerCore expone el programador principal", () => {
   const core = loadPlannerCore();
   assert.equal(typeof core.schedulePlan, "function");
@@ -1379,4 +1386,35 @@ test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movibl
   assert.equal(result.operations.find((op) => op.id === "chain-first").fechaInicio, undefined);
   assert.equal(result.operations.find((op) => op.id === "chain-no-slot").fechaInicio, undefined);
   assert.equal(result.lastSchedule.unscheduled, 2);
+});
+
+test("flow balanced busca otro recurso si el de menor carga no alcanza la sucesora fija", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const result = core.schedulePlanOnce({
+    selectedOts: ["800", "900"],
+    operations: [
+      { id: "chain-start", ot: "800", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
+      { id: "chain-choice", ot: "800", secuencia: 2, ct: "ELECCION", descripcion: "ELECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "chain-fixed-nine", ot: "800", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "op1-prior-load", ot: "900", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
+    ],
+    workOrders: [{ ot: "800" }, { ot: "900" }],
+    matrix: {
+      "INICIO::INICIO": ["OP 0"], "ELECCION::ELECCION": ["OP 1", "OP 2"],
+      "FIJA::FIJA": ["OP 3"], "CARGA::CARGA": ["OP 1"],
+    },
+    configuredCapabilities: ["INICIO::INICIO", "ELECCION::ELECCION", "FIJA::FIJA", "CARGA::CARGA"],
+    calendarExceptions: [
+      { date: "2026-07-13", concept: "OPERADOR", resource: "OP 1", start: "08:00", end: "17:00" },
+      { date: "2026-07-13", concept: "OPERADOR", resource: "OP 2", start: "07:00", end: "09:00" },
+    ],
+    operators: ["OP 0", "OP 1", "OP 2", "OP 3"], settings: { flowWipTarget: 1 }, workSchedule: {},
+  }, {
+    strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  const choice = result.operations.find((op) => op.id === "chain-choice");
+  assert.equal(result.lastSchedule.unscheduled, 0);
+  assert.equal(choice.operador, "OP 1");
+  assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });

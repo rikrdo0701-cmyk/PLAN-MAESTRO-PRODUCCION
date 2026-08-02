@@ -48,3 +48,11 @@
 - GREEN: el mismo comando → 2 pass, 0 fail.
 - Corrección: los hitos consumen `productionSegments`; la cadena se prueba con el asignador existente sobre un contexto sombra que reserva cada candidata sin mutar el plan real.
 - Verificación final: focal 66 pass, 0 fail; suite completa 340 pass, 0 fail.
+
+## Apéndice TDD — alternativa factible antes de fija
+
+- Hallazgo Important: la simulación de cadena elegía una sola asignación `flow_balanced`; un recurso menos cargado pero tardío podía ocultar otro que sí alcanzaba la fija.
+- RED: `node --test --test-name-pattern="menor carga no alcanza" tests/planner-core.test.mjs` → 0 pass, 1 fail; quedaron 2 operaciones sin programar.
+- GREEN: el mismo comando → 1 pass, 0 fail; eligió OP1 07:30–08:00 frente a OP2 disponible desde 09:00.
+- Corrección: enumeración compartida de asignaciones y exploración de cadena limitada a 32 ramas; la carga ordena únicamente alternativas factibles.
+- Verificación final: focal 67 pass, 0 fail; suite completa 341 pass, 0 fail; `git diff --check` limpio.

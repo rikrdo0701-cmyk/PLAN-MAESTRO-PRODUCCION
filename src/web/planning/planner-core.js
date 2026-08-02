@@ -12,6 +12,7 @@
   const DEFAULT_END_MINUTE = 17 * 60;
   const DEFAULT_HORIZON_DAYS = 15;
   const MAX_SCHEDULING_DAYS = 366;
+  const MAX_FIXED_CHAIN_PROBES = 32;
   const GENERATED_BY = "PLANNER_CORE_V2";
   const TOOL_CHANGE_CAPABILITY = {
     key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
@@ -289,32 +290,35 @@
     return `${herramental || "SIN_HERR"}/${kit || "SIN_KIT"}`;
   }
 
-  function findBestAssignment(context, job, op, previous, enforceFixedSuccessor = true) {
+  function findBestAssignment(context, job, op, previous) {
+    const assignments = findAssignments(context, op, previous)
+      .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
+    assignments.sort((a, b) => compareAssignments(a, b, context.strategy));
+    return assignments[0] || null;
+  }
+
+  function findAssignments(context, op, previous) {
     const earliest = computeEarliestStart(context, op, previous);
-    if (earliest >= context.windowEnd) return null;
+    if (earliest >= context.windowEnd) return [];
     if (isSubcontractOperation(context.state, op)) {
       const assignment = findSubcontractAssignment(context, op, earliest);
-      return assignment && (!enforceFixedSuccessor || respectsFixedSuccessor(context, job, op, assignment)) ? assignment : null;
+      return assignment ? [{ ...assignment, earliest: new Date(earliest) }] : [];
     }
     const finite = isFiniteOperation(context.state, op);
     const operators = operatorCandidates(context.state, op, finite);
-    if (!operators.length) return null;
+    if (!operators.length) return [];
 
     const machines = machineCandidates(context.state, op);
-    if (!machines.length) return null;
+    if (!machines.length) return [];
     const assignments = [];
 
     for (const operator of operators) {
       for (const machine of machines) {
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
-        if (assignment && (!enforceFixedSuccessor || respectsFixedSuccessor(context, job, op, assignment))) {
-          assignments.push({ ...assignment, earliest: new Date(earliest) });
-        }
+        if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
       }
     }
-
-    assignments.sort((a, b) => compareAssignments(a, b, context.strategy));
-    return assignments[0] || null;
+    return assignments;
   }
 
   function findEarliestSlot(context, op, earliest, operator, machine, finite) {
@@ -725,15 +729,33 @@
     if (!fixedStart) return true;
     const probeContext = cloneFeasibilityContext(context);
     const probeJob = { ...job };
-    let previous = commitAssignment(probeContext, op, { ...assignment, gapFill: false });
-    for (const intermediate of future.slice(0, fixedIndex)) {
-      probeJob.index = job.operations.indexOf(intermediate);
-      const nextAssignment = findBestAssignment(probeContext, probeJob, intermediate, previous, false);
-      if (!nextAssignment) return false;
-      previous = commitAssignment(probeContext, intermediate, { ...nextAssignment, gapFill: false });
+    const previous = commitAssignment(probeContext, op, { ...assignment, gapFill: false });
+    return fixedChainIsFeasible(
+      probeContext,
+      probeJob,
+      future.slice(0, fixedIndex),
+      fixedStart,
+      previous,
+      { remaining: MAX_FIXED_CHAIN_PROBES },
+    );
+  }
+
+  function fixedChainIsFeasible(context, job, intermediates, fixedStart, previous, budget) {
+    if (!intermediates.length) {
+      const release = predecessorReleaseMoment(context, previous);
+      return Boolean(release && release <= fixedStart);
     }
-    const release = predecessorReleaseMoment(probeContext, previous);
-    return Boolean(release && release <= fixedStart);
+    const [intermediate, ...rest] = intermediates;
+    const probeJob = { ...job, index: job.operations.indexOf(intermediate) };
+    const assignments = findAssignments(context, intermediate, previous)
+      .sort((a, b) => compareAssignments(a, b, context.strategy));
+    for (const assignment of assignments) {
+      if (budget.remaining-- <= 0) return false;
+      const branchContext = cloneFeasibilityContext(context);
+      const next = commitAssignment(branchContext, intermediate, { ...assignment, gapFill: false });
+      if (fixedChainIsFeasible(branchContext, probeJob, rest, fixedStart, next, budget)) return true;
+    }
+    return false;
   }
 
   function cloneFeasibilityContext(context) {
