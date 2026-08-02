@@ -13,6 +13,9 @@
   const DEFAULT_HORIZON_DAYS = 15;
   const MAX_SCHEDULING_DAYS = 366;
   const MAX_FIXED_CHAIN_PROBES = 32;
+  const FIXED_CHAIN_INFEASIBLE = 0;
+  const FIXED_CHAIN_FEASIBLE = 1;
+  const FIXED_CHAIN_INCONCLUSIVE = 2;
   const GENERATED_BY = "PLANNER_CORE_V2";
   const TOOL_CHANGE_CAPABILITY = {
     key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
@@ -730,32 +733,50 @@
     const probeContext = cloneFeasibilityContext(context);
     const probeJob = { ...job };
     const previous = commitAssignment(probeContext, op, { ...assignment, gapFill: false });
-    return fixedChainIsFeasible(
+    return fixedChainFeasibility(
       probeContext,
       probeJob,
       future.slice(0, fixedIndex),
       fixedStart,
       previous,
       { remaining: MAX_FIXED_CHAIN_PROBES },
-    );
+    ) !== FIXED_CHAIN_INFEASIBLE;
   }
 
-  function fixedChainIsFeasible(context, job, intermediates, fixedStart, previous, budget) {
+  function fixedChainFeasibility(context, job, intermediates, fixedStart, previous, budget) {
     if (!intermediates.length) {
       const release = predecessorReleaseMoment(context, previous);
-      return Boolean(release && release <= fixedStart);
+      return release && release <= fixedStart ? FIXED_CHAIN_FEASIBLE : FIXED_CHAIN_INFEASIBLE;
     }
     const [intermediate, ...rest] = intermediates;
     const probeJob = { ...job, index: job.operations.indexOf(intermediate) };
     const assignments = findAssignments(context, intermediate, previous)
-      .sort((a, b) => compareAssignments(a, b, context.strategy));
+      .sort((a, b) => compareFixedChainAssignments(context, intermediate, a, b));
     for (const assignment of assignments) {
-      if (budget.remaining-- <= 0) return false;
+      if (budget.remaining-- <= 0) return FIXED_CHAIN_INCONCLUSIVE;
       const branchContext = cloneFeasibilityContext(context);
       const next = commitAssignment(branchContext, intermediate, { ...assignment, gapFill: false });
-      if (fixedChainIsFeasible(branchContext, probeJob, rest, fixedStart, next, budget)) return true;
+      const result = fixedChainFeasibility(branchContext, probeJob, rest, fixedStart, next, budget);
+      if (result === FIXED_CHAIN_FEASIBLE) return result;
+      if (result === FIXED_CHAIN_INCONCLUSIVE) return result;
     }
-    return false;
+    return FIXED_CHAIN_INFEASIBLE;
+  }
+
+  function compareFixedChainAssignments(context, operation, a, b) {
+    const releaseA = assignmentReleaseMoment(context, operation, a)?.getTime() || Number.MAX_SAFE_INTEGER;
+    const releaseB = assignmentReleaseMoment(context, operation, b)?.getTime() || Number.MAX_SAFE_INTEGER;
+    return releaseA - releaseB || compareAssignments(a, b, context.strategy);
+  }
+
+  function assignmentReleaseMoment(context, operation, assignment) {
+    return predecessorReleaseMoment(context, {
+      operation,
+      start: assignment.operationStart,
+      end: assignment.end,
+      duration: assignment.productionMinutes,
+      segments: assignment.productionSegments || assignment.segments,
+    });
   }
 
   function cloneFeasibilityContext(context) {

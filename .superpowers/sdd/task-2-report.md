@@ -56,3 +56,11 @@
 - GREEN: el mismo comando → 1 pass, 0 fail; eligió OP1 07:30–08:00 frente a OP2 disponible desde 09:00.
 - Corrección: enumeración compartida de asignaciones y exploración de cadena limitada a 32 ramas; la carga ordena únicamente alternativas factibles.
 - Verificación final: focal 67 pass, 0 fail; suite completa 341 pass, 0 fail; `git diff --check` limpio.
+
+## Apéndice TDD — presupuesto de exploración inconcluso
+
+- Hallazgo Important: al agotar 32 sondas, la búsqueda confundía `INCONCLUSIVE` con `INFEASIBLE` y podía descartar una cadena válida.
+- RED: `node --test --test-name-pattern="alternativa factible numero 33" tests/planner-core.test.mjs` → 0 pass, 1 fail; quedaron 2 operaciones sin programar.
+- GREEN: el mismo comando → 1 pass, 0 fail; encontró el operador factible 07:30–08:00 antes de la sucesora fija 09:00.
+- Corrección: las alternativas de cadena priorizan liberación temporal antes que carga y el resultado distingue `FEASIBLE`, `INFEASIBLE` e `INCONCLUSIVE`; agotar el presupuesto acotado de 32 sondas ya no declara inviabilidad.
+- Verificación final: focal 68 pass, 0 fail; suite completa 342 pass, 0 fail; `git diff --check` limpio.

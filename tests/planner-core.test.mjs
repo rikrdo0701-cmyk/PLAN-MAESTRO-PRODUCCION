@@ -1418,3 +1418,35 @@ test("flow balanced busca otro recurso si el de menor carga no alcanza la suceso
   assert.equal(choice.operador, "OP 1");
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
+
+test("flow balanced no descarta la alternativa factible numero 33 por el presupuesto", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const lateOperators = Array.from({ length: 32 }, (_, index) => `OP TARDE ${index + 1}`);
+  const result = core.schedulePlanOnce({
+    selectedOts: ["810", "910"],
+    operations: [
+      { id: "budget-start", ot: "810", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
+      { id: "budget-choice", ot: "810", secuencia: 2, ct: "ELECCION", descripcion: "ELECCION", estatus: "PLAN", tiempoProd: 30 },
+      { id: "budget-fixed-nine", ot: "810", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "fit-prior-load", ot: "910", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", locked: true, operador: "OP FACTIBLE", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
+    ],
+    workOrders: [{ ot: "810" }, { ot: "910" }],
+    matrix: {
+      "INICIO::INICIO": ["OP 0"], "ELECCION::ELECCION": [...lateOperators, "OP FACTIBLE"],
+      "FIJA::FIJA": ["OP FIJA"], "CARGA::CARGA": ["OP FACTIBLE"],
+    },
+    configuredCapabilities: ["INICIO::INICIO", "ELECCION::ELECCION", "FIJA::FIJA", "CARGA::CARGA"],
+    calendarExceptions: [
+      ...lateOperators.map((resource) => ({ date: "2026-07-13", concept: "OPERADOR", resource, start: "07:00", end: "09:00" })),
+      { date: "2026-07-13", concept: "OPERADOR", resource: "OP FACTIBLE", start: "08:00", end: "17:00" },
+    ],
+    operators: ["OP 0", ...lateOperators, "OP FACTIBLE", "OP FIJA"], settings: { flowWipTarget: 1 }, workSchedule: {},
+  }, {
+    strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  const choice = result.operations.find((op) => op.id === "budget-choice");
+  assert.equal(result.lastSchedule.unscheduled, 0);
+  assert.equal(choice.operador, "OP FACTIBLE");
+  assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
+});
