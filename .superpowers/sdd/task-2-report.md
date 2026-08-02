@@ -39,3 +39,12 @@
 - GREEN: el mismo comando → 2 pass, 0 fail.
 - Corrección: `findBestAssignment` rechaza asignaciones cuyo hito de liberación rebasa el inicio de la sucesora fija inmediata; el hito reutiliza la misma regla de precedencia/solapamiento de `computeEarliestStart`.
 - Verificación final del apéndice: focal 64 pass, 0 fail; suite completa 338 pass, 0 fail; `git diff --check` limpio.
+
+## Apéndice TDD — segmentos reales y cadena hasta fija
+
+- Re-review Critical 1: el hito parcial reconstruía calendario general y omitía pausas reales de operador/máquina.
+- Re-review Critical 2: la validación terminaba ante una movible intermedia y no comprobaba la próxima fija de la cadena.
+- RED: `node --test --test-name-pattern="segmentos productivos reales|acumula hitos" tests/planner-core.test.mjs` → 0 pass, 2 fail.
+- GREEN: el mismo comando → 2 pass, 0 fail.
+- Corrección: los hitos consumen `productionSegments`; la cadena se prueba con el asignador existente sobre un contexto sombra que reserva cada candidata sin mutar el plan real.
+- Verificación final: focal 66 pass, 0 fail; suite completa 340 pass, 0 fail.

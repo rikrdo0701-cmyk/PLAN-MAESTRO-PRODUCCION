@@ -1338,3 +1338,45 @@ test("una predecesora movible respeta el hito de solapamiento antes de su suceso
   assert.equal(predecessor.fechaInicio, undefined);
   assert.equal(result.lastSchedule.unscheduled, 1);
 });
+
+test("el hito de solapamiento usa los segmentos productivos reales antes de una sucesora fija", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["600"],
+    operations: [
+      { id: "segmented-predecessor", ot: "600", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 180 },
+      { id: "fixed-at-nine", ot: "600", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    ],
+    workOrders: [{ ot: "600" }],
+    matrix: { "CORTE::CORTE": ["OP 1"], "EMPAQUE::EMPAQUE": ["OP 2"] },
+    configuredCapabilities: ["CORTE::CORTE", "EMPAQUE::EMPAQUE"],
+    operationRules: { "CORTE::CORTE": { overlap: 0.5 } },
+    calendarExceptions: [{ date: "2026-07-13", concept: "OPERADOR", resource: "OP 1", start: "07:30", end: "09:00" }],
+    operators: ["OP 1", "OP 2"], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+
+  assert.equal(result.operations.find((op) => op.id === "segmented-predecessor").fechaInicio, undefined);
+  assert.equal(result.lastSchedule.unscheduled, 1);
+});
+
+test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movible sin hueco", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["700"],
+    operations: [
+      { id: "chain-first", ot: "700", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 240 },
+      { id: "chain-no-slot", ot: "700", secuencia: 2, ct: "PINTURA", descripcion: "PINTURA", estatus: "PLAN", tiempoProd: 120 },
+      { id: "chain-fixed", ot: "700", secuencia: 3, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00" },
+    ],
+    workOrders: [{ ot: "700" }],
+    matrix: { "CORTE::CORTE": ["OP 1"], "PINTURA::PINTURA": ["OP 2"], "EMPAQUE::EMPAQUE": ["OP 3"] },
+    configuredCapabilities: ["CORTE::CORTE", "PINTURA::PINTURA", "EMPAQUE::EMPAQUE"],
+    operationRules: { "CORTE::CORTE": { overlap: 0.25 }, "PINTURA::PINTURA": { overlap: 0.5 } },
+    calendarExceptions: [{ date: "2026-07-13", concept: "OPERADOR", resource: "OP 2", start: "07:00", end: "10:00" }],
+    operators: ["OP 1", "OP 2", "OP 3"], settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+
+  assert.equal(result.operations.find((op) => op.id === "chain-first").fechaInicio, undefined);
+  assert.equal(result.operations.find((op) => op.id === "chain-no-slot").fechaInicio, undefined);
+  assert.equal(result.lastSchedule.unscheduled, 2);
+});

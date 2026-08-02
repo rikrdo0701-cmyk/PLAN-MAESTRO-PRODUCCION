@@ -289,12 +289,12 @@
     return `${herramental || "SIN_HERR"}/${kit || "SIN_KIT"}`;
   }
 
-  function findBestAssignment(context, job, op, previous) {
+  function findBestAssignment(context, job, op, previous, enforceFixedSuccessor = true) {
     const earliest = computeEarliestStart(context, op, previous);
     if (earliest >= context.windowEnd) return null;
     if (isSubcontractOperation(context.state, op)) {
       const assignment = findSubcontractAssignment(context, op, earliest);
-      return assignment && respectsFixedSuccessor(context, job, op, assignment) ? assignment : null;
+      return assignment && (!enforceFixedSuccessor || respectsFixedSuccessor(context, job, op, assignment)) ? assignment : null;
     }
     const finite = isFiniteOperation(context.state, op);
     const operators = operatorCandidates(context.state, op, finite);
@@ -307,7 +307,7 @@
     for (const operator of operators) {
       for (const machine of machines) {
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
-        if (assignment && respectsFixedSuccessor(context, job, op, assignment)) {
+        if (assignment && (!enforceFixedSuccessor || respectsFixedSuccessor(context, job, op, assignment))) {
           assignments.push({ ...assignment, earliest: new Date(earliest) });
         }
       }
@@ -574,6 +574,7 @@
       start: assignment.operationStart,
       end: assignment.end,
       duration: assignment.productionMinutes,
+      segments: assignment.productionSegments || assignment.segments,
     };
   }
 
@@ -692,28 +693,65 @@
     const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
     let limit = previous.end;
     if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
-      const partialMilestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
+      const milestoneMinutes = Math.round(previous.duration * ratio);
+      const partialMilestone = previous.segments?.length
+        ? productiveMilestone(previous.segments, milestoneMinutes)
+        : addGeneralWorkMinutes(context.state, previous.start, milestoneMinutes, context.windowEnd);
       if (partialMilestone && partialMilestone < previous.end) limit = partialMilestone;
     }
     return limit;
   }
 
+  function productiveMilestone(segments, minutes) {
+    let remaining = Math.max(0, roundUp(minutes, SNAP_MINUTES));
+    for (const segment of segments || []) {
+      const duration = Math.max(0, diffMinutes(segment.start, segment.end));
+      if (remaining <= duration) return addMinutes(segment.start, remaining);
+      remaining -= duration;
+    }
+    return null;
+  }
+
   function respectsFixedSuccessor(context, job, op, assignment) {
     const fixed = new Set(job.fixedOperations);
-    const successor = [
+    const future = [
       ...job.operations.slice(job.index + 1),
       ...job.fixedOperations.filter((operation) => compareOperationSequence(operation, op) > 0),
-    ].sort(compareOperationSequence)[0];
-    if (!successor || !fixed.has(successor)) return true;
+    ].sort(compareOperationSequence);
+    const fixedIndex = future.findIndex((operation) => fixed.has(operation));
+    if (fixedIndex < 0) return true;
+    const successor = future[fixedIndex];
     const fixedStart = operationStart(successor);
     if (!fixedStart) return true;
-    const release = predecessorReleaseMoment(context, {
-      operation: op,
-      start: assignment.operationStart,
-      end: assignment.end,
-      duration: assignment.productionMinutes,
-    });
+    const probeContext = cloneFeasibilityContext(context);
+    const probeJob = { ...job };
+    let previous = commitAssignment(probeContext, op, { ...assignment, gapFill: false });
+    for (const intermediate of future.slice(0, fixedIndex)) {
+      probeJob.index = job.operations.indexOf(intermediate);
+      const nextAssignment = findBestAssignment(probeContext, probeJob, intermediate, previous, false);
+      if (!nextAssignment) return false;
+      previous = commitAssignment(probeContext, intermediate, { ...nextAssignment, gapFill: false });
+    }
+    const release = predecessorReleaseMoment(probeContext, previous);
     return Boolean(release && release <= fixedStart);
+  }
+
+  function cloneFeasibilityContext(context) {
+    const cloneBusy = (map) => new Map([...map.entries()].map(([key, intervals]) => [
+      key,
+      intervals.map((interval) => ({ ...interval, start: new Date(interval.start), end: new Date(interval.end) })),
+    ]));
+    return {
+      ...context,
+      diagnostics: [],
+      operatorBusy: cloneBusy(context.operatorBusy),
+      machineBusy: cloneBusy(context.machineBusy),
+      operatorLoad: new Map(context.operatorLoad),
+      machineTools: new Map([...context.machineTools.entries()].map(([key, events]) => [key, events.map((event) => ({ ...event }))])),
+      scheduledByKey: new Map(context.scheduledByKey),
+      scheduledById: new Map(context.scheduledById),
+      generatedChanges: [],
+    };
   }
 
   function isLaterOperationGapFill(context, job, assignment) {
