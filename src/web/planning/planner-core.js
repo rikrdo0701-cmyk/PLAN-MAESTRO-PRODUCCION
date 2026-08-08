@@ -741,10 +741,7 @@
       previous,
       { remaining: MAX_FIXED_CHAIN_PROBES },
     );
-    return feasibility === FIXED_CHAIN_FEASIBLE || (
-      feasibility === FIXED_CHAIN_INCONCLUSIVE &&
-      fixedChainLowerBoundFits(probeContext, future.slice(0, fixedIndex), fixedStart, previous)
-    );
+    return feasibility === FIXED_CHAIN_FEASIBLE;
   }
 
   function fixedChainFeasibility(context, job, intermediates, fixedStart, previous, budget) {
@@ -781,29 +778,6 @@
       duration: assignment.productionMinutes,
       segments: assignment.productionSegments || assignment.segments,
     });
-  }
-
-  function fixedChainLowerBoundFits(context, intermediates, fixedStart, previous) {
-    let release = predecessorReleaseMoment(context, previous);
-    if (!release) return false;
-    for (const operation of intermediates) {
-      const minutes = minimumReleaseMinutes(context.state, operation);
-      if (!Number.isFinite(minutes)) return false;
-      release = addMinutes(release, minutes);
-      if (release > fixedStart) return false;
-    }
-    return release <= fixedStart;
-  }
-
-  function minimumReleaseMinutes(state, operation) {
-    if (isSubcontractOperation(state, operation)) return Number.POSITIVE_INFINITY;
-    const operators = operatorCandidates(state, operation, isFiniteOperation(state, operation));
-    if (!operators.length) return Number.POSITIVE_INFINITY;
-    const efficiency = operationEfficiencyForOperation(state, operation);
-    const duration = Math.min(...operators.map((operator) =>
-      operationDuration(operation, operatorPerformanceForOperation(state, operation, operator), efficiency)
-    ));
-    return roundUp(Math.max(0, Math.round(duration * overlapForOperation(state, operation))), SNAP_MINUTES);
   }
 
   function cloneFeasibilityContext(context) {

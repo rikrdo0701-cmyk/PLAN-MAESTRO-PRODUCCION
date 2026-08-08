@@ -1451,6 +1451,33 @@ test("flow balanced no descarta la alternativa factible numero 33 por el presupu
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
 
+test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la sucesora fija", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const pausedOperators = Array.from({ length: 33 }, (_, index) => `OP PAUSA ${index + 1}`);
+  const result = core.schedulePlanOnce({
+    selectedOts: ["815"],
+    operations: [
+      { id: "paused-budget-start", ot: "815", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
+      { id: "paused-budget-middle", ot: "815", secuencia: 2, ct: "INTERMEDIA", descripcion: "INTERMEDIA", estatus: "PLAN", tiempoProd: 30 },
+      { id: "paused-budget-fixed", ot: "815", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    ],
+    workOrders: [{ ot: "815" }],
+    matrix: {
+      "INICIO::INICIO": ["OP INICIO"], "INTERMEDIA::INTERMEDIA": pausedOperators, "FIJA::FIJA": ["OP FIJA"],
+    },
+    configuredCapabilities: ["INICIO::INICIO", "INTERMEDIA::INTERMEDIA", "FIJA::FIJA"],
+    calendarExceptions: pausedOperators.map((resource) => ({
+      date: "2026-07-13", concept: "OPERADOR", resource, start: "07:00", end: "09:00",
+    })),
+    operators: ["OP INICIO", ...pausedOperators, "OP FIJA"], settings: { flowWipTarget: 1 }, workSchedule: {},
+  }, {
+    strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  assert.equal(result.operations.find((op) => op.id === "paused-budget-start").fechaInicio, undefined);
+  assert.equal(result.operations.find((op) => op.id === "paused-budget-fixed").horaInicio, "09:00");
+});
+
 test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agotan el presupuesto", () => {
   const core = loadPlannerCoreWithSinglePass();
   const intermediates = Array.from({ length: 33 }, (_, index) => ({

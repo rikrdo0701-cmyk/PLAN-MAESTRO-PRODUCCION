@@ -72,3 +72,11 @@
 - GREEN: focal de la regresión y el caso de recurso factible número 33 → 2 pass, 0 fail.
 - Corrección: `INCONCLUSIVE` solo se admite cuando el hito productivo real de la candidata más una cota inferior admisible de todas las intermedias no rebasa la fija; una duración no demostrable se rechaza conservadoramente.
 - Verificación final: focal 69 pass, 0 fail; suite completa 343 pass, 0 fail; las siete regresiones de sucesora fija pasan.
+
+## Apéndice TDD — resultado inconcluso conservador
+
+- Hallazgo Critical final: la cota nominal de `INCONCLUSIVE` ignoraba pausas, reservas, máquinas y cambios, por lo que no demostraba factibilidad real.
+- RED: `node --test --test-name-pattern="cadena inconclusa cuya pausa" tests/planner-core.test.mjs` → 0 pass, 1 fail; la predecesora se programaba aunque las 33 alternativas intermedias estaban pausadas hasta el inicio de la fija.
+- GREEN: focal de la nueva regresión y el caso `alternativa factible numero 33` → 2 pass, 0 fail.
+- Corrección: `respectsFixedSuccessor` sólo autoriza `FIXED_CHAIN_FEASIBLE`; se retiró la cota nominal y su código muerto.
+- Verificación: archivo focal 70 pass, 0 fail; suite completa 344 pass, 0 fail.
