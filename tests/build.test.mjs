@@ -36,6 +36,7 @@ test("la configuracion de flujo expone controles y diagnostico sin render global
   assert.match(planningApp, /Huecos evitables/);
   assert.match(planningApp, /Cambios de herramental/);
   assert.match(planningApp, /Utilizacion/);
+  assert.match(planningApp, /Estrategia:/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {

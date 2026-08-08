@@ -35,22 +35,38 @@
       const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
       return { strategy, index, result, metrics: evaluatePlan(result) };
     });
+    const strategyFailures = [];
+    let flowEvaluation;
     if (flowBalancedEnabled) {
       try {
         const strategy = "flow_balanced";
         const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
-        evaluated.push({ strategy, index: evaluated.length, result, metrics: evaluatePlan(result) });
-      } catch (_error) {
+        flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
+        evaluated.push(flowEvaluation);
+      } catch (error) {
+        strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
         // La estrategia adicional es opcional; las heuristicas existentes siguen disponibles.
       }
     }
     applyComparableScores(evaluated);
-    evaluated.sort((a, b) => compareEvaluatedPlans(a, b, flowBalancedEnabled));
-    const selected = evaluated[0];
+    const legacySelected = evaluated
+      .filter((item) => item.strategy !== "flow_balanced")
+      .reduce((best, item) => compareEvaluatedPlans(item, best, false) < 0 ? item : best);
+    const flowImprovesSafely = flowEvaluation &&
+      flowEvaluation.metrics.operatorConflicts <= legacySelected.metrics.operatorConflicts &&
+      flowEvaluation.metrics.unscheduled <= legacySelected.metrics.unscheduled &&
+      flowEvaluation.metrics.score < legacySelected.metrics.score;
+    const selected = flowImprovesSafely ? flowEvaluation : legacySelected;
     selected.result.lastSchedule.optimization = {
       method: "MULTI_STRATEGY_HEURISTIC",
       globalOptimalityGuaranteed: false,
-      strategiesEvaluated: evaluated.map((item) => ({ strategy: item.strategy, objective: item.metrics.objective, score: item.metrics.score })),
+      strategiesEvaluated: evaluated.map((item) => ({
+        strategy: item.strategy,
+        objective: item.metrics.objective,
+        score: item.metrics.score,
+        metrics: item.metrics,
+      })),
+      strategyFailures,
       volumePassLimit,
       selectedStrategy: selected.strategy,
       metrics: selected.metrics,
