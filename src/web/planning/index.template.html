@@ -319,6 +319,14 @@
                 <label><span>Meta semanal ($)</span><input id="weeklyReleaseTargetInput" type="text" inputmode="numeric" /></label>
               </div>
             </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Balance de flujo</h2><span>Preferencias para elegir la mejor estrategia al generar el plan</span></div></div>
+              <div class="config-form target-form">
+                <label><span>Optimizar flujo</span><input id="flowBalancedEnabledInput" type="checkbox" /></label>
+                <label><span>WIP objetivo</span><input id="flowWipTargetInput" type="number" min="1" max="50" step="1" inputmode="numeric" /></label>
+              </div>
+              <p id="flowOptimizationDiagnostics" class="status-note" hidden></p>
+            </div>
           </div>
         </section>
 

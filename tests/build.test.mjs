@@ -14,6 +14,30 @@ test("la identidad del detalle es UI local y no se envia al estado compartido", 
   assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*\.\.\.persisted\s*\}/);
 });
 
+test("la configuracion de flujo expone controles y diagnostico sin render global", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
+  const flowEventSource = planningApp.slice(
+    planningApp.indexOf('els.flowBalancedEnabledInput.addEventListener("change"'),
+    planningApp.indexOf("els.closeDetailPanelBtn.addEventListener", planningApp.indexOf('els.flowBalancedEnabledInput.addEventListener("change"')),
+  );
+
+  assert.match(planningTemplate, /id="flowBalancedEnabledInput"/);
+  assert.match(planningTemplate, /id="flowWipTargetInput"[^>]*min="1"[^>]*max="50"/);
+  assert.match(planningTemplate, /id="flowOptimizationDiagnostics"/);
+  assert.match(planningApp, /flowBalancedEnabled:\s*true/);
+  assert.match(planningApp, /flowWipTarget:\s*10/);
+  assert.match(planningApp, /state\.settings\.flowBalancedEnabled\s*=\s*state\.settings\.flowBalancedEnabled\s*!==\s*false/);
+  assert.match(planningApp, /state\.settings\.flowWipTarget\s*=\s*Number\.isFinite\(flowWipTarget\)/);
+  assert.match(flowEventSource, /renderFlowBalanceConfiguration\(\)/);
+  assert.doesNotMatch(flowEventSource, /saveAndRender\(/);
+  assert.match(planningApp, /Flujo promedio/);
+  assert.match(planningApp, /WIP maximo/);
+  assert.match(planningApp, /Huecos evitables/);
+  assert.match(planningApp, /Cambios de herramental/);
+  assert.match(planningApp, /Utilizacion/);
+});
+
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
   const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
   const workflows = await Promise.all(workflowNames.map((name) =>

@@ -177,6 +177,8 @@ const sampleState = {
     toolChangeMinutes: 120,
     toolChangeOperator: "AJUSTADOR",
     weeklyReleaseTarget: DEFAULT_WEEKLY_RELEASE_TARGET,
+    flowBalancedEnabled: true,
+    flowWipTarget: 10,
   },
   operators: ["DOBLADOR 1", "DOBLADOR 2", "SOLDADOR 1", "PINTURA 1", "AJUSTADOR"],
   operatorProfiles: {
@@ -557,6 +559,9 @@ function bindElements() {
     "draftExecutiveSummary",
     "draftExecutiveBody",
     "weeklyReleaseTargetInput",
+    "flowBalancedEnabledInput",
+    "flowWipTargetInput",
+    "flowOptimizationDiagnostics",
     "generatePlanBtn",
     "publishPlanBtn",
     "pdfBtn",
@@ -786,6 +791,21 @@ function bindEvents() {
     els.weeklyReleaseTargetInput.value = state.settings.weeklyReleaseTarget.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     saveAndRender("Objetivo semanal actualizado", "catalogs");
   });
+  els.flowBalancedEnabledInput.addEventListener("change", () => {
+    checkpointState();
+    state.settings.flowBalancedEnabled = els.flowBalancedEnabledInput.checked;
+    renderFlowBalanceConfiguration();
+    saveState("catalogs");
+    showToast(`Balance de flujo ${state.settings.flowBalancedEnabled ? "activado" : "desactivado"}`);
+  });
+  els.flowWipTargetInput.addEventListener("change", () => {
+    checkpointState();
+    const raw = Number(els.flowWipTargetInput.value);
+    state.settings.flowWipTarget = Number.isFinite(raw) ? Math.min(50, Math.max(1, Math.round(raw))) : 10;
+    renderFlowBalanceConfiguration();
+    saveState("catalogs");
+    showToast("WIP objetivo actualizado");
+  });
   els.closeDetailPanelBtn.addEventListener("click", () => {
     state.selectedDetailOt = "";
     state.selectedOperationId = "";
@@ -989,9 +1009,16 @@ function normalizeState() {
     toolChangeMinutes: 120,
     toolChangeOperator: "AJUSTADOR",
     weeklyReleaseTarget: DEFAULT_WEEKLY_RELEASE_TARGET,
+    flowBalancedEnabled: true,
+    flowWipTarget: 10,
     ...(state.settings && typeof state.settings === "object" ? state.settings : {}),
   };
   state.settings.weeklyReleaseTarget = Math.max(0, Number(state.settings.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
+  state.settings.flowBalancedEnabled = state.settings.flowBalancedEnabled !== false;
+  const flowWipTarget = Number(state.settings.flowWipTarget);
+  state.settings.flowWipTarget = Number.isFinite(flowWipTarget)
+    ? Math.min(50, Math.max(1, Math.round(flowWipTarget)))
+    : 10;
   state.customCapabilities = Array.isArray(state.customCapabilities) ? state.customCapabilities : [];
   const hadConfiguredCapabilities = Array.isArray(state.configuredCapabilities);
   state.configuredCapabilities = hadConfiguredCapabilities ? state.configuredCapabilities : [];
@@ -3501,6 +3528,7 @@ function renderConfiguration() {
   renderArticleConfigurations();
   renderInspectionRouteCatalog();
   renderWeeklyReleaseTarget();
+  renderFlowBalanceConfiguration();
 }
 
 function inspectionRouteCatalogVisibleRows() {
@@ -3598,6 +3626,27 @@ async function editInspectionRouteCatalogRow(index) {
 function renderWeeklyReleaseTarget() {
   const target = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   els.weeklyReleaseTargetInput.value = target.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function renderFlowBalanceConfiguration() {
+  if (!els.flowBalancedEnabledInput) return;
+  const settings = state.settings || {};
+  els.flowBalancedEnabledInput.checked = settings.flowBalancedEnabled !== false;
+  els.flowWipTargetInput.value = String(Math.min(50, Math.max(1, Math.round(Number(settings.flowWipTarget) || 10))));
+  const optimization = state.lastSchedule?.optimization;
+  if (!optimization?.metrics) {
+    els.flowOptimizationDiagnostics.hidden = true;
+    els.flowOptimizationDiagnostics.textContent = "";
+    return;
+  }
+  const metrics = optimization.metrics;
+  const resourceUtilization = Object.values(metrics.resourceUtilization || {});
+  const utilization = resourceUtilization.length
+    ? Math.round(resourceUtilization.reduce((sum, value) => sum + Number(value || 0), 0) / resourceUtilization.length * 100)
+    : 0;
+  const strategy = String(optimization.selectedStrategy || "balanced").replace(/_/g, " ");
+  els.flowOptimizationDiagnostics.hidden = false;
+  els.flowOptimizationDiagnostics.textContent = `Estrategia: ${strategy} · Flujo promedio: ${Number(metrics.averageFlowMinutes || 0)} min · WIP maximo: ${Number(metrics.maxWip || 0)} · Huecos evitables: ${Number(metrics.avoidableIdleMinutes || 0)} min · Cambios de herramental: ${Number(metrics.toolChanges || 0)} · Utilizacion: ${utilization}%`;
 }
 
 function renderWorkSchedule() {
