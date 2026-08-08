@@ -1450,3 +1450,31 @@ test("flow balanced no descarta la alternativa factible numero 33 por el presupu
   assert.equal(choice.operador, "OP FACTIBLE");
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
+
+test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agotan el presupuesto", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const intermediates = Array.from({ length: 33 }, (_, index) => ({
+    id: `budget-middle-${index + 1}`, ot: "820", secuencia: index + 2,
+    ct: "INTERMEDIA", descripcion: "INTERMEDIA", estatus: "PLAN", tiempoProd: 1,
+  }));
+  const result = core.schedulePlanOnce({
+    selectedOts: ["820"],
+    operations: [
+      { id: "budget-late-predecessor", ot: "820", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 180 },
+      ...intermediates,
+      { id: "budget-fixed-nine-after-chain", ot: "820", secuencia: 35, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    ],
+    workOrders: [{ ot: "820" }],
+    matrix: {
+      "INICIO::INICIO": ["OP INICIO"], "INTERMEDIA::INTERMEDIA": ["OP INTERMEDIA"], "FIJA::FIJA": ["OP FIJA"],
+    },
+    configuredCapabilities: ["INICIO::INICIO", "INTERMEDIA::INTERMEDIA", "FIJA::FIJA"],
+    operators: ["OP INICIO", "OP INTERMEDIA", "OP FIJA"], settings: { flowWipTarget: 1 }, workSchedule: {},
+  }, {
+    strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+  });
+
+  const predecessor = result.operations.find((op) => op.id === "budget-late-predecessor");
+  assert.equal(predecessor.fechaInicio, undefined);
+  assert.equal(result.operations.find((op) => op.id === "budget-fixed-nine-after-chain").horaInicio, "09:00");
+});

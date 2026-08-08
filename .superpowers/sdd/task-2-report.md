@@ -64,3 +64,11 @@
 - GREEN: el mismo comando → 1 pass, 0 fail; encontró el operador factible 07:30–08:00 antes de la sucesora fija 09:00.
 - Corrección: las alternativas de cadena priorizan liberación temporal antes que carga y el resultado distingue `FEASIBLE`, `INFEASIBLE` e `INCONCLUSIVE`; agotar el presupuesto acotado de 32 sondas ya no declara inviabilidad.
 - Verificación final: focal 68 pass, 0 fail; suite completa 342 pass, 0 fail; `git diff --check` limpio.
+
+## Apéndice TDD — cota segura ante exploración inconclusa
+
+- Hallazgo Critical: `INCONCLUSIVE` se aceptaba sin garantía temporal; una cadena de 33 intermedias podía agotar las 32 sondas y programar una predecesora de 180 minutos más allá de la fija 09:00.
+- RED: `node --test --test-name-pattern="33 intermedias agotan" tests/planner-core.test.mjs` → 0 pass, 1 fail; la predecesora quedaba programada el 2026-07-13.
+- GREEN: focal de la regresión y el caso de recurso factible número 33 → 2 pass, 0 fail.
+- Corrección: `INCONCLUSIVE` solo se admite cuando el hito productivo real de la candidata más una cota inferior admisible de todas las intermedias no rebasa la fija; una duración no demostrable se rechaza conservadoramente.
+- Verificación final: focal 69 pass, 0 fail; suite completa 343 pass, 0 fail; las siete regresiones de sucesora fija pasan.
