@@ -75,6 +75,10 @@ const applyPlanningPayloadSource = appSource.slice(
   appSource.indexOf("function applyNetSuitePlanningPayload("),
   appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
 );
+const applyWorkOrdersPayloadSource = appSource.slice(
+  appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
+  appSource.indexOf("function setNetSuiteSyncPhaseLabel("),
+);
 const loadSourceSelectionSource = appSource.slice(
   appSource.indexOf("async function loadSelectedLoadPlan("),
   appSource.indexOf("async function loadIncrementalPlanningBase("),
@@ -926,6 +930,70 @@ test("la sincronizacion conserva la ruta de la OT cuyo detalle esta abierto", ()
 
   assert.deepEqual(state.operations.map((operation) => operation.id), ["direct-1325-1", "fresh-2001-1"]);
   assert.equal(state.selectedOperationId, "direct-1325-1");
+});
+
+test("la sincronizacion de OTs no rehidrata selectedOts desde metadata remota obsoleta", () => {
+  const state = {
+    selectedOts: ["200"], lockedOts: ["200"], expandedOts: ["200"],
+    lastSchedule: { scheduledOts: ["200"] },
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+  };
+  const applyNetSuiteWorkOrdersPayload = Function(
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
+    `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
+  )(state, {
+    PlanningWorkflowCore: {
+      pruneDraftToOpenWorkOrders: (draft, workOrders) => {
+        const open = new Set(workOrders.map((item) => item.ot));
+        const keep = (ot) => open.has(ot);
+        return {
+          ...draft,
+          selectedOts: draft.selectedOts.filter(keep),
+          lockedOts: draft.lockedOts.filter(keep),
+          expandedOts: draft.expandedOts.filter(keep),
+          lastSchedule: { ...draft.lastSchedule, scheduledOts: draft.lastSchedule.scheduledOts.filter(keep) },
+        };
+      },
+    },
+  }, () => {}, () => {});
+
+  applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200"], workOrders: [{ ot: "100" }, { ot: "200" }] });
+
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+});
+
+test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a backlog", () => {
+  const state = {
+    selectedOts: ["200", "300"], lockedOts: ["200"], expandedOts: ["200", "300"],
+    lastSchedule: { scheduledOts: ["200", "300"] },
+    workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
+  };
+  const applyNetSuiteWorkOrdersPayload = Function(
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
+    `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
+  )(state, {
+    PlanningWorkflowCore: {
+      pruneDraftToOpenWorkOrders: (draft, workOrders) => {
+        const open = new Set(workOrders.map((item) => item.ot));
+        const keep = (ot) => open.has(ot);
+        return {
+          ...draft,
+          selectedOts: draft.selectedOts.filter(keep),
+          lockedOts: draft.lockedOts.filter(keep),
+          expandedOts: draft.expandedOts.filter(keep),
+          lastSchedule: { ...draft.lastSchedule, scheduledOts: draft.lastSchedule.scheduledOts.filter(keep) },
+        };
+      },
+    },
+  }, () => {}, () => {});
+
+  applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200", "300"], workOrders: [{ ot: "100" }, { ot: "200" }] });
+
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, ["200"]);
+  assert.deepEqual(state.expandedOts, ["200"]);
+  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
 });
 
 test("la navegacion manual desplaza el espacio de trabajo al inicio", () => {

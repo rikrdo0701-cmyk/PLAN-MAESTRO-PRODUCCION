@@ -890,6 +890,7 @@ test("un herramental adicional genera una operacion artificial de doblado con ca
   const base = result.operations.find((op) => op.id === "bend-a");
   const successor = result.operations.find((op) => op.id === "cut-after");
   assert.equal(artificial.herramental, "H2");
+  assert.equal(artificial.maquina, "211");
   assert.equal(artificial.tiempoSetup, 3);
   assert.equal(artificial.tiempoProd, 10);
   assert.equal(artificial.ct, "5459");
@@ -897,6 +898,23 @@ test("un herramental adicional genera una operacion artificial de doblado con ca
   assert.ok(new Date(`${artificial.fechaInicio}T${artificial.horaInicio}:00`) >= new Date(`${base.fechaFin}T${base.horaFin}:00`));
   assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date(`${artificial.fechaFin}T${artificial.horaFin}:00`));
   assert.ok(result.operations.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeToHerramental === "H2"));
+});
+
+test("un herramental adicional puede usar una maquina propia y legacy sigue heredando", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", maquina: "211", herramental: "H1", additionalHerramentales: [{ herramental: "H2", machine: "212" }, "H3"], tiempoProd: 10 },
+    ],
+    workOrders: [{ ot: "100" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const artificial = result.operations.filter((op) => op.generatedAdditionalTool === true).sort((a, b) => a.secuencia - b.secuencia);
+  assert.deepEqual(structuredClone(artificial.map((op) => [op.herramental, op.maquina])), [["H2", "212"], ["H3", "211"]]);
 });
 
 test("un doblado sin parte en la operacion hereda el herramental usando el articulo de la OT", () => {

@@ -379,16 +379,39 @@
 
   async function reloadStateAfterConflict() {
     try {
+      const localRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
       const imported = await callAppsScript("getAppState");
       applyImported(imported, { preserveLocalPlanning: false });
+      const reappliedDraftRemovals = applyLocalDraftRemovalTombstones(localRemovedDraftOts);
       deferredRevision = Number(imported.revision || state.revision || 0);
       writeMeta({ revision: deferredRevision, syncedAt: state.syncedAt || "" });
       scheduleLocalStorageFlush();
-      return true;
+      return { reloaded: true, reappliedDraftRemovals };
     } catch (error) {
       console.warn("No se pudo recargar el estado despues del conflicto:", error);
-      return false;
+      return { reloaded: false, reappliedDraftRemovals: 0 };
     }
+  }
+
+  function applyLocalDraftRemovalTombstones(ots) {
+    const removed = new Set((ots || []).map(materialOtKey).filter(Boolean));
+    if (!removed.size) return 0;
+    const before = new Set((state.selectedOts || []).map(materialOtKey).filter(Boolean));
+    const keep = (ot) => !removed.has(materialOtKey(ot));
+    state.selectedOts = (state.selectedOts || []).filter(keep);
+    state.lockedOts = (state.lockedOts || []).filter(keep);
+    state.expandedOts = (state.expandedOts || []).filter(keep);
+    if (state.lastSchedule && typeof state.lastSchedule === "object") {
+      state.lastSchedule = {
+        ...state.lastSchedule,
+        scheduledOts: (state.lastSchedule.scheduledOts || []).filter(keep),
+      };
+    }
+    const preparedPlanningByOt = { ...(state.preparedPlanningByOt || {}) };
+    Object.keys(preparedPlanningByOt).forEach((key) => { if (removed.has(materialOtKey(key))) delete preparedPlanningByOt[key]; });
+    state.preparedPlanningByOt = preparedPlanningByOt;
+    state._locallyRemovedDraftOts = [...removed];
+    return [...removed].filter((ot) => before.has(ot)).length;
   }
 
   const originalSaveAppSheet = saveAppSheet;
@@ -442,15 +465,18 @@
       saveRetryAttempt = 0;
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
+      delete state._locallyRemovedDraftOts;
       scheduleLocalStorageFlush();
       if (showMessage) showToast("Cambios guardados");
       return true;
     } catch (error) {
       const conflict = /CONFLICT_REVISION/i.test(String(error?.message || error));
       if (conflict) {
-        const reloaded = await reloadStateAfterConflict();
-        appSheetSavePending = false;
-        document.body.dataset.saveStatus = reloaded ? "conflict" : "pending";
+        const reloadResult = await reloadStateAfterConflict();
+        const reloaded = reloadResult.reloaded;
+        appSheetSavePending = reloadResult.reappliedDraftRemovals > 0;
+        if (appSheetSavePending) appSheetMarkDirtyScope("plan");
+        document.body.dataset.saveStatus = reloaded ? (appSheetSavePending ? "pending" : "conflict") : "pending";
         if (showMessage) showToast(reloaded
           ? "Otro usuario guardo cambios; se recargo el estado vigente"
           : "Conflicto de guardado; recarga antes de continuar", 4200);

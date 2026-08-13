@@ -1232,7 +1232,7 @@ function normalizeOperation(op, index) {
   next.operador = String(next.operador || "").trim() || "SIN_OPERADOR";
   next.maquina = String(next.maquina || "").trim();
   next.herramental = cleanToolValue(next.herramental);
-  next.additionalHerramentales = toolListValue(next.additionalHerramentales || next.herramentalesExtra);
+  next.additionalHerramentales = additionalToolListValue(next.additionalHerramentales || next.herramentalesExtra);
   next.kitHerramental = cleanToolValue(next.kitHerramental);
   const toolFields = normalizeToolFields(next.maquina, next.herramental, next.kitHerramental);
   next.maquina = toolFields.maquina;
@@ -2315,12 +2315,14 @@ async function performSelectJob(ot, selected, outcome = {}) {
   if (selected && !alreadySelected) {
     const signature = String(state.preparedPlanningByOt?.[ot] || "");
     Object.assign(state, window.PlanningWorkflowCore.commitPreparedOtSelection(state, ot, signature));
+    if (typeof forgetDraftRemovedOt === "function") forgetDraftRemovedOt(ot);
     if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
   }
   if (!selected && alreadySelected) {
     Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+    if (typeof rememberDraftRemovedOts === "function") rememberDraftRemovedOts([ot]);
   }
   if (!selected && alreadySelected) invalidatePriorityJobsCache();
   applyQueuePriorities();
@@ -2403,7 +2405,7 @@ async function prepareJobForPlanning(job, options = {}) {
 
 function showPlanningPreparationLoading(ot) {
   openPlanningDialog({
-    title: `Preparar OT ${ot}`,
+    title: planningPreparationTitle(typeof ot === "object" ? ot : { ot }),
     summary: "Cargando operaciones y requisitos de NetSuite...",
     body: `<div class="planning-loading" role="status" aria-live="polite">
       <strong>Preparando la informacion de la OT.</strong>
@@ -2441,7 +2443,7 @@ function planningPreparationSignature(job, operations, commercial) {
     ot: job?.ot || "",
     machine: productive.map((op) => op.maquina || "").join("|"),
     tool: productive.map((op) => op.herramental || "").join("|"),
-    additionalTools: productive.flatMap((op) => toolListValue(op.additionalHerramentales)),
+    additionalTools: productive.flatMap((op) => additionalToolListValue(op.additionalHerramentales)),
     kit: productive.map((op) => op.kitHerramental || "").join("|"),
     kitPending: productive.some((op) => op.kitPending === true),
     subcontractType: productive.map((op) => op.subcontractType || "").join("|"),
@@ -2614,13 +2616,13 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     const { op, codes, index } = requirement;
     const catalog = toolCatalogForAppOperation(op);
     const currentTool = cleanToolValue(configuration.herramental) || cleanToolValue(op.herramental) || cleanToolValue(catalog?.herramental);
-    const additionalTools = toolListValue(configuration.additionalHerramentales || op.additionalHerramentales);
+    const additionalTools = additionalToolListValue(configuration.additionalHerramentales || op.additionalHerramentales);
     const toolFields = codes.has("MISSING_TOOL") || codes.has("OT_TOOL")
       ? `<div class="planning-tool-list" data-planning-tool-list="${escapeHtml(index)}">
         <label>Herramental requerido${planningCatalogSelectMarkup(`tool_${index}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>
         <button class="icon-button planning-tool-add" type="button" data-add-planning-tool="${escapeHtml(index)}" aria-label="Agregar herramental a la operacion ${escapeHtml(op.secuencia)}">+</button>
         <div class="planning-tool-extra-list" data-planning-tool-extra-list="${escapeHtml(index)}">
-          ${additionalTools.map((tool, extraIndex) => planningAdditionalToolMarkup(index, extraIndex, tool)).join("")}
+          ${additionalTools.map((tool, extraIndex) => planningAdditionalToolMarkup(index, extraIndex, tool, compatibleMachines)).join("")}
         </div>
       </div>`
       : "";
@@ -2633,7 +2635,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   return new Promise((resolve, reject) => {
     requestAnimationFrame(() => {
       openPlanningDialog({
-        title: `Preparar OT ${job.ot}`,
+        title: planningPreparationTitle(job),
         summary: "Los datos comerciales se guardan por articulo; maquina, kit y subcontrato se guardan para esta OT.",
         body: `${commercialFields}${commonFields}${operationFields}`,
         confirmLabel: "Agregar al plan",
@@ -2666,7 +2668,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
               const index = button.dataset.addPlanningTool;
               const list = els.planningDialogBody.querySelector(`[data-planning-tool-extra-list="${index}"]`);
               if (!list) return;
-              list.insertAdjacentHTML("beforeend", planningAdditionalToolMarkup(index, list.children.length, ""));
+              list.insertAdjacentHTML("beforeend", planningAdditionalToolMarkup(index, list.children.length, "", compatibleMachines));
             });
           });
           els.planningDialogBody.onclick = (event) => {
@@ -2722,23 +2724,41 @@ function applyPlanningRequirements(requirements, values, operations) {
   }
 }
 
-function planningAdditionalToolMarkup(index, extraIndex, value) {
+function planningPreparationTitle(job) {
+  const ot = String(job?.ot || "").trim();
+  const article = String(job?.parte || workOrderForOt(ot)?.item || "").trim();
+  return `Preparar OT ${ot}${article ? ` - ${article}` : ""}`;
+}
+
+function planningAdditionalToolMarkup(index, extraIndex, value, machines = []) {
+  const entry = additionalToolEntryValue(value);
   const optionsId = `planningToolOptions_${index}_${extraIndex}`;
   const options = toolCatalogValues("herramental").map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("");
+  const machineOptions = (machines || []).map((machine) => `<option value="${escapeHtml(machine)}"${machine === entry.machine ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("");
   return `<div class="planning-tool-extra-row">
-    <input name="tool_${escapeHtml(index)}_extra_${escapeHtml(extraIndex)}" list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(value)}" placeholder="Otro herramental" autocomplete="off">
+    <input name="tool_${escapeHtml(index)}_extra_${escapeHtml(extraIndex)}" list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(entry.herramental)}" placeholder="Otro herramental" autocomplete="off">
     <datalist id="${escapeHtml(optionsId)}">${options}</datalist>
+    <select name="tool_${escapeHtml(index)}_extra_machine_${escapeHtml(extraIndex)}" aria-label="Maquina del herramental adicional" required>
+      <option value="">Selecciona maquina</option>${machineOptions}
+    </select>
     <button class="icon-button" type="button" data-remove-planning-tool aria-label="Eliminar herramental adicional">X</button>
   </div>`;
 }
 
 function collectAdditionalPlanningTools(values, index) {
   const prefix = `tool_${index}_extra_`;
-  return toolListValue(Object.keys(values || {}).filter((key) => key.startsWith(prefix)).map((key) => values[key]));
+  const out = [];
+  Object.keys(values || {}).filter((key) => key.startsWith(prefix) && !key.startsWith(`${prefix}machine_`)).forEach((key) => {
+    const suffix = key.slice(prefix.length);
+    const herramental = cleanToolValue(values[key]);
+    if (!herramental) return;
+    out.push({ herramental, machine: normalizeMachineValue(values[`${prefix}machine_${suffix}`]) });
+  });
+  return additionalToolListValue(out);
 }
 
 function ensureToolCatalogEntry(op, tool, catalog) {
-  const normalized = cleanToolValue(tool);
+  const normalized = additionalToolHerramental(tool);
   const part = String(op?.parte || "").trim();
   if (!normalized || !part) return;
   const exists = state.toolCatalog.some((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === normalized && cleanToolValue(item.kitHerramental) === cleanToolValue(op.kitHerramental));
@@ -2843,6 +2863,7 @@ function returnUnlockedJobsToBacklog() {
   for (const ot of removableOts) {
     Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
   }
+  rememberDraftRemovedOts(removableOts);
   invalidatePriorityJobsCache();
   applyQueuePriorities();
   renderPriorityList();
@@ -2919,12 +2940,12 @@ function renderSelectedJobPanel() {
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const hasBendingOperations = bendingOps.length > 0;
   const otConfiguration = otConfigurationFor(job.ot);
-  const configuredAdditionalTools = toolListValue(otConfiguration.additionalHerramentales);
+  const configuredAdditionalTools = additionalToolListValue(otConfiguration.additionalHerramentales);
   const detailOps = job.ops.map((op) => isBendingAppOperation(op)
     ? {
       ...op,
       herramental: cleanToolValue(op.herramental) || cleanToolValue(otConfiguration.herramental),
-      additionalHerramentales: toolListValue(op.additionalHerramentales).length ? toolListValue(op.additionalHerramentales) : configuredAdditionalTools,
+      additionalHerramentales: additionalToolListValue(op.additionalHerramentales).length ? additionalToolListValue(op.additionalHerramentales) : configuredAdditionalTools,
     }
     : op);
   const loadingOperations = selectedJobDetailOperationLoads.has(materialOtKey(job.ot)) && !hasIndividualPlanningOperations(job.ot);
@@ -2938,7 +2959,7 @@ function renderSelectedJobPanel() {
     : `<span class="tool-chip empty">SIN HERRAMENTAL<small>${job.ops.length} ops</small></span>`;
   const bendingToolValues = uniq(detailOps.filter(isBendingAppOperation).map((op) => cleanToolValue(op.herramental)).filter(Boolean));
   const currentBendingTool = bendingToolValues.length === 1 ? bendingToolValues[0] : "";
-  const currentAdditionalTools = configuredAdditionalTools.length ? configuredAdditionalTools : toolListValue(detailOps.find((op) => isBendingAppOperation(op) && toolListValue(op.additionalHerramentales).length)?.additionalHerramentales);
+  const currentAdditionalTools = configuredAdditionalTools.length ? configuredAdditionalTools : additionalToolListValue(detailOps.find((op) => isBendingAppOperation(op) && additionalToolListValue(op.additionalHerramentales).length)?.additionalHerramentales);
   const articleToolOptions = uniq(state.toolCatalog
     .filter((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(job.parte))
     .map((item) => cleanToolValue(item.herramental)).filter(Boolean));
@@ -3010,7 +3031,7 @@ function renderSelectedJobPanel() {
           <div class="job-tool-editor" data-job-tool-editor>
             <label><span>Herramental para doblado</span><input id="jobToolInput" list="jobToolOptions" type="text" value="${escapeHtml(currentBendingTool)}" placeholder="${bendingToolValues.length > 1 ? "VARIOS HERRAMENTALES" : "Selecciona o captura"}" autocomplete="off"><datalist id="jobToolOptions">${articleToolOptions.map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("")}</datalist></label>
             <button class="icon-button job-tool-add" type="button" data-add-job-tool aria-label="Agregar herramental adicional">+</button>
-            <div class="job-tool-extra-list" data-job-tool-extra-list>${currentAdditionalTools.map((tool, index) => jobAdditionalToolMarkup(tool, index, articleToolOptions)).join("")}</div>
+            <div class="job-tool-extra-list" data-job-tool-extra-list>${currentAdditionalTools.map((tool, index) => jobAdditionalToolMarkup(tool, index, articleToolOptions, machineOptions)).join("")}</div>
           </div>
           <div class="tool-chip-row">${toolSummary}</div>
         </div>
@@ -3063,7 +3084,7 @@ function renderSelectedJobPanel() {
   const addToolButton = els.selectedJobPanel.querySelector("[data-add-job-tool]");
   const extraList = els.selectedJobPanel.querySelector("[data-job-tool-extra-list]");
   if (addToolButton && extraList) addToolButton.addEventListener("click", () => {
-    extraList.insertAdjacentHTML("beforeend", jobAdditionalToolMarkup("", extraList.children.length, articleToolOptions));
+    extraList.insertAdjacentHTML("beforeend", jobAdditionalToolMarkup("", extraList.children.length, articleToolOptions, machineOptions));
     extraList.lastElementChild?.querySelector("input")?.focus();
   });
   if (extraList) extraList.addEventListener("change", saveToolEditor);
@@ -6287,7 +6308,6 @@ function applyNetSuitePlanningPayload(payload) {
 
 function applyNetSuiteWorkOrdersPayload(payload) {
   state.workOrders = Array.isArray(payload?.workOrders) ? payload.workOrders : state.workOrders;
-  if (Array.isArray(payload?.selectedOts)) state.selectedOts = payload.selectedOts;
   Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
   if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
   if (payload?.plant) state.plant = payload.plant;
@@ -7770,7 +7790,7 @@ function applyMachineToJob(ot, machine) {
 
 function applyToolToJob(ot, tool, additionalTools = []) {
   const normalized = cleanToolValue(tool);
-  const extras = toolListValue(additionalTools).filter((item) => normalizeStatus(item) !== normalizeStatus(normalized));
+  const extras = additionalToolListValue(additionalTools).filter((item) => normalizeStatus(additionalToolHerramental(item)) !== normalizeStatus(normalized));
   const configuration = otConfigurationFor(ot);
   configuration.herramental = normalized;
   configuration.additionalHerramentales = extras;
@@ -7786,10 +7806,11 @@ function applyToolToJob(ot, tool, additionalTools = []) {
     });
   }
   for (const extra of extras) {
-    if (!part || !extra) continue;
-    const existing = state.toolCatalog.find((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === extra);
+    const extraTool = additionalToolHerramental(extra);
+    if (!part || !extraTool) continue;
+    const existing = state.toolCatalog.find((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === extraTool);
     if (!existing) state.toolCatalog.push({
-      id: uid("tool"), part, herramental: extra, kitHerramental: getOtKitValue(bendingOps),
+      id: uid("tool"), part, herramental: extraTool, kitHerramental: getOtKitValue(bendingOps),
       toolSetupMinutes: 0, kitSetupMinutes: 0, active: true,
     });
   }
@@ -7797,17 +7818,23 @@ function applyToolToJob(ot, tool, additionalTools = []) {
   for (const op of bendingOps) op.log = appendLog(op.log, "HERRAMENTAL_OT_APP");
 }
 
-function jobAdditionalToolMarkup(value, index, options) {
+function jobAdditionalToolMarkup(value, index, options, machines = []) {
+  const entry = additionalToolEntryValue(value);
   const optionsId = `jobToolOptionsExtra_${index}`;
+  const machineOptions = (machines || []).map((machine) => `<option value="${escapeHtml(machine)}"${machine === entry.machine ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("");
   return `<div class="job-tool-extra-row">
-    <input data-job-tool-extra list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(value)}" placeholder="Otro herramental" autocomplete="off">
+    <input data-job-tool-extra list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(entry.herramental)}" placeholder="Otro herramental" autocomplete="off">
     <datalist id="${escapeHtml(optionsId)}">${(options || []).map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("")}</datalist>
+    <select data-job-tool-extra-machine aria-label="Maquina del herramental adicional"><option value="">Misma maquina</option>${machineOptions}</select>
     <button class="icon-button" type="button" data-remove-job-tool aria-label="Eliminar herramental adicional">X</button>
   </div>`;
 }
 
 function currentJobAdditionalTools() {
-  return toolListValue([...els.selectedJobPanel.querySelectorAll("[data-job-tool-extra]")].map((input) => input.value));
+  return additionalToolListValue([...els.selectedJobPanel.querySelectorAll(".job-tool-extra-row")].map((row) => ({
+    herramental: row.querySelector("[data-job-tool-extra]")?.value,
+    machine: row.querySelector("[data-job-tool-extra-machine]")?.value,
+  })));
 }
 
 function getOtKitValue(ops) {
@@ -7993,7 +8020,7 @@ function normalizeOtResourceAssignments() {
       ot,
       machine: stored ? normalizeMachineValue(stored.machine || stored.maquina) : derivedMachine,
       herramental: stored ? cleanToolValue(stored.herramental || stored.tool) : (bendingOps.map((op) => cleanToolValue(op.herramental)).find(Boolean) || ""),
-      additionalHerramentales: stored ? toolListValue(stored.additionalHerramentales || stored.herramentalesExtra) : toolListValue(bendingOps.find((op) => toolListValue(op.additionalHerramentales).length)?.additionalHerramentales),
+      additionalHerramentales: stored ? additionalToolListValue(stored.additionalHerramentales || stored.herramentalesExtra) : additionalToolListValue(bendingOps.find((op) => additionalToolListValue(op.additionalHerramentales).length)?.additionalHerramentales),
       kitHerramental: stored ? cleanToolValue(stored.kitHerramental || stored.kit) : derivedKit,
       kitPending: stored ? stored.kitPending === true : derivedPending,
       subcontractType: stored
@@ -8165,6 +8192,41 @@ function cleanToolValue(value) {
   const upper = text.toUpperCase();
   if (["NO", "N/A", "NA", "-", "VACIO", "VACÍO"].includes(upper)) return "";
   return text;
+}
+
+function additionalToolEntryValue(value) {
+  if (value && typeof value === "object") {
+    return {
+      herramental: cleanToolValue(value.herramental || value.tool),
+      machine: normalizeMachineValue(value.machine || value.maquina),
+    };
+  }
+  return { herramental: cleanToolValue(value), machine: "" };
+}
+
+function additionalToolHerramental(value) {
+  return additionalToolEntryValue(value).herramental;
+}
+
+function additionalToolListValue(value) {
+  let values = value;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  const seen = new Set();
+  for (const item of values) {
+    const entry = additionalToolEntryValue(item);
+    if (!entry.herramental) continue;
+    const key = `${normalizeStatus(entry.herramental)}|${normalizeStatus(entry.machine)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry.machine ? entry : entry.herramental);
+  }
+  return out;
 }
 
 function toolListValue(value) {
@@ -8730,6 +8792,7 @@ async function saveAppSheet(showMessage) {
     appSheetAvailable = true;
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
+    delete state._locallyRemovedDraftOts;
     if (showMessage) showToast("Hoja app guardada");
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;

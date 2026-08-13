@@ -111,7 +111,7 @@
       "type": "google_sheet",
       "name": "CONFIGURACION_OT",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["OT", "MAQUINA", "KIT_HERRAMENTAL", "KIT_PENDIENTE", "TIPO_SUBCONTRATO", "DIAS_SUBCONTRATO", "ACTUALIZADO", "HERRAMENTAL", "HERRAMENTALES_EXTRA_JSON"],
+      "columns": ["OT", "MAQUINA", "KIT_HERRAMENTAL", "KIT_PENDIENTE", "TIPO_SUBCONTRATO", "DIAS_SUBCONTRATO", "ACTUALIZADO", "HERRAMENTAL", "HERRAMENTALES_EXTRA_JSON (JSON: strings legacy u objetos {herramental, machine})"],
       "readers": ["PP_readState_ (PP_buildOtConfigurations_)"],
       "writers": ["PP_writeState_", "PP_writeCatalogState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
       "rules": ["RULE-DOB-001", "RULE-HER-003"],

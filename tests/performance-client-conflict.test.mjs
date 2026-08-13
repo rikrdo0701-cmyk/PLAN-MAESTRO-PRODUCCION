@@ -229,6 +229,42 @@ test("un conflicto recarga la coleccion remota y no reintenta el payload obsolet
   assert.equal(fixture.timers.length, 0);
 });
 
+test("un conflicto no revive OTs devueltas a backlog desde el estado remoto obsoleto", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyRemovedDraftOts: ["100"],
+      selectedOts: ["200"],
+      lockedOts: ["200"],
+      expandedOts: ["200"],
+      lastSchedule: { scheduledOts: ["200"] },
+      preparedPlanningByOt: { 200: "firma-200" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["100", "200"],
+      lockedOts: ["100", "200"],
+      expandedOts: ["100", "200"],
+      lastSchedule: { scheduledOts: ["100", "200"] },
+      preparedPlanningByOt: { 100: "firma-100", 200: "firma-200" },
+      operations: [],
+      workOrders: [{ ot: "100" }, { ot: "200" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(fixture.state.selectedOts, ["200"]);
+  assert.deepEqual(fixture.state.lockedOts, ["200"]);
+  assert.deepEqual(fixture.state.expandedOts, ["200"]);
+  assert.deepEqual(fixture.state.lastSchedule.scheduledOts, ["200"]);
+  assert.equal(fixture.state.preparedPlanningByOt[100], undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state._locallyRemovedDraftOts)), ["100"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
 test("el arranque optimizado purga despues de importar y renderiza sin guardar", async () => {
   const events = [];
   const fixture = loadClient({

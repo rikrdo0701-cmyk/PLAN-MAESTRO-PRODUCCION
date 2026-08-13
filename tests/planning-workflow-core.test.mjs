@@ -518,6 +518,24 @@ test("cambiar herramental en una tarjeta actualiza solo sus operaciones de dobla
   assert.equal(operations[0].herramental, "H1");
 });
 
+test("retirar una OT limpia referencias que pueden rehidratar el borrador y conserva otras bloqueadas", () => {
+  const state = {
+    selectedOts: ["100", "200", "300"], lockedOts: ["200"], expandedOts: ["100", "200", "300"],
+    lastSchedule: { scheduledOts: ["100", "200", "300"] },
+    preparedPlanningByOt: { 100: "firma-100", 200: "firma-200" },
+    operations: [{ id: "100-p", ot: "100", locked: false }, { id: "200-p", ot: "200", locked: true }],
+  };
+
+  const next = core.removeOtFromDraft(state, "100");
+
+  assert.deepEqual(structuredClone(next.selectedOts), ["200", "300"]);
+  assert.deepEqual(structuredClone(next.lockedOts), ["200"]);
+  assert.deepEqual(structuredClone(next.expandedOts), ["200", "300"]);
+  assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["200", "300"]);
+  assert.equal(next.preparedPlanningByOt[100], undefined);
+  assert.equal(next.preparedPlanningByOt[200], "firma-200");
+});
+
 test("cambiar herramental puede guardar herramentales adicionales simultaneos", () => {
   const operations = [
     { id: "bend", ot: "100", ct: "5459", herramental: "H1" },
@@ -525,6 +543,16 @@ test("cambiar herramental puede guardar herramentales adicionales simultaneos", 
   ];
   const next = core.applyDraftToolSelection(operations, "100", "H2", ["5459", "5527"], ["H3", "H4"]);
   assert.deepEqual(structuredClone(next.map((op) => [op.id, op.herramental, op.additionalHerramentales || []])), [["bend", "H2", ["H3", "H4"]], ["cut", "", []]]);
+});
+
+test("cambiar herramental conserva maquina por herramental adicional", () => {
+  const operations = [
+    { id: "bend", ot: "100", ct: "5459", herramental: "H1" },
+    { id: "cut", ot: "100", ct: "5458", herramental: "" },
+  ];
+  const extras = [{ herramental: "H3", machine: "212" }, "H4"];
+  const next = core.applyDraftToolSelection(operations, "100", "H2", ["5459", "5527"], extras);
+  assert.deepEqual(structuredClone(next.map((op) => [op.id, op.herramental, op.additionalHerramentales || []])), [["bend", "H2", extras], ["cut", "", []]]);
 });
 
 test("la preparacion es idempotente hasta que cambia su firma", () => {
@@ -563,7 +591,7 @@ test("el detalle y la tarjeta resuelven el mismo herramental efectivo", () => {
     toolCatalog: [{ part: "C 490 UND", herramental: "CATALOGO" }],
   }, job, ["5459", "5527"]), "4 x 5");
   assert.equal(core.effectiveJobTool({
-    otConfigurations: { 2159: { herramental: "4 x 5", additionalHerramentales: ["7 x 8"] } },
+    otConfigurations: { 2159: { herramental: "4 x 5", additionalHerramentales: [{ herramental: "7 x 8", machine: "212" }] } },
     toolCatalog: [{ part: "C 490 UND", herramental: "CATALOGO" }],
   }, job, ["5459", "5527"]), "4 x 5 + 7 x 8");
   assert.equal(core.effectiveJobTool({

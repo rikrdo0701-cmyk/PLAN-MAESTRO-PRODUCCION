@@ -493,7 +493,7 @@ function PP_otConfigurationRows_(payload) {
       Number(item.subcontractDays || item.diasSubcontrato || 0),
       item.updatedAt || item.actualizado || new Date().toISOString(),
       item.herramental || item.tool || '',
-      JSON.stringify(PP_toolList_(item.additionalHerramentales || item.herramentalesExtra || []))
+      JSON.stringify(PP_additionalToolList_(item.additionalHerramentales || item.herramentalesExtra || []))
     ];
   });
 }
@@ -646,7 +646,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
         Number(item.subcontractDays || item.diasSubcontrato || 0),
         item.updatedAt || item.actualizado || new Date().toISOString(),
         item.herramental || item.tool || '',
-        JSON.stringify(PP_toolList_(item.additionalHerramentales || item.herramentalesExtra || []))
+        JSON.stringify(PP_additionalToolList_(item.additionalHerramentales || item.herramentalesExtra || []))
       ];
     }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO,
@@ -1119,7 +1119,7 @@ function PP_buildOtConfigurations_(rows, operations) {
       subcontractType: String(row.TIPO_SUBCONTRATO || '').trim(),
       subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
       updatedAt: String(row.ACTUALIZADO || '').trim(),
-      additionalHerramentales: PP_toolList_(row.HERRAMENTALES_EXTRA_JSON)
+      additionalHerramentales: PP_additionalToolList_(row.HERRAMENTALES_EXTRA_JSON)
     };
     explicit[PP_normalizeKey_(ot)] = true;
   });
@@ -1216,6 +1216,34 @@ function PP_toolList_(value) {
   values.forEach(function(item) {
     const text = String(item || '').trim();
     if (text && out.indexOf(text) < 0) out.push(text);
+  });
+  return out;
+}
+
+function PP_additionalToolList_(value) {
+  let values = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (ignored) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  const seen = {};
+  values.forEach(function(item) {
+    let herramental = '';
+    let machine = '';
+    if (item && typeof item === 'object') {
+      herramental = String(item.herramental || item.tool || '').trim();
+      machine = String(item.machine || item.maquina || '').trim();
+    } else {
+      herramental = String(item || '').trim();
+    }
+    if (!herramental) return;
+    const key = PP_normalizeKey_(herramental) + '|' + PP_normalizeKey_(machine);
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(machine ? { herramental: herramental, machine: machine } : herramental);
   });
   return out;
 }

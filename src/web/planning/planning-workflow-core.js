@@ -21,6 +21,37 @@
     return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
   }
 
+  function additionalToolEntry(value) {
+    if (value && typeof value === "object") {
+      return {
+        herramental: String(value.herramental || value.tool || "").trim(),
+        machine: String(value.machine || value.maquina || "").trim(),
+      };
+    }
+    return { herramental: String(value || "").trim(), machine: "" };
+  }
+
+  function additionalToolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    const out = [];
+    const seen = new Set();
+    values.forEach((item) => {
+      const entry = additionalToolEntry(item);
+      if (!entry.herramental) return;
+      const key = `${normalize(entry.herramental)}|${normalize(entry.machine)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(entry.machine ? entry : entry.herramental);
+    });
+    return out;
+  }
+
   function withTimeout(promise, milliseconds) {
     let timer;
     const timeout = new Promise((resolve, reject) => {
@@ -460,7 +491,10 @@
       machine: normalize(value.machine),
       tool: normalize(value.tool),
       kit: normalize(value.kit),
-      additionalTools: toolList(value.additionalTools || value.additionalHerramentales).map(normalize),
+      additionalTools: additionalToolList(value.additionalTools || value.additionalHerramentales).map((item) => {
+        const entry = additionalToolEntry(item);
+        return { herramental: normalize(entry.herramental), machine: normalize(entry.machine) };
+      }),
       kitPending: value.kitPending === true,
       subcontractType: normalize(value.subcontractType),
       subcontractDays: Number(value.subcontractDays || 0),
@@ -489,7 +523,7 @@
           const configuration = configurationForOt(next.ot);
           if (!String(next.maquina || "").trim()) next.maquina = String(configuration.machine || configuration.maquina || "").trim();
           if (!String(next.herramental || "").trim()) next.herramental = String(configuration.herramental || configuration.tool || "").trim();
-          next.additionalHerramentales = toolList(next.additionalHerramentales || configuration.additionalHerramentales || configuration.herramentalesExtra);
+          next.additionalHerramentales = additionalToolList(next.additionalHerramentales || configuration.additionalHerramentales || configuration.herramentalesExtra);
           if (!String(next.kitHerramental || "").trim() && next.kitPending !== true) next.kitHerramental = String(configuration.kitHerramental || configuration.kit || "").trim();
         }
         return next;
@@ -569,7 +603,7 @@
   function applyDraftToolSelection(operations, ot, tool, bendingCts, additionalTools = []) {
     const targetOt = normalize(ot);
     const allowed = new Set((bendingCts || []).map((ct) => normalize(ct)));
-    const extras = toolList(additionalTools);
+    const extras = additionalToolList(additionalTools);
     return (operations || []).map((operation) =>
       normalize(operation?.ot) === targetOt && allowed.has(normalize(operation?.ct))
         && operation?.generatedAdditionalTool !== true
@@ -585,10 +619,10 @@
     const configurationKey = Object.keys(configurations).find((key) => normalize(configurations[key]?.ot || key) === normalize(job?.ot));
     const configured = configurationKey ? configurations[configurationKey] || {} : {};
     const configuredTool = String(configured.herramental || configured.tool || "").trim();
-    const configuredTools = [configuredTool, ...toolList(configured.additionalHerramentales || configured.herramentalesExtra)].filter(Boolean);
+    const configuredTools = [configuredTool, ...additionalToolList(configured.additionalHerramentales || configured.herramentalesExtra).map((item) => additionalToolEntry(item).herramental)].filter(Boolean);
     if (configuredTools.length) return configuredTools.join(" + ");
     const operationTool = operations.map((operation) => String(operation?.herramental || "").trim()).find(Boolean);
-    const operationExtras = toolList(operations.find((operation) => Array.isArray(operation?.additionalHerramentales) && operation.additionalHerramentales.length)?.additionalHerramentales);
+    const operationExtras = additionalToolList(operations.find((operation) => Array.isArray(operation?.additionalHerramentales) && operation.additionalHerramentales.length)?.additionalHerramentales).map((item) => additionalToolEntry(item).herramental);
     if (operationTool || operationExtras.length) return [operationTool, ...operationExtras].filter(Boolean).join(" + ");
     const article = normalize(job?.parte);
     const catalog = (state?.toolCatalog || []).find((item) => item?.active !== false && normalize(item?.part || item?.parte) === article);

@@ -21,10 +21,10 @@ test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion",
   const end = planningApp.indexOf("function reorderSelectedJobs(", start);
   const source = planningApp.slice(start, end);
   const createHandler = (state, options = {}) => {
-    const calls = { confirm: 0, checkpoint: 0, invalidate: 0, priorities: 0, list: 0, queue: 0, gantt: 0, save: 0, toasts: [] };
+    const calls = { confirm: 0, checkpoint: 0, tombstones: [], invalidate: 0, priorities: 0, list: 0, queue: 0, gantt: 0, save: 0, toasts: [] };
     const handler = Function(
       "state", "window", "isProgrammedJobStatus", "jobStatusForOt", "showToast", "checkpointState",
-      "invalidatePriorityJobsCache", "applyQueuePriorities", "renderPriorityList", "renderPriorityQueue", "renderGantt", "saveState",
+      "rememberDraftRemovedOts", "invalidatePriorityJobsCache", "applyQueuePriorities", "renderPriorityList", "renderPriorityQueue", "renderGantt", "saveState",
       `${source}; return returnUnlockedJobsToBacklog;`,
     )(
       state,
@@ -48,6 +48,7 @@ test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion",
       (ot) => options.programmedOts?.includes(ot) ? "PROGRAMADO" : "PENDIENTE",
       (message) => calls.toasts.push(message),
       () => { calls.checkpoint += 1; },
+      (ots) => { calls.tombstones.push(...ots); },
       () => { calls.invalidate += 1; },
       () => { calls.priorities += 1; },
       () => { calls.list += 1; },
@@ -68,6 +69,7 @@ test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion",
   assert.deepEqual(state.selectedOts, ["200"]);
   assert.deepEqual(state.lockedOts, ["200"]);
   assert.deepEqual(state.preparedPlanningByOt, { 200: "b" });
+  assert.deepEqual(calls.tombstones, ["100", "300"]);
   assert.equal(calls.save, 1);
   assert.equal(calls.toasts.at(-1), "2 trabajos devueltos al backlog");
 
@@ -206,7 +208,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
   assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)/);
-  assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*\}/);
+  assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*if \(typeof rememberDraftRemovedOts === "function"\) rememberDraftRemovedOts\(\[ot\]\);\s*\}/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
   assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
@@ -216,11 +218,16 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);
+  assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
+  assert.match(pagesIndex, /Preparar OT \$\{ot\}\$\{article \? ` - \$\{article\}` : ""\}/);
+  assert.match(pagesIndex, /name="tool_\$\{escapeHtml\(index\)\}_extra_machine_\$\{escapeHtml\(extraIndex\)\}"/);
+  assert.match(pagesIndex, /data-job-tool-extra-machine/);
   assert.doesNotMatch(pagesIndex, /Piezas pendientes/);
   assert.doesNotMatch(pagesIndex, /Monto estimado/);
   assert.match(pagesIndex, /configuration\.subcontractType \|\| registeredSubcontract/);
   assert.match(pagesIndex, /configuration\.machine/);
   assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'\]/);
+  assert.match(storageService, /PP_additionalToolList_\(item\.additionalHerramentales \|\| item\.herramentalesExtra \|\| \[\]\)/);
   assert.match(storageService, /herramental:\s*String\(row\.HERRAMENTAL \|\| ''\)\.trim\(\)/);
   assert.match(storageService, /preparedPlanningByOt:\s*config\.preparedPlanningByOt \|\| \{\}/);
   assert.match(storageService, /\['preparedPlanningByOt', JSON\.stringify\(payload\.preparedPlanningByOt \|\| \{\}\)\]/);
@@ -535,7 +542,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);
-  assert.match(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
+  assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);

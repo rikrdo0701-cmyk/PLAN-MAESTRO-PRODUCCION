@@ -1253,7 +1253,7 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .job-tool-editor input { width: 100%; min-height: 30px; }
 .job-tool-add { align-self: end; min-width: 30px; min-height: 30px; }
 .job-tool-extra-list { grid-column: 1 / -1; display: grid; gap: 4px; }
-.job-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.job-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) auto; gap: 6px; }
 .tool-chip {
   min-height: 30px;
   display: flex;
@@ -1800,7 +1800,7 @@ tr:last-child td { border-bottom: 0; }
 .planning-tool-list { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .planning-tool-add { align-self: end; min-width: 32px; min-height: 32px; }
 .planning-tool-extra-list { grid-column: 1 / -1; display: grid; gap: 6px; }
-.planning-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.planning-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) auto; gap: 6px; }
 .planning-static-field { display: grid; gap: 5px; color: #46545b; font-size: 10px; font-weight: 700; }
 .planning-static-field strong {
   min-height: 32px;

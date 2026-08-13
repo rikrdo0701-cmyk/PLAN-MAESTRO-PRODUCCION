@@ -1518,7 +1518,7 @@
     const byOt = new Map();
     operations.forEach((op) => {
       if (!isBendingOperation(op)) return;
-      const extras = toolList(op.additionalHerramentales || op.herramentalesExtra);
+      const extras = additionalToolList(op.additionalHerramentales || op.herramentalesExtra);
       if (!extras.length) return;
       const key = normalizeKey(op.ot);
       if (!byOt.has(key)) byOt.set(key, []);
@@ -1531,22 +1531,25 @@
       .map((op) => `${normalizeKey(op.ot)}|${normalizeKey(op.herramental)}`));
     for (const items of byOt.values()) {
       const base = items.sort(compareOperationSequence)[0];
-      toolList(base.additionalHerramentales).forEach((tool, index) => {
-        if (completedGenerated.has(`${normalizeKey(base.ot)}|${normalizeKey(tool)}`)) return;
-        expanded.push(additionalToolOperation(base, tool, index));
+      additionalToolList(base.additionalHerramentales).forEach((tool, index) => {
+        const entry = additionalToolEntry(tool);
+        if (completedGenerated.has(`${normalizeKey(base.ot)}|${normalizeKey(entry.herramental)}`)) return;
+        expanded.push(additionalToolOperation(base, entry, index));
       });
     }
     return expanded;
   }
 
   function additionalToolOperation(base, tool, index) {
+    const entry = additionalToolEntry(tool);
     return {
       ...base,
       id: `${base.id || `${base.ot}-${base.secuencia}`}-herr-extra-${index + 1}`,
       num: Number(base.num || 0) + ((index + 1) / 1000),
       secuencia: Number(base.secuencia || 1) + ((index + 1) / 1000),
       descripcion: base.descripcion || "DOBLEZ",
-      herramental: tool,
+      maquina: entry.machine || base.maquina,
+      herramental: entry.herramental,
       additionalHerramentales: [],
       fechaInicio: "",
       horaInicio: "",
@@ -2114,7 +2117,7 @@
       operador: String(op.operador || "SIN_OPERADOR").trim(),
       maquina: String(op.maquina || "").trim(),
       herramental: cleanTool(op.herramental),
-      additionalHerramentales: toolList(op.additionalHerramentales || op.herramentalesExtra),
+      additionalHerramentales: additionalToolList(op.additionalHerramentales || op.herramentalesExtra),
       kitHerramental: cleanTool(op.kitHerramental),
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
@@ -2136,7 +2139,7 @@
     if (match && isBendingOperation(op)) {
       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
-      op.additionalHerramentales = toolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
+      op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
       op.kitPending = configuration.kitPending === true;
     } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(op)) {
@@ -2310,6 +2313,37 @@
     }
     if (!Array.isArray(values)) values = [];
     return unique(values.map(cleanTool).filter(Boolean));
+  }
+
+  function additionalToolEntry(value) {
+    if (value && typeof value === "object") {
+      return {
+        herramental: cleanTool(value.herramental || value.tool),
+        machine: String(value.machine || value.maquina || "").trim(),
+      };
+    }
+    return { herramental: cleanTool(value), machine: "" };
+  }
+
+  function additionalToolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    const out = [];
+    const seen = new Set();
+    values.forEach((item) => {
+      const entry = additionalToolEntry(item);
+      if (!entry.herramental) return;
+      const key = `${normalizeKey(entry.herramental)}|${normalizeKey(entry.machine)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(entry.machine ? entry : entry.herramental);
+    });
+    return out;
   }
 
   function appendLog(current, message) {

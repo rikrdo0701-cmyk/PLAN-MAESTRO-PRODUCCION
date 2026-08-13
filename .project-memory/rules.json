@@ -264,8 +264,8 @@
       "rule_id": "RULE-HER-003",
       "name": "Multiples herramentales de doblado",
       "status": "implementada",
-      "rule": "Una OT puede requerir un herramental principal y herramentales adicionales. Al preparar la OT desde backlog a Planeado/Por planear, el usuario agrega cajas con + junto a Herramental y elimina adicionales con X. CONFIGURACION_OT.HERRAMENTAL conserva el principal y CONFIGURACION_OT.HERRAMENTALES_EXTRA_JSON persiste los adicionales. Cada herramental adicional genera una operacion artificial de doblado con la misma OT, maquina, CT, tiempo de setup y tiempo de produccion del primer doblado; sigue en secuencia al primer doblado aunque no tiene que ir pegada y pelea por capacidad segun la matriz.",
-      "source": "definicion de usuario 2026-08-12; src/web/planning/app.js; src/server/02-storage.js; src/web/planning/planner-core.js",
+      "rule": "Una OT puede requerir un herramental principal y herramentales adicionales. Al preparar la OT desde backlog a Planeado/Por planear, el usuario agrega filas con + junto a Herramental, cada fila pide herramental y maquina, y elimina adicionales con X. CONFIGURACION_OT.HERRAMENTAL conserva el principal y CONFIGURACION_OT.HERRAMENTALES_EXTRA_JSON persiste los adicionales como strings legacy o como objetos {herramental, machine}. Cada herramental adicional genera una operacion artificial de doblado con la misma OT, CT, tiempo de setup y tiempo de produccion del primer doblado; usa su machine cuando existe y, para datos legacy sin machine, hereda la maquina base. Sigue en secuencia al primer doblado aunque no tiene que ir pegada y pelea por capacidad segun la matriz.",
+      "source": "definicion de usuario 2026-08-12 y 2026-08-13; src/web/planning/app.js; src/server/02-storage.js; src/web/planning/planner-core.js",
       "domain": "Herramentales"
     },
     {
