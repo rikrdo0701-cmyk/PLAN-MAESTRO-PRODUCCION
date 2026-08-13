@@ -1248,8 +1248,12 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .availability::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 .tool-chip-row { display: grid; gap: 4px; }
-.job-tool-editor { display: grid; gap: 4px; margin-bottom: 7px; color: var(--muted); font-size: 9px; }
+.job-tool-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; margin-bottom: 7px; color: var(--muted); font-size: 9px; }
+.job-tool-editor label { display: grid; gap: 4px; }
 .job-tool-editor input { width: 100%; min-height: 30px; }
+.job-tool-add { align-self: end; min-width: 30px; min-height: 30px; }
+.job-tool-extra-list { grid-column: 1 / -1; display: grid; gap: 4px; }
+.job-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .tool-chip {
   min-height: 30px;
   display: flex;
@@ -1793,6 +1797,10 @@ tr:last-child td { border-bottom: 0; }
 .planning-requirement-fields input,
 .planning-requirement-fields select { width: 100%; }
 .planning-requirement-fields small { color: var(--muted); font-size: 9px; font-weight: 500; }
+.planning-tool-list { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.planning-tool-add { align-self: end; min-width: 32px; min-height: 32px; }
+.planning-tool-extra-list { grid-column: 1 / -1; display: grid; gap: 6px; }
+.planning-tool-extra-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .planning-static-field { display: grid; gap: 5px; color: #46545b; font-size: 10px; font-weight: 700; }
 .planning-static-field strong {
   min-height: 32px;

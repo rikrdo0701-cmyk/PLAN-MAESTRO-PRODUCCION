@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "project": "plangit",
+  "repo": "C:\\Users\\plane\\Downloads\\plangit",
+  "git_local": "READY",
+  "git_commit": "6899414ffd3cbed449e6595b1bd7da865753c0a6",
+  "git_commit_state": "EXISTING_HISTORY_DIRTY_PRESERVED",
+  "git_remote": {
+    "state": "EXISTING_REMOTE",
+    "origin": "https://github.com/rikrdo0701-cmyk/PLAN-MAESTRO-PRODUCCION.git",
+    "visibility": "public",
+    "branch": "main"
+  },
+  "project_memory": "READY",
+  "memory_files": [
+    "project.json",
+    "structure.json",
+    "data-sources.json",
+    "rules.json",
+    "modules.json",
+    "integrations.json",
+    "indexes.json"
+  ],
+  "detected_data_sources": 28,
+  "detected_modules": 8,
+  "at": "2026-08-09T18:42:32.411317-06:00"
+}

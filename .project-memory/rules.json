@@ -1,0 +1,297 @@
+{
+  "schema_version": "1.0",
+  "rules": [
+    {
+      "rule_id": "RULE-GOV-001",
+      "name": "Project Memory first",
+      "status": "active",
+      "rule": "Los agentes consultan Project Memory antes de navegar código y sólo abren código puntual para verificar o modificar.",
+      "source": "ADR-0001"
+    },
+    {
+      "rule_id": "RULE-GOV-002",
+      "name": "Single writer",
+      "status": "active",
+      "rule": "Sólo un writer puede modificar un repositorio a la vez; especialistas son read-only.",
+      "source": "ADR-0001"
+    },
+    {
+      "rule_id": "RULE-GOV-003",
+      "name": "Document discovered knowledge",
+      "status": "active",
+      "rule": "Si una IA necesita descubrir una regla, fuente, columna, tabla, relación o estructura leyendo código, debe escribir ese conocimiento en Project Memory antes de cerrar la TASK.",
+      "source": "ADR-0001"
+    },
+    {
+      "rule_id": "RULE-GIT-001",
+      "name": "Private independent remote",
+      "status": "active",
+      "rule": "Todo proyecto sin remote debe recibir un repositorio remoto independiente y privado. Nunca se reutiliza el remote de otro proyecto.",
+      "source": "ADR-0001"
+    },
+    {
+      "rule_id": "RULE-GIT-002",
+      "name": "Push only through Git Gate",
+      "status": "active",
+      "rule": "Los cambios de una TASK se envían a origin sólo después de validación, Documentation Gate, secret scan y APPROVE de Codex.",
+      "source": "ADR-0001"
+    },
+    {
+      "rule_id": "RULE-OT-001",
+      "name": "Mapeo de hojas OT",
+      "status": "documentada",
+      "rule": "Control de trabajos (TRABAJO) -> Trabajos programados (Folio de trabajo -> ID Interno) -> Operaciones programadas (Orden de trabajo = ID Interno).",
+      "source": "OT_RULES.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-002",
+      "name": "Normalización TRABAJO/Folio",
+      "status": "documentada",
+      "rule": "Eliminar prefijos OT-/O.T./ot-; eliminar caracteres no alfanuméricos; trim; \"05\" -> \"5\"; usar texto mostrado de HYPERLINK.",
+      "source": "OT_RULES.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-003",
+      "name": "ID Interno como cadena",
+      "status": "documentada",
+      "rule": "ID Interno se trata como cadena con trim(); si está vacío el trabajo no puede mapearse: detectar y reportar.",
+      "source": "OT_RULES.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-004",
+      "name": "Agrupación por secuencia",
+      "status": "documentada",
+      "rule": "Las operaciones de un mismo ID Interno se agrupan por secuencia (1, 2, ...).",
+      "source": "OT_RULES.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-005",
+      "name": "Coherencia del borrador",
+      "status": "documentada",
+      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-006",
+      "name": "Sincronización ligera del backlog",
+      "status": "implementada",
+      "rule": "syncBacklogWorkOrders() usa únicamente syncNetSuiteWorkOrdersLite, compara antes de aplicar, confirma una sola vez y persiste estado/snapshot.",
+      "source": "src/web/planning/app.js",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-007",
+      "name": "Exclusión mutua",
+      "status": "implementada",
+      "rule": "Sincronización ligera, sincronización completa y programación no pueden ejecutarse simultáneamente.",
+      "source": ".superpowers/sdd-restore/task-2-report.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-008",
+      "name": "OTs cerradas conservadas",
+      "status": "implementada",
+      "rule": "Una CLOSED_KEPT permanece visible sin entrar al motor ni poda.",
+      "source": ".superpowers/sdd-restore/task-2-report.md",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-009",
+      "name": "Tipos de trabajo",
+      "status": "implementada",
+      "rule": "PROTOTIPO, URGENTE y EXPEDITACION determinan la clasificación visual de riesgo.",
+      "source": "legacy/IndexPlanning.html",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-010",
+      "name": "Persistencia de CONFIGURACION_OT mientras OT abierta",
+      "status": "documentada",
+      "rule": "CONFIGURACION_OT (máquina, herramental, kit, tipo/días de subcontrato) debe sobrevivir a sincronizaciones y recargas mientras la OT siga abierta; la validación previa a generar plan debe usar la configuración efectiva persistida por OT antes de volver a pedir datos.",
+      "source": "definición de usuario 2026-08-12",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-DOB-001",
+      "name": "Precarga CT 5459/5527",
+      "status": "documentada",
+      "rule": "Operaciones sincronizadas sin máquina/herramental/kit no se descartan; la preparación de la OT precarga esos datos del catálogo del artículo.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "Doblado"
+    },
+    {
+      "rule_id": "RULE-HER-001",
+      "name": "Preservación de HERRAMENTALES",
+      "status": "documentada",
+      "rule": "La hoja HERRAMENTALES se preserva durante la limpieza del borrador (configuración maestra).",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "Herramentales"
+    },
+    {
+      "rule_id": "RULE-HER-002",
+      "name": "Herramental en doblado",
+      "status": "inferida",
+      "rule": "El herramental de operaciones de doblado CT 5459/5527 se precarga desde el catálogo del artículo durante la preparación de la OT.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "Herramentales"
+    },
+    {
+      "rule_id": "RULE-MAQ-001",
+      "name": "Preservación de MAQUINAS",
+      "status": "documentada",
+      "rule": "La hoja MAQUINAS se preserva durante la limpieza del borrador (configuración maestra).",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "Máquinas"
+    },
+    {
+      "rule_id": "RULE-MAQ-002",
+      "name": "Programa semanal = Gantt por máquina",
+      "status": "implementada",
+      "rule": "El Programa semanal es una vista de borrador por máquina (p. ej. Dobladora 209).",
+      "source": "legacy/IndexPlanning.html",
+      "domain": "Máquinas"
+    },
+    {
+      "rule_id": "RULE-MAQ-003",
+      "name": "Asignación de máquina",
+      "status": "implementada",
+      "rule": "Cada operación del plan tiene una máquina asignada (Corte en máquina 1, Doblez en Dobladora 209).",
+      "source": "legacy/IndexPlanning.html",
+      "domain": "Máquinas"
+    },
+    {
+      "rule_id": "RULE-MAT-001",
+      "name": "Catálogo maestro SuiteQL",
+      "status": "documentada",
+      "rule": "Consulta pasos de rutas de manufactura activas unidas a rutas y centros activos; entrada {key, ct, label, source: NETSUITE_MASTER, active}.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-002",
+      "name": "Dedupe y filtro de activos",
+      "status": "documentada",
+      "rule": "Dedupe por CT y nombre normalizado; conservar únicamente registros, rutas y centros activos.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-003",
+      "name": "Fallback del catálogo",
+      "status": "documentada",
+      "rule": "Si la consulta falla, conservar el último catálogo válido y devolver advertencia; nunca reemplazarlo por lista vacía.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-004",
+      "name": "No modificar RESTlets/Apps Script",
+      "status": "documentada",
+      "rule": "El catálogo y las exclusiones no modifican los RESTlets actuales ni el Apps Script protegido.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-005",
+      "name": "Exclusión de subcontratos especiales",
+      "status": "documentada",
+      "rule": "El selector Agregar operación no muestra operaciones clasificadas como subcontrato especial.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-006",
+      "name": "Buscador de operaciones",
+      "status": "documentada",
+      "rule": "Coincidencia parcial por nombre o CT; normalización sin mayúsculas, espacios ni acentos; contador N de M; botón limpiar; mensaje sin coincidencias; solo afecta la vista.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-007",
+      "name": "Exclusiones globales",
+      "status": "documentada",
+      "rule": "excludedCapabilities excluye operaciones globalmente; la reactivación restaura la programación; la exclusión intermedia reconstruye precedencias; se persiste e importa.",
+      "source": "docs/superpowers/specs/2026-07-26-matrix-search-catalog-exclusions-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-008",
+      "name": "Memorización de operaciones incluidas",
+      "status": "implementada",
+      "rule": "currentPlanOperations() se memoriza con clave = referencia de operaciones + firma normalizada de excludedCapabilities; se invalida al normalizar, importar, sincronizar, programar o cambiar exclusiones.",
+      "source": "docs/superpowers/specs/2026-07-27-frontend-progressive-loading-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-MAT-009",
+      "name": "Catálogo con caché 1h",
+      "status": "implementada",
+      "rule": "CacheService de Apps Script por 1 hora, separado por cuenta y ubicación; una respuesta inválida nunca reemplaza el catálogo anterior.",
+      "source": "docs/superpowers/specs/2026-07-27-frontend-progressive-loading-design.md",
+      "domain": "Matriz"
+    },
+    {
+      "rule_id": "RULE-BAL-001",
+      "name": "KPIs de carga",
+      "status": "implementada",
+      "rule": "El borrador muestra métricas de Horas programadas y Riesgo alto.",
+      "source": "legacy/IndexPlanning.html",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-BAL-002",
+      "name": "Cargas coherentes con selectedOts",
+      "status": "documentada",
+      "rule": "Las cargas del borrador usan la misma lista selectedOts que Gantt, KPI, backlog y reportes (misma regla que RULE-OT-005).",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-BAL-003",
+      "name": "Agrupacion por maquina y herramental en doblado",
+      "status": "documentada",
+      "rule": "El balanceo debe preferir, en la medida de lo posible, operaciones de doblado de OTs con la misma maquina y el mismo herramental/kit ya montado para evitar cambios de herramental; es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
+      "source": "definicion de usuario 2026-08-12; src/web/planning/planner-core.js; tests/planner-core.test.mjs",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-HER-003",
+      "name": "Multiples herramentales de doblado",
+      "status": "implementada",
+      "rule": "Una OT puede requerir un herramental principal y herramentales adicionales. Al preparar la OT desde backlog a Planeado/Por planear, el usuario agrega cajas con + junto a Herramental y elimina adicionales con X. CONFIGURACION_OT.HERRAMENTAL conserva el principal y CONFIGURACION_OT.HERRAMENTALES_EXTRA_JSON persiste los adicionales. Cada herramental adicional genera una operacion artificial de doblado con la misma OT, maquina, CT, tiempo de setup y tiempo de produccion del primer doblado; sigue en secuencia al primer doblado aunque no tiene que ir pegada y pelea por capacidad segun la matriz.",
+      "source": "definicion de usuario 2026-08-12; src/web/planning/app.js; src/server/02-storage.js; src/web/planning/planner-core.js",
+      "domain": "Herramentales"
+    },
+    {
+      "rule_id": "RULE-BAL-004",
+      "name": "Menor tiempo de OT en produccion",
+      "status": "documentada",
+      "rule": "Una OT debe tardar el menor tiempo posible en produccion para evitar demasiadas OTs abiertas a la par; el balanceo debe preferir terminar OTs activas antes de abrir nuevas cuando sea factible, sin violar precedencia, bloqueos, calendario, capacidad ni secuencia inicial protegida.",
+      "source": "definicion de usuario 2026-08-12; src/web/planning/planner-core.js",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-BOM-001",
+      "name": "MATERIALES en limpieza del borrador",
+      "status": "documentada",
+      "rule": "Las filas de MATERIALES que representan el estado sincronizado/programado actual se limpian en la limpieza del borrador.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "domain": "BOM"
+    },
+    {
+      "rule_id": "RULE-BOM-002",
+      "name": "materialsForOt filtra por OT",
+      "status": "implementada",
+      "rule": "materialsForOt() filtra la lista de materiales por OT; optimizado para evitar recorridos repetidos por tarjeta.",
+      "source": "docs/CONFIGURACION.md",
+      "domain": "BOM"
+    }
+  ],
+  "updated_at": "2026-08-11T00:00:00-06:00"
+}

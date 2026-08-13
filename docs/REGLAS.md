@@ -17,6 +17,7 @@
 - **RULE-OT-007** — Exclusión mutua (IMPLEMENTADA): sincronización ligera, sincronización completa y programación no pueden ejecutarse simultáneamente. Fuente: `.superpowers/sdd-restore/task-2-report.md:1-47`.
 - **RULE-OT-008** — OTs cerradas conservadas (IMPLEMENTADA): una `CLOSED_KEPT` permanece visible sin entrar al motor ni poda. Fuente: `.superpowers/sdd-restore/task-2-report.md:1-47`.
 - **RULE-OT-009** — Tipos de trabajo (IMPLEMENTADA): `PROTOTIPO`, `URGENTE`, `EXPEDITACION` determinan la clasificación visual de riesgo. Fuente: `legacy/IndexPlanning.html:701-800`.
+- **RULE-OT-010** — Persistencia de configuración OT (DOCUMENTADA): `CONFIGURACION_OT` (máquina, herramental, kit, tipo/días de subcontrato) debe sobrevivir a sincronizaciones y recargas mientras la OT siga abierta; la validación previa a generar plan debe usar la configuración efectiva persistida por OT antes de volver a pedir datos. Fuente: definición de usuario 2026-08-12 y `src/web/planning/planner-core.js`.
 
 ## Doblado
 
@@ -26,6 +27,7 @@
 
 - **RULE-HER-001** — Preservación de herramentales (DOCUMENTADA): la hoja `HERRAMENTALES` se preserva durante la limpieza del borrador (configuración maestra). Fuente: `docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md:1-48`.
 - **RULE-HER-002** — Herramental en doblado (INFERIDA; complementa RULE-DOB-001): el herramental de las operaciones de doblado CT 5459/5527 se precarga desde el catálogo del artículo durante la preparación de la OT. Fuente: `docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md:1-48`.
+- **RULE-HER-003** — Múltiples herramentales de doblado (IMPLEMENTADA): una OT puede requerir un herramental principal y herramentales adicionales. Al preparar la OT desde backlog a Planeado/Por planear, el usuario puede agregar cajas con `+` junto a Herramental y eliminar adicionales con `X`; `HERRAMENTAL` conserva el principal y `HERRAMENTALES_EXTRA_JSON` persiste los adicionales en `CONFIGURACION_OT`. Cada herramental adicional genera una operación artificial de doblado, con la misma OT, máquina, CT, tiempo de setup y tiempo de producción del primer doblado; sigue en secuencia al primer doblado aunque no tiene que ir pegada y pelea por capacidad según la matriz. Fuente: definición de usuario 2026-08-12, `src/web/planning/app.js`, `src/server/02-storage.js`, `src/web/planning/planner-core.js`.
 
 ## Máquinas
 
@@ -49,7 +51,9 @@
 
 - **RULE-BAL-001** — KPIs de carga (IMPLEMENTADA): el borrador muestra métricas de "Horas programadas" y "Riesgo alto". Fuente: `legacy/IndexPlanning.html:601-700`.
 - **RULE-BAL-002** — Cargas coherentes con `selectedOts` (DOCUMENTADA; misma regla que RULE-OT-005): las cargas del borrador usan la misma lista `selectedOts` que Gantt, KPI, backlog y reportes. Fuente: `docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md:1-48`.
-- **Nota:** no se encontró evidencia de una regla explícita de balanceo de cargas (p. ej. algoritmo de nivelación); solo métricas de horas programadas y cargas. Evidencia insuficiente.
+- **RULE-BAL-003** — Agrupación por máquina y herramental en doblado (DOCUMENTADA): el balanceo debe preferir, en la medida de lo posible, operaciones de doblado de OTs con la misma máquina y el mismo herramental/kit ya montado para evitar cambios de herramental; es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad. Fuente: definición de usuario 2026-08-12, `src/web/planning/planner-core.js`, `tests/planner-core.test.mjs`.
+- **RULE-BAL-004** — Menor tiempo de OT en producción (DOCUMENTADA): una OT debe tardar el menor tiempo posible en producción para evitar demasiadas OTs abiertas a la par; el balanceo debe preferir terminar OTs activas antes de abrir nuevas cuando sea factible, sin violar precedencia, bloqueos, calendario, capacidad ni secuencia inicial protegida. Fuente: definición de usuario 2026-08-12 y estrategia `flow_balanced`.
+- **Nota:** no se encontró evidencia adicional de una regla explícita de balanceo de cargas (p. ej. algoritmo de nivelación); solo métricas de horas programadas y cargas. Evidencia insuficiente.
 
 ## BOM
 

@@ -147,7 +147,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /Monto estimado/);
   assert.match(pagesIndex, /configuration\.subcontractType \|\| registeredSubcontract/);
   assert.match(pagesIndex, /configuration\.machine/);
-  assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL'\]/);
+  assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'\]/);
   assert.match(storageService, /herramental:\s*String\(row\.HERRAMENTAL \|\| ''\)\.trim\(\)/);
   assert.match(storageService, /preparedPlanningByOt:\s*config\.preparedPlanningByOt \|\| \{\}/);
   assert.match(storageService, /\['preparedPlanningByOt', JSON\.stringify\(payload\.preparedPlanningByOt \|\| \{\}\)\]/);
@@ -424,12 +424,13 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /planSnapshots\.some\(\(snapshot\) => snapshot\.snapshotId === "draft"\)/);
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
   assert.match(pagesIndex, /id="jobToolInput"/);
-  assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value\)/);
+  assert.match(pagesIndex, /data-add-job-tool/);
+  assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value, currentJobAdditionalTools\(\)\)/);
   assert.match(pagesIndex, /class="queue-tool-mini"/);
   assert.match(pagesIndex, /"Maq\/Area", "Herramental", "TC \(min\)"/);
   assert.match(pagesIndex, /effectiveJobTool\(state, \{ ot: op\.ot, parte: op\.parte \|\| workOrder\?\.item \|\| "", ops: \[op\] \}, \["5459", "5527"\]\)/);
   const detailBinding = pagesIndex.slice(pagesIndex.indexOf('const toolInput = els.selectedJobPanel.querySelector("#jobToolInput")'), pagesIndex.indexOf("function renderGantt()"));
-  assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
+  assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value, currentJobAdditionalTools\(\)\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
   assert.match(pagesIndex, /<details class="job-resource-section/);
   assert.doesNotMatch(pagesIndex, /class="job-photo/);
   assert.doesNotMatch(pagesIndex, />Inicio NetSuite</);

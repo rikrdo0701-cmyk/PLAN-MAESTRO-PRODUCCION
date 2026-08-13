@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "project_id": "PROJECT-PLANGIT",
+  "name": "plangit",
+  "repository": {
+    "local_git_required": true,
+    "remote_required": true,
+    "new_remote_visibility": "private",
+    "origin": "https://github.com/rikrdo0701-cmyk/PLAN-MAESTRO-PRODUCCION.git"
+  },
+  "knowledge_policy": {
+    "project_memory_first": true,
+    "targeted_code_second": true,
+    "discovered_facts_must_be_documented": true,
+    "documentation_gate_required": true
+  },
+  "updated_at": "2026-08-09T18:42:32.512187-06:00"
+}

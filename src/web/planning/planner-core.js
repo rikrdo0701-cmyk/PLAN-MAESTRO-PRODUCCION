@@ -92,9 +92,9 @@
     const preservedCompletedChanges = allOperations
       .filter((op) => op.generatedBy === GENERATED_BY && isPlanCompletedOperation(state, op))
       .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
-    const sourceOperations = allOperations
+    const sourceOperations = expandAdditionalToolOperations(state, allOperations
       .filter((op) => op.generatedBy !== GENERATED_BY)
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index))));
     const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
     const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
     const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
@@ -631,6 +631,7 @@
       tipoInsercion: "CAMBIO_HERRAMENTAL",
       estatus: "PLAN",
       generatedBy: GENERATED_BY,
+      generatedAdditionalTool: false,
       completionKey,
       toolChangeFromHerramental: reportableToolValue(fromHerramental),
       toolChangeFromKit: reportableToolValue(fromKit),
@@ -667,6 +668,7 @@
       tipoInsercion: "CAMBIO_HERRAMENTAL",
       estatus: "PLAN",
       generatedBy: GENERATED_BY,
+      generatedAdditionalTool: false,
       completionKey,
       toolChangeFromHerramental: reportableToolValue(fromHerramental),
       toolChangeFromKit: reportableToolValue(fromKit),
@@ -1020,7 +1022,9 @@
     const toolsByMachine = new Map();
     const configured = Array.isArray(state.configuredCapabilities) ? new Set(state.configuredCapabilities) : null;
     const matrix = state.matrix || {};
-    for (const op of filterExcludedOperations(state, operations)) {
+    const effectiveOperations = filterExcludedOperations(state, operations)
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
+    for (const op of effectiveOperations) {
       if (String(op.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL") continue;
       const capability = capabilityForOperation(op);
       const isSubcontract = isSubcontractOperation(state, op);
@@ -1510,6 +1514,55 @@
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
   }
 
+  function expandAdditionalToolOperations(state, operations) {
+    const byOt = new Map();
+    operations.forEach((op) => {
+      if (!isBendingOperation(op)) return;
+      const extras = toolList(op.additionalHerramentales || op.herramentalesExtra);
+      if (!extras.length) return;
+      const key = normalizeKey(op.ot);
+      if (!byOt.has(key)) byOt.set(key, []);
+      byOt.get(key).push(op);
+    });
+    if (!byOt.size) return operations;
+    const expanded = [...operations];
+    const completedGenerated = new Set((state.operations || [])
+      .filter((op) => op.generatedAdditionalTool === true && isPlanCompletedOperation(state, op))
+      .map((op) => `${normalizeKey(op.ot)}|${normalizeKey(op.herramental)}`));
+    for (const items of byOt.values()) {
+      const base = items.sort(compareOperationSequence)[0];
+      toolList(base.additionalHerramentales).forEach((tool, index) => {
+        if (completedGenerated.has(`${normalizeKey(base.ot)}|${normalizeKey(tool)}`)) return;
+        expanded.push(additionalToolOperation(base, tool, index));
+      });
+    }
+    return expanded;
+  }
+
+  function additionalToolOperation(base, tool, index) {
+    return {
+      ...base,
+      id: `${base.id || `${base.ot}-${base.secuencia}`}-herr-extra-${index + 1}`,
+      num: Number(base.num || 0) + ((index + 1) / 1000),
+      secuencia: Number(base.secuencia || 1) + ((index + 1) / 1000),
+      descripcion: base.descripcion || "DOBLEZ",
+      herramental: tool,
+      additionalHerramentales: [],
+      fechaInicio: "",
+      horaInicio: "",
+      fechaFin: "",
+      horaFin: "",
+      operador: "SIN_OPERADOR",
+      locked: false,
+      autoFrozen: false,
+      generatedBy: GENERATED_BY,
+      generatedAdditionalTool: true,
+      tipoInsercion: "OPERACION",
+      planStatus: "PENDIENTE",
+      log: appendLog(base.log, "HERRAMENTAL_ADICIONAL_GENERADO"),
+    };
+  }
+
   function fixedPredecessor(job, operation) {
     const candidates = (job.fixedOperations || [])
       .filter((candidate) => compareOperationSequence(candidate, operation) < 0)
@@ -1546,6 +1599,11 @@
   }
 
   function compareReadyCandidates(a, b, firstOperation, strategy) {
+    const isFirstA = a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
+    const isFirstB = b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
+    if (isFirstA && !isFirstB) return -1;
+    if (!isFirstA && isFirstB) return 1;
+    if (isFirstA && isFirstB) return compareFirstOperationCandidates(a, b);
     if (strategy === "flow_balanced") return compareFlowReadyCandidates(a, b);
     const stateA = a.job?.state || a.context?.state || {};
     const stateB = b.job?.state || b.context?.state || {};
@@ -1555,15 +1613,6 @@
       const daysA = Number(a.op.subcontractDays || 0);
       const daysB = Number(b.op.subcontractDays || 0);
       if (daysA !== daysB) return daysA - daysB;
-    }
-    const aIsFirst = strategy === "flow_balanced" && a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
-    const bIsFirst = strategy === "flow_balanced" && b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
-    if (aIsFirst && !bIsFirst) return -1;
-    if (!aIsFirst && bIsFirst) return 1;
-    if (aIsFirst && bIsFirst) {
-      const seqA = Number(a.op.secuencia) || 1;
-      const seqB = Number(b.op.secuencia) || 1;
-      if (seqA !== seqB) return seqA - seqB;
     }
     if (firstOperation) {
       const priorityDifference = normalizePriority(a.op.prioridad) - normalizePriority(b.op.prioridad);
@@ -1597,9 +1646,9 @@
       if (aLoad !== bLoad) return aLoad - bLoad;
     }
     const state = a.job?.state || a.context?.state || {};
-    const isFirstA = a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
-    const isFirstB = b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
     if (!isFirstA && !isFirstB) {
+      const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
+      if (toolChange) return toolChange;
       const matrix = state.matrix || {};
       const capabilityA = capabilityForOperation(a.op);
       const capabilityB = capabilityForOperation(b.op);
@@ -1626,16 +1675,16 @@
     const tie = String(a.operator).localeCompare(String(b.operator), "es", { numeric: true });
     if (strategy === "flow_balanced") {
       return a.projectedOperatorLoad - b.projectedOperatorLoad ||
+        a.toolPenalty - b.toolPenalty ||
         a.end - b.end ||
         a.start - b.start ||
-        a.toolPenalty - b.toolPenalty ||
         String(a.machine).localeCompare(String(b.machine), "es", { numeric: true }) ||
         tie;
     }
     if (strategy === "finish") return a.end - b.end || a.start - b.start || a.toolPenalty - b.toolPenalty || a.operatorLoad - b.operatorLoad || tie;
     if (strategy === "load") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || tie;
-    if (strategy === "tools") return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
-    return a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || a.toolPenalty - b.toolPenalty || tie;
+    if (strategy === "tools") return a.toolPenalty - b.toolPenalty || a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
+    return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
   }
 
   function flowReadyCandidates(ready, jobs, wipTarget) {
@@ -1651,6 +1700,8 @@
   function compareFlowReadyCandidates(a, b) {
     const slack = flowSlackMinutes(a) - flowSlackMinutes(b);
     if (slack) return slack;
+    const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
+    if (toolChange) return toolChange;
     const remaining = flowActiveProjectedFinish(a) - flowActiveProjectedFinish(b);
     if (remaining) return remaining;
     const unlocked = flowUnlockedSuccessorWork(b) - flowUnlockedSuccessorWork(a);
@@ -1726,9 +1777,9 @@
     const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
     const bd = parseDateOnly(b.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
     return a.assignment.start - b.assignment.start ||
+      a.assignment.toolPenalty - b.assignment.toolPenalty ||
       a.assignment.end - b.assignment.end ||
       a.assignment.operatorLoad - b.assignment.operatorLoad ||
-      a.assignment.toolPenalty - b.assignment.toolPenalty ||
       ad - bd ||
       String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
   }
@@ -2063,6 +2114,7 @@
       operador: String(op.operador || "SIN_OPERADOR").trim(),
       maquina: String(op.maquina || "").trim(),
       herramental: cleanTool(op.herramental),
+      additionalHerramentales: toolList(op.additionalHerramentales || op.herramentalesExtra),
       kitHerramental: cleanTool(op.kitHerramental),
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
@@ -2070,6 +2122,7 @@
     if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next) && !isFixedOperation(next)) {
       next.maquina = "";
       next.herramental = "";
+      next.additionalHerramentales = [];
       next.kitHerramental = "";
       next.kitPending = false;
     }
@@ -2083,6 +2136,7 @@
     if (match && isBendingOperation(op)) {
       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
+      op.additionalHerramentales = toolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
       op.kitPending = configuration.kitPending === true;
     } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(op)) {
@@ -2245,6 +2299,17 @@
   function cleanTool(value) {
     const text = String(value || "").trim();
     return ["", "NO", "N/A", "NA", "-"].includes(normalizeKey(text)) ? "" : text;
+  }
+
+  function toolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    return unique(values.map(cleanTool).filter(Boolean));
   }
 
   function appendLog(current, message) {

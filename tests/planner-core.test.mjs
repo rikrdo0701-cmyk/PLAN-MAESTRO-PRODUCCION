@@ -768,6 +768,36 @@ test("el motor toma el herramental guardado en la configuracion de la OT", () =>
   assert.equal(result.operations.find((op) => op.id === "bend-2433").herramental, "4 x 5");
 });
 
+test("la validacion usa herramental persistido en configuracion de la OT", () => {
+  const core = loadPlannerCore();
+  const issues = core.planningConfigurationIssues({
+    selectedOts: ["2433"],
+    operations: [{ id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "211", herramental: "", tiempoCiclo: 1, cantidadPendiente: 1 }],
+    otConfigurations: { "2433": { ot: "2433", machine: "211", herramental: "4 x 5" } },
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA"],
+    operators: ["OPERADOR 2"],
+    workSchedule: {},
+  }, [{ id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "211", herramental: "", tiempoCiclo: 1, cantidadPendiente: 1 }]);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_TOOL"), false);
+});
+
+test("la validacion usa dias y tipo de subcontrato persistidos por OT", () => {
+  const core = loadPlannerCore();
+  const operation = { id: "sub-100", ot: "100", secuencia: 2, ct: "SUB", descripcion: "CROMADO", contenido: "SUBCONTRATO", estatus: "PLAN", subcontractType: "", subcontractDays: 0, tiempoProd: 0 };
+  const issues = core.planningConfigurationIssues({
+    selectedOts: ["100"],
+    operations: [operation],
+    otConfigurations: { "100": { ot: "100", subcontractType: "CROMADO", subcontractDays: 3 } },
+    matrix: {},
+    configuredCapabilities: [],
+    operators: [],
+    workSchedule: {},
+  }, [operation]);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_SUBCONTRACT_TYPE"), false);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_SUBCONTRACT_DAYS"), false);
+});
+
 test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", () => {
   const core = loadPlannerCore();
   const operations = [
@@ -813,6 +843,60 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   const change = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeFromHerramental === "4 x 5" && op.toolChangeToHerramental === "5 x 6");
   assert.ok(change, "debe proyectar el cambio 4 x 5 a 5 x 6");
   assert.equal(change.tiempoSetup, 30);
+});
+
+test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const operations = [
+    { id: "prev-a", ot: "100", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
+    { id: "prev-b", ot: "200", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
+    { id: "change-first", ot: "100", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", maquina: "211", herramental: "H2", tiempoProd: 5 },
+    { id: "keep-mounted", ot: "200", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "B", estatus: "PLAN", maquina: "211", herramental: "H1", tiempoProd: 40 },
+  ];
+  const state = {
+    selectedOts: ["100", "200"], operations, workOrders: [{ ot: "100" }, { ot: "200" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    operationPlanStatuses: [{ ot: "200", status: "COMPLETADA_PLAN", machine: "211", toToolKey: "H1/SIN_KIT" }],
+    settings: { toolChangeMinutes: 30 }, workSchedule: {},
+  };
+
+  for (const strategy of ["balanced", "flow_balanced", "tools"]) {
+    const result = core.schedulePlanOnce(state, { strategy, planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+    const scheduled = result.operations
+      .filter((op) => ["change-first", "keep-mounted"].includes(op.id))
+      .sort((a, b) => new Date(`${a.fechaInicio}T${a.horaInicio}:00`) - new Date(`${b.fechaInicio}T${b.horaInicio}:00`));
+    assert.equal(scheduled[0].id, "keep-mounted", strategy);
+  }
+});
+
+test("un herramental adicional genera una operacion artificial de doblado con capacidad propia", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200", "300"],
+    operations: [
+      { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", maquina: "211", herramental: "H1", additionalHerramentales: ["H2"], tiempoSetup: 3, tiempoProd: 10 },
+      { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", maquina: "211", herramental: "H3", tiempoProd: 10 },
+      { id: "cut-after", ot: "100", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 5 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "CORTE::CORTE": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "CORTE::CORTE", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const artificial = result.operations.find((op) => op.generatedAdditionalTool === true);
+  const base = result.operations.find((op) => op.id === "bend-a");
+  const successor = result.operations.find((op) => op.id === "cut-after");
+  assert.equal(artificial.herramental, "H2");
+  assert.equal(artificial.tiempoSetup, 3);
+  assert.equal(artificial.tiempoProd, 10);
+  assert.equal(artificial.ct, "5459");
+  assert.equal(artificial.operador, "OPERADOR 2");
+  assert.ok(new Date(`${artificial.fechaInicio}T${artificial.horaInicio}:00`) >= new Date(`${base.fechaFin}T${base.horaFin}:00`));
+  assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date(`${artificial.fechaFin}T${artificial.horaFin}:00`));
+  assert.ok(result.operations.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeToHerramental === "H2"));
 });
 
 test("un doblado sin parte en la operacion hereda el herramental usando el articulo de la OT", () => {
@@ -1062,16 +1146,16 @@ test("desactivar flow balanced conserva operaciones, fechas y recursos existente
     planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
   });
 
-  assert.equal(result.lastSchedule.optimization.selectedStrategy, "makespan");
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
   assert.equal(result.lastSchedule.optimization.strategiesEvaluated.some((item) => item.strategy === "flow_balanced"), false);
   assert.deepEqual(
     JSON.parse(JSON.stringify(result.operations.map(({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin }) => ({ id, operador, fechaInicio, horaInicio, fechaFin, horaFin })))),
     [
-      { id: "o1", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:54" },
-      { id: "o4", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:27" },
-      { id: "o2", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "09:27", fechaFin: "2026-07-13", horaFin: "10:12" },
-      { id: "o0", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "10:12", fechaFin: "2026-07-13", horaFin: "13:15" },
-      { id: "o3", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "10:54", fechaFin: "2026-07-13", horaFin: "12:30" },
+      { id: "o1", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:54" },
+      { id: "o4", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:27" },
+      { id: "o2", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "09:27", fechaFin: "2026-07-13", horaFin: "10:12" },
+      { id: "o3", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "10:12", fechaFin: "2026-07-13", horaFin: "11:48" },
+      { id: "o0", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "10:54", fechaFin: "2026-07-13", horaFin: "13:57" },
     ],
   );
 });
@@ -1402,28 +1486,96 @@ test("flow balanced conserva precedencia y bloqueos", () => {
   assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date("2026-07-13T09:00:00"));
 });
 
-test("flow balanced incluye operaciones fijas futuras al estimar que OT termina primero", () => {
+test("un asueto general detiene operaciones finitas y subcontratos al buscar el primer fin posible", () => {
   const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"],
+    operations: [
+      { id: "finite-before-holiday", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+      { id: "sub-before-holiday", ot: "200", secuencia: 1, ct: "519", descripcion: "MAKA", tipoInsercion: "SUBCONTRATO", estatus: "PLAN" },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    otConfigurations: { 200: { ot: "200", subcontractType: "MAKA", subcontractDays: 1 } },
+    matrix: { "CORTE::CORTE": ["OP 1"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"],
+    calendarExceptions: [{ date: "2026-07-14", concept: "ASUETO", reason: "Validacion motor" }],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T16:30:00" });
+
+  const finite = result.operations.find((op) => op.id === "finite-before-holiday");
+  const subcontract = result.operations.find((op) => op.id === "sub-before-holiday");
+  assert.deepEqual([finite.fechaInicio, finite.horaInicio, finite.fechaFin, finite.horaFin], ["2026-07-13", "16:30", "2026-07-15", "07:30"]);
+  assert.deepEqual([subcontract.fechaInicio, subcontract.horaInicio, subcontract.fechaFin, subcontract.horaFin], ["2026-07-13", "16:30", "2026-07-15", "07:00"]);
+  assert.equal(result.lastSchedule.unscheduled, 0);
+});
+
+test("una completada fija la precedencia de su sucesora sin consumir capacidad para otras OTs", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100", "200"],
+    operations: [
+      { id: "completed-predecessor", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoProd: 300 },
+      { id: "successor-after-completed", ot: "100", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+      { id: "other-ot-can-use-capacity", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: true },
+    workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+
+  const successor = result.operations.find((op) => op.id === "successor-after-completed");
+  const other = result.operations.find((op) => op.id === "other-ot-can-use-capacity");
+  assert.deepEqual([other.fechaInicio, other.horaInicio], ["2026-07-13", "07:00"]);
+  assert.deepEqual([successor.fechaInicio, successor.horaInicio], ["2026-07-13", "12:00"]);
+  assert.equal(result.lastSchedule.operatorConflicts, 0);
+});
+
+test("el motor elige el recurso factible mas rapido cuando el primero esta bloqueado", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const result = core.schedulePlanOnce({
+    selectedOts: ["100", "200"],
+    operations: [
+      { id: "blocked-op1", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:00", tiempoProd: 180 },
+      { id: "fast-choice", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1", "OP 2"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1", "OP 2"],
+    settings: {},
+    workSchedule: {},
+  }, { strategy: "balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+
+  const operation = result.operations.find((op) => op.id === "fast-choice");
+  assert.deepEqual([operation.operador, operation.fechaInicio, operation.horaInicio, operation.horaFin], ["OP 2", "2026-07-13", "07:00", "07:30"]);
+  assert.equal(result.lastSchedule.operatorConflicts, 0);
+});
+
+test("flow balanced incluye operaciones fijas futuras al estimar que OT termina primero", () => {
+  const core = loadPlannerCoreWithSinglePass();
   const operations = [
-    { id: "long-current", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
-    { id: "long-fixed", ot: "100", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-14", horaInicio: "16:00", fechaFin: "2026-07-14", horaFin: "17:00" },
-    { id: "short-current", ot: "200", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
-    { id: "short-fixed", ot: "200", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
-    ...["300", "400"].flatMap((ot) => [1, 2].map((secuencia) => ({
-      id: `serial-${ot}-${secuencia}`, ot, secuencia, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60,
-    }))),
+    { id: "long-open", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "long-current", ot: "100", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
+    { id: "long-fixed", ot: "100", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-14", horaInicio: "16:00", fechaFin: "2026-07-14", horaFin: "17:00" },
+    { id: "short-open", ot: "200", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "short-current", ot: "200", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
+    { id: "short-fixed", ot: "200", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
   ];
-  const result = core.schedulePlan(flowFixture(operations, {
+  const result = core.schedulePlanOnce(flowFixture(operations, {
     matrix: { "SERIAL::SERIAL": ["OP 1"] },
     configuredCapabilities: ["SERIAL::SERIAL"],
-    operators: ["OP 1", "OP 2"],
+    operators: ["OP 1", "OP 2", "OP 3"],
   }), {
-    planStart: "2026-07-13", horizonDays: 2, executionTime: "2026-07-13T07:00:00",
+    strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 2, executionTime: "2026-07-13T07:00:00",
   });
 
-  assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
-  assert.equal(result.operations.find((op) => op.id === "short-current").horaInicio, "07:00");
-  assert.equal(result.operations.find((op) => op.id === "long-current").horaInicio, "08:00");
+  assert.equal(result.operations.find((op) => op.id === "short-current").horaInicio, "08:00");
+  assert.equal(result.operations.find((op) => op.id === "long-current").horaInicio, "09:00");
 });
 
 test("si flow balanced falla se excluye y las estrategias existentes continuan", () => {

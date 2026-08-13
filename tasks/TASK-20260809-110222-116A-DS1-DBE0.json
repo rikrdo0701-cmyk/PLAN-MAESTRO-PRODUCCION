@@ -1,0 +1,86 @@
+{
+  "id": "TASK-20260809-110222-116A-DS1-DBE0",
+  "objective": "Create project memory and a canonical non-duplicating index of business rules verified across documentation, code, tests, SQL/configuration for OT, doblado, herramentales, máquinas, matriz de capacidad, balanceo, and BOM.",
+  "allowed_files": [
+    ".project-memory/indexes.json",
+    "docs/REGLAS.md"
+  ],
+  "requirements": [
+    "Use docs/REGLAS.md as the human canonical index and preserve OT_RULES.md as specialized OT authority.",
+    "Audit documentation, code, tests, fixtures, SQL/SuiteQL, and configuration with segmented read-only specialists.",
+    "Use stable RULE-* IDs, concise summaries, classification, and exact source links without duplicating full rules.",
+    "Classify findings as DOCUMENTADA, IMPLEMENTADA, INFERIDA, or AMBIGUA and record contradictions explicitly.",
+    "Cover OT, doblado, herramentales, máquinas, matriz de capacidad, balanceo, and BOM without changing application behavior."
+  ],
+  "acceptance_criteria": [
+    ".project-memory/indexes.json is valid JSON and points to docs/REGLAS.md.",
+    "docs/REGLAS.md contains all seven domains and unique RULE-* IDs.",
+    "Every definitive entry cites an existing exact repository source; insufficient evidence is marked explicitly.",
+    "No file outside allowed_files is modified by the executor.",
+    "No deployment is performed."
+  ],
+  "plan_review": {
+    "required": false
+  },
+  "execution_plan": {
+    "executor_mode": "fixed",
+    "max_attempts": 2,
+    "smoke_test_commands": [
+      "powershell -NoProfile -Command \"Get-Content -Raw .project-memory/indexes.json | ConvertFrom-Json | Out-Null\"",
+      "powershell -NoProfile -Command \"if ((Select-String -Path docs/REGLAS.md -Pattern '^## (OT|Doblado|Herramentales|Máquinas|Matriz de capacidad|Balanceo|BOM)$').Count -ne 7) { exit 1 }\""
+    ],
+    "preferred_executor": "deepseek",
+    "fallback_executors": [],
+    "exclusive_executor": true
+  },
+  "validation_plan": {
+    "syntax": {
+      "required": true,
+      "commands": [
+        "powershell -NoProfile -Command \"Get-Content -Raw .project-memory/indexes.json | ConvertFrom-Json | Out-Null\""
+      ]
+    },
+    "functional_tests": {
+      "required": true,
+      "commands": [
+        "powershell -NoProfile -Command \"$ids = Select-String -Path docs/REGLAS.md -Pattern 'RULE-[A-Z0-9-]+' -AllMatches | ForEach-Object { $_.Matches.Value }; if (($ids | Sort-Object -Unique).Count -ne $ids.Count) { exit 1 }\""
+      ]
+    },
+    "technical_review": {
+      "required": true,
+      "reviewer": "laguna"
+    },
+    "visual_review": {
+      "required": false,
+      "reviewer": "mimo",
+      "files": []
+    }
+  },
+  "hybrid_subagents": {
+    "mode": "auto",
+    "strategy": "read_only_specialists"
+  },
+  "documentation_plan": {
+    "rules_affected": [
+      "OT",
+      "doblado",
+      "herramentales",
+      "máquinas",
+      "matriz de capacidad",
+      "balanceo",
+      "BOM"
+    ],
+    "data_sources_affected": [],
+    "module_docs": [
+      "docs/REGLAS.md",
+      ".project-memory/indexes.json"
+    ],
+    "adr_required": false,
+    "changelog_required": true,
+    "task_journal_required": true
+  },
+  "commit_message": "docs(rules): add canonical business rules index",
+  "cloud_allowed": true,
+  "plan_file": "docs/superpowers/plans/2026-08-09-canonical-business-rules-index.md",
+  "context_report": "reports/TASK-20260809-110222-116A-DS1-DBE0.context.json"
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "read_order": [
+    ".project-memory/project.json",
+    ".project-memory/rules.json",
+    ".project-memory/data-sources.json",
+    ".project-memory/modules.json",
+    ".project-memory/integrations.json",
+    ".project-memory/structure.json",
+    "docs/project/overview.md"
+  ],
+  "documentation_roots": [
+    "docs/",
+    ".project-memory/"
+  ],
+  "updated_at": "2026-08-11T00:00:00-06:00"
+}

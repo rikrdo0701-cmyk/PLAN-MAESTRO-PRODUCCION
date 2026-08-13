@@ -10,6 +10,17 @@
     return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
 
+  function toolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+
   function withTimeout(promise, milliseconds) {
     let timer;
     const timeout = new Promise((resolve, reject) => {
@@ -449,6 +460,7 @@
       machine: normalize(value.machine),
       tool: normalize(value.tool),
       kit: normalize(value.kit),
+      additionalTools: toolList(value.additionalTools || value.additionalHerramentales).map(normalize),
       kitPending: value.kitPending === true,
       subcontractType: normalize(value.subcontractType),
       subcontractDays: Number(value.subcontractDays || 0),
@@ -477,6 +489,7 @@
           const configuration = configurationForOt(next.ot);
           if (!String(next.maquina || "").trim()) next.maquina = String(configuration.machine || configuration.maquina || "").trim();
           if (!String(next.herramental || "").trim()) next.herramental = String(configuration.herramental || configuration.tool || "").trim();
+          next.additionalHerramentales = toolList(next.additionalHerramentales || configuration.additionalHerramentales || configuration.herramentalesExtra);
           if (!String(next.kitHerramental || "").trim() && next.kitPending !== true) next.kitHerramental = String(configuration.kitHerramental || configuration.kit || "").trim();
         }
         return next;
@@ -553,12 +566,14 @@
     };
   }
 
-  function applyDraftToolSelection(operations, ot, tool, bendingCts) {
+  function applyDraftToolSelection(operations, ot, tool, bendingCts, additionalTools = []) {
     const targetOt = normalize(ot);
     const allowed = new Set((bendingCts || []).map((ct) => normalize(ct)));
+    const extras = toolList(additionalTools);
     return (operations || []).map((operation) =>
       normalize(operation?.ot) === targetOt && allowed.has(normalize(operation?.ct))
-        ? { ...operation, herramental: String(tool || "").trim() }
+        && operation?.generatedAdditionalTool !== true
+        ? { ...operation, herramental: String(tool || "").trim(), additionalHerramentales: extras }
         : { ...operation });
   }
 
@@ -570,9 +585,11 @@
     const configurationKey = Object.keys(configurations).find((key) => normalize(configurations[key]?.ot || key) === normalize(job?.ot));
     const configured = configurationKey ? configurations[configurationKey] || {} : {};
     const configuredTool = String(configured.herramental || configured.tool || "").trim();
-    if (configuredTool) return configuredTool;
+    const configuredTools = [configuredTool, ...toolList(configured.additionalHerramentales || configured.herramentalesExtra)].filter(Boolean);
+    if (configuredTools.length) return configuredTools.join(" + ");
     const operationTool = operations.map((operation) => String(operation?.herramental || "").trim()).find(Boolean);
-    if (operationTool) return operationTool;
+    const operationExtras = toolList(operations.find((operation) => Array.isArray(operation?.additionalHerramentales) && operation.additionalHerramentales.length)?.additionalHerramentales);
+    if (operationTool || operationExtras.length) return [operationTool, ...operationExtras].filter(Boolean).join(" + ");
     const article = normalize(job?.parte);
     const catalog = (state?.toolCatalog || []).find((item) => item?.active !== false && normalize(item?.part || item?.parte) === article);
     return String(catalog?.herramental || "").trim();

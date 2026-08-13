@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "modules": [
+    {
+      "module_id": "MODULE-GITHUB",
+      "path": ".github",
+      "files_sample": [
+        ".github/pull_request_template.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy-appscript.yml",
+        ".github/workflows/deploy-pages.yml",
+        ".github/workflows/npm-publish-github-packages.yml"
+      ],
+      "purpose": "CI y despliegues: CI (test/build), deploy de Apps Script (clasp push a dist/) y GitHub Pages (site/). El PR template impone el checklist de gates.",
+      "rules": ["RULE-GIT-002"],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-LOCAL_AI",
+      "path": ".local-ai",
+      "files_sample": [
+        ".local-ai/analysis_pool_state.json",
+        ".local-ai/executor_pool_state.json",
+        ".local-ai/repo_index.json"
+      ],
+      "purpose": "Estado local del pool de agentes de IA (análisis/ejecución) e índice local del repo; no es código de la aplicación.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-SUPERPOWERS",
+      "path": ".superpowers",
+      "files_sample": [
+        ".superpowers/sdd-restore/final-fix-report.md",
+        ".superpowers/sdd-restore/task-1-report.md",
+        ".superpowers/sdd-restore/task-2-report.md",
+        ".superpowers/sdd-restore/task-3-report.md",
+        ".superpowers/sdd-restore/task-4-report.md",
+        ".superpowers/sdd-restore/task-5-report.md",
+        ".superpowers/sdd-restore/task-6-report.md",
+        ".superpowers/sdd/task-2-report.md",
+        ".superpowers/sdd/task-3-report.md",
+        ".superpowers/sdd/task-4-report.md",
+        ".superpowers/sdd/task-5-report.md"
+      ],
+      "purpose": "Reportes y evidencia de TASKs de desarrollo (sdd/sdd-restore); fuente de evidencia citada por docs/REGLAS.md.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-LEGACY",
+      "path": "legacy",
+      "files_sample": [
+        "legacy/IndexPlanning.html"
+      ],
+      "purpose": "Frontend legacy de planeación (HTML único con lógica inline); citado como evidencia de reglas históricas (RULE-OT-009, MAQ-002/003, BAL-001).",
+      "rules": ["RULE-OT-009", "RULE-MAQ-002", "RULE-MAQ-003", "RULE-BAL-001"],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-SCRIPTS",
+      "path": "scripts",
+      "files_sample": [
+        "scripts/build-appscript.mjs",
+        "scripts/check-project.mjs"
+      ],
+      "purpose": "Build a dist/ (Apps Script) y site/ (GitHub Pages); check-project valida sintaxis, marcadores de build y URL del backend.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-SRC",
+      "path": "src",
+      "files_sample": [
+        "src/server/00-common.js",
+        "src/server/01-code.js",
+        "src/server/02-storage.js",
+        "src/server/03-storage-service.js",
+        "src/server/04-planning-service.js",
+        "src/server/05-publishing-service.js",
+        "src/server/06-completion-service.js",
+        "src/server/07-report-service.js",
+        "src/server/08-netsuite.js",
+        "src/server/09-photos.js",
+        "src/server/10-app-planning.js",
+        "src/server/11-app-operator.js",
+        "src/server/12-app-skills.js",
+        "src/server/13-configuration.js",
+        "src/server/14-pages-bridge.js",
+        "src/server/15-performance-service.js",
+        "src/server/16-inspection-service.js",
+        "src/server/17-inspection-drawing-service.js",
+        "src/server/18-planning-work-order-service.js",
+        "src/web/bridge/Bridge.html"
+      ],
+      "purpose": "Aplicación: backend Apps Script (19 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md.",
+      "rules": ["RULE-OT-006", "RULE-OT-007", "RULE-OT-008", "RULE-MAT-008", "RULE-MAT-009", "RULE-DOB-001", "RULE-HER-001", "RULE-MAQ-001"],
+      "data_sources": [
+        "SHEET-CONFIG",
+        "SHEET-OPERACIONES",
+        "SHEET-OPERADORES",
+        "SHEET-CAPACIDADES",
+        "SHEET-CATALOGO_OPERACIONES",
+        "SHEET-ORDENES_TRABAJO",
+        "SHEET-CONFIGURACION_OT",
+        "SHEET-CONFIGURACION_ARTICULO",
+        "SHEET-MATRIZ",
+        "SHEET-MAQUINAS",
+        "SHEET-HERRAMENTALES",
+        "SHEET-MATERIALES",
+        "SHEET-CALENDARIO",
+        "SHEET-SUBCONTRATOS",
+        "SHEET-TIPOS_OT",
+        "SHEET-ESTADOS_OPERACION_PLAN",
+        "SHEET-PLANES_HISTORICOS",
+        "SHEET-BORRADOR_PLAN",
+        "SHEET-AUDITORIA"
+      ]
+    },
+    {
+      "module_id": "MODULE-TASKS",
+      "path": "tasks",
+      "files_sample": [
+        "tasks/TASK-20260809-110222-116A-DS1-DBE0.json",
+        "tasks/TASK-20260809-110222-116A.json",
+        "tasks/TASK-20260809-114212-1B33.json",
+        "tasks/TASK-20260809-125520-4FE9.json",
+        "tasks/TASK-20260809-143203-2350.json",
+        "tasks/TASK-20260809-144118-CFA9.json"
+      ],
+      "purpose": "Registros de TASKs (JSON) con evidencia; docs/changes/TASK-*.md es la versión legible. Fuente de evidencia de reglas.",
+      "rules": ["RULE-GOV-003"],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-TESTS",
+      "path": "tests",
+      "files_sample": [
+        "tests/build.test.mjs",
+        "tests/inspection-app-loading.test.mjs",
+        "tests/inspection-core.test.mjs",
+        "tests/inspection-service.test.mjs",
+        "tests/matrix-integration-app.test.mjs",
+        "tests/netsuite-operation-catalog.test.mjs",
+        "tests/performance-client-calls.test.mjs",
+        "tests/performance-client-conflict.test.mjs",
+        "tests/planner-core.test.mjs",
+        "tests/planning-work-order-service.test.mjs",
+        "tests/planning-workflow-core.test.mjs",
+        "tests/storage-state.test.mjs",
+        "tests/test-plan-maestro.gs"
+      ],
+      "purpose": "Suite de pruebas node --test (347 pruebas) que cubre motor de planeación, workflow, storage, catálogo NetSuite, matrix, rendimiento, inspección y build.",
+      "rules": [],
+      "data_sources": []
+    }
+  ],
+  "updated_at": "2026-08-11T00:00:00-06:00"
+}

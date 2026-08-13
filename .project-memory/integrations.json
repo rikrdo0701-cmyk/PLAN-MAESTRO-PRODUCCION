@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "integrations": [
+    {
+      "integration_id": "INT-GITHUB_PAGES",
+      "name": "github_pages",
+      "status": "active",
+      "detail": "Frontend estático (site/) publicado en https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/ via .github/workflows/deploy-pages.yml. PWA con service worker (sw.js).",
+      "hosts": "frontend"
+    },
+    {
+      "integration_id": "INT-GOOGLE_APPS_SCRIPT",
+      "name": "google_apps_script",
+      "status": "active",
+      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; 134 versiones, deployment de producción @134.",
+      "hosts": "backend"
+    },
+    {
+      "integration_id": "INT-GOOGLE_SHEETS",
+      "name": "google_sheets",
+      "status": "active",
+      "detail": "Almacenamiento estructurado: workbook principal (PLANNING_SPREADSHEET_ID, 19 hojas) y workbook de inspección (INSPECTION_SPREADSHEET_ID). Ver docs/data/sources.md.",
+      "hosts": "data"
+    },
+    {
+      "integration_id": "INT-GOOGLE_DRIVE",
+      "name": "google_drive",
+      "status": "active",
+      "detail": "Fotografías de artículos (PHOTO_FOLDER_ID); índice por miniaturas en PP_loadPhotoCatalog_ (09-photos.js). Solo lectura.",
+      "hosts": "data"
+    },
+    {
+      "integration_id": "INT-NETSUITE",
+      "name": "netsuite",
+      "status": "active",
+      "detail": "ERP fuente de verdad: RESTlets 1764/1762/1763/2080, SuiteQL (catálogo maestro, promedios, rutas directas) y REST Record API (legacy). OAuth 1.0a HMAC-SHA256; locationId=1.",
+      "hosts": "data"
+    },
+    {
+      "integration_id": "INT-GITHUB",
+      "name": "github",
+      "status": "active",
+      "detail": "Repositorio origin https://github.com/rikrdo0701-cmyk/PLAN-MAESTRO-PRODUCCION.git; CI (ci.yml) y despliegues. Git Gate: push solo tras APPROVE.",
+      "hosts": "tooling"
+    },
+    {
+      "integration_id": "INT-OPENCODE",
+      "name": "opencode",
+      "status": "active",
+      "detail": "Agente de desarrollo usado para las TASKs del proyecto; contexto via AGENTS.md y .project-memory.",
+      "hosts": "tooling"
+    },
+    {
+      "integration_id": "INT-CODEX",
+      "name": "codex",
+      "status": "active",
+      "detail": "Revisión/APPROVE final antes del push (RULE-GIT-002).",
+      "hosts": "tooling"
+    },
+    {
+      "integration_id": "INT-OLLAMA",
+      "name": "ollama",
+      "status": "detected",
+      "detail": "Detectado en entorno local (.local-ai pool); no es integración del producto.",
+      "hosts": "tooling"
+    }
+  ],
+  "updated_at": "2026-08-11T00:00:00-06:00"
+}

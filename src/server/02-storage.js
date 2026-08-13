@@ -11,7 +11,7 @@ const PP_SHEETS = {
   CAPACIDADES: ['KEY', 'CT', 'OPERACION', 'ACTIVA', 'CAPACIDAD', 'SOLAPAMIENTO', 'PALABRAS_CLAVE', 'REQUIERE_HERRAMENTAL', 'REQUIERE_KIT', 'CUSTOM', 'EFICIENCIA_PCT'],
   CATALOGO_OPERACIONES: ['KEY', 'CT', 'OPERACION', 'ORIGEN', 'ACTIVA'],
   ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA'],
-  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL'],
+  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'],
   CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
   MAQUINAS: ['ID', 'ACTIVA'],
@@ -492,7 +492,8 @@ function PP_otConfigurationRows_(payload) {
       item.subcontractType || item.tipoSubcontrato || '',
       Number(item.subcontractDays || item.diasSubcontrato || 0),
       item.updatedAt || item.actualizado || new Date().toISOString(),
-      item.herramental || item.tool || ''
+      item.herramental || item.tool || '',
+      JSON.stringify(PP_toolList_(item.additionalHerramentales || item.herramentalesExtra || []))
     ];
   });
 }
@@ -644,7 +645,8 @@ function PP_writeState_(spreadsheet, payload, user, force) {
         item.subcontractType || item.tipoSubcontrato || '',
         Number(item.subcontractDays || item.diasSubcontrato || 0),
         item.updatedAt || item.actualizado || new Date().toISOString(),
-        item.herramental || item.tool || ''
+        item.herramental || item.tool || '',
+        JSON.stringify(PP_toolList_(item.additionalHerramentales || item.herramentalesExtra || []))
       ];
     }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO,
@@ -1116,7 +1118,8 @@ function PP_buildOtConfigurations_(rows, operations) {
       kitPending: PP_bool_(row.KIT_PENDIENTE, false),
       subcontractType: String(row.TIPO_SUBCONTRATO || '').trim(),
       subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
-      updatedAt: String(row.ACTUALIZADO || '').trim()
+      updatedAt: String(row.ACTUALIZADO || '').trim(),
+      additionalHerramentales: PP_toolList_(row.HERRAMENTALES_EXTRA_JSON)
     };
     explicit[PP_normalizeKey_(ot)] = true;
   });
@@ -1124,7 +1127,7 @@ function PP_buildOtConfigurations_(rows, operations) {
     const ot = String(op.ot || '').trim();
     if (!ot || explicit[PP_normalizeKey_(ot)]) return;
     if (!configurations[ot]) {
-      configurations[ot] = { ot: ot, machine: '', herramental: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '' };
+      configurations[ot] = { ot: ot, machine: '', herramental: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '', additionalHerramentales: [] };
     }
     const item = configurations[ot];
     const bending = ['5459', '5527'].indexOf(String(op.ct || '').trim()) >= 0;
@@ -1199,6 +1202,22 @@ function PP_cellValue_(value) {
   if (value == null) return '';
   if (typeof value === 'object') return JSON.stringify(value);
   return value;
+}
+
+function PP_toolList_(value) {
+  let values = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (ignored) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  values.forEach(function(item) {
+    const text = String(item || '').trim();
+    if (text && out.indexOf(text) < 0) out.push(text);
+  });
+  return out;
 }
 
 function PP_bool_(value, fallback) {
