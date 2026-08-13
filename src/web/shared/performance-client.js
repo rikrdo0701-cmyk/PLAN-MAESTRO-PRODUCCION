@@ -394,6 +394,7 @@
   }
 
   function applyLocalDraftRemovalTombstones(ots) {
+    if (root.applyLocalDraftRemovalTombstones) return root.applyLocalDraftRemovalTombstones(ots);
     const removed = new Set((ots || []).map(materialOtKey).filter(Boolean));
     if (!removed.size) return 0;
     const before = new Set((state.selectedOts || []).map(materialOtKey).filter(Boolean));
@@ -545,6 +546,7 @@
       state.revision = currentRevision;
       state.savedAt = imported.savedAt || state.savedAt;
       state.syncedAt = imported.syncedAt || state.syncedAt;
+      applyLocalDraftRemovalTombstones(state._locallyRemovedDraftOts || []);
       deferredRevision = currentRevision;
       writeMeta({
         revision: currentRevision,

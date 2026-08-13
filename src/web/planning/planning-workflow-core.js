@@ -288,16 +288,36 @@
     const key = normalize(ot);
     const without = (items) => (items || []).filter((item) => normalize(item) !== key);
     const preparedPlanningByOt = { ...(state?.preparedPlanningByOt || {}) };
-    delete preparedPlanningByOt[ot];
+    Object.keys(preparedPlanningByOt).forEach((item) => { if (normalize(item) === key) delete preparedPlanningByOt[item]; });
+    const selectedOperation = (state?.operations || []).find((operation) => String(operation?.id || "") === String(state?.selectedOperationId || ""));
     return {
       ...(state || {}),
       selectedOts: without(state?.selectedOts),
       lockedOts: without(state?.lockedOts),
       expandedOts: without(state?.expandedOts),
       preparedPlanningByOt,
-      operations: (state?.operations || []).map((operation) => normalize(operation?.ot) === key
-        ? { ...operation, locked: false }
-        : operation),
+      _pendingAddOt: normalize(state?._pendingAddOt) === key ? undefined : state?._pendingAddOt,
+      _pendingAddOtSnapshot: Array.isArray(state?._pendingAddOtSnapshot) ? without(state._pendingAddOtSnapshot) : state?._pendingAddOtSnapshot,
+      selectedDetailOt: normalize(state?.selectedDetailOt) === key ? "" : state?.selectedDetailOt,
+      selectedOperationId: normalize(selectedOperation?.ot) === key ? "" : state?.selectedOperationId,
+      draftVersionId: "",
+      operations: (state?.operations || []).map((operation) => {
+        if (normalize(operation?.ot) !== key) return operation;
+        if (!isPendingDraftOperation(operation) || isHistorical(operation)) return { ...operation, locked: false };
+        return {
+          ...operation,
+          locked: false,
+          autoFrozen: false,
+          needsReschedule: true,
+          fechaInicio: "",
+          horaInicio: "",
+          fechaFin: "",
+          horaFin: "",
+          operador: "",
+          estatus: "PLAN",
+          planStatus: "PENDIENTE",
+        };
+      }),
       lastSchedule: state?.lastSchedule ? {
         ...state.lastSchedule,
         scheduledOts: without(state.lastSchedule.scheduledOts),

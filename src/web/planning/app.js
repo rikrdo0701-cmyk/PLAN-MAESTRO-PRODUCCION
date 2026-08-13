@@ -6798,6 +6798,7 @@ async function fetchAppSheetText() {
 }
 
 function applyImported(imported, options = {}) {
+  const locallyRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
   const backlogDatasetChanged = Array.isArray(imported.operations)
     || Array.isArray(imported.materials)
     || Array.isArray(imported.workOrders);
@@ -6860,6 +6861,33 @@ function applyImported(imported, options = {}) {
   invalidateCurrentPlanOperationsCache();
   if (backlogDatasetChanged) resetBacklogWindow();
   normalizeState();
+  applyLocalDraftRemovalTombstones(locallyRemovedDraftOts);
+}
+
+function applyLocalDraftRemovalTombstones(ots) {
+  const removed = [...new Set((ots || []).map(materialOtKey).filter(Boolean))];
+  if (!removed.length) return 0;
+  const before = new Set((state.selectedOts || []).map(materialOtKey).filter(Boolean));
+  for (const ot of removed) {
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+  }
+  state._locallyRemovedDraftOts = removed;
+  invalidateCurrentPlanOperationsCache();
+  return removed.filter((ot) => before.has(ot)).length;
+}
+
+function rememberDraftRemovedOts(ots) {
+  state._locallyRemovedDraftOts = [...new Set([
+    ...(state._locallyRemovedDraftOts || []),
+    ...(ots || []),
+  ].map(materialOtKey).filter(Boolean))];
+}
+
+function forgetDraftRemovedOt(ot) {
+  const key = materialOtKey(ot);
+  if (!key || !Array.isArray(state._locallyRemovedDraftOts)) return;
+  state._locallyRemovedDraftOts = state._locallyRemovedDraftOts.filter((item) => materialOtKey(item) !== key);
+  if (!state._locallyRemovedDraftOts.length) delete state._locallyRemovedDraftOts;
 }
 
 function captureLocalPlanningState() {
@@ -8855,8 +8883,12 @@ function persistableState(source = state) {
 }
 
 function createAppSheetPayload(source = state) {
+  const payload = { ...deepClone(persistableState(source)) };
+  delete payload._locallyRemovedDraftOts;
+  delete payload._pendingAddOt;
+  delete payload._pendingAddOtSnapshot;
   return {
-    ...deepClone(persistableState(source)),
+    ...payload,
     source: "plan-app-sheet",
     savedAt: new Date().toISOString(),
   };

@@ -267,10 +267,12 @@ test("normaliza la vista Gantt y mantiene un unico control activo", () => {
 });
 
 test("retirar una OT limpia solo su pertenencia al borrador", () => {
-  const operation = { id: "op-1", ot: "1325", locked: true };
+  const operation = { id: "op-1", ot: "1325", locked: true, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", operador: "OP1", autoFrozen: true };
   const state = {
     selectedOts: ["1325", "1400"], lockedOts: ["1325"], expandedOts: ["1325"],
     operations: [operation], lastSchedule: { scheduledOts: ["1325", "1400"] },
+    selectedDetailOt: "1325", selectedOperationId: "op-1", draftVersionId: "draft-old",
+    _pendingAddOt: "1325", _pendingAddOtSnapshot: ["1325", "1400"],
     planningConfigByOt: { 1325: { subcontractDays: 15 } }, preparedPlanningByOt: { 1325: "firma" },
   };
   const result = core.removeOtFromDraft(state, "1325");
@@ -279,9 +281,38 @@ test("retirar una OT limpia solo su pertenencia al borrador", () => {
   assert.deepEqual(result.lastSchedule.scheduledOts, ["1400"]);
   assert.equal(result.operations.length, 1);
   assert.equal(result.operations[0].locked, false);
+  assert.equal(result.operations[0].fechaInicio, "");
+  assert.equal(result.operations[0].horaInicio, "");
+  assert.equal(result.operations[0].fechaFin, "");
+  assert.equal(result.operations[0].horaFin, "");
+  assert.equal(result.operations[0].operador, "");
+  assert.equal(result.operations[0].autoFrozen, false);
+  assert.equal(result.operations[0].needsReschedule, true);
+  assert.equal(result.selectedDetailOt, "");
+  assert.equal(result.selectedOperationId, "");
+  assert.equal(result.draftVersionId, "");
+  assert.equal(result._pendingAddOt, undefined);
+  assert.deepEqual(result._pendingAddOtSnapshot, ["1400"]);
   assert.equal(result.planningConfigByOt[1325].subcontractDays, 15);
   assert.equal(result.preparedPlanningByOt[1325], undefined);
   assert.equal(core.isOtEligibleForDraft(result, "1325"), false);
+});
+
+test("retirar una OT conserva completadas e historicas pero no las deja seleccionadas", () => {
+  const state = { selectedOts: ["1325"], lockedOts: ["1325"], lastSchedule: { scheduledOts: ["1325"] }, operations: [
+    { id: "done", ot: "1325", locked: true, planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "hist", ot: "1325", locked: true, historical: true, fechaInicio: "2026-07-12", horaInicio: "07:00", fechaFin: "2026-07-12", horaFin: "08:00" },
+  ] };
+
+  const result = core.removeOtFromDraft(state, "1325");
+
+  assert.deepEqual(structuredClone(result.selectedOts), []);
+  assert.deepEqual(structuredClone(result.lastSchedule.scheduledOts), []);
+  assert.equal(result.operations[0].fechaInicio, "2026-07-13");
+  assert.equal(result.operations[0].locked, false);
+  assert.equal(result.operations[1].fechaInicio, "2026-07-12");
+  assert.equal(result.operations[1].locked, false);
+  assert.deepEqual(structuredClone(core.draftScheduledOperations(result).map((op) => op.id)), []);
 });
 
 test("completar y reabrir conserva la programacion historica", () => {

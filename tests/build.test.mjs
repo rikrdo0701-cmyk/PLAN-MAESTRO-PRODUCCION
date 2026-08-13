@@ -943,6 +943,89 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
   assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
 });
 
+test("tombstones locales evitan que import remoto o snapshot stale reviva OTs retiradas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importStart = app.indexOf("function applyImported(imported, options = {})");
+  const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  const payloadStart = app.indexOf("function createAppSheetPayload(source = state)");
+  const payloadEnd = app.indexOf("function isAppsScriptRuntime()", payloadStart);
+  const createPayloadSource = app.slice(payloadStart, payloadEnd);
+
+  assert.match(importFlow, /const locallyRemovedDraftOts = \[\.\.\.\(state\._locallyRemovedDraftOts \|\| \[\]\)\];/);
+  assert.match(importFlow, /normalizeState\(\);\s*applyLocalDraftRemovalTombstones\(locallyRemovedDraftOts\);/);
+  assert.match(importFlow, /function rememberDraftRemovedOts\(ots\)/);
+  assert.match(importFlow, /function forgetDraftRemovedOt\(ot\)/);
+  assert.match(createPayloadSource, /delete payload\._locallyRemovedDraftOts;/);
+  assert.match(createPayloadSource, /delete payload\._pendingAddOt;/);
+  assert.match(createPayloadSource, /delete payload\._pendingAddOtSnapshot;/);
+
+  const state = {
+    selectedOts: ["100", "200"],
+    lockedOts: ["100"],
+    expandedOts: ["100", "200"],
+    lastSchedule: { scheduledOts: ["100", "200"] },
+    preparedPlanningByOt: { 100: "a", 200: "b" },
+    operations: [
+      { id: "100-op", ot: "100", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", locked: true },
+      { id: "200-op", ot: "200", fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+    ],
+  };
+  let invalidations = 0;
+  const api = Function(
+    "state",
+    "window",
+    "materialOtKey",
+    "invalidateCurrentPlanOperationsCache",
+    `${importFlow}; return { applyLocalDraftRemovalTombstones, rememberDraftRemovedOts, forgetDraftRemovedOt };`,
+  )(
+    state,
+    { PlanningWorkflowCore: { removeOtFromDraft(current, ot) {
+      const key = String(ot || "").trim().toUpperCase();
+      const keep = (items) => (items || []).filter((item) => String(item || "").trim().toUpperCase() !== key);
+      const preparedPlanningByOt = { ...(current.preparedPlanningByOt || {}) };
+      Object.keys(preparedPlanningByOt).forEach((item) => { if (String(item).trim().toUpperCase() === key) delete preparedPlanningByOt[item]; });
+      return {
+        ...current,
+        selectedOts: keep(current.selectedOts),
+        lockedOts: keep(current.lockedOts),
+        expandedOts: keep(current.expandedOts),
+        preparedPlanningByOt,
+        operations: (current.operations || []).map((operation) => String(operation.ot || "").trim().toUpperCase() === key
+          ? { ...operation, locked: false, fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "" }
+          : operation),
+        lastSchedule: { ...current.lastSchedule, scheduledOts: keep(current.lastSchedule.scheduledOts) },
+      };
+    } } },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => { invalidations += 1; },
+  );
+
+  api.rememberDraftRemovedOts(["100"]);
+  assert.deepEqual(state._locallyRemovedDraftOts, ["100"]);
+  const removed = api.applyLocalDraftRemovalTombstones(["100"]);
+
+  assert.equal(removed, 1);
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, []);
+  assert.deepEqual(state.expandedOts, ["200"]);
+  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+  assert.equal(state.preparedPlanningByOt[100], undefined);
+  assert.equal(state.operations.find((op) => op.id === "100-op").fechaInicio, "");
+  assert.equal(invalidations, 1);
+  api.forgetDraftRemovedOt("100");
+  assert.equal(state._locallyRemovedDraftOts, undefined);
+});
+
+test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const loadStart = performanceClient.indexOf("async function loadInitialStateConditionally(localCache)");
+  const loadEnd = performanceClient.indexOf("loadAppStateInBackground = function optimizedLoadAppStateInBackground", loadStart);
+  const loadFlow = performanceClient.slice(loadStart, loadEnd);
+
+  assert.match(loadFlow, /if \(imported\?\.unchanged\) \{[\s\S]*applyLocalDraftRemovalTombstones\(state\._locallyRemovedDraftOts \|\| \[\]\);[\s\S]*return \{ loaded: false, unchanged: true \};/);
+});
+
 test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const renderStart = app.indexOf("function renderOperationCatalogSelect()");
