@@ -493,6 +493,10 @@ let inspectionRouteCatalogReady = false;
 let inspectionRouteCatalogLoading = false;
 let inspectionRouteCatalogLoadError = "";
 let currentPlanOperationsCache = null;
+let priorityJobsCache = null;
+let planningStateIndexesCache = null;
+let planAlertItemsCache = null;
+let operatorLoadsCache = null;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -1548,6 +1552,7 @@ function materialValue(item, names) {
 }
 
 function render(options = {}) {
+  const perfMark = planningPerfMark("render");
   const parts = options.parts || {};
   const all = parts === true || typeof parts !== "object" || !Object.keys(parts).length;
   if (all || parts.normalize) normalizeState();
@@ -1562,11 +1567,89 @@ function render(options = {}) {
   if (all || parts.catalogs) renderConfiguration();
   if (all || parts.reports) renderReports();
   if (options.save !== false) saveState(options.saveScope || "plan");
+  planningPerfMeasure("render", perfMark);
 }
 
 function invalidateCurrentPlanOperationsCache() {
   currentPlanOperationsCache = null;
   currentPlanOperations.cache = null;
+  priorityJobsCache = null;
+  planAlertItemsCache = null;
+  operatorLoadsCache = null;
+}
+
+function invalidatePriorityJobsCache() {
+  priorityJobsCache = null;
+  planAlertItemsCache = null;
+  operatorLoadsCache = null;
+}
+
+function planningStateIndexes() {
+  const operations = Array.isArray(state.operations) ? state.operations : [];
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const materials = Array.isArray(state.materials) ? state.materials : [];
+  const cache = typeof planningStateIndexesCache === "undefined" ? planningStateIndexes.cache : planningStateIndexesCache;
+  if (cache
+      && cache.operations === operations
+      && cache.workOrders === workOrders
+      && cache.materials === materials) {
+    return cache;
+  }
+  const next = {
+    operations,
+    workOrders,
+    materials,
+    operationsByOt: new Map(),
+    workOrdersByOt: new Map(),
+    materialsByOt: new Map(),
+  };
+  for (const op of operations) {
+    const key = materialOtKey(op?.ot);
+    if (!key) continue;
+    if (!next.operationsByOt.has(key)) next.operationsByOt.set(key, []);
+    next.operationsByOt.get(key).push(op);
+  }
+  for (const workOrder of workOrders) {
+    const key = materialOtKey(workOrder?.ot);
+    if (key && !next.workOrdersByOt.has(key)) next.workOrdersByOt.set(key, workOrder);
+  }
+  for (const material of materials) {
+    const key = materialOtKey(material?.ot);
+    if (!key) continue;
+    if (!next.materialsByOt.has(key)) next.materialsByOt.set(key, []);
+    next.materialsByOt.get(key).push(material);
+  }
+  if (typeof planningStateIndexesCache === "undefined") planningStateIndexes.cache = next;
+  else planningStateIndexesCache = next;
+  return next;
+}
+
+function planningPerfEnabled() {
+  if (typeof window !== "undefined" && window.PLAN_APP_PERFORMANCE_DEBUG === true) return true;
+  if (state?.settings?.performanceDebug === true) return true;
+  try { return localStorage.getItem("planPlanningPerfDebug") === "1"; } catch (_) { return false; }
+}
+
+function planningPerfMark(name) {
+  if (!planningPerfEnabled() || typeof performance === "undefined" || typeof performance.mark !== "function") return "";
+  const mark = `planning:${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  performance.mark(mark);
+  return mark;
+}
+
+function planningPerfMeasure(name, startMark) {
+  if (!startMark || !planningPerfEnabled() || typeof performance === "undefined" || typeof performance.measure !== "function") return;
+  const endMark = `${startMark}:end`;
+  try {
+    performance.mark(endMark);
+    const measure = performance.measure(`planning:${name}`, startMark, endMark);
+    if (typeof console !== "undefined" && typeof console.debug === "function") console.debug(`[planning perf] ${name}: ${Math.round(measure.duration)}ms`);
+    performance.clearMarks?.(startMark);
+    performance.clearMarks?.(endMark);
+    performance.clearMeasures?.(`planning:${name}`);
+  } catch (_) {
+    // Performance APIs vary by runtime; metrics must never affect planning.
+  }
 }
 
 function currentPlanOperations(operations = state.operations) {
@@ -1646,6 +1729,7 @@ function renderTop() {
 }
 
 function renderPlanAlerts() {
+  const perfMark = planningPerfMark("alerts-render");
   if (!els.planAlerts) return;
   const alerts = planAlertItems();
   els.planAlerts.hidden = alerts.length === 0;
@@ -1665,9 +1749,25 @@ function renderPlanAlerts() {
       render();
     });
   });
+  planningPerfMeasure("alerts-render", perfMark);
 }
 
 function planAlertItems() {
+  const operations = typeof currentPlanOperations === "function" ? currentPlanOperations() : [];
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    operationsRef: operations === state.operations ? "state" : "filtered",
+    selectedOts: state.selectedOts || [],
+    lockedOts: state.lockedOts || [],
+    lastSchedule: state.lastSchedule?.scheduledOts || [],
+    planStart: state.planStart,
+    weeklyReleaseTarget: state.settings?.weeklyReleaseTarget,
+    operationCatalogWarning: state.operationCatalogWarning || "",
+    netSuiteSyncAlert: state.netSuiteSyncAlert?.message || "",
+    netSuiteChangeAlerts: (state.netSuiteChangeAlerts || []).map((alert) => [alert.ot, alert.severity, alert.summary]),
+  });
+  const cache = typeof planAlertItemsCache === "undefined" ? planAlertItems.cache : planAlertItemsCache;
+  if (cache?.signature === signature) return cache.result;
   const alerts = [];
   if (state.operationCatalogWarning) {
     alerts.push({
@@ -1712,6 +1812,9 @@ function planAlertItems() {
       message: `Meta semanal no alcanzada: ${formatCurrency(target.releaseAmount)} / ${formatCurrency(target.releaseTarget)}. Faltan ${formatCurrency(target.releaseGap)}`,
     });
   }
+  const next = { signature, result: alerts };
+  if (typeof planAlertItemsCache === "undefined") planAlertItems.cache = next;
+  else planAlertItemsCache = next;
   return alerts;
 }
 
@@ -2101,8 +2204,15 @@ const individualPlanningActionFeedback = new Map();
 const INDIVIDUAL_PLANNING_FEEDBACK_MS = 3000;
 
 function selectJob(ot, selected) {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark(selected ? "selection-add" : "selection-remove") : "";
   const key = materialOtKey(ot);
-  if (!selected || !key) return performSelectJob(ot, selected);
+  if (!selected || !key) {
+    const result = performSelectJob(ot, selected);
+    Promise.resolve(result).finally(() => {
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure(selected ? "selection-add" : "selection-remove", perfMark);
+    });
+    return result;
+  }
   if (individualPlanningActions.has(key)) return individualPlanningActions.get(key);
 
   setIndividualPlanningBusy(ot, true);
@@ -2120,6 +2230,7 @@ function selectJob(ot, selected) {
       individualPlanningActions.delete(key);
       setIndividualPlanningActionStatus(ot, status);
       setIndividualPlanningBusy(ot, false);
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-add", perfMark);
     }
   })();
   individualPlanningActions.set(key, action);
@@ -2147,22 +2258,36 @@ async function performSelectJob(ot, selected, outcome = {}) {
   }
   const alreadySelected = state.selectedOts.includes(ot);
   if (selected && !alreadySelected) {
+    const showLoadingDialog = !hasIndividualPlanningOperations(ot);
+    if (showLoadingDialog) showPlanningPreparationLoading(ot);
+    const loadPerfMark = typeof planningPerfMark === "function" ? planningPerfMark("selection-load") : "";
     try {
       const loaded = await ensureWorkOrderPlanningData(ot);
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-load", loadPerfMark);
+      if (showLoadingDialog && !els.planningDialog.open) {
+        outcome.cancelled = true;
+        return false;
+      }
       job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
       if (!loaded?.ready) {
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
         return;
       }
       if (job && !job.movable && !job.programmed) {
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
         return false;
       }
       if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
         return;
       }
+      if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
     } catch (error) {
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-load", loadPerfMark);
+      if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
       showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
       return false;
     }
@@ -2187,12 +2312,14 @@ async function performSelectJob(ot, selected, outcome = {}) {
   if (selected && !alreadySelected) {
     const signature = String(state.preparedPlanningByOt?.[ot] || "");
     Object.assign(state, window.PlanningWorkflowCore.commitPreparedOtSelection(state, ot, signature));
+    if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
   }
   if (!selected && alreadySelected) {
     Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
   }
+  if (!selected && alreadySelected) invalidatePriorityJobsCache();
   applyQueuePriorities();
   if (!selected && alreadySelected) {
     renderPriorityList();
@@ -2215,7 +2342,11 @@ async function performSelectJob(ot, selected, outcome = {}) {
 }
 
 async function prepareJobForPlanning(job, options = {}) {
-  if (!job) return false;
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("preparation") : "";
+  if (!job) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return false;
+  }
   const operations = jobPlanningOperations(job);
   const planningJob = { ...job, ops: operations };
   const issues = window.PlannerCore?.planningConfigurationIssues
@@ -2224,6 +2355,7 @@ async function prepareJobForPlanning(job, options = {}) {
   const blockers = issues.filter((issue) => ["MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR"].includes(issue.code));
   if (blockers.length) {
     await showPlanningBlockers(job, blockers);
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return false;
   }
 
@@ -2231,19 +2363,27 @@ async function prepareJobForPlanning(job, options = {}) {
   const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
   const hasRequiredGaps = requirements.some((item) => ["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]
     .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType;
-  if (options.reuseConfirmed === true && window.PlanningWorkflowCore.canReusePlanningPreparation(state, job.ot, hasRequiredGaps)) return true;
+  if (options.reuseConfirmed === true && window.PlanningWorkflowCore.canReusePlanningPreparation(state, job.ot, hasRequiredGaps)) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
   const signature = planningPreparationSignature(job, operations, commercial);
-  if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) return true;
+  if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
   const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
   const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType;
   if (!mustConfirmPlanning) {
     Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return true;
   }
   const values = await showPlanningRequirements(planningJob, requirements, commercial);
   if (!values) {
     options.onCancel?.();
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return false;
   }
 
@@ -2253,7 +2393,25 @@ async function prepareJobForPlanning(job, options = {}) {
   Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(
     state, job.ot, planningPreparationSignature(job, operations, commercialPlanningRequirement(job))
   ));
+  if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
+  if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
   return true;
+}
+
+function showPlanningPreparationLoading(ot) {
+  openPlanningDialog({
+    title: `Preparar OT ${ot}`,
+    summary: "Cargando operaciones y requisitos de NetSuite...",
+    body: `<div class="planning-loading" role="status" aria-live="polite">
+      <strong>Preparando la informacion de la OT.</strong>
+      <span>El formulario se abrira automaticamente en cuanto terminen las validaciones.</span>
+    </div>`,
+    confirmLabel: "Cargando",
+    cancelVisible: true,
+    setup: () => {
+      els.planningDialogConfirm.disabled = true;
+    },
+  });
 }
 
 function setGanttView(view) {
@@ -2646,6 +2804,7 @@ function toggleJobLock(ot) {
   checkpointState();
   const locked = !isJobLocked(ot);
   state.lockedOts = locked ? uniq([...state.lockedOts, ot]) : state.lockedOts.filter((item) => item !== ot);
+  invalidatePriorityJobsCache();
   state.operations.filter((op) => op.ot === ot).forEach((op) => {
     op.locked = locked;
     op.log = appendLog(op.log, locked ? "OT_BLOQUEADA_APP" : "OT_DESBLOQUEADA_APP");
@@ -2660,6 +2819,7 @@ function toggleAllJobs(locked) {
   state.lockedOts = locked
     ? uniq([...state.lockedOts, ...editableOts])
     : state.lockedOts.filter((ot) => !editableOts.includes(ot));
+  invalidatePriorityJobsCache();
   for (const op of state.operations) {
     if (!editableOts.includes(op.ot)) continue;
     op.locked = locked;
@@ -2689,6 +2849,7 @@ function reorderSelectedJobs(sourceOt, targetOt) {
   order.splice(sourceIndex, 1);
   order.splice(order.indexOf(targetOt), 0, sourceOt);
   state.selectedOts = order;
+  invalidatePriorityJobsCache();
   applyQueuePriorities();
   saveAndRenderQueueChange("Orden del plan actualizado");
 }
@@ -3351,6 +3512,7 @@ function endDrag() {
 }
 
 function renderLoads() {
+  const perfMark = planningPerfMark("loads-render");
   renderLoadSourceSelect();
   const source = window.PlanningWorkflowCore.loadOperationsForMode(
     loadSnapshot || { operations: currentDraftScheduledOperations() },
@@ -3417,6 +3579,7 @@ function renderLoads() {
       updateResourceProfile(operator, { category });
     });
   });
+  planningPerfMeasure("loads-render", perfMark);
 }
 
 function clearResourceCategoryDropTargets() {
@@ -7012,11 +7175,29 @@ function ganttGroupSubtitle(ops) {
 }
 
 function getOperatorLoads(weekStartValue = state.loadWeekStart, horizonDays = 7) {
-  return operatorLoadsForOperations(
-    currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
+  const operations = currentPlanOperations();
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    selectedOts: state.selectedOts || [],
+    scheduledOts: state.lastSchedule?.scheduledOts || [],
+    operatorCount: state.operators.length,
+    weekStartValue,
+    horizonDays,
+    capacityMinutes: state.capacityMinutes,
+    operatorPerformance: state.operatorPerformance || {},
+    operationRules: state.operationRules || {},
+  });
+  const cache = typeof operatorLoadsCache === "undefined" ? getOperatorLoads.cache : operatorLoadsCache;
+  if (cache?.operations === operations && cache.signature === signature) return cache.result;
+  const result = operatorLoadsForOperations(
+    operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
     weekStartValue,
     horizonDays
   );
+  const next = { operations, signature, result };
+  if (typeof operatorLoadsCache === "undefined") getOperatorLoads.cache = next;
+  else operatorLoadsCache = next;
+  return result;
 }
 
 function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loadWeekStart, horizonDays = 7) {
@@ -7404,8 +7585,34 @@ function getJobSequence(op) {
 }
 
 function getPriorityJobs() {
+  const operations = currentPlanOperations();
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const materials = Array.isArray(state.materials) ? state.materials : [];
+  const otKey = typeof materialOtKey === "function"
+    ? materialOtKey
+    : (value) => String(value || "").trim().toUpperCase();
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    workOrdersLength: workOrders.length,
+    materialsLength: materials.length,
+    selectedOts: state.selectedOts || [],
+    lockedOts: state.lockedOts || [],
+    lastSchedule: state.lastSchedule?.scheduledOts || [],
+    dueOverrides: workOrders.map((workOrder) => [otKey(workOrder.ot), workOrder.dueDateOverride || workOrder.fechaEntregaAjustada || ""]),
+    operationCatalogWarning: state.operationCatalogWarning || "",
+    netSuiteChangeAlerts: (state.netSuiteChangeAlerts || []).map((alert) => [alert.ot, alert.severity, alert.summary]),
+  });
+  const cache = typeof priorityJobsCache === "undefined" ? getPriorityJobs.cache : priorityJobsCache;
+  if (cache
+      && cache.operations === operations
+      && cache.workOrders === workOrders
+      && cache.materials === materials
+      && cache.signature === signature) {
+    return cache.result;
+  }
+  const indexes = typeof planningStateIndexes === "function" ? planningStateIndexes() : null;
   const map = new Map();
-  for (const op of currentPlanOperations()) {
+  for (const op of operations) {
     const job = map.get(op.ot) || {
       ot: op.ot,
       ops: [],
@@ -7413,7 +7620,7 @@ function getPriorityJobs() {
     job.ops.push(op);
     map.set(op.ot, job);
   }
-  for (const workOrder of state.workOrders) {
+  for (const workOrder of workOrders) {
     if (!workOrder.ot || map.has(workOrder.ot)) continue;
     map.set(workOrder.ot, {
       ot: workOrder.ot,
@@ -7422,11 +7629,12 @@ function getPriorityJobs() {
     });
   }
 
-  return [...map.values()]
+  const result = [...map.values()]
     .map((job) => {
       const ops = job.ops.sort((a, b) => sequenceSort(a, b) || opStart(a) - opStart(b));
-      const workOrder = workOrderForOt(job.ot);
+      const workOrder = indexes?.workOrdersByOt?.get(otKey(job.ot)) || workOrderForOt(job.ot);
       const firstOp = ops[0] || workOrderPlaceholderOperation(workOrder || { ot: job.ot });
+      const materials = indexes?.materialsByOt?.get(otKey(job.ot)) || materialsForOt(job.ot);
       return {
         ...job,
         ops,
@@ -7441,8 +7649,8 @@ function getPriorityJobs() {
         quantity: pendingPiecesForWorkOrder(workOrder),
         cts: uniq(ops.map((op) => op.ct).filter(Boolean)),
         operators: uniq(ops.map((op) => op.operador).filter(Boolean)),
-        materials: materialsForOt(job.ot),
-        materialBase: materialBaseForOt(job.ot),
+        materials,
+        materialBase: materials[0]?.component || "",
         status: jobStatusForOt(job.ot),
         movable: isMovablePlanningStatus(jobStatusForOt(job.ot)),
         programmed: isProgrammedJobStatus(jobStatusForOt(job.ot)),
@@ -7455,6 +7663,10 @@ function getPriorityJobs() {
       };
     })
     .sort(compareJobs);
+  const next = { operations, workOrders, materials, signature, result };
+  if (typeof priorityJobsCache === "undefined") getPriorityJobs.cache = next;
+  else priorityJobsCache = next;
+  return result;
 }
 
 function getSelectedPriorityJob() {
@@ -7814,11 +8026,13 @@ function getJobToolGroups(ops) {
 
 function materialsForOt(ot) {
   const key = materialOtKey(ot);
+  if (typeof planningStateIndexes === "function") return planningStateIndexes().materialsByOt.get(key) || [];
   return state.materials.filter((material) => materialOtKey(material.ot) === key);
 }
 
 function workOrderForOt(ot) {
   const key = materialOtKey(ot);
+  if (typeof planningStateIndexes === "function") return planningStateIndexes().workOrdersByOt.get(key) || null;
   return state.workOrders.find((item) => materialOtKey(item.ot) === key) || null;
 }
 
@@ -8362,12 +8576,14 @@ function focusGanttBar(id) {
 }
 
 function saveAndRenderQueueChange(message, saveScope = "plan") {
+  invalidatePriorityJobsCache();
   renderPriorityQueue();
   if (message) showToast(message);
   saveState(saveScope);
 }
 
 function saveAndRender(message, saveScope = "plan") {
+  invalidatePriorityJobsCache();
   const scope = String(saveScope || "plan").trim().toLowerCase();
   const parts = {};
   if (scope === "catalogs") {
@@ -8391,8 +8607,10 @@ function saveAndRender(message, saveScope = "plan") {
 }
 
 function saveState(saveScope = "plan") {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-state") : "";
   scheduleLocalStorageFlush();
   queueAppSheetSave(saveScope);
+  if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-state", perfMark);
 }
 
 let _flushTimer = null;
@@ -8454,14 +8672,17 @@ async function appSheetWaitForIdle() {
 }
 
 async function saveAppSheet(showMessage) {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-appsheet") : "";
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     if (showMessage) showToast("Guardado en curso");
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return false;
   }
   const saveGate = appSheetTryAcquireSaveGate();
   if (!saveGate) {
     appSheetSavePending = true;
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return false;
   }
   const scopes = appSheetConsumeDirtyScopes();
@@ -8486,6 +8707,7 @@ async function saveAppSheet(showMessage) {
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
     if (showMessage) showToast("Hoja app guardada");
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;
   } catch (error) {
     scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
@@ -8503,6 +8725,7 @@ async function saveAppSheet(showMessage) {
     } else {
       if (showMessage) showToast(`No se pudo guardar hoja app: ${error.message}`);
     }
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return false;
   } finally {
     appSheetReleaseSaveGate(saveGate);

@@ -133,7 +133,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
-  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)[\s\S]{0,2400}PlanningWorkflowCore\.removeOtFromDraft/);
+  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)/);
+  assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*\}/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
   assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);

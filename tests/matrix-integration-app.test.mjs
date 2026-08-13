@@ -330,6 +330,71 @@ test("los consumidores del render comparten operaciones incluidas hasta invalida
   assert.equal(filterCalls, 3);
 });
 
+test("getPriorityJobs reutiliza indices y se invalida al cambiar los datos base", () => {
+  const state = {
+    operations: [{ id: "op-1", ot: "100", secuencia: 1, ct: "5458", prioridad: 10, tiempoProd: 30 }],
+    workOrders: [{ ot: "100", status: "PLAN", item: "P-100" }],
+    materials: [{ ot: "100", component: "MP-100" }],
+    selectedOts: [],
+    lockedOts: [],
+    netSuiteChangeAlerts: [],
+  };
+  let materialScans = 0;
+  let workOrderScans = 0;
+  const source = [
+    sourceBetween("function invalidateCurrentPlanOperationsCache", "function currentDraftScheduledOperations("),
+    sourceBetween("function getPriorityJobs()", "function getSelectedPriorityJob()"),
+  ].join("\n");
+  const api = Function(
+    "state", "window", "normalizeCapabilityKeys", "sequenceSort", "opStart", "workOrderPlaceholderOperation",
+    "jobPriority", "effectiveWorkOrderDueDate", "pendingPiecesForWorkOrder", "uniq", "jobStatusForOt",
+    "isMovablePlanningStatus", "isProgrammedJobStatus", "isClosedJobStatus", "isJobLocked", "operationDuration",
+    "compareJobs", "materialOtKey", "workOrderForOt", "materialsForOt", "materialBaseForOt",
+    `let currentPlanOperationsCache = null;
+     let priorityJobsCache = null;
+     let planningStateIndexesCache = null;
+     let planAlertItemsCache = null;
+     let operatorLoadsCache = null;
+     ${source};
+     return { getPriorityJobs, invalidatePriorityJobsCache };`,
+  )(
+    state,
+    { PlannerCore },
+    normalizeCapabilityKeysForApp,
+    (a, b) => a.secuencia - b.secuencia,
+    () => 0,
+    (wo) => ({ id: `placeholder-${wo.ot}`, ot: wo.ot }),
+    (ops) => Math.min(...ops.map((op) => op.prioridad), 999),
+    () => "",
+    () => 0,
+    (values) => [...new Set(values)],
+    () => "PLAN",
+    () => true,
+    () => false,
+    () => false,
+    () => false,
+    (op) => Number(op.tiempoProd || 0),
+    (a, b) => String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }),
+    (value) => String(value || "").trim().toUpperCase(),
+    (ot) => { workOrderScans += 1; return state.workOrders.find((item) => String(item.ot) === String(ot)); },
+    (ot) => { materialScans += 1; return state.materials.filter((item) => String(item.ot) === String(ot)); },
+    (ot) => state.materials.find((item) => String(item.ot) === String(ot))?.component || "",
+  );
+
+  const first = api.getPriorityJobs();
+  const second = api.getPriorityJobs();
+  assert.strictEqual(first, second);
+  assert.equal(first[0].materialBase, "MP-100");
+  assert.equal(materialScans, 0);
+  assert.equal(workOrderScans, 0);
+
+  state.materials = [{ ot: "100", component: "MP-200" }];
+  api.invalidatePriorityJobsCache();
+  const third = api.getPriorityJobs();
+  assert.notStrictEqual(third, first);
+  assert.equal(third[0].materialBase, "MP-200");
+});
+
 test("la firma de exclusiones distingue claves que contienen separadores", () => {
   const state = {
     excludedCapabilities: ["100::A|B", "200::C"],

@@ -88,38 +88,38 @@ const planStatusSource = appSource.slice(
   appSource.indexOf("function renderProductionReportRow("),
 );
 
-function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {} }) {
+function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {}, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true } }) {
   return new Function(
     "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
     "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
     "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
-    "materialOtKey", "hasIndividualPlanningOperations",
+    "materialOtKey", "hasIndividualPlanningOperations", "showPlanningPreparationLoading", "closePlanningDialog",
     `${individualSelectionSource}; return selectJob;`,
   )(
-    { priorityList: { querySelectorAll: () => [card] } }, () => jobs.value, (message) => toasts.push(message), state,
+    { priorityList: { querySelectorAll: () => [card] }, planningDialog }, () => jobs.value, (message) => toasts.push(message), state,
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
     (operations) => operations, loaded, prepare, checkpoint, () => {}, () => {}, () => {},
     (callback) => callback(), () => {}, () => {}, () => {},
-    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0),
+    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0), showLoading, closeDialog,
   );
 }
 
-function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prepare = async () => true }) {
+function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prepare = async () => true, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true } }) {
   return new Function(
     "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
     "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
     "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
-    "materialOtKey", "hasIndividualPlanningOperations",
+    "materialOtKey", "hasIndividualPlanningOperations", "showPlanningPreparationLoading", "closePlanningDialog",
     `${individualSelectionSource}; return {
       selectJob,
       actionStatus: typeof individualPlanningActionStatus === "function" ? individualPlanningActionStatus : null,
     };`,
   )(
-    { priorityList: { querySelectorAll: () => [card] } }, () => jobs.value, (message) => toasts.push(message), state,
+    { priorityList: { querySelectorAll: () => [card] }, planningDialog }, () => jobs.value, (message) => toasts.push(message), state,
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
     (operations) => operations, loaded, prepare, () => {}, () => {}, () => {}, () => {},
     (callback) => callback(), () => {}, () => {}, () => {},
-    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0),
+    (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0), showLoading, closeDialog,
   );
 }
 
@@ -303,6 +303,48 @@ test("cancelar el dialogo de planeacion libera la tarjeta sin mostrar Error", as
   assert.equal(statusNode.textContent, "");
   assert.equal(fixture.actionStatus("100"), "");
   assert.deepEqual(state.selectedOts, []);
+});
+
+test("agregar una OT sin operaciones locales abre preparacion antes de esperar la carga remota", async () => {
+  const statusNode = { textContent: "" };
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    setAttribute: () => {}, removeAttribute: () => {},
+    querySelector: (selector) => selector === ".job-add" ? addButton : statusNode,
+  };
+  const loadGate = deferredPromise();
+  const loadingDialogs = [];
+  const closedDialogs = [];
+  const preparedDialogs = [];
+  const jobs = { value: [{ ot: "100", movable: true, ops: [] }] };
+  const state = { selectedOts: [], operations: [], preparedPlanningByOt: {} };
+  const fixture = loadIndividualSelection({
+    jobs,
+    card,
+    state,
+    toasts: [],
+    loaded: async () => {
+      await loadGate.promise;
+      jobs.value = [{ ot: "100", movable: true, ops: [{ ot: "100", ct: "CORTE" }] }];
+      return { ready: true };
+    },
+    showLoading: (ot) => loadingDialogs.push(ot),
+    closeDialog: (value) => closedDialogs.push(value),
+    prepare: async (job) => { preparedDialogs.push(job.ot); return true; },
+  });
+
+  const selection = fixture("100", true);
+  await settleMicrotasks();
+
+  assert.deepEqual(loadingDialogs, ["100"]);
+  assert.deepEqual(state.selectedOts, []);
+
+  loadGate.resolve();
+  assert.equal(await selection, true);
+  assert.deepEqual(closedDialogs, [null]);
+  assert.deepEqual(preparedDialogs, ["100"]);
+  assert.deepEqual(state.selectedOts, ["100"]);
 });
 
 function plain(value) {
