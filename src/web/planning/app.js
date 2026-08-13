@@ -592,6 +592,7 @@ function bindElements() {
     "selectedJobCount",
     "lockAllBtn",
     "unlockAllBtn",
+    "returnUnlockedToBacklogBtn",
     "selectedJobPanel",
     "closeDetailPanelBtn",
     "ganttCanvas",
@@ -887,6 +888,7 @@ function bindEvents() {
   els.retryInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
   els.lockAllBtn.addEventListener("click", () => toggleAllJobs(true));
   els.unlockAllBtn.addEventListener("click", () => toggleAllJobs(false));
+  els.returnUnlockedToBacklogBtn.addEventListener("click", returnUnlockedJobsToBacklog);
   els.planningDialogClose.addEventListener("click", () => closePlanningDialog(null));
   els.planningDialogCancel.addEventListener("click", () => closePlanningDialog(null));
   els.planningDialog.addEventListener("cancel", (event) => {
@@ -1934,6 +1936,7 @@ function renderPriorityQueue() {
   const pendingCount = ordered.filter((job) => !isJobScheduled(job.ot)).length;
   els.lockAllBtn.disabled = !ordered.some((job) => !job.programmed && !job.locked);
   els.unlockAllBtn.disabled = !ordered.some((job) => !job.programmed && job.locked);
+  els.returnUnlockedToBacklogBtn.disabled = !ordered.some((job) => !job.programmed && window.PlanningWorkflowCore.canRemoveSelectedOt(state, job.ot).allowed);
   els.selectedJobCount.textContent = `${ordered.length} en el plan${pendingCount ? ` / ${pendingCount} por programar` : ""}${fixedCount ? ` / ${fixedCount} fijas` : ""}`;
   if (!ordered.length) {
     els.priorityQueue.innerHTML = `<div class="queue-empty">Arrastra aqui los trabajos que deseas programar</div>`;
@@ -2826,6 +2829,27 @@ function toggleAllJobs(locked) {
     op.log = appendLog(op.log, locked ? "OT_BLOQUEADA_MASIVO" : "OT_DESBLOQUEADA_MASIVO");
   }
   saveAndRenderQueueChange(locked ? "Todos los trabajos fueron bloqueados" : "Todos los trabajos fueron desbloqueados");
+}
+
+function returnUnlockedJobsToBacklog() {
+  const removableOts = state.selectedOts.filter((ot) => {
+    if (isProgrammedJobStatus(jobStatusForOt(ot))) return false;
+    return window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot).allowed;
+  });
+  if (!removableOts.length) return showToast("No hay trabajos no bloqueados para enviar a backlog");
+  if (!window.confirm("esta seguro de enviar todos los trabajos no bloqueados a backlog?")) return;
+
+  checkpointState();
+  for (const ot of removableOts) {
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+  }
+  invalidatePriorityJobsCache();
+  applyQueuePriorities();
+  renderPriorityList();
+  renderPriorityQueue();
+  renderGantt();
+  showToast(`${removableOts.length} trabajos devueltos al backlog`);
+  saveState("plan");
 }
 
 function reorderSelectedJobs(sourceOt, targetOt) {

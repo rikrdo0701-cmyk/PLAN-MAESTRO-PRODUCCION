@@ -14,6 +14,78 @@ test("la identidad del detalle es UI local y no se envia al estado compartido", 
   assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*\.\.\.persisted\s*\}/);
 });
 
+test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
+  const start = planningApp.indexOf("function returnUnlockedJobsToBacklog()");
+  const end = planningApp.indexOf("function reorderSelectedJobs(", start);
+  const source = planningApp.slice(start, end);
+  const createHandler = (state, options = {}) => {
+    const calls = { confirm: 0, checkpoint: 0, invalidate: 0, priorities: 0, list: 0, queue: 0, gantt: 0, save: 0, toasts: [] };
+    const handler = Function(
+      "state", "window", "isProgrammedJobStatus", "jobStatusForOt", "showToast", "checkpointState",
+      "invalidatePriorityJobsCache", "applyQueuePriorities", "renderPriorityList", "renderPriorityQueue", "renderGantt", "saveState",
+      `${source}; return returnUnlockedJobsToBacklog;`,
+    )(
+      state,
+      {
+        confirm(message) { calls.confirm += 1; calls.confirmMessage = message; return options.confirm !== false; },
+        PlanningWorkflowCore: {
+          canRemoveSelectedOt(current, ot) {
+            return (current.lockedOts || []).includes(ot)
+              ? { allowed: false, reason: "Desbloquea la OT antes de retirarla del plan" }
+              : { allowed: true, reason: "" };
+          },
+          removeOtFromDraft(current, ot) {
+            const keep = (items) => (items || []).filter((item) => item !== ot);
+            const preparedPlanningByOt = { ...(current.preparedPlanningByOt || {}) };
+            delete preparedPlanningByOt[ot];
+            return { ...current, selectedOts: keep(current.selectedOts), lockedOts: keep(current.lockedOts), preparedPlanningByOt };
+          },
+        },
+      },
+      (status) => String(status || "").toUpperCase() === "PROGRAMADO",
+      (ot) => options.programmedOts?.includes(ot) ? "PROGRAMADO" : "PENDIENTE",
+      (message) => calls.toasts.push(message),
+      () => { calls.checkpoint += 1; },
+      () => { calls.invalidate += 1; },
+      () => { calls.priorities += 1; },
+      () => { calls.list += 1; },
+      () => { calls.queue += 1; },
+      () => { calls.gantt += 1; },
+      () => { calls.save += 1; },
+    );
+    return { handler, calls };
+  };
+
+  assert.match(planningTemplate, /id="returnUnlockedToBacklogBtn"/);
+  assert.match(planningApp, /returnUnlockedToBacklogBtn\.addEventListener\("click", returnUnlockedJobsToBacklog\)/);
+
+  const state = { selectedOts: ["100", "200", "300"], lockedOts: ["200"], preparedPlanningByOt: { 100: "a", 200: "b", 300: "c" } };
+  const { handler, calls } = createHandler(state);
+  handler();
+  assert.equal(calls.confirmMessage, "esta seguro de enviar todos los trabajos no bloqueados a backlog?");
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, ["200"]);
+  assert.deepEqual(state.preparedPlanningByOt, { 200: "b" });
+  assert.equal(calls.save, 1);
+  assert.equal(calls.toasts.at(-1), "2 trabajos devueltos al backlog");
+
+  const cancelled = { selectedOts: ["100", "200"], lockedOts: ["200"] };
+  const cancelledFlow = createHandler(cancelled, { confirm: false });
+  cancelledFlow.handler();
+  assert.deepEqual(cancelled.selectedOts, ["100", "200"]);
+  assert.equal(cancelledFlow.calls.confirm, 1);
+  assert.equal(cancelledFlow.calls.save, 0);
+
+  const none = { selectedOts: ["200", "300"], lockedOts: ["200"] };
+  const noneFlow = createHandler(none, { programmedOts: ["300"] });
+  noneFlow.handler();
+  assert.equal(noneFlow.calls.confirm, 0);
+  assert.equal(noneFlow.calls.save, 0);
+  assert.equal(noneFlow.calls.toasts.at(-1), "No hay trabajos no bloqueados para enviar a backlog");
+});
+
 test("la configuracion de flujo expone controles y diagnostico sin render global", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
   const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
