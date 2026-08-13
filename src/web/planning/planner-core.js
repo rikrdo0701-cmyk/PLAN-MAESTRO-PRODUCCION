@@ -29,7 +29,7 @@
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
-    const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle"];
+    const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
     const strategies = strategyPool.slice(0, Math.min(passCount + 2, strategyPool.length));
     const evaluated = strategies.map((strategy, index) => {
       const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
@@ -159,6 +159,14 @@
     enrichToolsFromCatalog(state, movable);
     const jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
     let pending = movable.length;
+    // Mark first operations in jobs for sequence protection
+    // These operations must be scheduled before subsequent operations of the same OT
+    // and must maintain PENDIENTE/planeado status
+    jobs.forEach(job => {
+      if (job.operations[0]) {
+        job.operations[0]._protectedSequence = true;
+      }
+    });
     let safety = Math.max(100, pending * 4);
 
     while (pending > 0 && safety-- > 0) {
@@ -172,11 +180,10 @@
       }
 
       if (!ready.length) break;
-      const firstOperations = ready.filter((candidate) => candidate.job.index === 0);
       const candidates = context.strategy === "flow_balanced"
         ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
-        : (firstOperations.length ? firstOperations : ready);
-      candidates.sort((a, b) => compareReadyCandidates(a, b, firstOperations.length > 0, context.strategy));
+        : ready;
+      candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy));
       const chosen = candidates[0];
       chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
       const committed = commitAssignment(context, chosen.op, chosen.assignment);
@@ -1099,6 +1106,7 @@
 
   function isSubcontractOperation(state, op) {
     if (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") return true;
+    if (op.subcontractType && String(op.subcontractType).trim()) return true;
     const description = normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`);
     return isSpecialSubcontractCapability({ ct: op.ct, label: description });
   }
@@ -1539,6 +1547,24 @@
 
   function compareReadyCandidates(a, b, firstOperation, strategy) {
     if (strategy === "flow_balanced") return compareFlowReadyCandidates(a, b);
+    const stateA = a.job?.state || a.context?.state || {};
+    const stateB = b.job?.state || b.context?.state || {};
+    const aIsSubcontract = isSubcontractOperation(stateA, a.op);
+    const bIsSubcontract = isSubcontractOperation(stateB, b.op);
+    if (aIsSubcontract && bIsSubcontract) {
+      const daysA = Number(a.op.subcontractDays || 0);
+      const daysB = Number(b.op.subcontractDays || 0);
+      if (daysA !== daysB) return daysA - daysB;
+    }
+    const aIsFirst = strategy === "flow_balanced" && a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
+    const bIsFirst = strategy === "flow_balanced" && b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
+    if (aIsFirst && !bIsFirst) return -1;
+    if (!aIsFirst && bIsFirst) return 1;
+    if (aIsFirst && bIsFirst) {
+      const seqA = Number(a.op.secuencia) || 1;
+      const seqB = Number(b.op.secuencia) || 1;
+      if (seqA !== seqB) return seqA - seqB;
+    }
     if (firstOperation) {
       const priorityDifference = normalizePriority(a.op.prioridad) - normalizePriority(b.op.prioridad);
       if (priorityDifference) return priorityDifference;
@@ -1564,6 +1590,34 @@
       const aGap = a.job.last ? (a.assignment.start - (operationEnd(a.job.last)?.getTime() || a.assignment.start)) : 0;
       const bGap = b.job.last ? (b.assignment.start - (operationEnd(b.job.last)?.getTime() || b.assignment.start)) : 0;
       return aGap - bGap || a.assignment.start - b.assignment.start || a.assignment.end - b.assignment.end || tie;
+    }
+    if (strategy === "balance") {
+      const aLoad = a.assignment.operatorLoad || 0;
+      const bLoad = b.assignment.operatorLoad || 0;
+      if (aLoad !== bLoad) return aLoad - bLoad;
+    }
+    const state = a.job?.state || a.context?.state || {};
+    const isFirstA = a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
+    const isFirstB = b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
+    if (!isFirstA && !isFirstB) {
+      const matrix = state.matrix || {};
+      const capabilityA = capabilityForOperation(a.op);
+      const capabilityB = capabilityForOperation(b.op);
+      const keyA = capabilityA.key;
+      const keyB = capabilityB.key;
+      const operatorsA = matrix[keyA] || matrix[capabilityA.ct] || [];
+      const operatorsB = matrix[keyB] || matrix[capabilityB.ct] || [];
+      const loadA = (a.assignment.operatorLoad || 0);
+      const loadB = (b.assignment.operatorLoad || 0);
+      if (operatorsA.length > 0 && operatorsB.length > 0) {
+        const aInMatrix = operatorsA.indexOf(String(a.assignment.operator || "")) >= 0;
+        const bInMatrix = operatorsB.indexOf(String(b.assignment.operator || "")) >= 0;
+        if (aInMatrix && !bInMatrix) return -1;
+        if (!aInMatrix && bInMatrix) return 1;
+      }
+      const matrixWeightA = computeMatrixLoadWeight(state, capabilityA, loadA, String(a.assignment.operator || "SIN_OPERADOR"));
+      const matrixWeightB = computeMatrixLoadWeight(state, capabilityB, loadB, String(b.assignment.operator || "SIN_OPERADOR"));
+      if (matrixWeightA !== matrixWeightB) return matrixWeightA - matrixWeightB;
     }
     return firstOperation ? compareFirstOperationCandidates(a, b) : compareInterleavedCandidates(a, b);
   }
@@ -1650,6 +1704,22 @@
     const aFitsBeforeB = a.assignment.start < b.assignment.start && a.assignment.end <= b.assignment.start;
     const bFitsBeforeA = b.assignment.start < a.assignment.start && b.assignment.end <= a.assignment.start;
     return aFitsBeforeB === bFitsBeforeA ? 0 : (aFitsBeforeB ? -1 : 1);
+  }
+
+  function computeMatrixLoadWeight(state, capability, operatorLoad, operatorName) {
+    const matrix = state.matrix || {};
+    const key = capability.key;
+    const ct = capability.ct;
+    const allowedOperators = matrix[key] || matrix[ct] || [];
+    if (!allowedOperators.length) return operatorLoad;
+    const opName = operatorName || (operatorLoad !== undefined ? "SIN_OPERADOR" : "SIN_OPERADOR");
+    const operatorInMatrix = allowedOperators.some((op) => normalizeKey(op) === normalizeKey(opName));
+    if (!operatorInMatrix) return operatorLoad * 2;
+    const configuredCapabilities = Array.isArray(state.configuredCapabilities) ? state.configuredCapabilities : [];
+    const capabilityInConfig = configuredCapabilities.includes(key);
+    if (!capabilityInConfig) return operatorLoad * 1.5;
+    const weight = allowedOperators.filter((op) => normalizeKey(op) === normalizeKey(opName)).length;
+    return operatorLoad / Math.max(1, weight);
   }
 
   function compareInterleavedCandidates(a, b) {

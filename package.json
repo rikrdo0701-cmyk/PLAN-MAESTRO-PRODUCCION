@@ -18,5 +18,8 @@
     "deploy": "npm run check && clasp deploy",
     "build:pages": "node scripts/build-appscript.mjs",
     "preview:pages": "python -m http.server 4173 --directory site"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }

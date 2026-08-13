@@ -1053,6 +1053,9 @@ function PP_mapOperation_(row) {
     if (['num', 'prioridad', 'cantTotal', 'secuencia', 'cantPendiente', 'tiempoCiclo', 'tiempoSetup', 'tiempoProd', 'subcontractDays'].indexOf(field) >= 0) value = Number(value || 0);
     if (field === 'locked' || field === 'kitPending' || field === 'autoFrozen' || field === 'tiempoFallback') value = PP_bool_(value, false);
     out[field] = value;
+    if (header === 'TIPO_SUBCONTRATO' && value && String(value).trim()) {
+      out.is_subcontract = true;
+    }
     return out;
   }, {});
 }

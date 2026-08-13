@@ -2,6 +2,21 @@ const PP_APP_VERSION = '2.41.0';
 const PP_SCHEMA_VERSION = 29;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
+function PP_dateToIso_(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    const day = String(Number(match[1])).padStart(2, '0');
+    const month = String(Number(match[2])).padStart(2, '0');
+    const year = match[3];
+    return `${year}-${month}-${day}`;
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return value;
+  return text;
+}
+
 function doGet(e) {
   if (PP_isBridgeRequest_(e)) return PP_createBridgeOutput_();
   const appName = PP_appNameFromRequest_(e);

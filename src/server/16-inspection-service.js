@@ -109,13 +109,14 @@ function getInspectionWorkOrders() {
     const response = PP_Inspection_restlet_({ action: 'list', pageIndex: 0, pageSize: 500 });
     const rows = response.wos || response.rows || response.data || [];
     return rows.map(function(row) {
+      const dueDate = PP_Inspection_text_(PP_Inspection_value_(row, ['fechaEntrega', 'duedate', 'enddate']));
       return {
         wo: PP_Inspection_text_(PP_Inspection_value_(row, ['wo', 'WO Folio', 'workorder_tranid', 'tranid', 'Trabajo'])),
         article: PP_Inspection_text_(PP_Inspection_value_(row, ['Articulo', 'item_name', 'item', 'Ensamble'])),
         description: PP_Inspection_text_(PP_Inspection_value_(row, ['descripcion', 'description'])),
         quantity: Number(PP_Inspection_value_(row, ['cantidad', 'quantity', 'qty']) || 0),
         status: PP_Inspection_text_(PP_Inspection_value_(row, ['estatus', 'status', 'Estado'])),
-        dueDate: PP_Inspection_text_(PP_Inspection_value_(row, ['fechaEntrega', 'duedate', 'enddate']))
+        dueDate: PP_dateToIso_(dueDate)
       };
     }).filter(function(item) { return item.wo; });
   });
