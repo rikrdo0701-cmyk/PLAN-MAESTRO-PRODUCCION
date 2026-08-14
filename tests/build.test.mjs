@@ -477,7 +477,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
   assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
-  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*PlanningWorkflowCore\.defaultDailyPlanSource[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
@@ -530,7 +530,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
   assert.match(pagesIndex, /callAppsScript\("saveDraftSnapshot", payload\)/);
   assert.match(pagesIndex, /snapshotId: "draft"/);
-  assert.match(pagesIndex, /planSnapshots\.some\(\(snapshot\) => snapshot\.snapshotId === "draft"\)/);
+  assert.match(pagesIndex, /if \(snapshotId === "draft"\) \{[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
   assert.match(pagesIndex, /id="jobToolInput"/);
   assert.match(pagesIndex, /data-add-job-tool/);
@@ -570,7 +570,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(publishingService, /snapshotId: 'draft'[\s\S]*backupId: backupId[\s\S]*summary:/);
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
-  assert.match(pagesIndex, /reportSnapshot = window\.PlanningWorkflowCore\.buildDraftSnapshot\(state/);
+  assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
@@ -1292,10 +1292,10 @@ test("completar una operacion usa guardado atomico y render parcial", async () =
   assert.doesNotMatch(persistence, /\brender\(\)/);
 });
 
-test("borrador usa exclusiones actuales y publicado permanece inmutable", async () => {
+test("reportes de borrador usan operaciones actuales y publicado permanece inmutable", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const reportSource = app.slice(
-    app.indexOf("function reportOperationsSource()"),
+    app.indexOf("function currentDraftReportSnapshot()"),
     app.indexOf("function reportSourceLabel()", app.indexOf("function reportOperationsSource()")),
   );
   const staleSource = app.slice(
@@ -1304,26 +1304,26 @@ test("borrador usa exclusiones actuales y publicado permanece inmutable", async 
   );
   const included = { id: "included", ot: "100", secuencia: 2, pendingPieces: 5 };
   const excluded = { id: "excluded", ot: "100", secuencia: 1, pendingPieces: 5 };
-  const state = { excludedCapabilities: ["5459::DOBLADO"], operations: [excluded, included] };
-  const filterExcludedOperations = (filterState, operations) => (
-    filterState.excludedCapabilities?.length ? operations.filter((op) => op.id !== "excluded") : operations
-  );
+  const state = { planStart: "2026-07-20", operations: [excluded, included] };
+  const currentDraftScheduledOperations = () => [included];
   const makeReportOperationsSource = (reportSnapshot) => Function(
-    "state", "reportSnapshot", "window",
+    "state", "reportSnapshot", "window", "currentDraftScheduledOperations",
     `${reportSource}; return reportOperationsSource;`,
-  )(state, reportSnapshot, { PlannerCore: { filterExcludedOperations } });
+  )(state, reportSnapshot, { PlanningWorkflowCore: { mondayIso: () => "2026-07-20" } }, currentDraftScheduledOperations);
 
   const draftSource = makeReportOperationsSource({
     snapshotId: "draft",
     excludedCapabilities: [],
     operations: [excluded, included],
   });
+  const defaultSource = makeReportOperationsSource(null);
   const publishedSource = makeReportOperationsSource({
     snapshotId: "published-1",
     operations: [excluded, included],
   });
 
   assert.deepEqual(draftSource().map((op) => op.id), ["included"]);
+  assert.deepEqual(defaultSource().map((op) => op.id), ["included"]);
   assert.deepEqual(publishedSource().map((op) => op.id), ["excluded", "included"]);
 
   const stalePublishedPieces = Function(

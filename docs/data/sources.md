@@ -198,6 +198,8 @@ Export CSV descargado por el frontend de planeacion desde el boton `Exportar`. O
 programado actual en memoria; si existe `lastSchedule.scheduledOts`, esa lista define las OTs del
 CSV. Se omiten operaciones completadas en el plan, historicas/publicadas, sin fechas y capacidades
 excluidas por `currentPlanOperations()`.
+En filas `CAMBIO_HERRAMENTAL`, `PARTE` identifica el articulo/OT que origina el cambio; `HERRAMENTAL`
+y `KIT_HERRAMENTAL` contienen el destino asignado al cambio, ademas de las columnas origen/destino.
 
 Headers (33): `NUM, OT, PARTE, DESCRIPCION, CONTENIDO, PRIORIDAD, FECHA_REQ, CANT_TOTAL,
 SECUENCIA, CT, OPERADOR, MAQUINA, HERRAMENTAL, KIT_HERRAMENTAL, CANT_PENDIENTE, TIEMPO_CICLO,

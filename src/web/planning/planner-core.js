@@ -623,6 +623,8 @@
       contenido: "",
       ct: TOOL_CHANGE_CAPABILITY.ct,
       operador: assignment.setupOperator || toolChangeOperator(context.state, context.settings) || "SIN_OPERADOR",
+      herramental: reportableToolValue(toHerramental),
+      kitHerramental: reportableToolValue(toKit),
       fechaInicio: formatDate(assignment.start),
       horaInicio: formatTime(assignment.start),
       fechaFin: formatDate(assignment.setupEnd || assignment.operationStart),
@@ -1687,8 +1689,8 @@
   function compareAssignments(a, b, strategy) {
     const tie = String(a.operator).localeCompare(String(b.operator), "es", { numeric: true });
     if (strategy === "flow_balanced") {
-      return a.projectedOperatorLoad - b.projectedOperatorLoad ||
-        a.toolPenalty - b.toolPenalty ||
+      return a.toolPenalty - b.toolPenalty ||
+        a.projectedOperatorLoad - b.projectedOperatorLoad ||
         a.end - b.end ||
         a.start - b.start ||
         String(a.machine).localeCompare(String(b.machine), "es", { numeric: true }) ||
@@ -1711,10 +1713,10 @@
   }
 
   function compareFlowReadyCandidates(a, b) {
-    const slack = flowSlackMinutes(a) - flowSlackMinutes(b);
-    if (slack) return slack;
     const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
     if (toolChange) return toolChange;
+    const slack = flowSlackMinutes(a) - flowSlackMinutes(b);
+    if (slack) return slack;
     const remaining = flowActiveProjectedFinish(a) - flowActiveProjectedFinish(b);
     if (remaining) return remaining;
     const unlocked = flowUnlockedSuccessorWork(b) - flowUnlockedSuccessorWork(a);

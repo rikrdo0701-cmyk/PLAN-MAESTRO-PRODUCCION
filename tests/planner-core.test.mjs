@@ -992,6 +992,9 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   const change = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeFromHerramental === "4 x 5" && op.toolChangeToHerramental === "5 x 6");
   assert.ok(change, "debe proyectar el cambio 4 x 5 a 5 x 6");
   assert.equal(change.tiempoSetup, 30);
+  assert.equal(change.parte, "AM 17123-002");
+  assert.equal(change.herramental, "5 x 6");
+  assert.equal(change.kitHerramental, "");
 });
 
 test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", () => {
@@ -1018,6 +1021,28 @@ test("balanceo prefiere agrupar doblados con herramental montado en la misma maq
       .sort((a, b) => new Date(`${a.fechaInicio}T${a.horaInicio}:00`) - new Date(`${b.fechaInicio}T${b.horaInicio}:00`));
     assert.equal(scheduled[0].id, "keep-mounted", strategy);
   }
+});
+
+test("flow balanced agrupa herramental montado antes que adelantar otra fecha requerida", () => {
+  const core = loadPlannerCoreWithSinglePass();
+  const operations = [
+    { id: "prev-mounted", ot: "100", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
+    { id: "prev-change", ot: "200", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
+    { id: "keep-mounted", ot: "100", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", prioridad: 9, fechaReq: "2026-07-20", maquina: "211", herramental: "H1", tiempoProd: 20 },
+    { id: "urgent-change", ot: "200", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "B", estatus: "PLAN", prioridad: 1, fechaReq: "2026-07-13", maquina: "211", herramental: "H2", tiempoProd: 20 },
+  ];
+  const result = core.schedulePlanOnce({
+    selectedOts: ["100", "200"], operations, workOrders: [{ ot: "100" }, { ot: "200" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    operationPlanStatuses: [{ ot: "100", status: "COMPLETADA_PLAN", machine: "211", toToolKey: "H1/SIN_KIT" }],
+    settings: { toolChangeMinutes: 30 }, workSchedule: {},
+  }, { strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const scheduled = result.operations
+    .filter((op) => ["keep-mounted", "urgent-change"].includes(op.id))
+    .sort((a, b) => new Date(`${a.fechaInicio}T${a.horaInicio}:00`) - new Date(`${b.fechaInicio}T${b.horaInicio}:00`));
+  assert.equal(scheduled[0].id, "keep-mounted");
 });
 
 test("un herramental adicional genera una operacion artificial de doblado con capacidad propia", () => {

@@ -4403,7 +4403,8 @@ async function scheduleCurrentPlanImpl() {
     void persistPlanSnapshot().then((snapshot) => {
       if (!snapshot?.snapshotId) return;
       state.draftVersionId = snapshot.snapshotId;
-      reportSnapshot = window.PlanningWorkflowCore.buildDraftSnapshot(state, snapshot.generatedAt || new Date().toISOString());
+      syncDraftReportWeek();
+      reportSnapshot = currentDraftReportSnapshot();
       renderPlanSnapshotSelect();
       renderReports();
       saveState("ui");
@@ -4652,7 +4653,8 @@ async function generatePlanPdf() {
     if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
   }
   if (usingDraft) {
-    reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
   } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   if (!reportSnapshot?.operations?.length) {
     reportSnapshot = { operations: currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
@@ -5094,14 +5096,8 @@ async function loadPlanSnapshots(showMessage) {
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     if (!reportSnapshot) {
-      const publishedIds = publishedSnapshotIds();
-      const source = window.PlanningWorkflowCore.defaultDailyPlanSource(planSnapshots.map((snapshot) => ({
-        ...snapshot,
-        status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
-      })), state);
-      if (source.type === "published") await loadPlanSnapshotById(source.snapshotId, { render: false, silent: true });
-      else if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft", { render: false, silent: true });
-      else reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
+      syncDraftReportWeek();
+      reportSnapshot = currentDraftReportSnapshot();
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
@@ -5121,11 +5117,9 @@ function loadSnapshotsOnce(showMessage) {
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
   const snapshotId = String(selectedSnapshotId ?? els.planSnapshotSelect.value);
   if (snapshotId === "draft") {
-    if (planSnapshots.some((snapshot) => snapshot.snapshotId === "draft")) await loadPlanSnapshotById("draft");
-    else {
-      reportSnapshot = { snapshotId: "draft", generatedAt: "", planStart: state.planStart, operations: currentDraftScheduledOperations().map((op) => ({ ...op })) };
-      renderReports();
-    }
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
+    renderReports();
     return;
   }
   if (!snapshotId) {
@@ -5217,16 +5211,31 @@ function activePublishedSnapshotId() {
   return planSnapshots.find((item) => publishedIds.has(item.snapshotId))?.snapshotId || "";
 }
 
+function currentDraftReportSnapshot() {
+  return {
+    snapshotId: "draft",
+    status: "BORRADOR",
+    generatedAt: "",
+    planStart: state.planStart,
+    weekStart: window.PlanningWorkflowCore.mondayIso(state.planStart),
+    operations: currentDraftScheduledOperations().map((op) => ({ ...op })),
+  };
+}
+
+function syncDraftReportWeek() {
+  const reportStart = state.planStart || state.reportWeekStart;
+  if (!reportStart) return;
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  syncReportFilterDates(state.reportWeekStart);
+}
+
 function reportOperationsSource() {
-  const operations = reportSnapshot?.operations || [];
-  return reportSnapshot?.snapshotId === "draft"
-    ? window.PlannerCore.filterExcludedOperations(state, operations)
-    : operations;
+  if (!reportSnapshot || reportSnapshot.snapshotId === "draft") return currentDraftReportSnapshot().operations;
+  return reportSnapshot?.operations || [];
 }
 
 function reportSourceLabel() {
-  if (!reportSnapshot) return "Sin plan publicado";
-  if (reportSnapshot.snapshotId === "draft") return "Borrador actual";
+  if (!reportSnapshot || reportSnapshot.snapshotId === "draft") return "Borrador actual";
   const week = reportSnapshot.weekStart || reportSnapshot.planStart;
   return `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(reportSnapshot.version || 1)}`;
 }

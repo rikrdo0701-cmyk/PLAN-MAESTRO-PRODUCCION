@@ -282,7 +282,7 @@
       ],
       "readers": [],
       "writers": ["exportCsv"],
-      "rules": ["RULE-OT-005", "RULE-MAT-007"],
+      "rules": ["RULE-OT-005", "RULE-MAT-007", "RULE-BAL-003"],
       "status": "documented",
       "references": ["src/web/planning/app.js", "src/web/planning/planning-workflow-core.js"]
     },

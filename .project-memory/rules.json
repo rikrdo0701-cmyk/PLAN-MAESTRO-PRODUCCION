@@ -72,8 +72,8 @@
       "rule_id": "RULE-OT-005",
       "name": "Coherencia del borrador",
       "status": "documentada",
-      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado.",
-      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado. En Reportes, la fuente Borrador/default se proyecta desde el borrador actual en memoria (currentDraftScheduledOperations/currentPlanOperations), no desde BORRADOR_PLAN persistido ni desde un publicado; los snapshots publicados siguen seleccionables explicitamente.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md; definicion de usuario 2026-08-13; src/web/planning/app.js",
       "domain": "OT"
     },
     {
@@ -272,8 +272,8 @@
       "rule_id": "RULE-BAL-003",
       "name": "Agrupacion por maquina y herramental en doblado",
       "status": "documentada",
-      "rule": "El balanceo debe preferir, en la medida de lo posible, operaciones de doblado de OTs con la misma maquina y el mismo herramental/kit ya montado para evitar cambios de herramental; es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
-      "source": "definicion de usuario 2026-08-12; src/web/planning/planner-core.js; tests/planner-core.test.mjs",
+      "rule": "El balanceo debe preferir, en la medida de lo posible, operaciones de doblado de OTs con la misma maquina y el mismo herramental/kit ya montado para evitar cambios de herramental; flow_balanced prioriza evitar cambio de herramental antes de adelantar otra fecha requerida cuando ambas operaciones ya son candidatas. Es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
+      "source": "definicion de usuario 2026-08-12 y 2026-08-14; src/web/planning/planner-core.js; tests/planner-core.test.mjs",
       "domain": "Balanceo"
     },
     {
@@ -309,5 +309,5 @@
       "domain": "BOM"
     }
   ],
-  "updated_at": "2026-08-13T00:00:00-06:00"
+  "updated_at": "2026-08-14T00:00:00-06:00"
 }

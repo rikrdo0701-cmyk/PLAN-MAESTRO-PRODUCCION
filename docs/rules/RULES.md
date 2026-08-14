@@ -74,7 +74,7 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 |---|---|---|---|
 | `RULE-BAL-001` | KPIs de carga | IMPLEMENTADA | `legacy/IndexPlanning.html` |
 | `RULE-BAL-002` | Cargas coherentes con `selectedOts` (misma regla OT-005) | DOCUMENTADA | spec 2026-07-12 |
-| `RULE-BAL-003` | Agrupación por máquina y herramental en doblado | DOCUMENTADA | definición de usuario 2026-08-12 |
+| `RULE-BAL-003` | Agrupación por máquina y herramental en doblado | DOCUMENTADA | definición de usuario 2026-08-12 y 2026-08-14 |
 | `RULE-BAL-004` | Menor tiempo de OT en producción para reducir WIP | DOCUMENTADA | definición de usuario 2026-08-12 |
 
 ## BOM

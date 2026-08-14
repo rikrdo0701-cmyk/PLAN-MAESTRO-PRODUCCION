@@ -60,7 +60,7 @@ Publicar por semana (PUBLICADO) → instantánea en PLANES_HISTORICOS
 Restaurar publicado como borrador (reconciliación) o consultar histórico
 ```
 
-- `selectedOts`: lista de OTs del borrador. Gantt, KPI, backlog, cargas y reportes usan la misma lista.
+- `selectedOts`: lista de OTs del borrador. Gantt, KPI, backlog, cargas y reportes usan la misma lista. En Reportes, `Borrador` muestra el borrador actual en memoria; `PLANES_HISTORICOS` se usa solo cuando el usuario selecciona un publicado.
 - `lockedOts`: OTs bloqueadas (no se reprograman).
 - `operationPlanStatuses`: estados por operación (`PENDIENTE` / `COMPLETADA_PLAN`).
 
