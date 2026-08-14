@@ -203,6 +203,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /state\.planStart = formatDate\(parseDateOnlyValue\(state\.planStart\) \|\| new Date\(\)\)/);
   assert.match(pagesIndex, /loadIncrementalPlanningBase\(planningWeekStart\)/);
   assert.match(pagesIndex, /respectPlanStart: true/);
+  const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWindow()"), pagesIndex.indexOf("function scheduledPlanWindowStart()"));
+  assert.match(planWindowSource, /const configured = parseDate\(state\.planStart\)/);
+  assert.doesNotMatch(planWindowSource, /scheduledPlanWindowStart\(\)/);
   assert.match(pagesIndex, /incrementalScope\(\{ base: incrementalBase, current: state/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
   assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);

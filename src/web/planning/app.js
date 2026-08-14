@@ -778,10 +778,7 @@ function bindEvents() {
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
     state.planStart = els.planStartInput.value;
-    const hasScheduledDraft = Boolean(scheduledPlanWindowStart());
-    saveAndRender(hasScheduledDraft
-      ? "Inicio guardado para la siguiente generacion; el Gantt conserva el borrador programado"
-      : "Inicio del horizonte actualizado");
+    saveAndRender("Inicio del horizonte actualizado");
   });
   els.horizonSelect.addEventListener("change", () => {
     checkpointState();
@@ -7152,9 +7149,9 @@ function parseCsv(text) {
 function getPlanWindow() {
   const configured = parseDate(state.planStart);
   const starts = currentPlanOperations().map(opStart).filter(Boolean);
-  const base = scheduledPlanWindowStart() || (configured
+  const base = configured
     ? new Date(configured.year, configured.month - 1, configured.day)
-    : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date())));
+    : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date()));
   const start = new Date(base);
   start.setHours(0, 0, 0, 0);
   return { start, end: addDays(start, state.horizonDays - 1) };
