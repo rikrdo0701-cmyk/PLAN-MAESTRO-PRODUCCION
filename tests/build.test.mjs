@@ -7,11 +7,32 @@ import { buildProject } from "../scripts/build-appscript.mjs";
 test("la identidad del detalle es UI local y no se envia al estado compartido", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
   assert.match(planningApp, /selectedDetailOt:\s*""/);
+  assert.match(planningApp, /queueMoveOt:\s*""/);
   const persistableSource = planningApp.slice(
     planningApp.indexOf("function persistableState("),
     planningApp.indexOf("function createAppSheetPayload("),
   );
-  assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*\.\.\.persisted\s*\}/);
+  assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*queueMoveOt,\s*\.\.\.persisted\s*\}/);
+});
+
+test("cola de planeacion expone reordenamiento y modal de preparacion sin textos removidos", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(planningApp, /data-move-queue-ot/);
+  assert.match(planningApp, /data-move-direction="up"/);
+  assert.match(planningApp, /data-move-direction="down"/);
+  assert.match(planningApp, /data-start-queue-move/);
+  assert.match(planningApp, /data-place-queue-ot/);
+  assert.match(planningApp, /Moviendo OT/);
+  assert.match(planningApp, /Cancelar/);
+  assert.match(planningApp, /Poner aqui/);
+  assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*startQueueMove/);
+  assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*reorderSelectedJobs\(state\.queueMoveOt, button\.dataset\.placeQueueOt\)/);
+  assert.match(planningApp, /reorderSelectedJobs\(button\.dataset\.moveQueueOt, targetOt\)/);
+  assert.match(planningApp, /function canReorderSelectedJobs\(sourceOt, targetOt, options = \{\}\)/);
+  assert.match(planningApp, /formatMaterialQuantity\(quantity\).*pzas/);
+  assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
+  assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
+  assert.doesNotMatch(planningApp, /<span>CT \$\{escapeHtml\(op\.ct\)\}<\/span>/);
 });
 
 test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion", async () => {
@@ -219,7 +240,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);
   assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
-  assert.match(pagesIndex, /Preparar OT \$\{ot\}\$\{article \? ` - \$\{article\}` : ""\}/);
+  assert.match(pagesIndex, /const description = String\(job\?\.descripcion \|\| workOrderForOt\(ot\)\?\.description \|\| ""\)\.trim\(\);/);
+  assert.match(pagesIndex, /const detail = \[article, description, quantity \? `\$\{formatMaterialQuantity\(quantity\)\} pzas` : ""\]\.filter\(Boolean\)\.join\(" - "\);/);
   assert.match(pagesIndex, /name="tool_\$\{escapeHtml\(index\)\}_extra_machine_\$\{escapeHtml\(extraIndex\)\}"/);
   assert.match(pagesIndex, /data-job-tool-extra-machine/);
   assert.doesNotMatch(pagesIndex, /Piezas pendientes/);
@@ -679,7 +701,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
-  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, \.\.\.persisted \} = source;/);
+  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
   assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
 });
@@ -1276,6 +1298,21 @@ test("exportCsv omite capacidades excluidas del borrador", async () => {
 
   assert.match(exported, /keep/);
   assert.doesNotMatch(exported, /drop/);
+});
+
+test("PLAN_HEADERS documenta las columnas del CSV exportado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const headersSource = app.slice(app.indexOf("const PLAN_HEADERS = ["), app.indexOf("const FIELD_MAP =", app.indexOf("const PLAN_HEADERS = [")));
+  const PLAN_HEADERS = Function(`${headersSource}; return PLAN_HEADERS;`)();
+
+  assert.deepEqual(PLAN_HEADERS, [
+    "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
+    "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
+    "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
+    "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
+    "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
+    "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO",
+  ]);
 });
 
 test("importJson adopta y limpia operationCatalogWarning", async () => {

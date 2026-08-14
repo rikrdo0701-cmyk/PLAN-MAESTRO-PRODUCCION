@@ -124,6 +124,22 @@ test("filterOperationsByPlanStatus filtra pendientes, completadas y todas", () =
   assert.deepEqual(core.filterOperationsByPlanStatus(rows, "TODAS"), rows);
 });
 
+test("draftExportOperations usa lastSchedule.scheduledOts como alcance del borrador actual", () => {
+  const scheduled = { id: "scheduled", ot: "100", planStatus: "PENDIENTE", fechaInicio: "2026-08-17", fechaFin: "2026-08-17" };
+  const staleSelected = { id: "stale", ot: "200", planStatus: "PENDIENTE", fechaInicio: "2026-08-17", fechaFin: "2026-08-17" };
+  const completed = { id: "completed", ot: "100", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-08-17", fechaFin: "2026-08-17" };
+  const historical = { id: "historical", ot: "100", planStatus: "PUBLICADO", fechaInicio: "2026-08-17", fechaFin: "2026-08-17" };
+  const missingDates = { id: "missing-dates", ot: "100", planStatus: "PENDIENTE", fechaInicio: "2026-08-17", fechaFin: "" };
+
+  const exported = core.draftExportOperations({
+    selectedOts: ["100", "200"],
+    lastSchedule: { scheduledOts: ["100"] },
+    operations: [scheduled, staleSelected, completed, historical, missingDates],
+  });
+
+  assert.deepEqual(exported.map((operation) => operation.id), ["scheduled"]);
+});
+
 test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloqueada", () => {
   const state = { lockedOts: ["100"] };
   assert.deepEqual(structuredClone(core.canRemoveSelectedOt(state, 100)), {

@@ -344,7 +344,10 @@
   }
 
   function draftExportOperations(state) {
-    const selected = new Set((state?.selectedOts || []).map(normalize));
+    const scope = Array.isArray(state?.lastSchedule?.scheduledOts)
+      ? state.lastSchedule.scheduledOts
+      : state?.selectedOts;
+    const selected = new Set((scope || []).map(normalize));
     return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
       isPendingDraftOperation(operation) && !isHistorical(operation) &&
       Boolean(operation?.fechaInicio && operation?.fechaFin));

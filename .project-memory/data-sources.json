@@ -268,6 +268,25 @@
       "references": ["src/server/02-storage.js"]
     },
     {
+      "source_id": "CSV-PLAN_PRODUCCION",
+      "type": "csv_export",
+      "name": "plan-produccion.csv",
+      "location/origin": "Frontend de planeacion, boton Exportar; generado en memoria desde el borrador programado actual",
+      "columns": [
+        "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
+        "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
+        "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
+        "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
+        "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
+        "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO"
+      ],
+      "readers": [],
+      "writers": ["exportCsv"],
+      "rules": ["RULE-OT-005", "RULE-MAT-007"],
+      "status": "documented",
+      "references": ["src/web/planning/app.js", "src/web/planning/planning-workflow-core.js"]
+    },
+    {
       "source_id": "SHEET-AUDITORIA",
       "type": "google_sheet",
       "name": "AUDITORIA",

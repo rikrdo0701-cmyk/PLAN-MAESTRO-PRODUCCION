@@ -154,6 +154,7 @@ const sampleState = {
   ganttDayWidth: DEFAULT_GANTT_DAY_WIDTH,
   selectedOperationId: "op-1",
   selectedDetailOt: "",
+  queueMoveOt: "",
   capacityMinutes: DEFAULT_CAPACITY_MINUTES,
   planStart: "2026-06-29",
   horizonDays: DEFAULT_HORIZON_DAYS,
@@ -588,6 +589,7 @@ function bindElements() {
     "priorityLoadMore",
     "priorityLoadMoreSentinel",
     "priorityQueue",
+    "queueMoveStatus",
     "queueSearchInput",
     "selectedJobCount",
     "lockAllBtn",
@@ -1931,6 +1933,8 @@ function renderPriorityQueue() {
   const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
   const ordered = state.selectedOts.map((ot) => jobsByOt.get(ot)).filter(Boolean);
   state.selectedOts = ordered.map((job) => job.ot);
+  if (state.queueMoveOt && !state.selectedOts.includes(state.queueMoveOt)) state.queueMoveOt = "";
+  const activeMoveOt = state.queueMoveOt || "";
   const visibleJobs = ordered.filter((job) => jobMatchesSearch(job, query));
   const fixedCount = ordered.filter((job) => job.programmed || job.locked).length;
   const pendingCount = ordered.filter((job) => !isJobScheduled(job.ot)).length;
@@ -1938,19 +1942,23 @@ function renderPriorityQueue() {
   els.unlockAllBtn.disabled = !ordered.some((job) => !job.programmed && job.locked);
   els.returnUnlockedToBacklogBtn.disabled = !ordered.some((job) => !job.programmed && window.PlanningWorkflowCore.canRemoveSelectedOt(state, job.ot).allowed);
   els.selectedJobCount.textContent = `${ordered.length} en el plan${pendingCount ? ` / ${pendingCount} por programar` : ""}${fixedCount ? ` / ${fixedCount} fijas` : ""}`;
+  renderQueueMoveStatus(activeMoveOt);
   if (!ordered.length) {
     els.priorityQueue.innerHTML = `<div class="queue-empty">Arrastra aqui los trabajos que deseas programar</div>`;
+    els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
     return;
   }
   if (!visibleJobs.length) {
     els.priorityQueue.innerHTML = `<div class="queue-empty">No hay trabajos planeados que coincidan con la busqueda</div>`;
+    els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
     return;
   }
 
   const existingItems = els.priorityQueue.querySelectorAll("[data-queue-ot]");
   const existingOts = new Set();
   existingItems.forEach((el) => existingOts.add(el.dataset.queueOt));
-  const sameSet = existingItems.length === visibleJobs.length && visibleJobs.every((job) => existingOts.has(job.ot));
+  const sameMoveMode = (els.priorityQueue.dataset.queueMoveOt || "") === activeMoveOt;
+  const sameSet = sameMoveMode && existingItems.length === visibleJobs.length && visibleJobs.every((job) => existingOts.has(job.ot));
 
   if (sameSet) {
     const otToElement = new Map();
@@ -1966,6 +1974,14 @@ function renderPriorityQueue() {
       el.classList.toggle("pending-schedule", !scheduled);
       el.classList.toggle("pinned", Boolean(job.programmed));
       el.classList.toggle("locked", !job.programmed && job.locked);
+      const selectedIndex = state.selectedOts.indexOf(job.ot);
+      const previousOt = state.selectedOts[selectedIndex - 1];
+      const nextOt = state.selectedOts[selectedIndex + 1];
+      const cannotMove = job.programmed || job.locked;
+      const upButton = el.querySelector('[data-move-direction="up"]');
+      const downButton = el.querySelector('[data-move-direction="down"]');
+      if (upButton) upButton.disabled = cannotMove || !previousOt || isJobLocked(previousOt) || isProgrammedJobStatus(jobStatusForOt(previousOt));
+      if (downButton) downButton.disabled = cannotMove || !nextOt || isJobLocked(nextOt) || isProgrammedJobStatus(jobStatusForOt(nextOt));
       if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
     });
     return;
@@ -1973,6 +1989,14 @@ function renderPriorityQueue() {
 
   els.priorityQueue.innerHTML = visibleJobs.map((job) => {
     const pendingSchedule = !isJobScheduled(job.ot);
+    const selectedIndex = state.selectedOts.indexOf(job.ot);
+    const previousOt = state.selectedOts[selectedIndex - 1];
+    const nextOt = state.selectedOts[selectedIndex + 1];
+    const cannotMove = job.programmed || job.locked;
+    const cannotMoveUp = cannotMove || !previousOt || isJobLocked(previousOt) || isProgrammedJobStatus(jobStatusForOt(previousOt));
+    const cannotMoveDown = cannotMove || !nextOt || isJobLocked(nextOt) || isProgrammedJobStatus(jobStatusForOt(nextOt));
+    const isMoveSource = activeMoveOt === job.ot;
+    const canPlaceHere = activeMoveOt && activeMoveOt !== job.ot && canReorderSelectedJobs(activeMoveOt, job.ot, { silent: true });
     const article = job.parte || "SIN ARTICULO";
     const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
     const quantityLabel = quantity ? formatMaterialQuantity(quantity) : "Sin dato";
@@ -2000,10 +2024,18 @@ function renderPriorityQueue() {
         <button class="queue-lock${job.locked ? " locked" : ""}" type="button" data-lock-ot="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
           <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
         </button>
+        <div class="queue-reorder" aria-label="Reordenar OT ${escapeHtml(job.ot)}">
+          <button type="button" data-move-queue-ot="${escapeHtml(job.ot)}" data-move-direction="up" aria-label="Subir OT ${escapeHtml(job.ot)}" title="Subir OT"${cannotMoveUp ? " disabled" : ""}>&#8593;</button>
+          <button type="button" data-move-queue-ot="${escapeHtml(job.ot)}" data-move-direction="down" aria-label="Bajar OT ${escapeHtml(job.ot)}" title="Bajar OT"${cannotMoveDown ? " disabled" : ""}>&#8595;</button>
+        </div>
+        <div class="queue-move-actions">
+          ${canPlaceHere ? `<button type="button" data-place-queue-ot="${escapeHtml(job.ot)}" aria-label="Poner OT ${escapeHtml(activeMoveOt)} aqui antes de OT ${escapeHtml(job.ot)}">Poner aqui</button>` : `<button type="button" data-start-queue-move="${escapeHtml(job.ot)}" aria-label="Mover OT ${escapeHtml(job.ot)}"${cannotMove || isMoveSource ? " disabled" : ""}>${isMoveSource ? "Moviendo" : "Mover"}</button>`}
+        </div>
         <span class="drag-handle" aria-hidden="true">&#8942;&#8942;</span>
       </article>
     `;
   }).join("");
+  els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
 
   els.priorityQueue.querySelectorAll("[data-queue-photo]").forEach((photo) => {
     photo.addEventListener("error", () => photo.parentElement.classList.remove("has-photo"));
@@ -2067,6 +2099,47 @@ function renderPriorityQueue() {
       event.stopPropagation();
       toggleJobLock(event.currentTarget.dataset.lockOt);
     });
+    item.querySelectorAll("[data-move-queue-ot]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const index = state.selectedOts.indexOf(button.dataset.moveQueueOt);
+        const direction = button.dataset.moveDirection === "up" ? -1 : 1;
+        const targetOt = state.selectedOts[index + direction];
+        if (targetOt) reorderSelectedJobs(button.dataset.moveQueueOt, targetOt);
+      });
+    });
+    item.querySelectorAll("[data-start-queue-move]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        startQueueMove(button.dataset.startQueueMove);
+      });
+    });
+    item.querySelectorAll("[data-place-queue-ot]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        reorderSelectedJobs(state.queueMoveOt, button.dataset.placeQueueOt);
+      });
+    });
+  });
+}
+
+function renderQueueMoveStatus(activeMoveOt) {
+  if (!els.queueMoveStatus) return;
+  if (!activeMoveOt) {
+    els.queueMoveStatus.hidden = true;
+    els.queueMoveStatus.innerHTML = "";
+    return;
+  }
+  els.queueMoveStatus.hidden = false;
+  els.queueMoveStatus.innerHTML = `<span>Moviendo OT <strong>${escapeHtml(activeMoveOt)}</strong></span><button type="button" data-cancel-queue-move>Cancelar</button>`;
+  els.queueMoveStatus.querySelector("[data-cancel-queue-move]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.queueMoveOt = "";
+    renderPriorityQueue();
   });
 }
 
@@ -2601,7 +2674,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
        </select>`
     : `<input name="ot_subcontract_type" type="text" value="${escapeHtml(currentSubcontractType)}" placeholder="Tipo de subcontrato" required>`;
   const commonFields = bendingOps.length || needsOtKit || needsSubcontract ? `<section class="planning-requirement planning-requirement-ot">
-    <div class="planning-requirement-title"><strong>Datos generales de la OT ${escapeHtml(job.ot)}</strong><span>Una asignacion para toda la orden</span></div>
+    <div class="planning-requirement-title"><strong>Datos generales de la OT ${escapeHtml(job.ot)}</strong></div>
     <div class="planning-requirement-fields">
       ${machineField}
       ${needsOtKit ? `<label>Kit de la OT (opcional)${planningCatalogSelectMarkup("ot_kit", "kitHerramental", currentKit, { emptyLabel: "Sin kit", customPlaceholder: "Nombre del nuevo kit", attributes: ` data-kit-input="ot"${currentKit ? "" : " disabled"}` })}</label>
@@ -2628,7 +2701,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
       : "";
     if (!toolFields) return "";
     return `<section class="planning-requirement">
-      <div class="planning-requirement-title"><strong>Sec. ${escapeHtml(op.secuencia)} - ${escapeHtml(op.descripcion)}</strong><span>CT ${escapeHtml(op.ct)}</span></div>
+      <div class="planning-requirement-title"><strong>Sec. ${escapeHtml(op.secuencia)} - ${escapeHtml(op.descripcion)}</strong></div>
       <div class="planning-requirement-fields">${toolFields}</div>
     </section>`;
   }).join("");
@@ -2636,7 +2709,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     requestAnimationFrame(() => {
       openPlanningDialog({
         title: planningPreparationTitle(job),
-        summary: "Los datos comerciales se guardan por articulo; maquina, kit y subcontrato se guardan para esta OT.",
+        summary: "",
         body: `${commercialFields}${commonFields}${operationFields}`,
         confirmLabel: "Agregar al plan",
         cancelVisible: true,
@@ -2727,7 +2800,10 @@ function applyPlanningRequirements(requirements, values, operations) {
 function planningPreparationTitle(job) {
   const ot = String(job?.ot || "").trim();
   const article = String(job?.parte || workOrderForOt(ot)?.item || "").trim();
-  return `Preparar OT ${ot}${article ? ` - ${article}` : ""}`;
+  const description = String(job?.descripcion || workOrderForOt(ot)?.description || "").trim();
+  const quantity = Number(job?.quantity || job?.ops?.find((op) => Number(op.cantTotal) > 0)?.cantTotal || workOrderForOt(ot)?.quantity || 0);
+  const detail = [article, description, quantity ? `${formatMaterialQuantity(quantity)} pzas` : ""].filter(Boolean).join(" - ");
+  return `Preparar OT ${ot}${detail ? ` - ${detail}` : ""}`;
 }
 
 function planningAdditionalToolMarkup(index, extraIndex, value, machines = []) {
@@ -2875,28 +2951,45 @@ function returnUnlockedJobsToBacklog() {
 
 function reorderSelectedJobs(sourceOt, targetOt) {
   if (!sourceOt || !targetOt || sourceOt === targetOt) return;
+  if (!canReorderSelectedJobs(sourceOt, targetOt)) return;
+  checkpointState();
+  const order = [...state.selectedOts];
+  const sourceIndex = order.indexOf(sourceOt);
+  order.splice(sourceIndex, 1);
+  order.splice(order.indexOf(targetOt), 0, sourceOt);
+  state.selectedOts = order;
+  state.queueMoveOt = "";
+  invalidatePriorityJobsCache();
+  applyQueuePriorities();
+  saveAndRenderQueueChange("Orden del plan actualizado");
+}
+
+function startQueueMove(sourceOt) {
+  if (!sourceOt || !canReorderSelectedJobs(sourceOt, state.selectedOts.find((ot) => ot !== sourceOt) || "", { allowMissingTarget: true })) return;
+  state.queueMoveOt = sourceOt;
+  renderPriorityQueue();
+}
+
+function canReorderSelectedJobs(sourceOt, targetOt, options = {}) {
+  if (!sourceOt || sourceOt === targetOt) return false;
   const sourceJob = getPriorityJobs().find((item) => item.ot === sourceOt);
   if (sourceJob?.programmed || sourceJob?.locked) {
-    showToast(`OT ${sourceOt} esta bloqueada y no se puede mover`);
-    return;
+    if (!options.silent) showToast(`OT ${sourceOt} esta bloqueada y no se puede mover`);
+    return false;
   }
   const order = [...state.selectedOts];
   const sourceIndex = order.indexOf(sourceOt);
   const targetIndex = order.indexOf(targetOt);
-  if (sourceIndex < 0 || targetIndex < 0) return;
+  if (sourceIndex < 0) return false;
+  if (options.allowMissingTarget && targetIndex < 0) return true;
+  if (targetIndex < 0) return false;
   const crossedFixed = order.slice(Math.min(sourceIndex, targetIndex), Math.max(sourceIndex, targetIndex) + 1)
     .some((ot) => ot !== sourceOt && (isJobLocked(ot) || isProgrammedJobStatus(jobStatusForOt(ot))));
   if (crossedFixed) {
-    showToast("No puedes mover una OT a traves de un trabajo fijo");
-    return;
+    if (!options.silent) showToast("No puedes mover una OT a traves de un trabajo fijo");
+    return false;
   }
-  checkpointState();
-  order.splice(sourceIndex, 1);
-  order.splice(order.indexOf(targetOt), 0, sourceOt);
-  state.selectedOts = order;
-  invalidatePriorityJobsCache();
-  applyQueuePriorities();
-  saveAndRenderQueueChange("Orden del plan actualizado");
+  return true;
 }
 
 function applyQueuePriorities() {
@@ -8878,7 +8971,7 @@ function purgeClosedWorkOrderRetention() {
 }
 
 function persistableState(source = state) {
-  const { matrixSearch, selectedDetailOt, ...persisted } = source;
+  const { matrixSearch, selectedDetailOt, queueMoveOt, ...persisted } = source;
   return persisted;
 }
 

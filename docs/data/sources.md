@@ -186,6 +186,22 @@ Mismos 30 headers que `PLANES_HISTORICOS`.
 - Writers: `PP_replaceDraftSnapshot_` (clear + append con `snapshotId='draft'`),
   `PP_clearDraftSnapshot_` (clearContent).
 
+## plan-produccion.csv
+
+Export CSV descargado por el frontend de planeacion desde el boton `Exportar`. Origen: borrador
+programado actual en memoria; si existe `lastSchedule.scheduledOts`, esa lista define las OTs del
+CSV. Se omiten operaciones completadas en el plan, historicas/publicadas, sin fechas y capacidades
+excluidas por `currentPlanOperations()`.
+
+Headers (33): `NUM, OT, PARTE, DESCRIPCION, CONTENIDO, PRIORIDAD, FECHA_REQ, CANT_TOTAL,
+SECUENCIA, CT, OPERADOR, MAQUINA, HERRAMENTAL, KIT_HERRAMENTAL, CANT_PENDIENTE, TIEMPO_CICLO,
+TIEMPO_SETUP, TIEMPO_PROD, FECHA_INICIO, HORA_INICIO, FECHA_FIN, HORA_FIN, TIPO_INSERCION,
+ESTATUS, LOG, DIAS_SUBCONTRATO, KIT_PENDIENTE, AUTO_FROZEN, HERRAMENTAL_ORIGEN, KIT_ORIGEN,
+HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO`.
+
+- Readers: descarga externa del usuario.
+- Writer: `exportCsv` (`src/web/planning/app.js`) via `PlanningWorkflowCore.draftExportOperations`.
+
 ## AUDITORIA
 
 Headers: `FECHA, USUARIO, ACCION, REVISION, DETALLE`. **Append-only** (nadie lee).
