@@ -15,21 +15,24 @@ test("la identidad del detalle es UI local y no se envia al estado compartido", 
   assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*queueMoveOt,\s*\.\.\.persisted\s*\}/);
 });
 
-test("cola de planeacion expone reordenamiento y modal de preparacion sin textos removidos", async () => {
+test("cola de planeacion expone mover sin flechas y modal de preparacion sin textos removidos", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
-  assert.match(planningApp, /data-move-queue-ot/);
-  assert.match(planningApp, /data-move-direction="up"/);
-  assert.match(planningApp, /data-move-direction="down"/);
+  const planningStyles = await readFile(new URL("../src/web/planning/styles.css", import.meta.url), "utf8");
+  assert.doesNotMatch(planningApp, /data-move-direction="up"/);
+  assert.doesNotMatch(planningApp, /data-move-direction="down"/);
+  assert.doesNotMatch(planningApp, /data-move-queue-ot=/);
   assert.match(planningApp, /data-start-queue-move/);
   assert.match(planningApp, /data-place-queue-ot/);
+  assert.match(planningApp, /queue-move-actions/);
+  assert.match(planningApp, /`qty:\$\{formatMaterialQuantity\(Number\.isFinite\(quantity\) \? quantity : 0\)\}`/);
   assert.match(planningApp, /Moviendo OT/);
   assert.match(planningApp, /Cancelar/);
   assert.match(planningApp, /Poner aqui/);
   assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*startQueueMove/);
   assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*reorderSelectedJobs\(state\.queueMoveOt, button\.dataset\.placeQueueOt\)/);
-  assert.match(planningApp, /reorderSelectedJobs\(button\.dataset\.moveQueueOt, targetOt\)/);
+  assert.match(planningStyles, /\.queue-move-actions \{ position: absolute; right: 10px; bottom: 10px;/);
   assert.match(planningApp, /function canReorderSelectedJobs\(sourceOt, targetOt, options = \{\}\)/);
-  assert.match(planningApp, /formatMaterialQuantity\(quantity\).*pzas/);
+  assert.doesNotMatch(planningApp, /<span>Cantidad<\/span><strong>\$\{escapeHtml\(quantityLabel\)\}<\/strong>/);
   assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
   assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
   assert.doesNotMatch(planningApp, /<span>CT \$\{escapeHtml\(op\.ct\)\}<\/span>/);

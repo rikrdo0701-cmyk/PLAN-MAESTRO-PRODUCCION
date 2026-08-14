@@ -1841,8 +1841,8 @@ function renderPriorityList() {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const article = job.parte || "SIN ARTICULO";
-    const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-    const quantityLabel = quantity ? `${formatMaterialQuantity(quantity)} pzas` : "Sin dato";
+    const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+    const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
     const toolMini = jobToolMiniHtml(job);
     const actionStatus = individualPlanningActionStatus(job.ot);
     const photoMarkup = job.photoUrl
@@ -1872,7 +1872,7 @@ function renderPriorityList() {
         <strong>${formatHours(job.minutes)}</strong>
         <small>${job.ops.length} ops</small>
       </div>
-      <div class="priority-quantity"><span>Cantidad</span><strong>${escapeHtml(quantityLabel)}</strong></div>
+      <div class="priority-quantity"><strong>${escapeHtml(quantityLabel)}</strong></div>
       <label class="priority-due-date"><span>Entrega</span><input class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" data-due-ot="${escapeHtml(job.ot)}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(workOrder?.dueDate))}"></label>
     `;
 
@@ -1974,14 +1974,9 @@ function renderPriorityQueue() {
       el.classList.toggle("pending-schedule", !scheduled);
       el.classList.toggle("pinned", Boolean(job.programmed));
       el.classList.toggle("locked", !job.programmed && job.locked);
-      const selectedIndex = state.selectedOts.indexOf(job.ot);
-      const previousOt = state.selectedOts[selectedIndex - 1];
-      const nextOt = state.selectedOts[selectedIndex + 1];
       const cannotMove = job.programmed || job.locked;
-      const upButton = el.querySelector('[data-move-direction="up"]');
-      const downButton = el.querySelector('[data-move-direction="down"]');
-      if (upButton) upButton.disabled = cannotMove || !previousOt || isJobLocked(previousOt) || isProgrammedJobStatus(jobStatusForOt(previousOt));
-      if (downButton) downButton.disabled = cannotMove || !nextOt || isJobLocked(nextOt) || isProgrammedJobStatus(jobStatusForOt(nextOt));
+      const startMoveButton = el.querySelector("[data-start-queue-move]");
+      if (startMoveButton) startMoveButton.disabled = cannotMove || activeMoveOt === job.ot;
       if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
     });
     return;
@@ -1989,19 +1984,14 @@ function renderPriorityQueue() {
 
   els.priorityQueue.innerHTML = visibleJobs.map((job) => {
     const pendingSchedule = !isJobScheduled(job.ot);
-    const selectedIndex = state.selectedOts.indexOf(job.ot);
-    const previousOt = state.selectedOts[selectedIndex - 1];
-    const nextOt = state.selectedOts[selectedIndex + 1];
     const cannotMove = job.programmed || job.locked;
-    const cannotMoveUp = cannotMove || !previousOt || isJobLocked(previousOt) || isProgrammedJobStatus(jobStatusForOt(previousOt));
-    const cannotMoveDown = cannotMove || !nextOt || isJobLocked(nextOt) || isProgrammedJobStatus(jobStatusForOt(nextOt));
     const isMoveSource = activeMoveOt === job.ot;
     const canPlaceHere = activeMoveOt && activeMoveOt !== job.ot && canReorderSelectedJobs(activeMoveOt, job.ot, { silent: true });
     const article = job.parte || "SIN ARTICULO";
-    const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-    const quantityLabel = quantity ? formatMaterialQuantity(quantity) : "Sin dato";
-    const toolMini = jobToolMiniHtml(job);
     const workOrder = workOrderForOt(job.ot);
+    const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+    const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
+    const toolMini = jobToolMiniHtml(job);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
     const photoMarkup = job.photoUrl
       ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
@@ -2019,15 +2009,11 @@ function renderPriorityQueue() {
           ${toolMini}
           ${jobTypeTagHtml(job)}
           <label class="queue-delivery"><span>Entrega</span><input class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" data-queue-due-date="${escapeHtml(job.ot)}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(workOrder?.dueDate))}"></label>
-          <div class="queue-meta"><span>Cantidad <strong>${escapeHtml(quantityLabel)}</strong></span><span>${formatHours(job.minutes)}</span></div>
+          <div class="queue-meta"><strong class="queue-qty">${escapeHtml(quantityLabel)}</strong><span>${formatHours(job.minutes)}</span></div>
         </div>
         <button class="queue-lock${job.locked ? " locked" : ""}" type="button" data-lock-ot="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
           <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
         </button>
-        <div class="queue-reorder" aria-label="Reordenar OT ${escapeHtml(job.ot)}">
-          <button type="button" data-move-queue-ot="${escapeHtml(job.ot)}" data-move-direction="up" aria-label="Subir OT ${escapeHtml(job.ot)}" title="Subir OT"${cannotMoveUp ? " disabled" : ""}>&#8593;</button>
-          <button type="button" data-move-queue-ot="${escapeHtml(job.ot)}" data-move-direction="down" aria-label="Bajar OT ${escapeHtml(job.ot)}" title="Bajar OT"${cannotMoveDown ? " disabled" : ""}>&#8595;</button>
-        </div>
         <div class="queue-move-actions">
           ${canPlaceHere ? `<button type="button" data-place-queue-ot="${escapeHtml(job.ot)}" aria-label="Poner OT ${escapeHtml(activeMoveOt)} aqui antes de OT ${escapeHtml(job.ot)}">Poner aqui</button>` : `<button type="button" data-start-queue-move="${escapeHtml(job.ot)}" aria-label="Mover OT ${escapeHtml(job.ot)}"${cannotMove || isMoveSource ? " disabled" : ""}>${isMoveSource ? "Moviendo" : "Mover"}</button>`}
         </div>
@@ -2098,16 +2084,6 @@ function renderPriorityQueue() {
     item.querySelector("[data-lock-ot]").addEventListener("click", (event) => {
       event.stopPropagation();
       toggleJobLock(event.currentTarget.dataset.lockOt);
-    });
-    item.querySelectorAll("[data-move-queue-ot]").forEach((button) => {
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const index = state.selectedOts.indexOf(button.dataset.moveQueueOt);
-        const direction = button.dataset.moveDirection === "up" ? -1 : 1;
-        const targetOt = state.selectedOts[index + direction];
-        if (targetOt) reorderSelectedJobs(button.dataset.moveQueueOt, targetOt);
-      });
     });
     item.querySelectorAll("[data-start-queue-move]").forEach((button) => {
       button.addEventListener("click", (event) => {
