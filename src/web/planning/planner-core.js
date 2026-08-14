@@ -1572,7 +1572,12 @@
     const candidates = (job.fixedOperations || [])
       .filter((candidate) => compareOperationSequence(candidate, operation) < 0)
       .filter((candidate) => operationStart(candidate) && operationEnd(candidate));
-    const predecessor = candidates[candidates.length - 1];
+    const predecessor = candidates.reduce((latest, candidate) => latestPredecessor(latest, {
+      operation: candidate,
+      start: operationStart(candidate),
+      end: operationEnd(candidate),
+      duration: declaredOperationDuration(candidate),
+    }), null)?.operation;
     if (!predecessor) return null;
     const start = operationStart(predecessor);
     const end = operationEnd(predecessor);
@@ -1588,6 +1593,9 @@
   function latestPredecessor(left, right) {
     if (!left) return right;
     if (!right) return left;
+    const leftEnd = left.end instanceof Date ? left.end.getTime() : Number.NEGATIVE_INFINITY;
+    const rightEnd = right.end instanceof Date ? right.end.getTime() : Number.NEGATIVE_INFINITY;
+    if (leftEnd !== rightEnd) return leftEnd > rightEnd ? left : right;
     return compareOperationSequence(left.operation, right.operation) >= 0 ? left : right;
   }
 

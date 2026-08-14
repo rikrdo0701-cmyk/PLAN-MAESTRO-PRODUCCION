@@ -517,6 +517,59 @@ test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte
   assert.ok(successorStart >= subcontractEnd, "un subcontrato exige precedencia completa aunque configure overlap menor a 1");
 });
 
+test("OT tipo 1325 respeta secuencia despues de subcontrato largo", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["1325"],
+    operations: [
+      { id: "seq-10", ot: "1325", secuencia: 10, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+      { id: "seq-11", ot: "1325", secuencia: 11, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+      { id: "seq-12-sub", ot: "1325", secuencia: 12, ct: "519", descripcion: "MAKA", tipoInsercion: "SUBCONTRATO", estatus: "PLAN" },
+      { id: "seq-13", ot: "1325", secuencia: 13, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+      { id: "seq-14", ot: "1325", secuencia: 14, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+    ],
+    workOrders: [{ ot: "1325", item: "CCA 519 CM" }],
+    otConfigurations: { 1325: { ot: "1325", subcontractType: "MAKA", subcontractDays: 15 } },
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1, finiteCapacity: false },
+    workSchedule: {},
+  }, { planStart: "2026-08-10", horizonDays: 5, executionTime: "2026-08-10T07:00:00" });
+
+  const sub = result.operations.find((item) => item.id === "seq-12-sub");
+  const seq13 = result.operations.find((item) => item.id === "seq-13");
+  const seq14 = result.operations.find((item) => item.id === "seq-14");
+  assert.deepEqual([sub.fechaInicio, sub.horaInicio, sub.fechaFin, sub.horaFin], ["2026-08-10", "07:02", "2026-08-31", "07:00"]);
+  assert.ok(new Date(`${seq13.fechaInicio}T${seq13.horaInicio}:00`) >= new Date(`${sub.fechaFin}T${sub.horaFin}:00`));
+  assert.ok(new Date(`${seq14.fechaInicio}T${seq14.horaInicio}:00`) >= new Date(`${seq13.fechaFin}T${seq13.horaFin}:00`));
+});
+
+test("una movible respeta la operacion anterior incluida con fin real mas tardio aunque haya secuencias completadas intermedias", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["1325"],
+    operations: [
+      {
+        id: "completed-long", ot: "1325", secuencia: 10, ct: "SUB", descripcion: "SUBCONTRATO LARGO",
+        estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "SUBCONTRATO",
+        fechaInicio: "2026-08-10", horaInicio: "07:00", fechaFin: "2026-08-31", horaFin: "07:00", tiempoProd: 30240,
+      },
+      {
+        id: "completed-short", ot: "1325", secuencia: 11, ct: "CORTE", descripcion: "CORTE YA REPORTADO",
+        estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1",
+        fechaInicio: "2026-08-10", horaInicio: "07:01", fechaFin: "2026-08-10", horaFin: "07:02", tiempoProd: 1,
+      },
+      { id: "pending-after-completed", ot: "1325", secuencia: 12, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
+    ],
+    workOrders: [{ ot: "1325" }],
+    matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
+    settings: { optimizationPasses: 1, finiteCapacity: false },
+    workSchedule: {},
+  }, { planStart: "2026-08-10", horizonDays: 5, executionTime: "2026-08-10T07:00:00" });
+
+  const pending = result.operations.find((item) => item.id === "pending-after-completed");
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-31", "07:00"]);
+});
+
 test("una completada conserva fechas y no consume capacidad pendiente", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

@@ -29,6 +29,8 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-OT-008` | OTs cerradas conservadas (`CLOSED_KEPT`) | IMPLEMENTADA | task-2-report |
 | `RULE-OT-009` | Tipos de trabajo (PROTOTIPO/URGENTE/EXPEDITACION) | IMPLEMENTADA | `legacy/IndexPlanning.html` |
 | `RULE-OT-010` | Persistencia de `CONFIGURACION_OT` mientras OT abierta | DOCUMENTADA | definición de usuario 2026-08-12 |
+| `RULE-OT-011` | Inicio del borrador desde Gantt | IMPLEMENTADA | definición de usuario 2026-08-13 |
+| `RULE-OT-012` | Precedencia por secuencia incluida | IMPLEMENTADA | definición de usuario 2026-08-13 |
 
 ## Doblado
 

@@ -2398,6 +2398,7 @@ async function prepareJobForPlanning(job, options = {}) {
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return false;
   }
+  if (typeof normalizeOtResourceAssignments === "function") normalizeOtResourceAssignments();
   const operations = jobPlanningOperations(job);
   const planningJob = { ...job, ops: operations };
   const issues = window.PlannerCore?.planningConfigurationIssues
@@ -2419,6 +2420,11 @@ async function prepareJobForPlanning(job, options = {}) {
     return true;
   }
   const signature = planningPreparationSignature(job, operations, commercial);
+  if (options.reuseConfirmed === true && !hasRequiredGaps) {
+    Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
   if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) {
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return true;
@@ -4351,7 +4357,7 @@ async function scheduleCurrentPlanImpl() {
   }
   if (!await ensureSelectedJobsReadyForScheduling(readyOts)) return;
   const executionTime = new Date();
-  const validation = validateScheduleConfiguration(executionTime);
+  const validation = validateScheduleConfiguration(executionTime, readyOts);
   if (validation) {
     if (validation.operationId) state.selectedOperationId = validation.operationId;
     showToast(validation.message);
@@ -4669,9 +4675,11 @@ async function generatePlanPdf() {
   }
 }
 
-function validateScheduleConfiguration(executionTime) {
+function validateScheduleConfiguration(executionTime, ots = state.selectedOts) {
+  const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
   const operations = currentPlanOperations().filter((op) =>
     isJobSelected(op.ot) &&
+    (!scopedOts.size || scopedOts.has(normalizeStatus(op.ot))) &&
     !isPlanCompletedOperation(op) &&
     !isJobLocked(op.ot) &&
     !shouldAutoFreezeOperation(op, executionTime) &&
@@ -4703,11 +4711,14 @@ function validateScheduleConfiguration(executionTime) {
     const capability = capabilityFromOperation(op);
     const catalog = toolCatalogForAppOperation(op);
     const subcontractDays = subcontractDaysForAppOperation(op);
+    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
+    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDays.days || op.subcontractDays || 0);
     const isSubcontract = isSubcontractAppOperation(op);
-    if (isSubcontract && !String(op.subcontractType || "").trim()) {
+    if (isSubcontract && !effectiveSubcontractType) {
       return { operationId: op.id, tab: "rules", message: `Define el tipo de subcontrato para ${capability.label}` };
     }
-    if (isSubcontract && subcontractDays.days <= 0) {
+    if (isSubcontract && effectiveSubcontractDays <= 0) {
       return { operationId: op.id, tab: "rules", message: `Define los dias de subcontrato para ${capability.label}` };
     }
   }

@@ -1171,12 +1171,14 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
     "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
     "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
     "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    "normalizeStatus",
     `${validation}; return validateScheduleConfiguration;`,
   )(
     { ...state, operations: [excluded] }, window, currentPlanOperations,
     () => true, () => false, () => false, () => false,
     () => ({ label: "DOBLADO", ct: "5459" }), () => excluded,
     () => null, () => ({ days: 0 }), () => true,
+    (value) => String(value || "").trim().toUpperCase(),
   );
 
   assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
@@ -1184,6 +1186,72 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
   assert.equal(dialogs, 0);
   assert.equal(validateScheduleConfiguration(new Date()), null);
   assert.deepEqual(validatedOperations, []);
+});
+
+test("generar plan no pide datos de OTs fuera del alcance y reutiliza configuracion OT persistida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const preparation = app.slice(
+    app.indexOf("async function prepareJobForPlanning("),
+    app.indexOf("function setGanttView(", app.indexOf("async function prepareJobForPlanning(")),
+  );
+  const validation = app.slice(
+    app.indexOf("function validateScheduleConfiguration("),
+    app.indexOf("function freezeElapsedOperations(", app.indexOf("function validateScheduleConfiguration(")),
+  );
+  const scoped = { id: "scoped", ot: "200", ct: "3000", tipoInsercion: "OPERACION", subcontractType: "", subcontractDays: 0 };
+  const unaffected = { id: "unaffected", ot: "100", ct: "3000", tipoInsercion: "OPERACION", subcontractType: "", subcontractDays: 0 };
+  const state = {
+    selectedOts: ["100", "200"],
+    preparedPlanningByOt: {},
+    otConfigurations: { 200: { ot: "200", subcontractType: "MAKA", subcontractDays: 3 } },
+  };
+  let dialogs = 0;
+  let validatedOperations = null;
+  const window = {
+    PlannerCore: {
+      planningConfigurationIssues: (_state, operations) => {
+        validatedOperations = operations;
+        return [];
+      },
+    },
+    PlanningWorkflowCore: {
+      canReusePlanningPreparation: () => false,
+      needsPlanningPreparation: () => true,
+      markPlanningPrepared: (source, ot, signature) => ({ preparedPlanningByOt: { ...(source.preparedPlanningByOt || {}), [ot]: signature } }),
+    },
+  };
+  const prepareJobForPlanning = Function(
+    "state", "window", "currentPlanOperations", "jobPlanningOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
+    "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
+    "applyCommercialPlanningRequirement", "assignPlanningOperators",
+    `${preparation}; return prepareJobForPlanning;`,
+  )(
+    state, window, (operations) => operations, (job) => job.ops,
+    async () => { dialogs += 1; }, () => [],
+    () => ({ needsType: false, needsPlanningType: false }),
+    () => "signature", () => true, () => false,
+    async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
+  );
+  const validateScheduleConfiguration = Function(
+    "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
+    "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
+    "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    "normalizeStatus",
+    `${validation}; return validateScheduleConfiguration;`,
+  )(
+    state, window, () => [unaffected, scoped],
+    () => true, () => false, () => false, () => false,
+    () => ({ label: "SUBCONTRATO", ct: "3000" }), (id) => [unaffected, scoped].find((op) => op.id === id),
+    () => null, () => ({ days: 0 }), () => true,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+  assert.equal(await prepareJobForPlanning({ ot: "200", ops: [scoped], parte: "P" }, { reuseConfirmed: true }), true);
+  assert.equal(dialogs, 0);
+  assert.equal(state.preparedPlanningByOt[200], "signature");
+  assert.equal(validateScheduleConfiguration(new Date(), ["200"]), null);
+  assert.deepEqual(validatedOperations, [scoped]);
 });
 
 test("agregar o arrastrar una OT consulta su ruta directa una vez por sesion antes de planearla", async () => {
