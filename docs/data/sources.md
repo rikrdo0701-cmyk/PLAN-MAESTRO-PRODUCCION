@@ -47,6 +47,9 @@ TIEMPO_FALLBACK`.
   `savePlanningStateOptimized`.
 - Restricciones: las operaciones con `ESTATUS`/`planStatus` en `COMPLETADA_PLAN` no se incluyen
   en las instantáneas; los cambios de herramental usan `TIPO_INSERCION = CAMBIO_HERRAMENTAL`.
+- Restricción: para doblado con máquina se genera/conserva `CAMBIO_HERRAMENTAL` cuando el último
+  herramental/kit de esa máquina difiere o no existe antecedente; `KIT_PENDIENTE` sin kit no elimina
+  el cambio inicial por herramental.
 
 ## OPERADORES
 
@@ -200,6 +203,8 @@ CSV. Se omiten operaciones completadas en el plan, historicas/publicadas, sin fe
 excluidas por `currentPlanOperations()`.
 En filas `CAMBIO_HERRAMENTAL`, `PARTE` identifica el articulo/OT que origina el cambio; `HERRAMENTAL`
 y `KIT_HERRAMENTAL` contienen el destino asignado al cambio, ademas de las columnas origen/destino.
+La fila debe aparecer si el doblado requiere una máquina y no hay antecedente de herramental en esa
+máquina, o si el último herramental/kit conocido en la misma máquina difiere del destino.
 
 Headers (33): `NUM, OT, PARTE, DESCRIPCION, CONTENIDO, PRIORIDAD, FECHA_REQ, CANT_TOTAL,
 SECUENCIA, CT, OPERADOR, MAQUINA, HERRAMENTAL, KIT_HERRAMENTAL, CANT_PENDIENTE, TIEMPO_CICLO,

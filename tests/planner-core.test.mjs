@@ -1152,6 +1152,32 @@ test("el primer herramental sin antecedente usa el estandar de 120 minutos", () 
   assert.equal(change?.tiempoSetup, 120);
 });
 
+test("un doblado con kit pendiente y sin antecedente genera cambio inicial exportable", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["2474"],
+    operations: [
+      { id: "bend-2474", ot: "2474", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "ART-2474", estatus: "PLAN", maquina: "42", herramental: "5 x 6", kitHerramental: "", kitPending: true, tiempoCiclo: 1, cantidadPendiente: 1 },
+    ],
+    workOrders: [{ ot: "2474", item: "ART-2474" }],
+    operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    toolCatalog: [{ part: "ART-2474", herramental: "5 x 6", toolSetupMinutes: 0, kitSetupMinutes: 0, active: true }],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 0 }, workSchedule: {},
+  }, { planStart: "2026-08-10", horizonDays: 5, executionTime: "2026-08-10T07:00:00" });
+
+  const change = result.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.ot === "2474");
+  assert.equal(change?.toolChangeFromHerramental, "");
+  assert.equal(change?.toolChangeToHerramental, "5 x 6");
+  assert.equal(change?.toolChangeToKit, "");
+  assert.equal(change?.parte, "ART-2474");
+  assert.equal(change?.herramental, "5 x 6");
+  assert.equal(change?.kitHerramental, "");
+  assert.equal(change?.tiempoSetup, 120);
+  assert.ok(result.lastSchedule.scheduledOts.includes("2474"));
+});
+
 test("una fecha vieja del borrador movible no cuenta como antecedente de herramental", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

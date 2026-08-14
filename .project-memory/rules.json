@@ -285,6 +285,14 @@
       "domain": "Herramentales"
     },
     {
+      "rule_id": "RULE-HER-004",
+      "name": "Cambio de herramental obligatorio",
+      "status": "documentada",
+      "rule": "Para una operacion de doblado con maquina, el plan/export/reporte debe generar y conservar una fila CAMBIO_HERRAMENTAL si el ultimo herramental/kit conocido en esa misma maquina difiere del herramental/kit de la nueva OT, o si no existe antecedente de herramental en esa maquina. La fila identifica la OT/articulo que origina el cambio, el herramental/kit destino y las columnas de origen/destino; KIT_PENDIENTE sin kit no elimina el cambio inicial ni la transicion por herramental.",
+      "source": "definicion de usuario 2026-08-13; src/web/planning/planner-core.js; src/web/planning/planning-workflow-core.js; tests/planner-core.test.mjs; tests/planning-workflow-core.test.mjs",
+      "domain": "Herramentales"
+    },
+    {
       "rule_id": "RULE-BAL-004",
       "name": "Menor tiempo de OT en produccion",
       "status": "documentada",

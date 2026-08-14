@@ -390,6 +390,22 @@ test("las vistas del borrador incluyen solo OTs seleccionadas programadas", () =
   assert.deepEqual(structuredClone(core.draftScheduledOperations(state).map((op) => op.id)), ["selected"]);
 });
 
+test("borrador vivo usa lastSchedule e incluye cambios de herramental generados", () => {
+  const state = {
+    selectedOts: ["100"],
+    lastSchedule: { scheduledOts: ["200"] },
+    operations: [
+      { id: "selected-old", ot: "100", fechaInicio: "2026-08-10", fechaFin: "2026-08-10", planStatus: "PENDIENTE" },
+      { id: "change", ot: "200", tipoInsercion: "CAMBIO_HERRAMENTAL", generatedBy: "PLANNER_CORE_V2", parte: "ART-200", herramental: "H2", kitHerramental: "", toolChangeToHerramental: "H2", fechaInicio: "2026-08-10", fechaFin: "2026-08-10", planStatus: "PENDIENTE" },
+      { id: "bend", ot: "200", ct: "5459", fechaInicio: "2026-08-10", fechaFin: "2026-08-10", planStatus: "PENDIENTE" },
+    ],
+  };
+  assert.deepEqual(structuredClone(core.draftScheduledOperations(state).map((op) => op.id)), ["change", "bend"]);
+  assert.deepEqual(structuredClone(core.draftExportOperations(state).map((op) => op.id)), ["change", "bend"]);
+  assert.equal(core.draftExportOperations(state)[0].parte, "ART-200");
+  assert.equal(core.draftExportOperations(state)[0].herramental, "H2");
+});
+
 test("la sincronizacion conserva en el borrador solo OTs que NetSuite sigue reportando abiertas", () => {
   const state = {
     selectedOts: ["100", "200"], lockedOts: ["100", "200"], expandedOts: ["100", "200"],

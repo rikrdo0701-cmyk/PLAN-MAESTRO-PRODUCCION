@@ -46,7 +46,7 @@
       ],
       "readers": ["PP_readState_ (PP_mapOperation_ via PP_OPERATION_FIELDS)"],
       "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-005", "RULE-DOB-001"],
+      "rules": ["RULE-OT-005", "RULE-DOB-001", "RULE-HER-004"],
       "status": "documented",
       "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
     },
@@ -282,7 +282,7 @@
       ],
       "readers": [],
       "writers": ["exportCsv"],
-      "rules": ["RULE-OT-005", "RULE-MAT-007", "RULE-BAL-003"],
+      "rules": ["RULE-OT-005", "RULE-MAT-007", "RULE-BAL-003", "RULE-HER-004"],
       "status": "documented",
       "references": ["src/web/planning/app.js", "src/web/planning/planning-workflow-core.js"]
     },

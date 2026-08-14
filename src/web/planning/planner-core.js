@@ -238,7 +238,7 @@
       engine: GENERATED_BY,
       scheduled: scheduled.length,
       selectedJobs: selectedOtsSet.size,
-      scheduledOts: [...new Set([...fixed.filter(isSelected), ...scheduled]
+      scheduledOts: [...new Set([...fixed.filter(isSelected), ...context.generatedChanges, ...scheduled]
         .filter((op) => operationStart(op) && operationEnd(op))
         .map((op) => String(op.ot || "").trim())
         .filter(Boolean))],
