@@ -4329,10 +4329,11 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
-  state.planStart = window.PlanningWorkflowCore.mondayIso(state.planStart || formatDate(new Date()));
-  const incrementalBase = await loadIncrementalPlanningBase(state.planStart);
+  state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
+  const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
+  const incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
   const incrementalScope = incrementalBase
-    ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: state.planStart })
+    ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
     : { affectedOts: [...state.selectedOts] };
   const affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
   const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
@@ -4380,6 +4381,7 @@ async function scheduleCurrentPlanImpl() {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
+      respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
     });

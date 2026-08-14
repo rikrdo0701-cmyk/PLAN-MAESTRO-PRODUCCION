@@ -92,6 +92,8 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 - `NUM` → 1:1 con `OPERACIONES.NUM`; `OT` → `ORDENES_TRABAJO.OT`; `OP`/`MAQ_AREA` →
   `CAPACIDADES`; `OPERADOR` → `OPERADORES`.
 - Ambos comparten los 30 headers (esquema de snapshot de plan).
+- `PLAN_INICIO` guarda la fecha exacta `INICIO` del Gantt; la identidad semanal para listados,
+  reportes y publicación se toma de `weekStart` en la metadata del payload y se normaliza al lunes.
 
 ### 1.11 `ESTADOS_OPERACION_PLAN`
 

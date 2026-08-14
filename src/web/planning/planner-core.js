@@ -83,7 +83,9 @@
     const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(filterExcludedOperations(state, state.operations)));
     const requestedStart = atMinute(planStart, DEFAULT_START_MINUTE);
     const executionTime = parseExecutionTime(options?.executionTime);
-    const windowStart = executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart;
+    const windowStart = options?.respectPlanStart === true
+      ? requestedStart
+      : (executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart);
     const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
@@ -91,10 +93,10 @@
     const allOperations = state.operations;
     const preservedCompletedChanges = allOperations
       .filter((op) => op.generatedBy === GENERATED_BY && isPlanCompletedOperation(state, op))
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state)));
     const sourceOperations = expandAdditionalToolOperations(state, allOperations
       .filter((op) => op.generatedBy !== GENERATED_BY)
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index))));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state))));
     const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
     const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
     const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
@@ -138,21 +140,21 @@
       : (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : []).filter(isCompletedToolHistory);
     const authorizedSourceOperations = includedSourceOperations.filter(isSelected);
     const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
-      isPlanCompletedOperation(state, op) || isFixedOperation(op)
+      isPlanCompletedOperation(state, op) || isFixedOperation(state, op)
     );
     seedCompletedToolStates(context, authorizedStatuses);
     seedMachineToolHistory(context, authorizedToolHistory, authorizedHistoricalOperations);
 
-    const fixed = activeSourceOperations.filter((op) => isFixedOperation(op) && isSelected(op));
+    const fixed = activeSourceOperations.filter((op) => isFixedOperation(state, op) && isSelected(op));
     const movable = activeSourceOperations.filter((op) =>
-      !isFixedOperation(op) &&
+      !isFixedOperation(state, op) &&
       op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
       isSelected(op) &&
       isAssignableOperation(state, op)
     );
     const excluded = activeSourceOperations.filter((op) =>
       op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      (!isSelected(op) || (!isFixedOperation(op) && !isAssignableOperation(state, op)))
+      (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
     );
     for (const op of fixed) commitFixedOperation(context, op);
 
@@ -1924,7 +1926,7 @@
 
   function isGapFillCandidate(state, operations, op, operator, gapStart, gapEnd) {
     const start = operationStart(op);
-    if (!start || start < gapEnd || isFixedOperation(op) || !isAssignableOperation(state, op)) return false;
+    if (!start || start < gapEnd || isFixedOperation(state, op) || !isAssignableOperation(state, op)) return false;
     if (operationToolKey(op) || isHardWaitCause(op.causaEspera)) return false;
     if (!operatorCandidates(state, op, isFiniteOperation(state, op)).includes(operator)) return false;
     const predecessors = operations.filter((candidate) => normalizeKey(candidate.ot) === normalizeKey(op.ot) &&
@@ -2038,9 +2040,9 @@
     return parseDateTime(op.fechaFin, op.horaFin);
   }
 
-  function isFixedOperation(op) {
-    const status = normalizeKey(op.estatus);
-    return op.locked === true || op.autoFrozen === true || status.includes("PROGRAMAD") || status.includes("SCHEDULED");
+  function isFixedOperation(state, op) {
+    const ot = normalizeKey(op?.ot);
+    return Array.isArray(state?.lockedOts) && state.lockedOts.some((item) => normalizeKey(item) === ot);
   }
 
   function operationCompletionKey(op) {
@@ -2087,9 +2089,8 @@
   function isMovablePlanningStatus(status) {
     const normalized = normalizeKey(status);
     return ![
-      "CERRAD", "CLOSED", "COMPLETE", "COMPLETADO",
-      "CANCELAD", "CANCELED", "CANCELLED",
-      "PROGRAMAD", "SCHEDULED", "PLANIFICAD", "PLANNED"
+      "CERRAD", "CLOSED", "COMPLETE", "COMPLETAD",
+      "CANCELAD", "CANCELED", "CANCELLED"
     ]
       .some((blocked) => normalized.includes(blocked));
   }
@@ -2105,7 +2106,7 @@
       : false;
   }
 
-  function normalizeOperation(op, index) {
+  function normalizeOperation(op, index, state) {
     const next = {
       ...op,
       id: op.id || `op-${index + 1}`,
@@ -2122,7 +2123,7 @@
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
     };
-    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next) && !isFixedOperation(next)) {
+    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next) && !isFixedOperation(state, next)) {
       next.maquina = "";
       next.herramental = "";
       next.additionalHerramentales = [];
@@ -2142,7 +2143,7 @@
       op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
       op.kitPending = configuration.kitPending === true;
-    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(op)) {
+    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
       op.maquina = "";
     }
     if (isSubcontractOperation(state, op)) {

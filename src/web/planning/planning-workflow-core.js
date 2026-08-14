@@ -78,7 +78,7 @@
     return {
       ...(state || {}),
       operations: (state?.operations || []).map((operation) => {
-        const preserved = !selected.has(normalize(operation?.ot)) || operation?.locked === true ||
+        const preserved = !selected.has(normalize(operation?.ot)) || isLockedOperation(state, operation) ||
           normalize(operation?.planStatus) === "COMPLETADA_PLAN" || isHistorical(operation);
         if (preserved) return { ...operation };
         return {
@@ -89,6 +89,11 @@
         };
       }),
     };
+  }
+
+  function isLockedOperation(state, operation) {
+    const ot = normalize(operation?.ot);
+    return (state?.lockedOts || []).some((item) => normalize(item) === ot);
   }
 
   function filterOperationsByPlanStatus(rows, status) {
@@ -539,6 +544,7 @@
       status: "BORRADOR",
       generatedAt: String(generatedAt || ""),
       planStart: state?.planStart || "",
+      weekStart: mondayIso(state?.weekStart || state?.planStart || ""),
       selectedOts: [...(state?.selectedOts || [])],
       operations: draftExportOperations(state).map((operation) => {
         const next = { ...operation };

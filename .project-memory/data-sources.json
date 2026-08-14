@@ -245,7 +245,7 @@
       ],
       "readers": ["PP_listPlanSnapshots_", "PP_getPlanSnapshot_", "PP_readMachineToolHistory_"],
       "writers": ["PP_appendPlanSnapshot_"],
-      "rules": [],
+      "rules": ["RULE-OT-011"],
       "status": "documented",
       "references": ["src/server/02-storage.js"]
     },
@@ -263,7 +263,7 @@
       ],
       "readers": ["PP_getPlanSnapshot_ (snapshotId='draft')", "PP_listPlanSnapshots_", "PP_replaceDraftSnapshot_"],
       "writers": ["PP_replaceDraftSnapshot_", "PP_clearDraftSnapshot_"],
-      "rules": ["RULE-OT-005"],
+      "rules": ["RULE-OT-005", "RULE-OT-011"],
       "status": "documented",
       "references": ["src/server/02-storage.js"]
     },

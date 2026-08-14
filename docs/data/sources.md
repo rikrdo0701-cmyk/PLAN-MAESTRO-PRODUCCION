@@ -176,6 +176,7 @@ TIPO_SUBCONTRATO, DIAS_SUBCONTRATO, PZAS_PENDIENTES, TIPO_OT, PRECIO_UNITARIO, M
 - Readers: `PP_listPlanSnapshots_`, `PP_getPlanSnapshot_`, `PP_readMachineToolHistory_`.
 - Writer: `PP_appendPlanSnapshot_` (append por filas en `getLastRow()+1`).
 - Restricción: al publicar no se incluyen operaciones `COMPLETADA_PLAN` ni sin fechas.
+- `PLAN_INICIO` conserva la fecha exacta `INICIO` del Gantt; la metadata `weekStart` del payload/snapshot identifica la semana normalizada al lunes para reportes/publicación (RULE-OT-011).
 
 ## BORRADOR_PLAN
 
@@ -185,6 +186,7 @@ Mismos 30 headers que `PLANES_HISTORICOS`.
   `PP_listPlanSnapshots_`, `PP_replaceDraftSnapshot_` (backup previo).
 - Writers: `PP_replaceDraftSnapshot_` (clear + append con `snapshotId='draft'`),
   `PP_clearDraftSnapshot_` (clearContent).
+- `PLAN_INICIO` conserva la fecha exacta `INICIO` del Gantt; la metadata `weekStart` del payload/snapshot identifica la semana normalizada al lunes para reportes/publicación (RULE-OT-011).
 
 ## plan-produccion.csv
 

@@ -91,17 +91,20 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado sin
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",
     fechaFin: "2026-07-01", horaFin: "10:00", operador: "OP 1", maquina: "M1",
-    herramental: "H1", kitHerramental: "K1", needsReschedule: true, autoFrozen: true,
-    estatus: "PROGRAMADA", planStatus: "PENDIENTE",
+    herramental: "H1", kitHerramental: "K1", needsReschedule: true,
+    estatus: "PLAN", planStatus: "PENDIENTE",
   };
   const completed = { ...movable, id: "completed", planStatus: "COMPLETADA_PLAN" };
-  const locked = { ...movable, id: "locked", locked: true };
+  const markedLockedOnly = { ...movable, id: "marked-locked-only", locked: true, fechaInicio: "2026-06-27" };
   const otherOt = { ...movable, id: "other", ot: "999" };
   const historical = { ...movable, id: "historical", historical: true };
-  const state = { selectedOts: ["1325"], operations: [movable, completed, locked, otherOt, historical] };
+  const lockedByOt = { ...movable, id: "locked-by-ot", ot: "200", fechaInicio: "2026-06-28" };
+  const programmed = { ...movable, id: "programmed", estatus: "PROGRAMADA", fechaInicio: "2026-06-29" };
+  const frozen = { ...movable, id: "frozen", autoFrozen: true, fechaInicio: "2026-06-30" };
+  const state = { selectedOts: ["1325", "200"], lockedOts: ["200"], operations: [movable, completed, markedLockedOnly, otherOt, historical, lockedByOt, programmed, frozen] };
   const original = structuredClone(state);
 
-  const result = core.prepareDraftForReschedule(state, ["1325"]);
+  const result = core.prepareDraftForReschedule(state, ["1325", "200"]);
 
   assert.deepEqual(state, original);
   assert.notEqual(result, state);
@@ -112,7 +115,25 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado sin
     operador: "",
     needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
   });
-  assert.deepEqual(structuredClone(result.operations.slice(1)), original.operations.slice(1));
+  assert.deepEqual(structuredClone(result.operations.slice(1, 2)), original.operations.slice(1, 2));
+  assert.deepEqual(structuredClone(result.operations.slice(3, 6)), original.operations.slice(3, 6));
+  assert.deepEqual(structuredClone([result.operations[2], ...result.operations.slice(6)]), [markedLockedOnly, programmed, frozen].map((operation) => ({
+    ...operation,
+    fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
+    operador: "",
+    needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
+  })));
+});
+
+test("buildDraftSnapshot conserva el INICIO exacto y agrega identidad semanal de lunes", () => {
+  const snapshot = core.buildDraftSnapshot({
+    planStart: "2026-08-13",
+    selectedOts: ["100"],
+    operations: [{ id: "op-1", ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-13", horaInicio: "07:00", fechaFin: "2026-08-13", horaFin: "08:00" }],
+  }, "2026-08-13T12:00:00Z");
+
+  assert.equal(snapshot.planStart, "2026-08-13");
+  assert.equal(snapshot.weekStart, "2026-08-10");
 });
 
 test("filterOperationsByPlanStatus filtra pendientes, completadas y todas", () => {
