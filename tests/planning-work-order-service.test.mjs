@@ -109,8 +109,12 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   assert.equal(result.data.operations.length, 12);
   assert.equal(result.data.operations[0].id, "ns-2773-1");
   assert.equal(result.data.operations[0].ct, "5458");
+  assert.equal(result.data.operations[0].cantPendiente, 3);
+  assert.equal(result.data.operations[0].cantTotal, 3);
   assert.equal(result.data.operations[0].tiempoProd, 6 + (0.62 * 3));
   assert.equal(result.data.operations[11].tiempoProd, 4);
+  assert.equal(result.data.operations[11].cantPendiente, 3);
+  assert.equal(result.data.operations[11].cantTotal, 3);
 });
 
 test("conserva la ruta de una OT activa aunque sus tareas aparezcan terminales", () => {
@@ -226,6 +230,8 @@ test("calcula setup mas run rate por la cantidad pendiente de la OT", () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.data.operations[0].tiempoProd, 4 + (1.5 * (10 - 3)));
+  assert.equal(result.data.operations[0].cantPendiente, 10 - 3);
+  assert.equal(result.data.operations[0].cantTotal, 10 - 3);
 });
 
 test("oculta la respuesta cruda de SuiteQL y conserva el diagnostico en servidor", () => {
