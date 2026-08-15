@@ -110,7 +110,38 @@ test("PlannerCore acepta un estado vacio", () => {
   assert.equal(result.horizonDays, 5);
 });
 
-test("respeta el inicio del Gantt aunque la ejecucion ocurra despues", () => {
+test("respeta el inicio del Gantt para una operacion existente aunque la ejecucion ocurra despues", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      {
+        id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", operador: "OP 1",
+        fechaInicio: "2026-08-03", horaInicio: "07:00", fechaFin: "2026-08-03", horaFin: "08:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-03",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+  });
+
+  const operation = result.operations.find((item) => item.id === "op-1");
+  assert.equal(result.planStart, "2026-08-03");
+  assert.equal(operation.fechaInicio, "2026-08-03");
+  assert.equal(operation.horaInicio, "07:00");
+});
+
+test("una OT nueva sin programacion previa no puede iniciar antes de la hora actual", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({
     selectedOts: ["100"],
@@ -132,8 +163,8 @@ test("respeta el inicio del Gantt aunque la ejecucion ocurra despues", () => {
 
   const operation = result.operations.find((item) => item.id === "op-1");
   assert.equal(result.planStart, "2026-08-03");
-  assert.equal(operation.fechaInicio, "2026-08-03");
-  assert.equal(operation.horaInicio, "07:00");
+  assert.equal(operation.fechaInicio, "2026-08-13");
+  assert.ok(new Date(`${operation.fechaInicio}T${operation.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
 
 test("OT bloqueada antes del Gantt queda fija completa y reserva carga", () => {
@@ -170,7 +201,7 @@ test("OT bloqueada antes del Gantt queda fija completa y reserva carga", () => {
   assert.equal(fixed.fechaFin, "2026-08-13");
   assert.equal(fixed.horaFin, "08:00");
   assert.equal(newOp.fechaInicio, "2026-08-13");
-  assert.equal(newOp.horaInicio, "08:00");
+  assert.ok(new Date(`${newOp.fechaInicio}T${newOp.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
 
 test("OT no bloqueada con operacion pendiente programada antes del Gantt se replanea desde INICIO", () => {
@@ -204,6 +235,129 @@ test("OT no bloqueada con operacion pendiente programada antes del Gantt se repl
   assert.equal(operation.horaInicio, "07:00");
   assert.equal(operation.fechaFin, "2026-08-13");
   assert.equal(operation.horaFin, "08:00");
+});
+
+test("una operacion nueva en una OT existente no inicia antes de la hora actual aunque su predecesora quede en el pasado", () => {
+  const core = loadPlannerCore();
+  const baseSnapshot = {
+    selectedOts: ["100"],
+    operations: [
+      { ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00" },
+    ],
+  };
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      {
+        id: "existing-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00",
+        tiempoProd: 60,
+      },
+      { id: "new-2", ot: "100", secuencia: 2, ct: "200", descripcion: "SOLDA", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"], "200::SOLDA": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE", "200::SOLDA"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+    baseSnapshot,
+  });
+
+  const existing = result.operations.find((item) => item.id === "existing-1");
+  const added = result.operations.find((item) => item.id === "new-2");
+  assert.equal(existing.fechaInicio, "2026-08-13");
+  assert.equal(existing.horaInicio, "07:00");
+  assert.ok(new Date(`${added.fechaInicio}T${added.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
+  assert.ok(new Date(`${added.fechaInicio}T${added.horaInicio}:00`) >= new Date(`${existing.fechaFin}T${existing.horaFin}:00`));
+});
+
+test("una OT existente programada conserva su ancla aunque la ejecucion ocurra despues", () => {
+  const core = loadPlannerCore();
+  const baseSnapshot = {
+    selectedOts: ["100"],
+    operations: [
+      { ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00" },
+    ],
+  };
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      {
+        id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+    baseSnapshot,
+  });
+
+  const operation = result.operations.find((item) => item.id === "op-1");
+  assert.equal(operation.fechaInicio, "2026-08-13");
+  assert.equal(operation.horaInicio, "07:00");
+});
+
+test("una operacion existente en la base no se bloquea por la hora actual y conserva su secuencia", () => {
+  const core = loadPlannerCore();
+  const baseSnapshot = {
+    selectedOts: ["100"],
+    operations: [
+      { ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00" },
+      { ot: "100", secuencia: 2, ct: "200", fechaInicio: "2026-08-12", horaInicio: "08:00", fechaFin: "2026-08-12", horaFin: "09:00" },
+    ],
+  };
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      {
+        id: "existing-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00",
+        tiempoProd: 60,
+      },
+      {
+        id: "existing-2", ot: "100", secuencia: 2, ct: "200", descripcion: "SOLDA",
+        estatus: "PROGRAMADA", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "08:00", fechaFin: "2026-08-12", horaFin: "09:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"], "200::SOLDA": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE", "200::SOLDA"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+    baseSnapshot,
+  });
+
+  const first = result.operations.find((item) => item.id === "existing-1");
+  const second = result.operations.find((item) => item.id === "existing-2");
+  assert.equal(first.horaInicio, "07:00");
+  assert.equal(second.horaInicio, "08:00");
 });
 
 test("una operacion excluida no se agenda, bloquea recursos ni genera errores de configuracion", () => {

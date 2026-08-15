@@ -86,6 +86,9 @@
     const windowStart = options?.respectPlanStart === true
       ? requestedStart
       : (executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart);
+    const newnessBase = options?.baseSnapshot?.fullState || options?.baseSnapshot || null;
+    const newnessIndex = newnessBase ? buildNewnessIndex(newnessBase) : null;
+    const nowAnchor = executionTime;
     const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
@@ -124,6 +127,8 @@
       changeCounter: 0,
       gapFilled: 0,
       strategy: options?.strategy || "balanced",
+      newnessIndex,
+      nowAnchor,
       flowWipTarget: options?.strategy === "flow_balanced"
         ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
         : 10,
@@ -719,6 +724,10 @@
     if (previous?.operation) {
       const predecessorLimit = predecessorReleaseMoment(context, previous);
       if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
+    }
+    if (context?.nowAnchor && isNewOperation(context, op)) {
+      const anchor = ceilToSnap(context.nowAnchor);
+      if (anchor > earliest) earliest = anchor;
     }
 
     return nextAvailableMoment(context.state, earliest, "", "", context.windowEnd);
@@ -1998,6 +2007,31 @@
   function operationKey(op) {
     const ct = op.ct ? `|${normalizeKey(op.ct)}` : "";
     return `${normalizeKey(op.ot)}|${Number(op.secuencia || 0)}${ct}`;
+  }
+
+  function buildNewnessIndex(base) {
+    const baseOts = new Set();
+    const baseOpKeys = new Set();
+    for (const ot of (base?.selectedOts || [])) {
+      const key = normalizeKey(ot);
+      if (key) baseOts.add(key);
+    }
+    for (const op of (base?.operations || [])) {
+      const ot = normalizeKey(op?.ot);
+      if (ot) baseOts.add(ot);
+      baseOpKeys.add(operationKey(op));
+    }
+    return { baseOts, baseOpKeys };
+  }
+
+  function isNewOperation(context, op) {
+    const index = context?.newnessIndex;
+    const ot = normalizeKey(op?.ot);
+    if (index) {
+      if (!index.baseOts.has(ot)) return true;
+      return !index.baseOpKeys.has(operationKey(op));
+    }
+    return !operationStart(op) && !operationEnd(op);
   }
 
   function operationToolKey(op) {
