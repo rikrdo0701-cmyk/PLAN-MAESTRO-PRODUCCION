@@ -1226,6 +1226,10 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .job-detail-actions .pill { margin: 0; }
 .detail-lock { width: 28px; height: 28px; min-height: 28px; }
 .detail-lock.locked { border-color: #d4b14b; background: #fff7d8; color: #7c6211; }
+.detail-ot-refresh { width: 28px; height: 28px; min-height: 28px; }
+.detail-ot-refresh.is-loading { animation: detail-ot-refresh-spin 0.9s linear infinite; border-color: var(--accent); color: var(--accent); }
+.detail-ot-refresh.is-loading svg { animation: none; }
+@keyframes detail-ot-refresh-spin { to { transform: rotate(360deg); } }
 
 .job-facts {
   display: grid;

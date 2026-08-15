@@ -3072,6 +3072,9 @@ function renderSelectedJobPanel() {
           <button class="icon-button detail-lock${job.locked ? " locked" : ""}" type="button" data-detail-lock="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
             <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
           </button>
+          <button class="icon-button detail-ot-refresh" type="button" data-detail-ot-refresh="${escapeHtml(job.ot)}" aria-label="Actualizar OT ${escapeHtml(job.ot)} desde NetSuite" title="${job.locked ? "OT bloqueada: no se actualizan tiempos porque esta fija" : "Actualizar OT desde NetSuite"}"${job.locked ? " disabled" : ""}>
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
         </div>
       </div>
       <div class="job-facts job-detail-quick-facts">
@@ -3143,6 +3146,8 @@ function renderSelectedJobPanel() {
   els.selectedJobPanel.querySelector("[data-detail-lock]").addEventListener("click", (event) => {
     toggleJobLock(event.currentTarget.dataset.detailLock);
   });
+  const otRefreshButton = els.selectedJobPanel.querySelector("[data-detail-ot-refresh]");
+  if (otRefreshButton) otRefreshButton.addEventListener("click", () => updateSelectedOtFromNetSuite(job.ot));
   const dueDateInput = els.selectedJobPanel.querySelector("#jobDueDateInput");
   if (dueDateInput) dueDateInput.addEventListener("change", () => updateWorkOrderDueDate(job.ot, dueDateInput.value));
   const toolInput = els.selectedJobPanel.querySelector("#jobToolInput");
@@ -6295,16 +6300,24 @@ async function syncBacklogWorkOrders() {
       NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
+    const planningCore = window.PlanningWorkflowCore;
+    const smartSync = planningCore?.classifySmartSyncChange
+      ? planningCore.classifySmartSyncChange(state, payload.workOrders)
+      : null;
     if (appSheetSaveTimer != null || appSheetDirtyScopes.size) appSheetSavePending = true;
     window.clearTimeout(appSheetSaveTimer);
     appSheetSaveTimer = null;
     syncSaveGate = await appSheetAcquireSaveGate();
+    const refreshResults = smartSync ? await refreshSmartSyncOtTimes(smartSync.updateCandidates) : {};
     const nowIso = new Date().toISOString();
     const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
       window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
       nowIso,
     );
     nextState.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
+    const smartSyncCounts = smartSync ? planningCore.finalizeSmartSyncSummary(smartSync, refreshResults) : null;
+    nextState.smartSyncSummary = smartSyncCounts || {};
+    nextState.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
     const syncPayload = {
       revision: Number(nextState.revision || 0),
       workOrders: nextState.workOrders || [],
@@ -6329,10 +6342,12 @@ async function syncBacklogWorkOrders() {
     );
     state.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
     state.revision = Number(saved?.revision || state.revision);
+    state.smartSyncSummary = smartSyncCounts || {};
+    state.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
     invalidateCurrentPlanOperationsCache();
     resetBacklogWindow();
     render({ save: false });
-    showToast(`${state.workOrders.length} OTs activas sincronizadas`);
+    showToast(smartSyncCounts ? planningCore.smartSyncSummaryMessage(smartSyncCounts) : `${state.workOrders.length} OTs activas sincronizadas`, smartSyncCounts ? 6000 : undefined);
     return { ok: true };
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
@@ -6346,6 +6361,75 @@ async function syncBacklogWorkOrders() {
     }
     setBacklogSyncInFlight(false);
   }
+}
+
+function smartSyncReviewWarnings(state, smartSync) {
+  const existing = (state?.workOrderSyncWarnings || []).map((warning) => ({ ...warning }));
+  const reasons = {
+    review_completed: "SMART_SYNC_COMPLETED_OPS",
+    review_changed: "SMART_SYNC_ROUTE_QUANTITY_CHANGED",
+    review_unstable: "SMART_SYNC_ROUTE_UNSTABLE",
+  };
+  for (const record of Object.values(smartSync?.byOt || {})) {
+    const reason = reasons[record?.decision];
+    if (!reason) continue;
+    if (existing.some((warning) => materialOtKey(warning.ot) === materialOtKey(record.ot) && warning.type === reason)) continue;
+    existing.push({
+      ot: String(record.ot || "").trim(),
+      type: reason,
+      createdAt: new Date().toISOString(),
+      current: record.current || null,
+      incoming: record.incoming || null,
+    });
+  }
+  return existing;
+}
+
+function otOperationsRouteTimesSignature(key) {
+  return (state.operations || [])
+    .filter((operation) => materialOtKey(operation?.ot) === key)
+    .map((operation) => [
+      normalizeStatus(operation.secuencia),
+      normalizeStatus(operation.ct),
+      normalizeStatus(operation.descripcion || operation.tipoInsercion),
+      Number(operation.cantPendiente ?? operation.cantTotal ?? 0),
+      Number(operation.tiempoCiclo || 0),
+      Number(operation.tiempoSetup || 0),
+      Number(operation.tiempoProd || 0),
+    ].join("|"))
+    .sort()
+    .join("\u001e");
+}
+
+function isOtPlannedInDraft(key) {
+  const selected = new Set((state.selectedOts || []).map(materialOtKey));
+  const scheduled = new Set((state.lastSchedule?.scheduledOts || []).map(materialOtKey));
+  if (selected.has(key) || scheduled.has(key)) return true;
+  return (state.operations || []).some((operation) =>
+    materialOtKey(operation?.ot) === key &&
+    Boolean(operation?.fechaInicio && operation?.horaInicio && operation?.fechaFin && operation?.horaFin)
+  );
+}
+
+async function refreshSmartSyncOtTimes(records) {
+  const results = {};
+  const candidates = (records || []).map((record) => ({ record, key: materialOtKey(record.ot) }));
+  candidates.forEach(({ key }, index) => {
+    if (index >= SMART_SYNC_TIME_REFRESH_LIMIT) results[key] = { changed: false, skipped: true };
+  });
+  for (const { record, key } of candidates.slice(0, SMART_SYNC_TIME_REFRESH_LIMIT)) {
+    if (!isAppsScriptRuntime()) {
+      results[key] = { changed: false, skipped: true };
+      continue;
+    }
+    const before = otOperationsRouteTimesSignature(key);
+    const result = await ensureWorkOrderPlanningData(record.ot);
+    const after = otOperationsRouteTimesSignature(key);
+    const changed = result.ready && before !== after;
+    if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+    results[key] = { changed, skipped: !result.ready };
+  }
+  return results;
 }
 
 async function syncNetSuiteTwoPhase(options = {}) {
@@ -6508,6 +6592,7 @@ const INDIVIDUAL_PLANNING_PREFETCH_LIMIT = 5;
 const INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY = 2;
 const INDIVIDUAL_PLANNING_CACHE_TTL_MS = 10 * 60 * 1000;
 const INDIVIDUAL_PLANNING_TIMEOUT_MS = 30 * 1000;
+const SMART_SYNC_TIME_REFRESH_LIMIT = 10;
 const individualPlanningPrefetchTasks = new Map();
 const individualPlanningPrefetchQueue = [];
 let individualPlanningPrefetchActive = 0;
@@ -6627,6 +6712,32 @@ function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
   return merged;
 }
 
+function mergeIndividualPlanningOperationsPreserving(remoteOperations, existingOperations) {
+  const existing = (existingOperations || []).filter(Boolean);
+  const isCompleted = (operation) => String(operation?.planStatus || operation?.estatus || "").toUpperCase() === "COMPLETADA_PLAN";
+  const preserved = existing.filter((operation) =>
+    isCompleted(operation) ||
+    String(operation?.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL"
+  );
+  const matchable = existing.filter((operation) =>
+    String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+  );
+  const existingBySequence = new Map();
+  const existingByCt = new Map();
+  matchable.forEach((operation) => {
+    const sequenceKey = individualPlanningOperationSequenceKey(operation);
+    const ctKey = individualPlanningOperationCtKey(operation);
+    if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+    if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+  });
+  const merged = (remoteOperations || []).map((operation) => {
+    const existing = existingBySequence.get(individualPlanningOperationSequenceKey(operation))
+      || existingByCt.get(individualPlanningOperationCtKey(operation));
+    return mergeIndividualPlanningOperation(operation, existing);
+  });
+  return { preserved, merged };
+}
+
 function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   const normalizedFields = [
     "id", "workOrderId", "ot", "item", "description", "photoUrl", "startDate", "endDate", "dueDate",
@@ -6670,6 +6781,9 @@ function mergeIndividualPlanningData(payload, ot) {
     : [];
   const operations = individualPlanningOperationsForOt(key, remoteOperations);
   if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
+  const materials = Array.isArray(data?.materials)
+    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
+    : [];
 
   const existingOperations = individualPlanningOperationsForOt(key);
   const existingBySequence = new Map();
@@ -6685,9 +6799,6 @@ function mergeIndividualPlanningData(payload, ot) {
       || existingByCt.get(individualPlanningOperationCtKey(operation));
     return mergeIndividualPlanningOperation(operation, existing);
   });
-  const materials = Array.isArray(data?.materials)
-    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
-    : [];
   state.operations = [
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
     ...mergedOperations,
@@ -6745,6 +6856,97 @@ function ensureWorkOrderPlanningData(ot) {
   })();
   individualPlanningRequests.set(key, request);
   return request;
+}
+
+function applyForcedOtPlanningData(payload, ot) {
+  const key = materialOtKey(ot);
+  const data = payload?.data || payload;
+  const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
+  const remoteOperations = Array.isArray(data?.operations)
+    ? data.operations.map(normalizeIndividualPlanningOperation)
+    : [];
+  const operations = individualPlanningOperationsForOt(key, remoteOperations);
+  if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
+  const materials = Array.isArray(data?.materials)
+    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
+    : [];
+
+  const existingOperations = (state.operations || []).filter((operation) => materialOtKey(operation?.ot) === key);
+  const { preserved, merged: mergedOperations } = mergeIndividualPlanningOperationsPreserving(operations, existingOperations);
+  state.operations = [
+    ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
+    ...preserved,
+    ...mergedOperations,
+  ];
+  mergeIndividualPlanningOperationCatalog(mergedOperations);
+  state.materials = [
+    ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
+    ...materials,
+  ];
+  if (data?.workOrder && materialOtKey(data.workOrder.ot) === key) {
+    state.workOrders = [
+      ...(state.workOrders || []).filter((workOrder) => materialOtKey(workOrder?.ot) !== key),
+      mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
+    ];
+  }
+  individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+  return true;
+}
+
+async function updateSelectedOtFromNetSuite(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return { ok: false, error: "OT requerida" };
+  if (isJobLocked(key)) {
+    showToast("OT bloqueada: no se actualizan tiempos porque esta fija", 6000);
+    return { ok: false, error: "OT bloqueada" };
+  }
+  if (!isAppsScriptRuntime()) {
+    showToast("Apps Script no disponible para actualizar la OT", 6000);
+    return { ok: false, error: "Apps Script no disponible" };
+  }
+  const button = document.querySelector(`[data-detail-ot-refresh="${CSS.escape(ot)}"]`);
+  const previousLabel = button?.getAttribute("aria-label") || "";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.setAttribute("aria-label", `Actualizando OT ${ot} desde NetSuite...`);
+  }
+  showToast(`Actualizando OT ${ot} desde NetSuite...`);
+  const before = otOperationsRouteTimesSignature(key);
+  try {
+    const payload = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("getPlanningWorkOrderData", ot),
+      INDIVIDUAL_PLANNING_TIMEOUT_MS,
+    );
+    if (!payload?.ok) {
+      const message = String(payload?.error || "No se pudieron cargar las operaciones");
+      showToast(`No se actualizo la OT ${ot}: ${message}`, 9000);
+      return { ok: false, error: message };
+    }
+    if (!applyForcedOtPlanningData(payload, key)) {
+      showToast(`La OT ${ot} no devolvio operaciones de planeacion`, 9000);
+      return { ok: false, error: "La OT no devolvio operaciones de planeacion" };
+    }
+    const after = otOperationsRouteTimesSignature(key);
+    const changed = before !== after;
+    if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+    render({ save: false });
+    showToast(changed ? `OT ${ot} actualizada` : `OT ${ot} sin cambios detectados`, 5000);
+    return { ok: true, changed };
+  } catch (error) {
+    const message = String(error?.message || error || "No se pudo actualizar la OT");
+    showToast(`No se actualizo la OT ${ot}: ${message}`, 9000);
+    return { ok: false, error: message };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.setAttribute("aria-label", previousLabel);
+    }
+  }
 }
 
 function loadSelectedJobDetailOperations(ot) {

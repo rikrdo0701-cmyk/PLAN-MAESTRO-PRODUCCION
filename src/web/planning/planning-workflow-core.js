@@ -190,6 +190,160 @@
     return ["quantity", "builtQuantity", "pendingQuantity"].some((field) => left[field] !== right[field]);
   }
 
+  function isOtLockedInState(state, ot) {
+    const key = normalize(ot);
+    return (state?.lockedOts || []).some((item) => normalize(item) === key);
+  }
+
+  function otHasCompletedOperations(state, ot) {
+    const key = normalize(ot);
+    return (state?.operations || []).some((operation) =>
+      normalize(operation?.ot) === key &&
+      (isHistorical(operation) || normalize(operation?.planStatus || operation?.estatus) === "COMPLETADA_PLAN")
+    );
+  }
+
+  function pendingOperationsForOt(state, ot) {
+    const key = normalize(ot);
+    return (state?.operations || []).filter((operation) =>
+      normalize(operation?.ot) === key &&
+      !isHistorical(operation) &&
+      normalize(operation?.planStatus || operation?.estatus) !== "COMPLETADA_PLAN"
+    );
+  }
+
+  function operationsRouteSignature(operations) {
+    return (operations || [])
+      .map((operation) => {
+        const secuencia = normalize(String(operation?.secuencia ?? ""));
+        const ct = normalize(String(operation?.ct ?? ""));
+        const descripcion = normalize(String(operation?.descripcion || operation?.tipoInsercion || ""));
+        return secuencia && ct ? [secuencia, ct, descripcion].filter(Boolean).join("|") : "";
+      })
+      .filter(Boolean)
+      .sort()
+      .join("\u001e");
+  }
+
+  const SMART_SYNC_DECISIONS = {
+    BLOCKED: "blocked",
+    REVIEW_COMPLETED: "review_completed",
+    REVIEW_CHANGED: "review_changed",
+    REVIEW_UNSTABLE: "review_unstable",
+    UPDATE_CANDIDATE: "update_candidate",
+  };
+
+  function classifySmartSyncChange(state, incomingWorkOrders) {
+    const source = state || {};
+    const selected = new Set((source.selectedOts || []).map(normalize).filter(Boolean));
+    const currentByOt = new Map((source.workOrders || []).map((item) => [normalize(item?.ot), item]));
+    const byOt = {};
+    const counts = {
+      unchanged: 0, updated: 0, reviewChanged: 0, reviewCompleted: 0, blocked: 0, reviewUnstable: 0,
+    };
+    const updateCandidates = [];
+
+    for (const workOrder of (incomingWorkOrders || [])) {
+      const normalizedIncoming = normalizedLiteWorkOrder(workOrder);
+      const key = normalize(normalizedIncoming.ot);
+      if (!key || !selected.has(key)) continue;
+      const current = currentByOt.get(key);
+      const record = {
+        ot: String(normalizedIncoming.ot).trim(),
+        current: current ? { ...current } : null,
+        incoming: { ...normalizedIncoming },
+      };
+      if (isOtLockedInState(source, key)) {
+        record.decision = SMART_SYNC_DECISIONS.BLOCKED;
+        counts.blocked += 1;
+      } else if (otHasCompletedOperations(source, key)) {
+        record.decision = SMART_SYNC_DECISIONS.REVIEW_COMPLETED;
+        counts.reviewCompleted += 1;
+      } else if (current && (liteQuantityChanged(current, normalizedIncoming) ||
+          normalize(current?.item) !== normalize(normalizedIncoming.item))) {
+        record.decision = SMART_SYNC_DECISIONS.REVIEW_CHANGED;
+        counts.reviewChanged += 1;
+      } else {
+        const pending = pendingOperationsForOt(source, key);
+        const signature = operationsRouteSignature(pending);
+        if (!pending.length || !signature) {
+          record.decision = SMART_SYNC_DECISIONS.REVIEW_UNSTABLE;
+          counts.reviewUnstable += 1;
+        } else {
+          record.decision = SMART_SYNC_DECISIONS.UPDATE_CANDIDATE;
+          record.signature = signature;
+          updateCandidates.push(record);
+        }
+      }
+      byOt[key] = record;
+    }
+    return { byOt, counts, updateCandidates };
+  }
+
+  function finalizeSmartSyncSummary(classification, refreshResults) {
+    const counts = { ...(classification?.counts || {}) };
+    for (const record of classification?.updateCandidates || []) {
+      const key = normalize(record.ot);
+      const refresh = refreshResults?.[key];
+      if (refresh?.changed) counts.updated = (counts.updated || 0) + 1;
+      else counts.unchanged = (counts.unchanged || 0) + 1;
+    }
+    return counts;
+  }
+
+  function smartSyncSummaryMessage(counts) {
+    const c = counts || {};
+    const review = Number(c.reviewChanged || 0) + Number(c.reviewUnstable || 0);
+    return [
+      `${Number(c.unchanged || 0)} OTs sin cambios`,
+      `${Number(c.updated || 0)} actualizadas`,
+      `${review} con ruta/cantidad distinta (revisar)`,
+      `${Number(c.blocked || 0)} bloqueadas`,
+      `${Number(c.reviewCompleted || 0)} con completadas`,
+    ].join(", ");
+  }
+
+  const PLANNING_ROUTE_FIELDS = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tiempoFallback", "tipoInsercion",
+  ];
+
+  function mergeOtRouteOperation(remoteOperation, existingOperation) {
+    if (!existingOperation) return { ...(remoteOperation || {}) };
+    const route = {};
+    PLANNING_ROUTE_FIELDS.forEach((field) => {
+      if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+    });
+    const merged = { ...existingOperation, ...route };
+    if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+    return merged;
+  }
+
+  function mergeOtRouteOperations(remoteOperations, existingOperations) {
+    const existing = (existingOperations || []).filter(Boolean);
+    const preserved = existing.filter((operation) =>
+      isHistorical(operation) ||
+      normalize(operation?.planStatus || operation?.estatus) === "COMPLETADA_PLAN" ||
+      normalize(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL"
+    );
+    const matchable = existing.filter((operation) => normalize(operation?.tipoInsercion) !== "CAMBIO_HERRAMENTAL");
+    const existingBySequence = new Map();
+    const existingByCt = new Map();
+    matchable.forEach((operation) => {
+      const sequenceKey = [normalize(operation?.ot), String(operation?.secuencia ?? "").trim()].join("|");
+      const ctKey = [normalize(operation?.ot), String(operation?.ct ?? "").trim().toUpperCase()].join("|");
+      if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+      if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+    });
+    const merged = (remoteOperations || []).map((operation) => {
+      const sequenceKey = [normalize(operation?.ot), String(operation?.secuencia ?? "").trim()].join("|");
+      const ctKey = [normalize(operation?.ot), String(operation?.ct ?? "").trim().toUpperCase()].join("|");
+      const existingOperation = existingBySequence.get(sequenceKey) || existingByCt.get(ctKey);
+      return mergeOtRouteOperation(operation, existingOperation);
+    });
+    return { preserved, merged };
+  }
+
   function compareWorkOrderLite(currentState, incomingWorkOrders) {
     const state = currentState || {};
     const selected = new Set((state.selectedOts || []).map(normalize).filter(Boolean));
@@ -954,6 +1108,9 @@
 
   return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
+    isOtLockedInState, otHasCompletedOperations, pendingOperationsForOt, operationsRouteSignature,
+    classifySmartSyncChange, finalizeSmartSyncSummary, smartSyncSummaryMessage,
+    mergeOtRouteOperation, mergeOtRouteOperations,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, purgeClosedWorkOrderRetention,

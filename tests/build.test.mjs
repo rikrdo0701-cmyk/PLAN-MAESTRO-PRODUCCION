@@ -587,6 +587,29 @@ test("el detalle de OT muestra carga de operaciones mientras espera una ruta val
   assert.match(renderSelected, /selectedJobDetailOperationLoads\.has\(materialOtKey\(job\.ot\)\)/);
 });
 
+test("el detalle de OT incluye el boton Actualizar OT bloqueado cuando la OT esta fija", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSelectedJobPanel()");
+  const renderEnd = app.indexOf("function renderGantt()", renderStart);
+  const renderSelected = app.slice(renderStart, renderEnd);
+  assert.match(renderSelected, /data-detail-ot-refresh/);
+  assert.match(renderSelected, /OT bloqueada: no se actualizan tiempos porque esta fija/);
+  assert.match(renderSelected, /updateSelectedOtFromNetSuite\(job\.ot\)/);
+  assert.match(app, /async function updateSelectedOtFromNetSuite\(ot\)/);
+});
+
+test("la sincronizacion ligera clasifica cambios, refresca tiempos y resume sin helpers prohibidos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("async function syncBacklogWorkOrders()");
+  const end = app.indexOf("async function syncNetSuiteTwoPhase(options = {})");
+  const source = app.slice(start, end);
+  assert.match(source, /classifySmartSyncChange\(state, payload\.workOrders\)/);
+  assert.match(source, /refreshSmartSyncOtTimes\(smartSync\.updateCandidates\)/);
+  assert.match(source, /finalizeSmartSyncSummary\(smartSync, refreshResults\)/);
+  assert.match(source, /smartSyncSummaryMessage\(smartSyncCounts\)/);
+  assert.doesNotMatch(source, /saveAppState|createAppSheetPayload\(nextState\)|compareWorkOrderLite|applyConfirmedWorkOrderChanges|syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
+});
+
 test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina", async () => {
   const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
   const start = inspectionApp.indexOf("function operationRow(operation)");

@@ -857,3 +857,137 @@ test("weeklyFinishingCost convierte en cero sumas y divisiones desbordadas", () 
     { ot: "4", pendingPieces: Number.MAX_VALUE, amount: 1 },
   ])), { finishingPieces: 0, totalCost: 2, costPerPiece: 0 });
 });
+
+test("isOtLockedInState normaliza la OT contra lockedOts", () => {
+  assert.equal(core.isOtLockedInState({ lockedOts: [" OT-100 ", "ot-2"] }, "ot-100"), true);
+  assert.equal(core.isOtLockedInState({ lockedOts: ["ot-2"] }, "ot-100"), false);
+  assert.equal(core.isOtLockedInState({}, "ot-100"), false);
+});
+
+test("otHasCompletedOperations y pendingOperationsForOt separan operaciones completadas", () => {
+  const state = {
+    operations: [
+      { ot: "OT-1", secuencia: "10", ct: "M1", planStatus: "COMPLETADA_PLAN" },
+      { ot: "OT-1", secuencia: "20", ct: "M2", planStatus: "PENDIENTE_PLAN", inicio: "2026-07-22T08:00:00Z" },
+      { ot: "OT-1", secuencia: "30", ct: "M3", tipoInsercion: "CAMBIO_HERRAMENTAL", planStatus: "PENDIENTE_PLAN" },
+      { ot: "OT-2", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN" },
+    ],
+  };
+  assert.equal(core.otHasCompletedOperations(state, "ot-1"), true);
+  assert.equal(core.otHasCompletedOperations(state, "ot-2"), false);
+  assert.deepEqual(structuredClone(core.pendingOperationsForOt(state, "OT-1").map((op) => op.secuencia)), ["20", "30"]);
+});
+
+test("operationsRouteSignature ordena y omite entradas sin secuencia o CT", () => {
+  const signature = core.operationsRouteSignature([
+    { ot: "OT-1", secuencia: "20", ct: "M2" },
+    { ot: "OT-1", secuencia: "10", ct: "M1" },
+    { ot: "OT-1", secuencia: " ", ct: "" },
+    { ot: "OT-1", descripcion: "solo descripcion" },
+  ]);
+  assert.equal(signature, "10|M1\u001e20|M2");
+});
+
+test("classifySmartSyncChange clasifica solo OTs seleccionadas segun las reglas 1-3", () => {
+  const state = {
+    selectedOts: ["OT-1", "OT-2", "OT-3", "OT-4", "OT-5"],
+    lockedOts: ["OT-3"],
+    workOrders: [
+      { ot: "OT-1", item: "PIEZA-A", quantity: 100 },
+      { ot: "OT-2", item: "PIEZA-B", quantity: 200 },
+      { ot: "OT-4", item: "PIEZA-D", quantity: 400 },
+      { ot: "OT-5", item: "PIEZA-E", quantity: 500 },
+    ],
+    operations: [
+      { ot: "OT-1", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN" },
+      { ot: "OT-2", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN" },
+      { ot: "OT-4", secuencia: "10", ct: "M1", planStatus: "COMPLETADA_PLAN" },
+    ],
+  };
+  const incoming = [
+    { ot: "OT-1", item: "PIEZA-A", quantity: 100 },
+    { ot: "OT-2", item: "PIEZA-B", quantity: 210 },
+    { ot: "OT-3", item: "PIEZA-C", quantity: 300 },
+    { ot: "OT-4", item: "PIEZA-D", quantity: 400 },
+    { ot: "OT-5", item: "PIEZA-E", quantity: 500 },
+    { ot: "NO-SELECCIONADA", item: "X", quantity: 1 },
+  ];
+  const result = core.classifySmartSyncChange(state, incoming);
+  assert.equal(result.byOt["OT-1"].decision, "update_candidate");
+  assert.equal(result.byOt["OT-2"].decision, "review_changed");
+  assert.equal(result.byOt["OT-3"].decision, "blocked");
+  assert.equal(result.byOt["OT-4"].decision, "review_completed");
+  assert.equal(result.byOt["OT-5"].decision, "review_unstable");
+  assert.equal(result.byOt["NO-SELECCIONADA"], undefined);
+  assert.deepEqual(structuredClone(result.updateCandidates.map((record) => record.ot)), ["OT-1"]);
+  assert.deepEqual(structuredClone(result.counts), {
+    unchanged: 0, updated: 0, reviewChanged: 1, reviewCompleted: 1, blocked: 1, reviewUnstable: 1,
+  });
+});
+
+test("classifySmartSyncChange considera item cambiado como revision y estructura estable como candidata", () => {
+  const state = {
+    selectedOts: ["OT-A", "OT-B"],
+    workOrders: [{ ot: "OT-A", item: "PIEZA-1", quantity: 10 }],
+    operations: [{ ot: "OT-A", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN" }],
+  };
+  const incoming = [
+    { ot: "OT-A", item: "PIEZA-2", quantity: 10 },
+    { ot: "OT-B", item: "PIEZA-3", quantity: 30 },
+  ];
+  const result = core.classifySmartSyncChange(state, incoming);
+  assert.equal(result.byOt["OT-A"].decision, "review_changed");
+  assert.equal(result.byOt["OT-B"].decision, "review_unstable");
+});
+
+test("finalizeSmartSyncSummary suma actualizadas y sin cambios de los refresh results", () => {
+  const classification = {
+    counts: { unchanged: 0, updated: 0, reviewChanged: 1, reviewCompleted: 1, blocked: 1, reviewUnstable: 1 },
+    updateCandidates: [
+      { ot: "OT-1", decision: "update_candidate" },
+      { ot: "OT-2", decision: "update_candidate" },
+      { ot: "OT-3", decision: "update_candidate" },
+    ],
+  };
+  const refreshResults = {
+    "OT-1": { changed: true, skipped: false },
+    "OT-2": { changed: false, skipped: false },
+    "OT-3": { changed: false, skipped: true },
+  };
+  const counts = core.finalizeSmartSyncSummary(classification, refreshResults);
+  assert.deepEqual(structuredClone(counts), {
+    unchanged: 2, updated: 1, reviewChanged: 1, reviewCompleted: 1, blocked: 1, reviewUnstable: 1,
+  });
+  assert.equal(core.smartSyncSummaryMessage(counts),
+    "2 OTs sin cambios, 1 actualizadas, 2 con ruta/cantidad distinta (revisar), 1 bloqueadas, 1 con completadas");
+});
+
+test("mergeOtRouteOperation conserva campos locales y aplica campos de ruta remotos", () => {
+  const existing = { ot: "OT-1", secuencia: "10", ct: "M1", tiempoCiclo: 3, tiempoSetup: 1, tiempoProd: 2, planStatus: "PENDIENTE_PLAN", tipoInsercion: "NORMAL" };
+  const remote = { ot: "OT-1", secuencia: "10", ct: "M1", tiempoCiclo: 5, tiempoSetup: 2, tiempoProd: 1, secuenciaNueva: "ignorada" };
+  const merged = core.mergeOtRouteOperation(remote, existing);
+  assert.equal(merged.tiempoCiclo, 5);
+  assert.equal(merged.planStatus, "PENDIENTE_PLAN");
+  assert.equal(merged.secuenciaNueva, undefined);
+});
+
+test("mergeOtRouteOperations preserva completadas y CAMBIO_HERRAMENTAL y combina por secuencia/CT", () => {
+  const existing = [
+    { ot: "OT-1", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN", tiempoCiclo: 3 },
+    { ot: "OT-1", secuencia: "20", ct: "M2", planStatus: "COMPLETADA_PLAN", tiempoCiclo: 9 },
+    { ot: "OT-1", secuencia: "30", ct: "M3", tipoInsercion: "CAMBIO_HERRAMENTAL", planStatus: "PENDIENTE_PLAN", tiempoCiclo: 1 },
+  ];
+  const remote = [
+    { ot: "OT-1", secuencia: "10", ct: "M1", tiempoCiclo: 5 },
+    { ot: "OT-1", secuencia: "20", ct: "M2", tiempoCiclo: 9 },
+  ];
+  const result = core.mergeOtRouteOperations(remote, existing);
+  assert.equal(result.preserved.length, 2);
+  assert.equal(result.merged.length, 2);
+  const mergedBySequence = Object.fromEntries(result.merged.map((op) => [op.secuencia, op]));
+  assert.equal(mergedBySequence["10"].tiempoCiclo, 5);
+  assert.equal(mergedBySequence["10"].planStatus, "PENDIENTE_PLAN");
+  assert.equal(mergedBySequence["20"].planStatus, "COMPLETADA_PLAN");
+  assert.equal(mergedBySequence["20"].tiempoCiclo, 9);
+  assert.ok(result.preserved.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL"));
+});
