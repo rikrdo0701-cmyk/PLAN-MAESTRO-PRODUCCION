@@ -32,6 +32,9 @@ Tabla de pares clave→valor (JSON). Headers: `KEY, VALUE`.
   `EXCLUDED_CAPABILITIES`, `selectedOts`, `lockedOts`, `expandedOts`, `workSchedule`,
   `dailyBreaks`, `plant`, `settings`, `lastSchedule`, `operationCatalogWarning`,
   `invoicePriceWindow`.
+- `syncedAt` se usa en el frontend para considerar frescos los datos de planeación por 5 minutos
+  antes de generar plan. Si NetSuite no responde al refresco de operaciones y ya existen
+  operaciones cargadas para todas las OTs seleccionadas, la generación continúa con esos datos.
 
 ## OPERACIONES
 
@@ -45,6 +48,11 @@ TIEMPO_FALLBACK`.
 - Readers: `PP_readState_` → `PP_mapOperation_` (mapeo header→campo en `PP_OPERATION_FIELDS`).
 - Writers: `PP_writeState_`, `PP_writeNetSuiteSyncState_`, `PP_writeWorkOrderSyncState_`,
   `savePlanningStateOptimized`.
+- Origen de refresco: `syncNetSuitePlanningData` reemplaza esta hoja con operaciones abiertas de
+  NetSuite; las consultas directas por OT (`getPlanningWorkOrderData`) fusionan operaciones de una
+  OT en el estado del navegador y luego pueden persistirse en esta hoja. Si el refresco general de
+  NetSuite vence timeout al generar plan, `state.operations`/`OPERACIONES` ya cargadas son el
+  fallback usado por el motor, siempre que cubran todas las OTs seleccionadas.
 - Restricciones: las operaciones con `ESTATUS`/`planStatus` en `COMPLETADA_PLAN` no se incluyen
   en las instantáneas; los cambios de herramental usan `TIPO_INSERCION = CAMBIO_HERRAMENTAL`.
 - Restricción: para doblado con máquina se genera/conserva `CAMBIO_HERRAMENTAL` cuando el último
@@ -84,6 +92,9 @@ CANT_ENSAMBLADA, CANT_PENDIENTE, PRECIO_PROMEDIO_VENTA, PRECIO_DESDE, PRECIO_HAS
 - Readers: `PP_readState_` → `PP_mapWorkOrder_`; `syncNetSuiteWorkOrdersLite`.
 - Writers: `PP_writeState_`, `PP_writeNetSuiteSyncState_`, `PP_writeNetSuiteWorkOrdersState_`,
   `PP_writeWorkOrderSyncState_`, `savePlanningStateOptimized`.
+- Restricción: el payload ligero de `fetchNetSuiteWorkOrdersLite` no incluye tiempos de operación
+  (solo cabecera de la OT); los tiempos reales de una OT se obtienen por consulta directa
+  (`getPlanningWorkOrderData`) y se fusionan en `state.operations`/`OPERACIONES`.
 
 ## CONFIGURACION_OT
 
@@ -382,7 +393,11 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
    (mínimo `2026-02-01`), `CustInvc` no anuladas, promedio `ABS(SUM(netamount))/ABS(SUM(quantity))`.
 3. **Ruta directa de OT** (`18-planning-work-order-service.js`):
    `manufacturingoperationtask WHERE workorder='...'` y lookup `transaction WHERE type='WorkOrd'
-   AND tranid='...'`.
+   AND tranid='...'`. Por operación se calcula `'Tiempo estimado (min)' = setuptime + runrate ×
+   cantidad pendiente de la OT (`PP_pendingWorkOrderQuantity_` = Cantidad − Cantidad ensamblada)
+   y cada fila lleva `'Cantidad a procesar' = cantidad pendiente`, con lo que
+   `PP_mapNetSuiteOperation_` deriva `cantTotal`/`cantPendiente` igual a la cantidad pendiente,
+   coherentes con `tiempoProd`.
 
 ## REST Record API v1
 

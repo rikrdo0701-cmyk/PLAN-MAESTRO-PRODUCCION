@@ -94,7 +94,7 @@
         "src/web/bridge/Bridge.html"
       ],
       "purpose": "Aplicación: backend Apps Script (19 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md.",
-      "rules": ["RULE-OT-006", "RULE-OT-007", "RULE-OT-008", "RULE-MAT-008", "RULE-MAT-009", "RULE-DOB-001", "RULE-HER-001", "RULE-MAQ-001"],
+      "rules": ["RULE-OT-006", "RULE-OT-007", "RULE-OT-008", "RULE-OT-014", "RULE-MAT-008", "RULE-MAT-009", "RULE-DOB-001", "RULE-HER-001", "RULE-MAQ-001"],
       "data_sources": [
         "SHEET-CONFIG",
         "SHEET-OPERACIONES",
@@ -155,5 +155,5 @@
       "data_sources": []
     }
   ],
-  "updated_at": "2026-08-11T00:00:00-06:00"
+  "updated_at": "2026-08-14T00:00:00-06:00"
 }

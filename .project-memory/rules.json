@@ -133,6 +133,30 @@
       "domain": "OT"
     },
     {
+      "rule_id": "RULE-OT-013",
+      "name": "Fallback de datos al generar plan",
+      "status": "implementada",
+      "rule": "Al generar plan, ensurePlanningDataLoaded intenta refrescar operaciones/materiales desde syncNetSuitePlanningData con timeout de 15s, salvo que state.syncedAt tenga menos de 5 minutos y existan operaciones para todas las OTs seleccionadas. Si NetSuite falla o vence el timeout y PlanningWorkflowCore.hasPlanningData confirma operaciones en state.operations para las OTs seleccionadas, el plan se genera con esos datos ya cargados (estado local cargado desde Google Sheets/app state o consultas directas por OT previamente fusionadas). Si no hay operaciones cargadas para todas las OTs seleccionadas, se bloquea la generación.",
+      "source": "src/web/planning/app.js; src/web/planning/planning-workflow-core.js; src/server/01-code.js; src/server/08-netsuite.js",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-014",
+      "name": "Sincronizacion inteligente y actualizacion por OT",
+      "status": "implementada",
+      "rule": "syncBacklogWorkOrders() clasifica cada OT seleccionada con classifySmartSyncChange antes de aplicar: bloqueada (en lockedOts), revisar-completadas (tiene operaciones completadas/historicas), revisar-ruta/cantidad (cantidad o item cambiaron respecto al trabajo actual), revisar-inestable (sin operaciones pendientes locales o sin firma de ruta) o candidata a actualizar (sin completadas, sin cambios de cantidad/item y con operaciones pendientes locales con secuencia y CT). El payload ligero de NetSuite NO trae tiempos de operacion, por lo que el refresco real de tiempos en la sincronizacion global usa getPlanningWorkOrderData por OT via ensureWorkOrderPlanningData solo para candidatas estables, acotado a SMART_SYNC_TIME_REFRESH_LIMIT=10, secuencial, con firma de ruta/tiempos antes y despues (otOperationsRouteTimesSignature); si cambio y la OT esta en el borrador se marca draftNeedsReschedule. El resumen final usa el formato 'X OTs sin cambios, Y actualizadas, Z con ruta/cantidad distinta (revisar), W bloqueadas, V con completadas'. El boton 'Actualizar OT' del detalle fuerza getPlanningWorkOrderData sin pasar por el cache individual (updateSelectedOtFromNetSuite), esta deshabilitado cuando la OT esta fija con tooltip 'OT bloqueada: no se actualizan tiempos porque esta fija', reemplaza solo operaciones pendientes preservando completadas, historicas y CAMBIO_HERRAMENTAL (mergeOtRouteOperations), y avisa 'Actualizando desde NetSuite...', 'OT actualizada' o 'Sin cambios detectados'. La sincronizacion ligera no llama saveAppState, createAppSheetPayload, openPlanningDialog ni compareWorkOrderLite. La ruta directa de OT (getPlanningWorkOrderData -> PP_fetchDirectWorkOrderOperations_) entrega cada operacion con 'Cantidad a procesar' = cantidad pendiente de la OT (PP_pendingWorkOrderQuantity_ = Cantidad - Cantidad ensamblada), de modo que PP_mapNetSuiteOperation_ deriva cantTotal/cantPendiente = cantidad pendiente, coherentes con tiempoProd; esto solo corrige la cantidad mostrada, no cambia el tiempo de produccion ni la programacion.",
+      "source": "definicion de usuario 2026-08-14; src/web/planning/app.js; src/web/planning/planning-workflow-core.js; src/server/15-performance-service.js; src/server/02-storage.js; src/server/18-planning-work-order-service.js; src/server/08-netsuite.js",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-015",
+      "name": "OT u operacion nueva no inicia antes de la hora actual",
+      "status": "implementada",
+      "rule": "Una OT nueva o una operacion nueva no puede programarse para iniciar antes del dia y hora actuales. 'Nueva' se determina contra el snapshot base (baseSnapshot): una OT es nueva si su OT no esta en base.selectedOts ni en las OTs de base.operations; una operacion es nueva si su clave operationKey (OT|secuencia|CT) no existe en base.operations. Sin baseSnapshot (primera generacion o sin plan previo de la semana), una operacion es nueva si no tiene fecha/hora de inicio y fin previos. En computeEarliestStart el inicio mas temprano de una operacion nueva se eleva a la hora actual (executionTime/nowAnchor, con ceilToSnap) cuando esta es posterior al calculado; las operaciones existentes conservan su ancla de INICIO y no se mueven. Las operaciones fijas (lockedOts), completadas/historicas y publicadas no se tocan. La secuencia se conserva: cada sucesora espera el fin de su predecesora y la hora actual; los cambios de herramental se insertan antes de su operacion.",
+      "source": "definicion de usuario 2026-08-14; src/web/planning/app.js; src/web/planning/planner-core.js; tests/planner-core.test.mjs",
+      "domain": "OT"
+    },
+    {
       "rule_id": "RULE-DOB-001",
       "name": "Precarga CT 5459/5527",
       "status": "documentada",
@@ -317,5 +341,5 @@
       "domain": "BOM"
     }
   ],
-  "updated_at": "2026-08-14T00:00:00-06:00"
+  "updated_at": "2026-08-15T00:00:00-06:00"
 }

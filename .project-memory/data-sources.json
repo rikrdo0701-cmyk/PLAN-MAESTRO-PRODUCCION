@@ -23,10 +23,11 @@
       "readers": [
         "PP_readConfig_", "PP_readState_", "PP_assertCurrentRevision_", "PP_nextRevision_",
         "PP_writeConfigPatch_", "PP_appRevisionMetadata_", "getAppStateIfChanged",
-        "savePlanningStateOptimized", "saveOperationPlanStatus", "syncNetSuiteWorkOrdersLite"
+        "savePlanningStateOptimized", "saveOperationPlanStatus", "syncNetSuiteWorkOrdersLite",
+        "ensurePlanningDataLoaded (frontend usa syncedAt)"
       ],
       "writers": ["PP_writeConfigPatch_", "PP_writeState_", "seed PP_ensureWorkbook_"],
-      "rules": [],
+      "rules": ["RULE-OT-014"],
       "status": "documented",
       "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
     },
@@ -46,7 +47,7 @@
       ],
       "readers": ["PP_readState_ (PP_mapOperation_ via PP_OPERATION_FIELDS)"],
       "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-005", "RULE-DOB-001", "RULE-HER-004"],
+      "rules": ["RULE-OT-005", "RULE-OT-013", "RULE-OT-014", "RULE-DOB-001", "RULE-HER-004"],
       "status": "documented",
       "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
     },
@@ -102,7 +103,7 @@
       ],
       "readers": ["PP_readState_ (PP_mapWorkOrder_)", "syncNetSuiteWorkOrdersLite"],
       "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeNetSuiteWorkOrdersState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-008"],
+      "rules": ["RULE-OT-008", "RULE-OT-014"],
       "status": "documented",
       "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
     },
@@ -547,11 +548,11 @@
       "columns": [
         "manufacturingroutingstep JOIN ruta/centro -> catálogo de operaciones",
         "CustInvc (6 meses) -> promedios de facturación",
-        "manufacturingoperationtask WHERE workorder -> ruta directa de OT"
+        "manufacturingoperationtask WHERE workorder -> ruta directa de OT; por operación: 'Tiempo estimado (min)' = setuptime + runrate x cantidad pendiente y 'Cantidad a procesar' = cantidad pendiente de la OT (PP_pendingWorkOrderQuantity_ = Cantidad - Cantidad ensamblada), de donde PP_mapNetSuiteOperation_ deriva cantTotal/cantPendiente"
       ],
       "readers": ["PP_fetchNetSuiteOperationCatalog_", "PP_fetchInvoiceSalesAverages_", "PP_fetchDirectWorkOrderSuiteQl_"],
       "writers": [],
-      "rules": ["RULE-MAT-001", "RULE-MAT-002", "RULE-MAT-003", "RULE-MAT-009"],
+      "rules": ["RULE-MAT-001", "RULE-MAT-002", "RULE-MAT-003", "RULE-MAT-009", "RULE-OT-014"],
       "status": "documented",
       "references": ["src/server/08-netsuite.js", "src/server/18-planning-work-order-service.js"]
     },
@@ -580,5 +581,5 @@
       "references": ["src/server/09-photos.js"]
     }
   ],
-  "updated_at": "2026-08-11T00:00:00-06:00"
+  "updated_at": "2026-08-15T00:00:00-06:00"
 }

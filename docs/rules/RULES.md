@@ -31,6 +31,13 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-OT-010` | Persistencia de `CONFIGURACION_OT` mientras OT abierta | DOCUMENTADA | definición de usuario 2026-08-12 |
 | `RULE-OT-011` | Inicio del borrador desde Gantt | IMPLEMENTADA | definición de usuario 2026-08-13 |
 | `RULE-OT-012` | Precedencia por secuencia incluida | IMPLEMENTADA | definición de usuario 2026-08-13 |
+| `RULE-OT-013` | Fallback de datos al generar plan | IMPLEMENTADA | definición de usuario 2026-08-13 |
+| `RULE-OT-014` | Sincronización inteligente y actualización por OT | IMPLEMENTADA | definición de usuario 2026-08-14 |
+| `RULE-OT-015` | OT u operación nueva no inicia antes de la hora actual | IMPLEMENTADA | definición de usuario 2026-08-14 |
+
+Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
+`cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía
+`'Cantidad a procesar'` en la fila; coherente con `tiempoProd`.
 
 ## Doblado
 
