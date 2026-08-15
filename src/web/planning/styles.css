@@ -176,22 +176,32 @@ svg {
 }
 
 .workspace[data-view="plan"] #cargas,
+.workspace[data-view="plan"] #cuello-botella,
 .workspace[data-view="plan"] .config-panel,
 .workspace[data-view="plan"] .reports-panel,
 .workspace[data-view="loads"] .summary-strip,
 .workspace[data-view="loads"] .planner-grid,
+.workspace[data-view="loads"] #cuello-botella,
 .workspace[data-view="loads"] .config-panel,
 .workspace[data-view="loads"] .reports-panel,
 .workspace[data-view="loads"] .draft-executive,
 .workspace[data-view="config"] .summary-strip,
 .workspace[data-view="config"] .planner-grid,
 .workspace[data-view="config"] #cargas,
+.workspace[data-view="config"] #cuello-botella,
 .workspace[data-view="config"] .reports-panel,
 .workspace[data-view="config"] .draft-executive,
 .workspace[data-view="reports"] .summary-strip,
 .workspace[data-view="reports"] .planner-grid,
 .workspace[data-view="reports"] #cargas,
-.workspace[data-view="reports"] .config-panel { display: none; }
+.workspace[data-view="reports"] #cuello-botella,
+.workspace[data-view="reports"] .config-panel,
+.workspace[data-view="saturation"] .summary-strip,
+.workspace[data-view="saturation"] .planner-grid,
+.workspace[data-view="saturation"] #cargas,
+.workspace[data-view="saturation"] .config-panel,
+.workspace[data-view="saturation"] .reports-panel,
+.workspace[data-view="saturation"] .draft-executive { display: none; }
 .workspace:not([data-view="plan"]) .restore-draft-action { display: none; }
 
 .reports-panel { display: none; }
@@ -1638,6 +1648,16 @@ tr:last-child td { border-bottom: 0; }
 .resource-person-input { width: 100%; min-width: 160px; font-weight: 650; }
 .resource-cell { display: block; min-width: 120px; }
 .resource-cell strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bottleneck-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 14px; align-items: start; padding: 4px 16px 20px; }
+.bottleneck-panel { min-width: 0; }
+.bottleneck-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 2px 0; }
+.bottleneck-panel header h3 { margin: 0; font-size: 13px; }
+.bottleneck-panel header span { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+#bottleneckOperators .load-percent.danger { background: #e88787; }
+#bottleneckOperations td:nth-child(2) { white-space: nowrap; }
+#bottleneckOperations .load-percent strong { font-size: 14px; }
+#bottleneckOperations .load-percent span { font-size: 9px; }
 .matrix-table { min-width: 1040px; table-layout: auto; }
 .matrix-table thead th { top: 0; z-index: 5; height: 82px; vertical-align: top; background: #edf1f3; box-shadow: 0 1px 0 var(--line-strong); }
 .matrix-table th:first-child,

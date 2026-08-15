@@ -125,6 +125,7 @@ const WORKSPACE_TITLES = {
   calendario: "Calendario de capacidad",
   herramentales: "Catalogos",
   cargas: "Cargas de operadores",
+  "cuello-botella": "Cuello de botella",
   "hoja-inspeccion": "Hoja de inspección",
   reportes: "Reportes de produccion",
 };
@@ -603,6 +604,12 @@ function bindElements() {
     "loadWeekRange",
     "loadPlanSelect",
     "loadModeSelect",
+    "bottleneckOperators",
+    "bottleneckOperations",
+    "bottleneckPlanSelect",
+    "bottleneckModeSelect",
+    "bottleneckWeekInput",
+    "bottleneckWeekRange",
     "matrixWrap",
     "matrixSearchInput",
     "matrixSearchCount",
@@ -830,6 +837,15 @@ function bindEvents() {
     loadMode = els.loadModeSelect.value;
     renderLoads();
   });
+  els.bottleneckWeekInput.addEventListener("change", () => {
+    state.loadWeekStart = normalizeWeekStartValue(els.bottleneckWeekInput.value);
+    saveAndRender("Semana de cuellos de botella actualizada");
+  });
+  els.bottleneckPlanSelect.addEventListener("change", () => loadSelectedBottleneckPlan(els.bottleneckPlanSelect.value));
+  els.bottleneckModeSelect.addEventListener("change", () => {
+    loadMode = els.bottleneckModeSelect.value;
+    renderSaturation();
+  });
   els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
   els.weekReportStartInput.addEventListener("change", () => {
     state.reportWeekStart = normalizeWeekStartValue(els.weekReportStartInput.value);
@@ -953,7 +969,7 @@ function applyInitialWorkspaceView({ scrollToTop = false } = {}) {
 function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
-  const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config")));
+  const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "cuello-botella" ? "saturation" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config"))));
   workspace.dataset.view = view;
   workspace.dataset.section = section;
   document.querySelectorAll(".nav-item").forEach((item) => {
@@ -965,6 +981,7 @@ function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
   if (els.workspaceTitle) els.workspaceTitle.textContent = WORKSPACE_TITLES[section] || "Planeacion de Produccion";
   if (tab) showTab(tab);
   if (view === "loads") renderLoads();
+  if (view === "saturation") renderSaturation();
   if (view === "reports") renderReports();
   if (section === "herramentales") {
     renderConfiguration();
@@ -1564,6 +1581,7 @@ function render(options = {}) {
   if (all || parts.queue) renderPriorityQueue();
   if (all || parts.gantt) renderGantt();
   if (all || parts.loads) renderLoads();
+  if (all || parts.saturation) renderSaturation();
   if (all || parts.matrix) renderMatrix();
   if (all || parts.catalogs) renderConfiguration();
   if (all || parts.reports) renderReports();
@@ -3706,6 +3724,99 @@ function renderLoads() {
 
 function clearResourceCategoryDropTargets() {
   els.loadList.querySelectorAll(".resource-category-group.drag-over").forEach((group) => group.classList.remove("drag-over"));
+}
+
+function renderBottleneckSourceSelect() {
+  if (!els.bottleneckPlanSelect) return;
+  const selected = loadSnapshot?.snapshotId || "draft";
+  const publishedIds = publishedSnapshotIds();
+  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+    const week = snapshot.weekStart || snapshot.planStart;
+    return `<option value="${escapeHtml(snapshot.snapshotId)}">Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(snapshot.version || 1)}</option>`;
+  }).join("");
+  els.bottleneckPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
+  els.bottleneckPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
+  els.bottleneckModeSelect.value = loadMode;
+}
+
+async function loadSelectedBottleneckPlan(snapshotId) {
+  if (!snapshotId || snapshotId === "draft") {
+    loadSnapshot = null;
+    const scheduledStart = scheduledPlanWindowStart();
+    state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
+    renderSaturation();
+    return;
+  }
+  els.bottleneckPlanSelect.disabled = true;
+  try {
+    loadSnapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", snapshotId)
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    loadSnapshot.snapshotId = snapshotId;
+    const source = loadSnapshot.fullState || loadSnapshot;
+    if (source.weekStart || source.planStart) {
+      state.loadWeekStart = normalizeWeekStartValue(source.weekStart || source.planStart);
+    }
+    renderSaturation();
+  } catch (error) {
+    loadSnapshot = null;
+    showToast(`No se pudo cargar la fuente de cuellos de botella: ${error.message}`);
+    renderSaturation();
+  } finally {
+    els.bottleneckPlanSelect.disabled = false;
+  }
+}
+
+function renderSaturation() {
+  if (document.querySelector(".workspace")?.dataset.view !== "saturation") return;
+  const perfMark = planningPerfMark("saturation-render");
+  renderBottleneckSourceSelect();
+  const source = window.PlanningWorkflowCore.loadOperationsForMode(
+    loadSnapshot || { operations: currentDraftScheduledOperations() },
+    state.operations,
+    loadMode
+  );
+  els.bottleneckWeekInput.value = state.loadWeekStart;
+  const week = selectedWeekRange(state.loadWeekStart);
+  els.bottleneckWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+
+  const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
+  const saturated = loads.filter((item) => item.percent > 100);
+  els.bottleneckOperators.innerHTML = `
+    <thead><tr><th>ID</th><th>Nombre</th><th>Recurso</th><th>Carga</th></tr></thead>
+    <tbody>${saturated.length ? saturated.map((item, rowNumber) => {
+      const profile = state.operatorProfiles[item.operator] || { name: item.operator, category: resourceCategoryFor(item.operator) };
+      return `<tr class="resource-row">
+        <td>${rowNumber + 1}</td>
+        <td>${escapeHtml(profile.name || item.operator)}</td>
+        <td><div class="resource-cell"><strong>${escapeHtml(item.operator)}</strong><span>${escapeHtml(formatResourceCategoryLabel(resourceCategoryFor(item.operator)))}</span></div></td>
+        <td class="load-percent danger"><strong>${Math.round(item.percent)}%</strong><span>${formatHours(item.minutes)} / ${formatHours(item.available)}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="4" class="bottleneck-empty">Sin operadores saturados en la semana</td></tr>`}</tbody>
+  `;
+
+  const weekOperations = operationsForWeekSource(source, "", state.loadWeekStart)
+    .filter((op) => !isToolChangeReportOperation(op) && !isSubcontractAppOperation(op) && op.operador !== "SUBCONTRATO");
+  const top = weekOperations
+    .map((op) => ({ op, minutes: operationDuration(op) }))
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, 10);
+  els.bottleneckOperations.innerHTML = `
+    <thead><tr><th>OT</th><th>Operacion</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
+    <tbody>${top.length ? top.map(({ op, minutes }) => {
+      const start = opStart(op);
+      const description = op.descripcion || `CT ${op.ct}`;
+      return `<tr>
+        <td>${escapeHtml(op.ot)}</td>
+        <td>${escapeHtml(description)}</td>
+        <td>${escapeHtml(op.operador || "")}</td>
+        <td>${escapeHtml(op.maquina || "")}</td>
+        <td>${start ? `${escapeHtml(formatShortDate(start))} ${escapeHtml(op.horaInicio || "")}` : "-"}</td>
+        <td class="load-percent danger"><strong>${formatHours(minutes)}</strong><span>${formatMinutes(minutes)}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
+  `;
+  planningPerfMeasure("saturation-render", perfMark);
 }
 
 function focusCapabilityPlanState(key) {

@@ -45,6 +45,10 @@
             <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
             <span>Cargas</span>
           </a>
+          <a href="#cuello-botella" class="nav-item" data-section="cuello-botella">
+            <svg viewBox="0 0 24 24"><path d="M8 3h8v4l-2 2v5h2l1 3-1 4H8l-1-4 1-3h2V9L8 7V3Z"/></svg>
+            <span>Cuello de botella</span>
+          </a>
           <a href="#reportes" class="nav-item" data-section="reportes" data-tab="week">
             <svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 11h6M9 15h6"/></svg>
             <span>Reportes</span>
@@ -226,6 +230,27 @@
           </div>
           <div class="operator-load-wrap">
             <table id="loadList" class="operator-load-table"></table>
+          </div>
+        </section>
+
+        <section class="panel operator-load-screen" id="cuello-botella" aria-labelledby="bottleneckTitle">
+          <div class="load-screen-heading">
+            <div><h2 id="bottleneckTitle">Cuello de botella</h2><span id="bottleneckWeekRange">Semana seleccionada</span></div>
+            <div class="load-screen-actions">
+              <label class="compact-control"><span>Plan</span><select id="bottleneckPlanSelect"></select></label>
+              <label class="compact-control"><span>Estado</span><select id="bottleneckModeSelect"><option value="pending">Pendientes</option><option value="completed">Completadas</option><option value="original">Plan original</option></select></label>
+              <label class="compact-control"><span>Semana</span><input id="bottleneckWeekInput" type="date" /></label>
+            </div>
+          </div>
+          <div class="bottleneck-grid">
+            <section class="bottleneck-panel" aria-labelledby="bottleneckOperatorsTitle">
+              <header><h3 id="bottleneckOperatorsTitle">Cuello de botella operador</h3><span>Operadores con carga mayor a 100%</span></header>
+              <div class="operator-load-wrap"><table id="bottleneckOperators" class="operator-load-table"></table></div>
+            </section>
+            <section class="bottleneck-panel" aria-labelledby="bottleneckOperationsTitle">
+              <header><h3 id="bottleneckOperationsTitle">Cuello de botella operación</h3><span>Top 10 operaciones de mayor tiempo</span></header>
+              <div class="operator-load-wrap"><table id="bottleneckOperations" class="operator-load-table"></table></div>
+            </section>
           </div>
         </section>
 
