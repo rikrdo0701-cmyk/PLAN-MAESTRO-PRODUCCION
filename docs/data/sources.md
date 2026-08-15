@@ -297,6 +297,16 @@ Fecha inicio real, Fecha fin real, Cantidad realizada`.
 - Reader: `parser_operaciones.js`. Writer: `OPERACION FINAL.js`.
 - ⚠️ Conflicto de nombre: `OPERACION FINAL.js` escribe `Operaciones programadas` (p minúscula)
   vs constante `HOJA_OPERACIONES_PROGRAMADAS = 'Operaciones Programadas'`.
+- ⚠️ No incluye columna de cantidad a procesar. En el sync completo (RESTlet 1762/17 vía
+  `PP_fetchNetSuitePlanningData_` → `PP_mapNetSuiteOperation_`), la cantidad pendiente
+  (`cantTotal`/`cantPendiente`) proviene de la OT: de la fila si expone
+  `Cantidad a procesar` / `Cantidad` / `qty_to_process`, o del catálogo de OTs
+  (`current.workOrders[].pendingQuantity = Cantidad - Cantidad ensamblada`, RESTlet 1764/1);
+  no existe fallback de cantidad. Las operaciones cuya OT no está en el catálogo abierto
+  (OT cerrada o eliminada) se descartan del sync completo y de planeación (filtro
+  `PP_belongsToPlant_` contra el catálogo). La ruta directa por OT
+  (`PP_fetchDirectWorkOrderOperations_`) sí inyecta `Cantidad a procesar = Cantidad - Cantidad ensamblada`. La ruta directa por OT
+  (`PP_fetchDirectWorkOrderOperations_`) sí inyecta `Cantidad a procesar = Cantidad - Cantidad ensamblada`.
 - ⚠️ `testoperaciones.js` escribe `Operaciones Programadas` pero con esquema incompatible
   (14 headers en minúsculas): `orden de trabajo, articulo, descripcion articulo, estado,
   fecha inicio, fecha inicio real orden, fecha final, cantidad planificada, cantidad completada,

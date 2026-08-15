@@ -504,3 +504,96 @@ test("si no existe catálogo previo el fallback conserva operaciones de las OT",
 
   assert.equal(merged.operationCatalog.length, 1);
 });
+
+test("cantidad de operación sin columna usa el pendiente del catálogo de OTs", () => {
+  const { context } = load();
+  const current = {
+    workOrders: [
+      { ot: "2476", pendingQuantity: 3 },
+      { ot: "2474", pendingQuantity: 4 },
+    ],
+  };
+  const row = {
+    "Orden de trabajo": "2476",
+    Secuencia: 1,
+    "Centro de trabajo": "5467",
+    "Trabajo restante (min)": 7.02,
+  };
+  const operation = context.PP_mapNetSuiteOperation_(row, 0, current);
+
+  assert.equal(operation.cantTotal, 3);
+  assert.equal(operation.cantPendiente, 3);
+});
+
+test("operación de OT cerrada o eliminada desaparece del sync completo", () => {
+  const { context } = load();
+  const current = {
+    operations: [],
+    workOrders: [
+      { ot: "2476", workOrderId: "1001", pendingQuantity: 3 },
+      { ot: "2474", workOrderId: "1002", pendingQuantity: 4 },
+    ],
+    operationCatalog: [],
+  };
+  const snapshot = {
+    workOrders: current.workOrders,
+    plantOperations: [
+      {
+        "Orden de trabajo": "2476",
+        "WO Internal ID": "1001",
+        Secuencia: 1,
+        "Centro de trabajo": "5467",
+        "Trabajo restante (min)": 7.02,
+      },
+      {
+        "Orden de trabajo": "2499",
+        "WO Internal ID": "1099",
+        Secuencia: 1,
+        "Centro de trabajo": "5467",
+      },
+    ],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "",
+  };
+  const merged = context.PP_applyNetSuitePlantData_(current, snapshot);
+
+  assert.equal(merged.operations.length, 1);
+  assert.equal(merged.operations[0].ot, "2476");
+  assert.equal(merged.operations[0].cantTotal, 3);
+});
+
+test("operación de OT cerrada o eliminada desaparece del sync de planeación", () => {
+  const { context } = load();
+  const current = {
+    operations: [],
+    workOrders: [
+      { ot: "2476", pendingQuantity: 3 },
+      { ot: "2474", pendingQuantity: 4 },
+    ],
+    operationCatalog: [],
+  };
+  const snapshot = {
+    plantOperations: [
+      {
+        "Orden de trabajo": "2476",
+        Secuencia: 1,
+        "Centro de trabajo": "5467",
+        "Trabajo restante (min)": 7.02,
+      },
+      {
+        "Orden de trabajo": "2499",
+        Secuencia: 1,
+        "Centro de trabajo": "5467",
+      },
+    ],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "",
+  };
+  const merged = context.PP_applyNetSuitePlanningData_(current, snapshot);
+
+  assert.equal(merged.operations.length, 1);
+  assert.equal(merged.operations[0].ot, "2476");
+  assert.equal(merged.operations[0].cantTotal, 3);
+});

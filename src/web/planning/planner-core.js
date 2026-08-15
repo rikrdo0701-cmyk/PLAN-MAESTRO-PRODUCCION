@@ -864,7 +864,7 @@
       const prior = lo > 0 ? events[lo - 1] : null;
       if (prior) {
         fromKey = prior.toolKey || "SIN_ANTECEDENTE";
-        if (prior.toolKey === toKey) return { required: false, minutes: 0, fromLabel: fromKey, toLabel: toKey };
+        if (normalizeKey(prior.toolKey) === normalizeKey(toKey)) return { required: false, minutes: 0, fromLabel: fromKey, toLabel: toKey };
       }
     }
     const minutes = toolChangeMinutesForTransition(context.state, op, fromKey, toKey, context.settings);
@@ -913,7 +913,7 @@
     const fromLabel = operationToolKey(op);
     if (!fromLabel || !machine || machine === "SIN_MAQUINA") return { required: false };
     const future = firstEventAfter(context.machineTools.get(machine), allocation.end.getTime());
-    if (!future || future.toolKey === fromLabel || future.isChange || Number.isFinite(future.preChangeStart)) {
+    if (!future || normalizeKey(future.toolKey) === normalizeKey(fromLabel) || future.isChange || Number.isFinite(future.preChangeStart)) {
       return { required: false };
     }
     const operator = toolChangeOperator(context.state, context.settings);

@@ -138,9 +138,12 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
     item.dueDateOverride = String(previous.dueDateOverride || '').trim();
   });
   const plantOperations = snapshot.plantOperations || [];
+  const catalogFilter = PP_buildPlantFilterFromWorkOrders_(workOrderCatalog);
+  const contextForOperations = Object.assign({}, current, { workOrders: workOrderCatalog });
   const operations = plantOperations
     .filter(PP_isSchedulable_)
-    .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
+    .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
+    .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, contextForOperations); });
   const materials = snapshot.materials || [];
 
   const merged = JSON.parse(JSON.stringify(current || {}));
@@ -207,8 +210,10 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
 function PP_applyNetSuitePlanningData_(current, snapshot) {
   if (snapshot.workOrders) return PP_applyNetSuitePlantData_(current, snapshot);
   const plantOperations = snapshot.plantOperations || [];
+  const catalogFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
   const operations = plantOperations
     .filter(PP_isSchedulable_)
+    .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
     .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
   const materials = snapshot.materials || [];
   const merged = JSON.parse(JSON.stringify(current || {}));
@@ -634,6 +639,15 @@ function PP_isSchedulable_(row) {
   ].some(function(terminal) { return status.indexOf(terminal) >= 0; });
 }
 
+function PP_workOrderPendingQuantity_(current, ot) {
+  if (!current || !Array.isArray(current.workOrders)) return 0;
+  const found = current.workOrders.find(function(workOrder) {
+    return PP_normalizeKey_(workOrder.ot) === PP_normalizeKey_(ot);
+  });
+  if (!found) return 0;
+  return Math.max(0, Number(found.pendingQuantity || 0));
+}
+
 function PP_mapNetSuiteOperation_(row, index, current) {
   const ot = String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid']) || ('WO-' + (index + 1))).trim();
   const sequence = Number(PP_pick_(row, ['Secuencia', 'sequence']) || 1);
@@ -641,9 +655,10 @@ function PP_mapNetSuiteOperation_(row, index, current) {
   const existing = (current.operations || []).find(function(op) {
     return PP_normalizeKey_(op.ot) === PP_normalizeKey_(ot) && Number(op.secuencia) === sequence && PP_normalizeKey_(op.ct) === PP_normalizeKey_(ct);
   }) || {};
-  const qty = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad', 'qty_to_process']) || 0);
+  const qtyRaw = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad', 'qty_to_process']) || 0);
+  const qty = qtyRaw > 0 ? qtyRaw : PP_workOrderPendingQuantity_(current, ot);
   const done = Number(PP_pick_(row, ['Cantidad realizada', 'qty_completed']) || 0);
-  const pending = Math.max(0, qty - done) || qty || 1;
+  const pending = Math.max(0, qty - done);
   const rateRaw = Number(PP_pick_(row, ['Tasa produccion', 'production_rate']));
   const setupRaw = Number(PP_pick_(row, ['Tiempo preparacion (min)', 'setup_min']));
   const rate = Number.isFinite(rateRaw) ? (rateRaw > 10 ? 0.67 : Math.max(0, rateRaw)) : 0;
@@ -681,7 +696,7 @@ function PP_mapNetSuiteOperation_(row, index, current) {
     cantPendiente: pending,
     tiempoCiclo: rate,
     tiempoSetup: setup,
-    tiempoProd: rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0),
+    tiempoProd: pending > 0 && rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0),
     fechaInicio: existing.fechaInicio || '', horaInicio: existing.horaInicio || '', fechaFin: existing.fechaFin || '', horaFin: existing.horaFin || '',
     tipoInsercion: 'OPERACION',
     estatus: String(PP_pick_(row, ['Estado', 'Status', 'status_op']) || 'No iniciado').trim(),

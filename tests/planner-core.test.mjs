@@ -1151,6 +1151,23 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   assert.equal(change.kitHerramental, "");
 });
 
+test("dos doblados con el mismo herramental en distinto uso de mayusculas no generan cambio", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "prior-mount", ot: "999", secuencia: 1, ct: "5459", descripcion: "DOBLADO", estatus: "PLAN", operationState: "COMPLETADA", maquina: "211", herramental: "3 X 4.5", fechaInicio: "2026-07-12", horaInicio: "16:00", fechaFin: "2026-07-12", horaFin: "18:00", tiempoProd: 120 },
+    { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO A", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "3 X 4.5", tiempoProd: 20 },
+    { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO B", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "3 x 4.5", tiempoProd: 20 },
+  ];
+  const result = core.schedulePlan({
+    operations, workOrders: [{ ot: "999" }, { ot: "100" }, { ot: "200" }], operators: ["OPERADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLADO": ["OPERADOR 2"], "5459::DOBLADO_A": ["OPERADOR 2"], "5459::DOBLADO_B": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLADO", "5459::DOBLADO_A", "5459::DOBLADO_B", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 120 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+  const changes = result.operations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  assert.equal(changes.length, 0, "el herramental 3 X 4.5 y 3 x 4.5 son el mismo, no debe generarse cambio");
+});
+
 test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
