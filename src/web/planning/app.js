@@ -670,6 +670,8 @@ function bindElements() {
     "calendarConceptInput",
     "calendarMachineField",
     "calendarMachineInput",
+    "calendarOperatorField",
+    "calendarOperatorInput",
     "calendarStartDateInput",
     "calendarEndDateField",
     "calendarEndDateInput",
@@ -1083,13 +1085,14 @@ function normalizeState() {
   state.materials = normalizeMaterials(state.materials);
   state.calendarExceptions = (Array.isArray(state.calendarExceptions) ? state.calendarExceptions : []).map((item, index) => {
     const rawConcept = normalizeStatus(item.concept || item.concepto || item.resourceType || item.tipoRecurso || "GENERAL");
-    const concept = ["GENERAL", "MAQUINA", "ASUETO", "VACACIONES"].includes(rawConcept) ? rawConcept : "GENERAL";
+    const concept = ["GENERAL", "MAQUINA", "OPERADOR", "ASUETO", "VACACIONES"].includes(rawConcept) ? rawConcept : "GENERAL";
     const startDate = normalizeOtDate(item.startDate || item.fechaInicio || item.date || item.fecha);
     const endDate = normalizeOtDate(item.endDate || item.fechaFin || item.date || item.fecha || startDate);
     return {
       id: String(item.id || `cal-${index + 1}`),
       concept,
       machine: concept === "MAQUINA" ? String(item.machine || item.maquina || item.resource || item.recurso || "").trim().toUpperCase() : "",
+      resource: concept === "OPERADOR" ? String(item.resource || item.recurso || item.machine || item.maquina || "").trim().toUpperCase() : "",
       startDate,
       endDate: endDate || startDate,
       start: String(item.start || item.horaInicio || "00:00"),
@@ -4278,12 +4281,21 @@ function renderCalendarExceptions() {
     ? `<option value="">Selecciona una maquina</option>${machineIds.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}`
     : `<option value="">Sin maquinas configuradas</option>`;
   if (machineIds.includes(selectedMachine)) els.calendarMachineInput.value = selectedMachine;
+  const selectedOperator = els.calendarOperatorInput.value;
+  const operatorIds = uniq((Array.isArray(state.operators) ? state.operators : [])
+    .map((operator) => String(operator || "").trim().toUpperCase())
+    .filter(Boolean))
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
+  els.calendarOperatorInput.innerHTML = operatorIds.length
+    ? `<option value="">Selecciona un operador</option>${operatorIds.map((operator) => `<option value="${escapeHtml(operator)}">${escapeHtml(operator)}</option>`).join("")}`
+    : `<option value="">Sin operadores configurados</option>`;
+  if (operatorIds.includes(selectedOperator)) els.calendarOperatorInput.value = selectedOperator;
   updateCalendarForm(false);
   const rows = [...state.calendarExceptions]
-    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")) || String(a.machine || "").localeCompare(String(b.machine || "")))
+    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")) || String(a.resource || a.machine || "").localeCompare(String(b.resource || b.machine || "")))
     .map((item) => `<tr>
       <td>${escapeHtml(calendarConceptLabel(item.concept))}</td>
-      <td>${escapeHtml(item.machine || "TODA LA PLANTA")}</td>
+      <td>${escapeHtml(item.resource || item.machine || "TODA LA PLANTA")}</td>
       <td>${escapeHtml(calendarPeriodLabel(item))}</td>
       <td>${escapeHtml(item.reason || "")}</td>
       <td><button class="table-action" type="button" data-delete-calendar="${escapeHtml(item.id)}" aria-label="Eliminar excepcion">&times;</button></td>
@@ -4300,10 +4312,14 @@ function renderCalendarExceptions() {
 function updateCalendarForm(resetTimes = false) {
   const concept = els.calendarConceptInput.value;
   const usesMachine = concept === "MAQUINA";
-  const usesPeriod = usesMachine || concept === "VACACIONES";
+  const usesOperator = concept === "OPERADOR";
+  const usesResource = usesMachine || usesOperator;
+  const usesPeriod = usesResource || concept === "VACACIONES";
   const requiresTimes = concept === "GENERAL" || concept === "VACACIONES";
   els.calendarMachineField.hidden = !usesMachine;
   els.calendarMachineInput.required = usesMachine;
+  els.calendarOperatorField.hidden = !usesOperator;
+  els.calendarOperatorInput.required = usesOperator;
   els.calendarEndDateField.hidden = !usesPeriod;
   els.calendarEndDateInput.required = usesPeriod;
   els.calendarStartInput.required = requiresTimes;
@@ -4319,6 +4335,7 @@ function updateCalendarForm(resetTimes = false) {
   const hints = {
     GENERAL: "Paro extraordinario de toda la planta en una fecha y horario definidos.",
     MAQUINA: "La maquina no estara disponible durante el intervalo; las horas son opcionales y, vacias, cubren los dias completos.",
+    OPERADOR: "El operador no estara disponible durante el intervalo; las horas son opcionales y, vacias, cubren los dias completos.",
     ASUETO: "Asueto de toda la planta; sin horas se considera el dia completo.",
     VACACIONES: "Periodo continuo que detiene operadores y maquinas desde la fecha y hora inicial hasta la final.",
   };
@@ -4326,7 +4343,7 @@ function updateCalendarForm(resetTimes = false) {
 }
 
 function calendarConceptLabel(concept) {
-  return ({ GENERAL: "General", MAQUINA: "Maquina", ASUETO: "Asueto", VACACIONES: "Periodo vacacional" })[concept] || concept;
+  return ({ GENERAL: "General", MAQUINA: "Maquina", OPERADOR: "Operador", ASUETO: "Asueto", VACACIONES: "Periodo vacacional" })[concept] || concept;
 }
 
 function calendarPeriodLabel(item) {
@@ -5017,9 +5034,10 @@ function addMachine() {
 function addCalendarException() {
   const concept = els.calendarConceptInput.value;
   const machine = concept === "MAQUINA" ? els.calendarMachineInput.value.trim().toUpperCase() : "";
+  const resource = concept === "OPERADOR" ? els.calendarOperatorInput.value.trim().toUpperCase() : "";
   const reason = els.calendarReasonInput.value.trim();
   const startDate = els.calendarStartDateInput.value;
-  const usesPeriod = concept === "MAQUINA" || concept === "VACACIONES";
+  const usesPeriod = concept === "MAQUINA" || concept === "OPERADOR" || concept === "VACACIONES";
   const endDate = usesPeriod ? els.calendarEndDateInput.value : startDate;
   const start = els.calendarStartInput.value || "00:00";
   const end = els.calendarEndInput.value || "24:00";
@@ -5028,13 +5046,14 @@ function addCalendarException() {
   if (usesPeriod && !endDate) return showToast("Selecciona la fecha final");
   if (endDate < startDate) return showToast("La fecha final no puede ser anterior a la inicial");
   if (concept === "MAQUINA" && !machine) return showToast("Selecciona una maquina del catalogo");
+  if (concept === "OPERADOR" && !resource) return showToast("Selecciona un operador del catalogo");
   if ((concept === "GENERAL" || concept === "VACACIONES") && (!els.calendarStartInput.value || !els.calendarEndInput.value)) {
     return showToast("Captura la hora inicial y final");
   }
   if (startDate === endDate && end <= start) return showToast("La hora final debe ser posterior a la inicial");
   checkpointState();
   state.calendarExceptions.push({
-    id: uid("cal"), concept, machine, startDate, endDate, start, end, reason, active: true,
+    id: uid("cal"), concept, machine, resource, startDate, endDate, start, end, reason, active: true,
   });
   els.calendarReasonInput.value = "";
   els.calendarStartDateInput.value = "";

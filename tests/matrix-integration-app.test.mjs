@@ -467,3 +467,27 @@ test("KPI histórico se calcula solo con el snapshot publicado", () => {
 
   assert.deepEqual(result, { initialCut: 7, finishing: 7 });
 });
+
+test("la app conserva el concepto OPERADOR de CALENDARIO y mapea su recurso al normalizar estado", () => {
+  const calendarSource = sourceBetween(
+    "state.calendarExceptions = (Array.isArray(state.calendarExceptions)",
+    "state.subcontracts = (Array.isArray(state.subcontracts)",
+  );
+  const normalizeCalendar = Function(
+    "state", "normalizeStatus", "normalizeOtDate",
+    `${calendarSource}; return state;`,
+  );
+  const call = (source, extra) => normalizeCalendar(
+    { calendarExceptions: [source] },
+    normalizeStatus,
+    (value) => String(value || "").slice(0, 10),
+  );
+
+  const operatorException = call({ concept: "OPERADOR", resource: "SOLDADOR", fechaInicio: "2026-08-20", fechaFin: "2026-08-20" });
+  assert.equal(operatorException.calendarExceptions[0].concept, "OPERADOR");
+  assert.equal(operatorException.calendarExceptions[0].resource, "SOLDADOR");
+  assert.equal(operatorException.calendarExceptions[0].machine, "");
+
+  const fallbackFromBackend = call({ concept: "OPERADOR", machine: "PUNTEADOR", fechaInicio: "2026-08-22", fechaFin: "2026-08-22" });
+  assert.equal(fallbackFromBackend.calendarExceptions[0].resource, "PUNTEADOR");
+});

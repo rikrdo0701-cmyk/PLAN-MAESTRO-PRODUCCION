@@ -35,6 +35,14 @@ Tabla de pares clave→valor (JSON). Headers: `KEY, VALUE`.
 - `syncedAt` se usa en el frontend para considerar frescos los datos de planeación por 5 minutos
   antes de generar plan. Si NetSuite no responde al refresco de operaciones y ya existen
   operaciones cargadas para todas las OTs seleccionadas, la generación continúa con esos datos.
+- `workSchedule` (JSON por día: `{ MON..SUN: { enabled, start, end } }`) define la ventana de
+  trabajo de cada día que consume `effectiveWindows` del motor (RULE-CAL-001). Default en
+  `app.js:19-27`: lunes a viernes `07:00-17:00` habilitados; sábado/domingo deshabilitados
+  (`07:00-13:00` sin efecto). `dailyBreaks` (JSON por evento: `{ MEAL, PRODUCTION: { enabled,
+  start, end } }`) define pausas intradía que restan de la ventana; default deshabilitadas
+  (`app.js:28-31`). Ambos los lee el frontend (`app.js:1018-1027`) y el motor
+  (`planner-core.js:1267-1279`), y los persiste el backend como JSON en `CONFIG`
+  (`02-storage.js:130-131, 567-568`).
 
 ## OPERACIONES
 
@@ -154,7 +162,27 @@ REQUERIDO, EMITIDO, PENDIENTE`.
 
 Headers: `ID, CONCEPTO, MAQUINA, FECHA_INICIO, HORA_INICIO, FECHA_FIN, HORA_FIN, MOTIVO, ACTIVO`.
 
-- Readers: `PP_readState_` → `PP_mapCalendar_`. Writers: `PP_writeState_`, `PP_writeCatalogState_`.
+- Readers: `PP_readState_` → `PP_mapCalendar_` (mapea a `state.calendarExceptions` con campos
+  `{id, concept, machine, startDate, start, endDate, end, reason, active}`); en el frontend el
+  motor `PlannerCore.effectiveWindows` consume esas excepciones (`planner-core.js:1280-1297`).
+- Writers: `PP_writeState_`, `PP_writeCatalogState_`.
+- Origen de datos: hoja mantenida por el usuario (configuración de calendario); no proviene de
+  NetSuite.
+- Conceptos (`CONCEPTO`, RULE-CAL-001):
+  - `GENERAL` — paro extraordinario de toda la planta con horario definido (`start`/`end`).
+  - `MAQUINA` — la máquina de `MAQUINA` no está disponible en el intervalo; sin horas cubre el
+    día completo. `MAQUINA` → `MAQUINAS.ID`.
+  - `ASUETO` — asueto de toda la planta; sin horas se considera el día completo.
+  - `VACACIONES` — periodo continuo (fecha/hora inicial → final).
+  - `OPERADOR` — el operador de `MAQUINA` (columna reutilizada como recurso) no está disponible en
+    el intervalo; sin horas cubre el día completo. El motor lo filtra por `resource`/`recurso`
+    (`planner-core.js:1287`) y el frontend lo conserva al normalizar estado (`app.js:1086`,
+    mapeando el recurso en `resource`). El backend persiste el operador en la columna `MAQUINA`
+    (`02-storage.js:222-224`).
+- `ACTIVO = false` excluye la excepción (`planner-core.js:1281`).
+- Efecto en el motor: cada excepción resta un intervalo de la ventana de trabajo del día
+  (`subtractWindow`); una sin horas abarca `00:00-24:00` (`planner-core.js:1294-1296`). Ver
+  RULE-CAL-001 y RULE-CAL-002.
 
 ## SUBCONTRATOS
 
@@ -225,6 +253,10 @@ HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO`.
 
 - Readers: descarga externa del usuario.
 - Writer: `exportCsv` (`src/web/planning/app.js`) via `PlanningWorkflowCore.draftExportOperations`.
+- `FECHA_INICIO`/`HORA_INICIO`/`FECHA_FIN`/`HORA_FIN` conservan el inicio y fin reales de la
+  operación; cuando una operación se parte entre días laborables (RULE-CAL-002), el fin puede caer
+  en el día siguiente (07:00 del siguiente día hábil) aunque `TIEMPO_PROD` siga siendo los minutos
+  productivos.
 
 ## AUDITORIA
 

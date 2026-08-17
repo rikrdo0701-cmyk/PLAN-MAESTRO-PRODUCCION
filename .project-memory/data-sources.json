@@ -27,7 +27,7 @@
         "ensurePlanningDataLoaded (frontend usa syncedAt)"
       ],
       "writers": ["PP_writeConfigPatch_", "PP_writeState_", "seed PP_ensureWorkbook_"],
-      "rules": ["RULE-OT-014"],
+      "rules": ["RULE-OT-014", "RULE-CAL-001"],
       "status": "documented",
       "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
     },
@@ -184,12 +184,15 @@
       "type": "google_sheet",
       "name": "CALENDARIO",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "CONCEPTO", "MAQUINA", "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "MOTIVO", "ACTIVO"],
-      "readers": ["PP_readState_ (PP_mapCalendar_)"],
+      "columns": [
+        "ID", "CONCEPTO (GENERAL/MAQUINA/ASUETO/VACACIONES; OPERADOR solo lo filtra el motor)",
+        "MAQUINA", "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "MOTIVO", "ACTIVO"
+      ],
+      "readers": ["PP_readState_ (PP_mapCalendar_) -> state.calendarExceptions; PlannerCore.effectiveWindows (frontend)"],
       "writers": ["PP_writeState_", "PP_writeCatalogState_"],
-      "rules": [],
+      "rules": ["RULE-CAL-001", "RULE-CAL-002"],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": ["src/server/02-storage.js", "src/web/planning/planner-core.js"]
     },
     {
       "source_id": "SHEET-SUBCONTRATOS",
@@ -581,5 +584,5 @@
       "references": ["src/server/09-photos.js"]
     }
   ],
-  "updated_at": "2026-08-15T00:00:00-06:00"
+  "updated_at": "2026-08-16T00:00:00-06:00"
 }

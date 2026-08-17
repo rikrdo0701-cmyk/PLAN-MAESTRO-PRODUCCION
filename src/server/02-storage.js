@@ -220,7 +220,7 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
     return [item.id, item.part || item.parte, item.herramental, item.kitHerramental, Number(item.toolSetupMinutes || 0), Number(item.kitSetupMinutes || 0), item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CALENDARIO'), PP_SHEETS.CALENDARIO, (payload.calendarExceptions || []).map(function(item) {
-    return [item.id, item.concept || item.concepto || 'GENERAL', item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
+    return [item.id, item.concept || item.concepto || 'GENERAL', item.resource || item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('SUBCONTRATOS'), PP_SHEETS.SUBCONTRATOS, (payload.subcontracts || []).map(function(item) {
     return [item.id, item.part || item.parte || '*', item.name || item.tipo, Number(item.days || item.dias || 3), item.active !== false];
@@ -676,7 +676,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     return [item.id, item.ot, item.workOrderId, item.assembly, item.componentId, item.component, item.description, item.unit, Number(item.required || 0), Number(item.issued || 0), Number(item.pending || 0)];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CALENDARIO'), PP_SHEETS.CALENDARIO, (payload.calendarExceptions || []).map(function(item) {
-    return [item.id, item.concept || item.concepto || 'GENERAL', item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
+    return [item.id, item.concept || item.concepto || 'GENERAL', item.resource || item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('SUBCONTRATOS'), PP_SHEETS.SUBCONTRATOS, (payload.subcontracts || []).map(function(item) {
     return [item.id, item.part || item.parte || '*', item.name || item.tipo, Number(item.days || item.dias || 3), item.active !== false];

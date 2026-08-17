@@ -371,8 +371,9 @@
             <div class="config-section">
             <div class="section-heading"><div><h2>Dias y periodos no laborales</h2><span>Paros generales, maquinas, asuetos y vacaciones</span></div></div>
             <div class="config-form calendar-form">
-              <label><span>Concepto</span><select id="calendarConceptInput"><option value="GENERAL">General</option><option value="MAQUINA">Maquina</option><option value="ASUETO">Asueto</option><option value="VACACIONES">Periodo vacacional</option></select></label>
+              <label><span>Concepto</span><select id="calendarConceptInput"><option value="GENERAL">General</option><option value="MAQUINA">Maquina</option><option value="OPERADOR">Operador</option><option value="ASUETO">Asueto</option><option value="VACACIONES">Periodo vacacional</option></select></label>
               <label id="calendarMachineField" hidden><span>Maquina</span><select id="calendarMachineInput"><option value="">Selecciona una maquina</option></select></label>
+              <label id="calendarOperatorField" hidden><span>Operador</span><select id="calendarOperatorInput"><option value="">Selecciona un operador</option></select></label>
               <label class="calendar-reason-field"><span>Motivo</span><input id="calendarReasonInput" type="text" placeholder="Motivo del paro" required /></label>
               <label><span>Fecha inicial</span><input id="calendarStartDateInput" type="date" required /></label>
               <label id="calendarEndDateField" hidden><span>Fecha final</span><input id="calendarEndDateInput" type="date" /></label>

@@ -1697,6 +1697,10 @@
 
   function compareAssignments(a, b, strategy) {
     const tie = String(a.operator).localeCompare(String(b.operator), "es", { numeric: true });
+    const sameMachine = normalizeKey(String(a.machine || "")) === normalizeKey(String(b.machine || ""));
+    if (sameMachine) {
+      return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || tie;
+    }
     if (strategy === "flow_balanced") {
       return a.toolPenalty - b.toolPenalty ||
         a.projectedOperatorLoad - b.projectedOperatorLoad ||

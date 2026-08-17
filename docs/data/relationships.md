@@ -11,6 +11,9 @@ pipeline legacy). Cada relación lista las columnas/keys exactas verificadas con
 
 - Clave: `KEY` (único). `VALUE` = JSON serializado.
 - Sin joins; es el estado de sesión/última escritura del backend y del frontend.
+- `workSchedule` y `dailyBreaks` son entradas JSON que definen las ventanas de trabajo diarias y
+  las pausas intradía; las consume `PlannerCore.effectiveWindows` (`planner-core.js:1267-1279`).
+  Ver RULE-CAL-001.
 
 ### 1.2 `OPERACIONES` — entidad central
 
@@ -78,6 +81,14 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 
 - `MAQUINA` → `MAQUINAS.ID` (N eventos por máquina). Sin relación con `OPERADORES`
   (los bloqueos son por máquina/concepto).
+- Mapeo al estado: `PP_readState_` → `PP_mapCalendar_` convierte cada fila en
+  `calendarExceptions` (`{id, concept, machine, startDate, start, endDate, end, reason, active}`);
+  el motor las resta de la ventana de trabajo del día en `effectiveWindows`
+  (`planner-core.js:1280-1297`). Conceptos: `GENERAL`, `MAQUINA`, `ASUETO`, `VACACIONES` (y
+  `OPERADOR`, solo filtrado por el motor). Ver RULE-CAL-001.
+- Un evento sin `HORA_INICIO`/`HORA_FIN` cubre `00:00-24:00` (`planner-core.js:1294-1296`); esto
+  permite que una operación iniciada cerca del cierre de la ventana se parta y continúe el
+  siguiente día hábil a las 07:00 (RULE-CAL-002).
 
 ### 1.9 `SUBCONTRATOS` y `TIPOS_OT` (catálogos semilla)
 

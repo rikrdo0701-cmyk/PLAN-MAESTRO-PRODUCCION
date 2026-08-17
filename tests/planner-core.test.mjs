@@ -2193,3 +2193,30 @@ test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agota
   assert.equal(predecessor.fechaInicio, undefined);
   assert.equal(result.operations.find((op) => op.id === "budget-fixed-nine-after-chain").horaInicio, "09:00");
 });
+
+test("con maquina fija y dos operadores capaces reparte por menor carga de operador", () => {
+  const core = loadPlannerCore();
+  const operations = [
+    { id: "bend-1", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P1", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 240, prioridad: 1, fechaReq: "2026-07-20" },
+    { id: "bend-2", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P2", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 240, prioridad: 1, fechaReq: "2026-07-20" },
+    { id: "bend-3", ot: "300", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P3", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 30, prioridad: 1, fechaReq: "2026-07-20" },
+  ];
+  const result = core.schedulePlan({
+    operations, workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
+    operators: ["DOBLADOR 1", "DOBLADOR 2", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["DOBLADOR 1", "DOBLADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    operatorPerformance: { "DOBLADOR 1": 100, "DOBLADOR 2": 50 },
+    settings: { optimizationPasses: 1 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
+
+  const productive = result.operations.filter((op) => ["bend-1", "bend-2", "bend-3"].includes(op.id));
+  assert.ok(productive.every((op) => op.fechaInicio && op.fechaFin), "los tres doblados deben quedar programados");
+  const loadByOperator = {};
+  for (const op of productive) {
+    const start = new Date(`${op.fechaInicio}T${op.horaInicio}:00`);
+    const end = new Date(`${op.fechaFin}T${op.horaFin}:00`);
+    loadByOperator[op.operador] = (loadByOperator[op.operador] || 0) + (end - start) / 60000;
+  }
+  assert.ok(Object.keys(loadByOperator).length >= 2, `debe repartir entre ambos operadores, no acumular en el mas rapido: ${JSON.stringify(loadByOperator)}`);
+});
