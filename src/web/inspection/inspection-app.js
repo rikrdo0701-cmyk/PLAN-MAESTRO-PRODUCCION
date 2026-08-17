@@ -288,7 +288,7 @@
     clickDrawingLink(drawing);
   }
   function materialRow(first, second, deliveryLabel = "", deliveryDate = "") {
-    return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, materialBadge(first), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, escape(first?.required ?? ""), "inspection-br") + cell(2, materialBadge(second)) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, escape(second?.required ?? ""));
+    return cell(3, deliveryLabel, "inspection-label inspection-br") + cell(4, deliveryDate, "inspection-br") + cell(3, materialBadge(first), "inspection-br") + cell(3, escape(first?.description || "")) + cell(2, escape(first?.route || ""), "inspection-br") + cell(2, escape(first?.required ?? ""), "inspection-qty inspection-br") + cell(2, materialBadge(second)) + cell(2, escape(second?.description || "")) + cell(2, escape(second?.route || ""), "inspection-br") + cell(1, escape(second?.required ?? ""), "inspection-qty");
   }
   function visibleInspectionMaterials() {
     return root.InspectionCore.inspectionMaterials(state.detail?.materials || []);
@@ -538,9 +538,11 @@
     const printableHeightMm = 210 - 3 - 5;
     const widthRatio = (printableWidthMm * 96 / 25.4) / sheet.scrollWidth;
     const heightRatio = (printableHeightMm * 96 / 25.4) / sheet.scrollHeight;
-    sheet.style.setProperty("--inspection-print-scale", String(Math.min(1, widthRatio, heightRatio)));
+    const scale = Math.min(1, widthRatio, heightRatio);
+    sheet.style.setProperty("--inspection-print-scale", String(scale));
+    sheet.style.setProperty("--inspection-print-minheight", `${Math.ceil(printableHeightMm * 96 / 25.4 / scale)}px`);
     try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
-    finally { sheet.style.removeProperty("--inspection-print-scale"); document.body.classList.remove("printing-inspection"); }
+    finally { sheet.style.removeProperty("--inspection-print-scale"); sheet.style.removeProperty("--inspection-print-minheight"); document.body.classList.remove("printing-inspection"); }
   }
   function clearInspectionPrintState() {
     byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale");
