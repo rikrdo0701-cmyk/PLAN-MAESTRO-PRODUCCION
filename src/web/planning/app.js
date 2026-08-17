@@ -64,6 +64,8 @@ const PLAN_HEADERS = [
   "HERRAMENTAL_DESTINO",
   "KIT_DESTINO",
   "COMENTARIO",
+  "PRECIO",
+  "MONTO",
 ];
 
 const FIELD_MAP = {
@@ -100,6 +102,8 @@ const FIELD_MAP = {
   HERRAMENTAL_DESTINO: "toolChangeToHerramental",
   KIT_DESTINO: "toolChangeToKit",
   COMENTARIO: "comentario",
+  PRECIO: "unitPrice",
+  MONTO: "amount",
 };
 
 const LEGACY_PRIORITY = { ALTA: 1, ALTO: 1, NORMAL: 50, MEDIO: 50, MEDIA: 50, BAJA: 100, BAJO: 100 };
@@ -7449,6 +7453,8 @@ function exportCsv() {
 function operationToRow(op) {
   return PLAN_HEADERS.map((header) => {
     if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
+    if (header === "PRECIO") return Number.isFinite(Number(op.unitPrice)) ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
+    if (header === "MONTO") return Number.isFinite(Number(op.amount)) ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
     return op[field] ?? "";
   });

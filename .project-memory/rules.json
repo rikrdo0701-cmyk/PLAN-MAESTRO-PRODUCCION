@@ -355,6 +355,14 @@
       "rule": "Si una operacion no cabe completa dentro de la ventana de trabajo del dia, el motor consume los minutos disponibles hasta el cierre de la ventana (17:00) y el remanente continua en el siguiente momento laborable (por defecto 07:00 del siguiente dia habil); effectiveWindows/nextAvailableMoment saltan noches, fines de semana y asuetos. allocateWork (planner-core.js:451-496) reparte en trozos de hasta ALLOCATION_CHUNK_MINUTES=30; currentAvailabilityEnd (planner-core.js:1318) devuelve el cierre de la ventana actual y nextAvailableMoment (planner-core.js:1303) salta al siguiente momento laborable. La operacion queda con un solo inicio y fin reales: commitAssignment graba fechaInicio/horaInicio = primer minuto consumido (operationStart) y fechaFin/horaFin = momento en que se agota el tiempo productivo (planner-core.js:527-616); los segmentos se conservan en assignment.segments y el intervalo real (operationEnd - operationStart) puede superar el tiempo productivo (operationDuration = setup + produccion ajustada por rendimiento/eficiencia, planner-core.js:2057-2085). El setup/cambio de herramental tambien se asigna con allocateWork y genera una fila CAMBIO_HERRAMENTAL propia (planner-core.js:558-572, 618-651).",
       "source": "definicion de usuario 2026-08-16 (comportamiento confirmado como correcto); src/web/planning/planner-core.js:451-496, 527-616, 618-651, 1245-1316, 2057-2085; tests/planner-core.test.mjs:889-936; src/web/planning/app.js:7420-7428 (exportCsv conserva inicio/fin reales)",
       "domain": "Calendario"
+    },
+    {
+      "rule_id": "RULE-MON-001",
+      "name": "Monto de liberacion en el export CSV del plan",
+      "status": "documentada",
+      "rule": "El export CSV del plan (Exportar) incluye las columnas PRECIO y MONTO por fila de operacion. PRECIO = precio unitario de la OT (si la operacion trae PRECIO_UNITARIO del snapshot lo conserva; si no, usa ORDENES_TRABAJO.PRECIO_PROMEDIO_VENTA y si es 0 el PRECIO_MANUAL de la configuracion de articulo; effectiveUnitPriceForOt, app.js:8548-8551). MONTO = PRECIO x piezas pendientes de la OT (amountForOt, app.js:8553-8555); coincide con el monto de liberacion que reporta el resumen semanal (weeklyFinishingCost, planning-workflow-core.js:968-978). Es valor de venta estimado, no costo real.",
+      "source": "definicion de usuario 2026-08-17 (solo interesa el monto de liberacion); src/web/planning/app.js:33-67 (PLAN_HEADERS), 7449-7460 (operationToRow), 8538-8555 (precio/monto); src/web/planning/planning-workflow-core.js:962-978; docs/data/sources.md (plan-produccion.csv)",
+      "domain": "Montos"
     }
   ],
   "updated_at": "2026-08-16T00:00:00-06:00"

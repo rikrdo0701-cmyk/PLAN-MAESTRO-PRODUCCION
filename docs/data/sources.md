@@ -245,11 +245,14 @@ y `KIT_HERRAMENTAL` contienen el destino asignado al cambio, ademas de las colum
 La fila debe aparecer si el doblado requiere una máquina y no hay antecedente de herramental en esa
 máquina, o si el último herramental/kit conocido en la misma máquina difiere del destino.
 
-Headers (33): `NUM, OT, PARTE, DESCRIPCION, CONTENIDO, PRIORIDAD, FECHA_REQ, CANT_TOTAL,
+Headers (35): `NUM, OT, PARTE, DESCRIPCION, CONTENIDO, PRIORIDAD, FECHA_REQ, CANT_TOTAL,
 SECUENCIA, CT, OPERADOR, MAQUINA, HERRAMENTAL, KIT_HERRAMENTAL, CANT_PENDIENTE, TIEMPO_CICLO,
 TIEMPO_SETUP, TIEMPO_PROD, FECHA_INICIO, HORA_INICIO, FECHA_FIN, HORA_FIN, TIPO_INSERCION,
 ESTATUS, LOG, DIAS_SUBCONTRATO, KIT_PENDIENTE, AUTO_FROZEN, HERRAMENTAL_ORIGEN, KIT_ORIGEN,
-HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO`.
+HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO, PRECIO, MONTO`.
+`PRECIO` = precio unitario de la OT (columna `PRECIO_UNITARIO` del snapshot, o
+`ORDENES_TRABAJO.PRECIO_PROMEDIO_VENTA` / `PRECIO_MANUAL` si no viene en la operación);
+`MONTO` = `PRECIO × piezas pendientes` de la OT (monto de liberación, RULE-MON-001).
 
 - Readers: descarga externa del usuario.
 - Writer: `exportCsv` (`src/web/planning/app.js`) via `PlanningWorkflowCore.draftExportOperations`.

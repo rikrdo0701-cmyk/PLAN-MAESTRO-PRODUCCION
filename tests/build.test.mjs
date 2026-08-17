@@ -1403,14 +1403,39 @@ test("PLAN_HEADERS documenta las columnas del CSV exportado", async () => {
   const headersSource = app.slice(app.indexOf("const PLAN_HEADERS = ["), app.indexOf("const FIELD_MAP =", app.indexOf("const PLAN_HEADERS = [")));
   const PLAN_HEADERS = Function(`${headersSource}; return PLAN_HEADERS;`)();
 
-  assert.deepEqual(PLAN_HEADERS, [
+assert.deepEqual(PLAN_HEADERS, [
     "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
     "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
     "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
     "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
     "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
-    "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO",
+    "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO", "PRECIO", "MONTO",
   ]);
+});
+
+test("operationToRow calcula PRECIO y MONTO desde la OT cuando la operacion no los trae", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PRECIO", "MONTO"],
+    { PRECIO: "unitPrice", MONTO: "amount" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+  );
+
+  const row = operationToRow({ ot: "100", unitPrice: 10, amount: 200 });
+  assert.deepEqual(row, [10, 200]);
+
+  const computed = operationToRow({ ot: "200" });
+  assert.deepEqual(computed, [12.5, 250]);
 });
 
 test("importJson adopta y limpia operationCatalogWarning", async () => {
