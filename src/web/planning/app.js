@@ -655,6 +655,7 @@ function bindElements() {
     "loadNsExerciseBtn",
     "saveBtn",
     "saveAppSheetBtn",
+    "exportSnapshotSelect",
     "exportCsvBtn",
     "balanceBtn",
     "printWeekBtn",
@@ -5278,9 +5279,7 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
   if (!snapshotId) return;
   els.planSnapshotSelect.disabled = true;
   try {
-    const snapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    const snapshot = await fetchPlanSnapshot(snapshotId);
     reportSnapshot = {
       ...snapshot,
       snapshotId,
@@ -5312,6 +5311,12 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchPlanSnapshot(snapshotId) {
+  return isAppsScriptRuntime()
+    ? await callAppsScript("getPlanSnapshot", snapshotId)
+    : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+}
+
 function renderPlanSnapshotSelect() {
   if (!els.planSnapshotSelect) return;
   const selectedId = reportSnapshot?.snapshotId || "";
@@ -5333,6 +5338,10 @@ function renderPlanSnapshotSelect() {
     select.innerHTML = els.planSnapshotSelect.innerHTML;
     select.value = els.planSnapshotSelect.value;
   });
+  if (els.exportSnapshotSelect) {
+    els.exportSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
+    els.exportSnapshotSelect.value = els.planSnapshotSelect.value;
+  }
 }
 
 function publishedSnapshotIds() {
@@ -7466,14 +7475,31 @@ function importCsv(text) {
   return { operations };
 }
 
-function exportCsv() {
-  const operations = window.PlanningWorkflowCore.draftExportOperations({
-    ...state,
-    operations: currentPlanOperations(),
-  });
+async function exportCsv() {
+  const sourceId = els.exportSnapshotSelect ? els.exportSnapshotSelect.value : "draft";
+  const operations = await exportSourceOperations(sourceId);
   const rows = [PLAN_HEADERS, ...operations.map(operationToRow)];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
+}
+
+async function exportSourceOperations(sourceId) {
+  if (sourceId === "draft" || !sourceId) {
+    return window.PlanningWorkflowCore.draftExportOperations({
+      ...state,
+      operations: currentPlanOperations(),
+    });
+  }
+  try {
+    const snapshot = await fetchPlanSnapshot(sourceId);
+    return (snapshot.operations || []).map((op, index) => normalizeOperation({
+      ...op,
+      id: op.id || `snapshot-${sourceId}-${index + 1}`,
+    }, index));
+  } catch (error) {
+    showToast(`No se pudo exportar el plan guardado: ${error.message}`);
+    throw error;
+  }
 }
 
 function operationToRow(op) {

@@ -1373,14 +1373,14 @@ test("reportes de borrador usan operaciones actuales y publicado permanece inmut
 test("exportCsv omite capacidades excluidas del borrador", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const exportSource = app.slice(
-    app.indexOf("function exportCsv()"),
-    app.indexOf("function operationToRow(", app.indexOf("function exportCsv()")),
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
   );
   const state = { operations: [{ id: "keep" }, { id: "drop" }] };
   let exported = "";
   const exportCsv = Function(
     "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
-    "csvCell", "downloadBlob",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
     `${exportSource}; return exportCsv;`,
   )(
     state,
@@ -1390,12 +1390,43 @@ test("exportCsv omite capacidades excluidas del borrador", async () => {
     (op) => [op.id],
     (value) => String(value),
     (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "draft" } },
+    () => [state.operations[0]],
   );
 
-  exportCsv();
+  await exportCsv();
 
   assert.match(exported, /keep/);
   assert.doesNotMatch(exported, /drop/);
+});
+
+test("exportCsv exporta las operaciones del plan publicado seleccionado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
+  );
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
+    `${exportSource}; return exportCsv;`,
+  )(
+    {},
+    { PlanningWorkflowCore: {} },
+    () => [],
+    ["OT"],
+    (op) => [op.ot],
+    (value) => String(value),
+    (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "snap-1" } },
+    () => [{ ot: "200" }, { ot: "300" }],
+  );
+
+  await exportCsv();
+
+  assert.match(exported, /200/);
+  assert.match(exported, /300/);
 });
 
 test("PLAN_HEADERS documenta las columnas del CSV exportado", async () => {
