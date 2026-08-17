@@ -1458,3 +1458,33 @@ test("importJson adopta y limpia operationCatalogWarning", async () => {
     operationCatalogWarning: "",
   })).operationCatalogWarning, "");
 });
+
+test("renderReportOperatorLoads muestra cargas de operadores en el reporte", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const loadsSource = app.slice(
+    app.indexOf("function renderReportOperatorLoads("),
+    app.indexOf("function weeklyExecutiveSummary(", app.indexOf("function renderReportOperatorLoads(")),
+  );
+  const renderReportOperatorLoads = Function(
+    "state", "operatorLoadsForOperations", "resourceIsInPlan", "formatHours", "escapeHtml",
+    `${loadsSource}; return renderReportOperatorLoads;`,
+  )(
+    { operatorProfiles: { "DOBLADOR 1": { name: "Juan Perez" } } },
+    () => [
+      { operator: "DOBLADOR 1", minutes: 3600, available: 3000, percent: 120 },
+      { operator: "DOBLADOR 2", minutes: 0, available: 3000, percent: 0 },
+    ],
+    (operator) => operator !== "FUERA_DE_PLAN",
+    (minutes) => `${Math.round(minutes / 60)}h`,
+    (value) => String(value),
+  );
+
+  const html = renderReportOperatorLoads([], "2026-01-05");
+
+  assert.match(html, /Juan Perez/);
+  assert.match(html, /120%/);
+  assert.match(html, /Saturado/);
+  assert.match(html, /DOBLADOR 1/);
+  assert.doesNotMatch(html, /DOBLADOR 2/);
+  assert.match(html, /<table>/);
+});
