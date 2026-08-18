@@ -323,6 +323,68 @@ test("trata JSON corrupto en cache como cache miss y reemplaza su contenido", ()
   assert.equal(cachedValue, JSON.stringify(result.data));
 });
 
+test("cachea el indice de tramos V2 y saveInspectionLink lo invalida", () => {
+  const cacheEntries = new Map();
+  let sheetReads = 0;
+  const cache = {
+    get: (key) => cacheEntries.get(key)?.value || null,
+    put: (key, value, ttl) => cacheEntries.set(key, { value, ttl }),
+    remove: (key) => cacheEntries.delete(key),
+  };
+  const context = loadBundledService({
+    CacheService: { getScriptCache: () => cache },
+    PP_readRows_: () => { sheetReads += 1; return [{ Articulo: "A-100", "Materia prima": "MP-1", Tramo: "650 mm", DIBUJO: "a100.pdf" }]; },
+  });
+  context.PP_Inspection_sheet_ = () => ({});
+
+  const first = context.PP_Inspection_routeIndexV2_();
+  assert.equal(sheetReads, 1);
+  assert.equal(first["A-100|MP-1"].TRAMO, "650 mm");
+
+  const second = context.PP_Inspection_routeIndexV2_();
+  assert.equal(sheetReads, 1);
+  assert.deepEqual(structuredClone(second), structuredClone(first));
+  assert.equal(cacheEntries.get("PP_INSPECTION_ROUTE_INDEX_V2").ttl, 900);
+
+  context.PP_Inspection_invalidateRouteIndexCache_();
+  assert.equal(cacheEntries.has("PP_INSPECTION_ROUTE_INDEX_V2"), false);
+
+  const third = context.PP_Inspection_routeIndexV2_();
+  assert.equal(sheetReads, 2);
+  assert.equal(third["A-100|MP-1"].TRAMO, "650 mm");
+});
+
+test("getInspectionWorkOrder reutiliza el indice de tramos cacheado entre OTs", () => {
+  const cacheEntries = new Map();
+  let sheetReads = 0;
+  let restletCalls = 0;
+  const context = loadBundledService({
+    CacheService: { getScriptCache: () => ({
+      get: (key) => cacheEntries.get(key)?.value || null,
+      put: (key, value, ttl) => cacheEntries.set(key, { value, ttl }),
+    }) },
+    PP_readRows_: () => { sheetReads += 1; return [{ Articulo: "A-100", "Materia prima": "MP-1", Tramo: "650 mm", DIBUJO: "a100.pdf" }]; },
+  });
+  context.PP_Inspection_sheet_ = () => ({});
+  context.PP_Inspection_restlet_ = () => {
+    restletCalls += 1;
+    return {
+      trabajo: { Articulo: "A-100", cantidad: 10, fechaEntrega: "2026-06-05", estatus: "En curso" },
+      materiales: [{ componente: "MP-1", requerido: 1, pendiente: 1, emitido: 0 }],
+      operaciones: []
+    };
+  };
+
+  const firstDetail = context.getInspectionWorkOrder("2001");
+  const secondDetail = context.getInspectionWorkOrder("2002");
+
+  assert.equal(firstDetail.ok, true);
+  assert.equal(secondDetail.ok, true);
+  assert.equal(restletCalls, 2);
+  assert.equal(sheetReads, 1);
+  assert.equal(secondDetail.data.materials[0].route, "650 mm");
+});
+
 test("registra historial con todos los campos del contrato original", () => {
   let appended;
   const context = loadService();

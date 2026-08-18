@@ -5418,35 +5418,9 @@ function renderWeekReport() {
     }))
     : `<div class="report-empty-state">No hay un plan publicado cargado para reportes.</div>`;
   els.weekReport.innerHTML = `
-    <section class="weekly-job-panel loads">
-      <header><h3>Cargas de operadores</h3><span>${escapeHtml(reportSourceLabel())}</span></header>
-      ${renderReportOperatorLoads(reportOps, state.reportWeekStart)}
-    </section>
     <section class="weekly-job-panel"><header><h3>OT que inician</h3><span>Fecha de la primera operacion</span></header>${renderWeeklyJobDays(summary.starts, false)}</section>
     <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
   `;
-}
-
-function renderReportOperatorLoads(reportOps, weekDate = state.reportWeekStart) {
-  const loads = operatorLoadsForOperations(reportOps, weekDate)
-    .filter((item) => Number(item.minutes || 0) > 0 && resourceIsInPlan(item.operator));
-  if (!loads.length) return `<div class="report-empty-state">No hay cargas programadas en la semana.</div>`;
-  const rows = loads.map((item, index) => {
-    const severity = item.percent > 100 ? "danger" : item.percent < 85 ? "warn" : "";
-    const profile = state.operatorProfiles[item.operator] || { name: item.operator };
-    return `<tr class="${severity ? `load-${severity}` : ""}">
-      <td>${index + 1}</td>
-      <td>${escapeHtml(profile.name || item.operator)}</td>
-      <td>${escapeHtml(item.operator)}</td>
-      <td><strong>${Math.round(item.percent)}%</strong></td>
-      <td>${formatHours(item.minutes)} / ${formatHours(item.available)}</td>
-      <td>${escapeHtml(severity === "danger" ? "Saturado" : severity === "warn" ? "Baja carga" : "Normal")}</td>
-    </tr>`;
-  }).join("");
-  return `<div class="weekly-day-table loads-table"><table>
-    <thead><tr><th>#</th><th>Nombre</th><th>Recurso</th><th>Carga</th><th>Horas / Capacidad</th><th>Estado</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
 }
 
 function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.reportWeekStart, options = {}) {

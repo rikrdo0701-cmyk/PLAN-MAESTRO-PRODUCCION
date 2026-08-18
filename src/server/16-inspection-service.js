@@ -1,6 +1,8 @@
 const PP_INSPECTION_DEFAULT_SPREADSHEET_ID = '1X0jtJBgxcD8jIKYVhuw76OTVLP74Lv2yZsbPA_WpG9M';
 const PP_INSPECTION_ROUTES_SHEET = 'Tramos';
 const PP_INSPECTION_HISTORY_SHEET = 'HISTORIAL_IMPRESION_INSPEC';
+const PP_INSPECTION_ROUTE_INDEX_CACHE_KEY = 'PP_INSPECTION_ROUTE_INDEX_V2';
+const PP_INSPECTION_ROUTE_INDEX_CACHE_TTL_SECONDS = 900;
 
 function PP_Inspection_result_(callback) {
   try { return { ok: true, data: callback() }; }
@@ -52,6 +54,25 @@ function PP_Inspection_sheet_(name, headers) {
   PP_Inspection_normalizeSheet_(sheet, headers, name === PP_INSPECTION_ROUTES_SHEET);
   sheet.setFrozenRows(1);
   return sheet;
+}
+
+function PP_Inspection_routeIndexCache_() {
+  try {
+    if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) return CacheService.getScriptCache();
+  } catch (error) {
+    // La cache es opcional; ignorar fallos de acceso.
+  }
+  return null;
+}
+
+function PP_Inspection_invalidateRouteIndexCache_() {
+  const cache = PP_Inspection_routeIndexCache_();
+  if (!cache) return;
+  try {
+    cache.remove(PP_INSPECTION_ROUTE_INDEX_CACHE_KEY);
+  } catch (error) {
+    // Un fallo de invalidacion no impide seguir guardando el vinculo.
+  }
 }
 
 function PP_Inspection_text_(value, maxLength) {
@@ -226,6 +247,7 @@ function saveInspectionLink(payload) {
     values.forEach(function(pair) {
       if (pair[0] >= 0) sheet.getRange(target, pair[0] + 1).setValue(pair[1]);
     });
+    PP_Inspection_invalidateRouteIndexCache_();
     return { article: article, material: material, route: route, drawing: drawing, updated: updated };
   });
 }

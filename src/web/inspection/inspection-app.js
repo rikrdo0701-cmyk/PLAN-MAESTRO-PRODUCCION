@@ -2,6 +2,8 @@
   "use strict";
   const state = { list: [], detail: null, selection: {} };
   const INSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+  const INSPECTION_PREFETCH_COUNT = 8;
+  const INSPECTION_MAX_ACTIVE_BUNDLE_REQUESTS = 3;
   const bundleCache = new Map();
   const normalBundleRequests = new Map();
   const bundleRequestVersions = new Map();
@@ -114,7 +116,7 @@
     });
   }
   function drainBundleQueue() {
-    while (activeBundleRequests < 2) {
+    while (activeBundleRequests < INSPECTION_MAX_ACTIVE_BUNDLE_REQUESTS) {
       const task = manualBundleQueue.shift() || prefetchBundleQueue.shift();
       if (!task) return;
       if (task.cancelled) continue;
@@ -173,7 +175,7 @@
     return request;
   }
   function replacePrefetchSchedule(workOrders) {
-    const desiredWos = new Set((workOrders || []).slice(0, 5).map((item) => String(item?.wo || "").trim()).filter(Boolean));
+    const desiredWos = new Set((workOrders || []).slice(0, INSPECTION_PREFETCH_COUNT).map((item) => String(item?.wo || "").trim()).filter(Boolean));
     prefetchBundleQueue.slice().forEach((task) => {
       if (!task.manualDemand && !desiredWos.has(task.wo)) cancelQueuedBundleTask(task);
     });

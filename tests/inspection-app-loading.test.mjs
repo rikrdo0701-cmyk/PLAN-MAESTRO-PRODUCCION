@@ -106,10 +106,10 @@ function bundle(wo) {
   };
 }
 
-test("precarga solamente las primeras cinco WOs", async () => {
+test("precarga las primeras ocho WOs", async () => {
   const bundleCalls = [];
   const { app } = createHarness(async (method, args) => {
-    if (method === "getInspectionWorkOrders") return { ok: true, data: Array.from({ length: 7 }, (_, index) => ({ wo: String(index + 1), article: "A", quantity: 1 })) };
+    if (method === "getInspectionWorkOrders") return { ok: true, data: Array.from({ length: 10 }, (_, index) => ({ wo: String(index + 1), article: "A", quantity: 1 })) };
     bundleCalls.push(args[0]);
     return bundle(args[0]);
   });
@@ -117,10 +117,10 @@ test("precarga solamente las primeras cinco WOs", async () => {
   await app.loadList();
   await flush();
 
-  assert.deepEqual(bundleCalls, ["1", "2", "3", "4", "5"]);
+  assert.deepEqual(bundleCalls, ["1", "2", "3", "4", "5", "6", "7", "8"]);
 });
 
-test("limita a dos las precargas simultaneas", async () => {
+test("limita a tres las precargas simultaneas", async () => {
   const pending = [];
   let active = 0;
   let maximumActive = 0;
@@ -135,19 +135,19 @@ test("limita a dos las precargas simultaneas", async () => {
 
   await app.loadList();
   await flush();
-  assert.equal(pending.length, 2);
+  assert.equal(pending.length, 3);
 
   while (pending.length < 5) {
     const next = pending.find((entry) => !entry.resolved);
     next.resolved = true;
     next.request.resolve(bundle(next.wo));
     await flush();
-    assert.ok(active <= 2);
+    assert.ok(active <= 3);
   }
   pending.filter((entry) => !entry.resolved).forEach((entry) => entry.request.resolve(bundle(entry.wo)));
   await flush();
 
-  assert.equal(maximumActive, 2);
+  assert.equal(maximumActive, 3);
 });
 
 test("seleccionar una WO que se precarga comparte la misma promesa", async () => {
@@ -209,7 +209,7 @@ test("una reseleccion posterior a forceRefresh no adopta la promesa normal anter
   const forcedLoad = app.loadDetail({ forceRefresh: true });
   const reselectedLoad = app.loadDetail();
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.deepEqual(structuredClone(requests[1].args), ["210", { forceRefresh: true }]);
   requests[0].request.resolve(bundle("210-antigua"));
   await oldNormalLoad;
@@ -249,7 +249,7 @@ test("filtrar la WO seleccionada invalida su solicitud normal antes de reselecci
   const reselectedLoad = app.loadDetail();
 
   let requests800 = requests.filter((entry) => entry.wo === "800");
-  assert.equal(requests800.length, 1);
+  assert.equal(requests800.length, 2);
   requests800[0].request.resolve(bundle("800-antigua"));
   await oldLoad;
   await flush();
@@ -299,18 +299,18 @@ test("la seleccion manual respeta el limite total y ocupa el siguiente hueco ant
 
   await app.loadList();
   await flush();
-  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2"]);
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "3"]);
   byId("inspectionWorkOrder").value = "4";
   const selectedLoad = app.loadDetail();
 
-  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2"]);
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "3"]);
   requests[0].request.resolve(bundle("1"));
   await flush();
-  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "4"]);
-  requests[2].request.resolve(bundle("4"));
+  assert.deepEqual(requests.map((entry) => entry.wo), ["1", "2", "3", "4"]);
+  requests.find((entry) => entry.wo === "4").request.resolve(bundle("4"));
   await selectedLoad;
   assert.match(byId("inspectionSheetGrid").innerHTML, />4</);
-  assert.equal(maximumActive, 2);
+  assert.equal(maximumActive, 3);
   requests[1].request.resolve(bundle("2"));
   await flush();
   requests.find((entry) => entry.wo === "3")?.request.resolve(bundle("3"));
@@ -341,22 +341,22 @@ test("una respuesta loadList obsoleta no reemplaza ni encola sobre la lista vige
   listRequests[1].resolve({ ok: true, data: ["6", "7", "8", "9", "10"].map((wo) => ({ wo, article: "B", quantity: 1 })) });
   await secondList;
   await flush();
-  assert.equal(pending.length, 2);
+  assert.equal(pending.length, 3);
   await firstList;
   await flush();
-  assert.deepEqual(pending.map((entry) => entry.wo), ["6", "7"]);
+  assert.deepEqual(pending.map((entry) => entry.wo), ["6", "7", "8"]);
 
   while (pending.length < 5) {
     const next = pending.find((entry) => !entry.resolved);
     next.resolved = true;
     next.request.resolve(bundle(next.wo));
     await flush();
-    assert.ok(active <= 2);
+    assert.ok(active <= 3);
   }
   pending.filter((entry) => !entry.resolved).forEach((entry) => entry.request.resolve(bundle(entry.wo)));
   await flush();
 
-  assert.equal(maximumActive, 2);
+  assert.equal(maximumActive, 3);
   assert.deepEqual(pending.map((entry) => entry.wo), ["6", "7", "8", "9", "10"]);
 });
 
@@ -378,17 +378,17 @@ test("la lista vigente elimina precargas pendientes obsoletas y conserva activas
   listRequests[0].resolve({ ok: true, data: ["1", "2", "3", "4", "5"].map((wo) => ({ wo, article: "A", quantity: 1 })) });
   await firstList;
   await flush();
-  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2"]);
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "3"]);
 
   const secondList = app.loadList();
   listRequests[1].resolve({ ok: true, data: ["2", "6", "7", "8", "9"].map((wo) => ({ wo, article: "B", quantity: 1 })) });
   await secondList;
   bundleRequests.find((entry) => entry.wo === "1").request.resolve(bundle("1"));
   await flush();
-  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6"]);
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "3", "6"]);
   bundleRequests.find((entry) => entry.wo === "2").request.resolve(bundle("2"));
   await flush();
-  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6", "7"]);
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "3", "6", "7"]);
   assert.equal(bundleRequests.filter((entry) => entry.wo === "2").length, 1);
 
   while (bundleRequests.length < 6) {
@@ -399,7 +399,7 @@ test("la lista vigente elimina precargas pendientes obsoletas y conserva activas
   }
   bundleRequests.filter((entry) => !entry.resolved && !["1", "2"].includes(entry.wo)).forEach((entry) => entry.request.resolve(bundle(entry.wo)));
   await flush();
-  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "6", "7", "8", "9"]);
+  assert.deepEqual(bundleRequests.map((entry) => entry.wo), ["1", "2", "3", "6", "7", "8", "9"]);
 });
 
 test("un fallo de precarga es silencioso y la seleccion vuelve a intentar", async () => {

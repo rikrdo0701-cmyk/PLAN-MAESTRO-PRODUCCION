@@ -46,6 +46,15 @@ function getInspectionWorkOrderBundle(wo, options) {
 }
 
 function PP_Inspection_routeIndexV2_() {
+  const cache = PP_Inspection_routeIndexCache_();
+  if (cache) {
+    try {
+      const cached = cache.get(PP_INSPECTION_ROUTE_INDEX_CACHE_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch (error) {
+      // La cache es opcional; continuar con la hoja Tramos.
+    }
+  }
   const sheet = PP_Inspection_sheet_(PP_INSPECTION_ROUTES_SHEET, ['Articulo', 'Materia prima', 'Tramo', 'DIBUJO', 'Ultima modificacion']);
   const index = { rows: [], byMaterialDrawing: {} };
   const rowsByKey = {};
@@ -76,6 +85,13 @@ function PP_Inspection_routeIndexV2_() {
     rowsByKey[articleKey + '|' + materialKey] = item;
   });
   index.rows = Object.keys(rowsByKey).map(function(key) { return rowsByKey[key]; });
+  if (cache) {
+    try {
+      cache.put(PP_INSPECTION_ROUTE_INDEX_CACHE_KEY, JSON.stringify(index), PP_INSPECTION_ROUTE_INDEX_CACHE_TTL_SECONDS);
+    } catch (error) {
+      // Un fallo de cache no invalida datos correctos.
+    }
+  }
   return index;
 }
 
