@@ -288,6 +288,200 @@ test("OT no bloqueada con operacion pendiente programada antes del Gantt se repl
   assert.equal(operation.horaFin, "08:00");
 });
 
+test("RULE-BAL-006: el operador de la operacion programada SIEMPRE sale de la MATRIZ, nunca del valor residual ('1' inexistente)", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      {
+        id: "with-residual", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PLAN", planStatus: "PENDIENTE", operador: "1",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-03",
+    horizonDays: 5,
+  });
+
+  const operation = result.operations.find((item) => item.id === "with-residual");
+  assert.equal(operation.operador, "OP 1");
+  assert.notEqual(operation.operador, "1");
+});
+
+test("RULE-OT-017: OT no bloqueada borra la asignacion del borrador y recalcula con operador de la MATRIZ", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      {
+        id: "dirty-draft", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", planStatus: "PENDIENTE", operador: "1", locked: true,
+        fechaInicio: "2026-08-12", horaInicio: "15:00", fechaFin: "2026-08-12", horaFin: "16:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+  });
+
+  const operation = result.operations.find((item) => item.id === "dirty-draft");
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-13", "07:00"]);
+  assert.equal(operation.operador, "OP 1");
+  assert.notEqual(operation.operador, "1");
+});
+
+test("RULE-BAL-006/RULE-OT-017: operador residual '1' y fechas viejas de OT no bloqueada se recalculan desde la MATRIZ", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      {
+        id: "dirty", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", planStatus: "PENDIENTE", operador: "1",
+        fechaInicio: "2026-08-12", horaInicio: "15:00", fechaFin: "2026-08-12", horaFin: "16:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T07:00:00",
+  });
+
+  const operation = result.operations.find((item) => item.id === "dirty");
+  assert.equal(operation.operador, "OP 1");
+  assert.notEqual(operation.operador, "1");
+  assert.equal(operation.fechaInicio, "2026-08-13");
+  assert.equal(operation.horaInicio, "07:00");
+});
+
+test("RULE-OT-017/RULE-BAL-006: una operacion movible no bloqueada sin hueco (UNSCHEDULED) queda con operador SIN_OPERADOR y sin fechas heredadas", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      {
+        id: "unsched-movable", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", planStatus: "PENDIENTE", operador: "1", locked: true,
+        fechaInicio: "2026-08-12", horaInicio: "15:00", fechaFin: "2026-08-12", horaFin: "16:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": [] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: [],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T07:00:00",
+  });
+
+  const operation = result.operations.find((item) => item.id === "unsched-movable");
+  assert.equal(operation.operador, "SIN_OPERADOR");
+  assert.equal(operation.fechaInicio, "");
+  assert.equal(operation.horaInicio, "");
+  assert.equal(operation.fechaFin, "");
+  assert.equal(operation.horaFin, "");
+});
+
+test("RULE-OT-017: una OT bloqueada conserva su asignacion intacta (control negativo)", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: ["100"],
+    operations: [
+      {
+        id: "locked-op", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", planStatus: "PENDIENTE", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "15:00", fechaFin: "2026-08-12", horaFin: "16:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T07:00:00",
+  });
+
+  const operation = result.operations.find((item) => item.id === "locked-op");
+  assert.equal(operation.operador, "OP 1");
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-12", "15:00"]);
+});
+
+test("RULE-OT-017: una operacion completada o historica se conserva intacta", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      {
+        id: "completed-op", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PROGRAMADA", planStatus: "COMPLETADA_PLAN", operador: "OP 1",
+        fechaInicio: "2026-08-12", horaInicio: "09:00", fechaFin: "2026-08-12", horaFin: "10:00",
+        tiempoProd: 60,
+      },
+      {
+        id: "historical-op", ot: "100", secuencia: 2, ct: "200", descripcion: "SOLDA",
+        estatus: "PROGRAMADA", planStatus: "PUBLICADO", historical: true, operador: "OP 2",
+        fechaInicio: "2026-08-12", horaInicio: "11:00", fechaFin: "2026-08-12", horaFin: "12:00",
+        tiempoProd: 60,
+      },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"], "200::SOLDA": ["OP 2"] },
+    configuredCapabilities: ["100::CORTE", "200::SOLDA"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T07:00:00",
+  });
+
+  const completed = result.operations.find((item) => item.id === "completed-op");
+  const historical = result.operations.find((item) => item.id === "historical-op");
+  assert.equal(completed.operador, "OP 1");
+  assert.deepEqual([completed.fechaInicio, completed.horaInicio], ["2026-08-12", "09:00"]);
+  assert.equal(historical.operador, "OP 2");
+  assert.deepEqual([historical.fechaInicio, historical.horaInicio], ["2026-08-12", "11:00"]);
+});
+
 test("una operacion nueva en una OT existente no inicia antes de la hora actual aunque su predecesora quede en el pasado", async () => {
   const core = loadPlannerCore();
   const baseSnapshot = {
@@ -1122,6 +1316,36 @@ test("el motor toma el herramental guardado en la configuracion de la OT", async
   assert.equal(result.operations.find((op) => op.id === "bend-2433").herramental, "4 x 5");
 });
 
+test("RULE-BAL-007: la validacion previa marca MISSING_OPERATOR cuando la matriz no tiene operador para una operacion de carga", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    selectedOts: ["100"],
+    operations: [{ id: "load-op", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", operador: "1", cantidadPendiente: 10 }],
+    matrix: {},
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    workSchedule: {},
+  };
+  const [operation] = state.operations;
+  const issues = core.planningConfigurationIssues(state, [operation]);
+  assert.ok(issues.some((issue) => issue.code === "MISSING_OPERATOR" && issue.operationId === "load-op" && issue.ot === "100"));
+});
+
+test("RULE-BAL-007: la validacion previa NO marca MISSING_OPERATOR si la matriz asigna operador activo para la operacion de carga", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    selectedOts: ["100"],
+    operations: [{ id: "load-op", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", operador: "1", cantidadPendiente: 10 }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    workSchedule: {},
+  };
+  const [operation] = state.operations;
+  const issues = core.planningConfigurationIssues(state, [operation]);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_OPERATOR"), false);
+});
+
 test("la validacion usa herramental persistido en configuracion de la OT", async () => {
   const core = loadPlannerCore();
   const issues = core.planningConfigurationIssues({
@@ -1859,7 +2083,7 @@ test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible",
   assertFlowEvaluated(result);
   assert.equal(result.lastSchedule.optimization.selectedStrategy, "flow_balanced");
   assert.ok(result.operations.find((op) => op.id === "other").fechaInicio);
-  assert.equal(result.operations.find((op) => op.id === "active-blocked").fechaInicio, undefined);
+  assert.equal(result.operations.find((op) => op.id === "active-blocked").fechaInicio, "");
 });
 
 test("flow balanced reparte trabajo entre operadores equivalentes por carga proyectada", async () => {

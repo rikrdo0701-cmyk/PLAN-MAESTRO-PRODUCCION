@@ -317,6 +317,38 @@
       "domain": "Herramentales"
     },
     {
+      "rule_id": "RULE-BAL-006",
+      "name": "Operador de la operacion tomado de la MATRIZ",
+      "status": "implementada",
+      "rule": "El operador de una operacion programada SIEMPRE se toma de la hoja MATRIZ (state.matrix, matriz de habilidades): operatorCandidates (planner-core.js:1207-1217) filtra solo los operadores habilitados para la capacidad/CT y commitAssignment graba next.operador = assignment.operator (planner-core.js:762). El valor residual que traiga la operacion (p. ej. '1' inexistente en MATRIZ/OPERADORES, o datos viejos de la hoja) JAMAS se usa como operador asignado: la asignacion real lo sobreescribe. Es defensivo dentro del motor: una operacion movible de OT no bloqueada que el motor NO alcanza a programar (UNSCHEDULED) queda con operador SIN_OPERADOR (planner-core.js:412), sin poder conservar valores residuales ni de la MATRIZ porque no se le asigno nada; las operaciones bloqueadas/completadas/historicas conservan su operador (dato fijo). Los operadores inexistentes se normalizan por RULE-BAL-005 al sincronizar.",
+      "source": "definicion de usuario 2026-08-27 (el operador de una operacion se toma de la matriz de habilidades); src/web/planning/planner-core.js:412, 762, 1207-1217; tests/planner-core.test.mjs",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-OT-017",
+      "name": "OT no bloqueada borra asignacion del borrador y recalcula",
+      "status": "implementada",
+      "rule": "Al generar el plan (prepareDraftForReschedule, llamado en app.js:4514 como paso previo a PlannerCore.schedulePlan), si una OT NO esta en lockedOts, sus operaciones pendientes seleccionadas pierden la asignacion previa del borrador (fechaInicio, horaInicio, fechaFin, horaFin y operador se vacian; needsReschedule=false, autoFrozen=false, estatus=PLAN, planStatus=PENDIENTE) y el motor recalcula desde cero. Solo se conservan intactas las operaciones de OTs no seleccionadas, OTs bloqueadas (lockedOts), completadas (COMPLETADA_PLAN), historicas o no movibles. El operador resultante de la reprogramacion sale de la MATRIZ (RULE-BAL-006). Es ademas defensivo dentro del motor PlannerCore, sin depender de prepareDraftForReschedule: (a) las operaciones historicas (isHistoricalOperation: historical/isHistorical o planStatus PUBLICADO/PUBLICADA/GUARDADO/GUARDADA/HISTORICO/HISTORICA) entran a inactive y se conservan intactas sin reprogramarse (planner-core.js:259-261, isHistoricalOperation junto a isPlanCompletedOperation); (b) una operacion movible de OT no bloqueada que queda UNSCHEDULED se entrega con operador SIN_OPERADOR y fechas (fechaInicio/horaInicio/fechaFin/horaFin) vacias, sin heredar el borrador (planner-core.js:408-414). La marca operation.locked derivada no fija por si sola y AUTO_FROZEN no bloquea (RULE-OT-011/OT-015).",
+      "source": "definicion de usuario 2026-08-27 (al generar plan, si la OT no esta bloqueada, borrar la asignacion del borrador y volver a calcular); src/web/planning/planning-workflow-core.js:76-92; src/web/planning/planner-core.js:259-261, 408-414, isHistoricalOperation; src/web/planning/app.js:4514; tests/planning-workflow-core.test.mjs; tests/planner-core.test.mjs",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-BAL-007",
+      "name": "Validacion previa de operador en la matriz de habilidades",
+      "status": "implementada",
+      "rule": "Antes de generar el plan (validateScheduleConfiguration, llamado en app.js:4503 y en el dry-run app.js:4750), se valida que la matriz de habilidades (MATRIZ / state.matrix) tenga asignado al menos un operador activo para cada operacion necesaria de carga de las OTs desbloqueadas seleccionadas. Si alguna operacion movible (no completada, no bloqueada, no auto-congelada, no CAMBIO_HERRAMENTAL) no tiene operador en la matriz, planningConfigurationIssues emite MISSING_OPERATOR (planner-core.js:1272-1339, linea :1290-1293) y se bloquea la generacion, mostrando en la pestana matriz el mensaje 'no tiene operador asignado o no existe en la matriz de capacidad' (app.js:5144-5162). La validacion no depende del operador residual que traiga la operacion (p. ej. '1'); solo depende de state.matrix / state.operators (ver RULE-BAL-006).",
+      "source": "definicion de usuario 2026-08-27 (antes de generar plan debe revisarse que la matriz de habilidades tenga operador asignado para las operaciones necesarias de carga); src/web/planning/planner-core.js:1272-1339; src/web/planning/app.js:5130-5198, 4503, 4750; tests/planner-core.test.mjs",
+      "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-BAL-005",
+      "name": "Validacion de operador en operaciones sincronizadas de NetSuite",
+      "status": "implementada",
+      "rule": "Al mapear operaciones desde NetSuite (PP_mapNetSuiteOperation_, src/server/08-netsuite.js), el operador que la app conserva para una operacion (ya sea el persistido existing.operador o el traido de NetSuite por los campos 'Recurso humano'/'Operador'/'human_resource') se valida contra la lista de operadores activos de la hoja OPERADORES (current.operators). Si la lista esta disponible y el candidato no es un operador activo (ni el centinela reservado SIN_OPERADOR ni SUBCONTRATO), el operador se normaliza a SIN_OPERADOR. Esto evita que operadores inexistentes como '1' (un id foraneo de NetSuite que no existe en OPERADORES ni en la MATRIZ) se preserven o persistan en la hoja OPERACIONES. Si current.operators no esta disponible (p. ej. ruta directa por OT), se conserva el valor de origen.",
+      "source": "investigacion usuario 2026-08-27 (operador '1' inexistente); src/server/08-netsuite.js:670, 706-725; tests/netsuite-operation-catalog.test.mjs",
+      "domain": "Balanceo"
+    },
+    {
       "rule_id": "RULE-BAL-004",
       "name": "Menor tiempo de OT en produccion",
       "status": "documentada",
@@ -373,5 +405,5 @@
       "domain": "OT"
     }
   ],
-  "updated_at": "2026-08-27T00:00:00-06:00"
+  "updated_at": "2026-08-27T13:00:00-06:00"
 }

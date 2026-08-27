@@ -257,8 +257,8 @@
     const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
     const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
     const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
-    const inactive = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && !isSchedulableOperation(op));
-    const activeSourceOperations = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op));
+    const inactive = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && (!isSchedulableOperation(op) || isHistoricalOperation(op)));
+    const activeSourceOperations = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op) && !isHistoricalOperation(op));
     const selectionDefined = Array.isArray(state.selectedOts);
     const selectedOtsSet = new Set((state.selectedOts || []).map(normalizeKey));
     const isSelected = (op) => !selectionDefined || selectedOtsSet.has(normalizeKey(op.ot));
@@ -409,7 +409,8 @@
     for (const job of jobs) {
       for (let index = job.index; index < job.operations.length; index++) {
         const op = job.operations[index];
-        op.operador = op.operador || "SIN_OPERADOR";
+        op.operador = "SIN_OPERADOR";
+        op.fechaInicio = ""; op.horaInicio = ""; op.fechaFin = ""; op.horaFin = "";
         if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
         op.log = appendLog(op.log, "WARN_SIN_HUECO_EN_HORIZONTE");
         unscheduled.push(op);
@@ -2497,6 +2498,12 @@
     const id = String(op?.id || "").trim();
     if (id) return `OP|${normalizeKey(id)}`;
     return `OP|${normalizeKey(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeKey(op?.ct)}`;
+  }
+
+  function isHistoricalOperation(op) {
+    const status = normalizeKey(op?.planStatus || op?.estatus);
+    return op?.historical === true || op?.isHistorical === true ||
+      ["PUBLICADO", "PUBLICADA", "GUARDADO", "GUARDADA", "HISTORICO", "HISTORICA"].includes(status);
   }
 
   function isPlanCompletedOperation(state, op) {

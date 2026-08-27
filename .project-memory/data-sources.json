@@ -57,11 +57,11 @@
       "name": "OPERADORES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": ["OPERADOR", "ACTIVO", "MINUTOS_CAPACIDAD", "RENDIMIENTO_PCT", "NOMBRE", "CATEGORIA"],
-      "readers": ["PP_readState_"],
+      "readers": ["PP_readState_", "PP_mapNetSuiteOperation_ (referencia de operadores activos para validar/normalizar el operador de las operaciones sincronizadas de NetSuite)"],
       "writers": ["PP_writeState_", "PP_writeSkillState_"],
-      "rules": [],
+      "rules": ["RULE-BAL-005"],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": ["src/server/02-storage.js", "src/server/08-netsuite.js"]
     },
     {
       "source_id": "SHEET-CAPACIDADES",

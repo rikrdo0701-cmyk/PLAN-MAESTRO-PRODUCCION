@@ -525,6 +525,79 @@ test("cantidad de operación sin columna usa el pendiente del catálogo de OTs",
   assert.equal(operation.cantPendiente, 3);
 });
 
+test("normaliza al operador activo y rechaza el operador foraneo inexistente", () => {
+  const { context } = load();
+  const base = {
+    "Orden de trabajo": "2476",
+    Secuencia: 1,
+    "Centro de trabajo": "5467",
+    "Trabajo restante (min)": 7.02,
+  };
+  const current = {
+    operations: [],
+    workOrders: [],
+    operators: ["CORTADOR INICIAL", "DOBLADOR 1"],
+  };
+
+  assert.equal(
+    context.PP_mapNetSuiteOperation_({ ...base, "Recurso humano": "1" }, 0, current).operador,
+    "SIN_OPERADOR",
+  );
+  assert.equal(
+    context.PP_mapNetSuiteOperation_({ ...base, "Recurso humano": "CORTADOR INICIAL" }, 0, current).operador,
+    "CORTADOR INICIAL",
+  );
+});
+
+test("no preserva un operador invalido ya persistido y conserva el valido", () => {
+  const { context } = load();
+  const base = {
+    "Orden de trabajo": "2476",
+    Secuencia: 1,
+    "Centro de trabajo": "5467",
+    "Trabajo restante (min)": 7.02,
+  };
+  const current = {
+    operations: [
+      { ot: "2476", secuencia: 1, ct: "5467", operador: "1" },
+    ],
+    workOrders: [],
+    operators: ["CORTADOR INICIAL"],
+  };
+
+  assert.equal(
+    context.PP_mapNetSuiteOperation_(base, 0, current).operador,
+    "SIN_OPERADOR",
+  );
+
+  const planned = {
+    operations: [
+      { ot: "2476", secuencia: 1, ct: "5467", operador: "DOBLADOR 1" },
+    ],
+    workOrders: [],
+    operators: ["CORTADOR INICIAL", "DOBLADOR 1"],
+  };
+  assert.equal(
+    context.PP_mapNetSuiteOperation_(base, 0, planned).operador,
+    "DOBLADOR 1",
+  );
+});
+
+test("sin lista de operadores conserva el valor de origen", () => {
+  const { context } = load();
+  const base = {
+    "Orden de trabajo": "2476",
+    Secuencia: 1,
+    "Centro de trabajo": "5467",
+    "Recurso humano": "1",
+  };
+
+  assert.equal(
+    context.PP_mapNetSuiteOperation_(base, 0, { workOrders: [] }).operador,
+    "1",
+  );
+});
+
 test("operación de OT cerrada o eliminada desaparece del sync completo", () => {
   const { context } = load();
   const current = {

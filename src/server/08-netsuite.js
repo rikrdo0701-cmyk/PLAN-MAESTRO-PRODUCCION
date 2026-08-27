@@ -668,7 +668,7 @@ function PP_mapNetSuiteOperation_(row, index, current) {
   const priority = PP_priorityForOt_(current, ot);
   const netSuiteOperator = String(PP_pick_(row, ['Recurso humano', 'Operador', 'human_resource']) || '').trim();
   const netSuiteMachine = String(PP_pick_(row, ['Recurso maquina', 'Maquina', 'machine_resource']) || '').trim();
-  const operator = existing.operador && existing.operador !== 'SIN_OPERADOR' ? existing.operador : (netSuiteOperator || 'SIN_OPERADOR');
+  const operator = PP_resolveNetSuiteOperator_(existing.operador, netSuiteOperator, current);
   const bending = ['5459', '5527'].indexOf(String(ct || '').trim()) >= 0;
   const machine = bending
     ? (existing.maquina && existing.maquina !== 'SIN_MAQUINA' ? existing.maquina : netSuiteMachine)
@@ -702,6 +702,27 @@ function PP_mapNetSuiteOperation_(row, index, current) {
     estatus: String(PP_pick_(row, ['Estado', 'Status', 'status_op']) || 'No iniciado').trim(),
     log: 'NETSUITE_APPS_SCRIPT'
   };
+}
+
+function PP_normalizeNetSuiteOperatorFallback_(candidate, active) {
+  if (!candidate) return 'SIN_OPERADOR';
+  const key = PP_normalizeKey_(candidate);
+  if (key === 'SIN_OPERADOR' || key === 'SUBCONTRATO') return String(candidate).trim();
+  if (!Array.isArray(active)) return String(candidate).trim();
+  const activeKeys = {};
+  active.forEach(function(name) {
+    const normalized = PP_normalizeKey_(name);
+    if (normalized) activeKeys[normalized] = true;
+  });
+  return activeKeys[key] ? String(candidate).trim() : 'SIN_OPERADOR';
+}
+
+function PP_resolveNetSuiteOperator_(existing, netSuiteOperator, current) {
+  const active = current && current.operators;
+  const existingOperator = String(existing || '').trim();
+  const preserve = existingOperator && existingOperator !== 'SIN_OPERADOR';
+  const preferred = preserve ? existingOperator : (String(netSuiteOperator || '').trim() || 'SIN_OPERADOR');
+  return PP_normalizeNetSuiteOperatorFallback_(preferred, active);
 }
 
 function PP_mapNetSuiteMaterial_(row, index) {

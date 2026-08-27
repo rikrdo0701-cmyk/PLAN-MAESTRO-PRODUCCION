@@ -34,6 +34,8 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-OT-013` | Fallback de datos al generar plan | IMPLEMENTADA | definición de usuario 2026-08-13 |
 | `RULE-OT-014` | Sincronización inteligente y actualización por OT | IMPLEMENTADA | definición de usuario 2026-08-14 |
 | `RULE-OT-015` | OT u operación nueva no inicia antes de la hora actual | IMPLEMENTADA | definición de usuario 2026-08-14 |
+| `RULE-OT-016` | Dry-run de rendimiento de planeación | IMPLEMENTADA | definición de usuario 2026-08-26 |
+| `RULE-OT-017` | OT no bloqueada: borrar asignación del borrador y recalcular | IMPLEMENTADA | definición de usuario 2026-08-27 |
 
 Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
 `cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía
@@ -83,6 +85,9 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-BAL-002` | Cargas coherentes con `selectedOts` (misma regla OT-005) | DOCUMENTADA | spec 2026-07-12 |
 | `RULE-BAL-003` | Agrupación por máquina y herramental en doblado | DOCUMENTADA | definición de usuario 2026-08-12 y 2026-08-14 |
 | `RULE-BAL-004` | Menor tiempo de OT en producción para reducir WIP | DOCUMENTADA | definición de usuario 2026-08-12 |
+| `RULE-BAL-005` | Validación de operador en operaciones sincronizadas de NetSuite | IMPLEMENTADA | definición de usuario 2026-08-27; `08-netsuite.js` |
+| `RULE-BAL-006` | Operador programado siempre desde la matriz de habilidades (MATRIZ), nunca residual | IMPLEMENTADA | definición de usuario 2026-08-27; `planner-core.js` |
+| `RULE-BAL-007` | Validación previa de operador en la matriz antes de generar plan | IMPLEMENTADA | definición de usuario 2026-08-27; `app.js` `planner-core.js` |
 
 ## BOM
 
