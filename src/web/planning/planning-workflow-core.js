@@ -593,10 +593,9 @@
 
     const keepOt = (ot) => !closed.has(normalize(ot));
     const compactRows = (rows) => (rows || []).filter((row) => keepOt(row?.ot)).map((row) => ({ ...row }));
-    const currentOperations = (source.operations || []).filter((operation) =>
-      keepOt(operation?.ot) || !isPendingDraftOperation(operation)).map((operation) => ({ ...operation }));
+    const currentOperations = (source.operations || []).filter((operation) => keepOt(operation?.ot)).map((operation) => ({ ...operation }));
     const operationPlanStatuses = Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
-      .filter(([, status]) => keepOt(status?.ot) || normalize(status?.status || status?.planStatus) === "COMPLETADA_PLAN")
+      .filter(([, status]) => keepOt(status?.ot))
       .map(([key, status]) => [key, { ...status }]));
     const selectedOperation = (source.operations || []).find((operation) => String(operation?.id) === String(source.selectedOperationId || ""));
     const selectedOperationRemoved = Boolean(source.selectedOperationId) && !currentOperations

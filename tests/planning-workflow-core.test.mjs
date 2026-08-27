@@ -418,7 +418,7 @@ test("la sincronizacion conserva en el borrador solo OTs que NetSuite sigue repo
   assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["200"]);
 });
 
-test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus completadas con resumen compacto", () => {
+test("reconcileActiveWorkOrders retira una OT ausente y elimina todas sus operaciones con resumen compacto", () => {
   const state = {
     selectedOts: ["100", "200"], lockedOts: ["100", "200"], expandedOts: ["200"],
     lastSchedule: { scheduledOts: ["100", "200"] },
@@ -451,13 +451,12 @@ test("reconcileActiveWorkOrders retira una OT ausente y conserva solo sus comple
   assert.deepEqual(structuredClone(next.lockedOts), ["100"]);
   assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["100"]);
   assert.deepEqual(structuredClone(next.workOrders.map((row) => row.ot)), ["100"]);
-  assert.deepEqual(structuredClone(next.operations.map((row) => row.id)), ["100-p", "200-c"]);
+  assert.deepEqual(structuredClone(next.operations.map((row) => row.id)), ["100-p"]);
   assert.deepEqual(structuredClone(next.materials.map((row) => row.ot)), ["100"]);
   assert.deepEqual(structuredClone(next.otConfigurations), { 100: { machine: "A" } });
   assert.deepEqual(structuredClone(next.planningConfigByOt), { 100: { priority: 1 } });
   assert.equal(next.preparedPlanningByOt[200], undefined);
   assert.deepEqual(structuredClone(next.operationPlanStatuses), {
-    "200-c": { ot: "200", status: "COMPLETADA_PLAN" },
     "100-p": { ot: "100", status: "PENDIENTE" },
   });
   assert.equal(next.selectedDetailOt, "");

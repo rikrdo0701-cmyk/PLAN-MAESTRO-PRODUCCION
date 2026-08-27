@@ -1306,6 +1306,67 @@
     return ct === "5459" || ct === "5527";
   }
 
+  function analyzeUnscheduledOperations(state, scheduleResult) {
+    const diagnostics = Array.isArray(scheduleResult?.diagnostics) ? scheduleResult.diagnostics : [];
+    const unscheduledDiags = diagnostics.filter((d) => d?.code === "UNSCHEDULED");
+    if (!unscheduledDiags.length) return { total: 0, byCause: {}, capacityOps: [], configOps: [], engineSuspicion: [] };
+
+    const byCause = {};
+    for (const d of unscheduledDiags) {
+      const cause = d.cause || "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO";
+      if (!byCause[cause]) byCause[cause] = [];
+      byCause[cause].push(d);
+    }
+
+    const configCauses = new Set(["SIN_OPERADOR_CONFIGURADO", "SIN_MAQUINA_O_HERRAMENTAL_VALIDO", "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL"]);
+    const configOps = unscheduledDiags.filter((d) => configCauses.has(d.cause));
+    const capacityOps = unscheduledDiags.filter((d) => !configCauses.has(d.cause));
+
+    const horizonStart = parseDateOnly(state.planStart) || new Date();
+    const horizonEndMs = horizonStart.getTime() + clampInteger(state.horizonDays || 15, 1, 45) * 86400000;
+    const horizonMinutes = Math.max(0, (horizonEndMs - horizonStart.getTime()) / 60000);
+
+    const engineSuspicion = [];
+    const operations = (state.operations || []).filter((op) => !filterExcludedOperations(state, [op]).length);
+    const opsById = new Map(operations.map((op) => [String(op.id), op]));
+
+    for (const d of capacityOps) {
+      const op = opsById.get(String(d.operationId));
+      if (!op) continue;
+      const capability = capabilityForOperation(op);
+      const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
+      const prodMinutes = productionMinutes(op);
+      const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
+      const avgPerf = opPerf.length ? opPerf.reduce((a, b) => a + b, 0) / opPerf.length : 100;
+      const effectiveMinutes = prodMinutes / (avgPerf / 100);
+      const totalAvailable = operators.reduce((sum, name) => sum + availableMinutes(state, name, state.planStart, state.horizonDays || 15), 0);
+      const capRatio = totalAvailable > 0 ? effectiveMinutes / totalAvailable : Infinity;
+      const isHeavy = effectiveMinutes > horizonMinutes * 0.15;
+      const onlyOneOperator = operators.length === 1;
+
+      if (capRatio > 0.05 && !isHeavy && onlyOneOperator && operators.length === 1) {
+        engineSuspicion.push({
+          operationId: d.operationId,
+          ot: d.ot,
+          sequence: d.sequence,
+          capability: capability.key,
+          operators,
+          effectiveMinutes: Math.round(effectiveMinutes),
+          totalAvailableMinutes: Math.round(totalAvailable),
+          reason: "UNIQUE_OPERATOR_SATURATED",
+        });
+      }
+    }
+
+    return {
+      total: unscheduledDiags.length,
+      byCause: Object.fromEntries(Object.entries(byCause).map(([cause, items]) => [cause, items.length])),
+      capacityOps: capacityOps.length,
+      configOps: configOps.length,
+      engineSuspicion,
+    };
+  }
+
   function validBendingMachine(machine, ct) {
     const value = String(machine || "").trim();
     return Boolean(value) && normalizeKey(value) !== "SIN_MAQUINA" && !(String(ct) === "5459" && value === "1");
@@ -2732,6 +2793,7 @@
     isMovablePlanningStatus,
     isOtScheduled,
     planningConfigurationIssues,
+    analyzeUnscheduledOperations,
     isBendingOperation,
     isSubcontractOperation,
     toolChangeCapability: () => ({ ...TOOL_CHANGE_CAPABILITY }),

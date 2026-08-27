@@ -4828,6 +4828,9 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       counts[code] = (counts[code] || 0) + 1;
       return counts;
     }, {});
+    if (window.PlannerCore?.analyzeUnscheduledOperations) {
+      metrics.unscheduledAnalysis = window.PlannerCore.analyzeUnscheduledOperations(temporaryState, summary);
+    }
     metrics.selectedStrategy = summary.optimization?.selectedStrategy || "balanced";
     metrics.horizonDays = Number(scheduleResult.horizonDays || temporaryState.horizonDays || metrics.horizonDays || 0);
     result.ok = result.blockers.length === 0 && !result.aborted;
