@@ -341,7 +341,10 @@
       if (!jobs.length && movable.length) excluded = [...excluded, ...movable];
     }
     let pending = movable.length;
-    if (performanceState) performanceState.scheduledOpsTotal = movable.length;
+    if (performanceState) {
+      performanceState.scheduledOpsTotal = movable.length;
+      performanceState.scheduledOpsDone = 0;
+    }
     // Mark first operations in jobs for sequence protection
     // These operations must be scheduled before subsequent operations of the same OT
     // and must maintain PENDIENTE/planeado status

@@ -150,6 +150,42 @@ test("PlannerCore aborta cooperativamente cuando vence el presupuesto", async ()
   assert.ok(result.lastSchedule.diagnostics.some((item) => item.code === "TIME_BUDGET_EXCEEDED"));
 });
 
+test("el progreso de programacion nunca supera el total entre estrategias (no acumula)", async () => {
+  const core = loadPlannerCore();
+  const operations = [];
+  for (let index = 1; index <= 120; index += 1) {
+    operations.push({ id: `op-${index}`, ot: String(index), secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 });
+  }
+  const events = [];
+  const result = await core.schedulePlan({
+    selectedOts: operations.map((op) => op.ot),
+    lockedOts: [],
+    operations,
+    workOrders: operations.map((op) => ({ ot: op.ot })),
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 4 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    collectStats: true,
+    progressEveryMs: 0,
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.ok(events.length > 0, "debe emitir eventos de progreso");
+  for (const event of events) {
+    assert.ok(event.scheduled <= event.total, `scheduled ${event.scheduled} no debe superar total ${event.total} en ${event.phase}`);
+  }
+  const last = events[events.length - 1];
+  assert.equal(last.total, 120);
+  assert.equal(last.percent, undefined);
+  assert.equal(result.lastSchedule.performance.stats.strategiesStarted > 1, true);
+});
+
 test("PlannerCore revisa presupuesto en loops internos del scheduler", async () => {
   assert.match(source, /function assertPlanningBudget\(performanceState, phase, context\)/);
   assert.match(source, /assertPlanningBudget\(performanceState, "main-loop", context\)/);
