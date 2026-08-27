@@ -1358,12 +1358,40 @@
       }
     }
 
+    const details = unscheduledDiags.map((d) => {
+      const op = opsById.get(String(d.operationId));
+      if (!op) return { ...d, capability: "", operators: [], prodMinutes: 0, effectiveMinutes: 0, totalAvailableMinutes: 0, machine: "" };
+      const capability = capabilityForOperation(op);
+      const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
+      const prodMinutes = productionMinutes(op);
+      const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
+      const avgPerf = opPerf.length ? opPerf.reduce((a, b) => a + b, 0) / opPerf.length : 100;
+      const effectiveMinutes = prodMinutes / (avgPerf / 100);
+      const totalAvailable = operators.reduce((sum, name) => sum + availableMinutes(state, name, state.planStart, state.horizonDays || 15), 0);
+      return {
+        operationId: d.operationId,
+        ot: d.ot,
+        sequence: d.sequence,
+        cause: d.cause,
+        capability: capability.key,
+        ct: capability.ct,
+        operators,
+        machine: op.maquina || "",
+        prodMinutes: Math.round(prodMinutes),
+        effectiveMinutes: Math.round(effectiveMinutes),
+        totalAvailableMinutes: Math.round(totalAvailable),
+        descripcion: op.descripcion || "",
+        parte: op.parte || "",
+      };
+    });
+
     return {
       total: unscheduledDiags.length,
       byCause: Object.fromEntries(Object.entries(byCause).map(([cause, items]) => [cause, items.length])),
       capacityOps: capacityOps.length,
       configOps: configOps.length,
       engineSuspicion,
+      details,
     };
   }
 
