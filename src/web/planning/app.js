@@ -523,6 +523,8 @@ window.addEventListener("beforeunload", () => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState()));
 });
 
+window.runPlanningPerformanceDryRun = dryRunCurrentPlanPerformance;
+
 function initializePlanningApp() {
   bindElements();
   bindEvents();
@@ -4554,6 +4556,196 @@ async function scheduleCurrentPlanImpl() {
     els.scheduleBtn.classList.remove("is-running");
     if (label) label.textContent = originalLabel;
   }
+}
+
+async function dryRunCurrentPlanPerformance() {
+  const totalStarted = dryRunNowMs();
+  const timings = {
+    totalMs: 0,
+    incrementalBaseMs: 0,
+    readinessMs: 0,
+    prepareDraftMs: 0,
+    schedulePlanMs: 0,
+    resultBuildMs: 0,
+  };
+  const selectedOts = Array.isArray(state.selectedOts) ? [...state.selectedOts] : [];
+  const metrics = {
+    selectedOtsCount: selectedOts.length,
+    engineSelectedOtsCount: 0,
+    affectedOtsCount: 0,
+    readyOtsCount: 0,
+    lockedOtsCount: selectedOts.filter((ot) => isJobLocked(ot)).length,
+    closedKeptCount: selectedOts.filter((ot) => hasClosedWorkOrderSyncWarning(ot)).length,
+    inputOperationsCount: Array.isArray(state.operations) ? state.operations.length : 0,
+    includedOperationsCount: 0,
+    scheduledOperationsCount: 0,
+    unscheduledOperationsCount: 0,
+    scheduledOtsCount: 0,
+    unscheduledOtsCount: 0,
+    diagnosticsCount: 0,
+    diagnosticsByCode: {},
+    selectedStrategy: "",
+    planStart: "",
+    horizonDays: Number(state.horizonDays || 0),
+    incrementalBaseSnapshotId: "",
+    ...timings,
+  };
+  const result = {
+    ok: false,
+    dryRun: true,
+    metrics,
+    blockers: [],
+    warnings: [],
+    missingDataOts: [],
+  };
+  const finish = () => {
+    timings.totalMs = Math.round(dryRunNowMs() - totalStarted);
+    Object.assign(metrics, timings);
+    if (typeof console !== "undefined") {
+      if (typeof console.table === "function") console.table(metrics);
+      if (typeof console.info === "function") console.info("[planning dry-run]", result);
+    }
+    if (typeof showToast === "function") {
+      const text = result.ok
+        ? `Dry-run: ${metrics.scheduledOperationsCount} programadas; ${metrics.unscheduledOperationsCount} sin hueco; ${metrics.selectedStrategy || "sin estrategia"} en ${(metrics.totalMs / 1000).toFixed(1)}s`
+        : `Dry-run bloqueado: ${result.blockers.length || result.missingDataOts.length} pendientes`;
+      showToast(text, result.ok ? 6000 : 9000);
+    }
+    return result;
+  };
+
+  if (!window.PlannerCore?.schedulePlan) {
+    result.blockers.push({ code: "PLANNER_CORE_UNAVAILABLE", message: "El motor de programacion no esta disponible" });
+    return finish();
+  }
+  if (!selectedOts.length) {
+    result.blockers.push({ code: "NO_SELECTED_OTS", message: "Agrega al menos una OT a la lista del plan" });
+    return finish();
+  }
+
+  const planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
+  metrics.planStart = planStart;
+  const planningWeekStart = window.PlanningWorkflowCore.mondayIso(planStart);
+  let incrementalBase = null;
+  let incrementalScope = null;
+  let readyOts = [];
+  let engineSelectedOts = [];
+  const originalState = state;
+  try {
+    let started = dryRunNowMs();
+    incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
+    timings.incrementalBaseMs = Math.round(dryRunNowMs() - started);
+    if (incrementalBase?.snapshotId) metrics.incrementalBaseSnapshotId = incrementalBase.snapshotId;
+    incrementalScope = incrementalBase
+      ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
+      : { affectedOts: [...selectedOts] };
+    const affected = new Set((incrementalScope.affectedOts || []).map(normalizeStatus));
+    metrics.affectedOtsCount = affected.size;
+
+    const hasLoadedData = window.PlanningWorkflowCore.hasPlanningData(state, selectedOts);
+    if (!hasLoadedData) {
+      const operationsByOt = planningStateIndexes().operationsByOt;
+      result.missingDataOts = selectedOts.filter((ot) => !(operationsByOt.get(materialOtKey(ot)) || []).length);
+      result.blockers.push({
+        code: "MISSING_LOADED_PLANNING_DATA",
+        message: "Faltan operaciones cargadas en memoria; el dry-run no sincroniza NetSuite ni modifica estado.",
+        ots: result.missingDataOts,
+      });
+      return finish();
+    }
+
+    started = dryRunNowMs();
+    const jobs = new Map(getPriorityJobs().map((job) => [materialOtKey(job.ot), job]));
+    readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
+      !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+    );
+    for (const ot of readyOts) {
+      const job = jobs.get(materialOtKey(ot));
+      const operations = jobPlanningOperations(job);
+      if (!job || !operations.length) {
+        result.blockers.push({ code: "OT_WITHOUT_OPERATIONS", ot, message: `No se encontraron operaciones cargadas para OT ${ot}` });
+        continue;
+      }
+      const issues = window.PlannerCore.planningConfigurationIssues
+        ? window.PlannerCore.planningConfigurationIssues(state, operations)
+        : [];
+      const blockers = issues.filter((issue) => [
+        "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR",
+        "MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS",
+      ].includes(issue.code));
+      blockers.forEach((issue) => result.blockers.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Falta completar la configuracion del plan" }));
+      const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: false });
+      if (commercial.needsType) result.blockers.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}` });
+      if (commercial.needsPlanningType) result.blockers.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}` });
+    }
+    readyOts = readyOts.filter((ot) => !result.blockers.some((blocker) => normalizeStatus(blocker.ot) === normalizeStatus(ot)));
+    metrics.readyOtsCount = readyOts.length;
+    timings.readinessMs = Math.round(dryRunNowMs() - started);
+    if (!readyOts.length) {
+      if (!result.blockers.length) result.blockers.push({ code: "NO_READY_OTS", message: "No hay OTs desbloqueadas listas para programar" });
+      return finish();
+    }
+
+    const validation = validateScheduleConfiguration(new Date(), readyOts);
+    if (validation) {
+      result.blockers.push({ code: "SCHEDULE_CONFIGURATION", operationId: validation.operationId || "", message: validation.message });
+      return finish();
+    }
+
+    started = dryRunNowMs();
+    engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
+    metrics.engineSelectedOtsCount = engineSelectedOts.length;
+    let temporaryState = window.PlanningWorkflowCore.prepareDraftForReschedule(deepClone({ ...state, planStart }), readyOts);
+    state = temporaryState;
+    invalidateCurrentPlanOperationsCache();
+    applyQueuePriorities();
+    freezeElapsedOperations(new Date());
+    temporaryState = state;
+    metrics.includedOperationsCount = currentPlanOperations().length;
+    timings.prepareDraftMs = Math.round(dryRunNowMs() - started);
+
+    started = dryRunNowMs();
+    const scheduleResult = window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
+      planStart: temporaryState.planStart,
+      horizonDays: temporaryState.horizonDays,
+      executionTime: new Date().toISOString(),
+      respectPlanStart: true,
+      baseSnapshot: incrementalBase,
+      affectedOts: readyOts,
+    });
+    timings.schedulePlanMs = Math.round(dryRunNowMs() - started);
+
+    started = dryRunNowMs();
+    const summary = scheduleResult.lastSchedule || {};
+    const diagnostics = Array.isArray(summary.diagnostics) ? summary.diagnostics : [];
+    metrics.scheduledOperationsCount = Number(summary.scheduled || 0);
+    metrics.unscheduledOperationsCount = Number(summary.unscheduled || 0);
+    metrics.scheduledOtsCount = Array.isArray(summary.scheduledOts) ? summary.scheduledOts.length : 0;
+    const scheduledOts = new Set((summary.scheduledOts || []).map(normalizeStatus));
+    metrics.unscheduledOtsCount = readyOts.filter((ot) => !scheduledOts.has(normalizeStatus(ot))).length;
+    metrics.diagnosticsCount = diagnostics.length;
+    metrics.diagnosticsByCode = diagnostics.reduce((counts, item) => {
+      const code = String(item?.code || "UNKNOWN").trim() || "UNKNOWN";
+      counts[code] = (counts[code] || 0) + 1;
+      return counts;
+    }, {});
+    metrics.selectedStrategy = summary.optimization?.selectedStrategy || "balanced";
+    metrics.horizonDays = Number(scheduleResult.horizonDays || temporaryState.horizonDays || metrics.horizonDays || 0);
+    result.ok = result.blockers.length === 0;
+    result.warnings = diagnostics.filter((item) => item?.level && String(item.level).toUpperCase() !== "ERROR");
+    timings.resultBuildMs = Math.round(dryRunNowMs() - started);
+    return finish();
+  } catch (error) {
+    result.blockers.push({ code: "DRY_RUN_ERROR", message: String(error?.message || error || "Error desconocido") });
+    return finish();
+  } finally {
+    state = originalState;
+    invalidateCurrentPlanOperationsCache();
+  }
+}
+
+function dryRunNowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 }
 
 function renderLoadSourceSelect() {

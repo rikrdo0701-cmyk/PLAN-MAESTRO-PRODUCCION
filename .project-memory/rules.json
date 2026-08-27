@@ -363,7 +363,15 @@
       "rule": "El export CSV del plan (Exportar) incluye las columnas PRECIO y MONTO por fila de operacion. PRECIO = precio unitario de la OT (si la operacion trae PRECIO_UNITARIO del snapshot lo conserva; si no, usa ORDENES_TRABAJO.PRECIO_PROMEDIO_VENTA y si es 0 el PRECIO_MANUAL de la configuracion de articulo; effectiveUnitPriceForOt, app.js:8548-8551). MONTO = PRECIO x piezas pendientes de la OT (amountForOt, app.js:8553-8555); coincide con el monto de liberacion que reporta el resumen semanal (weeklyFinishingCost, planning-workflow-core.js:968-978). Es valor de venta estimado, no costo real.",
       "source": "definicion de usuario 2026-08-17 (solo interesa el monto de liberacion); src/web/planning/app.js:33-67 (PLAN_HEADERS), 7449-7460 (operationToRow), 8538-8555 (precio/monto); src/web/planning/planning-workflow-core.js:962-978; docs/data/sources.md (plan-produccion.csv)",
       "domain": "Montos"
+    },
+    {
+      "rule_id": "RULE-OT-016",
+      "name": "Dry-run de rendimiento de planeacion",
+      "status": "implementada",
+      "rule": "window.runPlanningPerformanceDryRun() mide generacion de plan sobre las OTs reales seleccionadas en memoria, calcula base incremental de solo lectura y ejecuta PlannerCore.schedulePlan sobre una copia temporal; no sincroniza NetSuite, no abre dialogos de preparacion, no llama saveAndRender/saveState/queueAppSheetSave/savePlanningStateOptimized/persistPlanSnapshot/saveDraftSnapshot ni renderiza el resultado, y restaura state al finalizar.",
+      "source": "definicion de usuario 2026-08-26; src/web/planning/app.js; tests/build.test.mjs",
+      "domain": "OT"
     }
   ],
-  "updated_at": "2026-08-16T00:00:00-06:00"
+  "updated_at": "2026-08-26T00:00:00-06:00"
 }

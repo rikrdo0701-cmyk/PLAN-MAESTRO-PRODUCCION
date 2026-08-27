@@ -137,6 +137,54 @@ test("la configuracion de flujo expone controles y diagnostico sin render global
   assert.match(planningApp, /Estrategia:/);
 });
 
+test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultados", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const dryRunStart = planningApp.indexOf("async function dryRunCurrentPlanPerformance()");
+  const dryRunEnd = planningApp.indexOf("function dryRunNowMs()", dryRunStart);
+  const dryRunSource = planningApp.slice(dryRunStart, dryRunEnd);
+  const scheduleStart = planningApp.indexOf("async function scheduleCurrentPlanImpl()");
+  const scheduleEnd = planningApp.indexOf("async function dryRunCurrentPlanPerformance()", scheduleStart);
+  const scheduleSource = planningApp.slice(scheduleStart, scheduleEnd);
+
+  assert.match(planningApp, /window\.runPlanningPerformanceDryRun\s*=\s*dryRunCurrentPlanPerformance/);
+  assert.match(dryRunSource, /console\.table\(metrics\)/);
+  assert.match(dryRunSource, /console\.info\("\[planning dry-run\]", result\)/);
+  assert.match(dryRunSource, /selectedOtsCount/);
+  assert.match(dryRunSource, /engineSelectedOtsCount/);
+  assert.match(dryRunSource, /affectedOtsCount/);
+  assert.match(dryRunSource, /readyOtsCount/);
+  assert.match(dryRunSource, /lockedOtsCount/);
+  assert.match(dryRunSource, /closedKeptCount/);
+  assert.match(dryRunSource, /inputOperationsCount/);
+  assert.match(dryRunSource, /includedOperationsCount/);
+  assert.match(dryRunSource, /scheduledOperationsCount/);
+  assert.match(dryRunSource, /unscheduledOperationsCount/);
+  assert.match(dryRunSource, /scheduledOtsCount/);
+  assert.match(dryRunSource, /unscheduledOtsCount/);
+  assert.match(dryRunSource, /diagnosticsCount/);
+  assert.match(dryRunSource, /diagnosticsByCode/);
+  assert.match(dryRunSource, /selectedStrategy/);
+  assert.match(dryRunSource, /planStart/);
+  assert.match(dryRunSource, /horizonDays/);
+  assert.match(dryRunSource, /incrementalBaseSnapshotId/);
+  assert.match(dryRunSource, /totalMs/);
+  assert.match(dryRunSource, /incrementalBaseMs/);
+  assert.match(dryRunSource, /readinessMs/);
+  assert.match(dryRunSource, /prepareDraftMs/);
+  assert.match(dryRunSource, /schedulePlanMs/);
+  assert.match(dryRunSource, /resultBuildMs/);
+  assert.doesNotMatch(dryRunSource, /\bsaveState\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bqueueAppSheetSave\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bpersistPlanSnapshot\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bsaveDraftSnapshot\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bsaveAndRender\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\brender\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bensurePlanningDataLoaded\s*\(/);
+  assert.match(scheduleSource, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas/);
+  assert.match(scheduleSource, /persistPlanSnapshot\(\)/);
+  assert.match(scheduleSource, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \}/);
+});
+
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
   const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
   const workflows = await Promise.all(workflowNames.map((name) =>
