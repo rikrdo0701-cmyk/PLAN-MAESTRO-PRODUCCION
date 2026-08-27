@@ -19,13 +19,13 @@ function loadPlannerCoreWithSinglePass() {
   return context.globalThis.PlannerCore;
 }
 
-test("PlannerCore expone el programador principal", () => {
+test("PlannerCore expone el programador principal", async () => {
   const core = loadPlannerCore();
   assert.equal(typeof core.schedulePlan, "function");
   assert.equal(typeof core.operationToolKey, "function");
 });
 
-test("una OT cancelada nunca es movible para planeacion", () => {
+test("una OT cancelada nunca es movible para planeacion", async () => {
   const core = loadPlannerCore();
   for (const status of ["Cancelada", "Cancelado", "Canceled", "Cancelled"]) {
     assert.equal(core.isMovablePlanningStatus(status), false, status);
@@ -33,7 +33,7 @@ test("una OT cancelada nunca es movible para planeacion", () => {
   assert.equal(core.isMovablePlanningStatus("En curso"), true);
 });
 
-test("filtra capacidades parcialmente por nombre o CT sin acentos, mayusculas ni espacios extra", () => {
+test("filtra capacidades parcialmente por nombre o CT sin acentos, mayusculas ni espacios extra", async () => {
   const core = loadPlannerCore();
   const capabilities = [
     { key: "5459::DOBLEZ_DE_TUBERIA", ct: "5459", label: "Dóblez   de tubería" },
@@ -48,7 +48,7 @@ test("filtra capacidades parcialmente por nombre o CT sin acentos, mayusculas ni
   assert.deepEqual([...core.filterCapabilities(capabilities, "   ")], capabilities);
 });
 
-test("clasifica todas las variantes especiales de subcontrato por contenido", () => {
+test("clasifica todas las variantes especiales de subcontrato por contenido", async () => {
   const core = loadPlannerCore();
   for (const label of [
     "Envío a subcontrato externo",
@@ -65,7 +65,7 @@ test("clasifica todas las variantes especiales de subcontrato por contenido", ()
   assert.equal(core.isSpecialSubcontractCapability({ ct: "5495", label: "67OTD ENVIO A PINTURA" }), true);
 });
 
-test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", () => {
+test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "excluded", ct: " 54á ", descripcion: "  Dóblez   especial " },
@@ -79,7 +79,7 @@ test("identifica y filtra operaciones por la clave normalizada CT::NOMBRE", () =
   assert.deepEqual([...core.filterExcludedOperations({}, operations)], operations);
 });
 
-test("precalcula las exclusiones y permite reutilizarlas al filtrar operaciones", () => {
+test("precalcula las exclusiones y permite reutilizarlas al filtrar operaciones", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "excluded", ct: " 54á ", descripcion: "  Dóblez   especial " },
@@ -98,9 +98,9 @@ test("precalcula las exclusiones y permite reutilizarlas al filtrar operaciones"
   assert.deepEqual([...core.excludedCapabilityKeySet({ excludedCapabilities: "54A::DOBLEZ_ESPECIAL" })], []);
 });
 
-test("PlannerCore acepta un estado vacio", () => {
+test("PlannerCore acepta un estado vacio", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
+  const result = await core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
     planStart: "2026-07-13",
     horizonDays: 5,
     executionTime: "2026-07-13T07:00:00",
@@ -110,9 +110,9 @@ test("PlannerCore acepta un estado vacio", () => {
   assert.equal(result.horizonDays, 5);
 });
 
-test("PlannerCore no adjunta metricas de rendimiento por defecto", () => {
+test("PlannerCore no adjunta metricas de rendimiento por defecto", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
+  const result = await core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
     planStart: "2026-07-13",
     horizonDays: 5,
     executionTime: "2026-07-13T07:00:00",
@@ -121,10 +121,10 @@ test("PlannerCore no adjunta metricas de rendimiento por defecto", () => {
   assert.equal(result.lastSchedule.performance, undefined);
 });
 
-test("PlannerCore aborta cooperativamente cuando vence el presupuesto", () => {
+test("PlannerCore aborta cooperativamente cuando vence el presupuesto", async () => {
   const core = loadPlannerCore();
   let now = 0;
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       { id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
@@ -150,7 +150,7 @@ test("PlannerCore aborta cooperativamente cuando vence el presupuesto", () => {
   assert.ok(result.lastSchedule.diagnostics.some((item) => item.code === "TIME_BUDGET_EXCEEDED"));
 });
 
-test("PlannerCore revisa presupuesto en loops internos del scheduler", () => {
+test("PlannerCore revisa presupuesto en loops internos del scheduler", async () => {
   assert.match(source, /function assertPlanningBudget\(performanceState, phase, context\)/);
   assert.match(source, /assertPlanningBudget\(performanceState, "main-loop", context\)/);
   assert.match(source, /assertPlanningBudget\(performanceState, "job-scan", context\)/);
@@ -161,9 +161,9 @@ test("PlannerCore revisa presupuesto en loops internos del scheduler", () => {
   assert.match(source, /assertPlanningBudget\(context\.performanceState, "busy-conflict-scan", context\)/);
 });
 
-test("respeta el inicio del Gantt para una operacion existente aunque la ejecucion ocurra despues", () => {
+test("respeta el inicio del Gantt para una operacion existente aunque la ejecucion ocurra despues", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       {
@@ -192,9 +192,9 @@ test("respeta el inicio del Gantt para una operacion existente aunque la ejecuci
   assert.equal(operation.horaInicio, "07:00");
 });
 
-test("una OT nueva sin programacion previa no puede iniciar antes de la hora actual", () => {
+test("una OT nueva sin programacion previa no puede iniciar antes de la hora actual", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       { id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
@@ -218,9 +218,9 @@ test("una OT nueva sin programacion previa no puede iniciar antes de la hora act
   assert.ok(new Date(`${operation.fechaInicio}T${operation.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
 
-test("OT bloqueada antes del Gantt queda fija completa y reserva carga", () => {
+test("OT bloqueada antes del Gantt queda fija completa y reserva carga", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
@@ -255,9 +255,9 @@ test("OT bloqueada antes del Gantt queda fija completa y reserva carga", () => {
   assert.ok(new Date(`${newOp.fechaInicio}T${newOp.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
 
-test("OT no bloqueada con operacion pendiente programada antes del Gantt se replanea desde INICIO", () => {
+test("OT no bloqueada con operacion pendiente programada antes del Gantt se replanea desde INICIO", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     lockedOts: [],
     operations: [
@@ -288,7 +288,7 @@ test("OT no bloqueada con operacion pendiente programada antes del Gantt se repl
   assert.equal(operation.horaFin, "08:00");
 });
 
-test("una operacion nueva en una OT existente no inicia antes de la hora actual aunque su predecesora quede en el pasado", () => {
+test("una operacion nueva en una OT existente no inicia antes de la hora actual aunque su predecesora quede en el pasado", async () => {
   const core = loadPlannerCore();
   const baseSnapshot = {
     selectedOts: ["100"],
@@ -296,7 +296,7 @@ test("una operacion nueva en una OT existente no inicia antes de la hora actual 
       { ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00" },
     ],
   };
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       {
@@ -329,7 +329,7 @@ test("una operacion nueva en una OT existente no inicia antes de la hora actual 
   assert.ok(new Date(`${added.fechaInicio}T${added.horaInicio}:00`) >= new Date(`${existing.fechaFin}T${existing.horaFin}:00`));
 });
 
-test("una OT existente programada conserva su ancla aunque la ejecucion ocurra despues", () => {
+test("una OT existente programada conserva su ancla aunque la ejecucion ocurra despues", async () => {
   const core = loadPlannerCore();
   const baseSnapshot = {
     selectedOts: ["100"],
@@ -337,7 +337,7 @@ test("una OT existente programada conserva su ancla aunque la ejecucion ocurra d
       { ot: "100", secuencia: 1, ct: "100", fechaInicio: "2026-08-12", horaInicio: "07:00", fechaFin: "2026-08-12", horaFin: "08:00" },
     ],
   };
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       {
@@ -366,7 +366,7 @@ test("una OT existente programada conserva su ancla aunque la ejecucion ocurra d
   assert.equal(operation.horaInicio, "07:00");
 });
 
-test("una operacion existente en la base no se bloquea por la hora actual y conserva su secuencia", () => {
+test("una operacion existente en la base no se bloquea por la hora actual y conserva su secuencia", async () => {
   const core = loadPlannerCore();
   const baseSnapshot = {
     selectedOts: ["100"],
@@ -375,7 +375,7 @@ test("una operacion existente en la base no se bloquea por la hora actual y cons
       { ot: "100", secuencia: 2, ct: "200", fechaInicio: "2026-08-12", horaInicio: "08:00", fechaFin: "2026-08-12", horaFin: "09:00" },
     ],
   };
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       {
@@ -411,7 +411,7 @@ test("una operacion existente en la base no se bloquea por la hora actual y cons
   assert.equal(second.horaInicio, "08:00");
 });
 
-test("una operacion excluida no se agenda, bloquea recursos ni genera errores de configuracion", () => {
+test("una operacion excluida no se agenda, bloquea recursos ni genera errores de configuracion", async () => {
   const core = loadPlannerCore();
   const excluded = {
     id: "excluded", ot: "100", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR",
@@ -439,7 +439,7 @@ test("una operacion excluida no se agenda, bloquea recursos ni genera errores de
   };
 
   assert.deepEqual([...core.planningConfigurationIssues(state, state.operations)], []);
-  const result = core.schedulePlan(state, {
+  const result = await core.schedulePlan(state, {
     planStart: "2026-07-13",
     horizonDays: 5,
     executionTime: "2026-07-13T07:00:00",
@@ -454,9 +454,9 @@ test("una operacion excluida no se agenda, bloquea recursos ni genera errores de
   assert.equal(result.lastSchedule.diagnostics.some((item) => item.operationId === "excluded"), false);
 });
 
-test("al excluir una operacion intermedia la sucesora depende de la ultima incluida de la OT", () => {
+test("al excluir una operacion intermedia la sucesora depende de la ultima incluida de la OT", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
     selectedOts: ["300"],
     operations: [
@@ -486,9 +486,9 @@ test("al excluir una operacion intermedia la sucesora depende de la ultima inclu
   );
 });
 
-test("una sucesora conserva precedencia si la ultima incluida anterior esta fija", () => {
+test("una sucesora conserva precedencia si la ultima incluida anterior esta fija", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
     selectedOts: ["300"],
     operations: [
@@ -520,9 +520,9 @@ test("una sucesora conserva precedencia si la ultima incluida anterior esta fija
   );
 });
 
-test("un antecedente fijo que cruza tiempo no laborable limita por su fin real", () => {
+test("un antecedente fijo que cruza tiempo no laborable limita por su fin real", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
     selectedOts: ["300"],
     operations: [
@@ -550,9 +550,9 @@ test("un antecedente fijo que cruza tiempo no laborable limita por su fin real",
   assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
 });
 
-test("un solapamiento parcial usa la duracion productiva del antecedente fijo", () => {
+test("un solapamiento parcial usa la duracion productiva del antecedente fijo", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
     selectedOts: ["300"],
     operations: [
@@ -581,9 +581,9 @@ test("un solapamiento parcial usa la duracion productiva del antecedente fijo", 
   assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "07:00"]);
 });
 
-test("un solapamiento parcial sin duracion productiva respeta el fin fijo", () => {
+test("un solapamiento parcial sin duracion productiva respeta el fin fijo", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
     selectedOts: ["300"],
     operations: [
@@ -612,10 +612,10 @@ test("un solapamiento parcial sin duracion productiva respeta el fin fijo", () =
   assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
 });
 
-test("un hito parcial nunca supera el fin real del antecedente fijo", () => {
+test("un hito parcial nunca supera el fin real del antecedente fijo", async () => {
   const core = loadPlannerCore();
-  const starts = [0.5, 1].map((overlap) => {
-    const result = core.schedulePlan({
+  const starts = await Promise.all([0.5, 1].map(async (overlap) => {
+    const result = await core.schedulePlan({
       excludedCapabilities: ["200::INSPECCION"],
       selectedOts: ["300"],
       operations: [
@@ -641,7 +641,7 @@ test("un hito parcial nunca supera el fin real del antecedente fijo", () => {
     });
     const last = result.operations.find((operation) => operation.id === `last-${overlap}`);
     return [last.fechaInicio, last.horaInicio];
-  });
+  }));
 
   assert.deepEqual(starts, [
     ["2026-07-13", "08:00"],
@@ -649,7 +649,7 @@ test("un hito parcial nunca supera el fin real del antecedente fijo", () => {
   ]);
 });
 
-test("nextResourceAvailability ignora intervalos de operaciones excluidas", () => {
+test("nextResourceAvailability ignora intervalos de operaciones excluidas", async () => {
   const core = loadPlannerCore();
   const availability = core.nextResourceAvailability({
     excludedCapabilities: ["999::SIN_CONFIGURAR"],
@@ -667,9 +667,9 @@ test("nextResourceAvailability ignora intervalos de operaciones excluidas", () =
   assert.equal(availability?.getHours(), 7);
 });
 
-test("un subcontrato puede terminar despues del horizonte visible", () => {
+test("un subcontrato puede terminar despues del horizonte visible", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{
       id: "ot-1325-maka",
       ot: "1325",
@@ -698,9 +698,9 @@ test("un subcontrato puede terminar despues del horizonte visible", () => {
   assert.equal(operation.horaFin, "07:00");
 });
 
-test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte", () => {
+test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [
       { id: "sub", ot: "1325", secuencia: 1, ct: "519", descripcion: "MAKA", tipoInsercion: "SUBCONTRATO", estatus: "PLAN" },
       { id: "prod", ot: "1325", secuencia: 2, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoCiclo: 1, cantidadPendiente: 1 },
@@ -722,9 +722,9 @@ test("una sucesora nunca viola el fin real de un subcontrato fuera del horizonte
   assert.ok(successorStart >= subcontractEnd, "un subcontrato exige precedencia completa aunque configure overlap menor a 1");
 });
 
-test("OT tipo 1325 respeta secuencia despues de subcontrato largo", () => {
+test("OT tipo 1325 respeta secuencia despues de subcontrato largo", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["1325"],
     operations: [
       { id: "seq-10", ot: "1325", secuencia: 10, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
@@ -748,9 +748,9 @@ test("OT tipo 1325 respeta secuencia despues de subcontrato largo", () => {
   assert.ok(new Date(`${seq14.fechaInicio}T${seq14.horaInicio}:00`) >= new Date(`${seq13.fechaFin}T${seq13.horaFin}:00`));
 });
 
-test("una movible respeta la operacion anterior incluida con fin real mas tardio aunque haya secuencias completadas intermedias", () => {
+test("una movible respeta la operacion anterior incluida con fin real mas tardio aunque haya secuencias completadas intermedias", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["1325"],
     operations: [
       {
@@ -775,9 +775,9 @@ test("una movible respeta la operacion anterior incluida con fin real mas tardio
   assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-31", "07:00"]);
 });
 
-test("una completada conserva fechas y no consume capacidad pendiente", () => {
+test("una completada conserva fechas y no consume capacidad pendiente", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [
       { id: "done", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoCiclo: 1, cantidadPendiente: 300 },
       { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1", tiempoSetup: 0, tiempoCiclo: 1, cantidadPendiente: 1 },
@@ -795,9 +795,9 @@ test("una completada conserva fechas y no consume capacidad pendiente", () => {
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("una operacion fantasma no seleccionada no reserva capacidad", () => {
+test("una operacion fantasma no seleccionada no reserva capacidad", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["200"],
     operations: [
       { id: "ghost", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoProd: 300 },
@@ -814,9 +814,9 @@ test("una operacion fantasma no seleccionada no reserva capacidad", () => {
   assert.ok(result.operations.some((item) => item.id === "ghost"));
 });
 
-test("un cambio antiguo pendiente desaparece y no reserva capacidad", () => {
+test("un cambio antiguo pendiente desaparece y no reserva capacidad", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["200"],
     operations: [
       { id: "old-change", ot: "200", secuencia: 0, ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL", estatus: "PLAN", planStatus: "PENDIENTE", generatedBy: "PLANNER_CORE_V2", locked: true, operador: "AJUSTADOR", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoSetup: 120 },
@@ -832,9 +832,9 @@ test("un cambio antiguo pendiente desaparece y no reserva capacidad", () => {
   assert.deepEqual([selected.fechaInicio, selected.horaInicio], ["2026-07-13", "07:00"]);
 });
 
-test("un cambio antiguo completado permanece pero no reserva capacidad", () => {
+test("un cambio antiguo completado permanece pero no reserva capacidad", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["200"],
     operations: [
       { id: "old-completed-change", ot: "100", secuencia: 1, ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", generatedBy: "PLANNER_CORE_V2", operador: "AJUSTADOR", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoSetup: 120 },
@@ -853,9 +853,9 @@ test("un cambio antiguo completado permanece pero no reserva capacidad", () => {
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad", () => {
+test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
@@ -880,9 +880,9 @@ test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad
   assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con el bloqueo");
 });
 
-test("operaciones no finitas simultaneas no generan conflicto de operador", () => {
+test("operaciones no finitas simultaneas no generan conflicto de operador", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2159", "1325"],
     operations: [
       { id: "op-2159", ot: "2159", secuencia: 1, ct: "NOFIN", descripcion: "INSPECCION", estatus: "PLAN", operador: "OPERADOR 2", tiempoSetup: 0, tiempoProd: 20 },
@@ -901,9 +901,9 @@ test("operaciones no finitas simultaneas no generan conflicto de operador", () =
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("registra la operacion bloqueadora que causa la espera", () => {
+test("registra la operacion bloqueadora que causa la espera", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
@@ -924,9 +924,9 @@ test("registra la operacion bloqueadora que causa la espera", () => {
   assert.equal(pending.secuenciaBloqueadora, 1);
 });
 
-test("sin espera registra diagnostico vacio", () => {
+test("sin espera registra diagnostico vacio", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{ id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
     workOrders: [{ ot: "200" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
     settings: { optimizationPasses: 1 }, workSchedule: {},
@@ -937,9 +937,9 @@ test("sin espera registra diagnostico vacio", () => {
   assert.equal(pending.causaEspera, "");
 });
 
-test("una pausa intermedia extiende el intervalo sin aumentar tiempo productivo", () => {
+test("una pausa intermedia extiende el intervalo sin aumentar tiempo productivo", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{ id: "pause", ot: "500", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
     workOrders: [{ ot: "500" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
     settings: { optimizationPasses: 1 }, workSchedule: {},
@@ -951,9 +951,9 @@ test("una pausa intermedia extiende el intervalo sin aumentar tiempo productivo"
   assert.equal(core.operationDuration(operation, 100, 100), 20);
 });
 
-test("una operacion iniciada al cierre del viernes termina el lunes", () => {
+test("una operacion iniciada al cierre del viernes termina el lunes", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{ id: "weekend", ot: "600", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 }],
     workOrders: [{ ot: "600" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"],
     settings: { optimizationPasses: 1 },
@@ -968,9 +968,9 @@ test("una operacion iniciada al cierre del viernes termina el lunes", () => {
   assert.equal(core.operationDuration(operation, 100, 100), 20);
 });
 
-test("un limite de calendario posterior al conflicto corto determina la espera", () => {
+test("un limite de calendario posterior al conflicto corto determina la espera", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       { id: "short", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
@@ -986,9 +986,9 @@ test("un limite de calendario posterior al conflicto corto determina la espera",
   assert.equal(pending.secuenciaBloqueadora, "");
 });
 
-test("registra una maquina como causa de espera", () => {
+test("registra una maquina como causa de espera", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       { id: "machine-lock", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
@@ -1002,9 +1002,9 @@ test("registra una maquina como causa de espera", () => {
   assert.equal(pending.otBloqueadora, "100");
 });
 
-test("un cambio requerido determina la espera antes de produccion", () => {
+test("un cambio requerido determina la espera antes de produccion", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
@@ -1017,9 +1017,9 @@ test("un cambio requerido determina la espera antes de produccion", () => {
   assert.equal(pending.otBloqueadora, "");
 });
 
-test("entre bloqueadores simultaneos elige el que determina el inicio", () => {
+test("entre bloqueadores simultaneos elige el que determina el inicio", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "101", "200"], lockedOts: ["100", "101"],
     operations: [
       { id: "operator-lock", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP B", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
@@ -1034,7 +1034,7 @@ test("entre bloqueadores simultaneos elige el que determina el inicio", () => {
   assert.equal(pending.secuenciaBloqueadora, 2);
 });
 
-test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", () => {
+test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tiempo", async () => {
   const core = loadPlannerCore();
   const operation = {
     tiempoCiclo: 1.5,
@@ -1046,16 +1046,16 @@ test("la produccion se calcula como TC por piezas aunque NetSuite envie otro tie
   assert.equal(core.operationDuration(operation, 100, 100), 60);
 });
 
-test("la capacidad programada conserva un segundo solo con la marca de fallback", () => {
+test("la capacidad programada conserva un segundo solo con la marca de fallback", async () => {
   const core = loadPlannerCore();
 
   assert.equal(core.operationDuration({ tiempoProd: 1 / 60, tiempoFallback: true }, 100, 100), 1 / 60);
   assert.equal(core.operationDuration({ tiempoProd: 0.5 }, 100, 100), 1);
 });
 
-test("una operacion marcada como fallback conserva setup fraccional y un segundo", () => {
+test("una operacion marcada como fallback conserva setup fraccional y un segundo", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{
       id: "setup-fallback", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
       estatus: "PLAN", operador: "OP 1", tiempoSetup: 0.5, tiempoProd: 1 / 60, tiempoFallback: true,
@@ -1071,9 +1071,9 @@ test("una operacion marcada como fallback conserva setup fraccional y un segundo
   );
 });
 
-test("un setup de un segundo sin fallback conserva el redondeo de produccion normal", () => {
+test("un setup de un segundo sin fallback conserva el redondeo de produccion normal", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{
       id: "normal-one-second-setup", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
       estatus: "PLAN", operador: "OP 1", tiempoSetup: 1 / 60, tiempoProd: 1,
@@ -1086,9 +1086,9 @@ test("un setup de un segundo sin fallback conserva el redondeo de produccion nor
   assert.equal(operation.horaFin, "07:02");
 });
 
-test("una asignacion bloqueada conserva segundos y bloquea la recarga siguiente", () => {
+test("una asignacion bloqueada conserva segundos y bloquea la recarga siguiente", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       {
@@ -1108,9 +1108,9 @@ test("una asignacion bloqueada conserva segundos y bloquea la recarga siguiente"
   assert.equal(pending.horaInicio, "07:01");
 });
 
-test("el motor toma el herramental guardado en la configuracion de la OT", () => {
+test("el motor toma el herramental guardado en la configuracion de la OT", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2433"],
     operations: [{ id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "211", herramental: "5 x 6", tiempoCiclo: 1, cantidadPendiente: 1 }],
     workOrders: [{ ot: "2433" }],
@@ -1122,7 +1122,7 @@ test("el motor toma el herramental guardado en la configuracion de la OT", () =>
   assert.equal(result.operations.find((op) => op.id === "bend-2433").herramental, "4 x 5");
 });
 
-test("la validacion usa herramental persistido en configuracion de la OT", () => {
+test("la validacion usa herramental persistido en configuracion de la OT", async () => {
   const core = loadPlannerCore();
   const issues = core.planningConfigurationIssues({
     selectedOts: ["2433"],
@@ -1136,7 +1136,7 @@ test("la validacion usa herramental persistido en configuracion de la OT", () =>
   assert.equal(issues.some((issue) => issue.code === "MISSING_TOOL"), false);
 });
 
-test("la validacion usa dias y tipo de subcontrato persistidos por OT", () => {
+test("la validacion usa dias y tipo de subcontrato persistidos por OT", async () => {
   const core = loadPlannerCore();
   const operation = { id: "sub-100", ot: "100", secuencia: 2, ct: "SUB", descripcion: "CROMADO", contenido: "SUBCONTRATO", estatus: "PLAN", subcontractType: "", subcontractDays: 0, tiempoProd: 0 };
   const issues = core.planningConfigurationIssues({
@@ -1152,13 +1152,13 @@ test("la validacion usa dias y tipo de subcontrato persistidos por OT", () => {
   assert.equal(issues.some((issue) => issue.code === "MISSING_SUBCONTRACT_DAYS"), false);
 });
 
-test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", () => {
+test("dos doblados en la misma maquina conservan operaciones y generan cambio de herramental", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO A", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1", tiempoProd: 20 },
     { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO B", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "DOBLADORA 2", herramental: "H2", kitHerramental: "K2", tiempoProd: 20 },
   ];
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations, workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OPERADOR 1", "OPERADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLADO_A": ["OPERADOR 1"], "5459::DOBLADO_B": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
     configuredCapabilities: ["5459::DOBLADO_A", "5459::DOBLADO_B", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
@@ -1177,13 +1177,13 @@ test("dos doblados en la misma maquina conservan operaciones y generan cambio de
   assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
 });
 
-test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion cero", () => {
+test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion cero", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "AM M66-2843", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "4 x 5", tiempoCiclo: 1.5, cantidadPendiente: 30, tiempoSetup: 15 },
     { id: "bend-2436", ot: "2436", secuencia: 2, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "AM 17123-002", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "5 x 6", tiempoCiclo: 4, cantidadPendiente: 48, tiempoSetup: 12 },
   ];
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2433", "2436"], operations, workOrders: [{ ot: "2433" }, { ot: "2436" }],
     operators: ["OPERADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
@@ -1202,14 +1202,14 @@ test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion
   assert.equal(change.kitHerramental, "");
 });
 
-test("dos doblados con el mismo herramental en distinto uso de mayusculas no generan cambio", () => {
+test("dos doblados con el mismo herramental en distinto uso de mayusculas no generan cambio", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "prior-mount", ot: "999", secuencia: 1, ct: "5459", descripcion: "DOBLADO", estatus: "PLAN", operationState: "COMPLETADA", maquina: "211", herramental: "3 X 4.5", fechaInicio: "2026-07-12", horaInicio: "16:00", fechaFin: "2026-07-12", horaFin: "18:00", tiempoProd: 120 },
     { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLADO A", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "3 X 4.5", tiempoProd: 20 },
     { id: "bend-b", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLADO B", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "211", herramental: "3 x 4.5", tiempoProd: 20 },
   ];
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations, workOrders: [{ ot: "999" }, { ot: "100" }, { ot: "200" }], operators: ["OPERADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLADO": ["OPERADOR 2"], "5459::DOBLADO_A": ["OPERADOR 2"], "5459::DOBLADO_B": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
     configuredCapabilities: ["5459::DOBLADO", "5459::DOBLADO_A", "5459::DOBLADO_B", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
@@ -1219,7 +1219,7 @@ test("dos doblados con el mismo herramental en distinto uso de mayusculas no gen
   assert.equal(changes.length, 0, "el herramental 3 X 4.5 y 3 x 4.5 son el mismo, no debe generarse cambio");
 });
 
-test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", () => {
+test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
     { id: "prev-a", ot: "100", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
@@ -1237,7 +1237,7 @@ test("balanceo prefiere agrupar doblados con herramental montado en la misma maq
   };
 
   for (const strategy of ["balanced", "flow_balanced", "tools"]) {
-    const result = core.schedulePlanOnce(state, { strategy, planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+    const result = await core.schedulePlanOnce(state, { strategy, planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
     const scheduled = result.operations
       .filter((op) => ["change-first", "keep-mounted"].includes(op.id))
       .sort((a, b) => new Date(`${a.fechaInicio}T${a.horaInicio}:00`) - new Date(`${b.fechaInicio}T${b.horaInicio}:00`));
@@ -1245,7 +1245,7 @@ test("balanceo prefiere agrupar doblados con herramental montado en la misma maq
   }
 });
 
-test("flow balanced agrupa herramental montado antes que adelantar otra fecha requerida", () => {
+test("flow balanced agrupa herramental montado antes que adelantar otra fecha requerida", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
     { id: "prev-mounted", ot: "100", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
@@ -1253,7 +1253,7 @@ test("flow balanced agrupa herramental montado antes que adelantar otra fecha re
     { id: "keep-mounted", ot: "100", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", prioridad: 9, fechaReq: "2026-07-20", maquina: "211", herramental: "H1", tiempoProd: 20 },
     { id: "urgent-change", ot: "200", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "B", estatus: "PLAN", prioridad: 1, fechaReq: "2026-07-13", maquina: "211", herramental: "H2", tiempoProd: 20 },
   ];
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["100", "200"], operations, workOrders: [{ ot: "100" }, { ot: "200" }],
     operators: ["OPERADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
@@ -1267,9 +1267,9 @@ test("flow balanced agrupa herramental montado antes que adelantar otra fecha re
   assert.equal(scheduled[0].id, "keep-mounted");
 });
 
-test("un herramental adicional genera una operacion artificial de doblado con capacidad propia", () => {
+test("un herramental adicional genera una operacion artificial de doblado con capacidad propia", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200", "300"],
     operations: [
       { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", maquina: "211", herramental: "H1", additionalHerramentales: ["H2"], tiempoSetup: 3, tiempoProd: 10 },
@@ -1296,9 +1296,9 @@ test("un herramental adicional genera una operacion artificial de doblado con ca
   assert.ok(result.operations.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeToHerramental === "H2"));
 });
 
-test("un herramental adicional puede usar una maquina propia y legacy sigue heredando", () => {
+test("un herramental adicional puede usar una maquina propia y legacy sigue heredando", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100"],
     operations: [
       { id: "bend-a", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", maquina: "211", herramental: "H1", additionalHerramentales: [{ herramental: "H2", machine: "212" }, "H3"], tiempoProd: 10 },
@@ -1313,9 +1313,9 @@ test("un herramental adicional puede usar una maquina propia y legacy sigue here
   assert.deepEqual(structuredClone(artificial.map((op) => [op.herramental, op.maquina])), [["H2", "212"], ["H3", "211"]]);
 });
 
-test("un doblado sin parte en la operacion hereda el herramental usando el articulo de la OT", () => {
+test("un doblado sin parte en la operacion hereda el herramental usando el articulo de la OT", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2159", "2436"],
     operations: [
       { id: "bend-2159", ot: "2159", secuencia: 2, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "", estatus: "PLAN", maquina: "211", tiempoCiclo: 1.33, cantidadPendiente: 35 },
@@ -1337,13 +1337,13 @@ test("un doblado sin parte en la operacion hereda el herramental usando el artic
     op.toolChangeFromHerramental === "4 x 5" && op.toolChangeToHerramental === "5 x 6"));
 });
 
-test("un cambio sin tiempo configurado usa el estandar de 120 minutos", () => {
+test("un cambio sin tiempo configurado usa el estandar de 120 minutos", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "a", ot: "1", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", maquina: "211", herramental: "H1", tiempoCiclo: 1, cantidadPendiente: 1 },
     { id: "b", ot: "2", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "B", estatus: "PLAN", maquina: "211", herramental: "H2", tiempoCiclo: 1, cantidadPendiente: 1 },
   ];
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["1", "2"], operations, workOrders: [{ ot: "1" }, { ot: "2" }], operators: ["OPERADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLEZ": ["OPERADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
     configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
@@ -1354,9 +1354,9 @@ test("un cambio sin tiempo configurado usa el estandar de 120 minutos", () => {
   assert.equal(change?.tiempoSetup, 120);
 });
 
-test("el primer herramental sin antecedente usa el estandar de 120 minutos", () => {
+test("el primer herramental sin antecedente usa el estandar de 120 minutos", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["1"],
     operations: [
       { id: "initial-bend", ot: "1", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "A", estatus: "PLAN", maquina: "211", herramental: "H1", tiempoCiclo: 1, cantidadPendiente: 1 },
@@ -1374,9 +1374,9 @@ test("el primer herramental sin antecedente usa el estandar de 120 minutos", () 
   assert.equal(change?.tiempoSetup, 120);
 });
 
-test("un doblado con kit pendiente y sin antecedente genera cambio inicial exportable", () => {
+test("un doblado con kit pendiente y sin antecedente genera cambio inicial exportable", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2474"],
     operations: [
       { id: "bend-2474", ot: "2474", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", parte: "ART-2474", estatus: "PLAN", maquina: "42", herramental: "5 x 6", kitHerramental: "", kitPending: true, tiempoCiclo: 1, cantidadPendiente: 1 },
@@ -1400,9 +1400,9 @@ test("un doblado con kit pendiente y sin antecedente genera cambio inicial expor
   assert.ok(result.lastSchedule.scheduledOts.includes("2474"));
 });
 
-test("una fecha vieja del borrador movible no cuenta como antecedente de herramental", () => {
+test("una fecha vieja del borrador movible no cuenta como antecedente de herramental", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2159"],
     operations: [
       { id: "bend-2159", ot: "2159", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "C 490 UND", estatus: "PLAN", maquina: "211", herramental: "4 x 5", tiempoCiclo: 1.33, cantidadPendiente: 35, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:57" },
@@ -1420,9 +1420,9 @@ test("una fecha vieja del borrador movible no cuenta como antecedente de herrame
   assert.equal(initialChange?.tiempoSetup, 120);
 });
 
-test("un plan historico pendiente no cuenta como herramental colocado", () => {
+test("un plan historico pendiente no cuenta como herramental colocado", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["2159"],
     operations: [
       { id: "bend-2159", ot: "2159", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "C 490 UND", estatus: "PLAN", maquina: "211", herramental: "4 x 5", tiempoCiclo: 1.33, cantidadPendiente: 35 },
@@ -1443,7 +1443,7 @@ test("un plan historico pendiente no cuenta como herramental colocado", () => {
   assert.equal(initialChange?.tiempoSetup, 120);
 });
 
-test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", () => {
+test("un doblado sin recursos conserva identidad y diagnostica maquina y herramental", async () => {
   const core = loadPlannerCore();
   const operation = {
     id: "ct-5459-real", ot: "2159", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBO",
@@ -1461,7 +1461,7 @@ test("un doblado sin recursos conserva identidad y diagnostica maquina y herrame
   assert.ok(issues.some((issue) => issue.code === "MISSING_TOOL" && issue.operationId === operation.id));
 });
 
-test("la validacion reconstruye el indice de OTs serializado como objeto", () => {
+test("la validacion reconstruye el indice de OTs serializado como objeto", async () => {
   const core = loadPlannerCore();
   const operation = {
     id: "bend-2786", ot: "2786", secuencia: 10, ct: "5459", descripcion: "DOBLEZ DE TUBO",
@@ -1481,9 +1481,9 @@ test("la validacion reconstruye el indice de OTs serializado como objeto", () =>
   assert.equal(issues.some((issue) => issue.code === "MISSING_TOOL"), false);
 });
 
-test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () => {
+test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations: [{ id: "missing", ot: "300", secuencia: 7, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", tiempoProd: 20 }],
     workOrders: [{ ot: "300" }], matrix: { "CORTE::CORTE": [] }, operators: [], settings: { optimizationPasses: 1 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
@@ -1493,9 +1493,9 @@ test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", () =>
   assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
 });
 
-test("expone metricas comunes finitas para comparar estrategias", () => {
+test("expone metricas comunes finitas para comparar estrategias", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     operations: [
       { id: "first", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaReq: "2026-07-12", prioridad: 1, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
@@ -1529,14 +1529,14 @@ test("expone metricas comunes finitas para comparar estrategias", () => {
   );
 });
 
-test("flow balanced agrega como maximo una estrategia y conserva el conjunto legado al desactivarse", () => {
+test("flow balanced agrega como maximo una estrategia y conserva el conjunto legado al desactivarse", async () => {
   const core = loadPlannerCore();
   const state = {
     operations: [], workOrders: [], settings: { optimizationPasses: 4 }, workSchedule: {},
   };
   const options = { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" };
-  const disabled = core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: false } }, options);
-  const enabled = core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: true } }, options);
+  const disabled = await core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: false } }, options);
+  const enabled = await core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: true } }, options);
   const disabledNames = disabled.lastSchedule.optimization.strategiesEvaluated.map((item) => item.strategy);
   const enabledNames = enabled.lastSchedule.optimization.strategiesEvaluated.map((item) => item.strategy);
 
@@ -1545,9 +1545,9 @@ test("flow balanced agrega como maximo una estrategia y conserva el conjunto leg
   assert.ok(enabledNames.length <= disabledNames.length + 1);
 });
 
-test("lastSchedule registra metricas completas por estrategia para auditoria y reversion", () => {
+test("lastSchedule registra metricas completas por estrategia para auditoria y reversion", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({ operations: [], workOrders: [], settings: { optimizationPasses: 1 }, workSchedule: {} }, {
+  const result = await core.schedulePlan({ operations: [], workOrders: [], settings: { optimizationPasses: 1 }, workSchedule: {} }, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
   const optimization = result.lastSchedule.optimization;
@@ -1580,9 +1580,9 @@ function legacySelectionFixture(flowBalancedEnabled) {
   };
 }
 
-test("desactivar flow balanced conserva operaciones, fechas y recursos existentes", () => {
+test("desactivar flow balanced conserva operaciones, fechas y recursos existentes", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan(legacySelectionFixture(false), {
+  const result = await core.schedulePlan(legacySelectionFixture(false), {
     planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
   });
 
@@ -1600,11 +1600,11 @@ test("desactivar flow balanced conserva operaciones, fechas y recursos existente
   );
 });
 
-test("flow balanced no desplaza al ganador legado con empate de puntuacion", () => {
+test("flow balanced no desplaza al ganador legado con empate de puntuacion", async () => {
   const core = loadPlannerCore();
   const options = { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" };
-  const legacy = core.schedulePlan(legacySelectionFixture(false), options);
-  const enabled = core.schedulePlan(legacySelectionFixture(true), options);
+  const legacy = await core.schedulePlan(legacySelectionFixture(false), options);
+  const enabled = await core.schedulePlan(legacySelectionFixture(true), options);
   const legacyMetrics = enabled.lastSchedule.optimization.strategiesEvaluated
     .find((item) => item.strategy === legacy.lastSchedule.optimization.selectedStrategy);
   const flowMetrics = enabled.lastSchedule.optimization.strategiesEvaluated
@@ -1614,7 +1614,7 @@ test("flow balanced no desplaza al ganador legado con empate de puntuacion", () 
   assert.equal(enabled.lastSchedule.optimization.selectedStrategy, legacy.lastSchedule.optimization.selectedStrategy);
 });
 
-test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y calendario", () => {
+test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y calendario", async () => {
   const core = loadPlannerCore();
   const baseState = {
     selectedOts: ["100", "200", "300", "400", "500"],
@@ -1636,7 +1636,7 @@ test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y c
   const options = { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" };
 
   for (const flowBalancedEnabled of [false, true]) {
-    const result = core.schedulePlan({ ...baseState, settings: { ...baseState.settings, flowBalancedEnabled } }, options);
+    const result = await core.schedulePlan({ ...baseState, settings: { ...baseState.settings, flowBalancedEnabled } }, options);
     const byId = Object.fromEntries(result.operations.map((op) => [op.id, op]));
     assert.deepEqual([byId.done.fechaInicio, byId.done.horaInicio, byId.done.fechaFin, byId.done.horaFin], ["2026-07-13", "07:00", "2026-07-13", "12:00"]);
     assert.deepEqual([byId.locked.fechaInicio, byId.locked.horaInicio, byId.locked.fechaFin, byId.locked.horaFin], ["2026-07-13", "08:00", "2026-07-13", "09:00"]);
@@ -1647,7 +1647,7 @@ test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y c
   }
 });
 
-test("flow balanced conserva maquinas, herramentales y capacidad finita o no finita", () => {
+test("flow balanced conserva maquinas, herramentales y capacidad finita o no finita", async () => {
   const core = loadPlannerCore();
   const options = { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" };
   const finiteState = {
@@ -1669,7 +1669,7 @@ test("flow balanced conserva maquinas, herramentales y capacidad finita o no fin
   };
 
   for (const flowBalancedEnabled of [false, true]) {
-    const finite = core.schedulePlan({ ...finiteState, settings: { ...finiteState.settings, flowBalancedEnabled } }, options);
+    const finite = await core.schedulePlan({ ...finiteState, settings: { ...finiteState.settings, flowBalancedEnabled } }, options);
     const bend = finite.operations.find((op) => op.id === "pending-bend");
     const change = finite.operations.find((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL" && op.toolChangeToHerramental === "H2");
     assert.ok(change);
@@ -1677,15 +1677,15 @@ test("flow balanced conserva maquinas, herramentales y capacidad finita o no fin
     assert.ok(new Date(`${bend.fechaInicio}T${bend.horaInicio}:00`) >= new Date(`${change.fechaFin}T${change.horaFin}:00`));
     assert.equal(finite.lastSchedule.operatorConflicts, 0);
 
-    const nonFinite = core.schedulePlan({ ...nonFiniteState, settings: { ...nonFiniteState.settings, flowBalancedEnabled } }, options);
+    const nonFinite = await core.schedulePlan({ ...nonFiniteState, settings: { ...nonFiniteState.settings, flowBalancedEnabled } }, options);
     assert.deepEqual([...nonFinite.operations.map((op) => op.horaInicio)], ["07:00", "07:00"]);
     assert.equal(nonFinite.lastSchedule.operatorConflicts, 0);
   }
 });
 
-test("las metricas no cuentan como evitable la espera obligatoria por cambio de herramental", () => {
+test("las metricas no cuentan como evitable la espera obligatoria por cambio de herramental", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
@@ -1702,7 +1702,7 @@ test("las metricas no cuentan como evitable la espera obligatoria por cambio de 
   assert.equal(metrics.toolChanges, 1);
 });
 
-test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", () => {
+test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", async () => {
   const core = loadPlannerCore();
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101"],
@@ -1719,7 +1719,7 @@ test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", ()
   assert.equal(metrics.avoidableIdleMinutes, 30);
 });
 
-test("las metricas no reutilizan una operacion diferida entre dos huecos", () => {
+test("las metricas no reutilizan una operacion diferida entre dos huecos", async () => {
   const core = loadPlannerCore();
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101", "102"],
@@ -1737,7 +1737,7 @@ test("las metricas no reutilizan una operacion diferida entre dos huecos", () =>
   assert.equal(metrics.avoidableIdleMinutes, 30);
 });
 
-test("las metricas no inflan un hueco con una operacion que tarda mas por rendimiento", () => {
+test("las metricas no inflan un hueco con una operacion que tarda mas por rendimiento", async () => {
   const core = loadPlannerCore();
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101"],
@@ -1755,7 +1755,7 @@ test("las metricas no inflan un hueco con una operacion que tarda mas por rendim
   assert.equal(metrics.avoidableIdleMinutes, 0);
 });
 
-test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", () => {
+test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", async () => {
   const core = loadPlannerCore();
   const fixed = [
     { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
@@ -1782,9 +1782,9 @@ test("las metricas excluyen huecos sin capacidad elegible por calendario, maquin
   assert.equal(noWork.avoidableIdleMinutes, 0);
 });
 
-test("un empate de puntuacion conserva la estrategia existente", () => {
+test("un empate de puntuacion conserva la estrategia existente", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({ operations: [], workOrders: [], settings: { optimizationPasses: 1 }, workSchedule: {} }, {
+  const result = await core.schedulePlan({ operations: [], workOrders: [], settings: { optimizationPasses: 1 }, workSchedule: {} }, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
 
@@ -1813,7 +1813,7 @@ function assertFlowEvaluated(result) {
   );
 }
 
-test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir otra", () => {
+test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir otra", async () => {
   const core = loadPlannerCore();
   const operations = ["100", "200"].flatMap((ot) => [1, 2].map((secuencia) => ({
     id: `${ot}-${secuencia}`, ot, secuencia, ct: "CORTE", descripcion: "CORTE",
@@ -1822,8 +1822,8 @@ test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir
   const options = {
     planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
   };
-  const result = core.schedulePlan(flowFixture(operations), options);
-  const legacy = core.schedulePlan(flowFixture(operations, {
+  const result = await core.schedulePlan(flowFixture(operations), options);
+  const legacy = await core.schedulePlan(flowFixture(operations, {
     settings: { optimizationPasses: 1, flowWipTarget: 1, flowBalancedEnabled: false },
   }), options);
   const flowAudit = result.lastSchedule.optimization.strategiesEvaluated.find((item) => item.strategy === "flow_balanced");
@@ -1840,7 +1840,7 @@ test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir
   assert.equal(result.lastSchedule.optimization.metrics.maxWip, 1);
 });
 
-test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible", () => {
+test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "active-first", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
@@ -1852,7 +1852,7 @@ test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible",
   ];
   const state = flowFixture(operations);
   state.matrix["PINTURA::PINTURA"] = [];
-  const result = core.schedulePlan(state, {
+  const result = await core.schedulePlan(state, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
 
@@ -1862,7 +1862,7 @@ test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible",
   assert.equal(result.operations.find((op) => op.id === "active-blocked").fechaInicio, undefined);
 });
 
-test("flow balanced reparte trabajo entre operadores equivalentes por carga proyectada", () => {
+test("flow balanced reparte trabajo entre operadores equivalentes por carga proyectada", async () => {
   const core = loadPlannerCore();
   const operations = [
     ...["100", "200"].flatMap((ot) => [1, 2].map((secuencia) => ({
@@ -1879,7 +1879,7 @@ test("flow balanced reparte trabajo entre operadores equivalentes por carga proy
     configuredCapabilities: ["SERIAL::SERIAL", "FLEX::FLEX"],
     operators: ["OP 0", "OP 1", "OP 2"],
   });
-  const result = core.schedulePlan(state, {
+  const result = await core.schedulePlan(state, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
 
@@ -1888,7 +1888,7 @@ test("flow balanced reparte trabajo entre operadores equivalentes por carga proy
   assert.deepEqual([...new Set(result.operations.filter((op) => op.ct === "FLEX").map((op) => op.operador))].sort(), ["OP 1", "OP 2"]);
 });
 
-test("flow balanced conserva el fallback de un minuto para una operacion sin tiempo", () => {
+test("flow balanced conserva el fallback de un minuto para una operacion sin tiempo", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "without-time", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN" },
@@ -1896,7 +1896,7 @@ test("flow balanced conserva el fallback de un minuto para una operacion sin tie
     { id: "other", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
     { id: "other-second", ot: "200", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
   ];
-  const result = core.schedulePlan(flowFixture(operations), {
+  const result = await core.schedulePlan(flowFixture(operations), {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
   const fallback = result.operations.find((op) => op.id === "without-time");
@@ -1909,7 +1909,7 @@ test("flow balanced conserva el fallback de un minuto para una operacion sin tie
   );
 });
 
-test("flow balanced conserva precedencia y bloqueos", () => {
+test("flow balanced conserva precedencia y bloqueos", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "fixed", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 120, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00" },
@@ -1919,7 +1919,7 @@ test("flow balanced conserva precedencia y bloqueos", () => {
     { id: "third-first", ot: "400", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
     { id: "third-second", ot: "400", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
   ];
-  const result = core.schedulePlan(flowFixture(operations, { lockedOts: ["100"] }), {
+  const result = await core.schedulePlan(flowFixture(operations, { lockedOts: ["100"] }), {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
   const fixed = result.operations.find((op) => op.id === "fixed");
@@ -1931,9 +1931,9 @@ test("flow balanced conserva precedencia y bloqueos", () => {
   assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date("2026-07-13T09:00:00"));
 });
 
-test("un asueto general detiene operaciones finitas y subcontratos al buscar el primer fin posible", () => {
+test("un asueto general detiene operaciones finitas y subcontratos al buscar el primer fin posible", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     operations: [
       { id: "finite-before-holiday", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
@@ -1956,9 +1956,9 @@ test("un asueto general detiene operaciones finitas y subcontratos al buscar el 
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("una completada fija la precedencia de su sucesora sin consumir capacidad para otras OTs", () => {
+test("una completada fija la precedencia de su sucesora sin consumir capacidad para otras OTs", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
     operations: [
       { id: "completed-predecessor", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoProd: 300 },
@@ -1980,9 +1980,9 @@ test("una completada fija la precedencia de su sucesora sin consumir capacidad p
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("el motor elige el recurso factible mas rapido cuando el primero esta bloqueado", () => {
+test("el motor elige el recurso factible mas rapido cuando el primero esta bloqueado", async () => {
   const core = loadPlannerCoreWithSinglePass();
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
@@ -2002,7 +2002,7 @@ test("el motor elige el recurso factible mas rapido cuando el primero esta bloqu
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("flow balanced no trata operation.locked como fija sin OT bloqueada", () => {
+test("flow balanced no trata operation.locked como fija sin OT bloqueada", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
     { id: "long-open", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
@@ -2012,7 +2012,7 @@ test("flow balanced no trata operation.locked como fija sin OT bloqueada", () =>
     { id: "short-current", ot: "200", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
     { id: "short-fixed", ot: "200", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
   ];
-  const result = core.schedulePlanOnce(flowFixture(operations, {
+  const result = await core.schedulePlanOnce(flowFixture(operations, {
     matrix: { "SERIAL::SERIAL": ["OP 1"] },
     configuredCapabilities: ["SERIAL::SERIAL"],
     operators: ["OP 1", "OP 2", "OP 3"],
@@ -2024,14 +2024,14 @@ test("flow balanced no trata operation.locked como fija sin OT bloqueada", () =>
   assert.equal(result.operations.find((op) => op.id === "long-current").horaInicio, "08:00");
 });
 
-test("si flow balanced falla se excluye y las estrategias existentes continuan", () => {
+test("si flow balanced falla se excluye y las estrategias existentes continuan", async () => {
   const core = loadPlannerCore();
   const settings = { optimizationPasses: 1 };
   Object.defineProperty(settings, "flowWipTarget", {
     get() { throw new Error("configuracion flow invalida"); },
   });
 
-  const result = core.schedulePlan({ operations: [], workOrders: [], settings, workSchedule: {} }, {
+  const result = await core.schedulePlan({ operations: [], workOrders: [], settings, workSchedule: {} }, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
 
@@ -2042,9 +2042,9 @@ test("si flow balanced falla se excluye y las estrategias existentes continuan",
   ]);
 });
 
-function scheduleBeforeFixedSuccessor(operationRules = {}) {
+async function scheduleBeforeFixedSuccessor(operationRules = {}) {
   const core = loadPlannerCore();
-  return core.schedulePlan({
+  return await core.schedulePlan({
     selectedOts: ["500"],
     lockedOts: ["500"],
     operations: [
@@ -2063,8 +2063,8 @@ function scheduleBeforeFixedSuccessor(operationRules = {}) {
   });
 }
 
-test("una OT bloqueada conserva predecesora sin fecha y sucesora fija", () => {
-  const result = scheduleBeforeFixedSuccessor();
+test("una OT bloqueada conserva predecesora sin fecha y sucesora fija", async () => {
+  const result = await scheduleBeforeFixedSuccessor();
   const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
   const successor = result.operations.find((op) => op.id === "fixed-successor");
 
@@ -2073,17 +2073,17 @@ test("una OT bloqueada conserva predecesora sin fecha y sucesora fija", () => {
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("una OT bloqueada conserva predecesora sin fecha aunque exista hito de solapamiento", () => {
-  const result = scheduleBeforeFixedSuccessor({ "CORTE::CORTE": { overlap: 0.5 } });
+test("una OT bloqueada conserva predecesora sin fecha aunque exista hito de solapamiento", async () => {
+  const result = await scheduleBeforeFixedSuccessor({ "CORTE::CORTE": { overlap: 0.5 } });
   const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
 
   assert.equal(predecessor.fechaInicio, undefined);
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("el hito de solapamiento usa los segmentos productivos reales antes de una sucesora fija", () => {
+test("el hito de solapamiento usa los segmentos productivos reales antes de una sucesora fija", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["600"],
     lockedOts: ["600"],
     operations: [
@@ -2102,9 +2102,9 @@ test("el hito de solapamiento usa los segmentos productivos reales antes de una 
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movible sin hueco", () => {
+test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movible sin hueco", async () => {
   const core = loadPlannerCore();
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     selectedOts: ["700"],
     lockedOts: ["700"],
     operations: [
@@ -2125,9 +2125,9 @@ test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movibl
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("flow balanced busca otro recurso si el de menor carga no alcanza la sucesora fija", () => {
+test("flow balanced busca otro recurso si el de menor carga no alcanza la sucesora fija", async () => {
   const core = loadPlannerCoreWithSinglePass();
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["800", "900"],
     operations: [
       { id: "chain-start", ot: "800", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
@@ -2156,10 +2156,10 @@ test("flow balanced busca otro recurso si el de menor carga no alcanza la suceso
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
 
-test("flow balanced no descarta la alternativa factible numero 33 por el presupuesto", () => {
+test("flow balanced no descarta la alternativa factible numero 33 por el presupuesto", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const lateOperators = Array.from({ length: 32 }, (_, index) => `OP TARDE ${index + 1}`);
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["810", "910"],
     operations: [
       { id: "budget-start", ot: "810", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
@@ -2188,10 +2188,10 @@ test("flow balanced no descarta la alternativa factible numero 33 por el presupu
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
 
-test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la sucesora fija", () => {
+test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la sucesora fija", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const pausedOperators = Array.from({ length: 33 }, (_, index) => `OP PAUSA ${index + 1}`);
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["815"],
     lockedOts: ["815"],
     operations: [
@@ -2216,13 +2216,13 @@ test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la s
   assert.equal(result.operations.find((op) => op.id === "paused-budget-fixed").horaInicio, "09:00");
 });
 
-test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agotan el presupuesto", () => {
+test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agotan el presupuesto", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const intermediates = Array.from({ length: 33 }, (_, index) => ({
     id: `budget-middle-${index + 1}`, ot: "820", secuencia: index + 2,
     ct: "INTERMEDIA", descripcion: "INTERMEDIA", estatus: "PLAN", tiempoProd: 1,
   }));
-  const result = core.schedulePlanOnce({
+  const result = await core.schedulePlanOnce({
     selectedOts: ["820"],
     lockedOts: ["820"],
     operations: [
@@ -2245,14 +2245,14 @@ test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agota
   assert.equal(result.operations.find((op) => op.id === "budget-fixed-nine-after-chain").horaInicio, "09:00");
 });
 
-test("con maquina fija y dos operadores capaces reparte por menor carga de operador", () => {
+test("con maquina fija y dos operadores capaces reparte por menor carga de operador", async () => {
   const core = loadPlannerCore();
   const operations = [
     { id: "bend-1", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P1", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 240, prioridad: 1, fechaReq: "2026-07-20" },
     { id: "bend-2", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P2", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 240, prioridad: 1, fechaReq: "2026-07-20" },
     { id: "bend-3", ot: "300", secuencia: 1, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", parte: "P3", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "113", herramental: "H1", kitHerramental: "K1", tiempoProd: 30, prioridad: 1, fechaReq: "2026-07-20" },
   ];
-  const result = core.schedulePlan({
+  const result = await core.schedulePlan({
     operations, workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
     operators: ["DOBLADOR 1", "DOBLADOR 2", "AJUSTADOR"],
     matrix: { "5459::DOBLEZ_DE_TUBERIA": ["DOBLADOR 1", "DOBLADOR 2"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },

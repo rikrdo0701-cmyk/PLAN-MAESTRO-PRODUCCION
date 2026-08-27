@@ -137,7 +137,10 @@
     };
   }
 
-  function schedulePlan(inputState, options) {
+  const YIELD_INTERVAL_MS = 200;
+
+  async function schedulePlan(inputState, options) {
+    const onYield = typeof options?.onYield === "function" ? options.onYield : null;
     const performanceState = createPlanningPerformanceState(options);
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
@@ -152,7 +155,8 @@
         if (!evaluated.length) break;
         break;
       }
-      const result = schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState });
+      if (onYield) await onYield();
+      const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState, onYield });
       evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
       if (result.lastSchedule?.performance?.aborted) return result;
     }
@@ -162,18 +166,18 @@
       try {
         const strategy = "flow_balanced";
         if (!checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
-          const result = schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState });
+          if (onYield) await onYield();
+          const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState, onYield });
           flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
           evaluated.push(flowEvaluation);
           if (result.lastSchedule?.performance?.aborted) return result;
         }
       } catch (error) {
         strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
-        // La estrategia adicional es opcional; las heuristicas existentes siguen disponibles.
       }
     }
     if (!evaluated.length) {
-      return schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", __performanceState: performanceState });
+      return await schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", __performanceState: performanceState, onYield });
     }
     applyComparableScores(evaluated);
     const legacySelected = evaluated
@@ -202,7 +206,7 @@
     return selected.result;
   }
 
-  function schedulePlanOnce(inputState, options) {
+  async function schedulePlanOnce(inputState, options) {
     const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
     const strategy = options?.strategy || "balanced";
     const strategyStarted = planningNowMs(performanceState);
@@ -337,11 +341,17 @@
       }
     });
     let safety = Math.max(100, pending * 4);
+    const onYield = typeof options?.onYield === "function" ? options.onYield : null;
+    let lastYieldAt = Date.now();
 
     try {
       while (!context.abortReason && pending > 0 && safety-- > 0) {
         countPlanningStat(performanceState, "mainLoopIterations");
         assertPlanningBudget(performanceState, "main-loop", context);
+        if (onYield && Date.now() - lastYieldAt >= YIELD_INTERVAL_MS) {
+          await onYield();
+          lastYieldAt = Date.now();
+        }
         const ready = [];
         for (const job of jobs) {
           assertPlanningBudget(performanceState, "job-scan", context);

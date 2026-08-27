@@ -4522,13 +4522,14 @@ async function scheduleCurrentPlanImpl() {
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
-    const result = window.PlannerCore.schedulePlan({ ...state, selectedOts: engineSelectedOts }, {
+    const result = await window.PlannerCore.schedulePlan({ ...state, selectedOts: engineSelectedOts }, {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
       respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
+      onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
     const operatorConflicts = (result.lastSchedule?.diagnostics || [])
       .filter((item) => item.code === "OPERATOR_OVERLAP");
@@ -4780,8 +4781,9 @@ async function dryRunCurrentPlanPerformance(options = {}) {
         if (typeof console !== "undefined" && typeof console.info === "function") console.info("[planning dry-run] scheduler progress", event);
       };
     }
-    const scheduleResult = window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
+    const scheduleResult = await window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
       ...plannerOptions,
+      onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
     timings.schedulePlanMs = Math.round(dryRunNowMs() - started);
 

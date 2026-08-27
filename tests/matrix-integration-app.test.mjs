@@ -124,7 +124,7 @@ test("TOOL_CHANGE obligatorio se normaliza y se muestra fijo en la matriz", () =
   assert.doesNotMatch(matrixWrap.innerHTML, /value="EXCLUDE"/);
 });
 
-test("un estado corrupto no oculta el cambio generado por el motor", () => {
+test("un estado corrupto no oculta el cambio generado por el motor", async () => {
   const corruptState = {
     selectedOts: ["100"],
     excludedCapabilities: [TOOL_CHANGE_KEY],
@@ -171,7 +171,7 @@ test("un estado corrupto no oculta el cambio generado por el motor", () => {
     settings: { optimizationPasses: 1, toolChangeMinutes: 30 },
     workSchedule: {},
   };
-  const scheduled = PlannerCore.schedulePlan(corruptState, {
+  const scheduled = await PlannerCore.schedulePlan(corruptState, {
     planStart: "2026-07-27",
     horizonDays: 5,
     executionTime: "2026-07-27T07:00:00",
