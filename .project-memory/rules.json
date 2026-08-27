@@ -294,10 +294,10 @@
     },
     {
       "rule_id": "RULE-BAL-003",
-      "name": "Agrupacion por maquina y herramental en doblado",
+      "name": "Seleccion de operador por disponibilidad y menor carga; agrupacion por maquina/herramental en doblado",
       "status": "documentada",
-      "rule": "El balanceo debe preferir, en la medida de lo posible, operaciones de doblado de OTs con la misma maquina y el mismo herramental/kit ya montado para evitar cambios de herramental; flow_balanced prioriza evitar cambio de herramental antes de adelantar otra fecha requerida cuando ambas operaciones ya son candidatas. La maquina es fija por OT y el herramental tambien; lo que puede variar es el operador segun disponibilidad. Cuando una operacion tiene maquina fija y varios operadores capaces (matriz de capacidad), la seleccion de operador prefiere el de menor carga acumulada: compareAssignments antepone operatorLoad cuando ambas candidatas usan la misma maquina (planner-core.js:1698-1716), sin retrasar el inicio disponible. Es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
-      "source": "definicion de usuario 2026-08-12 y 2026-08-14; src/web/planning/planner-core.js; tests/planner-core.test.mjs",
+      "rule": "La maquina es fija por OT y el herramental es fijo por OT; lo unico que varia es el operador segun disponibilidad (matriz de capacidad). Dada una operacion con varios operadores capaces, el motor elige el operador 'disponible mas pronto' y, en empate, el de 'menor carga acumulada', de modo que se avanza con el menor tiempo y se aprovecha al maximo el tiempo disponible sin dejar huecos innecesarios: compareAssignments ordena primero por a.start y luego por a.operatorLoad (planner-core.js:2094-2112; rama misma-maquina 2097-2099 y estrategias load/default 2109-2111). En doblado, ademas, el balanceo prefiere agrupar operaciones con la misma maquina y mismo herramental/kit ya montado para evitar cambios de herramental, siempre respetando la precedencia del criterio de disponibilidad/carga. Los cambios de herramental generados (CAMBIO_HERRAMENTAL) se rellenan con el operador AJUSTADOR para no desperdiciar tiempo de maquina. Es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
+      "source": "definicion de usuario 2026-08-12, 2026-08-14 y 2026-08-27 ('usar el operador disponible en el menor tiempo y aprovechar al maximo el tiempo disponible'); src/web/planning/planner-core.js:2094-2112; tests/planner-core.test.mjs",
       "domain": "Balanceo"
     },
     {
@@ -373,5 +373,5 @@
       "domain": "OT"
     }
   ],
-  "updated_at": "2026-08-26T00:00:00-06:00"
+  "updated_at": "2026-08-27T00:00:00-06:00"
 }
