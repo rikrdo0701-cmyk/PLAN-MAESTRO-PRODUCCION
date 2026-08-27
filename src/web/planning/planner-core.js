@@ -28,9 +28,11 @@
     if (!options || (!options.collectStats && !Number.isFinite(Number(options.timeBudgetMs)) && !Number.isFinite(Number(options.progressEveryMs)))) return null;
     const nowMs = typeof options.nowMs === "function" ? options.nowMs : defaultNowMs;
     const startedAtMs = nowMs();
+    const startedAtWallMs = Date.now();
     return {
       nowMs,
       startedAtMs,
+      startedAtWallMs,
       startedAt: new Date().toISOString(),
       timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
       progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
@@ -73,11 +75,13 @@
     if (!performanceState) return false;
     performanceState.lastPhase = phase;
     const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
-    if (performanceState.progressEveryMs && elapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
-      performanceState.lastProgressElapsedMs = elapsedMs;
+    const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
+    const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
+    if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+      performanceState.lastProgressElapsedMs = effectiveElapsedMs;
       emitPlanningProgress(performanceState, phase);
     }
-    if (performanceState.timeBudgetMs && elapsedMs > performanceState.timeBudgetMs) {
+    if (performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs) {
       if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
       performanceState.aborted = true;
       performanceState.reason = "TIME_BUDGET_EXCEEDED";
@@ -101,7 +105,8 @@
   function emitPlanningProgress(performanceState, phase) {
     if (!performanceState?.progress) return;
     try {
-      performanceState.progress({ phase, elapsedMs: Math.round(planningNowMs(performanceState) - performanceState.startedAtMs), stats: { ...performanceState.stats } });
+      const elapsedMs = Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now())));
+      performanceState.progress({ phase, elapsedMs, stats: { ...performanceState.stats } });
     } catch (_) {
       // Progress hooks are diagnostic-only and must not affect scheduling.
     }
@@ -109,7 +114,7 @@
 
   function attachPlanningPerformance(state, performanceState, abortReason = "") {
     if (!performanceState || !state?.lastSchedule) return;
-    const elapsedMs = Math.round(planningNowMs(performanceState) - performanceState.startedAtMs);
+    const elapsedMs = Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now())));
     state.lastSchedule.performance = {
       startedAt: performanceState.startedAt,
       elapsedMs,
@@ -519,7 +524,7 @@
   function findEarliestSlot(context, op, earliest, operator, machine, finite) {
     if (context.abortReason) return null;
     let cursor = ceilToSnap(earliest);
-    while (cursor < context.windowEnd) {
+    while (!context.abortReason && cursor < context.windowEnd) {
       countPlanningStat(context.performanceState, "slotProbes");
       if (checkPlanningBudget(context.performanceState, "slot-probes", context)) {
         countPlanningStat(context.performanceState, "slotProbeSkips");
@@ -627,7 +632,7 @@
     let consumed = 0;
     const segments = [];
 
-    while (cursor < context.windowEnd && remaining > 0) {
+    while (!context.abortReason && cursor < context.windowEnd && remaining > 0) {
       assertPlanningBudget(context.performanceState, "allocate-work", context);
       const availableUntil = currentAvailabilityEnd(context.state, cursor, resources.operator, resources.machine);
       if (!availableUntil) {
