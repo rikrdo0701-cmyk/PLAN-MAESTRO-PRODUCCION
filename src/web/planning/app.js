@@ -7,6 +7,7 @@ const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
+const PLANNING_PLAN_TIME_BUDGET_MS = 60000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
@@ -4518,7 +4519,9 @@ async function scheduleCurrentPlanImpl() {
   const originalLabel = label?.textContent || "Programar plan";
   els.scheduleBtn.disabled = true;
   els.scheduleBtn.classList.add("is-running");
-  if (label) label.textContent = "Optimizando...";
+  if (label) {
+    label.textContent = "Optimizando...";
+  }
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
@@ -4529,6 +4532,15 @@ async function scheduleCurrentPlanImpl() {
       respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
+      timeBudgetMs: PLANNING_PLAN_TIME_BUDGET_MS,
+      collectStats: true,
+      progressEveryMs: 300,
+      onProgress: (event) => {
+        if (!label) return;
+        const scheduled = Number(event?.scheduled || 0);
+        const total = Number(event?.total || 0);
+        label.textContent = total > 0 ? `Optimizando ${scheduled} de ${total}` : `Optimizando...`;
+      },
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
     const operatorConflicts = (result.lastSchedule?.diagnostics || [])
@@ -5126,6 +5138,26 @@ function validateScheduleConfiguration(executionTime, ots = state.selectedOts) {
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
   if (issues.length) {
+    const configCauses = new Set(["MISSING_OPERATOR", "MISSING_CAPABILITY"]);
+    const firstByKey = {};
+    const aggregate = issues.filter((issue) => configCauses.has(issue.code));
+    for (const issue of aggregate) {
+      const key = `${issue.code}::${issue.capability?.key || ""}`;
+      if (!firstByKey[key]) firstByKey[key] = issue;
+    }
+    if (aggregate.length) {
+      const lines = [];
+      for (const issue of Object.values(firstByKey)) {
+        const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
+        const label = capability.label || capability.name || "OPERACION";
+        lines.push(`• ${label} (CT ${capability.ct || "-"}) no tiene operador asignado o no existe en la matriz de capacidad`);
+      }
+      return {
+        operationId: aggregate[0].operationId,
+        tab: "matrix",
+        message: lines.join("\n"),
+      };
+    }
     const issue = issues[0];
     const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
     const messages = {

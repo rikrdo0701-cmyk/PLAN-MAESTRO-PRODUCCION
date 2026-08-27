@@ -40,12 +40,15 @@
       progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
       lastProgressElapsedMs: 0,
       lastPhase: "scheduler:init",
+      scheduledOpsTotal: 0,
+      scheduledOpsDone: 0,
       progress: typeof options.onProgress === "function" ? options.onProgress : null,
       stats: {
         strategiesStarted: 0,
         strategyTimings: [],
         mainLoopIterations: 0,
         findBestAssignmentCalls: 0,
+        cachedAssignmentReuses: 0,
         assignmentCandidateEvaluations: 0,
         slotProbes: 0,
         slotProbeSkips: 0,
@@ -115,7 +118,13 @@
     if (!performanceState?.progress) return;
     try {
       const elapsedMs = Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now())));
-      performanceState.progress({ phase, elapsedMs, stats: { ...performanceState.stats } });
+      performanceState.progress({
+        phase,
+        elapsedMs,
+        scheduled: performanceState.scheduledOpsDone || 0,
+        total: performanceState.scheduledOpsTotal || 0,
+        stats: { ...performanceState.stats },
+      });
     } catch (_) {
       // Progress hooks are diagnostic-only and must not affect scheduling.
     }
@@ -332,6 +341,7 @@
       if (!jobs.length && movable.length) excluded = [...excluded, ...movable];
     }
     let pending = movable.length;
+    if (performanceState) performanceState.scheduledOpsTotal = movable.length;
     // Mark first operations in jobs for sequence protection
     // These operations must be scheduled before subsequent operations of the same OT
     // and must maintain PENDIENTE/planeado status
@@ -358,7 +368,22 @@
           const op = job.operations[job.index];
           if (!op) continue;
           const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
-          const assignment = findBestAssignment(context, job, op, previous);
+          const cached = job.__planAssignment;
+          let assignment = null;
+          if (cached && cached.op === op && cached.unique && isCachedAssignmentValid(context, cached.assignment)) {
+            assignment = cached.assignment;
+            assignment.operatorLoad = context.operatorLoad.get(assignment.operator) || 0;
+            assignment.projectedOperatorLoad = (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes;
+            countPlanningStat(performanceState, "cachedAssignmentReuses");
+          } else {
+            const candidates = findAssignments(context, op, previous)
+              .filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
+            candidates.sort((a, b) => compareAssignments(a, b, context.strategy));
+            assignment = candidates[0] || null;
+            if (assignment) {
+              job.__planAssignment = { op, assignment, unique: candidates.length === 1 };
+            }
+          }
           if (assignment) ready.push({ job, op, assignment });
         }
 
@@ -373,6 +398,7 @@
         chosen.job.last = committed;
         chosen.job.index += 1;
         pending -= 1;
+        if (performanceState) performanceState.scheduledOpsDone += 1;
       }
     } catch (error) {
       if (!isPlanningBudgetExceeded(error)) throw error;
@@ -1730,6 +1756,22 @@
     if (!left) return right ? new Date(right) : null;
     if (!right) return new Date(left);
     return left > right ? new Date(left) : new Date(right);
+  }
+
+  function isCachedAssignmentValid(context, assignment) {
+    if (!assignment || !assignment.end) return false;
+    const start = assignment.operationStart || assignment.start;
+    const end = assignment.end;
+    const spanStart = assignment.start;
+    const operators = unique([assignment.operator, assignment.setupOperator].filter(Boolean));
+    for (const operator of operators) {
+      if (firstBusyOverlapEnd(context.operatorBusy.get(operator), spanStart, end, context.performanceState)) return false;
+    }
+    if (assignment.machine && hasMachineResource(assignment.machine) &&
+        firstBusyOverlapEnd(context.machineBusy.get(assignment.machine), spanStart, end, context.performanceState)) {
+      return false;
+    }
+    return start < end;
   }
 
   function nextBusyConflictEnd(context, start, end, operators, machine, finite) {
