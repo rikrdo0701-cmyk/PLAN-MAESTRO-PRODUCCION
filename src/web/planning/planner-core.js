@@ -35,7 +35,7 @@
       startedAtWallMs,
       startedAt: new Date().toISOString(),
       timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
-      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 380) : 0,
+      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 36) : 0,
       budgetCheckCount: 0,
       progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
       lastProgressElapsedMs: 0,
@@ -86,7 +86,11 @@
     }
     const timerExceeded = performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
     const counterExceeded = performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount >= performanceState.budgetCheckLimit;
+    if (performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount % 100000 === 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+      console.warn(`[planner-budget] checks=${performanceState.budgetCheckCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
+    }
     if (timerExceeded || counterExceeded) {
+      if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(`[planner-budget] ABORT checks=${performanceState.budgetCheckCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} timer=${timerExceeded} counter=${counterExceeded}`);
       if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
       performanceState.aborted = true;
       performanceState.reason = "TIME_BUDGET_EXCEEDED";
@@ -126,6 +130,9 @@
       lastPhase: performanceState.lastPhase,
       aborted: Boolean(abortReason || performanceState.aborted),
       reason: abortReason || performanceState.reason || "",
+      budgetCheckCount: performanceState.budgetCheckCount || 0,
+      budgetCheckLimit: performanceState.budgetCheckLimit || 0,
+      startedAtWallMs: performanceState.startedAtWallMs || 0,
       stats: { ...performanceState.stats },
     };
   }
@@ -201,6 +208,9 @@
     const strategyStarted = planningNowMs(performanceState);
     if (performanceState) {
       performanceState.stats.strategiesStarted += 1;
+      if (typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget-init] strategy=${strategy} budgetCheckLimit=${performanceState.budgetCheckLimit} timeBudgetMs=${performanceState.timeBudgetMs} startedAtWallMs=${performanceState.startedAtWallMs} now=${Date.now()}`);
+      }
       emitPlanningProgress(performanceState, `strategy:${strategy}:start`);
     }
     const operations = (Array.isArray(inputState.operations) ? inputState.operations : []).map((op, idx) => ({ ...op, num: idx + 1 }));

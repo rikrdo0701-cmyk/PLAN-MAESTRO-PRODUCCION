@@ -22,7 +22,8 @@ function doGet(e) {
   const appName = PP_appNameFromRequest_(e);
   return HtmlService.createHtmlOutputFromFile(PP_appHtmlFile_(appName))
     .setTitle(PP_appTitle_(appName))
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .addMetaTag('cache-control', 'no-cache, no-store, must-revalidate');
 }
 
 function setupProductionPlanningApp() {

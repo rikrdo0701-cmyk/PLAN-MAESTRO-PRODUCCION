@@ -4803,6 +4803,9 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.plannerToolCatalogLookups = Number(plannerStats.toolCatalogLookups || 0);
     metrics.plannerToolCatalogScans = Number(plannerStats.toolCatalogScans || 0);
     metrics.plannerOtConfigurationLookups = Number(plannerStats.otConfigurationLookups || 0);
+    metrics.plannerBudgetCheckCount = Number(plannerPerformance.budgetCheckCount || 0);
+    metrics.plannerBudgetCheckLimit = Number(plannerPerformance.budgetCheckLimit || 0);
+    metrics.plannerStartedAtWallMs = Number(plannerPerformance.startedAtWallMs || 0);
     if (plannerPerformance.aborted) {
       result.aborted = true;
       result.reason = plannerPerformance.reason || "TIME_BUDGET_EXCEEDED";
