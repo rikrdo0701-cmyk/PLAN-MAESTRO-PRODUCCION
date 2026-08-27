@@ -35,6 +35,8 @@
       startedAtWallMs,
       startedAt: new Date().toISOString(),
       timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
+      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 37) : 0,
+      budgetCheckCount: 0,
       progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
       lastProgressElapsedMs: 0,
       lastPhase: "scheduler:init",
@@ -74,6 +76,7 @@
   function checkPlanningBudget(performanceState, phase, context) {
     if (!performanceState) return false;
     performanceState.lastPhase = phase;
+    performanceState.budgetCheckCount = (performanceState.budgetCheckCount || 0) + 1;
     const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
     const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
     const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
@@ -81,7 +84,9 @@
       performanceState.lastProgressElapsedMs = effectiveElapsedMs;
       emitPlanningProgress(performanceState, phase);
     }
-    if (performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs) {
+    const timerExceeded = performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
+    const counterExceeded = performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount >= performanceState.budgetCheckLimit;
+    if (timerExceeded || counterExceeded) {
       if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
       performanceState.aborted = true;
       performanceState.reason = "TIME_BUDGET_EXCEEDED";
