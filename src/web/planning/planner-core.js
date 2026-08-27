@@ -16,6 +16,7 @@
   const FIXED_CHAIN_INFEASIBLE = 0;
   const FIXED_CHAIN_FEASIBLE = 1;
   const FIXED_CHAIN_INCONCLUSIVE = 2;
+  const PLANNING_BUDGET_EXCEEDED = "PLANNING_BUDGET_EXCEEDED";
   const GENERATED_BY = "PLANNER_CORE_V2";
   const TOOL_CHANGE_CAPABILITY = {
     key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
@@ -23,7 +24,102 @@
     label: "CAMBIO DE HERRAMENTAL",
   };
 
+  function createPlanningPerformanceState(options) {
+    if (!options || (!options.collectStats && !Number.isFinite(Number(options.timeBudgetMs)) && !Number.isFinite(Number(options.progressEveryMs)))) return null;
+    const nowMs = typeof options.nowMs === "function" ? options.nowMs : defaultNowMs;
+    const startedAtMs = nowMs();
+    return {
+      nowMs,
+      startedAtMs,
+      startedAt: new Date().toISOString(),
+      timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
+      progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
+      lastProgressElapsedMs: 0,
+      lastPhase: "scheduler:init",
+      progress: typeof options.onProgress === "function" ? options.onProgress : null,
+      stats: {
+        strategiesStarted: 0,
+        strategyTimings: [],
+        mainLoopIterations: 0,
+        findBestAssignmentCalls: 0,
+        assignmentCandidateEvaluations: 0,
+        slotProbes: 0,
+        busyConflictScans: 0,
+        busyConflictSorts: 0,
+        busySegmentSorts: 0,
+        toolCatalogLookups: 0,
+        toolCatalogScans: 0,
+        otConfigurationLookups: 0,
+      },
+    };
+  }
+
+  function defaultNowMs() {
+    return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+  }
+
+  function planningNowMs(performanceState) {
+    return performanceState?.nowMs ? performanceState.nowMs() : defaultNowMs();
+  }
+
+  function countPlanningStat(performanceState, name, amount = 1) {
+    if (!performanceState?.stats || !Object.prototype.hasOwnProperty.call(performanceState.stats, name)) return;
+    performanceState.stats[name] += amount;
+  }
+
+  function checkPlanningBudget(performanceState, phase, context) {
+    if (!performanceState) return false;
+    performanceState.lastPhase = phase;
+    const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
+    if (performanceState.progressEveryMs && elapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+      performanceState.lastProgressElapsedMs = elapsedMs;
+      emitPlanningProgress(performanceState, phase);
+    }
+    if (performanceState.timeBudgetMs && elapsedMs > performanceState.timeBudgetMs) {
+      if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
+      performanceState.aborted = true;
+      performanceState.reason = "TIME_BUDGET_EXCEEDED";
+      emitPlanningProgress(performanceState, phase);
+      return true;
+    }
+    return false;
+  }
+
+  function assertPlanningBudget(performanceState, phase, context) {
+    if (!checkPlanningBudget(performanceState, phase, context)) return;
+    const error = new Error("TIME_BUDGET_EXCEEDED");
+    error.code = PLANNING_BUDGET_EXCEEDED;
+    throw error;
+  }
+
+  function isPlanningBudgetExceeded(error) {
+    return error?.code === PLANNING_BUDGET_EXCEEDED;
+  }
+
+  function emitPlanningProgress(performanceState, phase) {
+    if (!performanceState?.progress) return;
+    try {
+      performanceState.progress({ phase, elapsedMs: Math.round(planningNowMs(performanceState) - performanceState.startedAtMs), stats: { ...performanceState.stats } });
+    } catch (_) {
+      // Progress hooks are diagnostic-only and must not affect scheduling.
+    }
+  }
+
+  function attachPlanningPerformance(state, performanceState, abortReason = "") {
+    if (!performanceState || !state?.lastSchedule) return;
+    const elapsedMs = Math.round(planningNowMs(performanceState) - performanceState.startedAtMs);
+    state.lastSchedule.performance = {
+      startedAt: performanceState.startedAt,
+      elapsedMs,
+      lastPhase: performanceState.lastPhase,
+      aborted: Boolean(abortReason || performanceState.aborted),
+      reason: abortReason || performanceState.reason || "",
+      stats: { ...performanceState.stats },
+    };
+  }
+
   function schedulePlan(inputState, options) {
+    const performanceState = createPlanningPerformanceState(options);
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
@@ -31,22 +127,34 @@
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
     const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
     const strategies = strategyPool.slice(0, Math.min(passCount + 2, strategyPool.length));
-    const evaluated = strategies.map((strategy, index) => {
-      const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
-      return { strategy, index, result, metrics: evaluatePlan(result) };
-    });
+    const evaluated = [];
+    for (const [index, strategy] of strategies.entries()) {
+      if (checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
+        if (!evaluated.length) break;
+        break;
+      }
+      const result = schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState });
+      evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
+      if (result.lastSchedule?.performance?.aborted) return result;
+    }
     const strategyFailures = [];
     let flowEvaluation;
     if (flowBalancedEnabled) {
       try {
         const strategy = "flow_balanced";
-        const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
-        flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
-        evaluated.push(flowEvaluation);
+        if (!checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
+          const result = schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState });
+          flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
+          evaluated.push(flowEvaluation);
+          if (result.lastSchedule?.performance?.aborted) return result;
+        }
       } catch (error) {
         strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
         // La estrategia adicional es opcional; las heuristicas existentes siguen disponibles.
       }
+    }
+    if (!evaluated.length) {
+      return schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", __performanceState: performanceState });
     }
     applyComparableScores(evaluated);
     const legacySelected = evaluated
@@ -71,13 +179,24 @@
       selectedStrategy: selected.strategy,
       metrics: selected.metrics,
     };
+    attachPlanningPerformance(selected.result, performanceState);
     return selected.result;
   }
 
   function schedulePlanOnce(inputState, options) {
+    const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
+    const strategy = options?.strategy || "balanced";
+    const strategyStarted = planningNowMs(performanceState);
+    if (performanceState) {
+      performanceState.stats.strategiesStarted += 1;
+      emitPlanningProgress(performanceState, `strategy:${strategy}:start`);
+    }
     const operations = (Array.isArray(inputState.operations) ? inputState.operations : []).map((op, idx) => ({ ...op, num: idx + 1 }));
     const workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
     const state = { ...inputState, operations, lastSchedule: undefined };
+    state.__performanceState = performanceState;
+    state.__otConfigurationIndex = buildOtConfigurationIndex(state, performanceState);
+    state.__toolCatalogByPart = buildToolCatalogIndex(state, performanceState);
     const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
     const horizonDays = clampInteger(options?.horizonDays || state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45);
     const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(filterExcludedOperations(state, state.operations)));
@@ -126,9 +245,11 @@
       generatedChanges: [],
       changeCounter: 0,
       gapFilled: 0,
-      strategy: options?.strategy || "balanced",
+      strategy,
       newnessIndex,
       nowAnchor,
+      performanceState,
+      abortReason: "",
       flowWipTarget: options?.strategy === "flow_balanced"
         ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
         : 10,
@@ -147,24 +268,42 @@
     const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
       isPlanCompletedOperation(state, op) || isFixedOperation(state, op)
     );
-    seedCompletedToolStates(context, authorizedStatuses);
-    seedMachineToolHistory(context, authorizedToolHistory, authorizedHistoricalOperations);
+    let fixed = [];
+    let movable = [];
+    let excluded = activeSourceOperations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && isSelected(op));
+    let jobs = [];
+    try {
+      assertPlanningBudget(performanceState, "scheduler:seed", context);
+      seedCompletedToolStates(context, authorizedStatuses);
+      seedMachineToolHistory(context, authorizedToolHistory, authorizedHistoricalOperations);
 
-    const fixed = activeSourceOperations.filter((op) => isFixedOperation(state, op) && isSelected(op));
-    const movable = activeSourceOperations.filter((op) =>
-      !isFixedOperation(state, op) &&
-      op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      isSelected(op) &&
-      isAssignableOperation(state, op)
-    );
-    const excluded = activeSourceOperations.filter((op) =>
-      op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
-    );
-    for (const op of fixed) commitFixedOperation(context, op);
+      fixed = activeSourceOperations.filter((op) => isFixedOperation(state, op) && isSelected(op));
+      movable = activeSourceOperations.filter((op) =>
+        !isFixedOperation(state, op) &&
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        isSelected(op) &&
+        isAssignableOperation(state, op)
+      );
+      excluded = activeSourceOperations.filter((op) =>
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
+      );
+      for (const op of fixed) {
+        assertPlanningBudget(performanceState, "fixed-operations", context);
+        commitFixedOperation(context, op);
+      }
 
-    enrichToolsFromCatalog(state, movable);
-    const jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
+      enrichToolsFromCatalog(state, movable);
+      jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
+      excluded = activeSourceOperations.filter((op) =>
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
+      );
+    } catch (error) {
+      if (!isPlanningBudgetExceeded(error)) throw error;
+      context.abortReason = "TIME_BUDGET_EXCEEDED";
+      if (!jobs.length && movable.length) excluded = [...excluded, ...movable];
+    }
     let pending = movable.length;
     // Mark first operations in jobs for sequence protection
     // These operations must be scheduled before subsequent operations of the same OT
@@ -176,27 +315,35 @@
     });
     let safety = Math.max(100, pending * 4);
 
-    while (pending > 0 && safety-- > 0) {
-      const ready = [];
-      for (const job of jobs) {
-        const op = job.operations[job.index];
-        if (!op) continue;
-        const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
-        const assignment = findBestAssignment(context, job, op, previous);
-        if (assignment) ready.push({ job, op, assignment });
-      }
+    try {
+      while (!context.abortReason && pending > 0 && safety-- > 0) {
+        countPlanningStat(performanceState, "mainLoopIterations");
+        assertPlanningBudget(performanceState, "main-loop", context);
+        const ready = [];
+        for (const job of jobs) {
+          assertPlanningBudget(performanceState, "job-scan", context);
+          const op = job.operations[job.index];
+          if (!op) continue;
+          const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
+          const assignment = findBestAssignment(context, job, op, previous);
+          if (assignment) ready.push({ job, op, assignment });
+        }
 
-      if (!ready.length) break;
-      const candidates = context.strategy === "flow_balanced"
-        ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
-        : ready;
-      candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy));
-      const chosen = candidates[0];
-      chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
-      const committed = commitAssignment(context, chosen.op, chosen.assignment);
-      chosen.job.last = committed;
-      chosen.job.index += 1;
-      pending -= 1;
+        if (!ready.length) break;
+        const candidates = context.strategy === "flow_balanced"
+          ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
+          : ready;
+        candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy));
+        const chosen = candidates[0];
+        chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
+        const committed = commitAssignment(context, chosen.op, chosen.assignment);
+        chosen.job.last = committed;
+        chosen.job.index += 1;
+        pending -= 1;
+      }
+    } catch (error) {
+      if (!isPlanningBudgetExceeded(error)) throw error;
+      context.abortReason = "TIME_BUDGET_EXCEEDED";
     }
 
     const unscheduled = [];
@@ -212,6 +359,9 @@
           cause: unscheduledCause(state, op),
         });
       }
+    }
+    if (context.abortReason) {
+      diagnostics.push({ level: "ERROR", code: context.abortReason, phase: performanceState?.lastPhase || "scheduler", message: "Se excedio el presupuesto de tiempo de planeacion" });
     }
 
     const fixedIds = new Set(fixed.map((item) => item.id));
@@ -253,6 +403,10 @@
       operatorConflicts: operatorConflicts.length,
       diagnostics,
     };
+    if (performanceState) {
+      performanceState.stats.strategyTimings.push({ strategy, elapsedMs: Math.round(planningNowMs(performanceState) - strategyStarted), aborted: Boolean(context.abortReason) });
+      attachPlanningPerformance(state, performanceState, context.abortReason);
+    }
     return state;
   }
 
@@ -324,6 +478,7 @@
   }
 
   function findBestAssignment(context, job, op, previous) {
+    countPlanningStat(context.performanceState, "findBestAssignmentCalls");
     const assignments = findAssignments(context, op, previous)
       .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
     assignments.sort((a, b) => compareAssignments(a, b, context.strategy));
@@ -347,6 +502,8 @@
 
     for (const operator of operators) {
       for (const machine of machines) {
+        countPlanningStat(context.performanceState, "assignmentCandidateEvaluations");
+        assertPlanningBudget(context.performanceState, "assignment-candidates", context);
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
         if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
       }
@@ -357,6 +514,8 @@
   function findEarliestSlot(context, op, earliest, operator, machine, finite) {
     let cursor = ceilToSnap(earliest);
     while (cursor < context.windowEnd) {
+      countPlanningStat(context.performanceState, "slotProbes");
+      assertPlanningBudget(context.performanceState, "slot-probes", context);
       let postToolChangeFailed = false;
       const toolChange = toolChangeFor(context, op, machine, cursor);
       const setupMinutes = toolChange.minutes;
@@ -458,6 +617,7 @@
     const segments = [];
 
     while (cursor < context.windowEnd && remaining > 0) {
+      assertPlanningBudget(context.performanceState, "allocate-work", context);
       const availableUntil = currentAvailabilityEnd(context.state, cursor, resources.operator, resources.machine);
       if (!availableUntil) {
         if (!first) return null;
@@ -479,6 +639,7 @@
       cursor = segmentEnd;
 
       if (remaining > 0) {
+        assertPlanningBudget(context.performanceState, "allocate-work:calendar", context);
         const nextEnd = addMinutes(cursor, Math.min(ALLOCATION_CHUNK_MINUTES, remaining));
         if (!isCalendarAvailable(context.state, cursor, nextEnd, resources.operator, resources.machine)) {
           cursor = ceilToSnap(nextAvailableMoment(context.state, cursor, resources.operator, resources.machine, context.windowEnd));
@@ -544,7 +705,7 @@
     }
 
     const tracksOperator = assignment.finite && isLoadBearingOperator(assignment.operator);
-    const busyMetadata = { operationId: next.id, ot: next.ot, secuencia: next.secuencia };
+    const busyMetadata = { operationId: next.id, ot: next.ot, secuencia: next.secuencia, performanceState: context.performanceState };
     if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments, { ...busyMetadata, resourceType: "OPERADOR" });
     if (isLoadBearingOperator(assignment.setupOperator) && assignment.setupSegments?.length) {
       addBusySegments(context.operatorBusy, assignment.setupOperator, assignment.setupSegments, { ...busyMetadata, resourceType: "OPERADOR" });
@@ -706,7 +867,7 @@
     if (start && end) {
       const segments = [{ start, end }];
       const tracksOperator = isFiniteOperation(context.state, op) && isLoadBearingOperator(op.operador);
-      const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia };
+      const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia, performanceState: context.performanceState };
       if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments, { ...busyMetadata, resourceType: "OPERADOR" });
       if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments, { ...busyMetadata, resourceType: "MAQUINA" });
       if (tracksOperator) context.operatorLoad.set(op.operador, (context.operatorLoad.get(op.operador) || 0) + diffMinutes(start, end));
@@ -954,7 +1115,12 @@
   function toolCatalogForOperation(state, op) {
     if (!isBendingOperation(op)) return null;
     const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
-    const candidates = (state.toolCatalog || []).filter((item) => {
+    const performanceState = state.__performanceState;
+    countPlanningStat(performanceState, "toolCatalogLookups");
+    const catalogIndex = state.__toolCatalogByPart || buildToolCatalogIndex(state, performanceState);
+    const indexedCandidates = catalogIndex.get(normalizeKey(part));
+    const candidates = indexedCandidates || (state.toolCatalog || []).filter((item) => {
+      countPlanningStat(performanceState, "toolCatalogScans");
       return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(part);
     });
     const herramental = cleanTool(op.herramental);
@@ -1303,6 +1469,7 @@
   function nextAvailableMoment(state, date, operator, machine, windowEnd) {
     let cursor = ceilToSnap(date);
     while (cursor < windowEnd) {
+      assertPlanningBudget(state.__performanceState, "calendar-next-available");
       const windows = effectiveWindows(state, cursor, operator, machine);
       const currentMinute = minuteOfDay(cursor);
       const window = windows.find((item) => item.end > currentMinute);
@@ -1326,6 +1493,7 @@
     let cursor = startOfDay(date);
     let remaining = days;
     while (cursor < windowEnd && remaining > 0) {
+      assertPlanningBudget(state.__performanceState, "calendar-working-days");
       cursor = addDays(cursor, 1);
       if (effectiveWindows(state, atMinute(cursor, DEFAULT_START_MINUTE), "", "").length) remaining -= 1;
     }
@@ -1338,6 +1506,7 @@
     let remaining = Math.max(0, roundUp(minutes, SNAP_MINUTES));
     if (!remaining) return cursor;
     while (cursor < windowEnd && remaining > 0) {
+      assertPlanningBudget(state.__performanceState, "calendar-work-minutes");
       const end = addMinutes(cursor, Math.min(ALLOCATION_CHUNK_MINUTES, remaining));
       if (isCalendarAvailable(state, cursor, end, "", "")) {
         remaining -= diffMinutes(cursor, end);
@@ -1395,15 +1564,19 @@
   }
 
   function nextBusyConflictEnd(context, start, end, operators, machine, finite) {
+    assertPlanningBudget(context.performanceState, "busy-conflict-scan", context);
     const intervals = [];
     for (const operator of unique(operators)) intervals.push(...(context.operatorBusy.get(operator) || []));
     if (finite && hasMachineResource(machine)) intervals.push(...(context.machineBusy.get(machine) || []));
+    countPlanningStat(context.performanceState, "busyConflictScans", intervals.length);
     const conflicts = intervals
       .filter((interval) => start < interval.end && end > interval.start)
       .sort((left, right) => left.start - right.start || left.end - right.end);
+    if (conflicts.length > 1) countPlanningStat(context.performanceState, "busyConflictSorts");
     if (!conflicts.length) return null;
     let conflictEnd = new Date(conflicts[0].end);
     for (let index = 1; index < conflicts.length && conflicts[index].start <= conflictEnd; index += 1) {
+      assertPlanningBudget(context.performanceState, "busy-conflict-merge", context);
       if (conflicts[index].end > conflictEnd) conflictEnd = new Date(conflicts[index].end);
     }
     return conflictEnd;
@@ -1492,10 +1665,12 @@
   function addBusySegments(map, resource, segments, metadata) {
     if (!resource || normalizeKey(resource) === "SIN_OPERADOR" || normalizeKey(resource) === "SIN_MAQUINA" || normalizeKey(resource) === "SUBCONTRATO") return;
     const current = map.get(resource) || [];
+    const { performanceState, ...intervalMetadata } = metadata || {};
     current.push(...segments.map((segment) => ({
       start: new Date(segment.start), end: new Date(segment.end),
-      ...(metadata || {}), resource,
+      ...intervalMetadata, resource,
     })));
+    countPlanningStat(performanceState, "busySegmentSorts");
     current.sort((a, b) => a.start - b.start);
     map.set(resource, current);
   }
@@ -2182,9 +2357,12 @@
   }
 
   function applyOtConfiguration(state, op) {
-    const entries = Object.entries(state.otConfigurations || {});
-    const match = entries.find(([ot, item]) => normalizeKey(item?.ot || ot) === normalizeKey(op.ot));
-    const configuration = match?.[1] || {};
+    const performanceState = state.__performanceState;
+    countPlanningStat(performanceState, "otConfigurationLookups");
+    const configurationIndex = state.__otConfigurationIndex || buildOtConfigurationIndex(state);
+    const indexedConfiguration = configurationIndex.get(normalizeKey(op.ot));
+    const match = indexedConfiguration !== undefined;
+    const configuration = indexedConfiguration || {};
     if (match && isBendingOperation(op)) {
       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
@@ -2201,6 +2379,28 @@
       op.maquina = "";
     }
     return op;
+  }
+
+  function buildOtConfigurationIndex(state) {
+    const index = new Map();
+    for (const [ot, item] of Object.entries(state.otConfigurations || {})) {
+      const key = normalizeKey(item?.ot || ot);
+      if (key && !index.has(key)) index.set(key, item || {});
+    }
+    return index;
+  }
+
+  function buildToolCatalogIndex(state, performanceState) {
+    const index = new Map();
+    for (const item of state.toolCatalog || []) {
+      countPlanningStat(performanceState, "toolCatalogScans");
+      if (item?.active === false) continue;
+      const key = normalizeKey(item.part || item.parte);
+      if (!key) continue;
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(item);
+    }
+    return index;
   }
 
   function normalizePriority(value) {

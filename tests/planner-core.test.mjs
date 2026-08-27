@@ -110,6 +110,57 @@ test("PlannerCore acepta un estado vacio", () => {
   assert.equal(result.horizonDays, 5);
 });
 
+test("PlannerCore no adjunta metricas de rendimiento por defecto", () => {
+  const core = loadPlannerCore();
+  const result = core.schedulePlan({ operations: [], workOrders: [], settings: {}, workSchedule: {} }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+  });
+
+  assert.equal(result.lastSchedule.performance, undefined);
+});
+
+test("PlannerCore aborta cooperativamente cuando vence el presupuesto", () => {
+  const core = loadPlannerCore();
+  let now = 0;
+  const result = core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      { id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    collectStats: true,
+    timeBudgetMs: 1,
+    nowMs: () => { now += 10; return now; },
+  });
+
+  assert.equal(result.lastSchedule.performance.aborted, true);
+  assert.equal(result.lastSchedule.performance.reason, "TIME_BUDGET_EXCEEDED");
+  assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 1);
+  assert.ok(result.lastSchedule.diagnostics.some((item) => item.code === "TIME_BUDGET_EXCEEDED"));
+});
+
+test("PlannerCore revisa presupuesto en loops internos del scheduler", () => {
+  assert.match(source, /function assertPlanningBudget\(performanceState, phase, context\)/);
+  assert.match(source, /assertPlanningBudget\(performanceState, "main-loop", context\)/);
+  assert.match(source, /assertPlanningBudget\(performanceState, "job-scan", context\)/);
+  assert.match(source, /assertPlanningBudget\(context\.performanceState, "assignment-candidates", context\)/);
+  assert.match(source, /assertPlanningBudget\(context\.performanceState, "slot-probes", context\)/);
+  assert.match(source, /assertPlanningBudget\(context\.performanceState, "allocate-work", context\)/);
+  assert.match(source, /assertPlanningBudget\(state\.__performanceState, "calendar-next-available"\)/);
+  assert.match(source, /assertPlanningBudget\(context\.performanceState, "busy-conflict-scan", context\)/);
+});
+
 test("respeta el inicio del Gantt para una operacion existente aunque la ejecucion ocurra despues", () => {
   const core = loadPlannerCore();
   const result = core.schedulePlan({

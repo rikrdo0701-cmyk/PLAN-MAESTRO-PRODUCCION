@@ -6,6 +6,7 @@ const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
+const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
@@ -4558,8 +4559,14 @@ async function scheduleCurrentPlanImpl() {
   }
 }
 
-async function dryRunCurrentPlanPerformance() {
+async function dryRunCurrentPlanPerformance(options = {}) {
+  const dryRunOptions = options && typeof options === "object" ? options : {};
+  const configuredTimeoutMs = Number.isFinite(Number(dryRunOptions.timeoutMs)) && Number(dryRunOptions.timeoutMs) > 0
+    ? Number(dryRunOptions.timeoutMs)
+    : PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS;
   const totalStarted = dryRunNowMs();
+  const startedAt = new Date().toISOString();
+  let lastPhase = "init";
   const timings = {
     totalMs: 0,
     incrementalBaseMs: 0,
@@ -4588,18 +4595,47 @@ async function dryRunCurrentPlanPerformance() {
     planStart: "",
     horizonDays: Number(state.horizonDays || 0),
     incrementalBaseSnapshotId: "",
+    plannerElapsedMs: 0,
+    plannerLastPhase: "",
+    plannerStrategiesStarted: 0,
+    plannerMainLoopIterations: 0,
+    plannerFindBestAssignmentCalls: 0,
+    plannerAssignmentCandidateEvaluations: 0,
+    plannerSlotProbes: 0,
+    plannerBusyConflictScans: 0,
+    plannerBusyConflictSorts: 0,
+    plannerBusySegmentSorts: 0,
+    plannerToolCatalogLookups: 0,
+    plannerToolCatalogScans: 0,
+    plannerOtConfigurationLookups: 0,
     ...timings,
   };
   const result = {
     ok: false,
     dryRun: true,
+    aborted: false,
+    reason: "",
+    startedAt,
+    elapsedMs: 0,
+    lastPhase,
     metrics,
     blockers: [],
     warnings: [],
     missingDataOts: [],
   };
+  if (!Number.isFinite(Number(dryRunOptions.timeoutMs)) && typeof console !== "undefined" && typeof console.info === "function") {
+    console.info("[planning dry-run] Sin timeoutMs explicito; usando presupuesto seguro de 60000ms. Para diagnostico rapido usa await window.runPlanningPerformanceDryRun({ timeoutMs: 30000, collectStats: true, progressEveryMs: 5000 })");
+  }
+  const markPhase = (phase, message) => {
+    lastPhase = phase;
+    result.lastPhase = phase;
+    if (typeof console !== "undefined" && typeof console.info === "function") console.info(`[planning dry-run] ${message || phase}`);
+    if (typeof showToast === "function") showToast(`Dry-run: ${message || phase}`, 4000);
+  };
   const finish = () => {
     timings.totalMs = Math.round(dryRunNowMs() - totalStarted);
+    result.elapsedMs = timings.totalMs;
+    result.lastPhase = lastPhase;
     Object.assign(metrics, timings);
     if (typeof console !== "undefined") {
       if (typeof console.table === "function") console.table(metrics);
@@ -4608,11 +4644,14 @@ async function dryRunCurrentPlanPerformance() {
     if (typeof showToast === "function") {
       const text = result.ok
         ? `Dry-run: ${metrics.scheduledOperationsCount} programadas; ${metrics.unscheduledOperationsCount} sin hueco; ${metrics.selectedStrategy || "sin estrategia"} en ${(metrics.totalMs / 1000).toFixed(1)}s`
+        : result.aborted
+          ? `Dry-run abortado por presupuesto en ${result.lastPhase}; ${(metrics.totalMs / 1000).toFixed(1)}s`
         : `Dry-run bloqueado: ${result.blockers.length || result.missingDataOts.length} pendientes`;
       showToast(text, result.ok ? 6000 : 9000);
     }
     return result;
   };
+  const yieldToBrowser = () => new Promise((resolve) => window.setTimeout(resolve, 0));
 
   if (!window.PlannerCore?.schedulePlan) {
     result.blockers.push({ code: "PLANNER_CORE_UNAVAILABLE", message: "El motor de programacion no esta disponible" });
@@ -4633,6 +4672,8 @@ async function dryRunCurrentPlanPerformance() {
   const originalState = state;
   try {
     let started = dryRunNowMs();
+    markPhase("incremental-base", "cargando base incremental");
+    await yieldToBrowser();
     incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
     timings.incrementalBaseMs = Math.round(dryRunNowMs() - started);
     if (incrementalBase?.snapshotId) metrics.incrementalBaseSnapshotId = incrementalBase.snapshotId;
@@ -4642,6 +4683,8 @@ async function dryRunCurrentPlanPerformance() {
     const affected = new Set((incrementalScope.affectedOts || []).map(normalizeStatus));
     metrics.affectedOtsCount = affected.size;
 
+    markPhase("readiness", "validando OTs listas");
+    await yieldToBrowser();
     const hasLoadedData = window.PlanningWorkflowCore.hasPlanningData(state, selectedOts);
     if (!hasLoadedData) {
       const operationsByOt = planningStateIndexes().operationsByOt;
@@ -4693,6 +4736,8 @@ async function dryRunCurrentPlanPerformance() {
     }
 
     started = dryRunNowMs();
+    markPhase("prepare-draft", "preparando borrador temporal");
+    await yieldToBrowser();
     engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
     metrics.engineSelectedOtsCount = engineSelectedOts.length;
     let temporaryState = window.PlanningWorkflowCore.prepareDraftForReschedule(deepClone({ ...state, planStart }), readyOts);
@@ -4704,19 +4749,67 @@ async function dryRunCurrentPlanPerformance() {
     metrics.includedOperationsCount = currentPlanOperations().length;
     timings.prepareDraftMs = Math.round(dryRunNowMs() - started);
 
+    if (dryRunOptions.skipScheduler === true || dryRunOptions.profileOnly === true) {
+      result.ok = true;
+      result.reason = "SCHEDULER_SKIPPED";
+      result.skippedScheduler = true;
+      result.profileOnly = true;
+      if (typeof console !== "undefined" && typeof console.info === "function") console.info("[planning dry-run] scheduler omitido por skipScheduler/profileOnly", metrics);
+      return finish();
+    }
+
     started = dryRunNowMs();
-    const scheduleResult = window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
+    markPhase("scheduler-start", `iniciando scheduler; el navegador puede estar ocupado hasta ${Math.round(configuredTimeoutMs / 1000)}s`);
+    await yieldToBrowser();
+    const plannerOptions = {
       planStart: temporaryState.planStart,
       horizonDays: temporaryState.horizonDays,
       executionTime: new Date().toISOString(),
       respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
+    };
+    plannerOptions.timeBudgetMs = configuredTimeoutMs;
+    if (dryRunOptions.collectStats !== false && (plannerOptions.timeBudgetMs || dryRunOptions.collectStats === true)) plannerOptions.collectStats = true;
+    if (Number.isFinite(Number(dryRunOptions.progressEveryMs)) && Number(dryRunOptions.progressEveryMs) > 0) plannerOptions.progressEveryMs = Number(dryRunOptions.progressEveryMs);
+    if (plannerOptions.collectStats || plannerOptions.progressEveryMs) {
+      plannerOptions.onProgress = (event) => {
+        metrics.plannerLastPhase = event?.phase || metrics.plannerLastPhase;
+        if (typeof console !== "undefined" && typeof console.info === "function") console.info("[planning dry-run] scheduler progress", event);
+      };
+    }
+    const scheduleResult = window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
+      ...plannerOptions,
     });
     timings.schedulePlanMs = Math.round(dryRunNowMs() - started);
 
     started = dryRunNowMs();
     const summary = scheduleResult.lastSchedule || {};
+    const plannerPerformance = summary.performance || {};
+    const plannerStats = plannerPerformance.stats || {};
+    metrics.plannerElapsedMs = Number(plannerPerformance.elapsedMs || 0);
+    metrics.plannerLastPhase = plannerPerformance.lastPhase || metrics.plannerLastPhase || "";
+    metrics.plannerStrategiesStarted = Number(plannerStats.strategiesStarted || 0);
+    metrics.plannerMainLoopIterations = Number(plannerStats.mainLoopIterations || 0);
+    metrics.plannerFindBestAssignmentCalls = Number(plannerStats.findBestAssignmentCalls || 0);
+    metrics.plannerAssignmentCandidateEvaluations = Number(plannerStats.assignmentCandidateEvaluations || 0);
+    metrics.plannerSlotProbes = Number(plannerStats.slotProbes || 0);
+    metrics.plannerBusyConflictScans = Number(plannerStats.busyConflictScans || 0);
+    metrics.plannerBusyConflictSorts = Number(plannerStats.busyConflictSorts || 0);
+    metrics.plannerBusySegmentSorts = Number(plannerStats.busySegmentSorts || 0);
+    metrics.plannerToolCatalogLookups = Number(plannerStats.toolCatalogLookups || 0);
+    metrics.plannerToolCatalogScans = Number(plannerStats.toolCatalogScans || 0);
+    metrics.plannerOtConfigurationLookups = Number(plannerStats.otConfigurationLookups || 0);
+    if (plannerPerformance.aborted) {
+      result.aborted = true;
+      result.reason = plannerPerformance.reason || "TIME_BUDGET_EXCEEDED";
+      lastPhase = plannerPerformance.lastPhase || "scheduler";
+      result.lastPhase = lastPhase;
+      result.blockers.push({ code: result.reason, message: "El scheduler excedio el presupuesto de tiempo del dry-run", phase: plannerPerformance.lastPhase || "scheduler" });
+    } else {
+      markPhase("scheduler-end", "scheduler finalizado");
+      await yieldToBrowser();
+    }
     const diagnostics = Array.isArray(summary.diagnostics) ? summary.diagnostics : [];
     metrics.scheduledOperationsCount = Number(summary.scheduled || 0);
     metrics.unscheduledOperationsCount = Number(summary.unscheduled || 0);
@@ -4731,7 +4824,7 @@ async function dryRunCurrentPlanPerformance() {
     }, {});
     metrics.selectedStrategy = summary.optimization?.selectedStrategy || "balanced";
     metrics.horizonDays = Number(scheduleResult.horizonDays || temporaryState.horizonDays || metrics.horizonDays || 0);
-    result.ok = result.blockers.length === 0;
+    result.ok = result.blockers.length === 0 && !result.aborted;
     result.warnings = diagnostics.filter((item) => item?.level && String(item.level).toUpperCase() !== "ERROR");
     timings.resultBuildMs = Math.round(dryRunNowMs() - started);
     return finish();

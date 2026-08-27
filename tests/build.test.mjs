@@ -139,7 +139,7 @@ test("la configuracion de flujo expone controles y diagnostico sin render global
 
 test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultados", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
-  const dryRunStart = planningApp.indexOf("async function dryRunCurrentPlanPerformance()");
+  const dryRunStart = planningApp.indexOf("async function dryRunCurrentPlanPerformance(options = {})");
   const dryRunEnd = planningApp.indexOf("function dryRunNowMs()", dryRunStart);
   const dryRunSource = planningApp.slice(dryRunStart, dryRunEnd);
   const scheduleStart = planningApp.indexOf("async function scheduleCurrentPlanImpl()");
@@ -149,6 +149,28 @@ test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultado
   assert.match(planningApp, /window\.runPlanningPerformanceDryRun\s*=\s*dryRunCurrentPlanPerformance/);
   assert.match(dryRunSource, /console\.table\(metrics\)/);
   assert.match(dryRunSource, /console\.info\("\[planning dry-run\]", result\)/);
+  assert.match(dryRunSource, /dryRunOptions/);
+  assert.match(planningApp, /PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS\s*=\s*60000/);
+  assert.match(dryRunSource, /configuredTimeoutMs/);
+  assert.match(dryRunSource, /plannerOptions\.timeBudgetMs\s*=\s*configuredTimeoutMs/);
+  assert.match(dryRunSource, /skipScheduler/);
+  assert.match(dryRunSource, /profileOnly/);
+  assert.match(dryRunSource, /SCHEDULER_SKIPPED/);
+  assert.match(dryRunSource, /yieldToBrowser/);
+  assert.match(dryRunSource, /await yieldToBrowser\(\)/);
+  assert.match(dryRunSource, /timeBudgetMs/);
+  assert.match(dryRunSource, /collectStats/);
+  assert.match(dryRunSource, /progressEveryMs/);
+  assert.match(dryRunSource, /lastPhase/);
+  assert.match(dryRunSource, /startedAt/);
+  assert.match(dryRunSource, /elapsedMs/);
+  assert.match(dryRunSource, /aborted/);
+  assert.match(dryRunSource, /TIME_BUDGET_EXCEEDED/);
+  assert.match(dryRunSource, /markPhase\("incremental-base"/);
+  assert.match(dryRunSource, /markPhase\("readiness"/);
+  assert.match(dryRunSource, /markPhase\("prepare-draft"/);
+  assert.match(dryRunSource, /markPhase\("scheduler-start"/);
+  assert.match(dryRunSource, /markPhase\("scheduler-end"/);
   assert.match(dryRunSource, /selectedOtsCount/);
   assert.match(dryRunSource, /engineSelectedOtsCount/);
   assert.match(dryRunSource, /affectedOtsCount/);
@@ -173,6 +195,15 @@ test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultado
   assert.match(dryRunSource, /prepareDraftMs/);
   assert.match(dryRunSource, /schedulePlanMs/);
   assert.match(dryRunSource, /resultBuildMs/);
+  assert.match(dryRunSource, /plannerStrategiesStarted/);
+  assert.match(dryRunSource, /plannerMainLoopIterations/);
+  assert.match(dryRunSource, /plannerFindBestAssignmentCalls/);
+  assert.match(dryRunSource, /plannerAssignmentCandidateEvaluations/);
+  assert.match(dryRunSource, /plannerSlotProbes/);
+  assert.match(dryRunSource, /plannerBusyConflictScans/);
+  assert.match(dryRunSource, /plannerBusySegmentSorts/);
+  assert.match(dryRunSource, /plannerToolCatalogLookups/);
+  assert.match(dryRunSource, /plannerOtConfigurationLookups/);
   assert.doesNotMatch(dryRunSource, /\bsaveState\s*\(/);
   assert.doesNotMatch(dryRunSource, /\bqueueAppSheetSave\s*\(/);
   assert.doesNotMatch(dryRunSource, /\bpersistPlanSnapshot\s*\(/);
