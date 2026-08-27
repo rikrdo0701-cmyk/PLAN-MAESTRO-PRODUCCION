@@ -40,7 +40,7 @@
       "integration_id": "INT-GITHUB",
       "name": "github",
       "status": "active",
-      "detail": "Repositorio origin https://github.com/rikrdo0701-cmyk/PLAN-MAESTRO-PRODUCCION.git; CI (ci.yml) y despliegues. Git Gate: push solo tras APPROVE.",
+      "detail": "Repositorio origin https://github.com/rikrdo0701-cmyk/PLAN-MAESTRO-PRODUCCION.git; CI (ci.yml) y despliegues (deploy-pages.yml, deploy-appscript.yml).",
       "hosts": "tooling"
     },
     {
@@ -54,7 +54,7 @@
       "integration_id": "INT-CODEX",
       "name": "codex",
       "status": "active",
-      "detail": "Revisión/APPROVE final antes del push (RULE-GIT-002).",
+      "detail": "Revisión/approval opcional en el flujo de desarrollo del orquestador híbrido.",
       "hosts": "tooling"
     },
     {

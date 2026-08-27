@@ -30,13 +30,6 @@
       "source": "ADR-0001"
     },
     {
-      "rule_id": "RULE-GIT-002",
-      "name": "Push only through Git Gate",
-      "status": "active",
-      "rule": "Los cambios de una TASK se envían a origin sólo después de validación, Documentation Gate, secret scan y APPROVE de Codex.",
-      "source": "ADR-0001"
-    },
-    {
       "rule_id": "RULE-OT-001",
       "name": "Mapeo de hojas OT",
       "status": "documentada",
@@ -405,5 +398,5 @@
       "domain": "OT"
     }
   ],
-  "updated_at": "2026-08-27T13:00:00-06:00"
+  "updated_at": "2026-08-27T15:00:00-06:00"
 }

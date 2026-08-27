@@ -12,7 +12,7 @@
         ".github/workflows/npm-publish-github-packages.yml"
       ],
       "purpose": "CI y despliegues: CI (test/build), deploy de Apps Script (clasp push a dist/) y GitHub Pages (site/). El PR template impone el checklist de gates.",
-      "rules": ["RULE-GIT-002"],
+      "rules": [],
       "data_sources": []
     },
     {
@@ -155,5 +155,5 @@
       "data_sources": []
     }
   ],
-  "updated_at": "2026-08-14T00:00:00-06:00"
+  "updated_at": "2026-08-27T15:00:00-06:00"
 }

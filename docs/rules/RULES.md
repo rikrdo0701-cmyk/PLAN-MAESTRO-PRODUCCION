@@ -13,7 +13,6 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-GOV-002` | Single writer | DOCUMENTADA | ADR-0001 |
 | `RULE-GOV-003` | Document discovered knowledge | DOCUMENTADA | ADR-0001 |
 | `RULE-GIT-001` | Private independent remote | DOCUMENTADA | ADR-0001 |
-| `RULE-GIT-002` | Push only through Git Gate | DOCUMENTADA | ADR-0001 |
 
 ## OT
 

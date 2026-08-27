@@ -109,5 +109,5 @@ Ambas carpetas son generadas y no deben editarse ni versionarse. Workflows en `.
 
 - `docs/architecture/decisions/ADR-0001-project-memory-private-git.md` — memoria obligatoria
   versionada, git local obligatorio, remote privado independiente, un writer por repositorio,
-  gates de documentación y aprobación antes del push.
+  gates de documentación antes del push.
 - `docs/ARQUITECTURA.md` (raíz) es la versión resumida heredada de esta arquitectura.

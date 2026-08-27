@@ -13,4 +13,3 @@
 - Document exact data origin, table/sheet, columns/fields, readers, writers, relationships and restrictions.
 - Preserve one writer per repository.
 - New remotes are private and independent.
-- Git push is performed only by Git Gate after Codex APPROVE.
