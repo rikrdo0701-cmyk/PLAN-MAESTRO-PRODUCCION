@@ -4794,6 +4794,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.plannerFindBestAssignmentCalls = Number(plannerStats.findBestAssignmentCalls || 0);
     metrics.plannerAssignmentCandidateEvaluations = Number(plannerStats.assignmentCandidateEvaluations || 0);
     metrics.plannerSlotProbes = Number(plannerStats.slotProbes || 0);
+    metrics.plannerBusyOverlapScans = Number(plannerStats.busyOverlapScans || 0);
     metrics.plannerBusyConflictScans = Number(plannerStats.busyConflictScans || 0);
     metrics.plannerBusyConflictSorts = Number(plannerStats.busyConflictSorts || 0);
     metrics.plannerBusySegmentSorts = Number(plannerStats.busySegmentSorts || 0);

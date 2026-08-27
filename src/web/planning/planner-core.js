@@ -44,6 +44,7 @@
         findBestAssignmentCalls: 0,
         assignmentCandidateEvaluations: 0,
         slotProbes: 0,
+        busyOverlapScans: 0,
         busyConflictScans: 0,
         busyConflictSorts: 0,
         busySegmentSorts: 0,
@@ -250,6 +251,7 @@
       nowAnchor,
       performanceState,
       abortReason: "",
+      lastAllocationConflictEnd: null,
       flowWipTarget: options?.strategy === "flow_balanced"
         ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
         : 10,
@@ -516,6 +518,7 @@
     while (cursor < context.windowEnd) {
       countPlanningStat(context.performanceState, "slotProbes");
       assertPlanningBudget(context.performanceState, "slot-probes", context);
+      context.lastAllocationConflictEnd = null;
       let postToolChangeFailed = false;
       const toolChange = toolChangeFor(context, op, machine, cursor);
       const setupMinutes = toolChange.minutes;
@@ -592,7 +595,8 @@
         }
       }
       const postChangeMinutes = postToolChangeFailed ? Math.max(1, numberOr(context.settings.toolChangeMinutes, 120)) : 0;
-      const conflictEnd = nextBusyConflictEnd(
+      const allocationConflictEnd = context.lastAllocationConflictEnd;
+      const conflictEnd = allocationConflictEnd && allocationConflictEnd > cursor ? allocationConflictEnd : nextBusyConflictEnd(
         context,
         cursor,
         addMinutes(cursor, setupMinutes + productionMinutes + postChangeMinutes),
@@ -626,10 +630,15 @@
       }
       const segmentMinutes = Math.min(ALLOCATION_CHUNK_MINUTES, remaining, diffMinutes(cursor, availableUntil));
       const segmentEnd = addMinutes(cursor, segmentMinutes);
-      const operatorBusy = resources.finite && overlapsBusy(context.operatorBusy.get(resources.operator), cursor, segmentEnd);
-      const machineBusy = resources.finite && hasMachineResource(resources.machine) && overlapsBusy(context.machineBusy.get(resources.machine), cursor, segmentEnd);
-      const busy = operatorBusy || machineBusy;
-      if (busy) return null;
+      const operatorConflictEnd = resources.finite ? firstBusyOverlapEnd(context.operatorBusy.get(resources.operator), cursor, segmentEnd, context.performanceState) : null;
+      const machineConflictEnd = resources.finite && hasMachineResource(resources.machine)
+        ? firstBusyOverlapEnd(context.machineBusy.get(resources.machine), cursor, segmentEnd, context.performanceState)
+        : null;
+      const conflictEnd = maxDate(operatorConflictEnd, machineConflictEnd);
+      if (conflictEnd) {
+        context.lastAllocationConflictEnd = maxDate(context.lastAllocationConflictEnd, conflictEnd);
+        return null;
+      }
 
       if (!first) first = new Date(cursor);
       segments.push({ start: new Date(cursor), end: new Date(segmentEnd) });
@@ -1559,19 +1568,50 @@
   }
 
   function overlapsBusy(intervals, start, end) {
-    if (!intervals) return false;
-    return intervals.some((interval) => start < interval.end && end > interval.start);
+    return Boolean(firstBusyOverlapEnd(intervals, start, end));
+  }
+
+  function firstBusyOverlapEnd(intervals, start, end, performanceState = null) {
+    if (!intervals || !intervals.length) return null;
+    let index = firstIntervalEndingAfter(intervals, start);
+    while (index > 0 && intervals[index - 1].end > start) index -= 1;
+    let conflictEnd = null;
+    for (; index < intervals.length; index += 1) {
+      if (index % 64 === 0) assertPlanningBudget(performanceState, "busy-overlap-scan");
+      const interval = intervals[index];
+      countPlanningStat(performanceState, "busyOverlapScans");
+      if (interval.start >= end) break;
+      if (start < interval.end && end > interval.start) {
+        conflictEnd = maxDate(conflictEnd, interval.end);
+        break;
+      }
+    }
+    return conflictEnd ? new Date(conflictEnd) : null;
+  }
+
+  function firstIntervalEndingAfter(intervals, start) {
+    let low = 0;
+    let high = intervals.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (intervals[mid].end <= start) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  }
+
+  function maxDate(left, right) {
+    if (!left) return right ? new Date(right) : null;
+    if (!right) return new Date(left);
+    return left > right ? new Date(left) : new Date(right);
   }
 
   function nextBusyConflictEnd(context, start, end, operators, machine, finite) {
     assertPlanningBudget(context.performanceState, "busy-conflict-scan", context);
     const intervals = [];
-    for (const operator of unique(operators)) intervals.push(...(context.operatorBusy.get(operator) || []));
-    if (finite && hasMachineResource(machine)) intervals.push(...(context.machineBusy.get(machine) || []));
-    countPlanningStat(context.performanceState, "busyConflictScans", intervals.length);
-    const conflicts = intervals
-      .filter((interval) => start < interval.end && end > interval.start)
-      .sort((left, right) => left.start - right.start || left.end - right.end);
+    for (const operator of unique(operators)) collectBusyConflicts(intervals, context.operatorBusy.get(operator), start, end, context.performanceState);
+    if (finite && hasMachineResource(machine)) collectBusyConflicts(intervals, context.machineBusy.get(machine), start, end, context.performanceState);
+    const conflicts = intervals.sort((left, right) => left.start - right.start || left.end - right.end);
     if (conflicts.length > 1) countPlanningStat(context.performanceState, "busyConflictSorts");
     if (!conflicts.length) return null;
     let conflictEnd = new Date(conflicts[0].end);
@@ -1580,6 +1620,19 @@
       if (conflicts[index].end > conflictEnd) conflictEnd = new Date(conflicts[index].end);
     }
     return conflictEnd;
+  }
+
+  function collectBusyConflicts(out, intervals, start, end, performanceState) {
+    if (!intervals || !intervals.length) return;
+    let index = firstIntervalEndingAfter(intervals, start);
+    while (index > 0 && intervals[index - 1].end > start) index -= 1;
+    for (; index < intervals.length; index += 1) {
+      if (index % 64 === 0) assertPlanningBudget(performanceState, "busy-conflict-scan");
+      const interval = intervals[index];
+      countPlanningStat(performanceState, "busyConflictScans");
+      if (interval.start >= end) break;
+      if (start < interval.end && end > interval.start) out.push(interval);
+    }
   }
 
   function operatorOverlapConflicts(stateOrOperations, stateContext = null) {
