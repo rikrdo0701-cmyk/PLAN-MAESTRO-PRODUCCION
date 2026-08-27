@@ -7,7 +7,7 @@ const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
-const PLANNING_PLAN_TIME_BUDGET_MS = 60000;
+const PLANNING_PLAN_TIME_BUDGET_MS = 600000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
@@ -4539,7 +4539,10 @@ async function scheduleCurrentPlanImpl() {
         if (!label) return;
         const scheduled = Number(event?.scheduled || 0);
         const total = Number(event?.total || 0);
-        label.textContent = total > 0 ? `Optimizando ${scheduled} de ${total}` : `Optimizando...`;
+        const percent = total > 0 ? Math.min(100, Math.round((scheduled / total) * 100)) : null;
+        label.textContent = total > 0
+          ? (percent !== null ? `Optimizando ${scheduled} de ${total} (${percent}%)` : `Optimizando ${scheduled} de ${total}`)
+          : `Optimizando...`;
       },
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
