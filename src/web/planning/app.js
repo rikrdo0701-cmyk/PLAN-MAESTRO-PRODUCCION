@@ -3077,7 +3077,8 @@ function renderSelectedJobPanel() {
     <input id="jobSubcontractDays" type="number" min="1" max="90" step="1" value="${escapeHtml(currentSubcontractDays || "")}" placeholder="Dias" aria-label="Dias de subcontrato de OT ${escapeHtml(job.ot)}" />
   </div>` : "";
   const firstQuantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-  const materialRows = job.materials.map((material) => `
+  const visibleMaterials = job.materials.filter((material) => !String(material?.material || "").toLowerCase().startsWith("costo 0"));
+  const materialRows = visibleMaterials.map((material) => `
     <div class="job-material-row" title="${escapeHtml(material.description || material.component)}">
       <span><strong>${escapeHtml(material.component)}</strong><small>${escapeHtml(material.description || "SIN DESCRIPCION")}</small></span>
       <span>${escapeHtml(material.unit || "-")}</span>
@@ -3142,8 +3143,8 @@ function renderSelectedJobPanel() {
       </details>` : ""}
       ${subcontractRows ? `<details class="job-resource-section"><summary><span>Subcontrato</span><strong>${escapeHtml(currentSubcontractType || "SIN TIPO")} · ${currentSubcontractDays || 0} dias</strong></summary><div class="job-section"><div class="job-subcontract-list">${subcontractRows}</div></div></details>` : ""}
       <details class="job-materials job-resource-section">
-        <summary><span>Materiales <small>${job.materials.length} componentes</small></span><strong>${escapeHtml(job.materialBase ? `Base ${job.materialBase}` : "SIN MATERIAL")}</strong></summary>
-        ${job.materials.length ? `
+        <summary><span>Materiales <small>${visibleMaterials.length} componentes</small></span><strong>${escapeHtml(job.materialBase ? `Base ${job.materialBase}` : "SIN MATERIAL")}</strong></summary>
+        ${visibleMaterials.length ? `
           <div class="job-material-header"><span>Componente</span><span>UM</span><span>Req.</span><span>Emit.</span><span>Pend.</span></div>
           <div class="job-material-list">${materialRows}</div>
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
