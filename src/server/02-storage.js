@@ -110,6 +110,7 @@ function PP_readState_(spreadsheet) {
     source: config.source || 'apps-script-spreadsheet',
     savedAt: config.savedAt || '',
     syncedAt: config.syncedAt || '',
+    operationsSyncedAt: config.operationsSyncedAt || {},
     invoicePriceWindow: config.invoicePriceWindow || null,
     operationCatalogWarning: String(config.operationCatalogWarning || ''),
     ganttView: config.ganttView || 'job',
@@ -260,13 +261,20 @@ function PP_writeSkillState_(spreadsheet, payload, user) {
 function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
   const savedAt = new Date().toISOString();
   const revision = PP_nextRevision_(spreadsheet);
+  const syncedAt = payload.syncedAt || savedAt;
+  const operationsSyncedAt = {};
+  (payload.operations || []).forEach(function(item) {
+    const ot = PP_normalizeKey_(item.ot);
+    if (ot && !operationsSyncedAt[ot]) operationsSyncedAt[ot] = syncedAt;
+  });
   PP_writeConfigPatch_(spreadsheet, {
     schemaVersion: PP_SCHEMA_VERSION,
     appVersion: PP_APP_VERSION,
     revision: revision,
     savedAt: savedAt,
     source: payload.source || 'NetSuite RESTlets / Apps Script',
-    syncedAt: payload.syncedAt || savedAt,
+    syncedAt: syncedAt,
+    operationsSyncedAt: Object.keys(operationsSyncedAt).length ? operationsSyncedAt : (payload.operationsSyncedAt || {}),
     plant: payload.plant || {},
     invoicePriceWindow: payload.invoicePriceWindow || null,
     operationCatalogWarning: String(payload.operationCatalogWarning || '')
@@ -568,7 +576,8 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['dailyBreaks', JSON.stringify(payload.dailyBreaks || {})],
     ['plant', JSON.stringify(payload.plant || {})],
     ['settings', JSON.stringify(payload.settings || {})],
-    ['lastSchedule', JSON.stringify(payload.lastSchedule || null)]
+    ['lastSchedule', JSON.stringify(payload.lastSchedule || null)],
+    ['operationsSyncedAt', JSON.stringify(payload.operationsSyncedAt || {})]
   ];
   PP_writeTable_(spreadsheet.getSheetByName('CONFIG'), PP_SHEETS.CONFIG, configRows);
 

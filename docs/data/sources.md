@@ -31,10 +31,14 @@ Tabla de pares clave→valor (JSON). Headers: `KEY, VALUE`.
   `reportFilters`, `preparedPlanningByOt`, `closedWorkOrderSummaries`,
   `EXCLUDED_CAPABILITIES`, `selectedOts`, `lockedOts`, `expandedOts`, `workSchedule`,
   `dailyBreaks`, `plant`, `settings`, `lastSchedule`, `operationCatalogWarning`,
-  `invoicePriceWindow`.
-- `syncedAt` se usa en el frontend para considerar frescos los datos de planeación por 5 minutos
-  antes de generar plan. Si NetSuite no responde al refresco de operaciones y ya existen
-  operaciones cargadas para todas las OTs seleccionadas, la generación continúa con esos datos.
+  `invoicePriceWindow`, `operationsSyncedAt`.
+- `syncedAt` global indica la última sincronización NetSuite completa. La frescura de la
+  generación de plan se evalúa por OT con `operationsSyncedAt` (mapa OT normalizada -> ISO,
+  clave CONFIG adicional): una OT se considera fresca si tiene operaciones en `state.operations`
+  y su timestamp está dentro de `NETSUITE_PLANNING_FRESH_MS` (24 h). Si todas las OTs
+  seleccionadas están frescas, se genera sin llamar NetSuite. Si NetSuite no responde al
+  refresco y quedan OTs sin operaciones cargadas, la generación continúa parcial con las OTs
+  disponibles y avisa cuáles quedaron fuera (RULE-OT-013).
 - `workSchedule` (JSON por día: `{ MON..SUN: { enabled, start, end } }`) define la ventana de
   trabajo de cada día que consume `effectiveWindows` del motor (RULE-CAL-001). Default en
   `app.js:19-27`: lunes a viernes `07:00-17:00` habilitados; sábado/domingo deshabilitados

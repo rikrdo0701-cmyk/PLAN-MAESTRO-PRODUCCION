@@ -87,6 +87,28 @@ test("hasPlanningData exige operaciones de las OTs solicitadas", () => {
   assert.equal(core.hasPlanningData({ operations: [{ ot: "999" }] }, ["1325"]), false);
 });
 
+test("planningDataAvailability separa OTs frescas, vencidas y sin datos por vigencia", () => {
+  const now = Date.now();
+  const recent = new Date(now - 60 * 60 * 1000).toISOString();
+  const old = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const state = {
+    operations: [{ ot: "FRESCA" }, { ot: "VENcida" }, { ot: "RARA" }],
+    operationsSyncedAt: { FRESCA: recent, VENCIDA: old },
+  };
+  const result = core.planningDataAvailability(state, ["FRESCA", "VENCIDA", "SIN-DATA"], 24 * 60 * 60 * 1000);
+  assert.deepEqual([...result.availableOts], ["FRESCA"]);
+  assert.deepEqual([...result.missingOts], ["SIN-DATA"]);
+  assert.deepEqual([...result.staleOts], ["VENCIDA"]);
+});
+
+test("markPlanningOtSynced registra el timestamp por OT sin tocar las demas", () => {
+  const before = { operations: [{ ot: "1" }], operationsSyncedAt: { "2": "2026-01-01T00:00:00Z" } };
+  const stamped = core.markPlanningOtSynced(before, "1", "2026-08-01T00:00:00Z");
+  assert.equal(core.planningOtSyncedAt(stamped, "1"), Date.parse("2026-08-01T00:00:00Z"));
+  assert.equal(core.planningOtSyncedAt(stamped, "2"), Date.parse("2026-01-01T00:00:00Z"));
+  assert.equal(core.planningOtSyncedAt(stamped, "3"), 0);
+});
+
 test("prepareDraftForReschedule limpia solo el borrador movible seleccionado sin mutar", () => {
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",

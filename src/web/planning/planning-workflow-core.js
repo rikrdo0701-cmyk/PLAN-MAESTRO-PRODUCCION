@@ -67,6 +67,51 @@
     return [...requested].every((ot) => available.has(ot));
   }
 
+  function planningOtSyncedAt(state, ot) {
+    const key = normalize(ot);
+    if (!key) return 0;
+    const map = (state?.operationsSyncedAt && typeof state.operationsSyncedAt === "object") ? state.operationsSyncedAt : {};
+    const raw = map[key] || map[ot] || "";
+    if (Number.isFinite(Number(raw))) return Number(raw);
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function planningOtsWithData(state, ots) {
+    const requested = new Set((ots || []).map(normalize).filter(Boolean));
+    if (!requested.size) return [];
+    const available = new Set((state?.operations || []).map((operation) => normalize(operation?.ot)).filter(Boolean));
+    return (ots || []).filter((ot) => available.has(normalize(ot)));
+  }
+
+  function planningDataAvailability(state, ots, maxAgeMs) {
+    const requested = (ots || []).map(normalize).filter(Boolean);
+    const available = new Set((state?.operations || []).map((operation) => normalize(operation?.ot)).filter(Boolean));
+    const now = Date.now();
+    const ageWindow = Number.isFinite(Number(maxAgeMs)) && Number(maxAgeMs) > 0 ? Number(maxAgeMs) : Number.POSITIVE_INFINITY;
+    const availableOts = [];
+    const missingOts = [];
+    const staleOts = [];
+    requested.forEach((ot) => {
+      if (!available.has(ot)) {
+        missingOts.push(ot);
+        return;
+      }
+      const synced = planningOtSyncedAt(state, ot);
+      if (synced <= 0 || now - synced >= ageWindow) staleOts.push(ot);
+      else availableOts.push(ot);
+    });
+    return { availableOts, missingOts, staleOts };
+  }
+
+  function markPlanningOtSynced(state, ot, syncedAt) {
+    const key = normalize(ot);
+    if (!key) return state;
+    const stamp = syncedAt || new Date().toISOString();
+    const incoming = state.operationsSyncedAt && typeof state.operationsSyncedAt === "object" ? state.operationsSyncedAt : {};
+    return { ...(state || {}), operationsSyncedAt: { ...incoming, [key]: stamp } };
+  }
+
   function isHistorical(operation) {
     const status = normalize(operation?.planStatus || operation?.estatus);
     return operation?.historical === true || operation?.isHistorical === true ||
@@ -1105,7 +1150,8 @@
     return operations.filter((operation) => mode === "completed" ? isCompleted(operation) : !isCompleted(operation));
   }
 
-  return { withTimeout, hasPlanningData, prepareDraftForReschedule, filterOperationsByPlanStatus,
+  return { withTimeout, hasPlanningData, planningOtSyncedAt, planningOtsWithData, planningDataAvailability, markPlanningOtSynced,
+    prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     isOtLockedInState, otHasCompletedOperations, pendingOperationsForOt, operationsRouteSignature,
     classifySmartSyncChange, finalizeSmartSyncSummary, smartSyncSummaryMessage,

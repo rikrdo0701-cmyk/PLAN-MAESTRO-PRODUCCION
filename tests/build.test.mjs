@@ -321,7 +321,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
-  assert.match(pagesIndex, /return \{ ready: hasData\(\), source: "fresh", warning: "" \}/);
+  assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
   assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
   assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);

@@ -5,7 +5,7 @@ const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
-const NETSUITE_PLANNING_FRESH_MS = 5 * 60 * 1000;
+const NETSUITE_PLANNING_FRESH_MS = 24 * 60 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLANNING_PLAN_TIME_BUDGET_MS = 600000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
@@ -1024,6 +1024,9 @@ function normalizeState() {
   state.draftVersionId = String(state.draftVersionId || "");
   state.activePublishedVersionId = String(state.activePublishedVersionId || "");
   state.publishedVersions = Array.isArray(state.publishedVersions) ? state.publishedVersions : [];
+  state.operationsSyncedAt = state.operationsSyncedAt && typeof state.operationsSyncedAt === "object"
+    ? state.operationsSyncedAt
+    : {};
   state.preparedPlanningByOt = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? state.preparedPlanningByOt : {};
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
   state.workSchedule = { ...deepClone(DEFAULT_WORK_SCHEDULE), ...(state.workSchedule || {}) };
@@ -4491,9 +4494,15 @@ async function scheduleCurrentPlanImpl() {
   }
   const planningData = await ensurePlanningDataLoaded(true, { force: false });
   if (!planningData.ready) return;
-  const readyOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
+  const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
+  const readyOts = state.selectedOts.filter((ot) =>
+    availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
+  const excludedOts = (planningData.missingOts || []).filter((ot) => state.selectedOts.includes(ot));
+  if (excludedOts.length) {
+    showToast(`Plan parcial: ${excludedOts.join(", ")} quedaron fuera por no tener operaciones cargadas`, 9000);
+  }
   if (!readyOts.length) {
     showToast("No hay OTs desbloqueadas para programar");
     return;
@@ -6949,6 +6958,13 @@ function applyNetSuitePlanningPayload(payload) {
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
+  if (typeof payload?.syncedAt === "string" && Array.isArray(payload?.operations)) {
+    state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}) };
+    for (const operation of refreshed) {
+      const key = materialOtKey(operation?.ot);
+      if (key) state.operationsSyncedAt[key] = payload.syncedAt;
+    }
+  }
   if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
   if (backlogDatasetChanged) resetBacklogWindow();
 }
@@ -7289,6 +7305,7 @@ function mergeIndividualPlanningData(payload, ot) {
       mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
     ];
   }
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), [key]: new Date().toISOString() };
   invalidateCurrentPlanOperationsCache();
   resetBacklogWindow();
   return true;
@@ -7365,6 +7382,7 @@ function applyForcedOtPlanningData(payload, ot) {
       mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
     ];
   }
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), [key]: new Date().toISOString() };
   individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
   invalidateCurrentPlanOperationsCache();
   resetBacklogWindow();
@@ -7456,15 +7474,24 @@ function loadSelectedJobDetailOperations(ot) {
 }
 
 async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
-  const hasData = () => window.PlanningWorkflowCore.hasPlanningData(state, state.selectedOts);
-  if (!isAppsScriptRuntime()) return { ready: hasData(), source: hasData() ? "cached" : "none", warning: "" };
-  const syncedAt = Date.parse(state.syncedAt || "");
-  if (!force && Number.isFinite(syncedAt) && Date.now() - syncedAt < NETSUITE_PLANNING_FRESH_MS && hasData()) {
-    return { ready: true, source: "fresh", warning: "" };
+  const selectedOts = Array.isArray(state.selectedOts) ? [...state.selectedOts] : [];
+  const availability = () => window.PlanningWorkflowCore.planningDataAvailability(state, selectedOts, NETSUITE_PLANNING_FRESH_MS);
+  if (!isAppsScriptRuntime()) {
+    const current = availability();
+    const ready = current.availableOts.length > 0;
+    return { ready, source: ready ? "cached" : "none", readyOts: current.availableOts, missingOts: current.missingOts, warning: "" };
+  }
+  const current = availability();
+  if (!force && current.missingOts.length === 0 && current.staleOts.length === 0) {
+    return { ready: true, source: "fresh", readyOts: current.availableOts, missingOts: [], warning: "" };
   }
   if (netSuitePlanningSyncInFlight) {
     if (showMessage) showToast("La carga de operaciones ya esta en curso");
-    return { ready: hasData(), source: hasData() ? "cached" : "none", warning: "Sincronizacion en curso" };
+    const hasSome = current.availableOts.length > 0;
+    const warning = hasSome
+      ? "Sincronizacion en curso; se programara con los datos ya cargados"
+      : "Sincronizacion en curso";
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts: current.availableOts, missingOts: current.missingOts, warning };
   }
   netSuitePlanningSyncInFlight = true;
   setNetSuitePlanningSyncState(true);
@@ -7475,14 +7502,22 @@ async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    return { ready: hasData(), source: "fresh", warning: "" };
+    const after = availability();
+    const missingOts = after.missingOts;
+    if (missingOts.length) {
+      const warning = `NetSuite respondio pero ${missingOts.length} OT(s) sin operaciones quedaron fuera`;
+      if (showMessage) showToast(warning, 9000);
+      return { ready: true, source: "fresh", readyOts: after.availableOts, missingOts, warning };
+    }
+    return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
   } catch (error) {
-    const ready = hasData();
-    const warning = ready
-      ? "NetSuite no respondio; se programara con los datos ya cargados"
+    const after = availability();
+    const hasSome = after.availableOts.length > 0;
+    const warning = hasSome
+      ? `NetSuite no respondio; se programara con los datos ya cargados (${after.availableOts.length} OT(s)), sin ${after.missingOts.length} OT(s)`
       : `No se pudieron cargar operaciones: ${error.message}`;
     if (showMessage) showToast(warning, 9000);
-    return { ready, source: ready ? "cached" : "none", warning };
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts: after.availableOts, missingOts: after.missingOts, warning };
   } finally {
     netSuitePlanningSyncInFlight = false;
     setNetSuitePlanningSyncState(false);
@@ -7573,6 +7608,15 @@ function applyImported(imported, options = {}) {
     ? detectNetSuiteOtChanges(state, imported, { detectedAt: new Date().toISOString() })
     : null;
   if (Array.isArray(imported.operations)) state.operations = imported.operations;
+  const importedSyncedMap = imported.operationsSyncedAt && typeof imported.operationsSyncedAt === "object" &&
+    Object.keys(imported.operationsSyncedAt).length ? imported.operationsSyncedAt : null;
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), ...(importedSyncedMap || {}) };
+  if (Array.isArray(imported.operations) && imported.syncedAt && !importedSyncedMap) {
+    for (const operation of state.operations) {
+      const key = materialOtKey(operation?.ot);
+      if (key) state.operationsSyncedAt[key] = imported.syncedAt;
+    }
+  }
   if (Number.isFinite(Number(imported.schemaVersion))) state.schemaVersion = Number(imported.schemaVersion);
   if (Number.isFinite(Number(imported.revision))) state.revision = Number(imported.revision);
   if (imported.operators) state.operators = imported.operators;
