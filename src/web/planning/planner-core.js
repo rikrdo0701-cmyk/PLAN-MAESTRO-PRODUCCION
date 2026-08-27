@@ -35,7 +35,7 @@
       startedAtWallMs,
       startedAt: new Date().toISOString(),
       timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
-      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 36) : 0,
+      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 500) : 0,
       budgetCheckCount: 0,
       progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
       lastProgressElapsedMs: 0,
