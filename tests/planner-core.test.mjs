@@ -155,7 +155,7 @@ test("PlannerCore revisa presupuesto en loops internos del scheduler", () => {
   assert.match(source, /assertPlanningBudget\(performanceState, "main-loop", context\)/);
   assert.match(source, /assertPlanningBudget\(performanceState, "job-scan", context\)/);
   assert.match(source, /assertPlanningBudget\(context\.performanceState, "assignment-candidates", context\)/);
-  assert.match(source, /assertPlanningBudget\(context\.performanceState, "slot-probes", context\)/);
+  assert.match(source, /checkPlanningBudget\(context\.performanceState, "slot-probes", context\)/);
   assert.match(source, /assertPlanningBudget\(context\.performanceState, "allocate-work", context\)/);
   assert.match(source, /assertPlanningBudget\(state\.__performanceState, "calendar-next-available"\)/);
   assert.match(source, /assertPlanningBudget\(context\.performanceState, "busy-conflict-scan", context\)/);

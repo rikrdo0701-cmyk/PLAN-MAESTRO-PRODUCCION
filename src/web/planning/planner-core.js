@@ -44,6 +44,7 @@
         findBestAssignmentCalls: 0,
         assignmentCandidateEvaluations: 0,
         slotProbes: 0,
+        slotProbeSkips: 0,
         busyOverlapScans: 0,
         busyConflictScans: 0,
         busyConflictSorts: 0,
@@ -480,6 +481,7 @@
   }
 
   function findBestAssignment(context, job, op, previous) {
+    if (context.abortReason) return null;
     countPlanningStat(context.performanceState, "findBestAssignmentCalls");
     const assignments = findAssignments(context, op, previous)
       .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
@@ -504,6 +506,7 @@
 
     for (const operator of operators) {
       for (const machine of machines) {
+        if (context.abortReason) return assignments;
         countPlanningStat(context.performanceState, "assignmentCandidateEvaluations");
         assertPlanningBudget(context.performanceState, "assignment-candidates", context);
         const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
@@ -514,10 +517,14 @@
   }
 
   function findEarliestSlot(context, op, earliest, operator, machine, finite) {
+    if (context.abortReason) return null;
     let cursor = ceilToSnap(earliest);
     while (cursor < context.windowEnd) {
       countPlanningStat(context.performanceState, "slotProbes");
-      assertPlanningBudget(context.performanceState, "slot-probes", context);
+      if (checkPlanningBudget(context.performanceState, "slot-probes", context)) {
+        countPlanningStat(context.performanceState, "slotProbeSkips");
+        return null;
+      }
       context.lastAllocationConflictEnd = null;
       let postToolChangeFailed = false;
       const toolChange = toolChangeFor(context, op, machine, cursor);
