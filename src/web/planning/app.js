@@ -7480,22 +7480,33 @@ function loadSelectedJobDetailOperations(ot) {
 async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
   const selectedOts = Array.isArray(state.selectedOts) ? [...state.selectedOts] : [];
   const availability = () => window.PlanningWorkflowCore.planningDataAvailability(state, selectedOts, NETSUITE_PLANNING_FRESH_MS);
+  const usableOts = (result) => {
+    const seen = new Set();
+    return [...(result?.availableOts || []), ...(result?.staleOts || [])].filter((ot) => {
+      const key = String(ot || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
   if (!isAppsScriptRuntime()) {
     const current = availability();
-    const ready = current.availableOts.length > 0;
-    return { ready, source: ready ? "cached" : "none", readyOts: current.availableOts, missingOts: current.missingOts, warning: "" };
+    const readyOts = usableOts(current);
+    const ready = readyOts.length > 0;
+    return { ready, source: ready ? "cached" : "none", readyOts, missingOts: current.missingOts, warning: "" };
   }
   const current = availability();
   if (!force && current.missingOts.length === 0 && current.staleOts.length === 0) {
-    return { ready: true, source: "fresh", readyOts: current.availableOts, missingOts: [], warning: "" };
+    return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
   }
   if (netSuitePlanningSyncInFlight) {
     if (showMessage) showToast("La carga de operaciones ya esta en curso");
-    const hasSome = current.availableOts.length > 0;
+    const readyOts = usableOts(current);
+    const hasSome = readyOts.length > 0;
     const warning = hasSome
       ? "Sincronizacion en curso; se programara con los datos ya cargados"
       : "Sincronizacion en curso";
-    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts: current.availableOts, missingOts: current.missingOts, warning };
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: current.missingOts, warning };
   }
   netSuitePlanningSyncInFlight = true;
   setNetSuitePlanningSyncState(true);
@@ -7511,17 +7522,18 @@ async function ensurePlanningDataLoaded(showMessage, { force = false } = {}) {
     if (missingOts.length) {
       const warning = `NetSuite respondio pero ${missingOts.length} OT(s) sin operaciones quedaron fuera`;
       if (showMessage) showToast(warning, 9000);
-      return { ready: true, source: "fresh", readyOts: after.availableOts, missingOts, warning };
+      return { ready: true, source: "fresh", readyOts: usableOts(after), missingOts, warning };
     }
     return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
   } catch (error) {
     const after = availability();
-    const hasSome = after.availableOts.length > 0;
+    const readyOts = usableOts(after);
+    const hasSome = readyOts.length > 0;
     const warning = hasSome
-      ? `NetSuite no respondio; se programara con los datos ya cargados (${after.availableOts.length} OT(s)), sin ${after.missingOts.length} OT(s)`
+      ? `NetSuite no respondio; se programara con los datos ya cargados (${readyOts.length} OT(s)), sin ${after.missingOts.length} OT(s)`
       : `No se pudieron cargar operaciones: ${error.message}`;
     if (showMessage) showToast(warning, 9000);
-    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts: after.availableOts, missingOts: after.missingOts, warning };
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: after.missingOts, warning };
   } finally {
     netSuitePlanningSyncInFlight = false;
     setNetSuitePlanningSyncState(false);
