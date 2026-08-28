@@ -5592,14 +5592,12 @@ async function loadPlanSnapshots(showMessage) {
       : await fetchJson(PLAN_SNAPSHOTS_API);
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
-    if (!reportSnapshot) {
-      const publishedId = activePublishedSnapshotId();
-      if (publishedId) {
-        await loadPlanSnapshotById(publishedId, { render: false, silent: true });
-      } else {
-        syncDraftReportWeek();
-        reportSnapshot = currentDraftReportSnapshot();
-      }
+    const publishedId = activePublishedSnapshotId();
+    if (publishedId && (!reportSnapshot || reportSnapshot.snapshotId === "draft")) {
+      await loadPlanSnapshotById(publishedId, { render: false, silent: true });
+    } else if (!reportSnapshot) {
+      syncDraftReportWeek();
+      reportSnapshot = currentDraftReportSnapshot();
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);

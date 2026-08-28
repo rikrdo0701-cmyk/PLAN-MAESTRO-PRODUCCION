@@ -65,10 +65,10 @@
       "rule_id": "RULE-OT-005",
       "name": "Coherencia del borrador",
       "status": "documentada",
-      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado. En Reportes y Exportar, la fuente por defecto es el ultimo plan publicado (ordenado por publishedAt/generateAt). Un snapshot cuenta como publicado si su id esta en activePublishedVersionId/publishedVersions o si el listado trae status/planStatus PUBLICADO o publishedAt desde el manifest de SNAPSHOT_PAYLOADS; esto evita ocultar publicaciones validas cuando el estado local no contiene el id. Si no existe plan publicado, el default es la fuente Borrador proyectada desde el estado actual en memoria (currentDraftReportSnapshot/currentDraftScheduledOperations/currentPlanOperations), no desde BORRADOR_PLAN persistido ni desde un publicado. Los snapshots publicados y el borrador siguen seleccionables explicitamente; tras generar el plan, el borrador recien programado queda como fuente activa de reportes.",
+      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado. En Reportes y Exportar, la fuente por defecto es el ultimo plan publicado (ordenado por publishedAt/generateAt). Un snapshot cuenta como publicado si su id esta en activePublishedVersionId/publishedVersions o si el listado trae status/planStatus PUBLICADO o publishedAt desde el manifest de SNAPSHOT_PAYLOADS; esto evita ocultar publicaciones validas cuando el estado local no contiene el id. Si los snapshots llegan despues de que Reportes arranco en Borrador, loadPlanSnapshots cambia automaticamente al ultimo publicado cuando reportSnapshot esta vacio o es draft; si no existe plan publicado, el default es la fuente Borrador proyectada desde el estado actual en memoria (currentDraftReportSnapshot/currentDraftScheduledOperations/currentPlanOperations), no desde BORRADOR_PLAN persistido ni desde un publicado. Los snapshots publicados y el borrador siguen seleccionables explicitamente; tras generar el plan, el borrador recien programado queda como fuente activa de reportes.",
       "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md; definicion de usuario 2026-08-13, 2026-08-27 (reportes por defecto al ultimo publicado); src/web/planning/app.js",
       "domain": "OT",
-      "updated_at": "2026-08-28T18:20:00-06:00"
+      "updated_at": "2026-08-28T18:35:00-06:00"
     },
     {
       "rule_id": "RULE-OT-006",
@@ -442,5 +442,5 @@
       "updated_at": "2026-08-28T17:55:00-06:00"
     }
   ],
-  "updated_at": "2026-08-28T18:20:00-06:00"
+  "updated_at": "2026-08-28T18:35:00-06:00"
 }
