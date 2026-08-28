@@ -23,6 +23,7 @@ const PP_SHEETS = {
   ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA'],
   PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
   BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
+  SNAPSHOT_PAYLOADS: ['KEY', 'VALUE'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
 const PP_TOOL_CHANGE_CAPABILITY_KEY = 'TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL';
@@ -749,6 +750,56 @@ function PP_planSnapshotPayloadKey_(snapshotId) {
   return 'PLAN_SNAPSHOT_PAYLOAD::' + String(snapshotId || '').trim();
 }
 
+function PP_getPayloadSheet_() {
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return spreadsheet.getSheetByName('SNAPSHOT_PAYLOADS');
+}
+
+function PP_payloadStore_() {
+  function findIndex_(entries, key) {
+    for (let index = 0; index < entries.length; index += 1) {
+      if (String(entries[index].KEY || '') === key) return index;
+    }
+    return -1;
+  }
+  return {
+    getProperty: function(key) {
+      const entries = PP_readRows_(PP_getPayloadSheet_());
+      const index = findIndex_(entries, key);
+      return index >= 0 ? String(entries[index].VALUE) : null;
+    },
+    setProperty: function(key, value) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const index = findIndex_(entries, key);
+      if (index < 0) sheet.appendRow([key, String(value)]);
+      else sheet.getRange(index + 2, 1, 1, 2).setValues([[key, String(value)]]);
+      return this;
+    },
+    setProperties: function(values, allowUpdate) {
+      const store = this;
+      Object.keys(values || {}).forEach(function(key) {
+        if (!allowUpdate && store.getProperty(key) != null) return;
+        store.setProperty(key, values[key]);
+      });
+      return this;
+    },
+    deleteProperty: function(key) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const index = findIndex_(entries, key);
+      if (index >= 0) sheet.deleteRow(index + 2);
+      return this;
+    },
+    getProperties: function() {
+      const out = {};
+      PP_readRows_(PP_getPayloadSheet_()).forEach(function(row) { out[String(row.KEY || '')] = String(row.VALUE); });
+      return out;
+    }
+  };
+}
+
 function PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest) {
   const generation = String(manifest && manifest.generation || '');
   for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) {
@@ -769,7 +820,7 @@ function PP_rollbackPlanSnapshotPayload_(transaction) {
 }
 
 function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
-  const properties = PropertiesService.getScriptProperties();
+  const properties = PP_payloadStore_();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
   const previousValue = properties.getProperty(key);
   let previousManifest = null;
@@ -780,7 +831,7 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
   const generation = Utilities.getUuid();
   const stagingKey = key + '::' + generation + '::';
   const staged = {};
-  chunks.forEach(function(chunk, index) { staged[stagingKey + index] = chunk; });
+  chunks.forEach(function(chunk, index) { staged[stagingKey + index] = JSON.stringify(chunk); });
   const details = metadata || {};
   const manifest = {
     chunks: chunks.length, generation: generation,
@@ -807,7 +858,8 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
 }
 
 function PP_readPlanSnapshotPayload_(snapshotId) {
-  const value = PropertiesService.getScriptProperties().getProperty(PP_planSnapshotPayloadKey_(snapshotId));
+  const properties = PP_payloadStore_();
+  const value = properties.getProperty(PP_planSnapshotPayloadKey_(snapshotId));
   if (!value) return null;
   try {
     const parsed = JSON.parse(value);
@@ -816,14 +868,15 @@ function PP_readPlanSnapshotPayload_(snapshotId) {
     const generation = String(parsed.generation || '');
     for (let index = 0; index < Number(parsed.chunks); index += 1) {
       const chunkKey = PP_planSnapshotPayloadKey_(snapshotId) + (generation ? '::' + generation : '') + '::' + index;
-      serialized += PropertiesService.getScriptProperties().getProperty(chunkKey) || '';
+      const rawChunk = properties.getProperty(chunkKey);
+      if (rawChunk != null) serialized += JSON.parse(rawChunk);
     }
     return JSON.parse(serialized);
   } catch (error) { throw new Error('El payload completo de la instantanea esta corrupto'); }
 }
 
 function PP_deletePlanSnapshotPayload_(snapshotId) {
-  const properties = PropertiesService.getScriptProperties();
+  const properties = PP_payloadStore_();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
   const value = properties.getProperty(key);
   try { if (value) PP_deletePlanSnapshotPayloadGeneration_(properties, key, JSON.parse(value)); } catch (ignored) {}
@@ -928,7 +981,7 @@ function PP_listPlanSnapshots_(spreadsheet) {
     grouped[snapshotId].operations += 1;
   });
   const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
-  const properties = PropertiesService.getScriptProperties().getProperties();
+  const properties = PP_payloadStore_().getProperties();
   Object.keys(properties).forEach(function(propertyKey) {
     if (propertyKey.indexOf(prefix) !== 0) return;
     const snapshotId = propertyKey.slice(prefix.length);

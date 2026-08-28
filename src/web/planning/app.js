@@ -4575,13 +4575,13 @@ async function scheduleCurrentPlanImpl() {
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; ${strategy} en ${seconds}s`);
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
+    renderReports();
+    saveState("ui");
     void persistPlanSnapshot().then((snapshot) => {
       if (!snapshot?.snapshotId) return;
       state.draftVersionId = snapshot.snapshotId;
-      syncDraftReportWeek();
-      reportSnapshot = currentDraftReportSnapshot();
-      renderPlanSnapshotSelect();
-      renderReports();
       saveState("ui");
     }).catch((error) => showToast(`El plan se calculo, pero no se pudo guardar: ${error.message}`, 9000));
   } catch (error) {

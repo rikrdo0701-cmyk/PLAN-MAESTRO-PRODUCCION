@@ -194,7 +194,7 @@ Reuse the completion identity logic. Match productive operations by stable OT/se
 
 - [ ] **Step 4: Extend historical payload without breaking row reports**
 
-Continue writing report rows to `PLANES_HISTORICOS`, and additionally persist the complete published payload under a snapshot-scoped configuration key such as `PLAN_SNAPSHOT_PAYLOAD::<snapshotId>`. `PP_getPlanSnapshot_` must return `fullState` when present and remain compatible with old row-only snapshots.
+Continue writing report rows to `PLANES_HISTORICOS`, and additionally persist the complete published payload under a snapshot-scoped key such as `PLAN_SNAPSHOT_PAYLOAD::<snapshotId>` in the `SNAPSHOT_PAYLOADS` sheet (`KEY`/`VALUE` rows). The payload must never go to Script Properties: its ~500 KB per-script quota breaks generation for large plans, so a key/value facade (`PP_payloadStore_`) reads/writes the same chunked manifest/generation keys over the sheet, preserving the transactional `finalize`/`rollback` semantics. `PP_getPlanSnapshot_` must return `fullState` when present and remain compatible with old row-only snapshots.
 
 - [ ] **Step 5: Implement transactional server restore**
 

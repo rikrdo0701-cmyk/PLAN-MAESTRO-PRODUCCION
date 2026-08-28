@@ -636,6 +636,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(storageService, /catch \(error\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_/);
   assert.match(storageService, /keepPreviousPayload[\s\S]*SpreadsheetApp\.flush\(\);[\s\S]*PP_finalizePlanSnapshotPayload_/);
   assert.match(storageService, /function PP_rollbackPlanSnapshotPayload_[\s\S]*setProperty\(transaction\.key, transaction\.previousValue\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_\([^;]+transaction\.newManifest/);
+  const payloadStorage = storageService.slice(storageService.indexOf("function PP_planSnapshotPayloadKey_"), storageService.indexOf("function PP_appendPlanSnapshot_"));
+  assert.match(payloadStorage, /function PP_getPayloadSheet_[\s\S]*getSheetByName\('SNAPSHOT_PAYLOADS'\)/);
+  assert.doesNotMatch(payloadStorage, /PropertiesService/);
+  const storageSheets = storageService.slice(storageService.indexOf("const PP_SHEETS"), storageService.indexOf("const PP_OPERATION_FIELDS"));
+  assert.match(storageSheets, /SNAPSHOT_PAYLOADS: \['KEY', 'VALUE'\]/);
   const replaceDraftSource = storageService.slice(storageService.indexOf("function PP_replaceDraftSnapshot_"), storageService.indexOf("function PP_listPlanSnapshots_"));
   assert.match(replaceDraftSource, /PP_rollbackPlanSnapshotPayload_\(payloadTransaction\.value\)/);
   assert.doesNotMatch(replaceDraftSource, /PP_storePlanSnapshotPayload_\('draft', previousPayload\)/);
@@ -650,6 +655,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
+  const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
+  assert.match(scheduleImpl, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);[\s\S]*saveState\("ui"\);[\s\S]*persistPlanSnapshot\(\)\.then/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
