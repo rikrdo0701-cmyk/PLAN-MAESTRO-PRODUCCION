@@ -1589,19 +1589,18 @@ test("importJson adopta y limpia operationCatalogWarning", async () => {
   })).operationCatalogWarning, "");
 });
 
-test("renderWeekReport ya no incluye el panel de cargas de operadores", async () => {
+test("renderWeekReport incluye el panel de cargas de operadores", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const reportSource = app.slice(
     app.indexOf("function renderWeekReport()"),
     app.indexOf("function weeklyExecutiveSummary("),
   );
 
+  assert.match(reportSource, /Cargas de operadores/);
+  assert.match(reportSource, /renderReportOperatorLoads/);
+  assert.match(reportSource, /loads-table/);
   assert.match(reportSource, /OT que inician/);
   assert.match(reportSource, /Acabado \/ OT que terminan/);
-  assert.doesNotMatch(reportSource, /Cargas de operadores/);
-  assert.doesNotMatch(reportSource, /weekly-job-panel loads/);
-  assert.doesNotMatch(reportSource, /renderReportOperatorLoads/);
-  assert.doesNotMatch(reportSource, /loads-table/);
 });
 
 test("identificador semanal distingue versiones y nextWeeklyVersion cuenta publicaciones de la misma semana", async () => {
