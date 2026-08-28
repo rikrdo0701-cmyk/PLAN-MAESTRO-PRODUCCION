@@ -89,9 +89,13 @@ El proyecto de Apps Script utilizado para el backend actual es:
 
 ### URL de la aplicación web
 
+Deployment de producción actual (2026-08-28):
+
 ```text
-https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec
+https://script.google.com/macros/s/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/exec
 ```
+
+Nota: el proyecto de Apps Script llegó al límite de 200 versiones, por lo que `clasp deploy` con versión nueva queda bloqueado. El deployment de producción se movió a la dirección anterior apuntando a la versión 200 (creado con `clasp deploy --versionNumber 200`) para conservar una URL pública funcional; liberar versiones antiguas en script.google.com antes de desplegar backend de nuevo.
 
 ### Comandos de publicación
 

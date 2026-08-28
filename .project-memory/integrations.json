@@ -12,7 +12,7 @@
       "integration_id": "INT-GOOGLE_APPS_SCRIPT",
       "name": "google_apps_script",
       "status": "active",
-      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; 134 versiones, deployment de producción @134.",
+      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; proyecto en el limite de 200 versiones, deployment de produccion AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q @200 (creado 2026-08-28 apuntando a la version 200 sin agregar versiones). Crear nuevas versiones esta bloqueado hasta liberar historial en script.google.com.",
       "hosts": "backend"
     },
     {
@@ -65,5 +65,5 @@
       "hosts": "tooling"
     }
   ],
-  "updated_at": "2026-08-11T00:00:00-06:00"
+  "updated_at": "2026-08-28T19:20:00-06:00"
 }

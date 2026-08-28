@@ -280,7 +280,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
   assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);
   assert.doesNotMatch(serviceWorker, /plan-maestro-v2\.41\.4/);
-  assert.match(pagesIndex, /script\.google\.com\/macros\/s\//);
+  assert.match(pagesIndex, /script\.google\.com\/macros\/s\/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q\/exec/);
+  assert.doesNotMatch(pagesIndex, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
+  assert.match(appScriptWorkflow, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
   assert.match(pagesIndex, /manifest\.webmanifest/);
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);

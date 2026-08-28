@@ -16,7 +16,7 @@ https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/
 El backend permanece en:
 
 ```text
-https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec
+https://script.google.com/macros/s/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/exec
 ```
 
 ## Trabajo realizado

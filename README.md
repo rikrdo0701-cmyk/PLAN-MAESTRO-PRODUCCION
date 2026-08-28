@@ -13,7 +13,7 @@ https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/
 Backend de Apps Script:
 
 ```text
-https://script.google.com/macros/s/AKfycbyCrdM3g-ixxjbvqjysQ7pdO59Bn6NQA6PECUC_YI-ByfwzC1ueWcQFx1hErWqTHVoSxw/exec
+https://script.google.com/macros/s/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/exec
 ```
 
 El backend no expone credenciales. El navegador se comunica con un iframe oculto de Apps Script mediante `postMessage`; dentro de ese iframe se utiliza `google.script.run`.
