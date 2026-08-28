@@ -6,6 +6,13 @@
   const BRIDGE_SOURCE = "pp-appscript-bridge";
   const READY_TIMEOUT_MS = 30000;
   const CALL_TIMEOUT_MS = 120000;
+  const METHOD_TIMEOUT_MS = {
+    publishDraftPlan: 360000,
+    saveDraftSnapshot: 300000,
+    restorePublishedPlanAsDraft: 300000,
+    savePlanningStateOptimized: 180000,
+    saveAppState: 180000,
+  };
 
   let iframe = null;
   let bridgeWindow = null;
@@ -134,10 +141,11 @@
         reject(new Error("El puente de Apps Script no esta disponible"));
         return;
       }
+      const timeoutMs = METHOD_TIMEOUT_MS[method] || CALL_TIMEOUT_MS;
       const timer = root.setTimeout(() => {
         pending.delete(id);
         reject(new Error(`Tiempo agotado al ejecutar ${method}`));
-      }, CALL_TIMEOUT_MS);
+      }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
       bridgeWindow.postMessage({
         source: CLIENT_SOURCE,
