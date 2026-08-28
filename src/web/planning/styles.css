@@ -2083,8 +2083,10 @@ tr:last-child td { border-bottom: 0; }
   .executive-critical { padding: 2mm 3mm; }
   .executive-critical h4 { margin-bottom: 1.5mm; font-size: 7pt; }
   .executive-critical p { margin-bottom: 1.5mm; font-size: 6.5pt; }
-  body[data-print-context="plan"] .weekly-job-panel.loads { display: block; }
-  .weekly-job-reports { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5mm; }
+  body[data-print-context="plan"] .weekly-job-reports { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5mm; align-items: stretch; }
+  body[data-print-context="plan"] .weekly-job-panel.loads { display: block; grid-column: 1 / -1; }
+  body[data-print-context="plan"] .weekly-job-panel:not(.loads) { display: flex; flex-direction: column; }
+  body[data-print-context="plan"] .weekly-job-panel:not(.loads) .weekly-job-empty { flex: 1; }
   .weekly-job-panel { break-inside: avoid; }
   .weekly-job-panel > header { min-height: 0; padding: 3mm; }
   .weekly-day-block { grid-template-columns: 22mm minmax(0, 1fr); min-height: 30mm; break-inside: avoid; }

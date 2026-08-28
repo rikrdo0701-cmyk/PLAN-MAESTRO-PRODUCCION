@@ -471,7 +471,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 210mm; min-height: 297mm/);
   assert.match(pagesIndex, /@media print[\s\S]*\.plan-alerts,[\s\S]*\.draft-executive,[\s\S]*\.toast,[\s\S]*\.planner-grid/);
   assert.match(pagesIndex, /\.weekly-job-panel\.loads \{ display: none; \}/);
-  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel\.loads \{ display: block; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-reports \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); gap: 5mm; align-items: stretch; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel\.loads \{ display: block; grid-column: 1 \/ -1; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel:not\(\.loads\) \{ display: flex; flex-direction: column; \}/);
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
