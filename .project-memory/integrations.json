@@ -12,7 +12,7 @@
       "integration_id": "INT-GOOGLE_APPS_SCRIPT",
       "name": "google_apps_script",
       "status": "active",
-      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; proyecto en el limite de 200 versiones, deployment de produccion AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q @200 (creado 2026-08-28 apuntando a la version 200 sin agregar versiones). Crear nuevas versiones esta bloqueado hasta liberar historial en script.google.com.",
+      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; proyecto en el limite de 200 versiones, deployment de produccion AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q @200 (creado 2026-08-28 apuntando a la version 200 sin agregar versiones). La Apps Script API no soporta borrar versiones (projects.versions solo create/list/get; DELETE devuelve 404); las versiones se liberan manualmente en la UI: script.google.com -> Project History -> Bulk delete versions, y las versiones en uso por una implementacion activa no son borrables. En este proyecto estan en uso 171 (deployment de debug AKfycbw4-zuT) y 200 (dos deployments de produccion); el resto (1-170 y 172-199) es borrable en masa. Crear nuevas versiones esta bloqueado hasta liberar historial.",
       "hosts": "backend"
     },
     {
@@ -65,5 +65,5 @@
       "hosts": "tooling"
     }
   ],
-  "updated_at": "2026-08-28T19:20:00-06:00"
+  "updated_at": "2026-08-28T19:40:00-06:00"
 }
