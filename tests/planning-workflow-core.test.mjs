@@ -547,6 +547,24 @@ test("la instantanea draft contiene solo seleccion pendiente programada", () => 
   assert.deepEqual(structuredClone(snapshot.operations.map((op) => op.id)), ["ok"]);
 });
 
+test("la instantanea draft no persiste internos del motor (indices Map) que el JSON degradaria", () => {
+  const snapshot = core.buildDraftSnapshot({
+    selectedOts: ["100"],
+    planStart: "2026-07-13",
+    operations: [{ id: "ok", ot: "100", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:10", planStatus: "PENDIENTE" }],
+    otConfigurations: { "100": { ot: "100", machine: "211" } },
+    __otConfigurationIndex: new Map([["100", { machine: "211" }]]),
+    __toolCatalogByPart: new Map(),
+    __windowCache: new Map(),
+    __performanceState: {},
+  }, "2026-07-13T07:00:00Z");
+  const keys = Object.keys(snapshot);
+  assert.equal(keys.some((key) => key.startsWith("__")), false);
+  assert.equal(snapshot.otConfigurations["100"].machine, "211");
+  const roundTripped = typeof structuredClone === "function" ? structuredClone(JSON.parse(JSON.stringify(snapshot))) : snapshot;
+  assert.equal(roundTripped.otConfigurations["100"].machine, "211");
+});
+
 test("incluye en Gantt por maquina solo doblados y cambios actuales programados con maquina", () => {
   const scheduled = { fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", maquina: "M1" };
   assert.equal(core.isMachineGanttOperation({ ...scheduled, ct: "5459", descripcion: "DOBLADO" }), true);

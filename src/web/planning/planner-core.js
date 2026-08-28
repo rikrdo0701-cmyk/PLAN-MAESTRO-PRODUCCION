@@ -2590,7 +2590,10 @@
   function applyOtConfiguration(state, op) {
     const performanceState = state.__performanceState;
     countPlanningStat(performanceState, "otConfigurationLookups");
-    const configurationIndex = state.__otConfigurationIndex || buildOtConfigurationIndex(state);
+    const cachedConfigurationIndex = state.__otConfigurationIndex;
+    const configurationIndex = (cachedConfigurationIndex && typeof cachedConfigurationIndex.get === "function")
+      ? cachedConfigurationIndex
+      : buildOtConfigurationIndex(state);
     const indexedConfiguration = configurationIndex.get(normalizeKey(op.ot));
     const match = indexedConfiguration !== undefined;
     const configuration = indexedConfiguration || {};

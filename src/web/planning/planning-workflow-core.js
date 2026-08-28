@@ -733,6 +733,10 @@
     });
   }
 
+  function withoutEngineInternals(source) {
+    return Object.fromEntries(Object.entries(source || {}).filter(([key]) => !String(key || "").startsWith("__")));
+  }
+
   function buildDraftSnapshot(state, generatedAt) {
     const configurations = state?.otConfigurations || {};
     const configurationForOt = (ot) => {
@@ -740,7 +744,7 @@
       return key ? configurations[key] || {} : {};
     };
     return {
-      ...(state || {}),
+      ...withoutEngineInternals(state || {}),
       snapshotId: "draft",
       status: "BORRADOR",
       generatedAt: String(generatedAt || ""),

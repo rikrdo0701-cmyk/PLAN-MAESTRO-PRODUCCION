@@ -1382,6 +1382,31 @@ test("RULE-BAL-007: la validacion previa NO marca MISSING_OPERATOR si la matriz 
   assert.equal(issues.some((issue) => issue.code === "MISSING_OPERATOR"), false);
 });
 
+test("un indice de configuracion restaurado como objeto plano (round-trip JSON) no rompe la validacion ni la asignacion", async () => {
+  const core = loadPlannerCore();
+  const operation = { id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "", herramental: "", tiempoCiclo: 1, cantidadPendiente: 1 };
+  const poisoned = {
+    selectedOts: ["2433"],
+    operations: [operation],
+    otConfigurations: { "2433": { ot: "2433", machine: "211", herramental: "4 x 5" } },
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OPERADOR 2"] },
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA"],
+    operators: ["OPERADOR 2"],
+    workSchedule: {},
+    __otConfigurationIndex: JSON.parse(JSON.stringify(new Map([["2433", { machine: "211", herramental: "4 x 5" }]]))),
+  };
+  assert.doesNotThrow(() => core.planningConfigurationIssues(poisoned, [operation]));
+  const issues = core.planningConfigurationIssues(poisoned, [operation]);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_TOOL"), false);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_MACHINE"), false);
+  const result = await core.schedulePlan(structuredClone(poisoned), {
+    planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
+  });
+  const bend = result.operations.find((op) => op.id === "bend-2433");
+  assert.equal(bend.maquina, "211");
+  assert.equal(bend.herramental, "4 x 5");
+});
+
 test("la validacion usa herramental persistido en configuracion de la OT", async () => {
   const core = loadPlannerCore();
   const issues = core.planningConfigurationIssues({
