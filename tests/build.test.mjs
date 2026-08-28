@@ -247,6 +247,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const claspConfig = JSON.parse(await readFile(path.join(process.cwd(), ".clasp.json"), "utf8"));
   assert.equal(claspConfig.rootDir, "dist");
   assert.equal(claspConfig.scriptId, "1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_");
+  const serverBundle = (await Promise.all(result.serverFiles.map((file) => readFile(path.join(result.distDir, file), "utf8")))).join("\n");
+  const bridgeMethods = [...bridge.matchAll(/^\s{4}([A-Za-z_$][\w$]*): true,$/gm)].map((match) => match[1]);
+  assert.ok(bridgeMethods.length >= 30, `el bridge debe declarar los metodos permitidos (se leyeron ${bridgeMethods.length})`);
+  const missingEntryPoints = bridgeMethods.filter((method) => !String(method).startsWith("PP_") && !serverBundle.includes("function " + method + "("));
+  assert.deepEqual(missingEntryPoints, [], `cada metodo del bridge sin prefijo PP_ necesita un entry point global en src/server: ${missingEntryPoints.join(", ")}`);
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
   assert.match(index, /google\.script\.run/);
   assert.match(index, /PPAppsScriptBridge/);

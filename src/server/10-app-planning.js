@@ -18,6 +18,10 @@ function PP_generateDraftPlan(payload) {
   return PP_generateDraftPlan_(payload || {});
 }
 
+function publishDraftPlan(payload) {
+  return PP_publishDraftPlan(payload || {});
+}
+
 function PP_publishDraftPlan(payload) {
   return PP_publishDraftPlan_(payload || {});
 }
