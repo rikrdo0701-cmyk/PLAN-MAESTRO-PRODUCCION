@@ -431,7 +431,16 @@
       "source": "fix 2026-08-27 (cuota de Script Properties al publicar planes grandes); fix 2026-08-28 (rendimiento: publish excede 6 min porque cada getProperty/setProperty lee la hoja completa y el payload son cientos de chunks de 8000 chars; ahora una lectura + escritura en lote, chunk 32000, y path appendOnly sin lectura en publish/savePlanSnapshot); src/server/02-storage.js:759-939; tests/build.test.mjs",
       "domain": "GOV",
       "updated_at": "2026-08-28T15:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-OT-021",
+      "name": "Estructura del reporte semanal y PDF",
+      "status": "implementada",
+      "rule": "El reporte semanal (renderWeekReport en app.js) muestra, en ese orden: Resumen ejecutivo (renderWeeklyExecutiveSummary en weekExecutiveSummary), panel 'Cargas de operadores' (renderReportOperatorLoads: operadores planificados con horas > 0 y resourceIsInPlan, columnas #/Nombre/Recurso/Carga/Horas-Capacidad/Estado con estados Saturado-Baja carga-Normal) y las secciones 'OT que inician' (renderWeeklyJobDays summary.starts) y 'Acabado / OT que terminan' (summary.finishes). El PDF del plan (generatePlanPdf) marca dataset.printContext='plan' (sin reglas CSS propias) y window.print() imprime solo la pestaña activa del panel de reportes (.tab-panel.active en @media print), activando la pestaña 'Plan de la semana' (showWorkspaceView('reportes','week')); por eso el PDF contiene esa misma estructura (Resumen + Cargas de operadores + OT que inician + Acabado/OT que terminan). Regresar el panel de cargas revierte el cambio de e920c56 y se garantiza por el test 'renderWeekReport incluye el panel de cargas de operadores' (tests/build.test.mjs).",
+      "source": "definicion de usuario 2026-08-28 (el PDF debe incluir resumen, cargas por operador, OT que inician y acabado/OT que terminan); src/web/planning/app.js:5769-5812; src/web/planning/styles.css; commit e920c56 (remocion) y 76ecb61 (restauracion); tests/build.test.mjs",
+      "domain": "OT",
+      "updated_at": "2026-08-28T16:45:00-06:00"
     }
   ],
-  "updated_at": "2026-08-28T15:30:00-06:00"
+  "updated_at": "2026-08-28T16:45:00-06:00"
 }
