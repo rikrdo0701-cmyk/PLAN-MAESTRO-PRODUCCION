@@ -4484,12 +4484,16 @@ async function scheduleCurrentPlanImpl() {
   const incrementalScope = incrementalBase
     ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
     : { affectedOts: [...state.selectedOts] };
-  const affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
+  let affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
+  if (!affected.size && state.selectedOts.length) {
+    affected = new Set(state.selectedOts.map(normalizeStatus));
+    showToast("Sin cambios detectados: reprogramando todas las OTs seleccionadas", 4000);
+  }
   const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   if (!replannableOts.length) {
-    showToast("No hay cambios pendientes para reprogramar");
+    showToast("No hay OTs desbloqueables para programar");
     return;
   }
   const planningData = await ensurePlanningDataLoaded(true, { force: false });

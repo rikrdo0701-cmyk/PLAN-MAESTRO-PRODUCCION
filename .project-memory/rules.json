@@ -396,7 +396,15 @@
       "rule": "window.runPlanningPerformanceDryRun(options) mide generacion de plan sobre las OTs reales seleccionadas en memoria, calcula base incremental de solo lectura y ejecuta PlannerCore.schedulePlan sobre una copia temporal; no sincroniza NetSuite, no abre dialogos de preparacion, no llama saveAndRender/saveState/queueAppSheetSave/savePlanningStateOptimized/persistPlanSnapshot/saveDraftSnapshot ni renderiza el resultado, y restaura state al finalizar. El dry-run aplica un presupuesto seguro por defecto de 60000 ms si no se pasa options.timeoutMs; con options.timeoutMs/collectStats/progressEveryMs pasa presupuesto cooperativo y estadisticas al planner, reporta fases en consola/toast, cede al navegador entre fases, y si vence el presupuesto devuelve ok:false, dryRun:true, aborted:true, reason:TIME_BUDGET_EXCEEDED, lastPhase, startedAt, elapsedMs y metricas parciales. options.skipScheduler/profileOnly omite PlannerCore.schedulePlan y devuelve solo perfil de preparacion sin persistir.",
       "source": "definicion de usuario 2026-08-26; src/web/planning/app.js; src/web/planning/planner-core.js; tests/build.test.mjs; tests/planner-core.test.mjs",
       "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-018",
+      "name": "Generar plan regenera todas las OTs movibles si no hay diferencias incrementales",
+      "status": "implementada",
+      "rule": "Al pulsar 'Generar plan', scheduleCurrentPlanImpl calcula la base incremental (loadIncrementalPlanningBase + incrementalScope / incrementalOtSignature): si el snapshot base existe y no hay OTs afectadas (misma cantidad, prioridad, entrega, maquina, herramental/kit, subcontrato y mismos estados de operacion), el scope incremental queda vacio y NO se programaba nada, conservando el plan anterior sin cambios. Desde el diagnostico del export plan-producciondd.csv (2026-12..2027-07, LOG solo NETSUITE_APPS_SCRIPT, sin PROGRAMADO_PLANNER_CORE_V2, sin CAMBIO_HERRAMENTAL, operador con nombres de maquina), se corrigio: cuando incrementalScope.affectedOts queda vacio y hay OTs seleccionadas, el boton reprograma igual todas las OTs seleccionadas (affected = todas las seleccionadas), mostrando el toast 'Sin cambios detectados: reprogramando todas las OTs seleccionadas'; continua respetando isJobLocked, isMovablePlanningStatus(jobStatusForOt) y hasClosedWorkOrderSyncWarning (app.js:4483-4494). El toast 'No hay OTs desbloqueables para programar' solo aparece si tras el barrido no queda ninguna OT desbloqueable. La firma incremental NO incluye fechas programadas ni operador, por lo que 'Generar plan' con datos sin cambios no debe confundirse con el plan importado: el plan adjunto 'como el CSVV' corresponde al plan conservado/importado que el motor no habia tocado.",
+      "source": "diagnostico 2026-08-27 del usuario (la web seguia generando un plan como el importado); src/web/planning/app.js:4483-4494; src/web/planning/planning-workflow-core.js:1059-1123; src/web/planning/planner-core.js:775-777; plan-producciondd.csv (contexto)",
+      "domain": "OT"
     }
   ],
-  "updated_at": "2026-08-27T15:35:00-06:00"
+  "updated_at": "2026-08-27T18:45:00-06:00"
 }
