@@ -1112,6 +1112,15 @@
       .reduce((max, snapshot) => Math.max(max, Number(snapshot?.version) || 0), 0) + 1;
   }
 
+  function weeklyPlanIdentifier(weekStart, version) {
+    const iso = mondayIso(weekStart);
+    if (!iso) return "sin inicio";
+    const [year, month, day] = iso.split("-");
+    const label = `${day}/${month}/${year}`;
+    const repeated = Math.max(0, Number(version || 1) - 1);
+    return repeated > 0 ? `${label} version ${repeated}` : label;
+  }
+
   function versionOtData(source, ot) {
     source = source?.fullState || source || {};
     const key = normalize(ot);
@@ -1174,5 +1183,5 @@
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, compactVersionDiff, loadOperationsForMode };
+    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
 });

@@ -657,6 +657,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
   const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
   assert.match(scheduleImpl, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);[\s\S]*saveState\("ui"\);[\s\S]*persistPlanSnapshot\(\)\.then/);
+  assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);
+  assert.match(pagesIndex, /const label = window\.PlanningWorkflowCore\.weeklyPlanIdentifier\(week, version\);/);
+  assert.match(pagesIndex, /reportSourceLabel\(\) \{[\s\S]*weeklyPlanIdentifier\(week, reportSnapshot\.version\)/);
+  const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
+  assert.match(snapshotsLoad, /const publishedId = activePublishedSnapshotId\(\);[\s\S]*if \(publishedId\) \{[\s\S]*loadPlanSnapshotById\(publishedId/);
+  assert.match(snapshotsLoad, /else \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);

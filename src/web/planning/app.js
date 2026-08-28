@@ -3748,7 +3748,7 @@ function renderBottleneckSourceSelect() {
   const publishedIds = publishedSnapshotIds();
   const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
-    return `<option value="${escapeHtml(snapshot.snapshotId)}">Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(snapshot.version || 1)}</option>`;
+    return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
   }).join("");
   els.bottleneckPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
   els.bottleneckPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
@@ -4891,7 +4891,7 @@ function renderLoadSourceSelect() {
   const publishedIds = publishedSnapshotIds();
   const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
-    return `<option value="${escapeHtml(snapshot.snapshotId)}">Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(snapshot.version || 1)}</option>`;
+    return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
   }).join("");
   els.loadPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
   els.loadPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
@@ -5016,7 +5016,8 @@ async function publishCurrentPlan() {
     let publicationReason = "";
     let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     if (version > 1) {
-      const answer = window.prompt(`Motivo de publicacion de la version V${version}:`, "");
+      const identifier = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
+      const answer = window.prompt(`Motivo de publicacion de ${identifier}:`, "");
       if (answer === null) return;
       publicationReason = String(answer).trim();
       if (!publicationReason) {
@@ -5585,8 +5586,13 @@ async function loadPlanSnapshots(showMessage) {
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     if (!reportSnapshot) {
-      syncDraftReportWeek();
-      reportSnapshot = currentDraftReportSnapshot();
+      const publishedId = activePublishedSnapshotId();
+      if (publishedId) {
+        await loadPlanSnapshotById(publishedId, { render: false, silent: true });
+      } else {
+        syncDraftReportWeek();
+        reportSnapshot = currentDraftReportSnapshot();
+      }
     }
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
@@ -5678,7 +5684,7 @@ function renderPlanSnapshotSelect() {
   const options = allowedSnapshots.map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
     const version = Number(snapshot.version || 1);
-    const label = `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${version}`;
+    const label = window.PlanningWorkflowCore.weeklyPlanIdentifier(week, version);
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
   els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
@@ -5734,7 +5740,7 @@ function reportOperationsSource() {
 function reportSourceLabel() {
   if (!reportSnapshot || reportSnapshot.snapshotId === "draft") return "Borrador actual";
   const week = reportSnapshot.weekStart || reportSnapshot.planStart;
-  return `Semana ${week ? formatReportDate(parseDateOnlyValue(week)) : "sin inicio"} - V${Number(reportSnapshot.version || 1)}`;
+  return `Plan ${window.PlanningWorkflowCore.weeklyPlanIdentifier(week, reportSnapshot.version)}`;
 }
 
 function reportWeekLabel() {

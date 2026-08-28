@@ -65,8 +65,8 @@
       "rule_id": "RULE-OT-005",
       "name": "Coherencia del borrador",
       "status": "documentada",
-      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado. En Reportes, la fuente Borrador/default se proyecta desde el borrador actual en memoria (currentDraftScheduledOperations/currentPlanOperations), no desde BORRADOR_PLAN persistido ni desde un publicado; los snapshots publicados siguen seleccionables explicitamente.",
-      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md; definicion de usuario 2026-08-13; src/web/planning/app.js",
+      "rule": "Gantt, KPI, backlog, Planeado/Por planear, cargas y reportes usan la misma lista selectedOts; una OT no seleccionada no aparece en el borrador programado. En Reportes, la fuente por defecto es el ultimo plan publicado (por generatedAt, vía activePublishedSnapshotId/state.activePublishedVersionId; se carga en loadPlanSnapshots cuando reportSnapshot es null); si no existe plan publicado, el default es la fuente Borrador proyectada desde el estado actual en memoria (currentDraftReportSnapshot/currentDraftScheduledOperations/currentPlanOperations), no desde BORRADOR_PLAN persistido ni desde un publicado. Los snapshots publicados y el borrador siguen seleccionables explicitamente; tras generar el plan, el borrador recien programado queda como fuente activa de reportes.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md; definicion de usuario 2026-08-13, 2026-08-27 (reportes por defecto al ultimo publicado); src/web/planning/app.js",
       "domain": "OT"
     },
     {
@@ -412,7 +412,23 @@
       "rule": "El motor PlannerCore construye indices internos (state.__otConfigurationIndex, __toolCatalogByPart, __windowCache, __performanceState, etc.) sobre la copia de trabajo del estado. Estos campos NO deben persistirse en snapshots/borradores: JSON degrada un Map a un objeto plano {} y, al restaurarlo sobre state, applyOtConfiguration y toolCatalogForOperation reutilizaban ese objeto plano y fallaban con 'configurationIndex.get is not a function' / 'catalogIndex.get is not a function' (TypeError no capturado durante validateScheduleConfiguration -> planningConfigurationIssues, app.js:5153, dejando el toast congelado en 'Plan parcial' y el plan sin cambios). Correcciones: (a) buildDraftSnapshot (planning-workflow-core.js:736) filtra claves que inician con '__' antes de esparcir el estado, para que los snapshots nunca lleven indices Map; (b) los lectores de cache interno solo reusan el indice cacheado si todavia es un Map (typeof .get === 'function') y si llego degradado a un objeto plano reconstruyen sobre los datos maestros (applyOtConfiguration -> buildOtConfigurationIndex sobre state.otConfigurations; toolCatalogForOperation -> buildToolCatalogIndex sobre state.toolCatalog), mismo patron ya presente en indexedWorkOrder y effectiveWindows. Una configuracion/herramental por OT no debe perderse aunque el indice cacheado venga envenenado de un snapshot antiguo. Regresiones: tests/planner-core.test.mjs y tests/planning-workflow-core.test.mjs.",
       "source": "diagnostico 2026-08-27 (TypeError configurationIndex.get en la web real al pulsar Generar plan con el bundle v=f7b2858); src/web/planning/planner-core.js:2593-2594; src/web/planning/planning-workflow-core.js:736-749; src/web/planning/app.js:5153; tests/planner-core.test.mjs; tests/planning-workflow-core.test.mjs",
       "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-OT-020",
+      "name": "Identificador semanal de planes publicados",
+      "status": "implementada",
+      "rule": "Cada plan publicado lleva un identificador semanal derivado del lunes de la semana de su planStart en formato DD/MM/YYYY: el primer plan publicado de la semana se identifica solo con la fecha ('24/08/2026'), el segundo como '24/08/2026 version 1', el tercero '24/08/2026 version 2', y asi consecutivamente. La 'version' proviene de nextWeeklyVersion (1-based por semana lunes a viernes en planning-workflow-core.js:1109-1113: primer publish de la semana -> version 1, segundo -> version 2); weeklyPlanIdentifier (planning-workflow-core.js:1115+) muestra el sufijo ' version N+1' solo cuando ya existe una version previa (repeated = Math.max(0, Number(version||1)-1)). El identificador se usa en el selector de plan del borrador (renderPlanSnapshotSelect), en la etiqueta de fuente de Reportes (reportSourceLabel 'Plan <identificador>'), en el modulo de publicacion ('Motivo de publicacion de <identificador>:') y en los selectores de Cargas (renderBottleneckSourceSelect / renderLoadSourceSelect).",
+      "source": "definicion de usuario 2026-08-27 (identificador de plan de semana y versiones); src/web/planning/planning-workflow-core.js:1109-1120; src/web/planning/app.js; tests/planning-workflow-core.test.mjs; tests/build.test.mjs",
+      "domain": "OT"
+    },
+    {
+      "rule_id": "RULE-GOV-004",
+      "name": "Payloads de snapshots de plan en la hoja SNAPSHOT_PAYLOADS (no Script Properties)",
+      "status": "implementada",
+      "rule": "El payload completo de cada snapshot de plan (que en conjunto puede exceder la cuota de Script Properties) se persiste como pares KEY/VALUE en la hoja SNAPSHOT_PAYLOADS del workbook (columnas KEY, VALUE; auto-creada por PP_ensureWorkbook_ al escribir). PP_payloadStore_ (02-storage.js:759-801) emula PropertiesService sobre esa hoja. PP_storePlanSnapshotPayload_ (822-858) serializa el payload, lo parte en chunks de 8000 chars y guarda cada chunk envuelto en JSON.stringify (asi un corte que comience con '=' nunca se interpreta como formula en la hoja) con clave PLAN_SNAPSHOT_PAYLOAD::<snapshotId>::<generation uuiid>::<index>; el manifest (clave base) se escribe al final, se conserva el manifest anterior hasta reemplazar (finaliza limpiando la generacion previa), soporta rollback (PP_rollbackPlanSnapshotPayload_) y PP_deletePlanSnapshotPayload_ borra generacion y manifest. Los limites de cuota por OT/keyset (SNAPSHOT_PAYLOADS_LIMITS_PER_OT_KEYSET) no cambiaron; solo el mecanismo de almacenamiento: antes Script Properties, ahora la hoja.",
+      "source": "fix 2026-08-27 (cuota de Script Properties al publicar planes grandes); src/server/02-storage.js:26, 750-884; tests/build.test.mjs",
+      "domain": "GOV"
     }
   ],
-  "updated_at": "2026-08-27T19:45:55-06:00"
+  "updated_at": "2026-08-27T19:48:00-06:00"
 }

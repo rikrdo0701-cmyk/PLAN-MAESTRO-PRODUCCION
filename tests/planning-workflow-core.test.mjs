@@ -63,6 +63,14 @@ test("versiona por semana y resume solamente cambios compactos", () => {
   assert.doesNotMatch(JSON.stringify(diff), /operador|carga|complet/i);
 });
 
+test("identifica el plan publicado por semana y version consecutiva", () => {
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 1), "24/08/2026");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 2), "24/08/2026 version 1");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 3), "24/08/2026 version 2");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 0), "24/08/2026");
+  assert.equal(core.weeklyPlanIdentifier("", 2), "sin inicio");
+});
+
 test("cargas historicas permiten pendiente completada y original", () => {
   const snapshot = { operations: [
     { ot: "1", secuencia: 1, ct: "A", planStatus: "PENDIENTE", fechaInicio: "2026-07-20" },
