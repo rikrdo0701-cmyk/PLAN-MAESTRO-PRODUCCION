@@ -637,7 +637,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);
   assert.match(storageService, /snapshotId\.indexOf\('technical-'\) === 0/);
   assert.match(storageService, /const fullState = PP_readPlanSnapshotPayload_\(key\);[\s\S]*if \(!rows\.length && !fullState\)/);
-  assert.match(storageService, /stagingKey[\s\S]*setProperties\([\s\S]*setProperty\(key, JSON\.stringify\(manifest\)\)/);
+  assert.match(storageService, /offset < serialized\.length; offset \+= 32000[\s\S]*staged\[key\] = JSON\.stringify\(manifest\);[\s\S]*properties\.setMany\(staged\)/);
   assert.match(storageService, /catch \(error\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_/);
   assert.match(storageService, /keepPreviousPayload[\s\S]*SpreadsheetApp\.flush\(\);[\s\S]*PP_finalizePlanSnapshotPayload_/);
   assert.match(storageService, /function PP_rollbackPlanSnapshotPayload_[\s\S]*setProperty\(transaction\.key, transaction\.previousValue\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_\([^;]+transaction\.newManifest/);

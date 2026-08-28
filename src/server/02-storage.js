@@ -785,11 +785,43 @@ function PP_payloadStore_() {
       });
       return this;
     },
+    setMany: function(values) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const indexByKey = {};
+      entries.forEach(function(row, index) { indexByKey[String(row.KEY || '')] = index; });
+      const newRows = [];
+      const updates = [];
+      Object.keys(values || {}).forEach(function(entryKey) {
+        const value = String(values[entryKey] == null ? '' : values[entryKey]);
+        const existingIndex = indexByKey[entryKey];
+        if (existingIndex == null) newRows.push([entryKey, value]);
+        else updates.push([existingIndex + 2, [entryKey, value]]);
+      });
+      if (newRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 2).setValues(newRows);
+      updates.forEach(function(update) { sheet.getRange(update[0], 1, 1, 2).setValues(update[1]); });
+      return this;
+    },
     deleteProperty: function(key) {
       const sheet = PP_getPayloadSheet_();
       const entries = PP_readRows_(sheet);
       const index = findIndex_(entries, key);
       if (index >= 0) sheet.deleteRow(index + 2);
+      return this;
+    },
+    deleteMany: function(keys) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const deleteSet = {};
+      (keys || []).forEach(function(key) { deleteSet[String(key)] = true; });
+      const kept = [];
+      entries.forEach(function(row) {
+        if (!deleteSet[String(row.KEY || '')]) kept.push([row.KEY, row.VALUE]);
+      });
+      if (kept.length === entries.length) return this;
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 2).clearContent();
+      if (kept.length) sheet.getRange(2, 1, kept.length, 2).setValues(kept);
       return this;
     },
     getProperties: function() {
@@ -802,9 +834,11 @@ function PP_payloadStore_() {
 
 function PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest) {
   const generation = String(manifest && manifest.generation || '');
+  const keys = [];
   for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) {
-    properties.deleteProperty(generation ? key + '::' + generation + '::' + index : key + '::' + index);
+    keys.push(generation ? key + '::' + generation + '::' + index : key + '::' + index);
   }
+  properties.deleteMany(keys);
 }
 
 function PP_finalizePlanSnapshotPayload_(transaction) {
@@ -827,7 +861,7 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
   try { previousManifest = previousValue ? JSON.parse(previousValue) : null; } catch (ignored) {}
   const serialized = JSON.stringify(payload || {});
   const chunks = [];
-  for (let offset = 0; offset < serialized.length; offset += 8000) chunks.push(serialized.slice(offset, offset + 8000));
+  for (let offset = 0; offset < serialized.length; offset += 32000) chunks.push(serialized.slice(offset, offset + 32000));
   const generation = Utilities.getUuid();
   const stagingKey = key + '::' + generation + '::';
   const staged = {};
@@ -842,9 +876,9 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
     publicationReason: String(payload.publicationReason || ''), changeSummary: payload.changeSummary || null,
     publishedAt: String(payload.publishedAt || '')
   };
+  staged[key] = JSON.stringify(manifest);
   try {
-    properties.setProperties(staged, false);
-    properties.setProperty(key, JSON.stringify(manifest));
+    properties.setMany(staged);
   } catch (error) {
     PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
     throw error;
@@ -858,17 +892,18 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
 }
 
 function PP_readPlanSnapshotPayload_(snapshotId) {
-  const properties = PP_payloadStore_();
-  const value = properties.getProperty(PP_planSnapshotPayloadKey_(snapshotId));
-  if (!value) return null;
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const values = PP_payloadStore_().getProperties();
+  const value = values[key] == null ? null : values[key];
+  if (value == null) return null;
   try {
     const parsed = JSON.parse(value);
     if (!parsed || !parsed.chunks) return parsed;
     let serialized = '';
     const generation = String(parsed.generation || '');
     for (let index = 0; index < Number(parsed.chunks); index += 1) {
-      const chunkKey = PP_planSnapshotPayloadKey_(snapshotId) + (generation ? '::' + generation : '') + '::' + index;
-      const rawChunk = properties.getProperty(chunkKey);
+      const chunkKey = key + (generation ? '::' + generation : '') + '::' + index;
+      const rawChunk = values[chunkKey] == null ? null : values[chunkKey];
       if (rawChunk != null) serialized += JSON.parse(rawChunk);
     }
     return JSON.parse(serialized);
@@ -878,9 +913,18 @@ function PP_readPlanSnapshotPayload_(snapshotId) {
 function PP_deletePlanSnapshotPayload_(snapshotId) {
   const properties = PP_payloadStore_();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
-  const value = properties.getProperty(key);
-  try { if (value) PP_deletePlanSnapshotPayloadGeneration_(properties, key, JSON.parse(value)); } catch (ignored) {}
-  properties.deleteProperty(key);
+  const values = properties.getProperties();
+  const keys = [key];
+  try {
+    const parsed = values[key] == null ? null : JSON.parse(values[key]);
+    if (parsed) {
+      const generation = String(parsed.generation || '');
+      for (let index = 0; index < Number(parsed.chunks || 0); index += 1) {
+        keys.push(generation ? key + '::' + generation + '::' + index : key + '::' + index);
+      }
+    }
+  } catch (ignored) {}
+  properties.deleteMany(keys);
 }
 
 function PP_clearDraftSnapshot_(spreadsheet) {
