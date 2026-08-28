@@ -5603,7 +5603,7 @@ async function loadPlanSnapshots(showMessage) {
       syncDraftReportWeek();
       reportSnapshot = currentDraftReportSnapshot();
     }
-    renderPlanSnapshotSelect();
+    renderReports();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
     return { ok: true, count: planSnapshots.length };
   } catch (error) {

@@ -681,6 +681,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
   assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
   assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);
+  assert.match(snapshotsLoad, /renderReports\(\);/);
   assert.match(pagesIndex, /return reportSnapshot;[\s\S]*catch \(error\)[\s\S]*return null;/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
