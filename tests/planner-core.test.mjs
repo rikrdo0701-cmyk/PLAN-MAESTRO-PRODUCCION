@@ -1394,6 +1394,7 @@ test("un indice de configuracion restaurado como objeto plano (round-trip JSON) 
     operators: ["OPERADOR 2"],
     workSchedule: {},
     __otConfigurationIndex: JSON.parse(JSON.stringify(new Map([["2433", { machine: "211", herramental: "4 x 5" }]]))),
+    __toolCatalogByPart: JSON.parse(JSON.stringify(new Map([["ART 2433", [{ herramental: "4 x 5", kitHerramental: "K1" }]]]))),
   };
   assert.doesNotThrow(() => core.planningConfigurationIssues(poisoned, [operation]));
   const issues = core.planningConfigurationIssues(poisoned, [operation]);

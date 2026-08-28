@@ -1193,7 +1193,10 @@
     const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
     const performanceState = state.__performanceState;
     countPlanningStat(performanceState, "toolCatalogLookups");
-    const catalogIndex = state.__toolCatalogByPart || buildToolCatalogIndex(state, performanceState);
+    const cachedCatalogIndex = state.__toolCatalogByPart;
+    const catalogIndex = (cachedCatalogIndex && typeof cachedCatalogIndex.get === "function")
+      ? cachedCatalogIndex
+      : buildToolCatalogIndex(state, performanceState);
     const indexedCandidates = catalogIndex.get(normalizeKey(part));
     const candidates = indexedCandidates || (state.toolCatalog || []).filter((item) => {
       countPlanningStat(performanceState, "toolCatalogScans");
