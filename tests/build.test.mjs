@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { buildProject } from "../scripts/build-appscript.mjs";
 
 test("la identidad del detalle es UI local y no se envia al estado compartido", async () => {
@@ -1601,4 +1602,33 @@ test("renderWeekReport ya no incluye el panel de cargas de operadores", async ()
   assert.doesNotMatch(reportSource, /weekly-job-panel loads/);
   assert.doesNotMatch(reportSource, /renderReportOperatorLoads/);
   assert.doesNotMatch(reportSource, /loads-table/);
+});
+
+test("identificador semanal distingue versiones y nextWeeklyVersion cuenta publicaciones de la misma semana", async () => {
+  const coreSource = await readFile(path.join(process.cwd(), "src", "web", "planning", "planning-workflow-core.js"), "utf8");
+  const sandbox = { module: { exports: {} }, exports: {}, console, globalThis: {} };
+  sandbox.window = sandbox;
+  runInNewContext(coreSource, sandbox);
+  const core = sandbox.module.exports;
+
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 1), "24/08/2026");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 2), "24/08/2026 version 1");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 3), "24/08/2026 version 2");
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-24", version: 1 }], "2026-08-24"), 2);
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-24", version: 1 }, { weekStart: "2026-08-24", version: 2 }], "2026-08-24"), 3);
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-17", version: 9 }], "2026-08-24"), 1);
+});
+
+test("publicar nueva version pide motivo obligatorio en el dialogo del planificador y no usa window.prompt", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const publish = app.slice(
+    app.indexOf("async function publishCurrentPlan("),
+    app.indexOf("async function generatePlanPdf("),
+  );
+
+  assert.doesNotMatch(publish, /window\.prompt/);
+  assert.match(publish, /version > 1\) \{[\s\S]*openPlanningDialog\(\{[\s\S]*Motivo de publicacion de \$\{identifier\}:?/);
+  assert.match(publish, /name="publication_reason"[\s\S]*required/);
+  assert.match(publish, /if \(!result \|\| !reason\)/);
+  assert.match(publish, /showToast\("Captura el motivo de la nueva version"\)/);
 });

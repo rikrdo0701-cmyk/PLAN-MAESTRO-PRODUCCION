@@ -5017,13 +5017,19 @@ async function publishCurrentPlan() {
     let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     if (version > 1) {
       const identifier = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
-      const answer = window.prompt(`Motivo de publicacion de ${identifier}:`, "");
-      if (answer === null) return;
-      publicationReason = String(answer).trim();
-      if (!publicationReason) {
-        showToast("Captura el motivo de la nueva version");
+      const result = await openPlanningDialog({
+        title: "Publicar nueva version",
+        summary: `Motivo de publicacion de ${identifier}:`,
+        body: `<label>Motivo de la nueva version<textarea name="publication_reason" required placeholder="Ej. Reasignacion de operadores por avance de la semana"></textarea></label>`,
+        confirmLabel: "Publicar",
+        cancelVisible: true,
+      });
+      const reason = String(result?.publication_reason || "").trim();
+      if (!result || !reason) {
+        if (result) showToast("Captura el motivo de la nueva version");
         return;
       }
+      publicationReason = reason;
       const previous = [...(state.publishedVersions || [])]
         .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart)
         .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
