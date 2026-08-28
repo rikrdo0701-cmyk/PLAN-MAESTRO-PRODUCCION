@@ -5592,10 +5592,14 @@ async function loadPlanSnapshots(showMessage) {
       : await fetchJson(PLAN_SNAPSHOTS_API);
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
-    const publishedId = activePublishedSnapshotId();
-    if (publishedId && (!reportSnapshot || reportSnapshot.snapshotId === "draft")) {
-      await loadPlanSnapshotById(publishedId, { render: false, silent: true });
-    } else if (!reportSnapshot) {
+    const preferPublished = !reportSnapshot || reportSnapshot.snapshotId === "draft";
+    if (preferPublished) {
+      for (const snapshot of publishedPlanSnapshots()) {
+        const loaded = await loadPlanSnapshotById(snapshot.snapshotId, { render: false, silent: true });
+        if (loaded) break;
+      }
+    }
+    if (!reportSnapshot) {
       syncDraftReportWeek();
       reportSnapshot = currentDraftReportSnapshot();
     }
@@ -5655,11 +5659,13 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
       syncReportFilterDates(reportStart);
     }
     if (options.render !== false) renderReports();
+    return reportSnapshot;
   } catch (error) {
     reportSnapshot = null;
     els.planSnapshotSelect.value = "";
     if (!options.silent) showToast(`No se pudo abrir el plan guardado: ${error.message}`);
     if (options.render !== false) renderReports();
+    return null;
   } finally {
     els.planSnapshotSelect.disabled = false;
   }

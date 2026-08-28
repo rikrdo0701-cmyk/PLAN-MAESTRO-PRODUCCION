@@ -569,7 +569,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
   assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
-  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*const publishedId = activePublishedSnapshotId\(\);[\s\S]*if \(publishedId && \(!reportSnapshot \|\| reportSnapshot\.snapshotId === "draft"\)\) \{[\s\S]*loadPlanSnapshotById\(publishedId, \{ render: false, silent: true \}\);[\s\S]*else if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*const preferPublished = !reportSnapshot \|\| reportSnapshot\.snapshotId === "draft";[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
@@ -679,8 +679,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function publishedPlanSnapshots\(\)[\s\S]*isPublishedSnapshotOption\(snapshot, publishedIds\)[\s\S]*publishedAt \|\| right\.generatedAt/);
   assert.match(pagesIndex, /status: isPublishedSnapshotOption\(snapshot, publishedIds\) \? "PUBLICADO"/);
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
-  assert.match(snapshotsLoad, /if \(publishedId && \(!reportSnapshot \|\| reportSnapshot\.snapshotId === "draft"\)\) \{[\s\S]*loadPlanSnapshotById\(publishedId/);
-  assert.match(snapshotsLoad, /else if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);
+  assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
+  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);
+  assert.match(pagesIndex, /return reportSnapshot;[\s\S]*catch \(error\)[\s\S]*return null;/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
