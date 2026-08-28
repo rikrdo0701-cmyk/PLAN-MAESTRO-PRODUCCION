@@ -467,7 +467,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
-  assert.match(pagesIndex, /@page \{ size: A4 landscape/);
+  assert.match(pagesIndex, /@page \{ size: 297mm 210mm/);
+  assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 297mm; min-height: 210mm/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.plan-alerts,[\s\S]*\.draft-executive,[\s\S]*\.toast,[\s\S]*\.planner-grid/);
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
