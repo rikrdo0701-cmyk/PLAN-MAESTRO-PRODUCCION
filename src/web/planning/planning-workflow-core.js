@@ -481,11 +481,15 @@
     return result;
   }
 
-  function schedulingSelectedOts(state) {
+  function schedulingSelectedOts(state, exclude = []) {
+    const denied = new Set((Array.isArray(exclude) ? exclude : []).map(normalize).filter(Boolean));
     const closed = new Set((state?.workOrderSyncWarnings || [])
       .filter((warning) => normalize(warning?.type) === "CLOSED_KEPT")
       .map((warning) => normalize(warning?.ot)));
-    return (state?.selectedOts || []).filter((ot) => !closed.has(normalize(ot)));
+    return (state?.selectedOts || []).filter((ot) => {
+      const key = normalize(ot);
+      return Boolean(key) && !denied.has(key) && !closed.has(key);
+    });
   }
 
   function removeOtFromDraft(state, ot) {

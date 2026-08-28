@@ -303,6 +303,17 @@ test("schedulingSelectedOts conserva bloqueadas y excluye solo CLOSED_KEPT", () 
   }), ["100", "200"]);
 });
 
+test("schedulingSelectedOts excluye las OTs cerradas indicadas sin tocar bloqueadas", () => {
+  assert.deepEqual(core.schedulingSelectedOts({
+    selectedOts: ["100", "200", "300"],
+    operations: [{ ot: "100", locked: true }],
+    workOrderSyncWarnings: [{ ot: "300", type: "CLOSED_KEPT" }],
+  }, ["200", "CERRADA_FANTASMA"]), ["100"]);
+  assert.deepEqual(core.schedulingSelectedOts({
+    selectedOts: ["100", "200"],
+  }, []), ["100", "200"]);
+});
+
 test("ganttOperationTiming separa minutos productivos y no operativos", () => {
   assert.deepEqual(structuredClone(core.ganttOperationTiming(20, new Date("2026-07-13T14:50:00"), new Date("2026-07-13T15:15:00"))), {
     productiveMinutes: 20,

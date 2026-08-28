@@ -24,7 +24,7 @@ const WORKFLOW = loadWorkflowCore();
 
 const PLAN_START = "2026-07-13";
 const EXECUTION_TIME = "2026-07-13T07:00:00";
-const NETSUITE_PLANNING_FRESH_MS = 24 * 60 * 60 * 1000;
+const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const TOOL_CHANGE_KEY = "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL";
 
 function norm(value) {
@@ -152,7 +152,7 @@ test("flujo e2e: solo se re-sincronizan OTs viejas o sin datos de planeacion", (
     operations: dataset.operations,
     operationsSyncedAt: {
       "OT-1001": new Date(now - 60 * 60 * 1000).toISOString(),
-      "OT-1002": new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+      "OT-1002": new Date(now - 4 * 24 * 60 * 60 * 1000).toISOString(),
     },
   };
   const ots = ["OT-1001", "OT-1002", "OT-1003", "OT-1005"];
