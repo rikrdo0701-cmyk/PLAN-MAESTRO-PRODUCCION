@@ -470,6 +470,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /@page \{ size: 297mm 210mm/);
   assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 297mm; min-height: 210mm/);
   assert.match(pagesIndex, /@media print[\s\S]*\.plan-alerts,[\s\S]*\.draft-executive,[\s\S]*\.toast,[\s\S]*\.planner-grid/);
+  assert.match(pagesIndex, /\.weekly-job-panel\.loads \{ display: none; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel\.loads \{ display: block; \}/);
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
@@ -481,6 +483,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /reportCoverageDiagnostics\(reportOperationsSource\(\)\)/);
   assert.match(pagesIndex, /weekPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
+  assert.match(pagesIndex, /delete document\.body\.dataset\.printContext/);
   assert.doesNotMatch(pagesIndex, /ReportShowAll/);
   assert.match(pagesIndex, /function setGanttView\(view\)/);
   assert.match(pagesIndex, /id="hoja-inspeccion"/);
@@ -1591,7 +1594,7 @@ test("importJson adopta y limpia operationCatalogWarning", async () => {
   })).operationCatalogWarning, "");
 });
 
-test("renderWeekReport incluye el panel de cargas de operadores", async () => {
+test("renderWeekReport incluye cargas de operadores solo para el PDF del plan", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const reportSource = app.slice(
     app.indexOf("function renderWeekReport()"),

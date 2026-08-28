@@ -1618,6 +1618,7 @@ tr:last-child td { border-bottom: 0; }
 .weekly-day-table th:nth-child(3), .weekly-day-table td:nth-child(3) { width: 36%; text-align: left; }
 .weekly-day-table tfoot td { background: #eef2f4; font-weight: 700; }
 .weekly-job-empty { min-height: 170px; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
+.weekly-job-panel.loads { display: none; }
 .weekly-job-panel.loads .weekly-day-table table { min-width: 520px; }
 .weekly-job-panel.loads .weekly-day-table th:nth-child(3), .weekly-job-panel.loads .weekly-day-table td:nth-child(3) { width: auto; text-align: center; }
 .loads-table tr.load-danger td { background: #fdecea; color: #a1332c; }
@@ -2082,6 +2083,7 @@ tr:last-child td { border-bottom: 0; }
   .executive-critical { padding: 2mm 3mm; }
   .executive-critical h4 { margin-bottom: 1.5mm; font-size: 7pt; }
   .executive-critical p { margin-bottom: 1.5mm; font-size: 6.5pt; }
+  body[data-print-context="plan"] .weekly-job-panel.loads { display: block; }
   .weekly-job-reports { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5mm; }
   .weekly-job-panel { break-inside: avoid; }
   .weekly-job-panel > header { min-height: 0; padding: 3mm; }

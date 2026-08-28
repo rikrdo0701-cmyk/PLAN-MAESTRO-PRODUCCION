@@ -5145,6 +5145,7 @@ async function generatePlanPdf() {
   } catch (error) {
     showToast(`No se pudo generar el PDF: ${error.message}`);
   } finally {
+    delete document.body.dataset.printContext;
     els.pdfBtn.disabled = false;
     els.pdfBtn.removeAttribute("aria-busy");
     els.pdfBtn.innerHTML = originalLabel;
