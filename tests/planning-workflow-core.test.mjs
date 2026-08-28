@@ -765,8 +765,15 @@ test("los planes diarios prefieren el ultimo publicado y usan borrador como resp
     { snapshotId: "saved", status: "GUARDADO", generatedAt: "2026-07-12T15:00:00Z" },
     { snapshotId: "old", status: "PUBLICADO", publishedAt: "2026-07-12T10:00:00Z" },
     { snapshotId: "new", planStatus: "PUBLICADO", publishedAt: "2026-07-12T12:00:00Z" },
+    { snapshotId: "newer", publishedAt: "2026-07-12T13:00:00Z" },
   ], { operations: [] });
-  assert.deepEqual(structuredClone(source), { type: "published", snapshotId: "new" });
+  assert.deepEqual(structuredClone(source), { type: "published", snapshotId: "newer" });
+  assert.equal(core.isPublishedPlanSnapshot({ snapshotId: "published-at", publishedAt: "2026-07-12T13:00:00Z" }), true);
+  assert.equal(core.isPublishedPlanSnapshot({ snapshotId: "saved", status: "GUARDADO" }), false);
+  assert.deepEqual(structuredClone(core.operationalPlanOptions([
+    { id: "saved", status: "GUARDADO" },
+    { id: "published-at", publishedAt: "2026-07-12T13:00:00Z" },
+  ])).map((item) => item.id), ["draft", "published-at"]);
 });
 
 test("describe resultados completos, parciales y fallidos de sincronizacion NetSuite", () => {

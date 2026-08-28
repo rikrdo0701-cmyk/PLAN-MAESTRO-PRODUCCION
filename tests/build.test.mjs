@@ -674,6 +674,10 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);
   assert.match(pagesIndex, /const label = window\.PlanningWorkflowCore\.weeklyPlanIdentifier\(week, version\);/);
   assert.match(pagesIndex, /reportSourceLabel\(\) \{[\s\S]*weeklyPlanIdentifier\(week, reportSnapshot\.version\)/);
+  assert.match(pagesIndex, /function isPublishedSnapshotOption\(snapshot, publishedIds = publishedSnapshotIds\(\)\)/);
+  assert.match(pagesIndex, /window\.PlanningWorkflowCore\.isPublishedPlanSnapshot\(snapshot\)/);
+  assert.match(pagesIndex, /function publishedPlanSnapshots\(\)[\s\S]*isPublishedSnapshotOption\(snapshot, publishedIds\)[\s\S]*publishedAt \|\| right\.generatedAt/);
+  assert.match(pagesIndex, /status: isPublishedSnapshotOption\(snapshot, publishedIds\) \? "PUBLICADO"/);
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
   assert.match(snapshotsLoad, /const publishedId = activePublishedSnapshotId\(\);[\s\S]*if \(publishedId\) \{[\s\S]*loadPlanSnapshotById\(publishedId/);
   assert.match(snapshotsLoad, /else \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);

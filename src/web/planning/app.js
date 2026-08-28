@@ -3746,7 +3746,7 @@ function renderBottleneckSourceSelect() {
   if (!els.bottleneckPlanSelect) return;
   const selected = loadSnapshot?.snapshotId || "draft";
   const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds)).map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
   }).join("");
@@ -4889,7 +4889,7 @@ function renderLoadSourceSelect() {
   if (!els.loadPlanSelect) return;
   const selected = loadSnapshot?.snapshotId || "draft";
   const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
+  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds)).map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
   }).join("");
@@ -5686,7 +5686,7 @@ function renderPlanSnapshotSelect() {
   const allowedSnapshots = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
     ...snapshot,
     id: snapshot.snapshotId,
-    status: publishedIds.has(snapshot.snapshotId) ? "PUBLICADO" : "GUARDADO",
+    status: isPublishedSnapshotOption(snapshot, publishedIds) ? "PUBLICADO" : (snapshot.status || snapshot.planStatus || "GUARDADO"),
   }))).filter((item) => item.id !== "draft");
   const options = allowedSnapshots.map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
@@ -5713,12 +5713,23 @@ function publishedSnapshotIds() {
   ].filter(Boolean));
 }
 
-function activePublishedSnapshotId() {
+function isPublishedSnapshotOption(snapshot, publishedIds = publishedSnapshotIds()) {
+  const snapshotId = String(snapshot?.snapshotId || snapshot?.id || "");
+  if (snapshotId && publishedIds.has(snapshotId)) return true;
+  if (window.PlanningWorkflowCore?.isPublishedPlanSnapshot) return window.PlanningWorkflowCore.isPublishedPlanSnapshot(snapshot);
+  return normalizeStatus(snapshot?.status || snapshot?.planStatus) === "PUBLICADO" || Boolean(String(snapshot?.publishedAt || "").trim());
+}
+
+function publishedPlanSnapshots() {
   const publishedIds = publishedSnapshotIds();
-  if (state.activePublishedVersionId && planSnapshots.some((item) => item.snapshotId === state.activePublishedVersionId)) {
-    return state.activePublishedVersionId;
-  }
-  return planSnapshots.find((item) => publishedIds.has(item.snapshotId))?.snapshotId || "";
+  return planSnapshots
+    .filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds))
+    .sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+}
+
+function activePublishedSnapshotId() {
+  const published = publishedPlanSnapshots();
+  return published[0]?.snapshotId || "";
 }
 
 function currentDraftReportSnapshot() {

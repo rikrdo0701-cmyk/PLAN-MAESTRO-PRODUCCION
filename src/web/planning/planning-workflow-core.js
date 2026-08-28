@@ -544,10 +544,14 @@
     return normalize(operation?.planStatus) !== "COMPLETADA_PLAN";
   }
 
+  function isPublishedPlanSnapshot(snapshot) {
+    return normalize(snapshot?.status || snapshot?.planStatus) === "PUBLICADO" || Boolean(String(snapshot?.publishedAt || "").trim());
+  }
+
   function operationalPlanOptions(snapshots) {
     return [
       { id: "draft", name: "Borrador", status: "BORRADOR" },
-      ...(snapshots || []).filter((snapshot) => normalize(snapshot?.status || snapshot?.planStatus) === "PUBLICADO"),
+      ...(snapshots || []).filter(isPublishedPlanSnapshot),
     ];
   }
 
@@ -885,7 +889,7 @@
   }
 
   function defaultDailyPlanSource(snapshots, draft) {
-    const published = (snapshots || []).filter((item) => normalize(item?.status || item?.planStatus) === "PUBLICADO")
+    const published = (snapshots || []).filter(isPublishedPlanSnapshot)
       .sort((left, right) => String(right?.publishedAt || right?.generatedAt || "").localeCompare(String(left?.publishedAt || left?.generatedAt || "")));
     return published.length
       ? { type: "published", snapshotId: String(published[0].snapshotId || published[0].id || "") }
@@ -1174,7 +1178,7 @@
     classifySmartSyncChange, finalizeSmartSyncSummary, smartSyncSummaryMessage,
     mergeOtRouteOperation, mergeOtRouteOperations,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
-    setDraftOperationCompletion, isPendingDraftOperation, operationalPlanOptions, draftExportOperations,
+    setDraftOperationCompletion, isPendingDraftOperation, isPublishedPlanSnapshot, operationalPlanOptions, draftExportOperations,
     draftScheduledOperations, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, purgeClosedWorkOrderRetention,
     needsPlanningPreparation, canReusePlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
     buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection, effectiveJobTool,
