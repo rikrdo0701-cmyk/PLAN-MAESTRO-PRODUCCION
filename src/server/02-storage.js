@@ -785,19 +785,25 @@ function PP_payloadStore_() {
       });
       return this;
     },
-    setMany: function(values) {
+    setMany: function(values, appendOnly) {
       const sheet = PP_getPayloadSheet_();
-      const entries = PP_readRows_(sheet);
-      const indexByKey = {};
-      entries.forEach(function(row, index) { indexByKey[String(row.KEY || '')] = index; });
       const newRows = [];
       const updates = [];
-      Object.keys(values || {}).forEach(function(entryKey) {
-        const value = String(values[entryKey] == null ? '' : values[entryKey]);
-        const existingIndex = indexByKey[entryKey];
-        if (existingIndex == null) newRows.push([entryKey, value]);
-        else updates.push([existingIndex + 2, [entryKey, value]]);
-      });
+      if (appendOnly) {
+        Object.keys(values || {}).forEach(function(entryKey) {
+          newRows.push([entryKey, String(values[entryKey] == null ? '' : values[entryKey])]);
+        });
+      } else {
+        const entries = PP_readRows_(sheet);
+        const indexByKey = {};
+        entries.forEach(function(row, index) { indexByKey[String(row.KEY || '')] = index; });
+        Object.keys(values || {}).forEach(function(entryKey) {
+          const value = String(values[entryKey] == null ? '' : values[entryKey]);
+          const existingIndex = indexByKey[entryKey];
+          if (existingIndex == null) newRows.push([entryKey, value]);
+          else updates.push([existingIndex + 2, [entryKey, value]]);
+        });
+      }
       if (newRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 2).setValues(newRows);
       updates.forEach(function(update) { sheet.getRange(update[0], 1, 1, 2).setValues(update[1]); });
       return this;
@@ -856,7 +862,9 @@ function PP_rollbackPlanSnapshotPayload_(transaction) {
 function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
   const properties = PP_payloadStore_();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
-  const previousValue = properties.getProperty(key);
+  const appendOnly = Boolean(options && options.appendOnly);
+  let previousValue = null;
+  if (!appendOnly) previousValue = properties.getProperty(key);
   let previousManifest = null;
   try { previousManifest = previousValue ? JSON.parse(previousValue) : null; } catch (ignored) {}
   const serialized = JSON.stringify(payload || {});
@@ -878,7 +886,7 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
   };
   staged[key] = JSON.stringify(manifest);
   try {
-    properties.setMany(staged);
+    properties.setMany(staged, appendOnly);
   } catch (error) {
     PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
     throw error;
@@ -972,7 +980,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
   });
   const payloadTransaction = PP_storePlanSnapshotPayload_(snapshotId, payload,
     { generatedAt: generatedAt, user: user, operations: rows.length },
-    { keepPrevious: Boolean(options && options.keepPreviousPayload) });
+    { keepPrevious: Boolean(options && options.keepPreviousPayload), appendOnly: !(options && options.snapshotId) });
   if (options && options.payloadTransaction) options.payloadTransaction.value = payloadTransaction;
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
