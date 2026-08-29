@@ -1349,22 +1349,7 @@
      return ct === "5459" || ct === "5527";
    }
 
-   function getRandomCommercialType() {
-     const types = ["MUESTRA", "TECNOLOGICO", "PROTOTIPO", "CERTIFICACION", "SAMPLING"];
-     return types[Math.floor(Math.random() * types.length)];
-   }
-
-   function getRandomPlanningType() {
-     const types = ["PLANEAMIENTO", "EXPEDICION", "EMERGENCIA", "PROGRAMADO", "URGENTE"];
-     return types[Math.floor(Math.random() * types.length)];
-   }
-
-    function getRandomSubcontractType() {
-     const types = ["GENERAL", "EXTERNO", "CROMADO", "PINTURA", "GALVANIZADO"];
-     return types[Math.floor(Math.random() * types.length)];
-   }
-
-   function isClosedOt(ot) {
+    function isClosedOt(ot) {
      if (!ot) return false;
      if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
      if (String(ot.planStatus || "").toUpperCase() === "COMPLETADA") return true;
@@ -2702,36 +2687,26 @@
        op.maquina = "";
      }
 
-       if (isDryRun === true) {
-         if (!op.comercialType && !op.commercialType) {
-           op.comercialType = getRandomCommercialType();
-         }
-         if (!op.planType && !op.planningType) {
-           op.planType = getRandomPlanningType();
-         }
-           if (isBendingOperation(op)) {
-             const catalogTool = toolCatalogForOperation(state, op);
-             if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
-               if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
-             }
-             if (!op.herramental && !op.tool) {
-               if (catalogTool && cleanTool(catalogTool.herramental)) {
-                 op.herramental = cleanTool(catalogTool.herramental);
-                 op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-               }
-             } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
-               if (catalogTool && cleanTool(catalogTool.herramental)) {
-                 op.herramental = cleanTool(catalogTool.herramental);
-                 op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-               }
-               op.tool = "";
-             }
-           }
-          if (isSubcontractOperation(state, op)) {
-            if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
-            if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
-          }
-       }
+        if (isDryRun === true) {
+            if (isBendingOperation(op)) {
+              const catalogTool = toolCatalogForOperation(state, op);
+              if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
+                if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
+              }
+              if (!op.herramental && !op.tool) {
+                if (catalogTool && cleanTool(catalogTool.herramental)) {
+                  op.herramental = cleanTool(catalogTool.herramental);
+                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+                }
+              } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
+                if (catalogTool && cleanTool(catalogTool.herramental)) {
+                  op.herramental = cleanTool(catalogTool.herramental);
+                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+                }
+                op.tool = "";
+              }
+            }
+        }
 
       return op;
    }

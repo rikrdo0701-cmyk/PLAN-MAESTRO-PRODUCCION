@@ -485,7 +485,25 @@
       "source": "probe-honest.mjs (SITE=?v=924cca2, estado prisma sin fabricacion): machinesLoaded=['209','40','39','211','113','188','42'], matrix5459Loaded=[], honestCauseDistribution={SIN_OPERADOR:108}; probe-detail.mjs: matrix5459AtStart=[]; corrige probe-bend.mjs/matrix.mjs obsoletos de deploy bb02ab7",
       "domain": "DOB",
       "updated_at": "2026-08-29T08:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-SUBC-001",
+      "name": "Tipo/dias de subcontrato: provienen de CONFIGURACION_OT, nunca de fabricacion",
+      "status": "implementada",
+      "rule": "El tipo de subcontrato (TIPO_SUBCONTRATO) y los dias (DIAS_SUBCONTRATO) de una operacion de subcontrato se derivan EXCLUSIVAMENTE de la configuracion de la OT (CONFIGURACION_OT, regla RULE-OT-010 / SHEET-CONFIGURACION_OT), tal como los aplica applyOtConfiguration: op.subcontractType = configuration.subcontractType || configuration.tipoSubcontrato; op.subcontractDays = configuration.subcontractDays || configuration.diasSubcontrato. NO se inventa ni se rellena aleatoriamente en ningun contexto (antes existia un fallback getRandomSubcontractType() + dias aleatorios 1..5 en el bloque isDryRun de applyOtConfiguration; ELIMINADO 2026-08-29 por directiva de no-fabricacion del usuario). Si la configuracion de la OT no trae tipo/dias, la operacion queda con subcontractType/dias vacios y el motor la reporta honestamente como MISSING_SUBCONTRACT_TYPE / MISSING_SUBCONTRACT_DAYS (planningConfigurationIssues) en lugar de fabricarlos. Los tipos validos son los del catalogo SUBCONTRATOS (GENERAL/EXTERNO/CROMADO/PINTURA/GALVANIZADO segun parte), no una lista hardcoded aleatoria.",
+      "source": "correccion usuario 2026-08-29 ('revisa el tipo subcontrato por que creo es una regla'); src/web/planning/planner-core.js applyOtConfiguration (lineas ~2699-2700 derivan de configuration; bloque isDryRun ya no fabrica), getRandomCommercialType/getRandomPlanningType/getRandomSubcontractType eliminados",
+      "domain": "SUBC",
+      "updated_at": "2026-08-29T09:00:00-06:00"
+    },
+    {
+      "rule_id": "RULE-GOV-004",
+      "name": "Dry-run: no fabricar ningun dato faltante (tipo comercial/planeacion/subcontrato, maquina, operador)",
+      "status": "implementada",
+      "rule": "En el modo dry-run (isDryRun), el unico relleno automatico permitido es el PRE-FILL de catalogo del articulo para operaciones de doblez (toolCatalogForOperation -> catalogTool.machine/herramental, RULE-DOB-001/RULE-HER-002). Queda PROHIBIDO inventar: maquinas (getRandomMachine/M7..M16), operadores (OPERADOR_AUTODRY_*), tipos comerciales (getRandomCommercialType), tipos de planeacion (getRandomPlanningType) ni tipos/dias de subcontrato (getRandomSubcontractType). Todos esos generadores fueron ELIMINADOS 2026-08-29. Campos descriptivos que la fuente no provee se dejan vacios y el motor los reporta como causa honesta (MISSING_SUBCONTRACT_TYPE, SIN_OPERADOR_CONFIGURADO, SIN_MAQUINA_O_HERRAMENTAL_VALIDO). Esto evita que el dry-run enmascare huecos de datos reales y produzca planes irreproducibles en live.",
+      "source": "correccion usuario 2026-08-29 ('quitarlos para que no generen problemas en el live'); src/web/planning/planner-core.js (applyOtConfiguration sin getRandom*, sin M7-M16, sin OPERADOR_AUTODRY)",
+      "domain": "GOV",
+      "updated_at": "2026-08-29T09:00:00-06:00"
     }
   ],
-  "updated_at": "2026-08-29T08:30:00-06:00"
+  "updated_at": "2026-08-29T09:00:00-06:00"
 }
