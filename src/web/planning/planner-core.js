@@ -2740,15 +2740,21 @@
          if (!op.planType && !op.planningType) {
            op.planType = getRandomPlanningType();
          }
-         if (isBendingOperation(op)) {
-           if (!op.maquina) {
-             op.maquina = getRandomMachine(op.ct);
-           }
-           if (!op.herramental && !op.tool) {
-             const machine = op.maquina || getRandomMachine(op.ct);
-             op.herramental = getRandomToolKey(machine, op.ct);
-           }
-         }
+          if (isBendingOperation(op)) {
+            const catalogTool = toolCatalogForOperation(state, op);
+            if (!op.maquina) {
+              op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(op.ct);
+            }
+            if (!op.herramental && !op.tool) {
+              if (catalogTool && cleanTool(catalogTool.herramental)) {
+                op.herramental = cleanTool(catalogTool.herramental);
+                op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+              } else {
+                const machine = op.maquina || getRandomMachine(op.ct);
+                op.herramental = getRandomToolKey(machine, op.ct);
+              }
+            }
+          }
           if (isSubcontractOperation(state, op)) {
             if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
             if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
