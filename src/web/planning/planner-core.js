@@ -1390,6 +1390,11 @@
      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
    }
 
+   function getRandomSubcontractType() {
+     const types = ["GENERAL", "EXTERNO", "CROMADO", "PINTURA", "GALVANIZADO"];
+     return types[Math.floor(Math.random() * types.length)];
+   }
+
    function isClosedOt(ot) {
      if (!ot) return false;
      if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
@@ -2728,23 +2733,43 @@
        op.maquina = "";
      }
 
-      if (isDryRun === true) {
-        if (!op.comercialType && !op.commercialType) {
-          op.comercialType = getRandomCommercialType();
-        }
-        if (!op.planType && !op.planningType) {
-          op.planType = getRandomPlanningType();
-        }
-        if (isBendingOperation(op)) {
-          if (!op.maquina) {
-            op.maquina = getRandomMachine(op.ct);
-          }
-          if (!op.herramental && !op.tool) {
-            const machine = op.maquina || getRandomMachine(op.ct);
-            op.herramental = getRandomToolKey(machine, op.ct);
-          }
-        }
-      }
+       if (isDryRun === true) {
+         if (!op.comercialType && !op.commercialType) {
+           op.comercialType = getRandomCommercialType();
+         }
+         if (!op.planType && !op.planningType) {
+           op.planType = getRandomPlanningType();
+         }
+         if (isBendingOperation(op)) {
+           if (!op.maquina) {
+             op.maquina = getRandomMachine(op.ct);
+           }
+           if (!op.herramental && !op.tool) {
+             const machine = op.maquina || getRandomMachine(op.ct);
+             op.herramental = getRandomToolKey(machine, op.ct);
+           }
+         }
+         if (isSubcontractOperation(state, op)) {
+           if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
+           if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
+         } else {
+           const cap = capabilityForOperation(op);
+           const capKey = cap && (cap.key || cap.ct);
+           if (capKey) {
+             if (Array.isArray(state.configuredCapabilities) && !state.configuredCapabilities.includes(capKey)) {
+               state.configuredCapabilities.push(capKey);
+             }
+             state.matrix = state.matrix || {};
+             if (!Array.isArray(state.matrix[capKey]) || state.matrix[capKey].length === 0) {
+               state.matrix[capKey] = ["OPERADOR_AUTODRY"];
+             }
+             state.operators = state.operators || [];
+             if (!state.operators.map(normalizeKey).includes(normalizeKey("OPERADOR_AUTODRY"))) {
+               state.operators.push("OPERADOR_AUTODRY");
+             }
+           }
+         }
+       }
 
       return op;
    }

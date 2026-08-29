@@ -4744,7 +4744,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
     );
      const dryRunMode = true;
-     const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE"]);
+      const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
      for (const ot of readyOts) {
        const job = jobs.get(materialOtKey(ot));
        const operations = jobPlanningOperations(job);
@@ -5188,7 +5188,7 @@ function validateScheduleConfiguration(executionTime, ots = state.selectedOts, o
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
   if (options.ignoreAutoFillable) {
-    const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE"]);
+    const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
     issues = issues.filter((issue) => !autoFillableCodes.has(issue.code));
   }
   if (issues.length) {
