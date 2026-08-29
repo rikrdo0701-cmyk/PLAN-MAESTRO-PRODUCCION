@@ -2730,33 +2730,7 @@
           if (isSubcontractOperation(state, op)) {
             if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
             if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
-          } else {
-            state.machines = state.machines || [];
-            for (let m = 7; m <= 16; m += 1) {
-              const id = `M${m}`;
-              if (!state.machines.some((mc) => String(mc.id || mc.machine || mc.maquina || "").trim() === id)) {
-                state.machines.push({ id, active: true });
-              }
-            }
-           const cap = capabilityForOperation(op);
-           const capKey = cap && (cap.key || cap.ct);
-           if (capKey) {
-             if (Array.isArray(state.configuredCapabilities) && !state.configuredCapabilities.includes(capKey)) {
-               state.configuredCapabilities.push(capKey);
-             }
-             state.matrix = state.matrix || {};
-              if (!Array.isArray(state.matrix[capKey]) || state.matrix[capKey].length === 0) {
-                state.matrix[capKey] = ["OPERADOR_AUTODRY_1", "OPERADOR_AUTODRY_2", "OPERADOR_AUTODRY_3", "OPERADOR_AUTODRY_4", "OPERADOR_AUTODRY_5"];
-              }
-              state.operators = state.operators || [];
-              for (let i = 1; i <= 5; i += 1) {
-                const name = `OPERADOR_AUTODRY_${i}`;
-                if (!state.operators.map(normalizeKey).includes(normalizeKey(name))) {
-                  state.operators.push(name);
-                }
-              }
-           }
-         }
+          }
        }
 
       return op;
