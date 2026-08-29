@@ -4481,8 +4481,8 @@ async function scheduleCurrentPlanImpl() {
   state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
   let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
-  if (incrementalBase && window.PlanningWorkflowCore.operationsStartingInWeek(incrementalBase, planningWeekStart) === 0) {
-    showToast("El plan previo no inicia en la semana de planStart; regenerando el plan desde el inicio", 8000);
+  if (incrementalBase && !window.PlanningWorkflowCore.planAnchoredAt(incrementalBase, state.planStart)) {
+    showToast("El plan previo no arranca en planStart; regenerando el plan desde el inicio", 8000);
     incrementalBase = null;
   }
   const incrementalScope = incrementalBase

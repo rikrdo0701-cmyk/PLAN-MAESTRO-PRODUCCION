@@ -1081,3 +1081,50 @@ test("incrementa desde todas las OTs seleccionadas cuando no hay base anclada a 
   assert.deepEqual(scope.affectedOts, ["2159", "2436"]);
   assert.equal(scope.addedOts.length, 2);
 });
+
+test("planAnchoredAt: base re-anclada a planStart se conserva como base incremental", () => {
+  const anchored = [
+    { ot: "3143", fechaInicio: "2026-08-28" },
+    { ot: "2233", fechaInicio: "2026-08-30" },
+    { ot: "3202", fechaInicio: "2026-09-29" },
+  ];
+  assert.equal(core.planAnchoredAt(anchored, "2026-08-28"), true);
+  assert.equal(core.planAnchoredAt({ fullState: { operations: anchored } }, "2026-08-28"), true);
+  assert.equal(core.planAnchoredAt({ operations: anchored }, "2026-08-28"), true);
+});
+
+test("planAnchoredAt: base sin ops en la semana de planStart NO esta anclada (reporte semanal vacio)", () => {
+  const emptyWeek = [
+    { ot: "3098", fechaInicio: "2026-08-17" },
+    { ot: "3202", fechaInicio: "2026-09-29" },
+    { ot: "3143", fechaInicio: "2027-05-20" },
+  ];
+  assert.equal(core.planAnchoredAt(emptyWeek, "2026-08-28"), false);
+});
+
+test("planAnchoredAt: ops movibles antes de la semana de planStart NO estan ancladas", () => {
+  const beforePlanStart = [
+    { ot: "3098", fechaInicio: "2026-08-18" },
+    { ot: "3143", fechaInicio: "2026-08-28", horaInicio: "7:00" },
+  ];
+  assert.equal(core.planAnchoredAt(beforePlanStart, "2026-08-28"), false);
+  assert.equal(core.planAnchoredAt({ fullState: { operations: beforePlanStart } }, "2026-08-28"), false);
+});
+
+test("planAnchoredAt: ops previas historicas/completadas/cerradas no rompen el anclaje", () => {
+  const withPastFixed = [
+    { ot: "3098", fechaInicio: "2026-08-10", planStatus: "COMPLETADA_PLAN" },
+    { ot: "3099", fechaInicio: "2026-08-12", planStatus: "HISTORICO" },
+    { ot: "3100", fechaInicio: "2026-08-14", locked: true },
+    { ot: "3101", fechaInicio: "2026-08-15", autoFrozen: true },
+    { ot: "3143", fechaInicio: "2026-08-28", horaInicio: "7:00" },
+    { ot: "2233", fechaInicio: "2026-08-30" },
+  ];
+  assert.equal(core.planAnchoredAt(withPastFixed, "2026-08-28"), true);
+});
+
+test("planAnchoredAt: casos borde (vacio, sin planStart valido, array plano)", () => {
+  assert.equal(core.planAnchoredAt([], "2026-08-28"), false);
+  assert.equal(core.planAnchoredAt({}, "2026-08-28"), false);
+  assert.equal(core.planAnchoredAt([{ ot: "3143", fechaInicio: "2026-08-28" }], ""), false);
+});

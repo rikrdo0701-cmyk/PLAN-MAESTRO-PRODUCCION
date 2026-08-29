@@ -1101,6 +1101,36 @@
     }, 0);
   }
 
+  function preservedOperationAcrossReschedule(operation) {
+    const status = normalize(String(operation?.planStatus || operation?.estatus || operation?.operationState || ""));
+    const historical = operation?.historical === true || operation?.isHistorical === true ||
+      status.includes("HISTORIC") || status.includes("PUBLICAD") || status.includes("GUARDAD");
+    const completed = status.includes("COMPLETAD") || status.includes("EXCLUID");
+    const frozen = operation?.locked === true || operation?.autoFrozen === true ||
+      operation?.frozen === true || operation?.blocked === true;
+    return historical || completed || frozen;
+  }
+
+  function planAnchoredAt(source, planStart) {
+    source = source?.fullState || source || {};
+    const week = mondayIso(planStart);
+    if (!week) return false;
+    const operations = Array.isArray(source) ? source : (source.operations || []);
+    let inWeek = 0;
+    let beforeWeek = 0;
+    for (const operation of operations) {
+      const start = isoDate(String(operation?.fechaInicio || operation?.startDate || "").slice(0, 10));
+      if (!start) continue;
+      const operationWeek = mondayIso(start);
+      if (operationWeek === week) {
+        inWeek += 1;
+      } else if (operationWeek < week && !preservedOperationAcrossReschedule(operation)) {
+        beforeWeek += 1;
+      }
+    }
+    return inWeek > 0 && beforeWeek === 0;
+  }
+
   function incrementalScope({ base = {}, current = {}, weekStart = "" } = {}) {
     base = base?.fullState || base || {};
     current = current?.fullState || current || {};
@@ -1198,5 +1228,5 @@
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, operationsStartingInWeek, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
+    mondayIso, operationsStartingInWeek, planAnchoredAt, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
 });
