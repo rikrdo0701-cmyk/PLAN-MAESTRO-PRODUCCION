@@ -2749,10 +2749,17 @@
              op.herramental = getRandomToolKey(machine, op.ct);
            }
          }
-         if (isSubcontractOperation(state, op)) {
-           if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
-           if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
-         } else {
+          if (isSubcontractOperation(state, op)) {
+            if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
+            if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
+          } else {
+            state.machines = state.machines || [];
+            for (let m = 7; m <= 16; m += 1) {
+              const id = `M${m}`;
+              if (!state.machines.some((mc) => String(mc.id || mc.machine || mc.maquina || "").trim() === id)) {
+                state.machines.push({ id, active: true });
+              }
+            }
            const cap = capabilityForOperation(op);
            const capKey = cap && (cap.key || cap.ct);
            if (capKey) {
