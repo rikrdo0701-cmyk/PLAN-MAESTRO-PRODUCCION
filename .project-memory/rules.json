@@ -440,6 +440,15 @@
       "source": "definicion de usuario 2026-08-28 (el PDF debe incluir resumen, cargas por operador, OT que inician y acabado/OT que terminan; PDF vertical; sin modificar vista Reportes); src/web/planning/app.js:5137-5151,5769-5812; src/web/planning/styles.css; commit e920c56 (remocion), 76ecb61 (restauracion), b6a9979 (limpieza UI), 789b968 (print-only) y cambio posterior A4 vertical; tests/build.test.mjs",
       "domain": "OT",
       "updated_at": "2026-08-28T17:55:00-06:00"
+    },
+    {
+      "rule_id": "RULE-OT-022",
+      "name": "Generar plan re-ancla el horizonte al inicio cuando la base no inicia en la semana de planStart",
+      "status": "implementada",
+      "rule": "scheduleCurrentPlanImpl usa la base incremental publicada/draft de la semana (loadIncrementalPlanningBase + incrementalScope) para reprogramar solo OTs afectadas y PRESERVAR las fechas programadas del resto de la base. Si la base NO tiene ninguna operacion con fechaInicio dentro de la semana de planStart (p.ej. plan publicado con planStart=28/08 pero con operaciones solo a partir de 09-28 y un rezago de 19 ops en la semana 08-17, que deja la semana 24-30/08 sin operaciones y el reporte semanal vacio), el boton descarta esa base (incrementalBase = null) y regenera TODAS las OTs seleccionadas desde planStart: el scope incremental pasa a { affectedOts: [...state.selectedOts] } y el motor recibe baseSnapshot: null, por lo que el plan arranca la semana/lunes de planStart y el reporte semanal se llena. La deteccion usa PlanningWorkflowCore.operationsStartingInWeek(base, weekStart) (planning-workflow-core.js): cuenta operaciones con fechaInicio (o startDate) cuyo lunes coincide con el lunes de planStart; acepta snapshot plano, con fullState o array. Si se descarta la base aparece el toast 'El plan previo no inicia en la semana de planStart; regenerando el plan desde el inicio' y se mantiene la logica posterior existente (replannableOts, readyOts, budget 600000ms). Verificado en vivo: con base = snapshot '24/08 v1' (0 ops en semana 24-30/08) y planStart 28/08, una llamada directa al motor sobre el tablero genera 243 ops el 28/08 y OT 3143 '1OC : CORTE DE DIMENSIÓN' en 2026-08-28 07:00 (igual al CSV).",
+      "source": "diagnostico 2026-08-28 en vivo (snapshots publicados con semana 24/08 vacia; motor respeta planStart en prueba directa); src/web/planning/app.js:4482-4491; src/web/planning/planning-workflow-core.js (operationsStartingInWeek); tests/planning-workflow-core.test.mjs",
+      "domain": "OT",
+      "updated_at": "2026-08-28T19:05:00-06:00"
     }
   ],
   "updated_at": "2026-08-28T19:05:00-06:00"

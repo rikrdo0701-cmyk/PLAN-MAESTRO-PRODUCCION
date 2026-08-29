@@ -4480,7 +4480,11 @@ async function scheduleCurrentPlanImpl() {
   }
   state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
-  const incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
+  let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
+  if (incrementalBase && window.PlanningWorkflowCore.operationsStartingInWeek(incrementalBase, planningWeekStart) === 0) {
+    showToast("El plan previo no inicia en la semana de planStart; regenerando el plan desde el inicio", 8000);
+    incrementalBase = null;
+  }
   const incrementalScope = incrementalBase
     ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
     : { affectedOts: [...state.selectedOts] };

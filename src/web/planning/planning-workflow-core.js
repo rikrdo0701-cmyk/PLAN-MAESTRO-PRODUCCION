@@ -1090,6 +1090,17 @@
     });
   }
 
+  function operationsStartingInWeek(source, weekStart) {
+    source = source?.fullState || source || {};
+    const week = mondayIso(weekStart);
+    if (!week) return 0;
+    const operations = Array.isArray(source) ? source : (source.operations || []);
+    return operations.reduce((count, operation) => {
+      const start = isoDate(String(operation?.fechaInicio || operation?.startDate || "").slice(0, 10));
+      return start && mondayIso(start) === week ? count + 1 : count;
+    }, 0);
+  }
+
   function incrementalScope({ base = {}, current = {}, weekStart = "" } = {}) {
     base = base?.fullState || base || {};
     current = current?.fullState || current || {};
@@ -1187,5 +1198,5 @@
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
+    mondayIso, operationsStartingInWeek, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
 });

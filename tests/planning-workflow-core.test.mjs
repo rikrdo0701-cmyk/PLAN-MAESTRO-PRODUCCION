@@ -1056,3 +1056,28 @@ test("mergeOtRouteOperations preserva completadas y CAMBIO_HERRAMENTAL y combina
   assert.equal(mergedBySequence["20"].tiempoCiclo, 9);
   assert.ok(result.preserved.some((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL"));
 });
+
+test("operationsStartingInWeek cuenta operaciones que inician dentro de la semana de planStart", () => {
+  const operations = [
+    { ot: "3143", fechaInicio: "2026-08-28" },
+    { ot: "2497", fechaInicio: "2026-08-30" },
+    { ot: "2233", fechaInicio: "2026-09-02" },
+    { ot: "3202", fechaInicio: "2026-09-29" },
+    { ot: "3109", startDate: "2026-08-18" },
+    { ot: "3350", fechaInicio: "" },
+  ];
+  assert.equal(core.operationsStartingInWeek(operations, "2026-08-28"), 2);
+  assert.equal(core.operationsStartingInWeek(operations, "2026-08-24"), 2);
+  assert.equal(core.operationsStartingInWeek(operations, "2026-08-17"), 1);
+  assert.equal(core.operationsStartingInWeek({ operations }, "2026-08-24"), 2);
+  assert.equal(core.operationsStartingInWeek({ fullState: { operations } }, "2026-08-24"), 2);
+  assert.equal(core.operationsStartingInWeek({}, "2026-08-24"), 0);
+  assert.equal(core.operationsStartingInWeek(operations, ""), 0);
+});
+
+test("incrementa desde todas las OTs seleccionadas cuando no hay base anclada a la semana", () => {
+  const current = { selectedOts: ["2159", "2436"] };
+  const scope = structuredClone(core.incrementalScope({ base: null, current, weekStart: "2026-08-24" }));
+  assert.deepEqual(scope.affectedOts, ["2159", "2436"]);
+  assert.equal(scope.addedOts.length, 2);
+});
