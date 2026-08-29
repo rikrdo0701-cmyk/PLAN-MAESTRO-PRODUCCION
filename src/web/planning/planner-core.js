@@ -376,12 +376,17 @@
             assignment.projectedOperatorLoad = (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes;
             countPlanningStat(performanceState, "cachedAssignmentReuses");
           } else {
-            const candidates = findAssignments(context, op, previous)
-              .filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
+            let candidates = findAssignments(context, op, previous);
+            if (context.isDryRun !== true) {
+              candidates = candidates.filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
+            }
             candidates.sort((a, b) => compareAssignments(a, b, context.strategy));
             assignment = candidates[0] || null;
             if (assignment) {
               job.__planAssignment = { op, assignment, unique: candidates.length === 1 };
+            }
+            if (!assignment && context.isDryRun === true) {
+              assignment = buildForcedAssignment(context, job, op, previous);
             }
           }
           if (assignment) ready.push({ job, op, assignment });
@@ -544,6 +549,41 @@
       .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
     assignments.sort((a, b) => compareAssignments(a, b, context.strategy));
     return assignments[0] || null;
+  }
+
+  function buildForcedAssignment(context, job, op, previous) {
+    const finite = isFiniteOperation(context.state, op);
+    const earliest = computeEarliestStart(context, op, previous);
+    const productionMinutes = Math.max(SNAP_MINUTES, Math.round(operationDuration(op, 100, 100)));
+    const start = ceilToSnap(earliest >= context.windowStart ? earliest : context.windowStart);
+    const end = addMinutes(start, productionMinutes);
+    const segments = [{ start, end }];
+    const isSub = isSubcontractOperation(context.state, op);
+    const operator = isSub ? "SUBCONTRATO" : (operatorCandidates(context.state, op, finite)[0] || "OPERADOR_AUTODRY_1");
+    const machine = isBendingOperation(op)
+      ? (String(op.maquina || "").trim() || machineCandidates(context.state, op)[0] || "")
+      : (isSub ? "" : "");
+    return {
+      start,
+      operationStart: start,
+      end,
+      segments,
+      productionSegments: segments,
+      setupSegments: [],
+      setupEnd: start,
+      operator,
+      machine,
+      finite,
+      setupMinutes: 0,
+      productionMinutes,
+      setupOperator: "",
+      toolChange: { required: false, minutes: 0, fromLabel: "", toLabel: "" },
+      postToolChange: null,
+      toolPenalty: 0,
+      operatorLoad: 0,
+      projectedOperatorLoad: productionMinutes,
+      gapFill: false,
+    };
   }
 
   function findAssignments(context, op, previous) {
