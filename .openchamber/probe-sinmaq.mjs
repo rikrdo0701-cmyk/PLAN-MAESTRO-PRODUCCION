@@ -1,37 +1,34 @@
 import { chromium } from "playwright";
-
-const SITE = "https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/?v=924cca2#planning";
+const SITE = "https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/?v=1ac4b2d#planning";
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+const page = await browser.newPage();
 page.on("dialog", (d) => d.accept().catch(() => {}));
 await page.goto(SITE, { waitUntil: "networkidle", timeout: 120000 });
-await page.waitForFunction(() => typeof state !== "undefined" && typeof runPlanningPerformanceDryRun === "function" && (state.operations || []).length > 300, null, { timeout: 240000, polling: 2000 });
-
-const out = await page.evaluate(() => {
-  const ots = [...new Set((state.operations || []).filter(o => o && o.ot && o.tipoInsercion !== "CAMBIO_HERRAMENTAL").map(o => String(o.ot).trim()).filter(Boolean))].slice(0, 140);
-  state.selectedOts = ots;
-  state.planStart = "2026-08-28";
-  const res = runPlanningPerformanceDryRun({ timeoutMs: 200000, collectStats: true, progressEveryMs: 20000 });
-  const scheduledIds = new Set();
-  for (const op of (state.operations || [])) {
-    if (op.operador && op.operador !== "SIN_OPERADOR" && op.fechaInicio && op.fechaFin) scheduledIds.add(op.id);
-  }
-  const unsched = (state.operations || []).filter(o => !scheduledIds.has(o.id) && o.tipoInsercion !== "CAMBIO_HERRAMENTAL");
-  const bending = unsched.filter(o => (typeof isBendingOperation === "function" ? isBendingOperation(o) : (o.ct === "5459" || o.ct === 5459 || (o.ct && String(o.ct).trim() === "5459"))));
-  const sinMaq = bending.filter(o => (typeof machineCandidates === "function" ? machineCandidates(state, o).length === 0 : false));
-  return {
-    totalUnsched: unsched.length,
-    bendingUnsched: bending.length,
-    sinMaqCount: sinMaq.length,
-    sinMaqSample: sinMaq.slice(0, 12).map(o => ({
-      id: o.id, ot: o.ot, sec: o.secuencia, ct: o.ct,
-      maquina: o.maquina, herramental: o.herramental, tool: o.tool,
-      assignedMach: o.machine, catalogMach: (typeof catalogToolForOperation === "function" ? (catalogToolForOperation(state, o) || {}).machine : undefined),
-      cands: (typeof machineCandidates === "function" ? machineCandidates(state, o) : []),
-      validBend: (typeof validBendingMachine === "function" ? validBendingMachine(o.maquina, o.ct) : "n/a"),
-      machKeys: Object.keys(state.machines || {}).slice(0, 5),
-    })),
-  };
+await page.waitForFunction(() => typeof state !== "undefined" && (state.operations||[]).length > 300, null, { timeout: 180000, polling: 2000 });
+const r = await page.evaluate(async () => {
+  const ots = [...new Set((state.operations||[]).filter(op=>op&&op.ot&&op.tipoInsercion!=="CAMBIO_HERRAMENTAL").map(op=>String(op.ot).trim()).filter(Boolean))].slice(0,140);
+  state.selectedOts = ots; state.planStart="2026-08-28";
+  const res = await runPlanningPerformanceDryRun({ timeoutMs: 300000, collectStats: true, progressEveryMs: 15000 });
+  const sum = res?.summary || {};
+  // Determine scheduled op signatures
+  const schedKeys = new Set();
+  (sum.scheduledOperations||[]).forEach(o=>schedKeys.add(String(o.ot||"")+"|"+String(o.index??o.idx??"")));
+  (sum.scheduledOts||[]).forEach(k=>schedKeys.add(String(k)));
+  const total = (state.operations||[]).length;
+  const uns = (state.operations||[]).filter(op=>{
+    if(!op) return false;
+    const k = String(op.ot||"")+"|"+(op.index!==undefined?op.index:(op.idx!==undefined?op.idx:""));
+    return !schedKeys.has(k) && !schedKeys.has(String(op.ot||""));
+  });
+  // Replicate unscheduledCause machine logic for bending ops
+  function norm(s){return String(s||"").trim().toLowerCase().replace(/\s+/g,"_");}
+  function validBending(m,ct){const v=String(m||"").trim();return Boolean(v)&&norm(v)!=="sin_maquina"&&!(String(ct)==="5459"&&v==="1");}
+  function machineCands(op){ if(!(String(op.ct)==="5459"||String(op.ct)==="5527")) return [""]; const am=String(op.maquina||"").trim(); if(am&&norm(am)!=="sin_maquina"){return validBending(am,op.ct)?[am]:[];} const cat=(state.machines||[]).filter(m=>m.active!==false).map(m=>m.id||m.machine||m.maquina).filter(Boolean); return [...new Set([op.maquina,...cat].filter(Boolean))].filter(m=>norm(m)!=="sin_maquina"&&!(String(op.ct)==="5459"&&String(m)==="1")); }
+  const bend = uns.filter(op=>String(op.ct)==="5459"||String(op.ct)==="5527");
+  const sinMaq = bend.filter(op=>!machineCands(op).length);
+  const mc = {};
+  for(const op of sinMaq){const m=String(op.maquina||"").trim()||"(empty)";mc[m]=(mc[m]||0)+1;}
+  return { totalOps: total, unsCount: uns.length, bendUns: bend.length, sinMaqCount: sinMaq.length, sinMaqMaquina: mc, sinMaqSample: sinMaq.slice(0,8).map(op=>({ot:op.ot,ct:op.ct,maquina:op.maquina,herr:op.herramental||op.tool})) };
 });
-console.log(JSON.stringify(out, null, 2));
+console.log(JSON.stringify(r,null,2));
 await browser.close();

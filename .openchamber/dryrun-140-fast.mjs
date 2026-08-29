@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 
-const SITE = "https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/?v=a3df386#planning";
+const SITE = "https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION/?v=1ac4b2d#planning";
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
 page.on("dialog", (d) => d.accept().catch(() => {}));

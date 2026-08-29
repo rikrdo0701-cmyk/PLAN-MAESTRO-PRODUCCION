@@ -2677,36 +2677,33 @@
        op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
        op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
        op.kitPending = configuration.kitPending === true;
-     } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
-       op.maquina = "";
-     }
-     if (isSubcontractOperation(state, op)) {
+      } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
+        op.maquina = "";
+      }
+      if (isBendingOperation(op) && !isSubcontractOperation(state, op)) {
+        const catalogTool = toolCatalogForOperation(state, op);
+        if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
+          if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
+        }
+        if (!op.herramental && !op.tool) {
+          if (catalogTool && cleanTool(catalogTool.herramental)) {
+            op.herramental = cleanTool(catalogTool.herramental);
+            op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+          }
+        } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
+          if (catalogTool && cleanTool(catalogTool.herramental)) {
+            op.herramental = cleanTool(catalogTool.herramental);
+            op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+          }
+          op.tool = "";
+        }
+      }
+      if (isSubcontractOperation(state, op)) {
        op.subcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
        op.subcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
        op.operador = "SUBCONTRATO";
        op.maquina = "";
-     }
-
-        if (isDryRun === true) {
-            if (isBendingOperation(op)) {
-              const catalogTool = toolCatalogForOperation(state, op);
-              if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
-                if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
-              }
-              if (!op.herramental && !op.tool) {
-                if (catalogTool && cleanTool(catalogTool.herramental)) {
-                  op.herramental = cleanTool(catalogTool.herramental);
-                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-                }
-              } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
-                if (catalogTool && cleanTool(catalogTool.herramental)) {
-                  op.herramental = cleanTool(catalogTool.herramental);
-                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-                }
-                op.tool = "";
-              }
-            }
-        }
+      }
 
       return op;
    }

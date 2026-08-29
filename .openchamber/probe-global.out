@@ -1,0 +1,19 @@
+{
+  "machineCandidates": "undefined",
+  "toolCatalogForOperation": "undefined",
+  "validBendingMachine": "undefined",
+  "unscheduledCause": "undefined",
+  "operatorCandidates": "undefined",
+  "isBendingOperation": "undefined",
+  "machinesLen": 7,
+  "machinesIds": [
+    "209",
+    "40",
+    "39",
+    "211",
+    "113",
+    "188",
+    "42"
+  ],
+  "note": "machineCandidates not global; cannot introspect"
+}

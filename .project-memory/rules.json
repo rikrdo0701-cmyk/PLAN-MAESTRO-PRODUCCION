@@ -152,10 +152,10 @@
     },
     {
       "rule_id": "RULE-DOB-001",
-      "name": "Precarga CT 5459/5527",
-      "status": "documentada",
-      "rule": "Operaciones sincronizadas sin máquina/herramental/kit no se descartan; la preparación de la OT precarga esos datos del catálogo del artículo.",
-      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md",
+      "name": "Precarga CT 5459/5527 desde catalogo del articulo (core, ambos modos)",
+      "status": "implementada",
+      "rule": "Las operaciones de doblez (ct '5459' | '5527') requieren maquina Y herramental/kit. La preparacion de la OT (applyOtConfiguration) precarga esos datos del catalogo del articulo (toolCatalogForOperation -> catalogTool.machine / catalogTool.herramental / kitHerramental) cuando la operacion no los trae validos. Es un comportamiento CORE: se ejecuta en live y en dry-run por igual (NO dentro de 'if (isDryRun)'), de modo que el dry-run es identico a la ejecucion real (RULE-GOV-004 / directiva usuario 2026-08-29 'EL DRY RUN DEBE SER EJEMPLO DE UNA EJECUCION REAL SIN FALLBACKS QUE NO HACE LA WEB'). Si el catalogo no tiene entrada para la parte, la operacion queda sin maquina/herramental y se reporta honestamente (SIN_MAQUINA_O_HERRAMENTAL_VALIDO), sin inventar IDs.",
+      "source": "docs/superpowers/specs/2026-07-12-limpieza-borrador-y-reportes-design.md (diseno) + correccion usuario 2026-08-29 (precarga movida fuera de isDryRun para paridad dry-run==live); src/web/planning/planner-core.js applyOtConfiguration",
       "domain": "Doblado"
     },
     {
@@ -470,12 +470,12 @@
     },
     {
       "rule_id": "RULE-DOB-003",
-      "name": "Doblez/KU: no fabricar maquina ni operador; omitir si no hay catalogo ni infraestructura",
+      "name": "Doblez/KU: no fabricar; precarga de catalogo es core (ambos modos) y dry-run == live",
       "status": "implementada",
-      "rule": "Las operaciones de doblez (isBendingOperation: ct '5459' | '5527') NO deben recibir maquina, herramental ni kit por fallback aleatorio/fabricado. El unico llenado permitido en dry-run es desde el catalogo del articulo (toolCatalogForOperation -> catalogTool.machine / catalogTool.herramental) por RULE-DOB-001/RULE-HER-002. Si el catalogo no provee maquina, la operacion queda con maquina vacia y el motor la reporta honestamente como SIN_MAQUINA (no se inventa 'M0'..'Mn', ni 'TOOLS_n', ni se reusa maquina '1' de corte). Esta es una RESTRICCION de no-fabricacion dictada por el usuario 2026-08-29: 'no hagas fallback ... si la operacion no debe llevar maquina segun las reglas entonces que se omita'.",
-      "source": "correccion usuario 2026-08-29 (rechazo del fallback getRandomMachine que inventaba IDs M0..Mn); src/web/planning/planner-core.js applyOtConfiguration (bloque doblez, relleno solo-desde-catalogo), getRandomMachine/getRandomToolKey eliminados por no usarse y fabricar",
+      "rule": "Las operaciones de doblez (isBendingOperation: ct '5459' | '5527') requieren maquina Y herramental/kit (regla de usuario 2026-08-29: 'los centros de trabajo de doblado que requieren herramental y maquina son CT 5459 Y CT 5527 SOLAMENTE'). La precarga de maquina/herramental desde el catalogo del articulo (toolCatalogForOperation -> catalogTool.machine / catalogTool.herramental, RULE-DOB-001/RULE-HER-002) es un comportamiento CORE de applyOtConfiguration: se ejecuta en AMBOS modos (live y dry-run), NO dentro de 'if (isDryRun)'. Asi el dry-run es identico a la ejecucion real (directiva 'EL DRY RUN DEBE SER EJEMPLO DE UNA EJECUCION REAL SIN FALLBACKS QUE NO HACE LA WEB'): no hay fallback que la web no haga. Si el catalogo no provee maquina/herramental para la parte, la operacion queda con maquina/herramental vacia/\"SIN_MAQUINA\" y el motor la reporta honestamente como SIN_MAQUINA_O_HERRAMENTAL_VALIDO / SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL (no se inventa 'M0'..'Mn', ni 'TOOLS_n', ni se reusa maquina '1' de corte). Queda PROHIBIDO fabricar operadores (OPERADOR_AUTODRY_*), maquinas (getRandomMachine/M7..M16) o tipos (getRandomCommercial/Planning/SubcontractType): todos eliminados de planner-core. La causa raiz de las ops de doblez no programadas es la FALTA de OPERADOR KU en la MATRIZ (state.matrix por capability de doblez vacio), no de maquina; esa brecha es de datos (sembrar operadores KU) y se reporta como SIN_OPERADOR_CONFIGURADO.",
+      "source": "correccion usuario 2026-08-29 ('EL DRY RUN DEBE SER EJEMPLO DE UNA EJECUCION REAL SIN FALLBACKS QUE NO HACE LA WEB'; 'CT 5459/5527 requieren herramental y maquina'); src/web/planning/planner-core.js applyOtConfiguration (precarga doblez FUERA de isDryRun, core), getRandomMachine/getRandomToolKey y getRandom* eliminados; RULE-DOB-001 honrado en ambos modos",
       "domain": "DOB",
-      "updated_at": "2026-08-29T07:30:00-06:00"
+      "updated_at": "2026-08-29T10:15:00-06:00"
     },
     {
       "rule_id": "ERR-DATOS-DOBLEZ-001",
@@ -497,12 +497,12 @@
     },
     {
       "rule_id": "RULE-GOV-004",
-      "name": "Dry-run: no fabricar ningun dato faltante (tipo comercial/planeacion/subcontrato, maquina, operador)",
+      "name": "Dry-run == ejecucion real: sin fallbacks que la web no hace",
       "status": "implementada",
-      "rule": "En el modo dry-run (isDryRun), el unico relleno automatico permitido es el PRE-FILL de catalogo del articulo para operaciones de doblez (toolCatalogForOperation -> catalogTool.machine/herramental, RULE-DOB-001/RULE-HER-002). Queda PROHIBIDO inventar: maquinas (getRandomMachine/M7..M16), operadores (OPERADOR_AUTODRY_*), tipos comerciales (getRandomCommercialType), tipos de planeacion (getRandomPlanningType) ni tipos/dias de subcontrato (getRandomSubcontractType). Todos esos generadores fueron ELIMINADOS 2026-08-29. Campos descriptivos que la fuente no provee se dejan vacios y el motor los reporta como causa honesta (MISSING_SUBCONTRACT_TYPE, SIN_OPERADOR_CONFIGURADO, SIN_MAQUINA_O_HERRAMENTAL_VALIDO). Esto evita que el dry-run enmascare huecos de datos reales y produzca planes irreproducibles en live.",
-      "source": "correccion usuario 2026-08-29 ('quitarlos para que no generen problemas en el live'); src/web/planning/planner-core.js (applyOtConfiguration sin getRandom*, sin M7-M16, sin OPERADOR_AUTODRY)",
+      "rule": "El dry-run (runPlanningPerformanceDryRun / isDryRun) DEBE ser un ejemplo fiel de la ejecucion real (live): no puede tener NINGUN comportamiento, relleno o fallback que la WEB (live) no ejecute. Directiva de usuario 2026-08-29: 'EL DRY RUN DEBE SER EJEMPLO DE UNA EJECUCION REAL SIN FALLBACKS QUE NO HACE LA WEB'. Consecuencias aplicadas 2026-08-29: (1) TODOS los generadores de fabricacion fueron ELIMINADOS de planner-core: getRandomMachine, getRandomToolKey, getRandomCommercialType, getRandomPlanningType, getRandomSubcontractType, el bloque M7..M16 + OPERADOR_AUTODRY_* en applyOtConfiguration, y los rellenos aleatorios de tipo comercial/planeacion/subcontrato/dias. (2) La precarga de catalogo del articulo para doblez (toolCatalogForOperation) es CORE: se ejecuta en AMBOS modos (fuera de cualquier guarda isDryRun), asi el dry-run y el live son identicos para asignacion de maquina/herramental (RULE-DOB-001/RULE-DOB-003). Lo que la web no hace, el dry-run tampoco; lo que la web hace (precarga de catalogo), el dry-run tambien. Campos que la fuente no provee y el catalogo tampoco (p.ej. operador KU en MATRIZ, o maquina invalida '1' en ct5459) se dejan vacios y el motor los reporta honestamente (SIN_OPERADOR_CONFIGURADO, SIN_MAQUINA_O_HERRAMENTAL_VALIDO, MISSING_SUBCONTRACT_TYPE) en lugar de inventarlos.",
+      "source": "correccion usuario 2026-08-29 ('EL DRY RUN DEBE SER EJEMPLO DE UNA EJECUCION REAL SIN FALLBACKS QUE NO HACE LA WEB'); src/web/planning/planner-core.js applyOtConfiguration (precarga doblez fuera de isDryRun; sin getRandom*; sin M7-M16/OPERADOR_AUTODRY)",
       "domain": "GOV",
-      "updated_at": "2026-08-29T09:00:00-06:00"
+      "updated_at": "2026-08-29T10:15:00-06:00"
     }
   ],
   "updated_at": "2026-08-29T09:00:00-06:00"

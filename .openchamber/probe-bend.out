@@ -1,0 +1,73 @@
+{
+  "totalUnscheduled": 2087,
+  "bendUnscheduled": 108,
+  "byMachine": {
+    "1": 1,
+    "39": 3,
+    "40": 6,
+    "42": 28,
+    "113": 9,
+    "188": 14,
+    "209": 5,
+    "211": 8,
+    "(empty)": 34
+  },
+  "sample": [
+    {
+      "ot": "2131",
+      "ct": "5459",
+      "maquina": "",
+      "cats": null
+    },
+    {
+      "ot": "2159",
+      "ct": "5459",
+      "maquina": "211",
+      "cats": null
+    },
+    {
+      "ot": "2580",
+      "ct": "5459",
+      "maquina": "",
+      "cats": null
+    },
+    {
+      "ot": "2597",
+      "ct": "5459",
+      "maquina": "",
+      "cats": null
+    },
+    {
+      "ot": "2612",
+      "ct": "5459",
+      "maquina": "",
+      "cats": null
+    },
+    {
+      "ot": "2613",
+      "ct": "5459",
+      "maquina": "209",
+      "tool": "1 x 2",
+      "cats": null
+    },
+    {
+      "ot": "2624",
+      "ct": "5459",
+      "maquina": "40",
+      "tool": "5 x 6",
+      "cats": null
+    },
+    {
+      "ot": "2637",
+      "ct": "5459",
+      "maquina": "40",
+      "tool": "5 x 6",
+      "cats": null
+    }
+  ],
+  "metricUnscheduledByCause": {
+    "SIN_MAQUINA_O_HERRAMENTAL_VALIDO": 12,
+    "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO": 154,
+    "SIN_OPERADOR_CONFIGURADO": 6
+  }
+}
