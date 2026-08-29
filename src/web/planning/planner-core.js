@@ -1359,14 +1359,15 @@
      return types[Math.floor(Math.random() * types.length)];
    }
 
-   function getRandomMachine(state, ct) {
-     const machines = (state.machines || [])
-       .filter((mc) => mc.active !== false)
-       .map((mc) => String(mc.id || mc.machine || mc.maquina || "").trim())
-       .filter(Boolean);
-     const candidates = machines.filter((m) => !(String(ct) === "5459" && m === "1"));
-     return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
-   }
+    function getRandomMachine(state, ct) {
+      const list = Array.isArray(state.machines) ? state.machines : Object.values(state.machines || {});
+      const machines = list
+        .filter((mc) => mc && mc.active !== false)
+        .map((mc, i) => String(mc.id || mc.machine || mc.maquina || mc.nombre || `M${i}`).trim())
+        .filter(Boolean);
+      const candidates = machines.filter((m) => !(String(ct) === "5459" && m === "1"));
+      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
+    }
 
    function getRandomToolKey(machine, ct) {
      const tools = ["TOOLS_1", "TOOLS_2", "TOOLS_3", "TOOLS_4", "TOOLS_5"];
