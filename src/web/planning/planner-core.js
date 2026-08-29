@@ -285,6 +285,7 @@
         ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
         : 10,
       fastQualityMode: options?.fastQualityMode === true,
+      isDryRun: options?.isDryRun === true || options?.__dryRun === true,
     };
 
     const authorizedStatuses = selectionDefined
@@ -561,19 +562,19 @@
 
     const assignments = [];
     const selectedMachine = String(op.maquina || "").trim();
-    const trySelectedFirst = (op) => {
-      const cands = op.tool?.assignedMachines || op.tool?.validMachines || [];
-      const base = cands.find((m) => m === selectedMachine);
-      if (base) return base;
-      const allowed = machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1"));
-      const fallback = allowed.slice(0, 2).find((m) => {
-        const ruleKey = `${op.id}-${m}`;
-        return m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1");
-      });
-      return fallback || null;
-    };
-
-    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(op.ct) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
+    const machineIsValid = (m) => m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1");
+    const dryRunAltPool = context.isDryRun === true
+      ? (context.state.machines || [])
+        .filter((mc) => mc.active !== false)
+        .map((mc) => String(mc.id || mc.machine || mc.maquina || "").trim())
+        .filter((m) => machineIsValid(m) && validBendingMachine(m, op.ct))
+      : [];
+    const machineOrder = (() => {
+      if (!selectedMachine) return machines;
+      const fallback = (context.isDryRun === true ? dryRunAltPool : machines)
+        .filter((m) => m && machineIsValid(m) && m !== selectedMachine);
+      return [selectedMachine, ...fallback.slice(0, 4)];
+    })();
 
     for (const operator of operators) {
       for (const machine of machineOrder) {
