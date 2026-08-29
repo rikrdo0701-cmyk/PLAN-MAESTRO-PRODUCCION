@@ -2760,13 +2760,16 @@
                state.configuredCapabilities.push(capKey);
              }
              state.matrix = state.matrix || {};
-             if (!Array.isArray(state.matrix[capKey]) || state.matrix[capKey].length === 0) {
-               state.matrix[capKey] = ["OPERADOR_AUTODRY"];
-             }
-             state.operators = state.operators || [];
-             if (!state.operators.map(normalizeKey).includes(normalizeKey("OPERADOR_AUTODRY"))) {
-               state.operators.push("OPERADOR_AUTODRY");
-             }
+              if (!Array.isArray(state.matrix[capKey]) || state.matrix[capKey].length === 0) {
+                state.matrix[capKey] = ["OPERADOR_AUTODRY_1", "OPERADOR_AUTODRY_2", "OPERADOR_AUTODRY_3", "OPERADOR_AUTODRY_4", "OPERADOR_AUTODRY_5"];
+              }
+              state.operators = state.operators || [];
+              for (let i = 1; i <= 5; i += 1) {
+                const name = `OPERADOR_AUTODRY_${i}`;
+                if (!state.operators.map(normalizeKey).includes(normalizeKey(name))) {
+                  state.operators.push(name);
+                }
+              }
            }
          }
        }
