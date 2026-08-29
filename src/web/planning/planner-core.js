@@ -2728,20 +2728,29 @@
          if (!op.planType && !op.planningType) {
            op.planType = getRandomPlanningType();
          }
-          if (isBendingOperation(op)) {
-            const catalogTool = toolCatalogForOperation(state, op);
-            if (!op.maquina) {
-              op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(state, op.ct);
-            }
-            if (!op.herramental && !op.tool) {
-              if (catalogTool && cleanTool(catalogTool.herramental)) {
-                op.herramental = cleanTool(catalogTool.herramental);
-                op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-              } else {
-                const machine = op.maquina || getRandomMachine(state, op.ct);
-                op.herramental = getRandomToolKey(machine, op.ct);
-              }
-            }
+           if (isBendingOperation(op)) {
+             const catalogTool = toolCatalogForOperation(state, op);
+             if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
+               op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(state, op.ct);
+             }
+             if (!op.herramental && !op.tool) {
+               if (catalogTool && cleanTool(catalogTool.herramental)) {
+                 op.herramental = cleanTool(catalogTool.herramental);
+                 op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+               } else {
+                 const machine = op.maquina || getRandomMachine(state, op.ct);
+                 op.herramental = getRandomToolKey(machine, op.ct);
+               }
+             } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
+               if (catalogTool && cleanTool(catalogTool.herramental)) {
+                 op.herramental = cleanTool(catalogTool.herramental);
+                 op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+               } else {
+                 const machine = op.maquina || getRandomMachine(state, op.ct);
+                 op.herramental = getRandomToolKey(machine, op.ct);
+               }
+               op.tool = "";
+             }
           }
           if (isSubcontractOperation(state, op)) {
             if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();

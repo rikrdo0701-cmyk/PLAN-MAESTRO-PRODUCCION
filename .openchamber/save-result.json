@@ -1,0 +1,61 @@
+{
+  "uuid": "a36245d9-6fa7-4cae-a787-bf42593f8dd4",
+  "gen": {
+    "selectedOts": 204,
+    "currentPlanOps": 2115,
+    "scheduled": 1727,
+    "minFi": "2026-08-28",
+    "opsCount": 2115,
+    "ot3143": [
+      {
+        "fi": "2026-08-28",
+        "hi": "07:00",
+        "sec": 1
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "07:24",
+        "sec": 2
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "08:24",
+        "sec": 3
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "08:36",
+        "sec": 4
+      }
+    ]
+  },
+  "saved": {
+    "result": {
+      "planStart": "2026-08-28",
+      "snapshotId": "8c14a62f-7fc8-419c-b9b8-2d88de977477",
+      "operations": 2087,
+      "weekStart": "2026-08-24",
+      "publishedAt": "",
+      "publicationReason": "",
+      "generatedAt": "2026-08-29T04:48:18.179Z",
+      "ok": true,
+      "version": 0,
+      "changeSummary": null
+    },
+    "error": null,
+    "payloadOps": 2115
+  },
+  "listed": {
+    "total": 29,
+    "mine": null,
+    "recent": [
+      {
+        "id": "8c14a62f-7fc8-419c-b9b8-2d88de977477",
+        "week": "2026-08-24",
+        "start": "2026-08-28",
+        "ops": 2087,
+        "gen": "2026-08-29T04:48:18.179Z"
+      }
+    ]
+  }
+}

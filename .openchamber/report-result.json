@@ -1,0 +1,41 @@
+{
+  "loadInfo": {
+    "id": "8c14a62f-7fc8-419c-b9b8-2d88de977477",
+    "planStart": "2026-08-28",
+    "weekStart": "2026-08-24",
+    "ops": 2087,
+    "minFi": "2026-08-28",
+    "byWeek": {
+      "2026-08-24": 235,
+      "2026-08-31": 1059,
+      "2026-09-07": 430
+    },
+    "opsInWeek24_30": 235
+  },
+  "report": {
+    "reportSnapshotId": "9378167d-c026-46cc-8aab-547aab304f9b",
+    "selectValue": "9378167d-c026-46cc-8aab-547aab304f9b",
+    "weekInputValue": "2026-08-24",
+    "hasSinOTs": false,
+    "hasNoPlan": false,
+    "summarySample": "Resumen ejecutivo\nIndicadores de liberacion, productividad y carga semanal\nMeta semanal no alcanzada: $36,607.50 / $1,110,000.00. Faltan $1,073,392.50\nFactores probables\nPocas OTs terminando en Acabado para cubrir la meta\nCuello de botella probable en OT 2151 / 20OTD : FLARE\nCambios de herramental c",
+    "weekSample": "OT que inician\nFecha de la primera operacion\n28/08/2026\nViernes\nNO.\tORD\tPARTE\tPZAS\n1\t1803\tE-4473\t5\n2\t2233\tCOMP-2505\t10\n3\t2497\tR 4 - 3.5\t4\n4\t2667\tCOMP UADA A\t32\n5\t2674\tBRIDA-2668\t956\n6\t2708\tCOMP-4509\t3\n7\t3143\tCPT 1/2\t15\n8\t2151\tCM 400\t200\n9\t3144\tM94-1003-2 I439\t50\n10\t3108\tAMRFA 05 23505 899\t2\n11\t3112\t",
+    "startPanelSample": "OT que inician\nFecha de la primera operacion\n28/08/2026\nViernes\nNO.\tORD\tPARTE\tPZAS\n1\t1803\tE-4473\t5\n2\t2233\tCOMP-2505\t10\n3\t2497\tR 4 - 3.5\t4\n4\t2667\tCOMP UADA A\t32\n5\t2674\tBRIDA-2668\t956\n6\t2708\tCOMP-4509\t3\n7\t3143\tCPT 1/2\t15\n8\t2151\tCM 400\t200\n9\t3144\tM94-1003-2 I439\t50\n10\t3108\tAMRFA 05 23505 899\t2\n11\t3112\t",
+    "startRowsSample": [
+      "#NombreRecursoCargaHoras / CapacidadEstado",
+      "1 CORTADOR INICIAL CORTADOR INICIAL 20% 10.0 h / 50 h Baja carga",
+      "2 FORMADOR 2 FORMADOR 2 15% 7.7 h / 50 h Baja carga",
+      "3 FORMADO 1 FORMADO 1 15% 7.3 h / 50 h Baja carga",
+      "4 LAVADO LAVADO 14% 6.9 h / 50 h Baja carga",
+      "5 COMPONENTES COMPONENTES 14% 6.8 h / 50 h Baja carga",
+      "6 CORTADOR EXT. 1 CORTADOR EXT. 1 11% 5.6 h / 50 h Baja carga",
+      "7 REBABEADOR EXT. 1 REBABEADOR EXT. 1 10% 5.0 h / 50 h Baja carga",
+      "8 PUNTEADOR PUNTEADOR 9% 4.4 h / 50 h Baja carga",
+      "9 SOLDADOR SOLDADOR 6% 3.1 h / 50 h Baja carga"
+    ],
+    "opsInWeekCount": 243,
+    "distinctOtsInWeek": 50,
+    "operatorRows": 1,
+    "operatorSample": "NumO.T.ParteOPPiezasMaq/AreaHerramentalTC (min)Tiempo setupTiempo prod.F. inicioH. inicioF. finH. finComentariosSin operaciones programadas en esta semana"
+  }
+}

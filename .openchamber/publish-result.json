@@ -1,0 +1,55 @@
+{
+  "run": {
+    "readyOts": 204,
+    "resultOps": 2117,
+    "scheduled": 1727,
+    "unscheduled": 360,
+    "minFi": "2026-08-28",
+    "on0828": 243,
+    "ot3143": [
+      {
+        "fi": "2026-08-28",
+        "hi": "07:00",
+        "sec": 1
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "07:24",
+        "sec": 2
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "08:24",
+        "sec": 3
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "08:36",
+        "sec": 4
+      }
+    ],
+    "stateOps": 2117,
+    "currentPlanOps": 2117,
+    "cMinFi": "2026-08-28",
+    "cOn0828": 243,
+    "draftVersion": ""
+  },
+  "pubState": {
+    "disabled": false,
+    "text": "Publicar plan"
+  },
+  "toast": "No se pudo publicar: Exception: Tu entrada supera el número máximo de 50000 caracteres en una misma celda.",
+  "newSnap": null,
+  "listed": {
+    "total": 28,
+    "recent": [
+      {
+        "id": "9378167d-c026-46cc-8aab-547aab304f9b",
+        "week": "2026-08-24",
+        "start": "2026-08-28",
+        "ops": 1757,
+        "gen": "2026-08-29T04:35:25.655Z"
+      }
+    ]
+  }
+}
