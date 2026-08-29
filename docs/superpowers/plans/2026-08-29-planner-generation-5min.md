@@ -70,6 +70,7 @@ Terminar antes de 5 min
 - [ ] Mantener fallback actual si no existe ninguna estrategia completa: puede devolver el parcial con diagnostico de timeout.
 - [ ] Implementar en `planner-core.js:168-182` y seleccion final `planner-core.js:191-215`.
 - [ ] Ejecutar `node --test tests/planner-core.test.mjs`.
+- [x] 2026-08-29: implementado `keep-best-on-timeout` y regresion focal en `tests/planner-core.test.mjs`.
 
 **Validacion:**
 - `operatorConflicts` del plan devuelto no aumenta contra el mejor completo.
@@ -91,6 +92,7 @@ Terminar antes de 5 min
 - [ ] Mantener modo 10 min como fallback configurable para comparacion y auditoria.
 - [ ] Registrar en `lastSchedule.optimization` estrategias omitidas por presupuesto.
 - [ ] Cubrir en tests el conteo maximo de estrategias.
+- [x] 2026-08-29: `timeBudgetMs <= 300000` activa modo rapido, UI usa `PLANNING_PLAN_TIME_BUDGET_MS=300000`, se omite `flow_balanced` adicional en volumen grande con `strategySkips: FAST_QUALITY_BUDGET` y se cubre con tests.
 
 **Validacion:**
 - Dry-run 300s inicia maximo 3 estrategias completas.

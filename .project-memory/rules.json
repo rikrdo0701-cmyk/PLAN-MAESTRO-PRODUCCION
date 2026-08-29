@@ -290,8 +290,8 @@
       "rule_id": "RULE-BAL-003",
       "name": "Seleccion de operador por disponibilidad y menor carga; agrupacion por maquina/herramental en doblado",
       "status": "documentada",
-      "rule": "La maquina es fija por OT y el herramental es fijo por OT; lo unico que varia es el operador segun disponibilidad (matriz de capacidad). Dada una operacion con varios operadores capaces, el motor elige el operador 'disponible mas pronto' y, en empate, el de 'menor carga acumulada', de modo que se avanza con el menor tiempo y se aprovecha al maximo el tiempo disponible sin dejar huecos innecesarios: compareAssignments ordena primero por a.start y luego por a.operatorLoad (planner-core.js:2094-2112; rama misma-maquina 2097-2099 y estrategias load/default 2109-2111). En doblado, ademas, el balanceo prefiere agrupar operaciones con la misma maquina y mismo herramental/kit ya montado para evitar cambios de herramental, siempre respetando la precedencia del criterio de disponibilidad/carga. Los cambios de herramental generados (CAMBIO_HERRAMENTAL) se rellenan con el operador AJUSTADOR para no desperdiciar tiempo de maquina. Es una preferencia y no puede violar precedencia, bloqueos, calendario, secuencia inicial protegida ni capacidad.",
-      "source": "definicion de usuario 2026-08-12, 2026-08-14 y 2026-08-27 ('usar el operador disponible en el menor tiempo y aprovechar al maximo el tiempo disponible'); src/web/planning/planner-core.js:2094-2112; tests/planner-core.test.mjs",
+      "rule": "La maquina es fija por OT y el herramental es fijo por OT; lo unico que varia es el operador segun disponibilidad (matriz de capacidad). Dada una operacion con varios operadores capaces, el motor elige el operador 'disponible mas pronto' y, en empate, el de 'menor carga acumulada', de modo que se avanza con el menor tiempo y se aprovecha al maximo el tiempo disponible sin dejar huecos innecesarios: compareAssignments ordena primero por a.start y luego por a.operatorLoad (planner-core.js). En doblado, ademas, el balanceo prefiere agrupar operaciones con la misma maquina y mismo herramental/kit ya montado para evitar cambios de herramental. Esta preferencia NO es solo desempate por inicio mas temprano: si evitar un cambio de herramental/kit ahorra un setup alto, el motor puede aceptar terminar o iniciar un poco mas tarde en la maquina que conserva el montaje, siempre que el atraso adicional sea menor que el costo evitado del cambio y no cruce una fecha critica de entrega ni aumente operaciones sin hueco. La funcion de costo debe penalizar fuerte el cambio de herramental/kit, penalizar la tardanza suave y tratar como restriccion dura las fechas criticas, solapes, precedencia, bloqueos, calendario, secuencia inicial protegida, capacidad y operador desde MATRIZ. Los cambios de herramental generados (CAMBIO_HERRAMENTAL) se rellenan con el operador AJUSTADOR para no desperdiciar tiempo de maquina. Agrupar por montaje/kit es una preferencia controlada: puede sacrificar algo de tiempo si reduce mas tiempo de setup, pero nunca puede violar restricciones duras ni degradar entrega critica.",
+      "source": "definicion de usuario 2026-08-12, 2026-08-14, 2026-08-27 ('usar el operador disponible en el menor tiempo y aprovechar al maximo el tiempo disponible') y 2026-08-29 (aceptable sacrificar algo de tiempo si CAMBIO_HERRAMENTAL penaliza mucho); src/web/planning/planner-core.js; tests/planner-core.test.mjs; docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
       "domain": "Balanceo"
     },
     {
@@ -346,9 +346,27 @@
       "rule_id": "RULE-BAL-004",
       "name": "Menor tiempo de OT en produccion",
       "status": "documentada",
-      "rule": "Una OT debe tardar el menor tiempo posible en produccion para evitar demasiadas OTs abiertas a la par; el balanceo debe preferir terminar OTs activas antes de abrir nuevas cuando sea factible, sin violar precedencia, bloqueos, calendario, capacidad ni secuencia inicial protegida.",
-      "source": "definicion de usuario 2026-08-12; src/web/planning/planner-core.js",
+      "rule": "Una OT debe tardar el menor tiempo posible en produccion para evitar demasiadas OTs abiertas a la par; el balanceo debe preferir compactar y terminar OTs activas cuando sea factible, sin violar precedencia, bloqueos, calendario, capacidad, secuencia inicial protegida, reglas de arranque por orden de lista (RULE-BAL-008) ni agrupacion por herramental/kit (RULE-BAL-003). Esto NO implica FIFO de terminacion: una OT posterior puede terminar antes que una OT anterior si ya pudo iniciar de acuerdo con el orden de lista y sus operaciones sucesoras encajan mejor en huecos disponibles, reducen tiempo en proceso o evitan cambios de herramental/kit sin retrasar el arranque factible de una OT anterior.",
+      "source": "definicion de usuario 2026-08-12 y 2026-08-29 (el orden controla el inicio, no la terminacion; una OT posterior puede terminar antes si encuentra huecos); src/web/planning/planner-core.js; docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
       "domain": "Balanceo"
+    },
+    {
+      "rule_id": "RULE-BAL-008",
+      "name": "Arranque de OTs por orden de Planeado/No planeado y sucesoras optimizables",
+      "status": "implementada",
+      "rule": "El orden visible de las OTs en la lista Planeado / No planeado define la prioridad de ARRANQUE de cada OT en modo rapido/flujo: la primera operacion de una OT posterior no debe iniciar antes que la primera operacion factible pendiente de una OT anterior, salvo que la OT anterior no pueda arrancar por una restriccion real (maquina, operador, calendario, herramental/kit, precedencia, configuracion, bloqueo o fecha minima). Una vez que una OT ya inicio, sus operaciones sucesoras entran a una cola optimizable: pueden aprovechar huecos, agruparse por herramental/kit, reducir CAMBIO_HERRAMENTAL, compactar tiempo en proceso y terminar antes que OTs anteriores. Por tanto, el orden de lista NO impone FIFO completo ni orden de terminacion; solo protege el inicio. Una operacion sucesora de una OT posterior puede adelantarse si no retrasa el arranque factible de una OT anterior ni viola restricciones duras. Implementacion: schedulePlan pasa fastQualityMode a schedulePlanOnce; compareReadyCandidates usa selectedOts/orderIndex para primeras operaciones y permite que sucesoras de OTs ya iniciadas ganen si son de orden anterior o llenan un hueco antes del arranque factible; fuera de fastQualityMode se conserva el comportamiento legacy.",
+      "source": "definicion de usuario 2026-08-29 (las OTs estan definidas por orden en Planeado/No planeado para empezar; desde la segunda operacion se optimizan huecos, cambios de herramental y terminacion; una OT posterior puede terminar antes); src/web/planning/planner-core.js; tests/planner-core.test.mjs; docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
+      "domain": "Balanceo",
+      "updated_at": "2026-08-29T07:10:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-009",
+      "name": "Modo rapido de generacion conserva mejor plan completo bajo presupuesto de 5 minutos",
+      "status": "implementada",
+      "rule": "Cuando PlannerCore.schedulePlan recibe fastQualityMode=true o un timeBudgetMs <= 300000, el motor entra en modo rapido de calidad: conserva como maximo tres estrategias completas para volumen grande, omite flow_balanced adicional con strategySkips reason FAST_QUALITY_BUDGET, y si el presupuesto vence durante una estrategia posterior devuelve el mejor plan completo ya evaluado (keep-best-on-timeout) marcando performance.aborted=true y reason TIME_BUDGET_EXCEEDED. La UI usa PLANNING_PLAN_TIME_BUDGET_MS=300000 para que Generar plan apunte a terminar antes de 5 minutos con ~140 OTs sin devolver parciales peores. Las restricciones duras se mantienen: respectPlanStart, operador desde MATRIZ, capacidad/calendario, precedencia, bloqueos, historicas/completadas, subcontrato y CAMBIO_HERRAMENTAL.",
+      "source": "definicion de usuario 2026-08-29 (generacion <5 min para 140 OTs sin sacrificar reglas); src/web/planning/app.js; src/web/planning/planner-core.js; tests/planner-core.test.mjs; docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
+      "domain": "Balanceo",
+      "updated_at": "2026-08-29T07:10:00-06:00"
     },
     {
       "rule_id": "RULE-BOM-001",
@@ -451,5 +469,5 @@
       "updated_at": "2026-08-29T05:20:00-06:00"
     }
   ],
-  "updated_at": "2026-08-29T06:35:00-06:00"
+  "updated_at": "2026-08-29T07:10:00-06:00"
 }

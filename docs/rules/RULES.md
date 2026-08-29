@@ -87,7 +87,8 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-BAL-005` | Validación de operador en operaciones sincronizadas de NetSuite | IMPLEMENTADA | definición de usuario 2026-08-27; `08-netsuite.js` |
 | `RULE-BAL-006` | Operador programado siempre desde la matriz de habilidades (MATRIZ), nunca residual | IMPLEMENTADA | definición de usuario 2026-08-27; `planner-core.js` |
 | `RULE-BAL-007` | Validación previa de operador en la matriz antes de generar plan | IMPLEMENTADA | definición de usuario 2026-08-27; `app.js` `planner-core.js` |
-| `RULE-BAL-008` | Arranque por orden de Planeado/No planeado; sucesoras optimizables y terminación flexible | DOCUMENTADA | definición de usuario 2026-08-29 |
+| `RULE-BAL-008` | Arranque por orden de Planeado/No planeado; sucesoras optimizables y terminación flexible | IMPLEMENTADA | definición de usuario 2026-08-29; `planner-core.js` |
+| `RULE-BAL-009` | Modo rápido 5 min con keep-best-on-timeout y estrategias acotadas | IMPLEMENTADA | definición de usuario 2026-08-29; `app.js` `planner-core.js` |
 
 ## BOM
 

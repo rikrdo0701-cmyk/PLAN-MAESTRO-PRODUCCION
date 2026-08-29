@@ -150,6 +150,51 @@ test("PlannerCore aborta cooperativamente cuando vence el presupuesto", async ()
   assert.ok(result.lastSchedule.diagnostics.some((item) => item.code === "TIME_BUDGET_EXCEEDED"));
 });
 
+test("PlannerCore devuelve el mejor plan completo si vence el presupuesto en una estrategia posterior", async () => {
+  const core = loadPlannerCore();
+  let nowCalls = 0;
+  const operations = Array.from({ length: 5 }, (_, index) => ({
+    id: `op-${index + 1}`,
+    ot: String(index + 1),
+    secuencia: 1,
+    ct: "100",
+    descripcion: "CORTE",
+    estatus: "PLAN",
+    tiempoProd: 1,
+  }));
+
+  const result = await core.schedulePlan({
+    selectedOts: operations.map((op) => op.ot),
+    operations,
+    workOrders: operations.map((op) => ({ ot: op.ot })),
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 4, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    collectStats: true,
+    timeBudgetMs: 1000,
+    nowMs: () => {
+      nowCalls += 1;
+      return nowCalls < 160 ? 0 : 2000;
+    },
+  });
+
+  assert.equal(result.lastSchedule.performance.aborted, true);
+  assert.equal(result.lastSchedule.performance.reason, "TIME_BUDGET_EXCEEDED");
+  assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");
+  assert.deepEqual(
+    structuredClone(result.lastSchedule.optimization.strategiesEvaluated.map((item) => `${item.strategy}:${item.aborted}`)),
+    ["balanced:false", "finish:true"],
+  );
+  assert.equal(result.lastSchedule.scheduled, 5);
+  assert.equal(result.lastSchedule.unscheduled, 0);
+});
+
 test("el progreso de programacion nunca supera el total entre estrategias (no acumula)", async () => {
   const core = loadPlannerCore();
   const operations = [];
@@ -172,6 +217,7 @@ test("el progreso de programacion nunca supera el total entre estrategias (no ac
     horizonDays: 5,
     executionTime: "2026-07-13T07:00:00",
     collectStats: true,
+    timeBudgetMs: 300000,
     progressEveryMs: 0,
     onProgress: (event) => events.push(event),
   });
@@ -183,7 +229,68 @@ test("el progreso de programacion nunca supera el total entre estrategias (no ac
   const last = events[events.length - 1];
   assert.equal(last.total, 120);
   assert.equal(last.percent, undefined);
-  assert.equal(result.lastSchedule.performance.stats.strategiesStarted > 1, true);
+  assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 3);
+  assert.deepEqual(structuredClone(result.lastSchedule.optimization.strategySkips), [{ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" }]);
+});
+
+test("la primera operacion respeta el orden de selectedOts sobre la prioridad calculada", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["200", "100"],
+    operations: [
+      { id: "op-100", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", prioridad: 1, tiempoProd: 30 },
+      { id: "op-200", ot: "200", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", prioridad: 9, tiempoProd: 30 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    respectPlanStart: true,
+    fastQualityMode: true,
+  });
+
+  const op200 = result.operations.find((op) => op.id === "op-200");
+  const op100 = result.operations.find((op) => op.id === "op-100");
+  assert.equal(op200.fechaInicio, "2026-07-13");
+  assert.equal(op200.horaInicio, "07:00");
+  assert.equal(op100.horaInicio, "07:30");
+});
+
+test("las sucesoras de una OT ya iniciada pueden compactarse antes de abrir una OT posterior", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100", "200"],
+    operations: [
+      { id: "op-100-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 10 },
+      { id: "op-100-2", ot: "100", secuencia: 2, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 10 },
+      { id: "op-200-1", ot: "200", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 10 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    respectPlanStart: true,
+    fastQualityMode: true,
+  });
+
+  const op1001 = result.operations.find((op) => op.id === "op-100-1");
+  const op1002 = result.operations.find((op) => op.id === "op-100-2");
+  const op2001 = result.operations.find((op) => op.id === "op-200-1");
+  assert.equal(op1001.horaInicio, "07:00");
+  assert.equal(op1002.horaInicio, "07:10");
+  assert.equal(op2001.horaInicio, "07:20");
 });
 
 test("PlannerCore revisa presupuesto en loops internos del scheduler", async () => {

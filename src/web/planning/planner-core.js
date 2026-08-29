@@ -13,6 +13,7 @@
   const DEFAULT_HORIZON_DAYS = 15;
   const MAX_SCHEDULING_DAYS = 366;
   const MAX_FIXED_CHAIN_PROBES = 32;
+  const FAST_QUALITY_BUDGET_MS = 300000;
   const FIXED_CHAIN_INFEASIBLE = 0;
   const FIXED_CHAIN_FEASIBLE = 1;
   const FIXED_CHAIN_INCONCLUSIVE = 2;
@@ -154,65 +155,58 @@
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
+    const fastQualityMode = options?.fastQualityMode ?? inputState?.settings?.fastQualityMode ??
+      (performanceState?.timeBudgetMs > 0 && performanceState.timeBudgetMs <= FAST_QUALITY_BUDGET_MS);
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
     const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
-    const strategies = strategyPool.slice(0, Math.min(passCount + 2, strategyPool.length));
+    const strategyLimit = fastQualityMode ? Math.min(3, passCount + 2) : passCount + 2;
+    const strategies = strategyPool.slice(0, Math.min(strategyLimit, strategyPool.length));
     const evaluated = [];
+    const strategyFailures = [];
+    const strategySkips = [];
+    let flowEvaluation;
     for (const [index, strategy] of strategies.entries()) {
       if (checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
         if (!evaluated.length) break;
         break;
       }
       if (onYield) await onYield();
-      const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState, onYield });
+      const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
       evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
-      if (result.lastSchedule?.performance?.aborted) return result;
+      if (result.lastSchedule?.performance?.aborted) {
+        const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
+        if (complete.length) return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+        return result;
+      }
     }
-    const strategyFailures = [];
-    let flowEvaluation;
     if (flowBalancedEnabled) {
-      try {
-        const strategy = "flow_balanced";
-        if (!checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
-          if (onYield) await onYield();
-          const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, __performanceState: performanceState, onYield });
-          flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
-          evaluated.push(flowEvaluation);
-          if (result.lastSchedule?.performance?.aborted) return result;
+      const skipFastFlow = fastQualityMode && operationCount > 80;
+      if (skipFastFlow) {
+        strategySkips.push({ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" });
+      } else {
+        try {
+          const strategy = "flow_balanced";
+          if (!checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
+            if (onYield) await onYield();
+            const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
+            flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
+            evaluated.push(flowEvaluation);
+            if (result.lastSchedule?.performance?.aborted) {
+              const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
+              if (complete.length) return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+              return result;
+            }
+          }
+        } catch (error) {
+          strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
         }
-      } catch (error) {
-        strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
       }
     }
     if (!evaluated.length) {
-      return await schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", __performanceState: performanceState, onYield });
+      return await schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", fastQualityMode, __performanceState: performanceState, onYield });
     }
-    applyComparableScores(evaluated);
-    const legacySelected = evaluated
-      .filter((item) => item.strategy !== "flow_balanced")
-      .reduce((best, item) => compareEvaluatedPlans(item, best, false) < 0 ? item : best);
-    const flowImprovesSafely = flowEvaluation &&
-      flowEvaluation.metrics.operatorConflicts <= legacySelected.metrics.operatorConflicts &&
-      flowEvaluation.metrics.unscheduled <= legacySelected.metrics.unscheduled &&
-      flowEvaluation.metrics.score < legacySelected.metrics.score;
-    const selected = flowImprovesSafely ? flowEvaluation : legacySelected;
-    selected.result.lastSchedule.optimization = {
-      method: "MULTI_STRATEGY_HEURISTIC",
-      globalOptimalityGuaranteed: false,
-      strategiesEvaluated: evaluated.map((item) => ({
-        strategy: item.strategy,
-        objective: item.metrics.objective,
-        score: item.metrics.score,
-        metrics: item.metrics,
-      })),
-      strategyFailures,
-      volumePassLimit,
-      selectedStrategy: selected.strategy,
-      metrics: selected.metrics,
-    };
-    attachPlanningPerformance(selected.result, performanceState);
-    return selected.result;
+    return finalizeMultiStrategyPlan({ evaluated, selectable: evaluated, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState });
   }
 
   async function schedulePlanOnce(inputState, options) {
@@ -289,6 +283,7 @@
       flowWipTarget: options?.strategy === "flow_balanced"
         ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
         : 10,
+      fastQualityMode: options?.fastQualityMode === true,
     };
 
     const authorizedStatuses = selectionDefined
@@ -330,7 +325,7 @@
       }
 
       enrichToolsFromCatalog(state, movable);
-      jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed]);
+      jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed], state);
       excluded = activeSourceOperations.filter((op) =>
         op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
         (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
@@ -391,10 +386,10 @@
         }
 
         if (!ready.length) break;
-        const candidates = context.strategy === "flow_balanced"
+        const candidates = context.strategy === "flow_balanced" || context.fastQualityMode
           ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
           : ready;
-        candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy));
+        candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy, context));
         const chosen = candidates[0];
         chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
         const committed = commitAssignment(context, chosen.op, chosen.assignment);
@@ -1913,13 +1908,16 @@
     return Boolean(key) && key !== "SIN_MAQUINA";
   }
 
-  function buildJobs(operations, fixedOperations) {
+  function buildJobs(operations, fixedOperations, state = {}) {
     const byOt = new Map();
     for (const op of operations) {
       const key = normalizeKey(op.ot);
       if (!byOt.has(key)) byOt.set(key, []);
       byOt.get(key).push(op);
     }
+    const selectedOrder = new Map((state.selectedOts || [])
+      .map((ot, index) => [normalizeKey(ot), index])
+      .filter(([key]) => key));
     return [...byOt.values()].map((items) => ({
       operations: items.sort(compareOperationSequence),
       fixedOperations: (fixedOperations || [])
@@ -1927,6 +1925,7 @@
         .sort(compareOperationSequence),
       index: 0,
       last: null,
+      orderIndex: selectedOrder.has(normalizeKey(items[0]?.ot)) ? selectedOrder.get(normalizeKey(items[0]?.ot)) : Number.MAX_SAFE_INTEGER,
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
   }
 
@@ -2017,7 +2016,11 @@
     return Number(a?.secuencia) - Number(b?.secuencia) || Number(a?.num) - Number(b?.num);
   }
 
-  function compareFirstOperationCandidates(a, b) {
+  function compareFirstOperationCandidates(a, b, strategy, context) {
+    if (usesOrderedStartFlow(strategy, context)) {
+      const order = jobOrderIndex(a.job) - jobOrderIndex(b.job);
+      if (order) return order;
+    }
     const ap = normalizePriority(a.op.prioridad);
     const bp = normalizePriority(b.op.prioridad);
     const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
@@ -2025,13 +2028,33 @@
     return ap - bp || a.assignment.end - b.assignment.end || ad - bd || String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
   }
 
-  function compareReadyCandidates(a, b, firstOperation, strategy) {
+  function jobOrderIndex(job) {
+    return Number.isFinite(Number(job?.orderIndex)) ? Number(job.orderIndex) : Number.MAX_SAFE_INTEGER;
+  }
+
+  function compareFirstAndSuccessorCandidates(firstCandidate, successorCandidate) {
+    const firstOrder = jobOrderIndex(firstCandidate.job);
+    const successorOrder = jobOrderIndex(successorCandidate.job);
+    if (firstOrder < successorOrder) {
+      return successorCandidate.assignment.end <= firstCandidate.assignment.start ? 1 : -1;
+    }
+    if (successorOrder < firstOrder) {
+      return firstCandidate.assignment.end <= successorCandidate.assignment.start ? -1 : 1;
+    }
+    return -1;
+  }
+
+  function usesOrderedStartFlow(strategy, context) {
+    return context?.fastQualityMode === true || strategy === "flow_balanced";
+  }
+
+  function compareReadyCandidates(a, b, firstOperation, strategy, context) {
     const isFirstA = a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
     const isFirstB = b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
-    if (isFirstA && !isFirstB) return -1;
-    if (!isFirstA && isFirstB) return 1;
-    if (isFirstA && isFirstB) return compareFirstOperationCandidates(a, b);
-    if (strategy === "flow_balanced") return compareFlowReadyCandidates(a, b);
+    if (isFirstA && !isFirstB) return usesOrderedStartFlow(strategy, context) ? compareFirstAndSuccessorCandidates(a, b) : -1;
+    if (!isFirstA && isFirstB) return usesOrderedStartFlow(strategy, context) ? -compareFirstAndSuccessorCandidates(b, a) : 1;
+    if (isFirstA && isFirstB) return compareFirstOperationCandidates(a, b, strategy, context);
+    if (strategy === "flow_balanced" || context?.fastQualityMode === true) return compareFlowReadyCandidates(a, b);
     const stateA = a.job?.state || a.context?.state || {};
     const stateB = b.job?.state || b.context?.state || {};
     const aIsSubcontract = isSubcontractOperation(stateA, a.op);
@@ -2095,7 +2118,7 @@
       const matrixWeightB = computeMatrixLoadWeight(state, capabilityB, loadB, String(b.assignment.operator || "SIN_OPERADOR"));
       if (matrixWeightA !== matrixWeightB) return matrixWeightA - matrixWeightB;
     }
-    return firstOperation ? compareFirstOperationCandidates(a, b) : compareInterleavedCandidates(a, b);
+    return firstOperation ? compareFirstOperationCandidates(a, b, strategy, context) : compareInterleavedCandidates(a, b);
   }
 
   function compareAssignments(a, b, strategy) {
@@ -2386,6 +2409,39 @@
       item.metrics.score = Math.round(components.reduce((sum, [key, weight]) =>
         sum + weight * finiteNumber(item.metrics[key]) / denominators[key], 0) * 1e8) / 1e8;
     }
+  }
+
+  function finalizeMultiStrategyPlan({ evaluated, selectable, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason = "" }) {
+    applyComparableScores(evaluated);
+    const selectedPool = selectable?.length ? selectable : evaluated;
+    const legacyCandidates = selectedPool.filter((item) => item.strategy !== "flow_balanced");
+    const legacySelected = legacyCandidates.length
+      ? legacyCandidates.reduce((best, item) => compareEvaluatedPlans(item, best, false) < 0 ? item : best)
+      : selectedPool[0];
+    const flowCandidate = selectedPool.find((item) => item === flowEvaluation);
+    const flowImprovesSafely = flowCandidate && legacySelected &&
+      flowCandidate.metrics.operatorConflicts <= legacySelected.metrics.operatorConflicts &&
+      flowCandidate.metrics.unscheduled <= legacySelected.metrics.unscheduled &&
+      flowCandidate.metrics.score < legacySelected.metrics.score;
+    const selected = flowImprovesSafely ? flowCandidate : legacySelected;
+    selected.result.lastSchedule.optimization = {
+      method: "MULTI_STRATEGY_HEURISTIC",
+      globalOptimalityGuaranteed: false,
+      strategiesEvaluated: evaluated.map((item) => ({
+        strategy: item.strategy,
+        objective: item.metrics.objective,
+        score: item.metrics.score,
+        metrics: item.metrics,
+        aborted: Boolean(item.result?.lastSchedule?.performance?.aborted),
+      })),
+      strategyFailures,
+      strategySkips,
+      volumePassLimit,
+      selectedStrategy: selected.strategy,
+      metrics: selected.metrics,
+    };
+    attachPlanningPerformance(selected.result, performanceState, abortReason);
+    return selected.result;
   }
 
   function compareEvaluatedPlans(a, b, useComparableScore) {
