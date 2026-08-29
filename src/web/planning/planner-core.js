@@ -238,7 +238,8 @@
     const newnessBase = options?.baseSnapshot?.fullState || options?.baseSnapshot || null;
     const newnessIndex = newnessBase ? buildNewnessIndex(newnessBase) : null;
     const nowAnchor = executionTime;
-    const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
+    const schedulingDays = (options?.isDryRun === true || options?.__dryRun === true) ? 3650 : MAX_SCHEDULING_DAYS;
+    const windowEnd = atMinute(addDays(startOfDay(planStart), schedulingDays), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
     state.__workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
@@ -1371,13 +1372,12 @@
      return types[Math.floor(Math.random() * types.length)];
    }
 
-   function getRandomMachine(ct) {
-     const machines = ["M1", "M2", "M3", "M4", "M5", "M6"];
-     const candidates = machines.filter(m => {
-       if (!m) return false;
-       if (ct === "5459" && m === "1") return false;
-       return true;
-     });
+   function getRandomMachine(state, ct) {
+     const machines = (state.machines || [])
+       .filter((mc) => mc.active !== false)
+       .map((mc) => String(mc.id || mc.machine || mc.maquina || "").trim())
+       .filter(Boolean);
+     const candidates = machines.filter((m) => !(String(ct) === "5459" && m === "1"));
      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
    }
 
@@ -2744,14 +2744,14 @@
           if (isBendingOperation(op)) {
             const catalogTool = toolCatalogForOperation(state, op);
             if (!op.maquina) {
-              op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(op.ct);
+              op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(state, op.ct);
             }
             if (!op.herramental && !op.tool) {
               if (catalogTool && cleanTool(catalogTool.herramental)) {
                 op.herramental = cleanTool(catalogTool.herramental);
                 op.kitHerramental = cleanTool(catalogTool.kitHerramental);
               } else {
-                const machine = op.maquina || getRandomMachine(op.ct);
+                const machine = op.maquina || getRandomMachine(state, op.ct);
                 op.herramental = getRandomToolKey(machine, op.ct);
               }
             }
