@@ -5187,6 +5187,23 @@ function validateScheduleConfiguration(executionTime, ots = state.selectedOts, o
   let issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
+  for (const op of operations) {
+    const capability = capabilityFromOperation(op);
+    const catalog = toolCatalogForAppOperation(op);
+    const subcontractDays = subcontractDaysForAppOperation(op);
+    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
+    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDays.days || op.subcontractDays || 0);
+    const isSubcontract = isSubcontractAppOperation(op);
+    if (isSubcontract && !effectiveSubcontractType) {
+      issues.push({ code: "MISSING_SUBCONTRACT_TYPE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+    if (isSubcontract && effectiveSubcontractDays <= 0) {
+      issues.push({ code: "MISSING_SUBCONTRACT_DAYS", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+  }
   if (options.ignoreAutoFillable) {
     const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
     issues = issues.filter((issue) => !autoFillableCodes.has(issue.code));
@@ -5229,21 +5246,6 @@ function validateScheduleConfiguration(executionTime, ots = state.selectedOts, o
       tab: ["MISSING_MACHINE", "MISSING_TOOL"].includes(issue.code) ? "tools" : "matrix",
       message: messages[issue.code] || "Falta completar la configuracion del plan",
     };
-  }
-  for (const op of operations) {
-    const capability = capabilityFromOperation(op);
-    const catalog = toolCatalogForAppOperation(op);
-    const subcontractDays = subcontractDaysForAppOperation(op);
-    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
-    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
-    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDays.days || op.subcontractDays || 0);
-    const isSubcontract = isSubcontractAppOperation(op);
-    if (isSubcontract && !effectiveSubcontractType) {
-      return { operationId: op.id, tab: "rules", message: `Define el tipo de subcontrato para ${capability.label}` };
-    }
-    if (isSubcontract && effectiveSubcontractDays <= 0) {
-      return { operationId: op.id, tab: "rules", message: `Define los dias de subcontrato para ${capability.label}` };
-    }
   }
   return null;
 }
