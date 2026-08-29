@@ -376,17 +376,12 @@
             assignment.projectedOperatorLoad = (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes;
             countPlanningStat(performanceState, "cachedAssignmentReuses");
           } else {
-            let candidates = findAssignments(context, op, previous);
-            if (context.isDryRun !== true) {
-              candidates = candidates.filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
-            }
+            const candidates = findAssignments(context, op, previous)
+              .filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
             candidates.sort((a, b) => compareAssignments(a, b, context.strategy));
             assignment = candidates[0] || null;
             if (assignment) {
               job.__planAssignment = { op, assignment, unique: candidates.length === 1 };
-            }
-            if (!assignment && context.isDryRun === true) {
-              assignment = buildForcedAssignment(context, job, op, previous);
             }
           }
           if (assignment) ready.push({ job, op, assignment });
@@ -551,41 +546,6 @@
     return assignments[0] || null;
   }
 
-  function buildForcedAssignment(context, job, op, previous) {
-    const finite = isFiniteOperation(context.state, op);
-    const earliest = computeEarliestStart(context, op, previous);
-    const productionMinutes = Math.max(SNAP_MINUTES, Math.round(operationDuration(op, 100, 100)));
-    const start = ceilToSnap(earliest >= context.windowStart ? earliest : context.windowStart);
-    const end = addMinutes(start, productionMinutes);
-    const segments = [{ start, end }];
-    const isSub = isSubcontractOperation(context.state, op);
-    const operator = isSub ? "SUBCONTRATO" : (operatorCandidates(context.state, op, finite)[0] || "OPERADOR_AUTODRY_1");
-    const machine = isBendingOperation(op)
-      ? (String(op.maquina || "").trim() || machineCandidates(context.state, op)[0] || "")
-      : (isSub ? "" : "");
-    return {
-      start,
-      operationStart: start,
-      end,
-      segments,
-      productionSegments: segments,
-      setupSegments: [],
-      setupEnd: start,
-      operator,
-      machine,
-      finite,
-      setupMinutes: 0,
-      productionMinutes,
-      setupOperator: "",
-      toolChange: { required: false, minutes: 0, fromLabel: "", toLabel: "" },
-      postToolChange: null,
-      toolPenalty: 0,
-      operatorLoad: 0,
-      projectedOperatorLoad: productionMinutes,
-      gapFill: false,
-    };
-  }
-
   function findAssignments(context, op, previous) {
     const earliest = computeEarliestStart(context, op, previous);
     if (earliest >= context.windowEnd) return [];
@@ -602,19 +562,7 @@
 
     const assignments = [];
     const selectedMachine = String(op.maquina || "").trim();
-    const machineIsValid = (m) => m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1");
-    const dryRunAltPool = context.isDryRun === true
-      ? (context.state.machines || [])
-        .filter((mc) => mc.active !== false)
-        .map((mc) => String(mc.id || mc.machine || mc.maquina || "").trim())
-        .filter((m) => machineIsValid(m) && validBendingMachine(m, op.ct))
-      : [];
-    const machineOrder = (() => {
-      if (!selectedMachine) return machines;
-      const fallback = (context.isDryRun === true ? dryRunAltPool : machines)
-        .filter((m) => m && machineIsValid(m) && m !== selectedMachine);
-      return [selectedMachine, ...fallback.slice(0, 4)];
-    })();
+    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(op.ct) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
 
     for (const operator of operators) {
       for (const machine of machineOrder) {
@@ -1068,7 +1016,7 @@
       previous,
       { remaining: MAX_FIXED_CHAIN_PROBES },
     );
-    return feasibility === FIXED_CHAIN_FEASIBLE;
+     return feasibility !== FIXED_CHAIN_INFEASIBLE;
   }
 
   function fixedChainFeasibility(context, job, intermediates, fixedStart, previous, budget) {
