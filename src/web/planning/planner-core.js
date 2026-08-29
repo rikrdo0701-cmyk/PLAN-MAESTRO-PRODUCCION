@@ -155,7 +155,7 @@
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
-    const fastQualityMode = options?.fastQualityMode ?? inputState?.settings?.fastQualityMode ??
+    const fastQualityMode = options?.fastQualityMode === true || inputState?.settings?.fastQualityMode === true ||
       (performanceState?.timeBudgetMs > 0 && performanceState.timeBudgetMs <= FAST_QUALITY_BUDGET_MS);
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);

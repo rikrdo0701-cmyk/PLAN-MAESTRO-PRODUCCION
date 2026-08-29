@@ -4553,6 +4553,7 @@ async function scheduleCurrentPlanImpl() {
       respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
+      fastQualityMode: true,
       timeBudgetMs: PLANNING_PLAN_TIME_BUDGET_MS,
       collectStats: true,
       progressEveryMs: 300,
@@ -4807,6 +4808,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       respectPlanStart: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
+      fastQualityMode: true,
     };
     plannerOptions.timeBudgetMs = configuredTimeoutMs;
     if (dryRunOptions.collectStats !== false && (plannerOptions.timeBudgetMs || dryRunOptions.collectStats === true)) plannerOptions.collectStats = true;
