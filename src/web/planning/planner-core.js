@@ -238,8 +238,7 @@
     const newnessBase = options?.baseSnapshot?.fullState || options?.baseSnapshot || null;
     const newnessIndex = newnessBase ? buildNewnessIndex(newnessBase) : null;
     const nowAnchor = executionTime;
-    const schedulingDays = (options?.isDryRun === true || options?.__dryRun === true) ? 3650 : MAX_SCHEDULING_DAYS;
-    const windowEnd = atMinute(addDays(startOfDay(planStart), schedulingDays), DEFAULT_START_MINUTE);
+    const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
     state.__workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
