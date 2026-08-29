@@ -467,7 +467,25 @@
       "source": "diagnostico 2026-08-28/29 en vivo (reporte semanal vacio por bases nunca ancladas; motor respeta planStart en prueba directa; E2E generar->publicar->reportes PASS con base 9378167d); src/web/planning/app.js:4482-4491; src/web/planning/planning-workflow-core.js (operationsStartingInWeek, planAnchoredAt); tests/planning-workflow-core.test.mjs",
       "domain": "OT",
       "updated_at": "2026-08-29T05:20:00-06:00"
+    },
+    {
+      "rule_id": "RULE-DOB-003",
+      "name": "Doblez/KU: no fabricar maquina ni operador; omitir si no hay catalogo ni infraestructura",
+      "status": "implementada",
+      "rule": "Las operaciones de doblez (isBendingOperation: ct '5459' | '5527') NO deben recibir maquina, herramental ni kit por fallback aleatorio/fabricado. El unico llenado permitido en dry-run es desde el catalogo del articulo (toolCatalogForOperation -> catalogTool.machine / catalogTool.herramental) por RULE-DOB-001/RULE-HER-002. Si el catalogo no provee maquina, la operacion queda con maquina vacia y el motor la reporta honestamente como SIN_MAQUINA (no se inventa 'M0'..'Mn', ni 'TOOLS_n', ni se reusa maquina '1' de corte). Esta es una RESTRICCION de no-fabricacion dictada por el usuario 2026-08-29: 'no hagas fallback ... si la operacion no debe llevar maquina segun las reglas entonces que se omita'.",
+      "source": "correccion usuario 2026-08-29 (rechazo del fallback getRandomMachine que inventaba IDs M0..Mn); src/web/planning/planner-core.js applyOtConfiguration (bloque doblez, relleno solo-desde-catalogo), getRandomMachine/getRandomToolKey eliminados por no usarse y fabricar",
+      "domain": "DOB",
+      "updated_at": "2026-08-29T07:30:00-06:00"
+    },
+    {
+      "rule_id": "ERR-DATOS-DOBLEZ-001",
+      "name": "Hueco de datos: base de planificacion carece de infraestructura de doblez/KU",
+      "status": "documentado",
+      "rule": "ERROR DE ORIGEN DE DATOS (no defecto del motor): la base incremental usada en el dry-run de performance no contiene la infraestructura necesaria para operaciones KU/doblez. Hechos verificados por probes (2026-08-29): (1) state.machines son 7 objetos con keys '0'..'6' y solo {active:true}, NINGUNO de tipo DOBLADO/BENDING y sin campos id/nombre -> getRandomMachine devuelve '' (no hay maquina real que asignar); (2) state.matrix['5459'] esta VACIO (sin operadores KU habilitados) -> operatorCandidates vacio para ct 5459; (3) 12 operaciones KU (ct '5459') tienen maquina vacia en la fuente (OPERACIONES / base autosynth). Consecuencia: esas 12 ops son genuinamente no-programables y el motor reporta SIN_MAQUINA de forma correcta y esperada. NO se debe fabricar maquina/operador para ocultar el hueco (RULE-DOB-003). Las 140 SIN_CAPACIDAD restantes son cascada de las OTs 3295/3098, que tambien contienen ops ct 5459 sin maquina. Origen del hueco: datos sinteticos/autosynth de la base de prueba, no el catalogo de produccion; requiere sembrar MAQUINAS tipo DOBLADO y MATRIZ['5459'] con operadores KU (o corregir la base) para cerrar el 0 sin programar. RULE-MAQ-003 (cada op tiene maquina: Doblez en Dobladora 209) NO se cumple en esta base por falta de datos, no por logica del motor.",
+      "source": "probes 2026-08-29: probe-bend.mjs (state.machines 7 sin DOBLADO), probe-matrix.mjs (matrix['5459'] vacio), probe-causa.mjs / probe-sinmaq.mjs (12 ops ct 5459 maquina ''); ver tambien dryrun-140-fast.mjs resultado SITE=9dc105b (152 unscheduled: 12 SIN_MAQUINA + 140 SIN_CAPACIDAD)",
+      "domain": "DOB",
+      "updated_at": "2026-08-29T07:30:00-06:00"
     }
   ],
-  "updated_at": "2026-08-29T07:10:00-06:00"
+  "updated_at": "2026-08-29T07:30:00-06:00"
 }

@@ -1359,27 +1359,7 @@
      return types[Math.floor(Math.random() * types.length)];
    }
 
-    function getRandomMachine(state, ct) {
-      const list = Array.isArray(state.machines) ? state.machines : Object.values(state.machines || {});
-      const machines = list
-        .filter((mc) => mc && mc.active !== false)
-        .map((mc, i) => String(mc.id || mc.machine || mc.maquina || mc.nombre || `M${i}`).trim())
-        .filter(Boolean);
-      const candidates = machines.filter((m) => !(String(ct) === "5459" && m === "1"));
-      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
-    }
-
-   function getRandomToolKey(machine, ct) {
-     const tools = ["TOOLS_1", "TOOLS_2", "TOOLS_3", "TOOLS_4", "TOOLS_5"];
-     const candidates = tools.filter(t => {
-       if (!t) return false;
-       if (ct === "5459" && machine === "1") return false;
-       return true;
-     });
-     return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
-   }
-
-   function getRandomSubcontractType() {
+    function getRandomSubcontractType() {
      const types = ["GENERAL", "EXTERNO", "CROMADO", "PINTURA", "GALVANIZADO"];
      return types[Math.floor(Math.random() * types.length)];
    }
@@ -2732,27 +2712,21 @@
            if (isBendingOperation(op)) {
              const catalogTool = toolCatalogForOperation(state, op);
              if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
-               op.maquina = (catalogTool && catalogTool.machine) ? String(catalogTool.machine).trim() : getRandomMachine(state, op.ct);
+               if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
              }
              if (!op.herramental && !op.tool) {
                if (catalogTool && cleanTool(catalogTool.herramental)) {
                  op.herramental = cleanTool(catalogTool.herramental);
                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-               } else {
-                 const machine = op.maquina || getRandomMachine(state, op.ct);
-                 op.herramental = getRandomToolKey(machine, op.ct);
                }
              } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
                if (catalogTool && cleanTool(catalogTool.herramental)) {
                  op.herramental = cleanTool(catalogTool.herramental);
                  op.kitHerramental = cleanTool(catalogTool.kitHerramental);
-               } else {
-                 const machine = op.maquina || getRandomMachine(state, op.ct);
-                 op.herramental = getRandomToolKey(machine, op.ct);
                }
                op.tool = "";
              }
-          }
+           }
           if (isSubcontractOperation(state, op)) {
             if (!String(op.subcontractType || "").trim()) op.subcontractType = getRandomSubcontractType();
             if (!(Number(op.subcontractDays) > 0)) op.subcontractDays = 1 + Math.floor(Math.random() * 5);
