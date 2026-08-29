@@ -4557,6 +4557,7 @@ async function scheduleCurrentPlanImpl() {
       timeBudgetMs: PLANNING_PLAN_TIME_BUDGET_MS,
       collectStats: true,
       progressEveryMs: 300,
+      isDryRun: false,
       onProgress: (event) => {
         if (!label) return;
         const scheduled = Number(event?.scheduled || 0);
@@ -4742,25 +4743,39 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
       !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
     );
-    for (const ot of readyOts) {
-      const job = jobs.get(materialOtKey(ot));
-      const operations = jobPlanningOperations(job);
-      if (!job || !operations.length) {
-        result.blockers.push({ code: "OT_WITHOUT_OPERATIONS", ot, message: `No se encontraron operaciones cargadas para OT ${ot}` });
-        continue;
-      }
-      const issues = window.PlannerCore.planningConfigurationIssues
-        ? window.PlannerCore.planningConfigurationIssues(state, operations)
-        : [];
-      const blockers = issues.filter((issue) => [
-        "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR",
-        "MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS",
-      ].includes(issue.code));
-      blockers.forEach((issue) => result.blockers.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Falta completar la configuracion del plan" }));
-      const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: false });
-      if (commercial.needsType) result.blockers.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}` });
-      if (commercial.needsPlanningType) result.blockers.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}` });
-    }
+     const dryRunMode = true;
+     const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE"]);
+     for (const ot of readyOts) {
+       const job = jobs.get(materialOtKey(ot));
+       const operations = jobPlanningOperations(job);
+       if (!job || !operations.length) {
+         result.blockers.push({ code: "OT_WITHOUT_OPERATIONS", ot, message: `No se encontraron operaciones cargadas para OT ${ot}` });
+         continue;
+       }
+       const issues = window.PlannerCore.planningConfigurationIssues
+         ? window.PlannerCore.planningConfigurationIssues(state, operations)
+         : [];
+       const blockers = issues.filter((issue) => [
+         "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR",
+         "MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS",
+       ].includes(issue.code));
+       for (const issue of blockers) {
+         if (dryRunMode && autoFillableCodes.has(issue.code)) {
+           result.warnings.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Dato faltante; se autocompleta solo para dry-run (no afecta planeacion real)", autoFilled: true });
+           continue;
+         }
+         result.blockers.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Falta completar la configuracion del plan" });
+       }
+       const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: false });
+       if (commercial.needsType) {
+         if (dryRunMode) result.warnings.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}; se autocompleta solo para dry-run`, autoFilled: true });
+         else result.blockers.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}` });
+       }
+       if (commercial.needsPlanningType) {
+         if (dryRunMode) result.warnings.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}; se autocompleta solo para dry-run`, autoFilled: true });
+         else result.blockers.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}` });
+       }
+     }
     readyOts = readyOts.filter((ot) => !result.blockers.some((blocker) => normalizeStatus(blocker.ot) === normalizeStatus(ot)));
     metrics.readyOtsCount = readyOts.length;
     timings.readinessMs = Math.round(dryRunNowMs() - started);
@@ -4769,7 +4784,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       return finish();
     }
 
-    const validation = validateScheduleConfiguration(new Date(), readyOts);
+    const validation = validateScheduleConfiguration(new Date(), readyOts, { ignoreAutoFillable: true });
     if (validation) {
       result.blockers.push({ code: "SCHEDULE_CONFIGURATION", operationId: validation.operationId || "", message: validation.message });
       return finish();
@@ -4821,6 +4836,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     }
     const scheduleResult = await window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
       ...plannerOptions,
+      isDryRun: true,
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
     timings.schedulePlanMs = Math.round(dryRunNowMs() - started);
@@ -5158,7 +5174,7 @@ async function generatePlanPdf() {
   }
 }
 
-function validateScheduleConfiguration(executionTime, ots = state.selectedOts) {
+function validateScheduleConfiguration(executionTime, ots = state.selectedOts, options = {}) {
   const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
   const operations = currentPlanOperations().filter((op) =>
     isJobSelected(op.ot) &&
@@ -5168,9 +5184,13 @@ function validateScheduleConfiguration(executionTime, ots = state.selectedOts) {
     !shouldAutoFreezeOperation(op, executionTime) &&
     op.tipoInsercion !== "CAMBIO_HERRAMENTAL"
   );
-  const issues = window.PlannerCore?.planningConfigurationIssues
+  let issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
+  if (options.ignoreAutoFillable) {
+    const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE"]);
+    issues = issues.filter((issue) => !autoFillableCodes.has(issue.code));
+  }
   if (issues.length) {
     const configCauses = new Set(["MISSING_OPERATOR", "MISSING_CAPABILITY"]);
     const firstByKey = {};

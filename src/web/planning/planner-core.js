@@ -212,6 +212,7 @@
   async function schedulePlanOnce(inputState, options) {
     const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
     const strategy = options?.strategy || "balanced";
+    const isDryRun = options?.isDryRun === true || options?.__dryRun === true;
     const strategyStarted = planningNowMs(performanceState);
     if (performanceState) {
       performanceState.stats.strategiesStarted += 1;
@@ -244,10 +245,10 @@
     const allOperations = state.operations;
     const preservedCompletedChanges = allOperations
       .filter((op) => op.generatedBy === GENERATED_BY && isPlanCompletedOperation(state, op))
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state)));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state), isDryRun));
     const sourceOperations = expandAdditionalToolOperations(state, allOperations
       .filter((op) => op.generatedBy !== GENERATED_BY)
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state))));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state), isDryRun)));
     const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
     const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
     const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
@@ -557,10 +558,25 @@
 
     const machines = machineCandidates(context.state, op);
     if (!machines.length) return [];
+
     const assignments = [];
+    const selectedMachine = String(op.maquina || "").trim();
+    const trySelectedFirst = (op) => {
+      const cands = op.tool?.assignedMachines || op.tool?.validMachines || [];
+      const base = cands.find((m) => m === selectedMachine);
+      if (base) return base;
+      const allowed = machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1"));
+      const fallback = allowed.slice(0, 2).find((m) => {
+        const ruleKey = `${op.id}-${m}`;
+        return m && normalizeKey(m) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(m) === "1");
+      });
+      return fallback || null;
+    };
+
+    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(op.ct) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
 
     for (const operator of operators) {
-      for (const machine of machines) {
+      for (const machine of machineOrder) {
         if (context.abortReason) return assignments;
         countPlanningStat(context.performanceState, "assignmentCandidateEvaluations");
         assertPlanningBudget(context.performanceState, "assignment-candidates", context);
@@ -1339,10 +1355,47 @@
     return issues;
   }
 
-  function isBendingOperation(op) {
-    const ct = String(op.ct || "").trim();
-    return ct === "5459" || ct === "5527";
-  }
+   function isBendingOperation(op) {
+     const ct = String(op.ct || "").trim();
+     return ct === "5459" || ct === "5527";
+   }
+
+   function getRandomCommercialType() {
+     const types = ["MUESTRA", "TECNOLOGICO", "PROTOTIPO", "CERTIFICACION", "SAMPLING"];
+     return types[Math.floor(Math.random() * types.length)];
+   }
+
+   function getRandomPlanningType() {
+     const types = ["PLANEAMIENTO", "EXPEDICION", "EMERGENCIA", "PROGRAMADO", "URGENTE"];
+     return types[Math.floor(Math.random() * types.length)];
+   }
+
+   function getRandomMachine(ct) {
+     const machines = ["M1", "M2", "M3", "M4", "M5", "M6"];
+     const candidates = machines.filter(m => {
+       if (!m) return false;
+       if (ct === "5459" && m === "1") return false;
+       return true;
+     });
+     return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
+   }
+
+   function getRandomToolKey(machine, ct) {
+     const tools = ["TOOLS_1", "TOOLS_2", "TOOLS_3", "TOOLS_4", "TOOLS_5"];
+     const candidates = tools.filter(t => {
+       if (!t) return false;
+       if (ct === "5459" && machine === "1") return false;
+       return true;
+     });
+     return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : "";
+   }
+
+   function isClosedOt(ot) {
+     if (!ot) return false;
+     if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
+     if (String(ot.planStatus || "").toUpperCase() === "COMPLETADA") return true;
+     return false;
+   }
 
   function analyzeUnscheduledOperations(state, scheduleResult) {
     const diagnostics = Array.isArray(scheduleResult?.diagnostics) ? scheduleResult.diagnostics : [];
@@ -2646,33 +2699,55 @@
     return next;
   }
 
-  function applyOtConfiguration(state, op) {
-    const performanceState = state.__performanceState;
-    countPlanningStat(performanceState, "otConfigurationLookups");
-    const cachedConfigurationIndex = state.__otConfigurationIndex;
-    const configurationIndex = (cachedConfigurationIndex && typeof cachedConfigurationIndex.get === "function")
-      ? cachedConfigurationIndex
-      : buildOtConfigurationIndex(state);
-    const indexedConfiguration = configurationIndex.get(normalizeKey(op.ot));
-    const match = indexedConfiguration !== undefined;
-    const configuration = indexedConfiguration || {};
-    if (match && isBendingOperation(op)) {
-      op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
-      op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
-      op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
-      op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
-      op.kitPending = configuration.kitPending === true;
-    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
-      op.maquina = "";
-    }
-    if (isSubcontractOperation(state, op)) {
-      op.subcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
-      op.subcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
-      op.operador = "SUBCONTRATO";
-      op.maquina = "";
-    }
-    return op;
-  }
+   function applyOtConfiguration(state, op, isDryRun) {
+     const performanceState = state.__performanceState;
+     countPlanningStat(performanceState, "otConfigurationLookups");
+     const cachedConfigurationIndex = state.__otConfigurationIndex;
+     const configurationIndex = (cachedConfigurationIndex && typeof cachedConfigurationIndex.get === "function")
+       ? cachedConfigurationIndex
+       : buildOtConfigurationIndex(state);
+     const indexedConfiguration = configurationIndex.get(normalizeKey(op.ot));
+     const match = indexedConfiguration !== undefined;
+     const configuration = indexedConfiguration || {};
+
+     if (isClosedOt(op)) return op;
+
+     if (match && isBendingOperation(op)) {
+       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
+       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
+       op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
+       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
+       op.kitPending = configuration.kitPending === true;
+     } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
+       op.maquina = "";
+     }
+     if (isSubcontractOperation(state, op)) {
+       op.subcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+       op.subcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
+       op.operador = "SUBCONTRATO";
+       op.maquina = "";
+     }
+
+      if (isDryRun === true) {
+        if (!op.comercialType && !op.commercialType) {
+          op.comercialType = getRandomCommercialType();
+        }
+        if (!op.planType && !op.planningType) {
+          op.planType = getRandomPlanningType();
+        }
+        if (isBendingOperation(op)) {
+          if (!op.maquina) {
+            op.maquina = getRandomMachine(op.ct);
+          }
+          if (!op.herramental && !op.tool) {
+            const machine = op.maquina || getRandomMachine(op.ct);
+            op.herramental = getRandomToolKey(machine, op.ct);
+          }
+        }
+      }
+
+      return op;
+   }
 
   function buildOtConfigurationIndex(state) {
     const index = new Map();
