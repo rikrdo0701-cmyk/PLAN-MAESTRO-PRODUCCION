@@ -258,6 +258,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(index, /PPAppsScriptBridge/);
   assert.match(index, /getAppState/);
   assert.match(index, /savePlanningStateOptimized/);
+  assert.doesNotMatch(codeService, /addMetaTag\(['"]cache-control['"]/, "Apps Script lanza error en addMetaTag('cache-control'); no agregar metatags no soportados en doGet");
   assert.match(codeService, /function saveWorkOrderSyncState\(payload\)/);
   assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
   assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
