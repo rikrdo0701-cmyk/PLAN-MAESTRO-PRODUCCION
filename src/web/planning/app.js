@@ -9,6 +9,7 @@ const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLANNING_PLAN_TIME_BUDGET_MS = 300000;
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
+const PLAN_SNAPSHOTS_CACHE_KEY = "plan-snapshots-cache-v1";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
 const WORK_END_HOUR = 17;
@@ -495,6 +496,23 @@ let resourceCategoryDrag = null;
 let planSnapshots = [];
 let planSnapshotsLoading = false;
 let planSnapshotsRequest = null;
+
+function loadPlanSnapshotsCache() {
+  try {
+    const raw = localStorage.getItem(PLAN_SNAPSHOTS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function savePlanSnapshotsCache(snapshots) {
+  try {
+    localStorage.setItem(PLAN_SNAPSHOTS_CACHE_KEY, JSON.stringify(snapshots));
+  } catch (_) {}
+}
 let reportSnapshot = null;
 let loadSnapshot = null;
 let loadMode = "pending";
@@ -5884,6 +5902,13 @@ async function loadPlanSnapshots(showMessage, options = {}) {
 }
 
 async function loadPlanSnapshotsImpl(showMessage, options = {}) {
+  if (!planSnapshots.length) {
+    const cached = loadPlanSnapshotsCache();
+    if (cached.length) {
+      planSnapshots = cached.sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+      renderPlanSnapshotSelect();
+    }
+  }
   planSnapshotsLoading = true;
   renderPlanSnapshotSelect();
   try {
@@ -5892,6 +5917,7 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
       : await fetchJson(PLAN_SNAPSHOTS_API);
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+    savePlanSnapshotsCache(planSnapshots);
     const draftReport = currentDraftReportSnapshot();
     const hasDraftReport = draftReport.operations.length > 0;
     const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
