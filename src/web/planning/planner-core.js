@@ -172,12 +172,26 @@
         break;
       }
       if (onYield) await onYield();
-      const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
+const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
       evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
       if (result.lastSchedule?.performance?.aborted) {
         const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
         if (complete.length) return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
         return result;
+      }
+      if (fastQualityMode && evaluated.length >= 2) {
+        const first = evaluated[0].metrics;
+        const converged = evaluated.every((item) =>
+          item.metrics.operatorConflicts === first.operatorConflicts &&
+          item.metrics.unscheduled === first.unscheduled &&
+          item.metrics.objective === first.objective
+        );
+        if (converged) {
+          for (const pending of strategies.slice(evaluated.length)) {
+            strategySkips.push({ strategy: pending, reason: "STRATEGY_CONVERGED" });
+          }
+          break;
+        }
       }
     }
     if (flowBalancedEnabled) {
@@ -1193,6 +1207,7 @@
     const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
     const performanceState = state.__performanceState;
     countPlanningStat(performanceState, "toolCatalogLookups");
+    if (performanceState) assertPlanningBudget(performanceState, "tool-catalog-lookup");
     const cachedCatalogIndex = state.__toolCatalogByPart;
     const catalogIndex = (cachedCatalogIndex && typeof cachedCatalogIndex.get === "function")
       ? cachedCatalogIndex
@@ -1582,6 +1597,8 @@
       return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {})));
     });
   }
+  // TODO: Consider memoizing filterExcludedOperations for performance improvement (RULE-BAL-009 / RULE-MAT-008)
+  // Current overhead: normalizes capabilities and creates Set per call; could cache by (stateHash, excludedSetHash)
 
   function isCalendarAvailable(state, start, end, operator, machine) {
     const windows = effectiveWindows(state, start, operator, machine);
@@ -1597,6 +1614,7 @@
       cache = new Map();
       state.__windowCache = cache;
     }
+    if (state.__performanceState) assertPlanningBudget(state.__performanceState, "effective-windows", { state, date, operator, machine });
     let cacheKey = "";
     if (cache) {
       cacheKey = `${formatDate(date)}|${operator}|${machine}`;
@@ -1667,8 +1685,14 @@
   function addWorkingDays(state, date, days, windowEnd) {
     let cursor = startOfDay(date);
     let remaining = days;
+    let iterationCount = 0;
     while (cursor < windowEnd && remaining > 0) {
       assertPlanningBudget(state.__performanceState, "calendar-working-days");
+      iterationCount++;
+      if (iterationCount % 50 === 0) {
+        // Yield al navegador cada 50 iteraciones para evitar "script unresponsive"
+        setTimeout(() => {}, 0);
+      }
       cursor = addDays(cursor, 1);
       if (effectiveWindows(state, atMinute(cursor, DEFAULT_START_MINUTE), "", "").length) remaining -= 1;
     }
@@ -1679,9 +1703,15 @@
   function addGeneralWorkMinutes(state, date, minutes, windowEnd) {
     let cursor = ceilToSnap(date);
     let remaining = Math.max(0, roundUp(minutes, SNAP_MINUTES));
+    let iterationCount = 0;
     if (!remaining) return cursor;
     while (cursor < windowEnd && remaining > 0) {
       assertPlanningBudget(state.__performanceState, "calendar-work-minutes");
+      iterationCount++;
+      if (iterationCount % 50 === 0) {
+        // Yield al navegador cada 50 iteraciones para evitar "script unresponsive"
+        setTimeout(() => {}, 0);
+      }
       const end = addMinutes(cursor, Math.min(ALLOCATION_CHUNK_MINUTES, remaining));
       if (isCalendarAvailable(state, cursor, end, "", "")) {
         remaining -= diffMinutes(cursor, end);

@@ -169,40 +169,54 @@ svg {
   font-weight: 700;
 }
 
-.workspace {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+html, body {
+  overflow: hidden;
+  touch-action: manipulation;
 }
 
-.workspace[data-view="plan"] #cargas,
-.workspace[data-view="plan"] #cuello-botella,
-.workspace[data-view="plan"] .config-panel,
-.workspace[data-view="plan"] .reports-panel,
-.workspace[data-view="loads"] .summary-strip,
-.workspace[data-view="loads"] .planner-grid,
-.workspace[data-view="loads"] #cuello-botella,
-.workspace[data-view="loads"] .config-panel,
-.workspace[data-view="loads"] .reports-panel,
-.workspace[data-view="loads"] .draft-executive,
-.workspace[data-view="config"] .summary-strip,
-.workspace[data-view="config"] .planner-grid,
-.workspace[data-view="config"] #cargas,
-.workspace[data-view="config"] #cuello-botella,
-.workspace[data-view="config"] .reports-panel,
-.workspace[data-view="config"] .draft-executive,
-.workspace[data-view="reports"] .summary-strip,
-.workspace[data-view="reports"] .planner-grid,
-.workspace[data-view="reports"] #cargas,
-.workspace[data-view="reports"] #cuello-botella,
-.workspace[data-view="reports"] .config-panel,
-.workspace[data-view="saturation"] .summary-strip,
-.workspace[data-view="saturation"] .planner-grid,
-.workspace[data-view="saturation"] #cargas,
-.workspace[data-view="saturation"] .config-panel,
-.workspace[data-view="saturation"] .reports-panel,
-.workspace[data-view="saturation"] .draft-executive { display: none; }
-.workspace:not([data-view="plan"]) .restore-draft-action { display: none; }
+.workspace {
+  overflow: hidden;
+}
+
+.planner-grid {
+  touch-action: manipulation;
+}
+
+.priority-queue {
+  touch-action: manipulation;
+}
+
+.detail-panel {
+  touch-action: auto;
+}
+
+.priority-table-head {
+  touch-action: none;
+}
+
+.gantt {
+  touch-action: manipulation;
+}
+
+.queue-item {
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.queue-move-actions {
+  touch-action: manipulation;
+}
+
+.draggable {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.draggable:active {
+  cursor: grabbing;
+}
 
 .reports-panel { display: none; }
 .workspace[data-view="reports"] .reports-panel { display: block; }

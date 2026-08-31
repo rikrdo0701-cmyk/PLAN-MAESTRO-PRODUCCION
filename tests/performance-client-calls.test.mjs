@@ -803,8 +803,13 @@ test("las fotos de prioridad y cola usan carga diferida nativa", () => {
 test("seleccionar Borrador alinea Cargas con la semana realmente programada", async () => {
   const state = { loadWeekStart: "2026-06-29", planStart: "2026-08-03" };
   let renders = 0;
+  const loadSelectedPlanSnapshot = async (snapshotId) => {
+    assert.equal(snapshotId, "draft");
+    state.loadWeekStart = "2026-08-03";
+    renders += 1;
+  };
   const loadSelectedLoadPlan = Function(
-    "state", "scheduledPlanWindowStart", "normalizeWeekStartValue", "formatDate", "renderLoads",
+    "state", "scheduledPlanWindowStart", "normalizeWeekStartValue", "formatDate", "renderLoads", "loadSelectedPlanSnapshot",
     `let loadSnapshot = { snapshotId: "anterior" };
      ${loadSourceSelectionSource}
      return loadSelectedLoadPlan;`,
@@ -814,6 +819,7 @@ test("seleccionar Borrador alinea Cargas con la semana realmente programada", as
     (value) => String(value),
     (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
     () => { renders += 1; },
+    loadSelectedPlanSnapshot,
   );
 
   await loadSelectedLoadPlan("draft");
@@ -1047,7 +1053,7 @@ test("el arranque remoto conserva la OT de detalle y la operacion seleccionada",
     (options) => workspaceOptions.push(options),
     () => false,
     () => {},
-    () => {},
+    () => Promise.resolve(null),
     () => {},
   );
 

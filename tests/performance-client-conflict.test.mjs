@@ -179,6 +179,12 @@ function loadClient(options = {}) {
     applyInitialWorkspaceView: () => {
       if (options.initialSection) context.showWorkspaceView(options.initialSection);
     },
+    ...(options.captureLocalPlanningState
+      ? { captureLocalPlanningState: options.captureLocalPlanningState }
+      : {}),
+    ...(options.confirmLatestModificationRefresh
+      ? { confirmLatestModificationRefresh: options.confirmLatestModificationRefresh }
+      : {}),
     syncNetSuiteData: async (...args) => {
       syncNetSuiteDataCalls.push(args);
       return false;
@@ -424,7 +430,7 @@ for (const [name, localState] of [
   });
 }
 
-test("un fallo condicional conserva el estado local y no carga historicos en el arranque", async () => {
+test("un fallo condicional conserva el estado local y carga solo la lista de historicos en el arranque", async () => {
   const fixture = loadClient({
     revision: 12,
     state: { operations: [{ id: "local-op" }] },
@@ -437,7 +443,9 @@ test("un fallo condicional conserva el estado local y no carga historicos en el 
 
   assert.equal(fixture.applyImportedCalls.length, 0);
   assert.deepEqual(fixture.state.operations, [{ id: "local-op" }]);
-  assert.equal(fixture.loadPlanSnapshotsCalls.length, 0);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
 });
 
 test("unchanged restaura materiales diferidos desde metadata y los carga bajo demanda", async () => {
@@ -605,7 +613,10 @@ test("Reportes espera a que termine el estado inicial antes de elegir su snapsho
   await fixture.context.loadAppStateInBackground();
 
   assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
-  assert.deepEqual(fixture.snapshotStateAtLoad[0].operations, [{ id: "remote-op" }]);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+  assert.deepEqual(fixture.snapshotStateAtLoad[0].operations, [{ id: "local-op" }]);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
 });
 
 test("Restaurar marca los snapshots como solicitados antes de abrir el flujo", async () => {
@@ -617,7 +628,9 @@ test("Restaurar marca los snapshots como solicitados antes de abrir el flujo", a
   await settleMicrotasks();
 
   assert.equal(fixture.restoreDraftCalls, 1);
-  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
 });
 
 test("Restaurar conserva una lista vacia valida al abrir Reportes", async () => {
@@ -629,7 +642,9 @@ test("Restaurar conserva una lista vacia valida al abrir Reportes", async () => 
   await settleMicrotasks();
 
   assert.equal(fixture.restoreDraftCalls, 1);
-  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
 });
 
 test("Reportes reintenta cuando loadPlanSnapshots informa fallo", async () => {
@@ -643,7 +658,9 @@ test("Reportes reintenta cuando loadPlanSnapshots informa fallo", async () => {
   fixture.context.showWorkspaceView("reportes");
   await settleMicrotasks();
 
-  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 3);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
 });
 
 test("Reportes y Restaurar concurrentes comparten una sola promesa de snapshots", async () => {
@@ -670,4 +687,98 @@ test("Reportes y Restaurar concurrentes comparten una sola promesa de snapshots"
 
   assert.equal(fixture.restoreDraftCalls, 1);
   assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+});
+
+test("al cancelar el arranque conserva el borrador local cuando remoto es mas reciente y distinto", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    state: { operations: [{ id: "local-op" }] },
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [{ id: "local-op" }] }),
+    confirmLatestModificationRefresh: async (localDraft, remoteDraft) => {
+      promptCalls.push({ localDraft, remoteDraft });
+      return false;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 1);
+  assert.equal(fixture.applyImportedCalls.length, 0);
+  assert.deepEqual(fixture.state.operations, [{ id: "local-op" }]);
+  assert.equal(fixture.state.revision, 12);
+  assert.equal(fixture.metadataWrites.at(-1).revision, 12);
+});
+
+test("al confirmar el arranque refresca con la ultima modificacion remota", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    state: { operations: [{ id: "local-op" }] },
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [{ id: "local-op" }] }),
+    confirmLatestModificationRefresh: async (localDraft, remoteDraft) => {
+      promptCalls.push({ localDraft, remoteDraft });
+      return true;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 1);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+  assert.equal(fixture.state.revision, 13);
+});
+
+test("el arranque con borrador local vacio no pregunta y aplica lo remoto", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    localState: coherentLocalState(12),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [] }),
+    confirmLatestModificationRefresh: async (localDraft) => {
+      if (!(localDraft?.operations?.length || localDraft?.selectedOts?.length)) return true;
+      promptCalls.push("llamado");
+      return true;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 0);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+  assert.equal(fixture.state.revision, 13);
 });

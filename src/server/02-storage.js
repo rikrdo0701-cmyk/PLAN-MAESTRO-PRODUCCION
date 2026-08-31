@@ -978,6 +978,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
       pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
     ];
   });
+  if (options && options.requireRows && !rows.length) throw new Error('La instantanea no contiene operaciones programadas para guardar');
   const payloadTransaction = PP_storePlanSnapshotPayload_(snapshotId, payload,
     { generatedAt: generatedAt, user: user, operations: rows.length },
     { keepPrevious: Boolean(options && options.keepPreviousPayload), appendOnly: !(options && options.snapshotId) });
@@ -1003,7 +1004,7 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
   try {
     if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
     return PP_appendPlanSnapshot_(spreadsheet, payload, user, {
-      snapshotId: 'draft', sheetName: 'BORRADOR_PLAN', keepPreviousPayload: true, payloadTransaction: payloadTransaction
+      snapshotId: 'draft', sheetName: 'BORRADOR_PLAN', keepPreviousPayload: true, payloadTransaction: payloadTransaction, requireRows: true
     });
   } catch (error) {
     const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);

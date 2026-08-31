@@ -555,6 +555,16 @@
       });
       return { loaded: false, unchanged: true };
     }
+    if (typeof captureLocalPlanningState === "function"
+      && typeof confirmLatestModificationRefresh === "function"
+      && Number(imported?.revision || 0) > Number(state.revision || 0)) {
+      const refreshWithLatest = await confirmLatestModificationRefresh(captureLocalPlanningState(), imported);
+      if (refreshWithLatest === false) {
+        deferredRevision = Number(state.revision || 0);
+        writeMeta({ syncedAt: state.syncedAt || "" });
+        return { loaded: false, unchanged: false, keptLocal: true };
+      }
+    }
     applyImported(imported, { preserveLocalPlanning: false });
     deferredRevision = Number(imported?.revision || state.revision || 0);
     state.savedAt = imported?.savedAt || state.savedAt;
@@ -573,8 +583,13 @@
       let loaded = false;
       const selectedDetailOt = state.selectedDetailOt;
       const selectedOperationId = state.selectedOperationId;
+      let snapshotsRequest = null;
       try {
         await root.PPAppsScriptBridge.ensureReady();
+        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+          console.warn("No se pudieron cargar los historicos:", error);
+          return null;
+        });
         const result = await loadInitialStateConditionally(initialLocalCache);
         loaded = result.loaded;
         appSheetAvailable = true;
@@ -595,15 +610,19 @@
       if (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded)) {
         syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
       }
+      void snapshotsRequest?.then(() => {
+        if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
+        return null;
+      });
     });
   };
 
   const originalLoadPlanSnapshots = loadPlanSnapshots;
-  function requestPlanSnapshots(showMessage) {
+  function requestPlanSnapshots(showMessage, options = {}) {
     snapshotsMessageRequested ||= showMessage === true;
     return singleFlight("snapshots", async () => {
       try {
-        const result = await originalLoadPlanSnapshots(false);
+        const result = await originalLoadPlanSnapshots(false, options);
         snapshotsLoaded = result?.ok === true;
         if (snapshotsMessageRequested) {
           const message = result?.ok
@@ -621,16 +640,16 @@
     });
   }
 
-  loadSnapshotsOnce = function optimizedLoadSnapshotsOnce(showMessage) {
-    if (activeCalls.has("snapshots")) return requestPlanSnapshots(showMessage);
+  loadSnapshotsOnce = function optimizedLoadSnapshotsOnce(showMessage, options = {}) {
+    if (activeCalls.has("snapshots")) return requestPlanSnapshots(showMessage, options);
     if (snapshotsLoaded) {
       return Promise.resolve({ ok: true, count: planSnapshots.length });
     }
-    return requestPlanSnapshots(showMessage);
+    return requestPlanSnapshots(showMessage, options);
   };
 
-  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage) {
-    return requestPlanSnapshots(showMessage);
+  loadPlanSnapshots = function optimizedLoadPlanSnapshots(showMessage, options = {}) {
+    return requestPlanSnapshots(showMessage, options);
   };
 
   const originalSyncWorkOrdersOnce = syncWorkOrdersOnce;

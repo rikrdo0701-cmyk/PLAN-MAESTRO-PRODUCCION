@@ -49,13 +49,21 @@ function patchPlanningApp(app) {
   let patched = app.replace(collectionMarker, collectionReplacement);
   if (patched === app) throw new Error("No se encontro el punto de importacion de colecciones del backend");
 
-  const sharedStateMarker = "    applyImported(imported, { preserveLocalPlanning: true, preferRemotePlanning: true });";
-  const sharedStateReplacement = "    applyImported(imported, { preserveLocalPlanning: false });";
+  const sharedStateMarker = `applyImported(imported, {
+      preserveLocalPlanning: true,
+      preferRemotePlanning: true,
+      confirmStaleLocalRefresh: confirmLatestModificationRefresh,
+    });`;
+  const sharedStateReplacement = "applyImported(imported, { preserveLocalPlanning: false });";
   const sharedStatePatched = patched.replace(sharedStateMarker, sharedStateReplacement);
   if (sharedStatePatched === patched) throw new Error("No se encontro la carga inicial del estado compartido");
   patched = sharedStatePatched;
 
   const startupMarker = `async function loadAppStateInBackground() {
+  const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+    console.warn("No se pudieron cargar los historicos:", error);
+    return null;
+  });
   const selectedDetailOt = state.selectedDetailOt;
   const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
@@ -68,14 +76,21 @@ function patchPlanningApp(app) {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
-  loadPlanSnapshots(false);
+  void snapshotsRequest.then(() => {
+    if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
+    return null;
+  });
 }`;
   const startupReplacement = `async function loadAppStateInBackground() {
+  const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+    console.warn("No se pudieron cargar los historicos:", error);
+    return null;
+  });
   const selectedDetailOt = state.selectedDetailOt;
   const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
-  await loadPlanSnapshots(false);
+  await snapshotsRequest;
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
   purgeClosedWorkOrderRetention();
   resetDailyReportFiltersToToday();
@@ -86,6 +101,9 @@ function patchPlanningApp(app) {
   applyInitialWorkspaceView({ scrollToTop: false });
   if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+  if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") {
+    void maybeLoadDefaultPublishedReportSnapshot();
+  }
 }
 
 async function restoreDraftPlanFromSharedState() {

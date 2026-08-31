@@ -493,6 +493,8 @@ let planningDialogResolve = null;
 let planningDialogSubmit = null;
 let resourceCategoryDrag = null;
 let planSnapshots = [];
+let planSnapshotsLoading = false;
+let planSnapshotsRequest = null;
 let reportSnapshot = null;
 let loadSnapshot = null;
 let loadMode = "pending";
@@ -521,9 +523,7 @@ function invalidateGanttGroupsCache() {
   GANTT_GROUPS_CACHE_VERSION++;
 }
 
-window.addEventListener("beforeunload", () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState()));
-});
+window.addEventListener("beforeunload", () => {});
 
 window.runPlanningPerformanceDryRun = dryRunCurrentPlanPerformance;
 
@@ -536,6 +536,7 @@ function initializePlanningApp() {
   bindBacklogLoadMoreObserver();
   saveState("ui");
   applyInitialWorkspaceView();
+  saveState("plan");
   loadAppStateInBackground();
 }
 
@@ -543,6 +544,10 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else initializePlanningApp();
 
 async function loadAppStateInBackground() {
+  const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+    console.warn("No se pudieron cargar los historicos:", error);
+    return null;
+  });
   const selectedDetailOt = state.selectedDetailOt;
   const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
@@ -555,7 +560,10 @@ async function loadAppStateInBackground() {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
-  loadPlanSnapshots(false);
+  void snapshotsRequest.then(() => {
+    if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
+    return null;
+  });
 }
 
 function bindElements() {
@@ -1002,13 +1010,7 @@ function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
 }
 
 function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return deepClone(sampleState);
-    return { ...deepClone(sampleState), ...JSON.parse(raw) };
-  } catch {
-    return deepClone(sampleState);
-  }
+  return deepClone(sampleState);
 }
 
 function normalizeState() {
@@ -1278,8 +1280,9 @@ function normalizeOperation(op, index) {
   if (String(next.ct) === "5459" && next.maquina === "1") next.maquina = "";
   next.estatus = String(next.estatus || "PLAN").trim();
   next.locked = next.locked === true || String(next.locked || "").trim().toUpperCase() === "TRUE";
-  next.tiempoSetup = Number(next.tiempoSetup || 0);
-  next.tiempoProd = Number(next.tiempoProd || 0);
+  next.tiempoCiclo = Number(next.tiempoCiclo ?? next.cycleTime ?? 0);
+  next.tiempoSetup = Number(next.tiempoSetup ?? next.setupTime ?? 0);
+  next.tiempoProd = Number(next.tiempoProd ?? next.productionTime ?? 0);
   next.subcontractType = String(next.subcontractType || "").trim().toUpperCase();
   next.subcontractDays = Number(next.subcontractDays || 0);
   if (isSubcontractAppOperation(next)) {
@@ -2439,12 +2442,18 @@ async function prepareJobForPlanning(job, options = {}) {
     : [];
   const blockers = issues.filter((issue) => ["MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR"].includes(issue.code));
   if (blockers.length) {
-    await showPlanningBlockers(job, blockers);
-    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
-    return false;
+    const resolved = await showPlanningBlockers(job, blockers);
+    if (!resolved) {
+      options.onCancel?.();
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+      return false;
+    }
   }
 
-  const requirements = buildPlanningRequirements(issues, operations);
+  const refreshedIssues = window.PlannerCore?.planningConfigurationIssues
+    ? window.PlannerCore.planningConfigurationIssues(state, operations)
+    : [];
+  const requirements = buildPlanningRequirements(refreshedIssues, operations);
   const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
   const hasRequiredGaps = requirements.some((item) => ["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]
     .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType;
@@ -2596,21 +2605,315 @@ function buildPlanningRequirements(issues, operations) {
 }
 
 async function showPlanningBlockers(job, blockers) {
-  const items = blockers.map((issue) => {
-    const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
-    if (issue.code === "MISSING_TOOL_CHANGE_CAPABILITY") return `<li>Falta agregar <strong>CAMBIO DE HERRAMENTAL</strong> a la matriz de habilidades.</li>`;
-    if (issue.code === "MISSING_TOOL_CHANGE_OPERATOR") return `<li>Falta habilitar al menos un operador para <strong>CAMBIO DE HERRAMENTAL</strong>.</li>`;
-    if (issue.code === "MISSING_CAPABILITY") return `<li>Falta agregar <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}) a la matriz de habilidades.</li>`;
-    return `<li>Falta habilitar al menos un operador para <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}).</li>`;
-  }).join("");
-  const result = await openPlanningDialog({
-    title: `OT ${job.ot} no puede agregarse al plan`,
-    summary: "Completa la configuracion antes de programar este trabajo.",
-    body: `<div class="planning-error"><ul>${items}</ul></div>`,
-    confirmLabel: "Ir a matriz",
-    cancelVisible: false,
+  const requirements = capabilityOperatorRequirements(blockers);
+  const toolChange = blockers.some((issue) =>
+    issue.code === "MISSING_TOOL_CHANGE_CAPABILITY" || issue.code === "MISSING_TOOL_CHANGE_OPERATOR"
+  );
+  if (!requirements.length && !toolChange) return false;
+  const confirmed = await openPlanningDialog({
+    title: `Completar operadores para OT ${job.ot}`,
+    summary: "Selecciona al menos un operador por habilidad. Se guarda en la matriz de capacidad y no se volvera a pedir.",
+    body: planningOperatorSelectionMarkup(requirements, { toolChange }),
+    confirmLabel: "Guardar y continuar",
+    cancelVisible: true,
+    submit: () => {
+      const missing = buildOperatorMissing(requirements, toolChange, els.planningDialogForm);
+      if (missing.length) {
+        showToast(missing.join(" | "), 9000);
+        return false;
+      }
+      checkpointState();
+      applyPlanningOperatorSelectionsFromForm(els.planningDialogForm, requirements, { toolChange });
+      persistPlanningConfigurationChanges();
+      return true;
+    },
   });
-  if (result) showWorkspaceView("matriz", "", { scrollToTop: true });
+  return confirmed === true;
+}
+
+function capabilityOperatorRequirements(issues) {
+  const byKey = new Map();
+  for (const issue of issues || []) {
+    if (issue.code !== "MISSING_CAPABILITY" && issue.code !== "MISSING_OPERATOR") continue;
+    const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
+    if (!capability?.key || capability.key === TOOL_CHANGE_CAPABILITY.key) continue;
+    if (!byKey.has(capability.key)) {
+      byKey.set(capability.key, { key: capability.key, ct: String(capability.ct || "").trim(), label: String(capability.label || capability.name || "OPERACION").trim(), codes: new Set() });
+    }
+    byKey.get(capability.key).codes.add(issue.code);
+  }
+  return [...byKey.values()].map((item) => ({ ...item, codes: [...item.codes] }));
+}
+
+function operatorFieldFor(capabilityKey) {
+  return `g_op_${capabilityKey}`;
+}
+
+function newOperatorFieldFor(capabilityKey) {
+  return `g_new_op_${capabilityKey}`;
+}
+
+function selectedFormValues(form, name) {
+  const values = new FormData(form).getAll(name);
+  return Array.from(values).map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function planningOperatorSelectionMarkup(requirements, options = {}) {
+  const capabilities = (requirements || []).map((capability) => ({
+    key: capability.key,
+    ct: String(capability.ct || "").trim(),
+    label: String(capability.label || capability.name || "OPERACION").trim(),
+  }));
+  if (options.toolChange) {
+    capabilities.push({ key: TOOL_CHANGE_CAPABILITY.key, ct: TOOL_CHANGE_CAPABILITY.ct, label: TOOL_CHANGE_CAPABILITY.label });
+  }
+  return capabilities.map((capability) => {
+    const current = hasMatrixKey(capability.key) ? (state.matrix[capability.key] || []) : [];
+    const operatorOptions = [...(state.operators || [])]
+      .sort((a, b) => a.localeCompare(b, "es", { numeric: true }))
+      .map((operator) => `<label class="planning-operator-option"><input type="checkbox" name="${escapeHtml(operatorFieldFor(capability.key))}" value="${escapeHtml(operator)}"${current.includes(operator) ? " checked" : ""}> ${escapeHtml(operator)}</label>`)
+      .join("") || `<p class="planning-inline-warning">No hay operadores registrados; escribe uno en el campo de abajo.</p>`;
+    return `<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>${escapeHtml(capability.label)}</strong><span>CT ${escapeHtml(capability.ct || "-")}</span></div>
+      <div class="planning-requirement-fields">
+        <div class="planning-operator-grid">${operatorOptions}</div>
+        <label>Operador nuevo (opcional)<input type="text" name="${escapeHtml(newOperatorFieldFor(capability.key))}" placeholder="Nombre del operador" autocomplete="off"></label>
+      </div>
+    </section>`;
+  }).join("");
+}
+
+function buildOperatorMissing(requirements, toolChange, form) {
+  const capabilities = (requirements || []).map((capability) => ({
+    key: capability.key,
+    label: String(capability.label || capability.name || "OPERACION").trim(),
+  }));
+  if (toolChange) capabilities.push({ key: TOOL_CHANGE_CAPABILITY.key, label: TOOL_CHANGE_CAPABILITY.label });
+  const missing = [];
+  for (const capability of capabilities) {
+    const selected = selectedFormValues(form, operatorFieldFor(capability.key));
+    const newName = String(form.elements.namedItem(newOperatorFieldFor(capability.key))?.value || "").trim();
+    if (!selected.length && !newName) missing.push(`Selecciona al menos un operador para ${capability.label}`);
+  }
+  return missing;
+}
+
+function applyPlanningOperatorSelectionsFromForm(form, requirements, options = {}) {
+  const entries = (requirements || []).map((capability) => ({
+    capability,
+    operators: selectedFormValues(form, operatorFieldFor(capability.key)),
+  }));
+  if (options.toolChange) {
+    entries.push({
+      capability: TOOL_CHANGE_CAPABILITY,
+      operators: selectedFormValues(form, operatorFieldFor(TOOL_CHANGE_CAPABILITY.key)),
+    });
+  }
+  let addedOperators = 0;
+  for (const entry of entries) {
+    const newName = String(form.elements.namedItem(newOperatorFieldFor(entry.capability.key))?.value || "").trim();
+    const operators = [...(entry.operators || [])];
+    if (newName && !operators.includes(newName)) operators.push(newName);
+    const filtered = operators.filter((name) => normalizeStatus(name) !== "SIN_OPERADOR");
+    if (!filtered.length) continue;
+    for (const name of filtered) {
+      if (!state.operators.includes(name)) {
+        state.operators.push(name);
+        if (state.operatorPerformance) state.operatorPerformance[name] = 100;
+        addedOperators += 1;
+      }
+    }
+    enableOperatorsForCapability(entry.capability, filtered);
+  }
+  if (addedOperators) showToast(`${addedOperators} operador(es) nuevo(s) agregado(s) a la matriz de habilidades`, 6000);
+}
+
+function enableOperatorsForCapability(capability, operators) {
+  const selected = uniq((operators || []).filter((name) => normalizeStatus(name) !== "SIN_OPERADOR"));
+  if (!selected.length || !capability?.key) return;
+  if (!Array.isArray(state.configuredCapabilities)) state.configuredCapabilities = [];
+  if (!state.configuredCapabilities.includes(capability.key)) state.configuredCapabilities.push(capability.key);
+  state.hiddenCapabilities = (state.hiddenCapabilities || []).filter((key) => key !== capability.key);
+  if (Array.isArray(state.cts) && capability.ct && !state.cts.includes(capability.ct)) state.cts.push(capability.ct);
+  if (!Array.isArray(state.matrix[capability.key])) state.matrix[capability.key] = [];
+  for (const name of selected) {
+    if (!state.matrix[capability.key].includes(name)) state.matrix[capability.key].push(name);
+  }
+  assignPlanningOperators(state.operations.filter((op) => capabilityFromOperation(op).key === capability.key));
+  if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
+}
+
+function persistPlanningConfigurationChanges() {
+  if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
+  saveState("catalogs");
+}
+
+function groupPlanConfigurationGaps(issues, operations) {
+  const machines = new Map();
+  const tools = new Map();
+  const subcontracts = new Map();
+  for (const issue of issues || []) {
+    const op = findOperation(issue.operationId);
+    if (!op) continue;
+    if (issue.code === "MISSING_MACHINE") {
+      const list = machines.get(op.ot) || [];
+      list.push(op);
+      machines.set(op.ot, list);
+    } else if (issue.code === "MISSING_TOOL") {
+      const list = tools.get(op.ot) || [];
+      list.push(op);
+      tools.set(op.ot, list);
+    } else if (issue.code === "MISSING_SUBCONTRACT_TYPE" || issue.code === "MISSING_SUBCONTRACT_DAYS") {
+      const list = subcontracts.get(op.ot) || [];
+      list.push(op);
+      subcontracts.set(op.ot, list);
+    }
+  }
+  return {
+    machines: [...machines.entries()].map(([ot, ops]) => ({ ot, ops })),
+    tools: [...tools.entries()].map(([ot, ops]) => ({ ot, ops })),
+    subcontracts: [...subcontracts.entries()].map(([ot, ops]) => ({ ot, ops })),
+    operators: capabilityOperatorRequirements(issues),
+    toolChange: (issues || []).some((issue) =>
+      issue.code === "MISSING_TOOL_CHANGE_CAPABILITY" || issue.code === "MISSING_TOOL_CHANGE_OPERATOR"
+    ),
+  };
+}
+
+function buildPlanConfigurationBody(gaps) {
+  const sections = [];
+  for (const { ot, ops } of gaps.machines) {
+    const compatible = compatibleMachineOptionsForOps(ops);
+    const configuration = otConfigurationFor(ot);
+    const toolRequired = gaps.tools.some((item) => item.ot === ot);
+    const currentTool = cleanToolValue(configuration.herramental) || cleanToolValue(ops[0]?.herramental) || cleanToolValue(toolCatalogForAppOperation(ops[0])?.herramental);
+    sections.push(`<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>OT ${escapeHtml(ot)} - doblez</strong></div>
+      <div class="planning-requirement-fields">
+        <label>Maquina de la OT
+          <select name="g_machine_${escapeHtml(ot)}" required>
+            <option value="">${compatible.length ? "Selecciona una maquina" : "No hay maquinas configuradas"}</option>
+            ${compatible.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}
+          </select>
+        </label>${compatible.length ? "" : `<p class="planning-inline-warning">Registra una maquina en Catalogos para poder programar esta OT.</p>`}
+        ${toolRequired ? `<label>Herramental requerido${planningCatalogSelectMarkup(`g_tool_${ot}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>` : ""}
+      </div>
+    </section>`);
+  }
+  for (const { ot, ops } of gaps.subcontracts) {
+    const op = ops[0];
+    const types = subcontractTypesForPart(op.parte);
+    const configuration = otConfigurationFor(ot);
+    const currentType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const currentDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
+    const typeField = types.length
+      ? `<select name="g_subcontract_type_${escapeHtml(ot)}" data-subcontract-select="${escapeHtml(String(ot))}" data-part="${escapeHtml(op.parte)}" required>
+           <option value="">Selecciona un tipo</option>
+           ${types.map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(currentType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+         </select>`
+      : `<input name="g_subcontract_type_${escapeHtml(ot)}" type="text" value="${escapeHtml(currentType)}" placeholder="Tipo de subcontrato" required>`;
+    sections.push(`<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>OT ${escapeHtml(ot)} - subcontrato</strong></div>
+      <div class="planning-requirement-fields">
+        <label>Tipo de subcontrato${typeField}</label>
+        <label>Dias habiles<input name="g_subcontract_days_${escapeHtml(ot)}" data-subcontract-days="${escapeHtml(String(ot))}" type="number" min="1" max="90" step="1" value="${escapeHtml(currentDays || "")}" required></label>
+      </div>
+    </section>`);
+  }
+  sections.push(planningOperatorSelectionMarkup(gaps.operators, { toolChange: gaps.toolChange }));
+  const setup = () => {
+    els.planningDialogBody.querySelectorAll("[data-catalog-select]").forEach((select) => {
+      select.addEventListener("change", () => updatePlanningCatalogSelect(select));
+      updatePlanningCatalogSelect(select);
+    });
+    els.planningDialogBody.querySelectorAll("[data-subcontract-select]").forEach((select) => {
+      select.addEventListener("change", () => {
+        const input = els.planningDialogBody.querySelector(`[data-subcontract-days="${select.dataset.subcontractSelect}"]`);
+        const catalogItem = select.dataset.part ? subcontractCatalogForSelection(select.dataset.part, select.value) : null;
+        if (input && catalogItem) input.value = String(Math.max(1, Number(catalogItem.days) || 1));
+      });
+    });
+  };
+  return { body: sections.join(""), setup };
+}
+
+function buildPlanConfigurationMissing(gaps, form) {
+  return buildOperatorMissing(gaps.operators, gaps.toolChange, form);
+}
+
+function applyPlanConfigurationSelectionsFromForm(form, gaps) {
+  const fd = new FormData(form);
+  const read = (name) => String(fd.get(name) || "").trim();
+  const readCatalog = (name) => cleanToolValue(fd.get(name) === CUSTOM_CATALOG_VALUE ? fd.get(`${name}_custom`) : fd.get(name));
+  for (const { ot } of gaps.machines) {
+    const machine = read(`g_machine_${ot}`).toUpperCase();
+    if (machine) applyMachineToJob(ot, machine);
+  }
+  for (const { ot } of gaps.tools) {
+    const tool = readCatalog(`g_tool_${ot}`);
+    if (tool) applyToolToJob(ot, tool, []);
+  }
+  for (const { ot } of gaps.subcontracts) {
+    const type = read(`g_subcontract_type_${ot}`);
+    const days = Number(fd.get(`g_subcontract_days_${ot}`) || 0);
+    if (type && days > 0) applySubcontractToJob(ot, type, days);
+  }
+  applyPlanningOperatorSelectionsFromForm(form, gaps.operators, { toolChange: gaps.toolChange });
+}
+
+async function ensurePlanConfigurationCollected(ots) {
+  const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
+  const executionTime = new Date();
+  const operations = currentPlanOperations().filter((op) =>
+    isJobSelected(op.ot) &&
+    (!scopedOts.size || scopedOts.has(normalizeStatus(op.ot))) &&
+    !isPlanCompletedOperation(op) &&
+    !isJobLocked(op.ot) &&
+    !shouldAutoFreezeOperation(op, executionTime) &&
+    op.tipoInsercion !== "CAMBIO_HERRAMENTAL"
+  );
+  if (!operations.length) return true;
+  let issues = window.PlannerCore?.planningConfigurationIssues
+    ? window.PlannerCore.planningConfigurationIssues(state, operations)
+    : [];
+  for (const op of operations) {
+    if (!isSubcontractAppOperation(op)) continue;
+    const capability = capabilityFromOperation(op);
+    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
+    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDaysForAppOperation(op).days || op.subcontractDays || 0);
+    if (!effectiveSubcontractType) {
+      issues.push({ code: "MISSING_SUBCONTRACT_TYPE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+    if (effectiveSubcontractDays <= 0) {
+      issues.push({ code: "MISSING_SUBCONTRACT_DAYS", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+    }
+  }
+  if (!issues.length) return true;
+  const gaps = groupPlanConfigurationGaps(issues, operations);
+  if (!gaps.machines.length && !gaps.subcontracts.length && !gaps.operators.length && !gaps.toolChange) return true;
+  const { body, setup } = buildPlanConfigurationBody(gaps);
+  const confirmed = await openPlanningDialog({
+    title: "Completar configuracion del plan",
+    summary: "Faltan datos obligatorios para programar. Completa las secciones; se guardan y no se volveran a pedir.",
+    body,
+    confirmLabel: "Guardar y programar",
+    cancelVisible: true,
+    setup,
+    submit: () => {
+      const missing = buildPlanConfigurationMissing(gaps, els.planningDialogForm);
+      if (missing.length) {
+        showToast(missing.join(" | "), 9000);
+        return false;
+      }
+      checkpointState();
+      applyPlanConfigurationSelectionsFromForm(els.planningDialogForm, gaps);
+      persistPlanningConfigurationChanges();
+      return true;
+    },
+  });
+  return confirmed === true;
 }
 
 function planningCatalogSelectMarkup(name, field, currentValue, options = {}) {
@@ -3028,6 +3331,10 @@ function closeDetailPanel() {
   if (!panel) return;
   panel.hidden = true;
   document.body.classList.remove("detail-panel-open");
+  const returnToBacklogBtn = document.getElementById("returnToBacklogBtn");
+  if (returnToBacklogBtn) {
+    returnToBacklogBtn.addEventListener("click", () => closeDetailPanel());
+  }
 }
 
 function renderSelectedJobPanel() {
@@ -3744,43 +4051,12 @@ function clearResourceCategoryDropTargets() {
 
 function renderBottleneckSourceSelect() {
   if (!els.bottleneckPlanSelect) return;
-  const selected = loadSnapshot?.snapshotId || "draft";
-  const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds)).map((snapshot) => {
-    const week = snapshot.weekStart || snapshot.planStart;
-    return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
-  }).join("");
-  els.bottleneckPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
-  els.bottleneckPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
+  syncPlanSourceSelect(els.bottleneckPlanSelect);
   els.bottleneckModeSelect.value = loadMode;
 }
 
 async function loadSelectedBottleneckPlan(snapshotId) {
-  if (!snapshotId || snapshotId === "draft") {
-    loadSnapshot = null;
-    const scheduledStart = scheduledPlanWindowStart();
-    state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
-    renderSaturation();
-    return;
-  }
-  els.bottleneckPlanSelect.disabled = true;
-  try {
-    loadSnapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
-    loadSnapshot.snapshotId = snapshotId;
-    const source = loadSnapshot.fullState || loadSnapshot;
-    if (source.weekStart || source.planStart) {
-      state.loadWeekStart = normalizeWeekStartValue(source.weekStart || source.planStart);
-    }
-    renderSaturation();
-  } catch (error) {
-    loadSnapshot = null;
-    showToast(`No se pudo cargar la fuente de cuellos de botella: ${error.message}`);
-    renderSaturation();
-  } finally {
-    els.bottleneckPlanSelect.disabled = false;
-  }
+  await loadSelectedPlanSnapshot(snapshotId);
 }
 
 function renderSaturation() {
@@ -4466,10 +4742,17 @@ async function scheduleCurrentPlan() {
     return await scheduleCurrentPlanImpl();
   } finally {
     setPlanningActionsBusy("schedule", false);
+    const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
+    if (label && !netSuitePlanningSyncInFlight) label.textContent = "Generar plan";
   }
 }
 
 async function scheduleCurrentPlanImpl() {
+  const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
+  const originalLabel = label?.textContent || "Generar plan";
+  const setScheduleStatus = (message) => {
+    if (label) label.textContent = message;
+  };
   if (!window.PlannerCore?.schedulePlan) {
     showToast("El motor de programacion no esta disponible");
     return;
@@ -4478,6 +4761,7 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
+  setScheduleStatus("Revisando plan...");
   state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
   let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
@@ -4500,6 +4784,7 @@ async function scheduleCurrentPlanImpl() {
     showToast("No hay OTs desbloqueables para programar");
     return;
   }
+  setScheduleStatus("Actualizando OTs...");
   const planningData = await ensurePlanningDataLoaded(true, { force: false, ots: replannableOts });
   if (!planningData.ready) return;
   const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
@@ -4519,7 +4804,13 @@ async function scheduleCurrentPlanImpl() {
     showToast("No hay OTs desbloqueadas para programar");
     return;
   }
+  setScheduleStatus("Validando OTs...");
   if (!await ensureSelectedJobsReadyForScheduling(readyOts)) return;
+  setScheduleStatus("Completando configuracion...");
+  if (!await ensurePlanConfigurationCollected(readyOts)) {
+    showToast("Programacion cancelada; completa la configuracion para continuar", 8000);
+    return;
+  }
   const executionTime = new Date();
   const validation = validateScheduleConfiguration(executionTime, readyOts);
   if (validation) {
@@ -4529,20 +4820,16 @@ async function scheduleCurrentPlanImpl() {
     showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz", "", { scrollToTop: true });
     return;
   }
-  const originalSelectedOts = [...state.selectedOts];
+  setScheduleStatus("Preparando OTs...");
   const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state, closedOts);
   checkpointState();
   state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
   invalidateCurrentPlanOperationsCache();
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
-  const label = els.scheduleBtn.querySelector("[data-schedule-label]");
-  const originalLabel = label?.textContent || "Programar plan";
   els.scheduleBtn.disabled = true;
   els.scheduleBtn.classList.add("is-running");
-  if (label) {
-    label.textContent = "Optimizando...";
-  }
+  setScheduleStatus("Programando OTs...");
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
@@ -4564,8 +4851,8 @@ async function scheduleCurrentPlanImpl() {
         const total = Number(event?.total || 0);
         const percent = total > 0 ? Math.min(100, Math.round((scheduled / total) * 100)) : null;
         label.textContent = total > 0
-          ? (percent !== null ? `Optimizando ${scheduled} de ${total} (${percent}%)` : `Optimizando ${scheduled} de ${total}`)
-          : `Optimizando...`;
+          ? (percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`)
+          : `Programando OTs...`;
       },
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
@@ -4575,21 +4862,25 @@ async function scheduleCurrentPlanImpl() {
       const conflict = operatorConflicts[0];
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
-    state = { ...result, selectedOts: originalSelectedOts };
+    state = { ...result, selectedOts: (result.lastSchedule?.scheduledOts || []).map(String).filter(Boolean) };
     invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; ${strategy} en ${seconds}s`);
     syncDraftReportWeek();
     reportSnapshot = currentDraftReportSnapshot();
+    loadSnapshot = null;
+    syncDraftLoadWeek();
     renderReports();
+    renderLoads();
+    renderSaturation();
     saveState("ui");
-    void persistPlanSnapshot().then((snapshot) => {
-      if (!snapshot?.snapshotId) return;
-      state.draftVersionId = snapshot.snapshotId;
-      saveState("ui");
-    }).catch((error) => showToast(`El plan se calculo, pero no se pudo guardar: ${error.message}`, 9000));
+    setScheduleStatus("Guardando borrador...");
+    const snapshot = await persistPlanSnapshot();
+    if (!snapshot?.snapshotId) throw new Error("el plan se calculo, pero no se pudo guardar el borrador");
+    state.draftVersionId = snapshot.snapshotId;
+    saveState("ui");
+    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`);
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
   } finally {
@@ -4909,43 +5200,12 @@ function dryRunNowMs() {
 
 function renderLoadSourceSelect() {
   if (!els.loadPlanSelect) return;
-  const selected = loadSnapshot?.snapshotId || "draft";
-  const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds)).map((snapshot) => {
-    const week = snapshot.weekStart || snapshot.planStart;
-    return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(window.PlanningWorkflowCore.weeklyPlanIdentifier(week, snapshot.version))}</option>`;
-  }).join("");
-  els.loadPlanSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
-  els.loadPlanSelect.value = selected !== "draft" && planSnapshots.some((item) => item.snapshotId === selected) ? selected : "draft";
+  syncPlanSourceSelect(els.loadPlanSelect);
   els.loadModeSelect.value = loadMode;
 }
 
 async function loadSelectedLoadPlan(snapshotId) {
-  if (!snapshotId || snapshotId === "draft") {
-    loadSnapshot = null;
-    const scheduledStart = scheduledPlanWindowStart();
-    state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
-    renderLoads();
-    return;
-  }
-  els.loadPlanSelect.disabled = true;
-  try {
-    loadSnapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
-    loadSnapshot.snapshotId = snapshotId;
-    const source = loadSnapshot.fullState || loadSnapshot;
-    if (source.weekStart || source.planStart) {
-      state.loadWeekStart = normalizeWeekStartValue(source.weekStart || source.planStart);
-    }
-    renderLoads();
-  } catch (error) {
-    loadSnapshot = null;
-    showToast(`No se pudo cargar la fuente de cargas: ${error.message}`);
-    renderLoads();
-  } finally {
-    els.loadPlanSelect.disabled = false;
-  }
+  await loadSelectedPlanSnapshot(snapshotId);
 }
 
 async function loadIncrementalPlanningBase(weekStart) {
@@ -5609,18 +5869,27 @@ async function confirmDraftRestore(snapshotId, previewState) {
   normalizeState();
   await loadPlanSnapshots(false);
   reportSnapshot = null;
+  loadSnapshot = null;
   showWorkspaceView("plan-semanal", "", { scrollToTop: true });
   saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
 }
 
-async function loadPlanSnapshots(showMessage) {
+async function loadPlanSnapshots(showMessage, options = {}) {
+  if (planSnapshotsRequest) return planSnapshotsRequest;
+  planSnapshotsRequest = loadPlanSnapshotsImpl(showMessage, options).finally(() => { planSnapshotsRequest = null; });
+  return planSnapshotsRequest;
+}
+
+async function loadPlanSnapshotsImpl(showMessage, options = {}) {
+  planSnapshotsLoading = true;
+  renderPlanSnapshotSelect();
   try {
     const snapshots = isAppsScriptRuntime()
       ? await callAppsScript("listPlanSnapshots")
       : await fetchJson(PLAN_SNAPSHOTS_API);
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
-    const preferPublished = !reportSnapshot || reportSnapshot.snapshotId === "draft";
+    const preferPublished = options.deferPublishedLoad !== true && (!reportSnapshot || reportSnapshot.snapshotId === "draft");
     if (preferPublished) {
       for (const snapshot of publishedPlanSnapshots()) {
         const loaded = await loadPlanSnapshotById(snapshot.snapshotId, { render: false, silent: true });
@@ -5631,11 +5900,13 @@ async function loadPlanSnapshots(showMessage) {
       syncDraftReportWeek();
       reportSnapshot = currentDraftReportSnapshot();
     }
+    planSnapshotsLoading = false;
     renderReports();
     if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
     return { ok: true, count: planSnapshots.length };
   } catch (error) {
     planSnapshots = [];
+    planSnapshotsLoading = false;
     renderPlanSnapshotSelect();
     if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
     return { ok: false, count: 0, error: error.message };
@@ -5643,7 +5914,14 @@ async function loadPlanSnapshots(showMessage) {
 }
 
 function loadSnapshotsOnce(showMessage) {
+  if (planSnapshots.length && showMessage !== true) return Promise.resolve({ ok: true, count: planSnapshots.length });
   return loadPlanSnapshots(showMessage);
+}
+
+function maybeLoadDefaultPublishedReportSnapshot() {
+  if (reportSnapshot && reportSnapshot.snapshotId !== "draft") return null;
+  const activeId = activePublishedSnapshotId();
+  return activeId ? loadPlanSnapshotById(activeId, { silent: true }) : null;
 }
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
@@ -5651,7 +5929,11 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
   if (snapshotId === "draft") {
     syncDraftReportWeek();
     reportSnapshot = currentDraftReportSnapshot();
+    loadSnapshot = null;
+    syncDraftLoadWeek();
     renderReports();
+    renderLoads();
+    renderSaturation();
     return;
   }
   if (!snapshotId) {
@@ -5661,7 +5943,10 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
       return;
     }
     reportSnapshot = null;
+    loadSnapshot = null;
     renderReports();
+    renderLoads();
+    renderSaturation();
     return;
   }
   await loadPlanSnapshotById(snapshotId);
@@ -5669,7 +5954,7 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
 
 async function loadPlanSnapshotById(snapshotId, options = {}) {
   if (!snapshotId) return;
-  els.planSnapshotSelect.disabled = true;
+  setPlanSourceControlsDisabled(true);
   try {
     const snapshot = await fetchPlanSnapshot(snapshotId);
     reportSnapshot = {
@@ -5680,22 +5965,33 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
         id: op.id || `snapshot-${snapshotId}-${index + 1}`,
       }, index)),
     };
+    loadSnapshot = reportSnapshot;
     const firstStart = reportSnapshot.operations.map(opStart).filter(Boolean).sort((a, b) => a - b)[0];
     const reportStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
     if (reportStart) {
       state.reportWeekStart = normalizeWeekStartValue(reportStart);
       syncReportFilterDates(reportStart);
     }
-    if (options.render !== false) renderReports();
+    syncLoadWeekFromPlanSource(reportSnapshot);
+    if (options.render !== false) {
+      renderReports();
+      renderLoads();
+      renderSaturation();
+    }
     return reportSnapshot;
   } catch (error) {
     reportSnapshot = null;
-    els.planSnapshotSelect.value = "";
+    loadSnapshot = null;
+    setPlanSourceSelectsValue("draft");
     if (!options.silent) showToast(`No se pudo abrir el plan guardado: ${error.message}`);
-    if (options.render !== false) renderReports();
+    if (options.render !== false) {
+      renderReports();
+      renderLoads();
+      renderSaturation();
+    }
     return null;
   } finally {
-    els.planSnapshotSelect.disabled = false;
+    setPlanSourceControlsDisabled(false);
   }
 }
 
@@ -5711,9 +6007,11 @@ async function fetchPlanSnapshot(snapshotId) {
     : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
 }
 
-function renderPlanSnapshotSelect() {
-  if (!els.planSnapshotSelect) return;
-  const selectedId = reportSnapshot?.snapshotId || "";
+function selectedPlanSourceId() {
+  return reportSnapshot?.snapshotId || "draft";
+}
+
+function planSourceOptionsMarkup() {
   const publishedIds = publishedSnapshotIds();
   const allowedSnapshots = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
     ...snapshot,
@@ -5726,15 +6024,53 @@ function renderPlanSnapshotSelect() {
     const label = window.PlanningWorkflowCore.weeklyPlanIdentifier(week, version);
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
-  els.planSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
-  els.planSnapshotSelect.value = selectedId === "draft" ? "draft" : (allowedSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "draft");
+  return { allowedSnapshots, options };
+}
+
+function syncPlanSourceSelect(select, allowedSnapshots = null, options = null) {
+  if (!select) return;
+  const source = allowedSnapshots && options !== null ? { allowedSnapshots, options } : planSourceOptionsMarkup();
+  const selectedId = selectedPlanSourceId();
+  const loadingOption = planSnapshotsLoading ? `<option value="" disabled>Cargando planes...</option>` : "";
+  select.innerHTML = `<option value="draft">Borrador</option>${loadingOption}${source.options}`;
+  select.value = selectedId !== "draft" && source.allowedSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "draft";
+}
+
+function setPlanSourceSelectsValue(value) {
+  [els.planSnapshotSelect, els.loadPlanSelect, els.bottleneckPlanSelect, els.exportSnapshotSelect]
+    .filter(Boolean)
+    .forEach((select) => { select.value = value; });
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => { select.value = value; });
+}
+
+function setPlanSourceControlsDisabled(disabled) {
+  [els.planSnapshotSelect, els.loadPlanSelect, els.bottleneckPlanSelect]
+    .filter(Boolean)
+    .forEach((select) => { select.disabled = disabled; });
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => { select.disabled = disabled; });
+}
+
+function syncDraftLoadWeek() {
+  const scheduledStart = scheduledPlanWindowStart();
+  state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
+}
+
+function syncLoadWeekFromPlanSource(source) {
+  const planSource = source?.fullState || source;
+  if (planSource?.weekStart || planSource?.planStart) state.loadWeekStart = normalizeWeekStartValue(planSource.weekStart || planSource.planStart);
+}
+
+function renderPlanSnapshotSelect() {
+  if (!els.planSnapshotSelect) return;
+  const { allowedSnapshots, options } = planSourceOptionsMarkup();
+  syncPlanSourceSelect(els.planSnapshotSelect, allowedSnapshots, options);
   document.querySelectorAll("[data-report-source-select]").forEach((select) => {
-    select.innerHTML = els.planSnapshotSelect.innerHTML;
-    select.value = els.planSnapshotSelect.value;
+    syncPlanSourceSelect(select, allowedSnapshots, options);
   });
+  syncPlanSourceSelect(els.loadPlanSelect, allowedSnapshots, options);
+  syncPlanSourceSelect(els.bottleneckPlanSelect, allowedSnapshots, options);
   if (els.exportSnapshotSelect) {
-    els.exportSnapshotSelect.innerHTML = `<option value="draft">Borrador</option>${options}`;
-    els.exportSnapshotSelect.value = els.planSnapshotSelect.value;
+    syncPlanSourceSelect(els.exportSnapshotSelect, allowedSnapshots, options);
   }
 }
 
@@ -6562,7 +6898,6 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
 
   renderPlanStatusChange();
   showToast(message);
-  scheduleLocalStorageFlush();
   if (!appSheetAvailable) {
     discardDetachedPlanStatusRows(key);
     return true;
@@ -6579,6 +6914,10 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
         });
         state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
         state.savedAt = saved?.savedAt || state.savedAt;
+        if (state.revision > Number(state.revision || 0)) {
+          discardDetachedPlanStatusRows(key);
+          return true;
+        }
       } finally {
         operationStatusSavesInFlight -= 1;
         if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
@@ -6587,17 +6926,16 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       appSheetMarkDirtyScope("plan");
       if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
     }
-    scheduleLocalStorageFlush();
     discardDetachedPlanStatusRows(key);
     return true;
   } catch (error) {
     console.warn("No se pudo guardar el estado de la operacion:", error);
+    showToast("Error de guardado; intente recargar la pagina", 5000);
   }
   if (previousStatus) state.operationPlanStatuses[key] = previousStatus;
   else delete state.operationPlanStatuses[key];
   if (operation && previousOperation) Object.assign(operation, previousOperation);
   renderPlanStatusChange();
-  scheduleLocalStorageFlush();
   showToast("No se pudo guardar el estado; se restauro el valor anterior");
   return false;
 }
@@ -6619,8 +6957,8 @@ function renderProductionReportRow(op, index, options = {}) {
     <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
     <td>${escapeHtml(machineArea)}</td>
     <td>${escapeHtml(effectiveReportTool)}</td>
-    <td>${formatReportDuration(op.tiempoCiclo)}</td>
-    <td>${formatReportDuration(op.tiempoSetup)}</td>
+    <td>${formatReportDuration(operationCycleMinutesForReport(op))}</td>
+    <td>${formatReportDuration(operationSetupMinutesForReport(op))}</td>
     <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
     <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
     <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
@@ -6629,6 +6967,14 @@ function renderProductionReportRow(op, index, options = {}) {
     <td>${reportOperationCommentCell(op)}</td>
     ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
   </tr>`;
+}
+
+function operationCycleMinutesForReport(op) {
+  return Number(op?.tiempoCiclo ?? op?.cycleTime ?? 0);
+}
+
+function operationSetupMinutesForReport(op) {
+  return Number(op?.tiempoSetup ?? op?.setupTime ?? 0);
 }
 
 function renderProductionReportTable(operations, options = {}) {
@@ -7103,14 +7449,14 @@ async function syncNetSuiteData(showMessage, options = {}) {
         ? await callAppsScript("syncNetSuitePlant")
         : await callAppsScript("syncNetSuiteWorkOrders");
       validateNetSuiteImportedData(imported, mode);
-      applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
       if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
     } else {
       const response = await fetchNetSuiteExercise();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const imported = importJson(await response.text());
       validateNetSuiteImportedData(imported, mode);
-      applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
     }
     clearNetSuiteSyncAlert();
     if (showMessage) {
@@ -7624,7 +7970,7 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
         callAppsScript("syncNetSuitePlanningData"),
         NETSUITE_PLANNING_TIMEOUT_MS
       );
-      applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
       after = availability();
       missingOts = after.missingOts;
     }
@@ -7683,7 +8029,7 @@ async function syncPlanningDataForSelected(showMessage, ots) {
       callAppsScript("syncNetSuitePlanningData"),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
-    applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+    await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
     const after = availability();
     if (after.missingOts.length) {
       const warning = `NetSuite respondio pero ${after.missingOts.length} OT(s) sin operaciones quedaron fuera`;
@@ -7762,7 +8108,11 @@ async function loadAppSheetIfAvailable(showMessage) {
     const imported = isAppsScriptRuntime()
       ? await callAppsScript("getAppState")
       : importJson(await fetchAppSheetText());
-    applyImported(imported, { preserveLocalPlanning: true, preferRemotePlanning: true });
+    await applyImported(imported, {
+      preserveLocalPlanning: true,
+      preferRemotePlanning: true,
+      confirmStaleLocalRefresh: confirmLatestModificationRefresh,
+    });
     appSheetAvailable = true;
     if (showMessage) showToast(`Hoja app cargada: ${state.operations.length} operaciones`);
     return true;
@@ -7779,7 +8129,58 @@ async function fetchAppSheetText() {
   return response.text();
 }
 
-function applyImported(imported, options = {}) {
+function planningDraftContentKey(draft) {
+  const operationsKey = Array.isArray(draft?.operations)
+    ? draft.operations.map((op) => JSON.stringify([
+        String(op?.ot || "").trim().toUpperCase(),
+        Number(op?.secuencia || 0),
+        String(op?.ct || "").trim().toUpperCase(),
+        String(op?.operador || "").trim().toUpperCase(),
+        String(op?.maquina || "").trim().toUpperCase(),
+        String(op?.estatus || "").trim().toUpperCase(),
+        String(op?.planStatus || "").trim().toUpperCase(),
+        Boolean(op?.locked === true || String(op?.locked || "").toUpperCase() === "TRUE"),
+        String(op?.fechaInicio || ""),
+        String(op?.horaInicio || ""),
+        String(op?.fechaFin || ""),
+        String(op?.horaFin || ""),
+      ])).sort()
+    : [];
+  return JSON.stringify({
+    planStart: String(draft?.planStart || ""),
+    selectedOts: (draft?.selectedOts || []).map((ot) => String(ot || "").trim().toUpperCase()).sort(),
+    lockedOts: (draft?.lockedOts || []).map((ot) => String(ot || "").trim().toUpperCase()).sort(),
+    operationsKey,
+  });
+}
+
+function planningDraftDiffers(localDraft, remoteDraft) {
+  return planningDraftContentKey(localDraft) !== planningDraftContentKey(remoteDraft);
+}
+
+function hasPlanningContent(draft) {
+  return (Array.isArray(draft?.operations) && draft.operations.length > 0)
+    || (Array.isArray(draft?.selectedOts) && draft.selectedOts.length > 0);
+}
+
+async function confirmLatestModificationRefresh(localDraft, remoteDraft) {
+  if (!hasPlanningContent(localDraft) || !planningDraftDiffers(localDraft, remoteDraft)) return true;
+  const accepted = await openPlanningDialog({
+    title: "Actualizar a la ultima modificacion",
+    summary: "Esta no es la ultima modificacion guardada.",
+    body: "<p>La hoja App tiene una version mas reciente distinta a tu borrador local.</p><p>Quieres actualizar a la ultima modificacion y refrescar con lo ultimo guardado?</p>",
+    confirmLabel: "Si, actualizar",
+    cancelVisible: true,
+  });
+  if (Boolean(accepted)) {
+    showToast("Se refresco con la ultima modificacion guardada.");
+    return true;
+  }
+  showToast("Se conservo tu borrador local; guarda para publicarlo.");
+  return false;
+}
+
+async function applyImported(imported, options = {}) {
   const locallyRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
   const backlogDatasetChanged = Array.isArray(imported.operations)
     || Array.isArray(imported.materials)
@@ -7843,10 +8244,29 @@ function applyImported(imported, options = {}) {
   if (imported.lastSchedule) state.lastSchedule = imported.lastSchedule;
   if (preservedLocalPlanning) {
     const remotePlanning = captureLocalPlanningState();
-    const coherent = options.preferRemotePlanning
-      ? window.PlanningWorkflowCore.selectAuthoritativeRemoteDraft(preservedLocalPlanning, remotePlanning)
-      : window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
-    restoreLocalPlanningState(coherent || preservedLocalPlanning);
+    const coherentLocal = window.PlanningWorkflowCore.isCoherentDraft(preservedLocalPlanning);
+    const coherentRemote = window.PlanningWorkflowCore.isCoherentDraft(remotePlanning);
+    const newest = window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
+    const differs = planningDraftDiffers(preservedLocalPlanning, remotePlanning);
+    const remoteIsLastModification = coherentRemote && (newest === remotePlanning || !coherentLocal);
+    let chosen;
+    if (options.preferRemotePlanning) {
+      if (typeof options.confirmStaleLocalRefresh === "function"
+        && remoteIsLastModification
+        && differs
+        && hasPlanningContent(preservedLocalPlanning)) {
+        const refresh = await options.confirmStaleLocalRefresh({
+          local: preservedLocalPlanning,
+          remote: remotePlanning,
+        });
+        chosen = refresh ? remotePlanning : preservedLocalPlanning;
+      } else {
+        chosen = remoteIsLastModification || !coherentLocal ? remotePlanning : preservedLocalPlanning;
+      }
+    } else {
+      chosen = newest || preservedLocalPlanning;
+    }
+    restoreLocalPlanningState(chosen || preservedLocalPlanning);
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();
@@ -9732,18 +10152,8 @@ function saveAndRender(message, saveScope = "plan") {
 
 function saveState(saveScope = "plan") {
   const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-state") : "";
-  scheduleLocalStorageFlush();
   queueAppSheetSave(saveScope);
   if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-state", perfMark);
-}
-
-let _flushTimer = null;
-function scheduleLocalStorageFlush() {
-  if (_flushTimer) return;
-  _flushTimer = setTimeout(() => {
-    _flushTimer = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState()));
-  }, 0);
 }
 
 function queueAppSheetSave(saveScope = "plan") {

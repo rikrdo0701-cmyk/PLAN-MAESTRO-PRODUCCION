@@ -214,7 +214,7 @@ test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultado
   assert.doesNotMatch(dryRunSource, /\bensurePlanningDataLoaded\s*\(/);
   assert.match(scheduleSource, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas/);
   assert.match(scheduleSource, /persistPlanSnapshot\(\)/);
-  assert.match(scheduleSource, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \}/);
+  assert.match(scheduleSource, /state = \{ \.\.\.result, selectedOts: \(result\.lastSchedule\?\.scheduledOts \|\| \[\]\)\.map\(String\)\.filter\(Boolean\) \}/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
@@ -306,7 +306,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /operatorPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /adjusterPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /subcontractPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
-  assert.match(pagesIndex, /<td>\$\{formatReportDuration\(op\.tiempoCiclo\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(op\.tiempoSetup\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
+  assert.match(pagesIndex, /<td>\$\{formatReportDuration\(operationCycleMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(operationSetupMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
   assert.match(pagesIndex, /@media print[\s\S]*\.report-comment-input::placeholder\s*\{[^}]*opacity:\s*0/);
   assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*8mm/);
   assert.match(pagesIndex, /formatCurrency\(window\.PlanningWorkflowCore\.effectiveFinishingAmount\(row\)\)/);
@@ -327,7 +327,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*if \(typeof rememberDraftRemovedOts === "function"\) rememberDraftRemovedOts\(\[ot\]\);\s*\}/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state, closedOts\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
-  assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: originalSelectedOts \};/);
+  assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: \(result\.lastSchedule\?\.scheduledOts \|\| \[\]\)\.map\(String\)\.filter\(Boolean\) \};/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
   assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
@@ -413,7 +413,12 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
   assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
   assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
-  assert.match(pagesIndex, /const result = await openPlanningDialog\([\s\S]*confirmLabel: "Ir a matriz"[\s\S]*if \(result\) showWorkspaceView\("matriz", "", \{ scrollToTop: true \}\)/);
+  assert.match(pagesIndex, /async function showPlanningBlockers\(job, blockers\)[\s\S]*planningOperatorSelectionMarkup\(requirements, \{ toolChange \}\)/);
+  assert.match(pagesIndex, /confirmLabel: "Guardar y continuar"/);
+  assert.match(pagesIndex, /const resolved = await showPlanningBlockers\(job, blockers\);[\s\S]*if \(!resolved\)/);
+  assert.match(pagesIndex, /async function ensurePlanConfigurationCollected\(ots\)[\s\S]*confirmLabel: "Guardar y programar"/);
+  assert.match(pagesIndex, /function enableOperatorsForCapability\(capability, operators\)[\s\S]*state\.configuredCapabilities\.push\(capability\.key\)[\s\S]*state\.matrix\[capability\.key\]\.push\(name\)/);
+  assert.match(pagesIndex, /applyPlanningOperatorSelectionsFromForm\(els\.planningDialogForm, requirements, \{ toolChange \}\)/);
   const builtStartupSource = pagesIndex.slice(
     pagesIndex.indexOf("async function loadAppStateInBackground()"),
     pagesIndex.indexOf("async function restoreDraftPlanFromSharedState()"),
@@ -557,7 +562,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
     pagesIndex.indexOf("const originalLoadPlanSnapshots =", pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)")),
   );
   assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
-  assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshots|loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
+  assert.match(optimizedStartupSource, /loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
   const initialCacheCaptureIndex = pagesIndex.indexOf("const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta)");
   assert.ok(
     initialCacheCaptureIndex >= 0 &&
@@ -570,9 +576,9 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /function showWorkspaceView\(section, tab = "", \{ scrollToTop = false \} = \{\}\)[\s\S]*if \(scrollToTop\) window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/);
   assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadSnapshotsOnce\(false\)/);
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
-  assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce[\s\S]*requestPlanSnapshots\(showMessage\)/);
+  assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce\(showMessage, options = \{\}\)[\s\S]*requestPlanSnapshots\(showMessage, options\)/);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
-  assert.match(pagesIndex, /function loadPlanSnapshots\(showMessage\)[\s\S]*const preferPublished = !reportSnapshot \|\| reportSnapshot\.snapshotId === "draft";[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const preferPublished = options\.deferPublishedLoad !== true && \(!reportSnapshot \|\| reportSnapshot\.snapshotId === "draft"\);[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
@@ -661,6 +667,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const replaceDraftSource = storageService.slice(storageService.indexOf("function PP_replaceDraftSnapshot_"), storageService.indexOf("function PP_listPlanSnapshots_"));
   assert.match(replaceDraftSource, /PP_rollbackPlanSnapshotPayload_\(payloadTransaction\.value\)/);
   assert.doesNotMatch(replaceDraftSource, /PP_storePlanSnapshotPayload_\('draft', previousPayload\)/);
+  assert.match(replaceDraftSource, /requireRows: true/);
+  assert.match(storageService, /if \(options && options\.requireRows && !rows\.length\) throw new Error\('La instantanea no contiene operaciones programadas para guardar'\)/);
   assert.match(codeService, /function restorePublishedPlanAsDraft\(snapshotId, currentPayload\)/);
   const publishingService = await readFile(path.join(result.distDir, "05-publishing-service.js"), "utf8");
   assert.match(publishingService, /PP_acquireScriptLock_\('restaurar publicado'/);
@@ -672,8 +680,14 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
   assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
+  assert.match(pagesIndex, /reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*loadSnapshot = null;[\s\S]*syncDraftLoadWeek\(\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);/);
+  assert.match(pagesIndex, /loadSnapshot = reportSnapshot;[\s\S]*syncLoadWeekFromPlanSource\(reportSnapshot\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);/);
+  assert.match(pagesIndex, /async function loadSelectedLoadPlan\(snapshotId\) \{\s*await loadSelectedPlanSnapshot\(snapshotId\);\s*\}/);
+  assert.match(pagesIndex, /function renderLoadSourceSelect\(\) \{[\s\S]*syncPlanSourceSelect\(els\.loadPlanSelect\);[\s\S]*els\.loadModeSelect\.value = loadMode;/);
   const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
-  assert.match(scheduleImpl, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);[\s\S]*saveState\("ui"\);[\s\S]*persistPlanSnapshot\(\)\.then/);
+  assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\./);
+  assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
+  assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*borrador guardado/);
   assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);
   assert.match(pagesIndex, /const label = window\.PlanningWorkflowCore\.weeklyPlanIdentifier\(week, version\);/);
   assert.match(pagesIndex, /reportSourceLabel\(\) \{[\s\S]*weeklyPlanIdentifier\(week, reportSnapshot\.version\)/);
@@ -1112,7 +1126,7 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
 
 test("tombstones locales evitan que import remoto o snapshot stale reviva OTs retiradas", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
-  const importStart = app.indexOf("function applyImported(imported, options = {})");
+const importStart = app.indexOf("async function applyImported(imported, options = {})");
   const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
   const importFlow = app.slice(importStart, importEnd);
   const payloadStart = app.indexOf("function createAppSheetPayload(source = state)");
@@ -1319,11 +1333,87 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
     (value) => String(value || "").trim().toUpperCase(),
   );
 
-  assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
+assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
   assert.deepEqual(preparedOperations, []);
   assert.equal(dialogs, 0);
   assert.equal(validateScheduleConfiguration(new Date()), null);
   assert.deepEqual(validatedOperations, []);
+});
+
+test("RUL-PRE-?: pedir operadores agrega la habilidad a la matriz y la persiste para no repetir la pregunta", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const helpers = app.slice(
+    app.indexOf("function capabilityOperatorRequirements("),
+    app.indexOf("function planningCatalogSelectMarkup(", app.indexOf("function capabilityOperatorRequirements(")),
+  );
+  const state = {
+    operators: ["DOBLADOR 2", "SUBCONTRATO"],
+    configuredCapabilities: [],
+    hiddenCapabilities: ["5459::DOBLADO_BASE_SUPERIOR"],
+    cts: [],
+    matrix: { 5459: [] },
+    operations: [
+      { ot: "100", ct: "5459", descripcion: "Doblado base superior", operador: "SIN_OPERADOR" },
+    ],
+    operatorPerformance: {},
+  };
+  const assigned = [];
+  const normalizeStatus = (value) => String(value || "").trim().toUpperCase();
+  const uniq = (values) => [...new Set(values || [])];
+  const TOOL_CHANGE_CAPABILITY = { key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL", ct: "TOOL_CHANGE", label: "CAMBIO DE HERRAMENTAL" };
+  const capabilityFromOperation = (op) => {
+    const label = String(op?.descripcion || op?.tipoInsercion || "OPERACION").trim();
+    return { key: `${op.ct}::${label.toUpperCase().replace(/\s+/g, "_")}`, ct: op.ct, label };
+  };
+  const findOperation = (id) => ({ id, ot: id === "s" ? "200" : "100" });
+  const assignPlanningOperators = (operations) => {
+    for (const op of operations) {
+      const allowed = state.matrix[`${op.ct}::${op.descripcion.toUpperCase().replace(/\s+/g, "_")}`] || [];
+      if (!allowed.includes(op.operador)) op.operador = allowed[0] || "SIN_OPERADOR";
+    }
+    assigned.push(...operations);
+  };
+  const invalidateCurrentPlanOperationsCache = () => {};
+  const build = Function(
+    "state", "normalizeStatus", "uniq", "TOOL_CHANGE_CAPABILITY", "capabilityFromOperation", "findOperation",
+    "assignPlanningOperators", "invalidateCurrentPlanOperationsCache",
+    "enableOperatorsForCapability", "capabilityOperatorRequirements", "groupPlanConfigurationGaps",
+    `; ${helpers};
+     return { enableOperatorsForCapability, capabilityOperatorRequirements, groupPlanConfigurationGaps };`,
+  )(
+    state, normalizeStatus, uniq, TOOL_CHANGE_CAPABILITY, capabilityFromOperation, findOperation,
+    assignPlanningOperators, invalidateCurrentPlanOperationsCache,
+  );
+  const issues = [
+    { code: "MISSING_OPERATOR", operationId: "x", capability: { key: "5459::DOBLADO_BASE_SUPERIOR", ct: "5459", label: "DOBLADO BASE SUPERIOR" } },
+    { code: "MISSING_CAPABILITY", operationId: "y", capability: { key: "5459::DOBLADO_BASE_SUPERIOR", ct: "5459", label: "DOBLADO BASE SUPERIOR" } },
+    { code: "MISSING_OPERATOR", operationId: "z", capability: TOOL_CHANGE_CAPABILITY },
+  ];
+  const requirements = build.capabilityOperatorRequirements(issues);
+  assert.equal(requirements.length, 1);
+  assert.deepEqual(requirements[0].codes, ["MISSING_OPERATOR", "MISSING_CAPABILITY"]);
+
+  build.enableOperatorsForCapability(requirements[0], ["DOBLADOR 2"]);
+  assert.ok(state.configuredCapabilities.includes("5459::DOBLADO_BASE_SUPERIOR"));
+  assert.ok(!state.hiddenCapabilities.includes("5459::DOBLADO_BASE_SUPERIOR"));
+  assert.deepEqual(state.matrix["5459::DOBLADO_BASE_SUPERIOR"], ["DOBLADOR 2"]);
+  assert.equal(state.operations[0].operador, "DOBLADOR 2");
+
+  const gaps = build.groupPlanConfigurationGaps(
+    [
+      { code: "MISSING_MACHINE", operationId: "m", ot: "100" },
+      { code: "MISSING_TOOL", operationId: "t", ot: "100" },
+      { code: "MISSING_SUBCONTRACT_TYPE", operationId: "s", ot: "200" },
+      { code: "MISSING_TOOL_CHANGE_OPERATOR", operationId: "z" },
+    ],
+    state.operations,
+  );
+  assert.equal(gaps.machines.length, 1);
+  assert.equal(gaps.machines[0].ot, "100");
+  assert.equal(gaps.tools.length, 1);
+  assert.equal(gaps.subcontracts.length, 1);
+  assert.equal(gaps.operators.length, 0);
+  assert.equal(gaps.toolChange, true);
 });
 
 test("generar plan no pide datos de OTs fuera del alcance y reutiliza configuracion OT persistida", async () => {

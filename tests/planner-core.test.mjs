@@ -226,11 +226,14 @@ test("el progreso de programacion nunca supera el total entre estrategias (no ac
   for (const event of events) {
     assert.ok(event.scheduled <= event.total, `scheduled ${event.scheduled} no debe superar total ${event.total} en ${event.phase}`);
   }
-  const last = events[events.length - 1];
+const last = events[events.length - 1];
   assert.equal(last.total, 120);
   assert.equal(last.percent, undefined);
-  assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 3);
-  assert.deepEqual(structuredClone(result.lastSchedule.optimization.strategySkips), [{ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" }]);
+  assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 2);
+  assert.deepEqual(structuredClone(result.lastSchedule.optimization.strategySkips), [
+    { strategy: "load", reason: "STRATEGY_CONVERGED" },
+    { strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" },
+  ]);
 });
 
 test("la primera operacion respeta el orden de selectedOts sobre la prioridad calculada", async () => {
