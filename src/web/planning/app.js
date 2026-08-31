@@ -5275,7 +5275,7 @@ async function persistPlanSnapshot() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       saved = await response.json();
     }
-    await loadPlanSnapshots(false);
+    await loadPlanSnapshots(false, { deferPublishedLoad: true });
     return saved;
   } catch (error) {
     if (window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(error)) {

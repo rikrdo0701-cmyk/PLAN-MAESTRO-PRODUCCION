@@ -687,6 +687,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
   assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\.[\s\S]*Guardando plan\.\.\./);
   assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
+  assert.match(pagesIndex, /async function persistPlanSnapshot\(\)[\s\S]*await loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\);[\s\S]*return saved/);
   assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*appSheetMarkDirtyScope\("plan"\);[\s\S]*await saveAppSheet\(false\);[\s\S]*borrador guardado/);
   assert.match(scheduleImpl, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas;[\s\S]*`, "ui"\)/);
   assert.match(pagesIndex, /function isTransientSaveLockError\(error\)[\s\S]*Otro proceso esta actualizando el plan/);
