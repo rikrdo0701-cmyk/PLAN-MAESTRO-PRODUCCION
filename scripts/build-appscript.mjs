@@ -69,7 +69,7 @@ function patchPlanningApp(app) {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   purgeClosedWorkOrderRetention();
-  resetDailyReportFiltersToToday();
+  syncReportFiltersToPlanWeekOrToday();
   if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
   if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
@@ -93,7 +93,7 @@ function patchPlanningApp(app) {
   await snapshotsRequest;
   const restoredDraft = loaded ? await restoreDraftPlanFromSharedState() : false;
   purgeClosedWorkOrderRetention();
-  resetDailyReportFiltersToToday();
+  syncReportFiltersToPlanWeekOrToday();
   if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
   if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");

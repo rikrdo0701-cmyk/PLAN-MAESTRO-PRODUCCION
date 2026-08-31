@@ -571,7 +571,7 @@ async function loadAppStateInBackground() {
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
   purgeClosedWorkOrderRetention();
-  resetDailyReportFiltersToToday();
+  syncReportFiltersToPlanWeekOrToday();
   if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
   if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
@@ -8938,6 +8938,16 @@ function resetDailyReportFiltersToToday() {
   const today = formatDate(new Date());
   for (const type of ["operator", "adjuster", "subcontract"]) {
     state.reportFilters[type].date = today;
+  }
+}
+
+function syncReportFiltersToPlanWeekOrToday() {
+  const reportStart = state.planStart || state.reportWeekStart;
+  if (reportStart) {
+    state.reportWeekStart = normalizeWeekStartValue(reportStart);
+    syncReportFilterDates(state.reportWeekStart);
+  } else {
+    resetDailyReportFiltersToToday();
   }
 }
 

@@ -575,7 +575,16 @@
       "source": "reporte usuario 2026-08-31 ('AL RECARGAR PAGINA EL PLAN TARDA TIEMPO EN APARECER EN LA LISTA DESPLEGABLE SOLO APARECE BORRADOR CUANDO HAY MAS PLANES'); src/web/planning/app.js loadAppStateInBackground, loadPlanSnapshots/loadSnapshotsOnce, renderPlanSnapshotSelect; scripts/build-appscript.mjs patchPlanningApp",
       "domain": "OT",
       "updated_at": "2026-08-31T00:10:00-06:00"
+    },
+    {
+      "rule_id": "RULE-GOV-005",
+      "name": "GitHub Pages es el punto de acceso publico a la app",
+      "status": "activa",
+      "rule": "El punto de acceso publico desde el que se abre la app es GitHub Pages: https://rikrdo0701-cmyk.github.io/PLAN-MAESTRO-PRODUCCION. Es el frontend estatico (site/ vía deploy-pages.yml) que se sirve al usuario (web/telefono/tablet) y que se comunica con la API backend de Apps Script a traves del Bridge (?app=bridge). Regla de despliegue: cualquier cambio de frontend que el usuario deba ver (UI, reportes, gantt, etc.) se refleja OK al publicarse en ese origen; los cambios solo de backend (src/server/*) no cambian el sitio y deben verificado contra el deployment de Apps Script. Para validar un cambio visible, revisar/abrir ese origen GitHub Pages (los cambios de src/web/** se despliegan automaticamente por deploy-pages.yml al pushear a main), no solo el bundle de Apps Script.",
+      "source": "definicion de usuario 2026-08-31 (esta web es desde donde se accede a la app); .github/workflows/deploy-pages.yml; .project-memory/integrations.json INT-GITHUB_PAGES",
+      "domain": "GOV",
+      "updated_at": "2026-08-31T18:00:00-06:00"
     }
   ],
-  "updated_at": "2026-08-31T00:10:00-06:00"
+  "updated_at": "2026-08-31T18:00:00-06:00"
 }

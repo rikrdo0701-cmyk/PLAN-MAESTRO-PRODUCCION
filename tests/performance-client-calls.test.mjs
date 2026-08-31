@@ -1068,7 +1068,7 @@ test("el arranque remoto conserva la OT de detalle y la operacion seleccionada",
   const renderOptions = [];
   const workspaceOptions = [];
   const loadAppStateInBackground = Function(
-    "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "resetDailyReportFiltersToToday",
+    "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "syncReportFiltersToPlanWeekOrToday",
     "saveState", "render", "applyInitialWorkspaceView", "isAppsScriptRuntime", "syncNetSuiteInBackground",
     "loadPlanSnapshots", "purgeClosedWorkOrderRetention",
     `${startupSource}; return loadAppStateInBackground;`,

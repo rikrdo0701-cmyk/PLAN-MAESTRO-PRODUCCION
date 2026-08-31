@@ -433,7 +433,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   const workspaceOptions = [];
   const generatedStartup = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "loadPlanSnapshots", "restoreDraftPlanFromSharedState",
-    "purgeClosedWorkOrderRetention", "resetDailyReportFiltersToToday", "saveState", "render", "applyInitialWorkspaceView",
+    "purgeClosedWorkOrderRetention", "syncReportFiltersToPlanWeekOrToday", "saveState", "render", "applyInitialWorkspaceView",
     "showToast", "isAppsScriptRuntime", "syncNetSuiteInBackground",
     `${builtStartupSource}; return loadAppStateInBackground;`,
   )(
