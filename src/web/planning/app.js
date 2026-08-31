@@ -8927,7 +8927,9 @@ function updateReportFilter(type, patch) {
 function syncReportFilterDates(date) {
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
   for (const type of ["operator", "adjuster", "subcontract"]) {
-    state.reportFilters[type].date = normalizeReportFilters({ [type]: { date } }, state.reportWeekStart)[type].date;
+    const normalized = normalizeReportFilters({ [type]: { date, futureDays: 5 } }, state.reportWeekStart)[type];
+    state.reportFilters[type].date = normalized.date;
+    state.reportFilters[type].futureDays = normalized.futureDays;
   }
 }
 
