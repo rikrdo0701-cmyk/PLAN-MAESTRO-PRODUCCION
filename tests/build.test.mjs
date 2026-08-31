@@ -447,7 +447,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
-  assert.match(pagesIndex, /statusActions: isReportSnapshotEditable\(\)/);
+  assert.match(pagesIndex, /function isPlanCompletedOperation\(op\)[\s\S]*const stored = state\.operationPlanStatuses\?\.\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
+  assert.match(pagesIndex, /statusActions: true/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
   assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
   assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);
@@ -578,7 +579,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
   assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce\(showMessage, options = \{\}\)[\s\S]*requestPlanSnapshots\(showMessage, options\)/);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
-  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const preferPublished = options\.deferPublishedLoad !== true && \(!reportSnapshot \|\| reportSnapshot\.snapshotId === "draft"\);[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = \(options\.deferPublishedLoad !== true \|\| !hasDraftReport\)[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
@@ -700,7 +701,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /status: isPublishedSnapshotOption\(snapshot, publishedIds\) \? "PUBLICADO"/);
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
   assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
-  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);/);
+  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;/);
   assert.match(snapshotsLoad, /renderReports\(\);/);
   assert.match(pagesIndex, /return reportSnapshot;[\s\S]*catch \(error\)[\s\S]*return null;/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
@@ -1514,11 +1515,14 @@ test("agregar o arrastrar una OT consulta su ruta directa una vez por sesion ant
 test("completar una operacion usa guardado atomico y render parcial", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const persistence = app.slice(
-    app.indexOf("async function persistOptimisticPlanStatus("),
+    app.indexOf("async function performToggleOperationPlanStatus("),
     app.indexOf("function renderProductionReportTable(", app.indexOf("async function persistOptimisticPlanStatus(")),
   );
 
   assert.match(persistence, /callAppsScript\("saveOperationPlanStatus"/);
+  assert.match(persistence, /const stateOperation = state\.operations\.find/);
+  assert.match(persistence, /const reportOperation = reportOperationsSource\(\)\.find/);
+  assert.match(persistence, /if \(stateOperation\) \{[\s\S]*operation\.needsReschedule = true/);
   assert.match(persistence, /renderPlanStatusChange\(\)/);
   assert.doesNotMatch(persistence, /\brender\(\)/);
 });

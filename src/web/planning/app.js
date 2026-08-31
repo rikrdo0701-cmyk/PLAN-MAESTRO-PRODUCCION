@@ -1565,8 +1565,9 @@ function operationCompletionKey(op) {
 
 function isPlanCompletedOperation(op) {
   if (!op) return false;
-  if (normalizeStatus(op.planStatus) === "COMPLETADA_PLAN") return true;
-  return state.operationPlanStatuses?.[operationCompletionKey(op)]?.status === "COMPLETADA_PLAN";
+  const stored = state.operationPlanStatuses?.[operationCompletionKey(op)];
+  if (stored?.status) return stored.status === "COMPLETADA_PLAN";
+  return normalizeStatus(op.planStatus) === "COMPLETADA_PLAN";
 }
 
 function normalizeOtDate(value) {
@@ -5891,7 +5892,10 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
       : await fetchJson(PLAN_SNAPSHOTS_API);
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
-    const preferPublished = options.deferPublishedLoad !== true && (!reportSnapshot || reportSnapshot.snapshotId === "draft");
+    const draftReport = currentDraftReportSnapshot();
+    const hasDraftReport = draftReport.operations.length > 0;
+    const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
+      (!reportSnapshot || (reportSnapshot.snapshotId === "draft" && !hasDraftReport));
     if (preferPublished) {
       for (const snapshot of publishedPlanSnapshots()) {
         const loaded = await loadPlanSnapshotById(snapshot.snapshotId, { render: false, silent: true });
@@ -5900,7 +5904,7 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
     }
     if (!reportSnapshot) {
       syncDraftReportWeek();
-      reportSnapshot = currentDraftReportSnapshot();
+      reportSnapshot = draftReport;
     }
     planSnapshotsLoading = false;
     renderReports();
@@ -6471,7 +6475,7 @@ function renderOperatorReport() {
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
   els.operatorPrintContext.textContent = formatReportDateTime(new Date());
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
-  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: isReportSnapshotEditable() });
+  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: true });
   bindReportCommentInputs(els.operatorReport);
   bindPlanStatusActions(els.operatorReport);
 }
@@ -6694,7 +6698,6 @@ const operationPlanStatusActions = new Map();
 const detachedPlanStatusRows = new WeakMap();
 
 function planStatusActionCell(op) {
-  if (!isReportSnapshotEditable()) return escapeHtml(isPlanCompletedOperation(op) ? "Completada" : "Pendiente");
   const completed = isPlanCompletedOperation(op);
   const key = operationCompletionKey(op);
   return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
@@ -6779,7 +6782,9 @@ function discardDetachedPlanStatusRows(key) {
 }
 
 function renderPlanStatusRow(key) {
-  const operation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
+  const operation = stateOperation || reportOperation;
   const current = state.operationPlanStatuses?.[key];
   const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
   planStatusButtons(key).forEach((button) => {
@@ -6792,7 +6797,7 @@ function renderPlanStatusRow(key) {
   updatePlanStatusReport(
     els.operatorReport, key, operatorReportSelection, "operator",
     els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount,
-    (op, index) => renderProductionReportRow(op, index, { statusActions: isReportSnapshotEditable() }),
+    (op, index) => renderProductionReportRow(op, index, { statusActions: true }),
     renderOperatorReport, true
   );
   updatePlanStatusReport(
@@ -6831,7 +6836,9 @@ function toggleOperationPlanStatus(key) {
 }
 
 async function performToggleOperationPlanStatus(key) {
-  const operation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
+  const operation = stateOperation || reportOperation;
   const current = state.operationPlanStatuses?.[key];
   const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
   if (!operation && !current) return showToast("No se encontro la operacion");
@@ -6843,12 +6850,14 @@ async function performToggleOperationPlanStatus(key) {
     state.operationPlanStatuses[key] = { ...(current || {}), key, status: "PENDIENTE", reopenedAt: new Date().toISOString() };
     if (operation) {
       operation.planStatus = "PENDIENTE";
-      operation.needsReschedule = true;
-      operation.autoFrozen = false;
-      operation.fechaInicio = "";
-      operation.horaInicio = "";
-      operation.fechaFin = "";
-      operation.horaFin = "";
+      if (stateOperation) {
+        operation.needsReschedule = true;
+        operation.autoFrozen = false;
+        operation.fechaInicio = "";
+        operation.horaInicio = "";
+        operation.fechaFin = "";
+        operation.horaFin = "";
+      }
       operation.log = appendLog(operation.log, "REABIERTA_PLAN_APP");
     }
     return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,

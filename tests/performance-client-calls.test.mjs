@@ -545,6 +545,7 @@ function loadPlanStatus(options = {}) {
     operationPlanStatuses: options.operationPlanStatuses || {},
     ...(options.state || {}),
   };
+  const reportSource = options.reportOperations || state.operations;
   const buttons = buttonKeys.map((key) => {
     const operation = state.operations.find((item) => item.id === key);
     const completed = state.operationPlanStatuses[key]?.status === "COMPLETADA_PLAN" || operation?.planStatus === "COMPLETADA_PLAN";
@@ -597,7 +598,7 @@ function loadPlanStatus(options = {}) {
   };
   const reportSelection = () => {
     const status = options.reportStatus || "TODAS";
-    const selected = state.operations.filter((operation) => {
+    const selected = reportSource.filter((operation) => {
       const completed = state.operationPlanStatuses[operation.id]?.status === "COMPLETADA_PLAN" || operation.planStatus === "COMPLETADA_PLAN";
       if (!operation.fechaInicio || !operation.fechaFin) return false;
       return status === "TODAS" || (status === "COMPLETADAS" ? completed : !completed);
@@ -622,7 +623,7 @@ function loadPlanStatus(options = {}) {
     "isAppsScriptRuntime", "appSheetSaveTimer", "operationStatusSavesInFlight", "callAppsScript",
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
     "selectedJobOt", "escapeHtml", "operatorReportSelection", "adjusterReportSelection", "renderReportFilterStatus",
-    "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport",
+    "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport", "reportOperationsSource",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -644,7 +645,7 @@ function loadPlanStatus(options = {}) {
       output.textContent = `${selection.rows.length} de ${selection.total} · max. 25`;
     },
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`,
-    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {}, rerenderReport, () => {},
+    (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {}, rerenderReport, () => {}, () => reportSource,
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport,
@@ -692,6 +693,38 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
   assert.equal(fixture.state.revision, 2);
   fixture.deferredWork.forEach((callback) => callback());
   assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt", "loads"]);
+});
+
+test("completar funciona con operaciones de un plan publicado seleccionado", async () => {
+  const calls = [];
+  const publishedOperation = {
+    id: "published-op-1",
+    ot: "200",
+    ct: "CORTE",
+    operador: "OPERADOR 1",
+    fechaInicio: "2026-08-01",
+    horaInicio: "07:00",
+    fechaFin: "2026-08-01",
+    horaFin: "08:00",
+  };
+  const fixture = loadPlanStatus({
+    rows: ["published-op-1"],
+    operations: [],
+    reportOperations: [publishedOperation],
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return Promise.resolve({ revision: 2, savedAt: "2026-08-01T00:00:00.000Z" });
+    },
+  });
+
+  fixture.api.bindPlanStatusActions({ querySelectorAll: () => fixture.buttons });
+  await fixture.buttons[0].listener();
+
+  assert.equal(fixture.state.operationPlanStatuses["published-op-1"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operationPlanStatuses["published-op-1"].ot, "200");
+  assert.equal(fixture.buttons[0].textContent, "Reabrir");
+  assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
+  assert.equal(fixture.state.operations.length, 0);
 });
 
 test("un error revierte unicamente la fila editada", async () => {
