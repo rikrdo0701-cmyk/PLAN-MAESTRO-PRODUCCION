@@ -377,6 +377,10 @@
     saveRetryTimer = root.setTimeout(() => saveAppSheet(false), delay);
   }
 
+  function isTransientSaveLockError(error) {
+    return /Otro proceso esta actualizando el plan/i.test(String(error?.message || error));
+  }
+
   async function reloadStateAfterConflict() {
     try {
       const localRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
@@ -484,7 +488,8 @@
         return false;
       }
       scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
-      console.warn("Guardado en segundo plano pendiente; se reintentara:", error);
+      if (isTransientSaveLockError(error)) console.info("Guardado en segundo plano esperando lock; se reintentara.");
+      else console.warn("Guardado en segundo plano pendiente; se reintentara:", error);
       document.body.dataset.saveStatus = "pending";
       scheduleRetry();
       if (showMessage) showToast("Guardado pendiente; se reintentara en segundo plano", 4200);

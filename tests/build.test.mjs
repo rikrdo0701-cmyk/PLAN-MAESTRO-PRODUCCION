@@ -685,9 +685,11 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /async function loadSelectedLoadPlan\(snapshotId\) \{\s*await loadSelectedPlanSnapshot\(snapshotId\);\s*\}/);
   assert.match(pagesIndex, /function renderLoadSourceSelect\(\) \{[\s\S]*syncPlanSourceSelect\(els\.loadPlanSelect\);[\s\S]*els\.loadModeSelect\.value = loadMode;/);
   const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
-  assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\./);
+  assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\.[\s\S]*Guardando plan\.\.\./);
   assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
-  assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*borrador guardado/);
+  assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*appSheetMarkDirtyScope\("plan"\);[\s\S]*await saveAppSheet\(false\);[\s\S]*borrador guardado/);
+  assert.match(scheduleImpl, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas;[\s\S]*`, "ui"\)/);
+  assert.match(pagesIndex, /function isTransientSaveLockError\(error\)[\s\S]*Otro proceso esta actualizando el plan/);
   assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);
   assert.match(pagesIndex, /const label = window\.PlanningWorkflowCore\.weeklyPlanIdentifier\(week, version\);/);
   assert.match(pagesIndex, /reportSourceLabel\(\) \{[\s\S]*weeklyPlanIdentifier\(week, reportSnapshot\.version\)/);

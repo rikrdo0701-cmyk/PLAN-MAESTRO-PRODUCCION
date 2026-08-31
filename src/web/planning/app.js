@@ -4879,8 +4879,10 @@ async function scheduleCurrentPlanImpl() {
     const snapshot = await persistPlanSnapshot();
     if (!snapshot?.snapshotId) throw new Error("el plan se calculo, pero no se pudo guardar el borrador");
     state.draftVersionId = snapshot.snapshotId;
-    saveState("ui");
-    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`);
+    setScheduleStatus("Guardando plan...");
+    appSheetMarkDirtyScope("plan");
+    await saveAppSheet(false);
+    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`, "ui");
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
   } finally {
