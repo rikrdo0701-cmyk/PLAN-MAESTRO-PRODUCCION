@@ -656,7 +656,6 @@ function bindElements() {
     "addCtBtn",
     "weekReport",
     "weekExecutiveSummary",
-    "weekReportStartInput",
     "operatorReport",
     "operatorReportSelect",
     "operatorReportStatus",
@@ -886,11 +885,6 @@ function bindEvents() {
     renderSaturation();
   });
   els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
-  els.weekReportStartInput.addEventListener("change", () => {
-    state.reportWeekStart = normalizeWeekStartValue(els.weekReportStartInput.value);
-    syncReportFilterDates(state.reportWeekStart);
-    saveAndRender("Semana del reporte actualizada");
-  });
   els.operatorReportStartInput.addEventListener("change", () => {
     updateReportFilter("operator", { date: els.operatorReportStartInput.value });
   });
@@ -1042,7 +1036,7 @@ function normalizeState() {
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   state.horizonDays = Math.max(1, Math.min(45, Number(state.horizonDays || DEFAULT_HORIZON_DAYS)));
   state.loadWeekStart = normalizeWeekStartValue(state.loadWeekStart || state.planStart);
-  state.reportWeekStart = normalizeWeekStartValue(state.reportWeekStart || state.planStart);
+  state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
   state.draftVersionId = String(state.draftVersionId || "");
   state.activePublishedVersionId = String(state.activePublishedVersionId || "");
   state.publishedVersions = Array.isArray(state.publishedVersions) ? state.publishedVersions : [];
@@ -5441,7 +5435,6 @@ async function generatePlanPdf() {
   }
   showWorkspaceView("reportes", "week", { scrollToTop: true });
   state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
-  syncReportFilterDates(state.reportWeekStart);
   renderReports();
   document.body.dataset.printContext = "plan";
   showToast("Usa Guardar como PDF en la ventana de impresion");
@@ -6002,9 +5995,8 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
     loadSnapshot = reportSnapshot;
     const firstStart = reportSnapshot.operations.map(opStart).filter(Boolean).sort((a, b) => a - b)[0];
     const reportStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
-    if (reportStart) {
+if (reportStart) {
       state.reportWeekStart = normalizeWeekStartValue(reportStart);
-      syncReportFilterDates(reportStart);
     }
     syncLoadWeekFromPlanSource(reportSnapshot);
     if (options.render !== false) {
@@ -6149,7 +6141,6 @@ function syncDraftReportWeek() {
   const reportStart = state.planStart || state.reportWeekStart;
   if (!reportStart) return;
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
-  syncReportFilterDates(state.reportWeekStart);
 }
 
 function reportOperationsSource() {
@@ -6181,7 +6172,6 @@ function renderReports() {
 }
 
 function renderWeekReport() {
-  els.weekReportStartInput.value = state.reportWeekStart;
   els.reportSnapshotMeta.textContent = reportSourceLabel();
   els.weekPrintContext.textContent = formatReportDateTime(new Date());
   const reportOps = reportOperationsSource();
@@ -8901,9 +8891,10 @@ function normalizeReportFilters(filters, fallbackDate) {
   const source = filters && typeof filters === "object" ? filters : {};
   return ["operator", "adjuster", "subcontract"].reduce((out, type) => {
     const current = source[type] && typeof source[type] === "object" ? source[type] : {};
-    const parsed = parseDate(current.date || fallbackDate);
+    const today = parseDate(formatDate(new Date()));
+    const parsed = parseDate(current.date) || (fallbackDate ? parseDate(fallbackDate) : null) || today;
     out[type] = {
-      date: parsed ? formatDate(new Date(parsed.year, parsed.month - 1, parsed.day)) : fallbackDate,
+      date: parsed ? formatDate(new Date(parsed.year, parsed.month - 1, parsed.day)) : formatDate(new Date()),
       showAll: current.showAll === true,
       futureDays: Math.max(1, Math.min(5, Number(current.futureDays) || 1)),
       status: ["PENDIENTES", "COMPLETADAS", "TODAS"].includes(String(current.status || "").toUpperCase())
@@ -8926,15 +8917,6 @@ function updateReportFilter(type, patch) {
   saveState();
 }
 
-function syncReportFilterDates(date) {
-  state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
-  for (const type of ["operator", "adjuster", "subcontract"]) {
-    const normalized = normalizeReportFilters({ [type]: { date, futureDays: 5 } }, state.reportWeekStart)[type];
-    state.reportFilters[type].date = normalized.date;
-    state.reportFilters[type].futureDays = normalized.futureDays;
-  }
-}
-
 function resetDailyReportFiltersToToday() {
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
   const today = formatDate(new Date());
@@ -8945,12 +8927,8 @@ function resetDailyReportFiltersToToday() {
 
 function syncReportFiltersToPlanWeekOrToday() {
   const reportStart = state.planStart || state.reportWeekStart;
-  if (reportStart) {
-    state.reportWeekStart = normalizeWeekStartValue(reportStart);
-    syncReportFilterDates(state.reportWeekStart);
-  } else {
-    resetDailyReportFiltersToToday();
-  }
+  if (reportStart) state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  resetDailyReportFiltersToToday();
 }
 
 function filteredReportRows(rows, type, dateGetter) {
