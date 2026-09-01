@@ -38,6 +38,12 @@ Detalle y mediciones: `docs/superpowers/plans/2026-09-01-arranque-con-datos-real
 
 Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):not(.planning-dialog) { display: none; }`, espejo de lo que `src/web/inspection/inspection.css` hace con `data-view="inspection"`.
 
+## Reportes
+
+| ID | Nombre | Estado | Fuente |
+|---|---|---|---|
+| `RULE-REP-001` | Fechas de reportes: día = hoy (operador/ajustador/subcontrato); semana = lunes del plan seleccionado, sin campo "Semana" | IMPLEMENTADA | `app.js`, `index.template.html`, commit `221f4d8` |
+
 ## OT
 
 | ID | Nombre | Estado | Fuente |

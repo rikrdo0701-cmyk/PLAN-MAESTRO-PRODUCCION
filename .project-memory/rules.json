@@ -656,7 +656,16 @@
       "source": "src/web/planning/styles.css (reglas data-view); src/web/inspection/inspection.css (patron inspeccion); commit 34c5802; docs/rules/RULES.md fila RULE-UI-001",
       "domain": "UI",
       "updated_at": "2026-09-01T18:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-REP-001",
+      "name": "Fechas de reportes: dia=hoy, semana=lunes del plan",
+      "status": "implementada",
+      "rule": "Los reportes diarios (Plan por operador, Ajustador, Subcontratos) inician SIEMPRE con fecha = hoy (formatDate(new Date())), aunque el plan/backend cargue despues; el usuario puede cambiarlas por sesion (inputs operator/adjuster/subcontractReportStartInput). El reporte semanal 'Plan de la semana' NO muestra campo 'Semana' (se elimino el input weekReportStartInput del toolbar): siempre inicia en lunes de la semana del plan/borrador seleccionado, es decir state.reportWeekStart = normalizeWeekStartValue(state.planStart || reportWeekStart) y para snapshots publicados = normalizeWeekStartValue(snapshot.planStart || primera fecha de una operacion). No restaurar syncReportFilterDates (eliminada) ni re-anadir el campo: los filtros de dia no deben resincronizarse al lunes del plan. Regla verificada 2026-09-01 en produccion: con 2254 ops cargadas, operator/adjuster/subcontract=2026-09-01, reportWeekStart=2026-08-24 (lunes normalizado desde planStart=2026-08-28).",
+      "source": "src/web/planning/app.js (normalizeReportFilters, resetDailyReportFiltersToToday, syncReportFiltersToPlanWeekOrToday, syncDraftReportWeek, renderWeekReport, normalizeState); src/web/planning/index.template.html (toolbar semana); commit 221f4d8; verificacion Playwright produccion 2026-09-01",
+      "domain": "REP",
+      "updated_at": "2026-09-01T19:15:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T18:40:00-06:00"
+  "updated_at": "2026-09-01T19:15:00-06:00"
 }
