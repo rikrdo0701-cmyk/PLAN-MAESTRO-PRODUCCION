@@ -225,14 +225,23 @@ Esto acelera visitas posteriores y permite abrir la interfaz básica aunque la r
 ```text
 1. El navegador abre GitHub Pages.
 2. El service worker entrega el frontend desde caché cuando está disponible.
-3. localStorage muestra el último plan inmediatamente.
-4. El frontend consulta getAppRevision().
-5. Si la revisión coincide, no descarga el estado.
-6. Si cambió, descarga un bootstrap sin materiales.
-7. Los materiales se solicitan al abrir una OT.
-8. Los históricos se solicitan al abrir Reportes.
-9. NetSuite se sincroniza automáticamente solo si los datos están vencidos.
+3. Sin Demo: el build neutraliza sampleState (planta/id/operations vacíos).
+4. Capa 1: initializePlanningApp hidrata el caché local (plan-produccion-app-v1)
+   si es válido → render instantáneo de datos reales para visitantes recurrentes.
+5. Capa 2: en paralelo, planningRescueStateFromBackups() intenta getPlanSnapshot('draft')
+   (rápido) o el último publicado; si llega, re-renderiza con el plan real.
+6. loadInitialStateConditionally consulta la revisión (getAppStateIfChanged);
+   si cambió, aplica el estado autoritativo (sin modal si el local vino del servidor).
+7. Tras una carga exitosa se flushea localStorage (scheduleLocalStorageFlush),
+   dejando caché válido para la siguiente visita.
+8. Los materiales se solicitan al abrir una OT.
+9. Los históricos se solicitan al abrir Reportes.
+10. NetSuite se sincroniza automáticamente solo si los datos están vencidos.
 ```
+
+Detalle, causas y reglas de que no se pierda: RULE-GOV-006/007/008 y RULE-LOAD-001..004
+(`.project-memory/rules.json`, `docs/rules/RULES.md`) y
+`docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md`.
 
 ## Flujo de desarrollo y despliegue
 
@@ -305,6 +314,7 @@ El puente solo acepta el origen configurado y una lista cerrada de funciones.
 - Las sincronizaciones completas de NetSuite siguen dependiendo del tiempo de los RESTlets.
 - El service worker acelera archivos estáticos, no consultas de Sheets o NetSuite.
 - La aplicación muestra el último caché mientras valida la revisión; durante unos instantes puede verse información anterior, que se reemplaza si hubo cambios.
+- En la primera visita de un navegador (sin caché local) el plan real aparece cuando el backend responde (~43-77 s en frío, medido 2026-09-01); la Capa 3 (caché de estado en servidor/warm-up) y la Capa 4 (payload ligero) seguirán siendo opcionales para eliminar ese latencia.
 
 ## Indicadores recomendados
 

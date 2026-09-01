@@ -64,8 +64,8 @@
         "scripts/build-appscript.mjs",
         "scripts/check-project.mjs"
       ],
-      "purpose": "Build a dist/ (Apps Script) y site/ (GitHub Pages); check-project valida sintaxis, marcadores de build y URL del backend.",
-      "rules": [],
+      "purpose": "Build a dist/ (Apps Script) y site/ (GitHub Pages); check-project valida sintaxis, marcadores de build y URL del backend. patchPlanningApp/patchPerformanceClient contienen los parches de produccion del arranque (demo neutralizado, hidratacion de cache, rescate rapido, flag de confirmacion); ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md.",
+      "rules": ["RULE-GOV-006", "RULE-GOV-007", "RULE-GOV-008", "RULE-LOAD-001", "RULE-LOAD-002", "RULE-LOAD-003", "RULE-LOAD-004"],
       "data_sources": []
     },
     {
@@ -94,8 +94,8 @@
         "src/web/bridge/Bridge.html",
         "docs/superpowers/plans/2026-08-29-planner-generation-5min.md"
       ],
-      "purpose": "Aplicación: backend Apps Script (19 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md. El plan docs/superpowers/plans/2026-08-29-planner-generation-5min.md documenta una propuesta por fases para reducir schedulePlan a ~5 min sin degradar calidad, con baseline dry-run y validaciones.",
-      "rules": ["RULE-OT-006", "RULE-OT-007", "RULE-OT-008", "RULE-OT-014", "RULE-MAT-008", "RULE-MAT-009", "RULE-DOB-001", "RULE-HER-001", "RULE-MAQ-001"],
+"purpose": "Aplicación: backend Apps Script (19 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md. El plan docs/superpowers/plans/2026-08-29-planner-generation-5min.md documenta una propuesta por fases para reducir schedulePlan a ~5 min sin degradar calidad, con baseline dry-run y validaciones. El arranque del frontend se controla desde shared/performance-client.js (boot real) + parches de scripts/build-appscript.mjs; ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md.",
+      "rules": ["RULE-OT-006", "RULE-OT-007", "RULE-OT-008", "RULE-OT-014", "RULE-MAT-008", "RULE-MAT-009", "RULE-DOB-001", "RULE-HER-001", "RULE-MAQ-001", "RULE-GOV-006", "RULE-GOV-007", "RULE-GOV-008", "RULE-LOAD-001", "RULE-LOAD-002", "RULE-LOAD-003", "RULE-LOAD-004"],
       "data_sources": [
         "SHEET-CONFIG",
         "SHEET-OPERACIONES",
@@ -157,5 +157,5 @@
       "data_sources": []
     }
   ],
-  "updated_at": "2026-08-29T06:00:00-06:00"
+"updated_at": "2026-09-01T15:40:00-06:00"
 }

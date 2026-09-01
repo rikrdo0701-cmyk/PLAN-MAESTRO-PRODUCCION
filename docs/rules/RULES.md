@@ -13,6 +13,22 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-GOV-002` | Single writer | DOCUMENTADA | ADR-0001 |
 | `RULE-GOV-003` | Document discovered knowledge | DOCUMENTADA | ADR-0001 |
 | `RULE-GIT-001` | Private independent remote | DOCUMENTADA | ADR-0001 |
+| `RULE-GOV-004` | Dry-run == ejecución real (sin fallbacks que la web no hace) | IMPLEMENTADA | `planner-core.js` |
+| `RULE-GOV-005` | GitHub Pages es el punto de acceso público a la app | ACTIVA | `deploy-pages.yml` |
+| `RULE-GOV-006` | Sin estado de demostración en el arranque público; datos reales se autoaplican | IMPLEMENTADA | `scripts/build-appscript.mjs` |
+| `RULE-GOV-007` | El arranque real es `performance-client.js`; parches del boot vía `scripts/build-appscript.mjs` | IMPLEMENTADA | `scripts/build-appscript.mjs` |
+| `RULE-GOV-008` | Código inyectado por el build no usa helpers internos de `planner-core` | IMPLEMENTADA | `scripts/build-appscript.mjs` |
+
+## Arranque (boot / carga)
+
+| ID | Nombre | Estado | Fuente |
+|---|---|---|---|
+| `RULE-LOAD-001` | Capa 1: hidratar caché local al boot (render instantáneo para recurrentes) | IMPLEMENTADA | plan 2026-09-01 |
+| `RULE-LOAD-002` | Capa 2: rescate rápido del Borrador en paralelo; `getAppState` autoritativo después | IMPLEMENTADA | plan 2026-09-01 |
+| `RULE-LOAD-003` | El caché local se puebla tras cada carga autoritativa exitosa | IMPLEMENTADA | plan 2026-09-01 |
+| `RULE-LOAD-004` | No abrir el modal de "última modificación" si el contenido local vino del servidor | IMPLEMENTADA | plan 2026-09-01 |
+
+Detalle y mediciones: `docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md`.
 
 ## OT
 

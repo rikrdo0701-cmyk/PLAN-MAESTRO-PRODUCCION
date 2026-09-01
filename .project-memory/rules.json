@@ -584,7 +584,70 @@
       "source": "definicion de usuario 2026-08-31 (esta web es desde donde se accede a la app); .github/workflows/deploy-pages.yml; .project-memory/integrations.json INT-GITHUB_PAGES",
       "domain": "GOV",
       "updated_at": "2026-08-31T18:00:00-06:00"
+    },
+    {
+      "rule_id": "RULE-GOV-006",
+      "name": "Sin estado de demostracion en el arranque publico; los datos reales se autoaplican",
+      "status": "implementada",
+      "rule": "El arranque de la web publica (GitHub Pages) NUNCA puede mostrar contenido de demostracion (sampleState demo, planta 'Demo', WO-10482). El build neutraliza sampleState en scripts/build-appscript.mjs patchPlanningApp: selectedOperationId:'', plant:{name:'',locationId:null}, operations:[]. Con el estado local vacio, hasPlanningContent() es false y confirmLatestModificationRefresh devuelve true sin abrir el modal 'Actualizar a la ultima modificacion', por lo que los datos reales del backend (getAppState / borrador / ultimo publicado) se aplican automaticamente. Cualquier cambio que reintroduzca contenido demo al boot o que vuelva a bloquear la autoaplicacion con un modal rompe esta regla.",
+      "source": "fix produccion 2026-09-01 (la vista mostraba Demo hasta que volvia el backend en cold start); scripts/build-appscript.mjs patchPlanningApp; src/web/planning/app.js sampleState/hasPlanningContent/confirmLatestModificationRefresh; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commits ce7adf3/e71fc3a/9d9e12d",
+      "domain": "GOV",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-GOV-007",
+      "name": "El arranque real es performance-client.js; los parches de produccion del boot van en scripts/build-appscript.mjs",
+      "status": "implementada",
+      "rule": "shared/performance-client.js sobreescribe loadAppStateInBackground con optimizedLoadAppStateInBackground y dirige el boot via loadInitialStateConditionally(initialLocalCache); es el UNICO arranque real del build. Los fixes de arranque/carga en produccion deben parchear performance-client.js (patchPerformanceClient) y app.js (patchPlanningApp, para codigo inyectado y neutralizacion del demo) en scripts/build-appscript.mjs, NO solo en src/web/planning/app.js (un fix solo en app.js de loadAppStateInBackground es codigo muerto en produccion). Respectad la camara de tests/build.test.mjs: el slice optimizedStartupSource (entre 'async function loadInitialStateConditionally(localCache)' y 'const originalLoadPlanSnapshots =') NO debe contener 'loadPlanSnapshotById|restoreDraftPlanFromSharedState'; por eso el alias planningRescueStateFromBackups() -> restoreDraftPlanFromSharedState() se usa desde performance-client.",
+      "source": "diagnostico produccion 2026-09-01 (fix previo en app.js no surtia efecto; performance-client sobreescribia); src/web/shared/performance-client.js optimizedLoadAppStateInBackground; scripts/build-appscript.mjs patchPlanningApp/patchPerformanceClient; tests/build.test.mjs; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md",
+      "domain": "GOV",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-GOV-008",
+      "name": "Codigo inyectado por el build no usa helpers internos de planner-core (no son globales)",
+      "status": "implementada",
+      "rule": "El codigo que scripts/build-appscript.mjs inyecta en app.js y performance-client.js corre en el ambito global de la pagina. planner-core.js define la mayoria de sus helpers (p. ej. normalizeKey) DENTRO del factory createPlannerCore() y solo expone lo listado en su objeto de retorno (root.PlannerCore); no son window.*. Referenciarlos desde codigo inyectado lanza en produccion 'ReferenceError: normalizeKey is not defined' (site/index.html:7582) y rompe el rescate del borrador. El codigo inyectado debe definir helpers propios (p. ej. planningNormalizeKey) y no asumir que un helper de planner-core esta en scope (excepcion: helpers globales reales de app.js como normalizeState, normalizeWeekStartValue, saveState, render, STORAGE_KEY/APP_SCHEMA_VERSION).",
+      "source": "error produccion 2026-09-01 (ReferenceError normalizeKey); src/web/planning/planner-core.js createPlannerCore (helper interno normalizeKey L2895); scripts/build-appscript.mjs planningNormalizeKey; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commit 4f977ec",
+      "domain": "GOV",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-LOAD-001",
+      "name": "Capa 1 - Hidratar el cache local al boot para render instantaneo para visitantes recurrentes",
+      "status": "implementada",
+      "rule": "Al arrancar, initializePlanningApp (app.js, parcheado por patchPlanningApp) llama planningHydrateLocalCache() ANTES del primer render({save:false}). Rehidrata localStorage[STORAGE_KEY]='plan-produccion-app-v1' solo si: cached.operations es array no vacio, revision>0, Number(schemaVersion)===APP_SCHEMA_VERSION (29), plant.name!=='Demo' y state.operations esta vacio (no pisa una carga ya aplicada). Restaura operations/workOrders/plant/planStart/selectedOts+expandedOts/loadWeekStart/reportWeekStart (via normalizeWeekStartValue)/lastSchedule/draftVersionId/activePublishedVersionId/operators/operatorProfiles/matrix/capacityModes/cts, fija state.revision y llama normalizeState(). Resultado medido en produccion 2026-09-01: recarga con cache valido muestra la planta real en ~3.4s (sin red). Cualquier excepcion devuelve false y no afecta el boot.",
+      "source": "scripts/build-appscript.mjs planningHydrateLocalCache; src/web/planning/app.js STORAGE_KEY/APP_SCHEMA_VERSION/initializePlanningApp/normalizeState; medicion Playwright produccion 2026-09-01; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commit d700a04",
+      "domain": "LOAD",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-LOAD-002",
+      "name": "Capa 2 - Rescate rapido del Borrador en paralelo; getAppState autoritativo despues",
+      "status": "implementada",
+      "rule": "optimizedLoadAppStateInBackground (parcheado por patchPerformanceClient) corre planningRescueStateFromBackups() en paralelo con loadInitialStateConditionally tras await PPAppsScriptBridge.ensureReady(): si resuelve true hace saveState('ui') y requestAnimationFrame(() => render({save:false})). restoreDraftPlanFromSharedState intenta planningFetchSnapshotById('draft') primero (getPlanSnapshot('draft'), rapido) y si falla cae a los snapshots pre-cargados (planSnapshots) eligiendo draftVersionId > 'draft' > ultimo publicado; cargar con planningLoadSnapshotIntoState. El borrador que desencadena una horquilla: en el primer cold start getPlanSnapshot('draft') puede lanzar una excepcion transitoria de Sheets ('El servicio Hojas de calculo fallo al acceder al documento...') y el rescate la degrada con console.warn y continua; la fuente autoritativa (getAppState/getAppStateIfChanged) refresca despues. En backend tibio el draft rapido cubre segundos; en frio el plan real llega por getAppState (~43-77s).",
+      "source": "scripts/build-appscript.mjs patchPerformanceClient startupReplacement (fastDraftRescue), restoreDraftPlanFromSharedState; src/web/shared/performance-client.js optimizedLoadAppStateInBackground; medicion Playwright produccion 2026-09-01; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commits d700a04/4f977ec",
+      "domain": "LOAD",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-LOAD-003",
+      "name": "Capa 1 - El cache local se puebla tras cada carga autoritativa exitosa",
+      "status": "implementada",
+      "rule": "Tras loadInitialStateConditionally en optimizedLoadAppStateInBackground, si loaded===true se llama scheduleLocalStorageFlush() (la version optimizada de performance-client que escribe localStorage[STORAGE_KEY] con el estado compacto incluida operations y performanceCache.{identity,revision}, y META_KEY='plan-produccion-performance-v2' con revision/cacheIdentity/cacheRevision/deferredMaterials via writeMeta). Antes el cache solo se escribia en guardados manuales y en recuperacion de conflictos (reloadStateAfterConflict/saveState), asi que una sesion sin interacciones dejaba el cache vacio y la Capa 1 no rendia; esta regla garantiza que todo boot exitoso deja cache valido para la siguiente visita.",
+      "source": "scripts/build-appscript.mjs patchPerformanceClient (if (loaded) scheduleLocalStorageFlush()); src/web/shared/performance-client.js optimizedScheduleLocalStorageFlush/compactLocalState/scheduleLocalStorageFlush (call sites 392/474/730); medicion Playwright produccion 2026-09-01 (localStorage ops 2254 tras carga); docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commit ff91e38",
+      "domain": "LOAD",
+      "updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-LOAD-004",
+      "name": "La confirmacion 'Actualizar a la ultima modificacion' no se abre si el contenido local vino del servidor",
+      "status": "implementada",
+      "rule": "planningLoadSnapshotIntoState setea sincronicamente window.__planningRestoredFromServer=true. loadInitialStateConditionally (performance-client) captura 'const planningRestoredFromServer = root.__planningRestoredFromServer === true' justo antes del bloque de confirmacion y omite confirmLatestModificationRefresh si es true; resetea root.__planningRestoredFromServer=false en TODAS las salidas: rama keptLocal (confirmar==false), rama imported.unchanged y tras applyImported. Asi el auto-rescate no dispara el modal 'Actualizar a la ultima modificacion' cuando el contenido local provino del snapshot/draft del servidor. Ademas, con la neutralizacion del demo (RULE-GOV-006), hasPlanningContent() es false al boot y el modal tampoco se abre aun sin flag.",
+      "source": "scripts/build-appscript.mjs planningLoadSnapshotIntoState (flag) y patchPerformanceClient (modalMarker/modalReplacement + unchangedMarker); src/web/shared/performance-client.js loadInitialStateConditionally; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commit d700a04",
+      "domain": "LOAD",
+      "updated_at": "2026-09-01T15:40:00-06:00"
     }
   ],
-  "updated_at": "2026-08-31T18:00:00-06:00"
+  "updated_at": "2026-09-01T15:40:00-06:00"
 }
