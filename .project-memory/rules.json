@@ -646,8 +646,17 @@
       "rule": "planningLoadSnapshotIntoState setea sincronicamente window.__planningRestoredFromServer=true. loadInitialStateConditionally (performance-client) captura 'const planningRestoredFromServer = root.__planningRestoredFromServer === true' justo antes del bloque de confirmacion y omite confirmLatestModificationRefresh si es true; resetea root.__planningRestoredFromServer=false en TODAS las salidas: rama keptLocal (confirmar==false), rama imported.unchanged y tras applyImported. Asi el auto-rescate no dispara el modal 'Actualizar a la ultima modificacion' cuando el contenido local provino del snapshot/draft del servidor. Ademas, con la neutralizacion del demo (RULE-GOV-006), hasPlanningContent() es false al boot y el modal tampoco se abre aun sin flag.",
       "source": "scripts/build-appscript.mjs planningLoadSnapshotIntoState (flag) y patchPerformanceClient (modalMarker/modalReplacement + unchangedMarker); src/web/shared/performance-client.js loadInitialStateConditionally; docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md; commit d700a04",
       "domain": "LOAD",
-      "updated_at": "2026-09-01T15:40:00-06:00"
+"updated_at": "2026-09-01T15:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-UI-001",
+      "name": "Cada vista no-plan ocupa todo el workspace",
+      "status": "implementada",
+      "rule": "El workspace es de una sola vista: al entrar a una seccion que no sea plan (reportes, cargas, cuello-botella, config) el resto del contenido queda display:none y solo el panel de la vista activa se muestra al inicio del area util (topbar + panel). Patron: .workspace[data-view=VISTA] > :not(.topbar):not(PANEL):not(.toast):not(.planning-dialog) { display:none }, ubicado en src/web/planning/styles.css (lineas 221-232) y exportado por run-inspection.css para hoja-inspeccion como .workspace[data-view=\"inspection\"] > :not(...). Sin estas reglas el Gantt/plan queda visible arriba del panel (bug reportado: 'DOY CLICK EN REPORTES Y ME APARECE LA VISTA DE PLAN SEMANAL' el 2026-09-01). No agregar reglas que devuelvan display al plan (p. ej. .planner-grid/display:grid) para vistas no-plan, salvo que el diseno cambie deliberadamente. Verificacion: npm test (453) + npm run build; Playwright en produccion: view=reports, ganttDisplay=none, reportsTop=71.",
+      "source": "src/web/planning/styles.css (reglas data-view); src/web/inspection/inspection.css (patron inspeccion); commit 34c5802; docs/rules/RULES.md fila RULE-UI-001",
+      "domain": "UI",
+      "updated_at": "2026-09-01T18:40:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T15:40:00-06:00"
+  "updated_at": "2026-09-01T18:40:00-06:00"
 }
