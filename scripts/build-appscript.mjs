@@ -318,7 +318,9 @@ function patchPerformanceClient(performanceClient) {
             })
           : Promise.resolve(false);
         void fastDraftRescue;
-        const result = await loadInitialStateConditionally(initialLocalCache);`;
+        const result = await loadInitialStateConditionally(initialLocalCache);
+        loaded = result.loaded;
+        if (loaded) scheduleLocalStorageFlush();`;
   const startupPatched = performanceClient.replace(startupMarker, startupReplacement);
   if (startupPatched === performanceClient) {
     throw new Error("No se encontro el arranque optimizado en performance-client");
