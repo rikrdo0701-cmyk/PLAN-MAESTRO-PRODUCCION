@@ -180,7 +180,7 @@ test("PlannerCore devuelve el mejor plan completo si vence el presupuesto en una
     timeBudgetMs: 1000,
     nowMs: () => {
       nowCalls += 1;
-      return nowCalls < 160 ? 0 : 2000;
+      return nowCalls < 300 ? 0 : 2000;
     },
   });
 

@@ -840,6 +840,7 @@ test("la matriz ofrece busqueda compacta y controles de exclusion accesibles", a
 
 test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusiones", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
   const renderStart = app.indexOf("function renderMatrix()");
   const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
   const renderMatrix = app.slice(renderStart, renderEnd);
@@ -866,7 +867,8 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
   assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
-  assert.match(app, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(persistableState\(\)\)\)/);
+  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, \.\.\.persisted \} = state;/);
+  assert.match(performanceClient, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
 });
 
