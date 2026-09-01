@@ -6483,7 +6483,7 @@ function renderOperatorSelect() {
 function operatorReportSelection() {
   const operator = els.operatorReportSelect.value || state.operators[0] || "";
   const filter = reportFilter("operator");
-  return filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
+  return filteredReportRows(operationsForDayReport(operator), "operator", opStart);
 }
 
 function renderOperatorReport() {
@@ -6501,7 +6501,7 @@ function renderOperatorReport() {
 function adjusterReportSelection() {
   const filter = reportFilter("adjuster");
   return filteredReportRows(
-    operationsForReportWeek("", filter.date).filter(isToolChangeReportOperation),
+    operationsForDayReport("").filter(isToolChangeReportOperation),
     "adjuster",
     opStart
   );
@@ -6658,8 +6658,15 @@ function parseDateOnlyValue(value) {
   return parsed ? new Date(parsed.year, parsed.month - 1, parsed.day) : new Date();
 }
 
-function operationsForReportWeek(operator = "", weekDate = state.reportWeekStart) {
-  return operationsForWeekSource(reportOperationsSource(), operator, weekDate);
+function operationsForDayReport(operator = "") {
+  return (Array.isArray(reportOperationsSource()) ? reportOperationsSource() : [])
+    .filter((op) => {
+      if (operator && op.operador !== operator) return false;
+      const start = opStart(op);
+      const end = opEnd(op);
+      return Boolean(start && end);
+    })
+    .sort((a, b) => opStart(a) - opStart(b) || Number(a.secuencia) - Number(b.secuencia));
 }
 
 function operationsForWeekSource(source, operator = "", weekDate = state.reportWeekStart) {
