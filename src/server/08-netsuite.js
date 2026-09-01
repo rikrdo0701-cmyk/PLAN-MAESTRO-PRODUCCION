@@ -665,6 +665,8 @@ function PP_mapNetSuiteOperation_(row, index, current) {
   const setup = Number.isFinite(setupRaw) ? (setupRaw > 20 ? 15 : Math.max(0, setupRaw)) : 0;
   const remaining = Number(PP_pick_(row, ['Trabajo restante (min)', 'remaining_min']) || 0);
   const estimated = Number(PP_pick_(row, ['Tiempo estimado (min)', 'est_min']) || 0);
+  const production = pending > 0 && rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0);
+  const cycle = pending > 0 && production > 0 ? Math.round((production / pending) * 100) / 100 : 0;
   const priority = PP_priorityForOt_(current, ot);
   const netSuiteOperator = String(PP_pick_(row, ['Recurso humano', 'Operador', 'human_resource']) || '').trim();
   const netSuiteMachine = String(PP_pick_(row, ['Recurso maquina', 'Maquina', 'machine_resource']) || '').trim();
@@ -694,9 +696,9 @@ function PP_mapNetSuiteOperation_(row, index, current) {
     kitPending: existing.kitPending === true,
     autoFrozen: existing.autoFrozen === true,
     cantPendiente: pending,
-    tiempoCiclo: rate,
+    tiempoCiclo: cycle,
     tiempoSetup: setup,
-    tiempoProd: pending > 0 && rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0),
+    tiempoProd: production,
     fechaInicio: existing.fechaInicio || '', horaInicio: existing.horaInicio || '', fechaFin: existing.fechaFin || '', horaFin: existing.horaFin || '',
     tipoInsercion: 'OPERACION',
     estatus: String(PP_pick_(row, ['Estado', 'Status', 'status_op']) || 'No iniciado').trim(),

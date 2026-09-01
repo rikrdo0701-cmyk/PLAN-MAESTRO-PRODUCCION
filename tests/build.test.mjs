@@ -449,7 +449,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
   assert.match(pagesIndex, /function isPlanCompletedOperation\(op\)[\s\S]*const stored = state\.operationPlanStatuses\?\.\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
-  assert.match(pagesIndex, /statusActions: true/);
+  assert.match(pagesIndex, /function reportSourceAllowsOperationTracking\(\)/);
+  assert.match(pagesIndex, /statusActions: reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
   assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
   assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);

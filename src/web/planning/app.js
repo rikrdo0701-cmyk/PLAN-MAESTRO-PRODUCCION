@@ -3483,8 +3483,11 @@ function renderSelectedJobPanel() {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
           const key = operationCompletionKey(op);
+          const tracking = reportSourceAllowsOperationTracking();
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`;
+            : tracking
+              ? `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`
+              : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada" : "Pendiente"}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
@@ -6126,6 +6129,12 @@ function activePublishedSnapshotId() {
   return published[0]?.snapshotId || "";
 }
 
+function reportSourceAllowsOperationTracking() {
+  const active = activePublishedSnapshotId();
+  if (!active) return false;
+  return (reportSnapshot?.snapshotId || "draft") === active;
+}
+
 function currentDraftReportSnapshot() {
   return {
     snapshotId: "draft",
@@ -6493,7 +6502,7 @@ function renderOperatorReport() {
   renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
   els.operatorPrintContext.textContent = formatReportDateTime(new Date());
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
-  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: true });
+  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: reportSourceAllowsOperationTracking() });
   bindReportCommentInputs(els.operatorReport);
   bindPlanStatusActions(els.operatorReport);
 }
@@ -6507,7 +6516,7 @@ function adjusterReportSelection() {
   );
 }
 
-function renderAdjusterReportRow(op) {
+function renderAdjusterReportRow(op, index, options = {}) {
   const start = opStart(op);
   const end = opEnd(op);
   const workOrder = workOrderForOt(op.ot);
@@ -6525,7 +6534,7 @@ function renderAdjusterReportRow(op) {
     <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
     <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
     <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
-    <td class="report-status-action-column">${planStatusActionCell(op)}</td>
+    ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
   </tr>`;
 }
 
@@ -6536,8 +6545,9 @@ function renderAdjusterReport() {
   renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
   els.adjusterPrintContext.textContent = formatReportDateTime(new Date());
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
-  const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
-  const body = selection.rows.map(renderAdjusterReportRow).join("");
+  const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
+  if (reportSourceAllowsOperationTracking()) headers.push("Estado");
+  const body = selection.rows.map((op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() })).join("");
   els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
   bindPlanStatusActions(els.adjusterReport);
 }
@@ -6723,6 +6733,7 @@ const operationPlanStatusActions = new Map();
 const detachedPlanStatusRows = new WeakMap();
 
 function planStatusActionCell(op) {
+  if (!reportSourceAllowsOperationTracking()) return "";
   const completed = isPlanCompletedOperation(op);
   const key = operationCompletionKey(op);
   return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
@@ -6822,13 +6833,13 @@ function renderPlanStatusRow(key) {
   updatePlanStatusReport(
     els.operatorReport, key, operatorReportSelection, "operator",
     els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount,
-    (op, index) => renderProductionReportRow(op, index, { statusActions: true }),
+(op, index) => renderProductionReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }),
     renderOperatorReport, true
   );
   updatePlanStatusReport(
     els.adjusterReport, key, adjusterReportSelection, "adjuster",
     els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount,
-    renderAdjusterReportRow, renderAdjusterReport
+    (op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }), renderAdjusterReport
   );
   if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
 }
@@ -6847,6 +6858,7 @@ function schedulePlanStatusBackgroundWork() {
 }
 
 function toggleOperationPlanStatus(key) {
+  if (!reportSourceAllowsOperationTracking()) return Promise.resolve();
   if (operationPlanStatusActions.has(key)) return operationPlanStatusActions.get(key);
   operationPlanStatusActions.set(key, true);
   setPlanStatusButtonsDisabled(key, true);
@@ -7006,7 +7018,12 @@ function renderProductionReportRow(op, index, options = {}) {
 }
 
 function operationCycleMinutesForReport(op) {
-  return Number(op?.tiempoCiclo ?? op?.cycleTime ?? 0);
+  const cycle = Number(op?.tiempoCiclo ?? op?.cycleTime ?? 0);
+  if (cycle > 0) return cycle;
+  const production = Number(op?.tiempoProd ?? op?.productionTime ?? 0);
+  const pieces = Number(op?.cantidadPendiente ?? op?.cantPendiente ?? op?.pendingPieces ?? 0);
+  if (production > 0 && pieces > 0) return Math.round((production / pieces) * 100) / 100;
+  return 0;
 }
 
 function operationSetupMinutesForReport(op) {

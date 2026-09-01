@@ -616,7 +616,7 @@ function loadPlanStatus(options = {}) {
     });
   };
   const api = new Function(
-    "state", "els", "window", "isReportSnapshotEditable", "isPlanCompletedOperation", "operationCompletionKey",
+    "state", "els", "window", "isReportSnapshotEditable", "reportSourceAllowsOperationTracking", "isPlanCompletedOperation", "operationCompletionKey",
     "deepClone", "appendLog", "isToolChangeReportOperation", "workOrderForOt", "checkpointState",
     "invalidateGanttCache", "renderTop", "renderPlanAlerts", "renderSelectedJobPanel", "renderDraftExecutiveSummary",
     "renderGantt", "renderLoads", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
@@ -630,7 +630,7 @@ function loadPlanStatus(options = {}) {
       clearTimeout: () => {},
       schedulePlanStatusBackgroundRefresh: (callback) => deferredWork.push(callback),
       PlannerCore: { operationToolKey: () => "" },
-    }, () => true,
+    }, () => true, () => options.reportTrackingAllowed !== false,
     (operation) => operation?.planStatus === "COMPLETADA_PLAN", (operation) => operation?.id || "",
     structuredClone, (log, entry) => [log, entry].filter(Boolean).join(" | "), () => false, () => null,
     () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), () => {},
