@@ -219,11 +219,15 @@ html, body {
 }
 
 .reports-panel { display: none; }
-.workspace[data-view="reports"] .reports-panel { display: block; }
 .config-panel { display: none; }
+.workspace[data-view="reports"] .reports-panel { display: block; }
 .workspace[data-view="config"][data-section="matriz"] .matrix-view,
 .workspace[data-view="config"][data-section="herramentales"] .catalogs-view,
 .workspace[data-view="config"][data-section="calendario"] .calendar-view { display: block; }
+.workspace[data-view="reports"] > :not(.topbar):not(.reports-panel):not(.toast):not(.planning-dialog),
+.workspace[data-view="loads"] > :not(.topbar):not(#cargas):not(.toast):not(.planning-dialog),
+.workspace[data-view="saturation"] > :not(.topbar):not(#cuello-botella):not(.toast):not(.planning-dialog),
+.workspace[data-view="config"] > :not(.topbar):not(.config-view):not(.toast):not(.planning-dialog) { display: none; }
 
 .topbar {
   position: sticky;
