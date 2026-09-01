@@ -111,6 +111,15 @@ function planningStateHasDemoOnly() {
   return !ops.filter((op) => String(op.log || "") !== "Demo").length;
 }
 
+function planningNormalizeKey(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 function planningLoadSnapshotIntoState(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.operations) || !snapshot.operations.length) return false;
   const snapshotOps = snapshot.operations.map((op, index) => normalizeOperation({
@@ -121,9 +130,9 @@ function planningLoadSnapshotIntoState(snapshot) {
   const ots = uniq(snapshotOps.map((op) => String(op.ot || "").trim()).filter(Boolean));
   if (!ots.length) return false;
 
-  const keys = new Set(ots.map(normalizeKey));
+  const keys = new Set(ots.map(planningNormalizeKey));
   state.operations = [
-    ...(state.operations || []).filter((op) => !keys.has(normalizeKey(op.ot))),
+    ...(state.operations || []).filter((op) => !keys.has(planningNormalizeKey(op.ot))),
     ...snapshotOps,
   ];
   state.selectedOts = ots;
