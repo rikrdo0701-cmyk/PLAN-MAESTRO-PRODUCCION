@@ -166,6 +166,13 @@ async function restoreDraftPlanFromSharedState() {
   if (Array.isArray(state.selectedOts) && state.selectedOts.length) return false;
   if ((state.operations || []).length && !planningStateHasDemoOnly()) return false;
 
+  try {
+    const draftSnapshot = await planningFetchSnapshotById("draft");
+    if (draftSnapshot && planningLoadSnapshotIntoState(draftSnapshot)) return true;
+  } catch (error) {
+    console.warn("No se pudo recuperar el borrador directamente:", error);
+  }
+
   const availableSnapshots = (Array.isArray(planSnapshots) ? planSnapshots : [])
     .slice()
     .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
@@ -188,10 +195,55 @@ async function restoreDraftPlanFromSharedState() {
     console.warn("No se pudo recuperar el plan guardado", error);
     return false;
   }
+}
+
+async function planningRescueStateFromBackups() {
+  return restoreDraftPlanFromSharedState();
 }`;
   const startupPatched = patched.replace(startupMarker, startupReplacement);
   if (startupPatched === patched) throw new Error("No se encontro la carga inicial para recuperar el borrador");
-  return startupPatched;
+  patched = startupPatched;
+
+  const demoSelectedIdMarker = 'selectedOperationId: "op-1",';
+  const demoSelectedIdReplacement = 'selectedOperationId: "",';
+  const demoSelectedIdPatched = patched.replace(demoSelectedIdMarker, demoSelectedIdReplacement);
+  if (demoSelectedIdPatched === patched) throw new Error("No se encontro el id de operacion demo en sampleState");
+  patched = demoSelectedIdPatched;
+
+  const demoPlantMarker = 'plant: { name: "Demo", locationId: null },';
+  const demoPlantReplacement = 'plant: { name: "", locationId: null },';
+  const demoPlantPatched = patched.replace(demoPlantMarker, demoPlantReplacement);
+  if (demoPlantPatched === patched) throw new Error("No se encontro la planta demo en sampleState");
+  patched = demoPlantPatched;
+
+  const demoOpsMarker = /\n  operations: \[\n\s*\{\n\s*id: "op-1",[\s\S]*?\n  \],\n\};/;
+  const demoOpsReplacement = "\n  operations: [],\n};";
+  const demoOpsPatched = patched.replace(demoOpsMarker, demoOpsReplacement);
+  if (demoOpsPatched === patched) throw new Error("No se encontraron las operaciones demo en sampleState");
+  patched = demoOpsPatched;
+
+  return patched;
+}
+
+function patchPerformanceClient(performanceClient) {
+  const conditionalMarker = `        const result = await loadInitialStateConditionally(initialLocalCache);
+        loaded = result.loaded;
+        appSheetAvailable = true;`;
+  const conditionalReplacement = `        const result = await loadInitialStateConditionally(initialLocalCache);
+        loaded = result.loaded;
+        appSheetAvailable = true;
+        if (!loaded && typeof planningRescueStateFromBackups === "function") {
+          const rescued = await planningRescueStateFromBackups().catch((error) => {
+            console.warn("No se pudo restaurar el borrador o el ultimo plan publicado:", error);
+            return false;
+          });
+          loaded = Boolean(rescued) || loaded;
+        }`;
+  const conditionalPatched = performanceClient.replace(conditionalMarker, conditionalReplacement);
+  if (conditionalPatched === performanceClient) {
+    throw new Error("No se encontro la carga condicional del estado en performance-client");
+  }
+  return conditionalPatched;
 }
 
 export async function buildProject() {
@@ -219,7 +271,8 @@ export async function buildProject() {
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   const app = patchPlanningApp(appSource);
-  const runtimeClients = `${performanceClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  const appRuntimeClient = patchPerformanceClient(performanceClient);
+  const runtimeClients = `${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,
