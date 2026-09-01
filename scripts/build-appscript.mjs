@@ -152,6 +152,7 @@ function planningLoadSnapshotIntoState(snapshot) {
     unscheduled: 0,
     restoredFromSnapshot: true,
   };
+  window.__planningRestoredFromServer = true;
   return true;
 }
 
@@ -199,6 +200,45 @@ async function restoreDraftPlanFromSharedState() {
 
 async function planningRescueStateFromBackups() {
   return restoreDraftPlanFromSharedState();
+}
+
+function planningHydrateLocalCache() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    if (!cached || typeof cached !== "object" || Array.isArray(cached)) return false;
+    if (!Array.isArray(cached.operations) || !cached.operations.length) return false;
+    if (!(Number(cached.revision) > 0)) return false;
+    if ((state.operations || []).length) return false;
+    if (String(cached.plant && cached.plant.name || "").toLowerCase() === "demo") return false;
+    if (Number(cached.schemaVersion) !== Number(state.schemaVersion || APP_SCHEMA_VERSION)) return false;
+    state.operations = cached.operations;
+    if (Array.isArray(cached.workOrders)) state.workOrders = cached.workOrders;
+    if (cached.plant) state.plant = cached.plant;
+    if (cached.planStart) state.planStart = cached.planStart;
+    if (Array.isArray(cached.selectedOts) && cached.selectedOts.length) {
+      state.selectedOts = cached.selectedOts;
+      state.expandedOts = (Array.isArray(cached.expandedOts) && cached.expandedOts.length) ? cached.expandedOts : cached.selectedOts.slice();
+    }
+    if (state.planStart) {
+      state.loadWeekStart = state.planStart;
+      state.reportWeekStart = normalizeWeekStartValue(state.planStart);
+    }
+    if (cached.lastSchedule) state.lastSchedule = cached.lastSchedule;
+    if (cached.draftVersionId) state.draftVersionId = cached.draftVersionId;
+    if (cached.activePublishedVersionId) state.activePublishedVersionId = cached.activePublishedVersionId;
+    if (cached.operators) state.operators = cached.operators;
+    if (cached.operatorProfiles) state.operatorProfiles = cached.operatorProfiles;
+    if (cached.matrix) state.matrix = cached.matrix;
+    if (cached.capacityModes) state.capacityModes = cached.capacityModes;
+    if (cached.cts) state.cts = cached.cts;
+    state.revision = Number(cached.revision || 0);
+    normalizeState();
+    return true;
+  } catch (_) {
+    return false;
+  }
 }`;
   const startupPatched = patched.replace(startupMarker, startupReplacement);
   if (startupPatched === patched) throw new Error("No se encontro la carga inicial para recuperar el borrador");
@@ -222,28 +262,107 @@ async function planningRescueStateFromBackups() {
   if (demoOpsPatched === patched) throw new Error("No se encontraron las operaciones demo en sampleState");
   patched = demoOpsPatched;
 
+  const initializeMarker = `function initializePlanningApp() {
+  bindElements();
+  bindEvents();
+  purgeClosedWorkOrderRetention();
+  resetDailyReportFiltersToToday();
+  render({ save: false });
+  bindBacklogLoadMoreObserver();`;
+  const initializeReplacement = `function initializePlanningApp() {
+  bindElements();
+  bindEvents();
+  purgeClosedWorkOrderRetention();
+  resetDailyReportFiltersToToday();
+  planningHydrateLocalCache();
+  render({ save: false });
+  bindBacklogLoadMoreObserver();`;
+  const initializePatched = patched.replace(initializeMarker, initializeReplacement);
+  if (initializePatched === patched) throw new Error("No se encontro initializePlanningApp para hidratar el cache local");
+  patched = initializePatched;
+
   return patched;
 }
 
 function patchPerformanceClient(performanceClient) {
-  const conditionalMarker = `        const result = await loadInitialStateConditionally(initialLocalCache);
-        loaded = result.loaded;
-        appSheetAvailable = true;`;
-  const conditionalReplacement = `        const result = await loadInitialStateConditionally(initialLocalCache);
-        loaded = result.loaded;
-        appSheetAvailable = true;
-        if (!loaded && typeof planningRescueStateFromBackups === "function") {
-          const rescued = await planningRescueStateFromBackups().catch((error) => {
-            console.warn("No se pudo restaurar el borrador o el ultimo plan publicado:", error);
-            return false;
-          });
-          loaded = Boolean(rescued) || loaded;
-        }`;
-  const conditionalPatched = performanceClient.replace(conditionalMarker, conditionalReplacement);
-  if (conditionalPatched === performanceClient) {
-    throw new Error("No se encontro la carga condicional del estado en performance-client");
+  const startupMarker = `        await root.PPAppsScriptBridge.ensureReady();
+        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+          console.warn("No se pudieron cargar los historicos:", error);
+          return null;
+        });
+        const result = await loadInitialStateConditionally(initialLocalCache);`;
+  const startupReplacement = `        await root.PPAppsScriptBridge.ensureReady();
+        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+          console.warn("No se pudieron cargar los historicos:", error);
+          return null;
+        });
+        const fastDraftRescue = (typeof planningRescueStateFromBackups === "function")
+          ? planningRescueStateFromBackups().then((ok) => {
+              if (ok) {
+                saveState("ui");
+                root.requestAnimationFrame(() => render({ save: false }));
+              }
+              return ok;
+            }).catch((error) => {
+              console.warn("No se pudo cargar el plan guardado de forma rapida:", error);
+              return false;
+            })
+          : Promise.resolve(false);
+        void fastDraftRescue;
+        const result = await loadInitialStateConditionally(initialLocalCache);`;
+  const startupPatched = performanceClient.replace(startupMarker, startupReplacement);
+  if (startupPatched === performanceClient) {
+    throw new Error("No se encontro el arranque optimizado en performance-client");
   }
-  return conditionalPatched;
+
+  const modalMarker = `    if (typeof captureLocalPlanningState === "function"
+      && typeof confirmLatestModificationRefresh === "function"
+      && Number(imported?.revision || 0) > Number(state.revision || 0)) {
+      const refreshWithLatest = await confirmLatestModificationRefresh(captureLocalPlanningState(), imported);
+      if (refreshWithLatest === false) {
+        deferredRevision = Number(state.revision || 0);
+        writeMeta({ syncedAt: state.syncedAt || "" });
+        return { loaded: false, unchanged: false, keptLocal: true };
+      }
+    }
+    applyImported(imported, { preserveLocalPlanning: false });`;
+  const modalReplacement = `    const planningRestoredFromServer = root.__planningRestoredFromServer === true;
+    if (typeof captureLocalPlanningState === "function"
+      && typeof confirmLatestModificationRefresh === "function"
+      && !planningRestoredFromServer
+      && Number(imported?.revision || 0) > Number(state.revision || 0)) {
+      const refreshWithLatest = await confirmLatestModificationRefresh(captureLocalPlanningState(), imported);
+      if (refreshWithLatest === false) {
+        root.__planningRestoredFromServer = false;
+        deferredRevision = Number(state.revision || 0);
+        writeMeta({ syncedAt: state.syncedAt || "" });
+        return { loaded: false, unchanged: false, keptLocal: true };
+      }
+    }
+    applyImported(imported, { preserveLocalPlanning: false });
+    root.__planningRestoredFromServer = false;`;
+  const modalPatched = startupPatched.replace(modalMarker, modalReplacement);
+  if (modalPatched === startupPatched) {
+    throw new Error("No se encontro el dialogo de confirmacion en performance-client");
+  }
+
+  const unchangedMarker = `    if (imported?.unchanged) {
+      const currentRevision = Number(imported.revision || revision);
+      deferredMaterials = localCache.deferredMaterials === true;
+      if (deferredMaterials) loadedMaterialOts.clear();
+      state.revision = currentRevision;`;
+  const unchangedReplacement = `    if (imported?.unchanged) {
+      const currentRevision = Number(imported.revision || revision);
+      deferredMaterials = localCache.deferredMaterials === true;
+      if (deferredMaterials) loadedMaterialOts.clear();
+      root.__planningRestoredFromServer = false;
+      state.revision = currentRevision;`;
+  const unchangedPatched = modalPatched.replace(unchangedMarker, unchangedReplacement);
+  if (unchangedPatched === modalPatched) {
+    throw new Error("No se encontro la rama unchanged en performance-client");
+  }
+
+  return unchangedPatched;
 }
 
 export async function buildProject() {
