@@ -43,6 +43,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | ID | Nombre | Estado | Fuente |
 |---|---|---|---|
 | `RULE-REP-001` | Fechas de reportes: día = hoy (operador/ajustador/subcontrato); semana = lunes del plan seleccionado, sin campo "Semana" | IMPLEMENTADA | `app.js`, `index.template.html`, commit `221f4d8` |
+| `RULE-REP-002` | Rango de fechas de reportes diarios: muestran operaciones con fecha anterior al día seleccionado y hacia adelante según la casilla de días; no se limitan a la semana del plan (`operationsForDayReport`, `filteredReportRows`, `reportDateRange`) | IMPLEMENTADA | `app.js` (`operationsForDayReport`, `operatorReportSelection`, `adjusterReportSelection`) |
 
 ## OT
 
