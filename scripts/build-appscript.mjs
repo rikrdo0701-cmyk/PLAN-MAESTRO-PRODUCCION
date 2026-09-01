@@ -99,75 +99,93 @@ function patchPlanningApp(app) {
   saveState("ui");
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
-  if (restoredDraft) showToast("Borrador recuperado desde Google Sheets");
+  if (restoredDraft) showToast("Se cargo el plan guardado desde Google Sheets");
   if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
   if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") {
     void maybeLoadDefaultPublishedReportSnapshot();
   }
 }
 
+function planningStateHasDemoOnly() {
+  const ops = Array.isArray(state.operations) ? state.operations : [];
+  return !ops.filter((op) => String(op.log || "") !== "Demo").length;
+}
+
+function planningLoadSnapshotIntoState(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.operations) || !snapshot.operations.length) return false;
+  const snapshotOps = snapshot.operations.map((op, index) => normalizeOperation({
+    ...op,
+    schemaVersion: op.schemaVersion != null ? op.schemaVersion : state.schemaVersion,
+    id: op.id || ("snapshot-" + snapshot.snapshotId + "-" + (index + 1)),
+  }, index));
+  const ots = uniq(snapshotOps.map((op) => String(op.ot || "").trim()).filter(Boolean));
+  if (!ots.length) return false;
+
+  const keys = new Set(ots.map(normalizeKey));
+  state.operations = [
+    ...(state.operations || []).filter((op) => !keys.has(normalizeKey(op.ot))),
+    ...snapshotOps,
+  ];
+  state.selectedOts = ots;
+  state.lockedOts = uniq([
+    ...(state.lockedOts || []),
+    ...snapshotOps.filter((op) => op.locked === true).map((op) => op.ot),
+  ].filter(Boolean));
+  state.expandedOts = uniq([...(state.expandedOts || []), ...ots]);
+
+  const fullState = snapshot.fullState || snapshot;
+  if (snapshot.planStart) state.planStart = snapshot.planStart;
+  if (fullState.plant && fullState.plant !== "Demo") state.plant = fullState.plant;
+  if (snapshot.weekStart) state.weekStart = snapshot.weekStart;
+  if (fullState.weekStart) state.weekStart = fullState.weekStart;
+  if (state.planStart) {
+    state.loadWeekStart = state.planStart;
+    state.reportWeekStart = normalizeWeekStartValue(state.planStart);
+  }
+  state.draftVersionId = snapshot.snapshotId;
+  state.lastSchedule = {
+    ...(state.lastSchedule || {}),
+    generatedAt: snapshot.generatedAt || "",
+    scheduled: snapshotOps.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").length,
+    scheduledOts: ots,
+    changes: snapshotOps.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL").length,
+    unscheduled: 0,
+    restoredFromSnapshot: true,
+  };
+  return true;
+}
+
+async function planningFetchSnapshotById(snapshotId) {
+  if (!snapshotId) return null;
+  return isAppsScriptRuntime()
+    ? await callAppsScript("getPlanSnapshot", snapshotId)
+    : await fetchJson(PLAN_SNAPSHOTS_API + "/" + encodeURIComponent(snapshotId));
+}
+
 async function restoreDraftPlanFromSharedState() {
   if (Array.isArray(state.selectedOts) && state.selectedOts.length) return false;
-
-  const scheduledFromSharedState = uniq([
-    ...((state.lastSchedule && Array.isArray(state.lastSchedule.scheduledOts)) ? state.lastSchedule.scheduledOts : []),
-    ...(state.operations || [])
-      .filter((op) => op.fechaInicio && op.horaInicio && op.fechaFin && op.horaFin && !isPlanCompletedOperation(op))
-      .map((op) => op.ot),
-  ].map((ot) => String(ot || "").trim()).filter(Boolean));
-
-  if (scheduledFromSharedState.length) {
-    state.selectedOts = scheduledFromSharedState;
-    return true;
-  }
+  if ((state.operations || []).length && !planningStateHasDemoOnly()) return false;
 
   const availableSnapshots = (Array.isArray(planSnapshots) ? planSnapshots : [])
     .slice()
     .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
   if (!availableSnapshots.length) return false;
 
-  const publishedIds = publishedSnapshotIds();
-  const preferredSnapshot =
-    availableSnapshots.find((item) => item.snapshotId === state.draftVersionId) ||
-    availableSnapshots.find((item) => !publishedIds.has(item.snapshotId)) ||
-    availableSnapshots[0];
-  if (!preferredSnapshot?.snapshotId) return false;
+  const publishedId = publishedSnapshotIds();
+  const byVersion = state.draftVersionId ? availableSnapshots.find((item) => item.snapshotId === state.draftVersionId) : null;
+  const draft = availableSnapshots.find((item) => item.snapshotId === "draft") ||
+    availableSnapshots.find((item) => item.snapshotId && item.snapshotId !== "draft" && !publishedId.has(item.snapshotId));
+  const published = publishedPlanSnapshots()[0];
+  const preferredSnapshot = (byVersion && byVersion !== published) ? byVersion : (draft || published || availableSnapshots[0]);
+  if (!preferredSnapshot || !preferredSnapshot.snapshotId) return false;
 
   try {
-    const snapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", preferredSnapshot.snapshotId)
-      : await fetchJson(PLAN_SNAPSHOTS_API + "/" + encodeURIComponent(preferredSnapshot.snapshotId));
-    const snapshotOperations = (snapshot.operations || []).map((op, index) => normalizeOperation({
-      ...op,
-      id: op.id || ("snapshot-" + preferredSnapshot.snapshotId + "-" + (index + 1)),
-    }, index));
-    const draftOts = uniq(snapshotOperations.map((op) => String(op.ot || "").trim()).filter(Boolean));
-    if (!draftOts.length) return false;
-
-    const draftKeys = new Set(draftOts.map(normalizeKey));
-    state.operations = [
-      ...(state.operations || []).filter((op) => !draftKeys.has(normalizeKey(op.ot))),
-      ...snapshotOperations,
-    ];
-    state.selectedOts = draftOts;
-    state.lockedOts = uniq([
-      ...(state.lockedOts || []),
-      ...snapshotOperations.filter((op) => op.locked === true).map((op) => op.ot),
-    ].filter(Boolean));
-    state.expandedOts = uniq([...(state.expandedOts || []), ...draftOts]);
-    state.draftVersionId = preferredSnapshot.snapshotId;
-    state.lastSchedule = {
-      ...(state.lastSchedule || {}),
-      generatedAt: snapshot.generatedAt || preferredSnapshot.generatedAt || "",
-      scheduled: snapshotOperations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").length,
-      scheduledOts: draftOts,
-      changes: snapshotOperations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL").length,
-      unscheduled: 0,
-      restoredFromSnapshot: true,
-    };
+    const snapshot = await planningFetchSnapshotById(preferredSnapshot.snapshotId);
+    if (!snapshot) return false;
+    if (!planningLoadSnapshotIntoState(snapshot)) return false;
     return true;
   } catch (error) {
-    console.warn("No se pudo recuperar el borrador guardado", error);
+    console.warn("No se pudo recuperar el plan guardado", error);
     return false;
   }
 }`;
