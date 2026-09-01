@@ -1,5 +1,7 @@
 "use strict";
 
+var scheduleLocalStorageFlush;
+
 const STORAGE_KEY = "plan-produccion-app-v1";
 const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
