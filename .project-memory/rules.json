@@ -674,7 +674,25 @@
       "source": "src/web/planning/app.js (operationsForDayReport nueva, operatorReportSelection, adjusterReportSelection, filteredReportRows, reportDateRange ref); verificacion Playwright local 2026-09-01; se reemplazo operationsForReportWeek en reportes diarios",
       "domain": "REP",
       "updated_at": "2026-09-01T19:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-REP-003",
+      "name": "Seguimiento de completado solo en el ultimo plan publicado",
+      "status": "implementada",
+      "rule": "El seguimiento de completado de operaciones se lleva UNICAMENTE en el ultimo plan publicado (activo) y NO en el borrador ni en planes publicados anteriores: el borrador y los planes mas antiguos son de solo lectura para las acciones Completar/Reabrir y ocultan la columna Estado. reportSourceAllowsOperationTracking() devuelve true solo cuando state.activePublishedVersionId existe y el plan fuente de reportes (reportSnapshot.snapshotId || 'draft') es exactamente el ultimo publicado (activePublishedSnapshotId(), que ordena publishedPlanSnapshots por publishedAt/generatedAt descendente). La guarda se aplica en: planStatusActionCell (no genera boton en modo lectura), renderOperatorReport/renderAdjusterReport (ocultan la columna Estado via statusActions=reportSourceAllowsOperationTracking(), que reciben renderProductionReportRow y renderAdjusterReportRow), el panel de OT seleccionada (muestra texto Completada/Pendiente sin boton) y toggleOperationPlanStatus (guardia de retorno temprano). Substituye el comportamiento anterior donde se podia completar en cualquier plan seleccionado. Nota: isReportSnapshotEditable () es distinta y ya existia: controla unicamente la edicion de comentarios (true solo en borrador); esta regla no la modifica.",
+      "source": "src/web/planning/app.js (reportSourceAllowsOperationTracking, planStatusActionCell, renderOperatorReport, renderAdjusterReport, renderAdjusterReportRow, renderPlanStatusRow, toggleOperationPlanStatus, renderSelectedJobPanel); tests/performance-client-calls.test.mjs; tests/build.test.mjs; verificacion Playwright local 2026-09-01",
+      "domain": "REP",
+      "updated_at": "2026-09-01T20:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-REP-004",
+      "name": "TC siempre derivado = tiempo de produccion / piezas a producir",
+      "status": "implementada",
+      "rule": "El TC (tiempo de ciclo por pieza, campo tiempoCiclo / columna 'TC (min)') se deriva SIEMPRE como tiempo de produccion entre piezas a producir, en todos lados de forma consistente (reporte, schedule y cargas). En la importacion de NetSuite (src/server/08-netsuite.js PP_mapNetSuiteOperation_) tiempoProd se calcula como rate*pendientes cuando la hoja trae tasa, o con fallback a Trabajo restante/Tiempo estimado; y tiempoCiclo = tiempoProd/pending cuando pending>0 y tiempoProd>0 (redondeado a 2 decimales), de modo que TC*piezas == tiempoProd y la carga queda identica a la anterior. Adicionalmente, el reporte por operador muestra TC con fallback de visualizacion (operationCycleMinutesForReport en app.js): si tiempoCiclo es 0 pero hay tiempoProd y piezas (cantidadPendiente/cantPendiente/pendingPieces), muestra tiempoProd/piezas, de modo que planes ya publicados (cuyo TC_MIN pueda venir en 0 pero con TIEMPO_PROD y PZAS_PENDIENTES) reflejan el TC correcto sin necesidad de regenerar. Si no hay piezas o no hay tiempoProd, TC = 0. La regla aplica desde la proxima importacion/regeneracion de plan (requiere redeploy del backend Apps Script); los datos publicados existentes no se reescriben.",
+      "source": "src/server/08-netsuite.js (PP_mapNetSuiteOperation_: cycle = production/pending); src/web/planning/app.js (operationCycleMinutesForReport fallback); verificacion Playwright local 2026-09-01: tiempoProd=59.033, 100 piezas, TC=0.59 min (35 s)",
+      "domain": "REP",
+      "updated_at": "2026-09-01T20:50:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T19:40:00-06:00"
+  "updated_at": "2026-09-01T20:50:00-06:00"
 }

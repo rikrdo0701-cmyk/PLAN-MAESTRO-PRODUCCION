@@ -44,6 +44,8 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 |---|---|---|---|
 | `RULE-REP-001` | Fechas de reportes: día = hoy (operador/ajustador/subcontrato); semana = lunes del plan seleccionado, sin campo "Semana" | IMPLEMENTADA | `app.js`, `index.template.html`, commit `221f4d8` |
 | `RULE-REP-002` | Rango de fechas de reportes diarios: muestran operaciones con fecha anterior al día seleccionado y hacia adelante según la casilla de días; no se limitan a la semana del plan (`operationsForDayReport`, `filteredReportRows`, `reportDateRange`) | IMPLEMENTADA | `app.js` (`operationsForDayReport`, `operatorReportSelection`, `adjusterReportSelection`) |
+| `RULE-REP-003` | El seguimiento de completado (Completar/Reabrir y columna Estado) solo aplica al último plan publicado; el borrador y los planes anteriores son solo lectura (`reportSourceAllowsOperationTracking`) | IMPLEMENTADA | `app.js` (`reportSourceAllowsOperationTracking`, `planStatusActionCell`) |
+| `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir (importación `08-netsuite.js` + fallback de visualización `operationCycleMinutesForReport`) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
 
 ## OT
 
