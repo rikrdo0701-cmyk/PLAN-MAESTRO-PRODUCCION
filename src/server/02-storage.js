@@ -805,7 +805,7 @@ function PP_payloadStore_() {
         });
       }
       if (newRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 2).setValues(newRows);
-      updates.forEach(function(update) { sheet.getRange(update[0], 1, 1, 2).setValues(update[1]); });
+      updates.forEach(function(update) { sheet.getRange(update[0], 1, 1, 2).setValues([update[1]]); });
       return this;
     },
     deleteProperty: function(key) {
