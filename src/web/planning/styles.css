@@ -307,6 +307,53 @@ html, body {
 .button.is-running .button-icon svg { visibility: hidden; }
 @keyframes button-spin { to { transform: rotate(360deg); } }
 
+#generatePlanBtn { position: relative; padding-bottom: 7px; gap: 6px; }
+#generatePlanBtn .schedule-percent {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+#generatePlanBtn .schedule-progress {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+#generatePlanBtn .schedule-progress-fill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background: #fff;
+  transition: width 260ms ease;
+}
+#generatePlanBtn.is-running .schedule-progress-fill { background: #c8f0ec; }
+#generatePlanBtn.is-indeterminate .schedule-progress-fill { display: none; }
+#generatePlanBtn.is-indeterminate .schedule-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+  animation: schedule-sweep 1.1s ease-in-out infinite;
+}
+@keyframes schedule-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
 .button.small { min-height: 30px; padding: 0 9px; font-size: 11px; }
 
 .button-icon,

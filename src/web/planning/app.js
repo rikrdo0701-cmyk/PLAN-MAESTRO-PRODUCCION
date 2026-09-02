@@ -4776,8 +4776,20 @@ setPlanningActionsBusy("schedule", false);
 
 async function scheduleCurrentPlanImpl() {
   const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
-  const setScheduleStatus = (message) => {
+  const percentEl = els.scheduleBtn?.querySelector("[data-schedule-percent]");
+  const fillEl = els.scheduleBtn?.querySelector("[data-schedule-fill]");
+  const setScheduleStatus = (message, percent = null) => {
     if (label) label.textContent = message;
+    if (percentEl) {
+      if (percent != null) {
+        percentEl.textContent = `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+        percentEl.hidden = false;
+      } else {
+        percentEl.textContent = "";
+        percentEl.hidden = true;
+      }
+    }
+    if (fillEl) fillEl.style.width = (percent != null ? Math.max(0, Math.min(100, percent)) : 0) + "%";
   };
   if (!window.PlannerCore?.schedulePlan) {
     showToast("El motor de programacion no esta disponible");
@@ -4864,22 +4876,22 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
       progressEveryMs: 300,
       isDryRun: false,
 onProgress: (event) => {
-        if (!label) return;
+        if (!label && !fillEl) return;
         const scheduled = Number(event?.scheduled || 0);
         const total = Number(event?.total || 0);
         const percent = total > 0 ? Math.min(100, Math.round((scheduled / total) * 100)) : null;
         const phase = String(event?.phase || "");
         const strategy = String(event?.strategy || "");
         if (phase === "finalize:select-best") {
-          label.textContent = "Eligiendo mejor plan...";
+          setScheduleStatus("Eligiendo mejor plan...", percent);
         } else if (strategy) {
-          label.textContent = total > 0
+          setScheduleStatus(total > 0
             ? `Estrategia ${strategy}: ${scheduled} de ${total}${percent !== null ? ` (${percent}%)` : ""}`
-            : `Estrategia ${strategy}: revisando...`;
+            : `Estrategia ${strategy}: revisando...`, percent);
         } else if (total > 0) {
-          label.textContent = percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`;
+          setScheduleStatus(percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`, percent);
         } else {
-          label.textContent = "Programando OTs...";
+          setScheduleStatus("Programando OTs...", percent);
         }
       },
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
@@ -4917,6 +4929,8 @@ onProgress: (event) => {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
     if (label) label.textContent = "Generar plan";
+    if (percentEl) { percentEl.textContent = ""; percentEl.hidden = true; }
+    if (fillEl) fillEl.style.width = "0%";
   }
 }
 
@@ -8149,8 +8163,13 @@ function setNetSuitePlanningSyncState(inProgress) {
   refreshPlanningActionControls();
   if (!els.scheduleBtn) return;
   els.scheduleBtn.classList.toggle("is-running", inProgress);
+  els.scheduleBtn.classList.toggle("is-indeterminate", inProgress);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
+  const percentEl = els.scheduleBtn.querySelector("[data-schedule-percent]");
+  const fillEl = els.scheduleBtn.querySelector("[data-schedule-fill]");
   if (label) label.textContent = inProgress ? "Cargando operaciones..." : "Generar plan";
+  if (percentEl) { percentEl.textContent = ""; percentEl.hidden = true; }
+  if (fillEl) fillEl.style.width = inProgress ? "0%" : "0%";
 }
 
 async function fetchNetSuiteExercise() {
