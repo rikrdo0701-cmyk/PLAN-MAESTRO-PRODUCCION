@@ -6091,8 +6091,7 @@ function setPlanSourceControlsDisabled(disabled) {
 }
 
 function syncDraftLoadWeek() {
-  const scheduledStart = scheduledPlanWindowStart();
-  state.loadWeekStart = normalizeWeekStartValue(scheduledStart ? formatDate(scheduledStart) : state.planStart);
+  state.loadWeekStart = normalizeWeekStartValue(state.planStart);
 }
 
 function syncLoadWeekFromPlanSource(source) {
@@ -8586,15 +8585,6 @@ function getPlanWindow() {
   const start = new Date(base);
   start.setHours(0, 0, 0, 0);
   return { start, end: addDays(start, state.horizonDays - 1) };
-}
-
-function scheduledPlanWindowStart() {
-  const starts = currentPlanOperations()
-    .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op))
-    .map(opStart)
-    .filter(Boolean);
-  if (!starts.length) return null;
-  return new Date(Math.min(...starts.map((date) => date.getTime())));
 }
 
 function getGanttGroups() {
