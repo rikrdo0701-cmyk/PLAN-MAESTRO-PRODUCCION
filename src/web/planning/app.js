@@ -5299,6 +5299,7 @@ async function persistPlanSnapshot() {
     if (window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(error)) {
       return payload;
     }
+    console.error("[persistPlanSnapshot] No se pudo guardar la instantanea del plan:", error, error && error.stack);
     showToast(`Plan generado; no se pudo guardar la instantanea: ${error.message}`);
     return null;
   }
