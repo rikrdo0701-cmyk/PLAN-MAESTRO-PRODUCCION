@@ -8396,8 +8396,6 @@ function captureLocalPlanningState() {
     "expandedOts",
     "selectedOperationId",
     "selectedDetailOt",
-    "machines",
-    "toolCatalog",
     "machineToolHistory",
     "calendarExceptions",
     "subcontracts",
