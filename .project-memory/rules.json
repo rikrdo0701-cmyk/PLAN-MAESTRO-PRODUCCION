@@ -701,7 +701,16 @@
       "source": "src/server/08-netsuite.js (PP_mapNetSuiteOperation_ lineas 658-669); test netsuite-operation-catalog.test.mjs \"mapea headers reales de ruta NetSuite\"; decision usuario 2026-09-01",
       "domain": "OT",
       "updated_at": "2026-09-01T21:20:00-06:00"
+    },
+    {
+      "rule_id": "RULE-STO-001",
+      "name": "Guardado de borrador: cadena storage, regresion c3315fc y lock del script",
+      "status": "implementada",
+      "rule": "saveDraftSnapshot (src/server/01-code.js:162) adquiere PP_acquireScriptLock_('guardar borrador', 30000) y llama PP_replaceDraftSnapshot_ (02-storage.js:1084) -> PP_appendPlanSnapshot_ (1031) con snapshotId='draft' -> PP_storePlanSnapshotPayload_ (946) -> PP_payloadStore_.setMany (851) que escribe filas [KEY,VALUE] en la hoja SNAPSHOT_PAYLOADS. El payload se parte en chunks de 32000 caracteres: clave manifest 'PLAN_SNAPSHOT_PAYLOAD::draft' (JSON con chunks/generation) y claves 'PLAN_SNAPSHOT_PAYLOAD::draft::<generation>::<n>' por chunk. REGRESION c3315fc (corregida en c71bb7a): setMany en la rama de actualizacion pasaba el array plano [entryKey, value] a SpreadsheetApp.Range.setValues, que exige Object[][], lanzando de forma determinista 'Los parametros (number[]) no coinciden con la firma del metodo para SpreadsheetApp.Range.setValues' en TODO guardado del borrador a partir del segundo (cuando la clave 'PLAN_SNAPSHOT_PAYLOAD::draft' ya existia); el borrador anciano quedaba para siempre y la UI lo recargaba. El fix es setValues([update[1]]). LOCK: cada llamada al bridge es una ejecucion independiente de Apps Script; si saveDraftSnapshot corre mientras el auto-sync de carga (loadAppStateInBackground -> syncNetSuiteInBackground, app.js:566/582: saveWorkOrderSyncState/saveCatalogState) mantiene el LockService.getScriptLock(), tryLock(30000) lanza 'Otro proceso esta actualizando el plan. Espera unos segundos e intenta guardar borrador nuevamente' y el guardado falla (la UI vuelve al borrador persistido viejo). PRACTICA: Generar plan inmediatamente tras recargar la pagina puede fallar por lock; esperar a que el sync inicial termine (~2-3 min) o reintentar. FRONTEND: persistPlanSnapshot (app.js:5278) hace callAppsScript('saveDraftSnapshot'); en el catch registra console.error '[persistPlanSnapshot]...' (anadido en 6a61baa) y muestra toast de 2.2 s (app.js:5302) que es pisado por el toast generico 'el plan se calculo, pero no se pudo guardar el borrador' (app.js:4905). Para leer estado desplegado sin cache usar query param (?t=N).",
+      "source": "src/server/01-code.js (saveDraftSnapshot, PP_acquireScriptLock_); src/server/02-storage.js (PP_appendPlanSnapshot_, PP_replaceDraftSnapshot_, PP_storePlanSnapshotPayload_, PP_payloadStore_.setMany); src/web/planning/app.js (persistPlanSnapshot); commits c3315fc (regresion), c71bb7a (fix), 6a61baa (log); verificacion Playwright produccion 2026-09-01",
+      "domain": "STORAGE",
+      "updated_at": "2026-09-01T22:05:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T21:20:00-06:00"
+  "updated_at": "2026-09-01T22:05:00-06:00"
 }
