@@ -43,6 +43,7 @@
       lastPhase: "scheduler:init",
       scheduledOpsTotal: 0,
       scheduledOpsDone: 0,
+      strategy: "",
       progress: typeof options.onProgress === "function" ? options.onProgress : null,
       stats: {
         strategiesStarted: 0,
@@ -124,6 +125,24 @@
         elapsedMs,
         scheduled: performanceState.scheduledOpsDone || 0,
         total: performanceState.scheduledOpsTotal || 0,
+        strategy: performanceState.strategy || "",
+        stats: { ...performanceState.stats },
+      });
+    } catch (_) {
+      // Progress hooks are diagnostic-only and must not affect scheduling.
+    }
+  }
+
+  function emitFinalizeProgress(performanceState) {
+    if (!performanceState?.progress) return;
+    try {
+      performanceState.lastPhase = "finalize:select-best";
+      performanceState.progress({
+        phase: "finalize:select-best",
+        elapsedMs: Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now()))),
+        scheduled: performanceState.scheduledOpsDone || 0,
+        total: performanceState.scheduledOpsTotal || 0,
+        strategy: "",
         stats: { ...performanceState.stats },
       });
     } catch (_) {
@@ -151,6 +170,7 @@
 
   async function schedulePlan(inputState, options) {
     const onYield = typeof options?.onYield === "function" ? options.onYield : null;
+    const earlyStop = options?.earlyStop !== false;
     const performanceState = createPlanningPerformanceState(options);
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
@@ -162,10 +182,11 @@
     const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
     const strategyLimit = fastQualityMode ? Math.min(3, passCount + 2) : passCount + 2;
     const strategies = strategyPool.slice(0, Math.min(strategyLimit, strategyPool.length));
-    const evaluated = [];
+const evaluated = [];
     const strategyFailures = [];
     const strategySkips = [];
     let flowEvaluation;
+    let completePlanFound = false;
     for (const [index, strategy] of strategies.entries()) {
       if (checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
         if (!evaluated.length) break;
@@ -176,8 +197,19 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
       if (result.lastSchedule?.performance?.aborted) {
         const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
-        if (complete.length) return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+        if (complete.length) {
+          emitFinalizeProgress(performanceState);
+          return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+        }
         return result;
+      }
+      const hasCompletePlan = evaluated.some((item) => Number(item.metrics?.unscheduled || 0) === 0 && Number(item.metrics?.operatorConflicts || 0) === 0);
+      if (earlyStop && hasCompletePlan && evaluated.length >= 2) {
+        for (const pending of strategies.slice(evaluated.length)) {
+          strategySkips.push({ strategy: pending, reason: "COMPLETE_PLAN_FOUND" });
+        }
+        completePlanFound = true;
+        break;
       }
       if (fastQualityMode && evaluated.length >= 2) {
         const first = evaluated[0].metrics;
@@ -194,7 +226,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         }
       }
     }
-    if (flowBalancedEnabled) {
+    if (flowBalancedEnabled && !completePlanFound) {
       const skipFastFlow = fastQualityMode && operationCount > 80;
       if (skipFastFlow) {
         strategySkips.push({ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" });
@@ -208,7 +240,10 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
             evaluated.push(flowEvaluation);
             if (result.lastSchedule?.performance?.aborted) {
               const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
-              if (complete.length) return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+              if (complete.length) {
+                emitFinalizeProgress(performanceState);
+                return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+              }
               return result;
             }
           }
@@ -220,12 +255,14 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     if (!evaluated.length) {
       return await schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", fastQualityMode, __performanceState: performanceState, onYield });
     }
+    emitFinalizeProgress(performanceState);
     return finalizeMultiStrategyPlan({ evaluated, selectable: evaluated, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState });
   }
 
   async function schedulePlanOnce(inputState, options) {
     const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
     const strategy = options?.strategy || "balanced";
+    if (performanceState) performanceState.strategy = strategy;
     const isDryRun = options?.isDryRun === true || options?.__dryRun === true;
     const strategyStarted = planningNowMs(performanceState);
     if (performanceState) {

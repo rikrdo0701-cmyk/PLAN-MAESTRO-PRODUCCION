@@ -711,7 +711,34 @@
       "source": "src/server/01-code.js (saveDraftSnapshot, PP_acquireScriptLock_); src/server/02-storage.js (PP_appendPlanSnapshot_, PP_replaceDraftSnapshot_, PP_storePlanSnapshotPayload_, PP_payloadStore_.setMany); src/web/planning/app.js (persistPlanSnapshot); commits c3315fc (regresion), c71bb7a (fix), 6a61baa (log); verificacion Playwright produccion 2026-09-01",
       "domain": "STORAGE",
       "updated_at": "2026-09-01T22:05:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-010",
+      "name": "Parada temprana del motor al encontrar plan completo",
+      "status": "implementada",
+      "rule": "En schedulePlan, cuando al menos 2 estrategias han sido evaluadas y alguna de ellas produjo un plan completo (0 operaciones pendientes y 0 conflictos de operador), el bucle de estrategias se detiene inmediatamente: las estrategias restantes del pool se registran en strategySkips con reason COMPLETE_PLAN_FOUND y flow_balanced se omite (completePlanFound=true). Esto garantiza que el motor no desperdicia tiempo en estrategias redundantes cuando ya existe un plan valido. La seleccion final (finalizeMultiStrategyPlan) compara los 2+ planes evaluados y elige el mejor por objective (operatorConflicts, unscheduled, objective, indice). Si la primera estrategia es completa pero no hay segunda evaluada, se ejecuta una segunda para poder comparar antes de detenerse. La parada temprana se aplica SIEMPRE, no solo en fastQualityMode. Nota de implementacion: la parada se puede desactivar puntualmente con la opcion schedulePlan(..., { earlyStop: false }) para tests unitarios que fijan estrategias concretas (p.ej. flow_balanced) u horizonte completo de estrategias; en produccion earlyStop queda activo por defecto (la UI nunca lo pasa en false).",
+      "source": "definicion de usuario 2026-09-02 ('la regla es buscar que sea poco tiempo de ejecucion; al generar debe terminar todas las ot; debe elegir el plan cual es la mejor estrategia'); src/web/planning/planner-core.js schedulePlan (hasCompletePlan + evaluated.length >= 2, COMPLETE_PLAN_FOUND); smoke test 2026-09-02 en Node (balanced+finish completa, converge, saltó load, emitió finalize:select-best)",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-02T00:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-011",
+      "name": "Presupuesto adaptativo por cantidad de OTs",
+      "status": "implementada",
+      "rule": "El presupuesto de generacion (timeBudgetMs) se calcula dinamicamente con planningPlanTimeBudgetMs(readyOts): base PLANNING_PLAN_BUDGET_BASE_MS (45000 ms) + PLANNING_PLAN_BUDGET_PER_OT_MS (45000 ms) por OT seleccionada, con tope en PLANNING_PLAN_TIME_BUDGET_MS (300000 ms = 5 min). Para 8 OTs el presupuesto es 405000 ms -> capped a 300000 ms; para 1 OT es 90000 ms. Esto asegura que planes chicos terminen rapido (la parada temprana de RULE-BAL-010 ya acorta) y planes grandes tengan suficiente tiempo para completar todas las OTs antes de abortar. El presupuesto sigue siendo un tope de seguridad; el motor termina antes cuando encuentra un plan completo. La funcion planningPlanTimeBudgetMs reemplaza el uso directo de la constante PLANNING_PLAN_TIME_BUDGET_MS en scheduleCurrentPlanImpl.",
+      "source": "definicion de usuario 2026-09-02 ('buscar que sea poco tiempo de ejecucion, no que sean 5 min siempre'); src/web/planning/app.js planningPlanTimeBudgetMs (PLANNING_PLAN_BUDGET_BASE_MS=45000, PLANNING_PLAN_BUDGET_PER_OT_MS=45000, PLANNING_PLAN_TIME_BUDGET_MS=300000); src/web/planning/planner-core.js FAST_QUALITY_BUDGET_MS=300000",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-02T00:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-012",
+      "name": "Progreso por fases en el boton Generar plan",
+      "status": "implementada",
+      "rule": "Durante la generacion, el boton 'Generar plan' muestra el avance por fases de estrategia: durante cada estrategia muestra 'Estrategia <nombre>: X de Y (Z%)' (p. ej. 'Estrategia balanced: 30 de 79 (38%)'); al finalizar todas las estrategias, muestra 'Eligiendo mejor plan...'; al completar, regresa incondicionalmente a 'Generar plan'. El campo strategy se agrega a cada evento onProgress (planner-core.js emitPlanningProgress) y se usa en la UI (app.js onProgress callback). La restauracion del label es INCONDICIONAL en ambos finally (wrapper scheduleCurrentPlan y scheduleCurrentPlanImpl): siempre escribe 'Generar plan', sin depender de netSuitePlanningSyncInFlight ni de originalLabel, para evitar que el boton quede pegado con texto de progreso anterior tras navegacion o error. Las fases emiten: strategy:<nombre>:start, finalize:select-best.",
+      "source": "definicion de usuario 2026-09-02 ('debe mostrar en el boton como va avanzando entre fases'); src/web/planning/planner-core.js emitPlanningProgress (campo strategy), emitFinalizeProgress (fase finalize:select-best), schedulePlanOnce (performanceState.strategy = strategy); src/web/planning/app.js onProgress (label por fase), scheduleCurrentPlan finally (reset incondicional), scheduleCurrentPlanImpl finally (reset incondicional)",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-02T00:30:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T22:05:00-06:00"
+  "updated_at": "2026-09-02T00:30:00-06:00"
 }

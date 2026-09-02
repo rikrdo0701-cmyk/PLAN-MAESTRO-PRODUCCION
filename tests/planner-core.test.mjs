@@ -231,8 +231,7 @@ const last = events[events.length - 1];
   assert.equal(last.percent, undefined);
   assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 2);
   assert.deepEqual(structuredClone(result.lastSchedule.optimization.strategySkips), [
-    { strategy: "load", reason: "STRATEGY_CONVERGED" },
-    { strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" },
+    { strategy: "load", reason: "COMPLETE_PLAN_FOUND" },
   ]);
 });
 
@@ -1930,7 +1929,7 @@ test("flow balanced agrega como maximo una estrategia y conserva el conjunto leg
   const state = {
     operations: [], workOrders: [], settings: { optimizationPasses: 4 }, workSchedule: {},
   };
-  const options = { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" };
+  const options = { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00", earlyStop: false };
   const disabled = await core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: false } }, options);
   const enabled = await core.schedulePlan({ ...state, settings: { ...state.settings, flowBalancedEnabled: true } }, options);
   const disabledNames = disabled.lastSchedule.optimization.strategiesEvaluated.map((item) => item.strategy);
@@ -1998,7 +1997,7 @@ test("desactivar flow balanced conserva operaciones, fechas y recursos existente
 
 test("flow balanced no desplaza al ganador legado con empate de puntuacion", async () => {
   const core = loadPlannerCore();
-  const options = { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" };
+  const options = { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00", earlyStop: false };
   const legacy = await core.schedulePlan(legacySelectionFixture(false), options);
   const enabled = await core.schedulePlan(legacySelectionFixture(true), options);
   const legacyMetrics = enabled.lastSchedule.optimization.strategiesEvaluated
@@ -2217,6 +2216,7 @@ test("flow balanced reduce flujo promedio y WIP terminando una OT antes de abrir
   })));
   const options = {
     planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   };
   const result = await core.schedulePlan(flowFixture(operations), options);
   const legacy = await core.schedulePlan(flowFixture(operations, {
@@ -2250,6 +2250,7 @@ test("flow balanced abre otra OT si ninguna OT activa tiene operacion elegible",
   state.matrix["PINTURA::PINTURA"] = [];
   const result = await core.schedulePlan(state, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   });
 
   assertFlowEvaluated(result);
@@ -2277,6 +2278,7 @@ test("flow balanced reparte trabajo entre operadores equivalentes por carga proy
   });
   const result = await core.schedulePlan(state, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   });
 
   assertFlowEvaluated(result);
@@ -2294,6 +2296,7 @@ test("flow balanced conserva el fallback de un minuto para una operacion sin tie
   ];
   const result = await core.schedulePlan(flowFixture(operations), {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   });
   const fallback = result.operations.find((op) => op.id === "without-time");
 
@@ -2317,6 +2320,7 @@ test("flow balanced conserva precedencia y bloqueos", async () => {
   ];
   const result = await core.schedulePlan(flowFixture(operations, { lockedOts: ["100"] }), {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   });
   const fixed = result.operations.find((op) => op.id === "fixed");
   const successor = result.operations.find((op) => op.id === "successor");
@@ -2429,6 +2433,7 @@ test("si flow balanced falla se excluye y las estrategias existentes continuan",
 
   const result = await core.schedulePlan({ operations: [], workOrders: [], settings, workSchedule: {} }, {
     planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
+    earlyStop: false,
   });
 
   assert.equal(result.lastSchedule.optimization.selectedStrategy, "balanced");

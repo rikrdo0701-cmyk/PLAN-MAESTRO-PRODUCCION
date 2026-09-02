@@ -10,6 +10,13 @@ const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLANNING_PLAN_TIME_BUDGET_MS = 300000;
+const PLANNING_PLAN_BUDGET_BASE_MS = 45000;
+const PLANNING_PLAN_BUDGET_PER_OT_MS = 45000;
+function planningPlanTimeBudgetMs(affectedOts) {
+  const count = Array.isArray(affectedOts) ? affectedOts.length : 0;
+  const scaled = PLANNING_PLAN_BUDGET_BASE_MS + count * PLANNING_PLAN_BUDGET_PER_OT_MS;
+  return Math.min(scaled, PLANNING_PLAN_TIME_BUDGET_MS);
+}
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const PLAN_SNAPSHOTS_CACHE_KEY = "plan-snapshots-cache-v1";
 const MIN_OPERATION_MINUTES = 1;
@@ -4759,15 +4766,14 @@ async function scheduleCurrentPlan() {
   try {
     return await scheduleCurrentPlanImpl();
   } finally {
-    setPlanningActionsBusy("schedule", false);
+setPlanningActionsBusy("schedule", false);
     const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
-    if (label && !netSuitePlanningSyncInFlight) label.textContent = "Generar plan";
+    if (label) label.textContent = "Generar plan";
   }
 }
 
 async function scheduleCurrentPlanImpl() {
   const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
-  const originalLabel = label?.textContent || "Generar plan";
   const setScheduleStatus = (message) => {
     if (label) label.textContent = message;
   };
@@ -4851,18 +4857,28 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
-      timeBudgetMs: PLANNING_PLAN_TIME_BUDGET_MS,
+      timeBudgetMs: planningPlanTimeBudgetMs(readyOts),
       collectStats: true,
       progressEveryMs: 300,
       isDryRun: false,
-      onProgress: (event) => {
+onProgress: (event) => {
         if (!label) return;
         const scheduled = Number(event?.scheduled || 0);
         const total = Number(event?.total || 0);
         const percent = total > 0 ? Math.min(100, Math.round((scheduled / total) * 100)) : null;
-        label.textContent = total > 0
-          ? (percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`)
-          : `Programando OTs...`;
+        const phase = String(event?.phase || "");
+        const strategy = String(event?.strategy || "");
+        if (phase === "finalize:select-best") {
+          label.textContent = "Eligiendo mejor plan...";
+        } else if (strategy) {
+          label.textContent = total > 0
+            ? `Estrategia ${strategy}: ${scheduled} de ${total}${percent !== null ? ` (${percent}%)` : ""}`
+            : `Estrategia ${strategy}: revisando...`;
+        } else if (total > 0) {
+          label.textContent = percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`;
+        } else {
+          label.textContent = "Programando OTs...";
+        }
       },
       onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
@@ -4898,7 +4914,7 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   } finally {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
-    if (label) label.textContent = originalLabel;
+    if (label) label.textContent = "Generar plan";
   }
 }
 
