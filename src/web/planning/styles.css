@@ -228,6 +228,7 @@ html, body {
 .workspace[data-view="loads"] > :not(.topbar):not(#cargas):not(.toast):not(.planning-dialog),
 .workspace[data-view="saturation"] > :not(.topbar):not(#cuello-botella):not(.toast):not(.planning-dialog),
 .workspace[data-view="config"] > :not(.topbar):not(.config-view):not(.toast):not(.planning-dialog) { display: none; }
+.workspace[data-view="plan"] > :not(.topbar):not(.planner-grid):not(.summary-strip):not(#planAlerts):not(#draftExecutiveSummary):not(.toast):not(.planning-dialog) { display: none; }
 
 .topbar {
   position: sticky;
