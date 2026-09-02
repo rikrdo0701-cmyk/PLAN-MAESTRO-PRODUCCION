@@ -640,6 +640,7 @@ function bindElements() {
     "unlockAllBtn",
     "returnUnlockedToBacklogBtn",
     "selectedJobPanel",
+    "returnToBacklogBtn",
     "closeDetailPanelBtn",
     "ganttCanvas",
     "loadList",
@@ -867,6 +868,11 @@ function bindEvents() {
     state.selectedOperationId = "";
     saveState();
     render();
+  });
+  els.returnToBacklogBtn.addEventListener("click", () => {
+    const ot = getSelectedPriorityJob()?.ot;
+    closeDetailPanel();
+    if (ot) selectJob(ot, false);
   });
   els.loadNsExerciseBtn.addEventListener("click", loadNetSuiteExercise);
   els.saveAppSheetBtn.addEventListener("click", () => saveAppSheet(true));
@@ -3353,10 +3359,6 @@ function closeDetailPanel() {
   if (!panel) return;
   panel.hidden = true;
   document.body.classList.remove("detail-panel-open");
-  const returnToBacklogBtn = document.getElementById("returnToBacklogBtn");
-  if (returnToBacklogBtn) {
-    returnToBacklogBtn.addEventListener("click", () => closeDetailPanel());
-  }
 }
 
 function renderSelectedJobPanel() {
