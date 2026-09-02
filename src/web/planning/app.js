@@ -3712,6 +3712,7 @@ function toggleExpandedJob(ot) {
   state.expandedOts = state.expandedOts.includes(ot)
     ? state.expandedOts.filter((item) => item !== ot)
     : uniq([...state.expandedOts, ot]);
+  invalidateGanttGroupsCache();
   renderGantt();
   saveState();
 }
@@ -3719,6 +3720,7 @@ function toggleExpandedCt(key) {
   state.expandedCts = state.expandedCts.includes(key)
     ? state.expandedCts.filter((item) => item !== key)
     : uniq([...state.expandedCts, key]);
+  invalidateGanttGroupsCache();
   renderGantt();
   saveState();
 }
