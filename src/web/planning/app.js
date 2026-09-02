@@ -644,7 +644,6 @@ function bindElements() {
     "closeDetailPanelBtn",
     "ganttCanvas",
     "loadList",
-    "loadWeekInput",
     "loadWeekRange",
     "loadPlanSelect",
     "loadModeSelect",
@@ -652,7 +651,6 @@ function bindElements() {
     "bottleneckOperations",
     "bottleneckPlanSelect",
     "bottleneckModeSelect",
-    "bottleneckWeekInput",
     "bottleneckWeekRange",
     "matrixWrap",
     "matrixSearchInput",
@@ -879,18 +877,10 @@ function bindEvents() {
   els.exportCsvBtn.addEventListener("click", exportCsv);
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
-  els.loadWeekInput.addEventListener("change", () => {
-    state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
-    saveAndRender("Semana de cargas actualizada");
-  });
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
   els.loadModeSelect.addEventListener("change", () => {
     loadMode = els.loadModeSelect.value;
     renderLoads();
-  });
-  els.bottleneckWeekInput.addEventListener("change", () => {
-    state.loadWeekStart = normalizeWeekStartValue(els.bottleneckWeekInput.value);
-    saveAndRender("Semana de cuellos de botella actualizada");
   });
   els.bottleneckPlanSelect.addEventListener("change", () => loadSelectedBottleneckPlan(els.bottleneckPlanSelect.value));
   els.bottleneckModeSelect.addEventListener("change", () => {
@@ -4010,9 +4000,9 @@ function renderLoads() {
     loadMode
   );
   const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
-  els.loadWeekInput.value = state.loadWeekStart;
   const week = selectedWeekRange(state.loadWeekStart);
-  els.loadWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  els.loadWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
   let rowNumber = 0;
   const groups = RESOURCE_CATEGORIES.map((category) => {
     const categoryRows = loads.filter((item) => resourceCategoryFor(item.operator) === category).map((item) => {
@@ -4095,9 +4085,9 @@ function renderSaturation() {
     state.operations,
     loadMode
   );
-  els.bottleneckWeekInput.value = state.loadWeekStart;
   const week = selectedWeekRange(state.loadWeekStart);
-  els.bottleneckWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  els.bottleneckWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
 
   const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
   const saturated = loads.filter((item) => item.percent > 100);
