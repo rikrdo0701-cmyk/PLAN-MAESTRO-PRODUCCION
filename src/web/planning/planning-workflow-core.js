@@ -122,17 +122,19 @@
     const selected = new Set((ots || state?.selectedOts || []).map(normalize).filter(Boolean));
     return {
       ...(state || {}),
-      operations: (state?.operations || []).map((operation) => {
-        const preserved = !selected.has(normalize(operation?.ot)) || isLockedOperation(state, operation) ||
-          normalize(operation?.planStatus) === "COMPLETADA_PLAN" || isHistorical(operation);
-        if (preserved) return { ...operation };
-        return {
-          ...operation,
-          fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
-          operador: "",
-          needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
-        };
-      }),
+      operations: (state?.operations || [])
+        .filter((operation) => normalize(operation?.planStatus) !== "COMPLETADA_PLAN")
+        .map((operation) => {
+          const preserved = !selected.has(normalize(operation?.ot)) || isLockedOperation(state, operation) ||
+            isHistorical(operation);
+          if (preserved) return { ...operation };
+          return {
+            ...operation,
+            fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
+            operador: "",
+            needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
+          };
+        }),
     };
   }
 

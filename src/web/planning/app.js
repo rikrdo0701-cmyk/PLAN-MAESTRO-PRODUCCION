@@ -4780,21 +4780,13 @@ async function scheduleCurrentPlanImpl() {
     return;
   }
   setScheduleStatus("Revisando plan...");
-  state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
+state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
   let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
   if (incrementalBase && !window.PlanningWorkflowCore.planAnchoredAt(incrementalBase, state.planStart)) {
-    showToast("El plan previo no arranca en planStart; regenerando el plan desde el inicio", 8000);
     incrementalBase = null;
   }
-  const incrementalScope = incrementalBase
-    ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
-    : { affectedOts: [...state.selectedOts] };
-  let affected = new Set(incrementalScope.affectedOts.map(normalizeStatus));
-  if (!affected.size && state.selectedOts.length) {
-    affected = new Set(state.selectedOts.map(normalizeStatus));
-    showToast("Sin cambios detectados: reprogramando todas las OTs seleccionadas", 4000);
-  }
+  const affected = new Set(state.selectedOts.map(normalizeStatus));
   const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
@@ -5018,7 +5010,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
   metrics.planStart = planStart;
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(planStart);
   let incrementalBase = null;
-  let incrementalScope = null;
   let readyOts = [];
   let engineSelectedOts = [];
   const originalState = state;
@@ -5029,10 +5020,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
     timings.incrementalBaseMs = Math.round(dryRunNowMs() - started);
     if (incrementalBase?.snapshotId) metrics.incrementalBaseSnapshotId = incrementalBase.snapshotId;
-    incrementalScope = incrementalBase
-      ? window.PlanningWorkflowCore.incrementalScope({ base: incrementalBase, current: state, weekStart: planningWeekStart })
-      : { affectedOts: [...selectedOts] };
-    const affected = new Set((incrementalScope.affectedOts || []).map(normalizeStatus));
+    const affected = new Set(selectedOts.map(normalizeStatus).filter(Boolean));
     metrics.affectedOtsCount = affected.size;
 
     markPhase("readiness", "validando OTs listas");
