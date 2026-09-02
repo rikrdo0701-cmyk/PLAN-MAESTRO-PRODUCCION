@@ -525,6 +525,35 @@ test("cantidad de operación sin columna usa el pendiente del catálogo de OTs",
   assert.equal(operation.cantPendiente, 3);
 });
 
+test("mapea headers reales de ruta NetSuite (velocidad/configuracion/cantidades)", () => {
+  const { context } = load();
+  const current = { operations: [], workOrders: [{ ot: "2748", pendingQuantity: 100 }] };
+  const row = {
+    "Orden de trabajo": "2748",
+    Secuencia: 96,
+    "Centro de trabajo": "3OTD",
+    "Operación": "3OTD",
+    "Cantidad de entrada": 52,
+    "Cantidad completada": 0,
+    "Tiempo de configuración (minutos)": 6,
+    "Velocidad de ejecución (minutos/unidad)": 1.02,
+    "Trabajo restante (min)": 59.033,
+  };
+  const operation = context.PP_mapNetSuiteOperation_(row, 0, current);
+
+  assert.equal(operation.cantTotal, 52);
+  assert.equal(operation.cantPendiente, 52);
+  assert.equal(operation.tiempoSetup, 6);
+  assert.equal(operation.tiempoCiclo, 1.02);
+  assert.equal(operation.tiempoProd, 53.04);
+  const setupReal = context.PP_mapNetSuiteOperation_(
+    { ...row, "Tiempo de configuración (minutos)": 34.8 },
+    0,
+    current,
+  );
+  assert.equal(setupReal.tiempoSetup, 34.8);
+});
+
 test("normaliza al operador activo y rechaza el operador foraneo inexistente", () => {
   const { context } = load();
   const base = {

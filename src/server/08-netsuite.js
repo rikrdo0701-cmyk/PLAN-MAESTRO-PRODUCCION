@@ -655,14 +655,14 @@ function PP_mapNetSuiteOperation_(row, index, current) {
   const existing = (current.operations || []).find(function(op) {
     return PP_normalizeKey_(op.ot) === PP_normalizeKey_(ot) && Number(op.secuencia) === sequence && PP_normalizeKey_(op.ct) === PP_normalizeKey_(ct);
   }) || {};
-  const qtyRaw = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad', 'qty_to_process']) || 0);
+  const qtyRaw = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad de entrada', 'Cantidad', 'qty_to_process']) || 0);
   const qty = qtyRaw > 0 ? qtyRaw : PP_workOrderPendingQuantity_(current, ot);
-  const done = Number(PP_pick_(row, ['Cantidad realizada', 'qty_completed']) || 0);
+  const done = Number(PP_pick_(row, ['Cantidad realizada', 'Cantidad completada', 'qty_completed']) || 0);
   const pending = Math.max(0, qty - done);
-  const rateRaw = Number(PP_pick_(row, ['Tasa produccion', 'production_rate']));
-  const setupRaw = Number(PP_pick_(row, ['Tiempo preparacion (min)', 'setup_min']));
-  const rate = Number.isFinite(rateRaw) ? (rateRaw > 10 ? 0.67 : Math.max(0, rateRaw)) : 0;
-  const setup = Number.isFinite(setupRaw) ? (setupRaw > 20 ? 15 : Math.max(0, setupRaw)) : 0;
+  const rateRaw = Number(PP_pick_(row, ['Tasa produccion', 'production_rate', 'Velocidad de ejecucion (minutos/unidad)', 'run_rate']));
+  const setupRaw = Number(PP_pick_(row, ['Tiempo preparacion (min)', 'setup_min', 'Tiempo de configuracion (minutos)', 'setup_time']));
+  const rate = Number.isFinite(rateRaw) ? Math.max(0, rateRaw) : 0;
+  const setup = Number.isFinite(setupRaw) ? Math.max(0, setupRaw) : 0;
   const remaining = Number(PP_pick_(row, ['Trabajo restante (min)', 'remaining_min']) || 0);
   const estimated = Number(PP_pick_(row, ['Tiempo estimado (min)', 'est_min']) || 0);
   const production = pending > 0 && rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0);
