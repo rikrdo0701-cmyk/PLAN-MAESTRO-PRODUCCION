@@ -692,7 +692,16 @@
       "source": "src/server/08-netsuite.js (PP_mapNetSuiteOperation_: cycle = production/pending); src/web/planning/app.js (operationCycleMinutesForReport fallback); verificacion Playwright local 2026-09-01: tiempoProd=59.033, 100 piezas, TC=0.59 min (35 s)",
       "domain": "REP",
       "updated_at": "2026-09-01T20:50:00-06:00"
+    },
+    {
+      "rule_id": "RULE-OT-027",
+      "name": "Mapeo de tiempos de operacion NetSuite: columnas reales de ruta y sin tope",
+      "status": "implementada",
+      "rule": "PP_mapNetSuiteOperation_ (src/server/08-netsuite.js) reconoce para tasa (tiempo de ciclo por pieza) los headers 'Tasa produccion'/'production_rate'/'Velocidad de ejecucion (minutos/unidad)'/'run_rate' (el RESTlet 1762/17 entrega el header estandar de ruta NetSuite 'Velocidad de ejecucion (minutos/unidad)'), para setup 'Tiempo preparacion (min)'/'setup_min'/'Tiempo de configuracion (minutos)'/'setup_time', y para cantidades 'Cantidad a procesar'/'Cantidad de entrada'/'Cantidad'/'qty_to_process' y 'Cantidad realizada'/'Cantidad completada'/'qty_completed'. Los valores se toman TAL CUAL desde NetSuite: YA NO existen los topes anteriores 'setup > 20 -> 15' ni 'rate > 10 -> 0.67' (eliminados por decision del usuario 2026-09-01 para que el borrador reproduzca exacto los tiempos de la ruta en NetSuite; p. ej. setup 34.8 min queda 34.8). La cantidad pendiente se deriva de la fila si trae columna de cantidad, si no del pendiente del catalogo de OTs. tiempoProd = rate*pendientes cuando rate>0 y pendientes>0, con fallback a 'Trabajo restante (min)'/'remaining_min' o 'Tiempo estimado (min)'/'est_min'; tiempoCiclo = tiempoProd/pendientes (RULE-REP-004). Aplica al reimportar/sincronizar OTs (accion 'Actualizar' o sync completo); los planes ya publicados no se reescriben.",
+      "source": "src/server/08-netsuite.js (PP_mapNetSuiteOperation_ lineas 658-669); test netsuite-operation-catalog.test.mjs \"mapea headers reales de ruta NetSuite\"; decision usuario 2026-09-01",
+      "domain": "OT",
+      "updated_at": "2026-09-01T21:20:00-06:00"
     }
   ],
-  "updated_at": "2026-09-01T20:50:00-06:00"
+  "updated_at": "2026-09-01T21:20:00-06:00"
 }

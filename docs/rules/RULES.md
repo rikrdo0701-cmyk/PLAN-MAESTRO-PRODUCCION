@@ -46,6 +46,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-REP-002` | Rango de fechas de reportes diarios: muestran operaciones con fecha anterior al día seleccionado y hacia adelante según la casilla de días; no se limitan a la semana del plan (`operationsForDayReport`, `filteredReportRows`, `reportDateRange`) | IMPLEMENTADA | `app.js` (`operationsForDayReport`, `operatorReportSelection`, `adjusterReportSelection`) |
 | `RULE-REP-003` | El seguimiento de completado (Completar/Reabrir y columna Estado) solo aplica al último plan publicado; el borrador y los planes anteriores son solo lectura (`reportSourceAllowsOperationTracking`) | IMPLEMENTADA | `app.js` (`reportSourceAllowsOperationTracking`, `planStatusActionCell`) |
 | `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir (importación `08-netsuite.js` + fallback de visualización `operationCycleMinutesForReport`) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
+| `RULE-OT-027` | Mapeo de tiempos de operación NetSuite: headers reales de ruta (`Velocidad de ejecución (minutos/unidad)`, `Tiempo de configuración (minutos)`, `Cantidad de entrada`/`Cantidad completada`) y SIN topes (`setup>20→15` y `rate>10→0.67` eliminados) | IMPLEMENTADA | `08-netsuite.js` |
 
 ## OT
 
