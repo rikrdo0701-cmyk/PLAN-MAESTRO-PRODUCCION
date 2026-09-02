@@ -175,7 +175,7 @@ html, body {
 }
 
 .workspace {
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .planner-grid {
