@@ -3481,12 +3481,8 @@ function renderSelectedJobPanel() {
         ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op);
-          const key = operationCompletionKey(op);
-          const tracking = reportSourceAllowsOperationTracking();
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : tracking
-              ? `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`
-              : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada" : "Pendiente"}</span>`;
+            : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
