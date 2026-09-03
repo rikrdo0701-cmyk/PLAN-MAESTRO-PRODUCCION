@@ -1021,6 +1021,28 @@ function PP_deletePlanSnapshotPayload_(snapshotId) {
   PP_removeManifestIndexRecord_(snapshotId);
 }
 
+function PP_deletePlanSnapshot_(spreadsheet, snapshotId) {
+  const key = String(snapshotId || '').trim();
+  if (!key || key === 'draft') return { ok: false, skipped: true };
+  ['PLANES_HISTORICOS', 'BORRADOR_PLAN'].forEach(function(sheetName) {
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) return;
+    let header = [];
+    try { header = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0] || []; } catch (ignored) {}
+    const colIndex = header.indexOf('SNAPSHOT_ID');
+    if (colIndex < 0) return;
+    for (let row = sheet.getLastRow(); row >= 2; row -= 1) {
+      let cell = '';
+      try { cell = String(sheet.getRange(row, colIndex + 1).getValue() || '').trim(); } catch (ignored) {}
+      if (cell === key) sheet.deleteRow(row);
+    }
+  });
+  PP_deletePlanSnapshotPayload_(key);
+  PP_removeManifestIndexRecord_(key);
+  SpreadsheetApp.flush();
+  return { ok: true, snapshotId: key };
+}
+
 function PP_clearDraftSnapshot_(spreadsheet) {
   const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
   const lastRow = sheet.getLastRow();

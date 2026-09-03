@@ -6,10 +6,27 @@ function PP_publishDraftPlan_(payload) {
     PP_ensureWorkbook_(spreadsheet);
     const snapshot = PP_appendPlanSnapshot_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
     const saved = PP_writeState_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
-    return { ok: true, activeVersion: snapshot, state: saved };
+    const weekStart = String(snapshot.weekStart || snapshot.planStart || '');
+    const pruned = PP_prunePublishedSnapshots_(spreadsheet, snapshot.snapshotId, weekStart);
+    return { ok: true, activeVersion: snapshot, state: saved, retained: { weekStart: weekStart }, pruned: pruned };
   } finally {
     lock.releaseLock();
   }
+}
+
+function PP_prunePublishedSnapshots_(spreadsheet, keepSnapshotId, weekStart) {
+  const week = String(weekStart || '');
+  const pruned = [];
+  let list = [];
+  try { list = PP_listPlanSnapshots_(spreadsheet) || []; } catch (ignored) {}
+  if (!Array.isArray(list) || !list.length) return pruned;
+  list.forEach(function(record) {
+    const id = String(record && record.snapshotId || '');
+    if (!id || id === 'draft' || id === keepSnapshotId) return;
+    if (week && String(record.weekStart || record.planStart || '') !== week) return;
+    try { PP_deletePlanSnapshot_(spreadsheet, id); pruned.push(id); } catch (ignored) {}
+  });
+  return pruned;
 }
 
 function PP_restoreNormalize_(value) {

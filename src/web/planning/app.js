@@ -19,6 +19,7 @@ function planningPlanTimeBudgetMs(affectedOts) {
 }
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
 const PLAN_SNAPSHOTS_CACHE_KEY = "plan-snapshots-cache-v1";
+const PLAN_VERSION_COUNTER_KEY = "plan-version-counter-v1";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
 const WORK_END_HOUR = 17;
@@ -520,6 +521,26 @@ function loadPlanSnapshotsCache() {
 function savePlanSnapshotsCache(snapshots) {
   try {
     localStorage.setItem(PLAN_SNAPSHOTS_CACHE_KEY, JSON.stringify(snapshots));
+  } catch (_) {}
+}
+
+function readPlanVersionCounter(weekStart) {
+  try {
+    const raw = localStorage.getItem(PLAN_VERSION_COUNTER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Number(parsed?.[weekStart] || 0) || 0;
+    }
+  } catch (_) {}
+  return 0;
+}
+
+function writePlanVersionCounter(weekStart, version) {
+  try {
+    const raw = localStorage.getItem(PLAN_VERSION_COUNTER_KEY);
+    const parsed = raw ? (JSON.parse(raw) || {}) : {};
+    if (typeof parsed === "object") parsed[weekStart] = Math.max(Number(parsed[weekStart] || 0), Number(version || 0));
+    localStorage.setItem(PLAN_VERSION_COUNTER_KEY, JSON.stringify(parsed));
   } catch (_) {}
 }
 let reportSnapshot = null;
@@ -5364,14 +5385,38 @@ async function publishCurrentPlan() {
   try {
     setPublishStatus("Preparando publicacion...", 5);
     const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
+    const counterBase = readPlanVersionCounter(weekStart);
     const versionBase = [
       ...(state.publishedVersions || []),
       ...(Array.isArray(planSnapshots) ? planSnapshots : []),
+      ...(counterBase ? [{ weekStart, version: counterBase }] : []),
     ].filter((item) => Number(item?.version || 0) > 0);
     const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart);
     let publicationReason = "";
     let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     if (version > 1) {
+      const previousPublished = [...(state.publishedVersions || []), ...(Array.isArray(planSnapshots) ? planSnapshots : [])]
+        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart && Number(item?.version || 0) > 0)
+        .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
+      if (previousPublished?.snapshotId) {
+        const previousLabel = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, Number(previousPublished.version || 1));
+        const nextLabel = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
+        const pdfAnswer = await openPlanningDialog({
+          title: "Guardar PDF de la version anterior",
+          summary: `Ya existe una version publicada (${previousLabel}). Al publicar la nueva version (${nextLabel}) la anterior sera reemplazada y solo se mantendran el ultimo publicado y el borrador.`,
+          body: `<label>¿Quieres guardar un PDF del reporte de la version anterior antes de publicar?<select name="save_pdf">
+            <option value="yes" selected>Si, guardar PDF y luego publicar</option>
+            <option value="no">No, publicar sin guardar PDF</option>
+          </select></label>`,
+          confirmLabel: "Continuar",
+          cancelVisible: true,
+        });
+        if (!pdfAnswer) return;
+        if (pdfAnswer.save_pdf === "yes") {
+          setPublishStatus("Abriendo PDF de la version anterior...", 15);
+          await generatePlanPdfForSnapshot(previousPublished.snapshotId);
+        }
+      }
       setPublishStatus(`Publicando ${window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version)}...`, 10);
       const identifier = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
       const result = await openPlanningDialog({
@@ -5387,9 +5432,7 @@ async function publishCurrentPlan() {
         return;
       }
       publicationReason = reason;
-      const previous = [...(state.publishedVersions || []), ...(Array.isArray(planSnapshots) ? planSnapshots : [])]
-        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart && Number(item?.version || 0) > 0)
-        .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
+      const previous = previousPublished;
       if (previous?.snapshotId) {
         try {
           setPublishStatus("Comparando con la version anterior...", 25);
@@ -5420,12 +5463,14 @@ async function publishCurrentPlan() {
     const active = result?.activeVersion || result;
     if (active?.snapshotId) {
       setPublishStatus("Guardando version publicada...", 75);
+      writePlanVersionCounter(weekStart, Number(active.version || version || 1));
       state.activePublishedVersionId = active.snapshotId;
       state.publishedVersions = [
-        ...(state.publishedVersions || []).filter((item) => item.snapshotId !== active.snapshotId),
-        { ...active, weekStart, version, publicationReason, changeSummary, status: "PUBLICADO" },
-      ];
+        (state.publishedVersions || []).find((item) => item.snapshotId === active.snapshotId),
+        { ...active, weekStart, version: Number(active.version || version || 1), publicationReason, changeSummary, status: "PUBLICADO" },
+      ].filter(Boolean);
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
+      try { await loadPlanSnapshots(false); } catch (snapErr) { console.warn("No se pudieron recargar los historicos tras publicar", snapErr); }
     }
     setPublishStatus("Finalizando publicacion...", 90);
     await saveAppSheet(false);
@@ -5444,7 +5489,7 @@ async function publishCurrentPlan() {
   }
 }
 
-async function generatePlanPdf() {
+async function generatePlanPdf(explicitSnapshotId = "") {
   const originalLabel = els.pdfBtn.innerHTML;
   els.pdfBtn.disabled = true;
   els.pdfBtn.setAttribute("aria-busy", "true");
@@ -5457,8 +5502,8 @@ async function generatePlanPdf() {
     const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
-    const usingDraft = reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft";
-    let snapshotId = usingDraft ? "" : reportSnapshot?.snapshotId;
+    const usingDraft = explicitSnapshotId ? false : (reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft");
+    let snapshotId = explicitSnapshotId || (usingDraft ? "" : reportSnapshot?.snapshotId);
   if (!usingDraft && !snapshotId && planSnapshots.length > 0) {
     const publishedIds = publishedSnapshotIds();
     const draftSnapshots = planSnapshots.filter((s) => !publishedIds.has(s.snapshotId));
@@ -5498,12 +5543,19 @@ async function generatePlanPdf() {
     syncDraftReportWeek();
     reportSnapshot = currentDraftReportSnapshot();
   } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
-  if (!reportSnapshot?.operations?.length) {
+  if (!explicitSnapshotId && !reportSnapshot?.operations?.length) {
     reportSnapshot = { operations: currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
+  if (!reportSnapshot?.operations?.length) {
+    showToast("No hay operaciones programadas para el informe de la version anterior");
+    return;
+  }
   showWorkspaceView("reportes", "week", { scrollToTop: true });
-  state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
+  const reportStart = explicitSnapshotId
+    ? (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart)
+    : (state.planStart || state.reportWeekStart);
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
   renderReports();
   document.body.dataset.printContext = "plan";
   showToast("Usa Guardar como PDF en la ventana de impresion");
@@ -5516,6 +5568,16 @@ async function generatePlanPdf() {
     els.pdfBtn.disabled = false;
     els.pdfBtn.removeAttribute("aria-busy");
     els.pdfBtn.innerHTML = originalLabel;
+  }
+}
+
+async function generatePlanPdfForSnapshot(snapshotId) {
+  if (!snapshotId) return;
+  const wasRunning = Boolean(els.scheduleBtn?.classList.contains("is-running"));
+  try {
+    await generatePlanPdf(snapshotId);
+  } finally {
+    if (wasRunning) els.scheduleBtn?.classList.add("is-running");
   }
 }
 
@@ -6108,11 +6170,14 @@ function selectedPlanSourceId() {
 
 function planSourceOptionsMarkup() {
   const publishedIds = publishedSnapshotIds();
-  const allowedSnapshots = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
+  const allOptions = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
     ...snapshot,
     id: snapshot.snapshotId,
     status: isPublishedSnapshotOption(snapshot, publishedIds) ? "PUBLICADO" : (snapshot.status || snapshot.planStatus || "GUARDADO"),
   }))).filter((item) => item.id !== "draft");
+  const ordered = [...allOptions].sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+  const latestPublished = ordered[0] || null;
+  const allowedSnapshots = latestPublished ? [latestPublished] : [];
   const options = allowedSnapshots.map((snapshot) => {
     const week = snapshot.weekStart || snapshot.planStart;
     const version = Number(snapshot.version || 1);
