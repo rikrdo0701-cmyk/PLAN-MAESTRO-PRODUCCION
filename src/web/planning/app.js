@@ -6264,8 +6264,9 @@ function reportSourceAllowsOperationTracking() {
   if (snapshotId === "draft") return false;
   const publishedIds = publishedSnapshotIds();
   const selected = (planSnapshots || []).find((s) => String(s?.snapshotId || s?.id || "") === snapshotId);
-  if (selected) return isPublishedSnapshotOption(selected, publishedIds);
-  return publishedIds.has(snapshotId);
+  if (selected && isPublishedSnapshotOption(selected, publishedIds)) return true;
+  if (publishedIds.has(snapshotId)) return true;
+  return isPublishedSnapshotOption(reportSnapshot, publishedIds);
 }
 
 function currentDraftReportSnapshot() {
