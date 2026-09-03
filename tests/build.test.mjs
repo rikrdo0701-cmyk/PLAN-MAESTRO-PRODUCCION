@@ -652,6 +652,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(bridge, /restorePublishedPlanAsDraft: true/);
   assert.match(bridge, /fetchNetSuiteWorkOrdersLite: true/);
   assert.match(bridge, /getInspectionWorkOrderBundle: true/);
+  assert.match(bridge, /getPlanSnapshotLight: true/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
   assert.match(storageService, /fullState/);
   assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);
