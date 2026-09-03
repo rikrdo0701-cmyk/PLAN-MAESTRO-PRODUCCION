@@ -1060,7 +1060,24 @@ test("la navegacion manual desplaza el espacio de trabajo al inicio", () => {
     {},
   );
 
-  applyInitialWorkspaceView({ scrollToTop: true });
+  const previousRenderFns = {
+    renderTop: globalThis.renderTop,
+    renderPlanAlerts: globalThis.renderPlanAlerts,
+    renderDraftExecutiveSummary: globalThis.renderDraftExecutiveSummary,
+    renderGantt: globalThis.renderGantt,
+  };
+  globalThis.renderTop = () => {};
+  globalThis.renderPlanAlerts = () => {};
+  globalThis.renderDraftExecutiveSummary = () => {};
+  globalThis.renderGantt = () => {};
+  try {
+    applyInitialWorkspaceView({ scrollToTop: true });
+  } finally {
+    for (const [name, fn] of Object.entries(previousRenderFns)) {
+      if (fn === undefined) delete globalThis[name];
+      else globalThis[name] = fn;
+    }
+  }
 
   assert.deepEqual(scrolls, [{ top: 0, behavior: "auto" }]);
 });

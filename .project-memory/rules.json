@@ -678,12 +678,12 @@
     },
     {
       "rule_id": "RULE-REP-003",
-      "name": "Seguimiento de completado solo en el ultimo plan publicado",
+      "name": "Seguimiento de completado en cualquier plan publicado seleccionado",
       "status": "implementada",
-      "rule": "El seguimiento de completado de operaciones se lleva UNICAMENTE en el ultimo plan publicado (activo) y NO en el borrador ni en planes publicados anteriores: el borrador y los planes mas antiguos son de solo lectura para las acciones Completar/Reabrir y ocultan la columna Estado. reportSourceAllowsOperationTracking() devuelve true solo cuando state.activePublishedVersionId existe y el plan fuente de reportes (reportSnapshot.snapshotId || 'draft') es exactamente el ultimo publicado (activePublishedSnapshotId(), que ordena publishedPlanSnapshots por publishedAt/generatedAt descendente). La guarda se aplica en: planStatusActionCell (no genera boton en modo lectura), renderOperatorReport/renderAdjusterReport (ocultan la columna Estado via statusActions=reportSourceAllowsOperationTracking(), que reciben renderProductionReportRow y renderAdjusterReportRow), el panel de OT seleccionada (muestra texto Completada/Pendiente sin boton) y toggleOperationPlanStatus (guardia de retorno temprano). Substituye el comportamiento anterior donde se podia completar en cualquier plan seleccionado. Nota: isReportSnapshotEditable () es distinta y ya existia: controla unicamente la edicion de comentarios (true solo en borrador); esta regla no la modifica.",
-      "source": "src/web/planning/app.js (reportSourceAllowsOperationTracking, planStatusActionCell, renderOperatorReport, renderAdjusterReport, renderAdjusterReportRow, renderPlanStatusRow, toggleOperationPlanStatus, renderSelectedJobPanel); tests/performance-client-calls.test.mjs; tests/build.test.mjs; verificacion Playwright local 2026-09-01",
+      "rule": "El seguimiento de completado de operaciones (botones Completar/Reabrir y la columna Estado) se habilita cuando la fuente de reportes es CUALQUIER plan publicado seleccionado por el usuario, y se deshabilita SOLO en el borrador y en planes guardados NO publicados (solo lectura). reportSourceAllowsOperationTracking() devuelve true cuando reportSnapshot.snapshotId NO es 'draft' y el snapshot seleccionado es un plan publicado (via isPublishedSnapshotOption, que acepta pertenencia a publishedSnapshotIds() o el fallback de metadata: status/planStatus 'PUBLICADO' o presencia de publishedAt). El reconocimiento de publicado NO depende de que sea el ultimo ni de state.activePublishedVersionId/publishedVersions (que pueden quedar vacios o desactualizados tras recargar), por eso ademas de los ids registrados en estado se consulta el metadata del snapshot de planSnapshots. Nota: isReportSnapshotEditable() es distinta y ya existia: controla unicamente la edicion de comentarios (true solo en borrador); esta regla no la modifica.",
+      "source": "cambio de diseno usuario 2026-09-03 ('en los reportes no aparece el boton de completar cuando es un plan publicado el que se selecciono'); src/web/planning/app.js reportSourceAllowsOperationTracking (ahora acepta cualquier plan publicado seleccionado), isPublishedSnapshotOption (fallback metadata), planStatusActionCell, renderOperatorReport, renderAdjusterReport, renderAdjusterReportRow, renderPlanStatusRow, toggleOperationPlanStatus, renderSelectedJobPanel; tests/build.test.mjs",
       "domain": "REP",
-      "updated_at": "2026-09-01T20:30:00-06:00"
+      "updated_at": "2026-09-03T02:00:00-06:00"
     },
     {
       "rule_id": "RULE-REP-004",
@@ -756,7 +756,25 @@
       "source": "definicion de usuario 2026-09-03 ('quiero algo visual que me diga cuando se este publicando el plan el avance'); src/web/planning/app.js publishCurrentPlan (setPublishStatus helper, DOM updates, finally reset), scheduleCurrentPlanImpl (referencia de patron); src/web/planning/index.template.html publishPlanBtn con data-schedule-label/percent/fill; src/web/planning/styles.css #publishPlanBtn .schedule-progress; tests: 455 pass; Probe Playwright DOM (publish-progress structure verified); RULE-BAL-012 (patron hermano para Generar plan)",
       "domain": "UI",
       "updated_at": "2026-09-03T00:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-UI-002",
+      "name": "Navegar a Plan semanal re-renderiza el plan (evita pantalla en blanco)", 
+      "status": "implementada",
+      "rule": "showWorkspaceView (src/web/planning/app.js) re-renderiza el plan al navegar a la seccion 'plan-semanal' (workspace dataset.view='plan'): si el destino es la vista plan, invoca renderTop(), renderPlanAlerts(), renderDraftExecutiveSummary() y renderGantt() antes de salir. Antes del fix no se llamaba ningun render para la vista plan (a diferencia de loads/saturation/reports/configuration que si despachaban renderLoads/renderSaturation/renderReports/renderConfiguration), por lo que al navegar a 'Plan semanal' el area quedaba con el contenido anterior (en blanco si el Gantt nunca se habia pintado, p. ej. al entrar durante/proximo a una generacion). Fix: se agrego en showWorkspaceView el bloque if con el destino de vista igual a 'plan' que invoca renderTop(); renderPlanAlerts(); renderDraftExecutiveSummary(); renderGantt(). Ademas, renderGantt muestra el mensaje 'Generando plan...' (en vez de 'Sin operaciones programadas') cuando el boton #generatePlanBtn/scheduleBtn tiene la clase 'is-running' y no hay grupos aun (generacion en curso), evitando que una generacion activa se interprete como plan vacio. Verificado con Playwright: navegar a Cargas y volver a Plan semanal deja dataset.view='plan' y pinta el gantt (gantt-inner presente) sin errores de consola; 455 tests pass; npm run build + npm run check validan.",
+      "source": "bug usuario 2026-09-03 (pantalla en blanco al navegar a Plan semanal); src/web/planning/app.js showWorkspaceView (bloque view==='plan'), renderGantt (mensaje is-running); tests/performance-client-calls.test.mjs (stubs renderTop/renderPlanAlerts/renderDraftExecutiveSummary/renderGantt en el test de navegacion manual); verificacion Playwright local 2026-09-03",
+      "domain": "UI",
+      "updated_at": "2026-09-03T01:15:00-06:00"
+    },
+    {
+      "rule_id": "RULE-PUB-001",
+      "name": "Versionado de planes publicados basado en los snapshots del servidor",
+      "status": "implementada",
+      "rule": "Al publicar un plan (publishCurrentPlan, app.js) el numero de version (V1, V2, ...) se calcula con PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart), donde versionBase ya NO es solo state.publishedVersions: es la union de state.publishedVersions y los planSnapshots cargados del servidor (filtrando items con version > 0 para no contar borradores). Esto corrige el bug donde tras recargar la pagina state.publishedVersions quedaba vacio/desactualizado y nextWeeklyVersion devolvia 1 otra vez, creando registros duplicados de la misma semana sin avanzar de version (dos '31/08/2026' identicos). La etiqueta del desplegable (weeklyPlanIdentifier: '31/08/2026' para V1, '31/08/2026 version 1' para V2, etc.) refleja el version almacenado en cada snapshot (02-storage.js guarda weekStart/version/publicationReason/publishedAt en el manifest). La comparacion con la version anterior (changeSummary / compactVersionDiff) tambien se hace sobre la union de state.publishedVersions y planSnapshots para no perder la version previa al recargar. Aplica a la proxima publicacion; las publicaciones previas duplicadas ya existentes en la hoja no se renumeran automaticamente.",
+      "source": "reporte usuario 2026-09-03 ('al guardar plan no se guarda con un V1... el ultimo publicado dice solo 31/08/2026 y hay 2 registros iguales'); src/web/planning/app.js publishCurrentPlan (versionBase = state.publishedVersions + planSnapshots, previous sobre la union); src/web/planning/planning-workflow-core.js nextWeeklyVersion/weeklyPlanIdentifier; src/server/02-storage.js (manifest weekStart/version/publishedAt); verificacion probe Node 2026-09-03 (nextWeeklyVersion([])=1 defectuoso vs con snapshots=2)",
+      "domain": "PUB",
+      "updated_at": "2026-09-03T02:00:00-06:00"
     }
   ],
-  "updated_at": "2026-09-03T00:30:00-06:00"
+  "updated_at": "2026-09-03T02:00:00-06:00"
 }

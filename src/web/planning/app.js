@@ -1016,6 +1016,12 @@ function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
   });
   if (els.workspaceTitle) els.workspaceTitle.textContent = WORKSPACE_TITLES[section] || "Planeacion de Produccion";
   if (tab) showTab(tab);
+  if (view === "plan") {
+    renderTop();
+    renderPlanAlerts();
+    renderDraftExecutiveSummary();
+    renderGantt();
+  }
   if (view === "loads") renderLoads();
   if (view === "saturation") renderSaturation();
   if (view === "reports") renderReports();
@@ -3591,9 +3597,10 @@ function renderGantt() {
   inner.appendChild(header);
 
   if (!groups.length) {
+    const generating = els.scheduleBtn?.classList.contains("is-running");
     const empty = document.createElement("div");
     empty.className = "gantt-empty";
-    empty.textContent = "Sin operaciones programadas";
+    empty.textContent = generating ? "Generando plan..." : "Sin operaciones programadas";
     inner.appendChild(empty);
     els.ganttCanvas.appendChild(inner);
     return;
@@ -5357,7 +5364,11 @@ async function publishCurrentPlan() {
   try {
     setPublishStatus("Preparando publicacion...", 5);
     const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
-    const version = window.PlanningWorkflowCore.nextWeeklyVersion(state.publishedVersions, weekStart);
+    const versionBase = [
+      ...(state.publishedVersions || []),
+      ...(Array.isArray(planSnapshots) ? planSnapshots : []),
+    ].filter((item) => Number(item?.version || 0) > 0);
+    const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart);
     let publicationReason = "";
     let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     if (version > 1) {
@@ -5376,8 +5387,8 @@ async function publishCurrentPlan() {
         return;
       }
       publicationReason = reason;
-      const previous = [...(state.publishedVersions || [])]
-        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart)
+      const previous = [...(state.publishedVersions || []), ...(Array.isArray(planSnapshots) ? planSnapshots : [])]
+        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart && Number(item?.version || 0) > 0)
         .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
       if (previous?.snapshotId) {
         try {
@@ -6184,9 +6195,12 @@ function activePublishedSnapshotId() {
 }
 
 function reportSourceAllowsOperationTracking() {
-  const active = activePublishedSnapshotId();
-  if (!active) return false;
-  return (reportSnapshot?.snapshotId || "draft") === active;
+  const snapshotId = reportSnapshot?.snapshotId || "draft";
+  if (snapshotId === "draft") return false;
+  const publishedIds = publishedSnapshotIds();
+  const selected = (planSnapshots || []).find((s) => String(s?.snapshotId || s?.id || "") === snapshotId);
+  if (selected) return isPublishedSnapshotOption(selected, publishedIds);
+  return publishedIds.has(snapshotId);
 }
 
 function currentDraftReportSnapshot() {
