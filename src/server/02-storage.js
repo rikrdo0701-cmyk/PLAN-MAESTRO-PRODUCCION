@@ -54,14 +54,20 @@ function PP_getWorkbook_() {
 function PP_ensureWorkbook_(spreadsheet) {
   Object.keys(PP_SHEETS).forEach(function(name) {
     let sheet = spreadsheet.getSheetByName(name);
-    if (!sheet) sheet = spreadsheet.insertSheet(name);
     const headers = PP_SHEETS[name];
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(name);
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
+      return;
+    }
     const current = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
     if (current.join('|') !== headers.join('|')) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
     }
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
   });
 
   const config = spreadsheet.getSheetByName('CONFIG');
@@ -95,7 +101,57 @@ function PP_ensureWorkbook_(spreadsheet) {
   }
 }
 
+var PP_STATE_CACHE_SHEET_ = 'PP_STATE_CACHE';
+
+function PP_stateCacheRevision_(spreadsheet) {
+  try {
+    const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+    return Number(config.PP_STATE_CACHE_REVISION || 0);
+  } catch (error) {
+    return -1;
+  }
+}
+
+function PP_readCachedState_(spreadsheet, revision) {
+  try {
+    if (PP_stateCacheRevision_(spreadsheet) !== Number(revision || 0)) return null;
+    const sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet || sheet.getLastRow() < 2) return null;
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    let json = '';
+    for (let i = 0; i < values.length; i++) json += String(values[i][0] || '');
+    return JSON.parse(json);
+  } catch (error) {
+    return null;
+  }
+}
+
+function PP_writeCachedState_(spreadsheet, revision, state) {
+  try {
+    let sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet) sheet = spreadsheet.insertSheet(PP_STATE_CACHE_SHEET_);
+    const json = JSON.stringify(state);
+    const CHUNK = 48000;
+    const chunks = [];
+    for (let j = 0; j < json.length; j += CHUNK) chunks.push([json.slice(j, j + CHUNK)]);
+    if (sheet.getLastRow() > 0) sheet.clearContents();
+    sheet.getRange(1, 1).setValue('CHUNK');
+    if (chunks.length) sheet.getRange(2, 1, chunks.length, 1).setValues(chunks);
+    PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: Number(revision || 0) });
+  } catch (error) {}
+}
+
 function PP_readState_(spreadsheet) {
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const revision = Number(config.revision || 0);
+  const cached = PP_readCachedState_(spreadsheet, revision);
+  if (cached) return cached;
+  const state = PP_buildState_(spreadsheet);
+  PP_writeCachedState_(spreadsheet, revision, state);
+  return state;
+}
+
+function PP_buildState_(spreadsheet) {
   const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
   const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
   const capabilities = PP_readRows_(spreadsheet.getSheetByName('CAPACIDADES'));
@@ -765,9 +821,16 @@ function PP_payloadStore_() {
   }
   return {
     getProperty: function(key) {
-      const entries = PP_readRows_(PP_getPayloadSheet_());
-      const index = findIndex_(entries, key);
-      return index >= 0 ? String(entries[index].VALUE) : null;
+      const sheet = PP_getPayloadSheet_();
+      if (!sheet || sheet.getLastRow() < 2) return null;
+      const keysColumn = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+      for (let index = 0; index < keysColumn.length; index += 1) {
+        if (String(keysColumn[index][0] || '') === key) {
+          const valueCell = sheet.getRange(index + 2, 2, 1, 1).getDisplayValues();
+          return valueCell[0][0] != null ? String(valueCell[0][0]) : null;
+        }
+      }
+      return null;
     },
     setProperty: function(key, value) {
       const sheet = PP_getPayloadSheet_();
@@ -834,6 +897,27 @@ function PP_payloadStore_() {
       const out = {};
       PP_readRows_(PP_getPayloadSheet_()).forEach(function(row) { out[String(row.KEY || '')] = String(row.VALUE); });
       return out;
+    },
+    getManifestProperties: function() {
+      const sheet = PP_getPayloadSheet_();
+      if (!sheet || sheet.getLastRow() < 2) return {};
+      const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+      const lastRow = sheet.getLastRow();
+      const keysColumn = sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+      const manifestRows = [];
+      for (let index = 0; index < keysColumn.length; index += 1) {
+        const key = String(keysColumn[index][0] || '');
+        if (key.indexOf(prefix) !== 0) continue;
+        const snapshotId = key.slice(prefix.length);
+        if (snapshotId && snapshotId.indexOf('::') < 0) manifestRows.push({ row: index + 2, key: key });
+      }
+      if (!manifestRows.length) return {};
+      const out = {};
+      manifestRows.forEach(function(entry) {
+        const valueCell = sheet.getRange(entry.row, 2, 1, 1).getDisplayValues();
+        out[entry.key] = valueCell[0][0] != null ? String(valueCell[0][0]) : '';
+      });
+      return out;
     }
   };
 }
@@ -891,6 +975,7 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
     PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
     throw error;
   }
+  PP_upsertManifestIndexRecord_(snapshotId, manifest, payload);
   const transaction = {
     properties: properties, key: key, previousValue: previousValue,
     previousManifest: previousManifest, newManifest: manifest
@@ -900,9 +985,9 @@ function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
 }
 
 function PP_readPlanSnapshotPayload_(snapshotId) {
+  const properties = PP_payloadStore_();
   const key = PP_planSnapshotPayloadKey_(snapshotId);
-  const values = PP_payloadStore_().getProperties();
-  const value = values[key] == null ? null : values[key];
+  const value = properties.getProperty(key);
   if (value == null) return null;
   try {
     const parsed = JSON.parse(value);
@@ -911,7 +996,7 @@ function PP_readPlanSnapshotPayload_(snapshotId) {
     const generation = String(parsed.generation || '');
     for (let index = 0; index < Number(parsed.chunks); index += 1) {
       const chunkKey = key + (generation ? '::' + generation : '') + '::' + index;
-      const rawChunk = values[chunkKey] == null ? null : values[chunkKey];
+      const rawChunk = properties.getProperty(chunkKey);
       if (rawChunk != null) serialized += JSON.parse(rawChunk);
     }
     return JSON.parse(serialized);
@@ -933,6 +1018,7 @@ function PP_deletePlanSnapshotPayload_(snapshotId) {
     }
   } catch (ignored) {}
   properties.deleteMany(keys);
+  PP_removeManifestIndexRecord_(snapshotId);
 }
 
 function PP_clearDraftSnapshot_(spreadsheet) {
@@ -1015,10 +1101,89 @@ function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
   }
 }
 
+function PP_manifestIndexKey_() { return 'SNAPSHOT_MANIFESTS_INDEX'; }
+
+function PP_readManifestIndex_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PP_manifestIndexKey_());
+    if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed; }
+  } catch (ignored) {}
+  return null;
+}
+
+function PP_writeManifestIndex_(list) {
+  try { PropertiesService.getScriptProperties().setProperty(PP_manifestIndexKey_(), JSON.stringify(list)); } catch (ignored) {}
+}
+
+function PP_manifestToRecord_(manifest, snapshotId, payload) {
+  return {
+    snapshotId: snapshotId,
+    generatedAt: String(manifest.generatedAt || payload.generatedAt || payload.savedAt || ''),
+    user: String(manifest.user || ''),
+    planStart: String(manifest.planStart || payload.planStart || ''),
+    horizonDays: Number(manifest.horizonDays || 0),
+    operations: Number(manifest.operations != null ? manifest.operations : Number(manifest.operations || 0)),
+    weekStart: String(manifest.weekStart || manifest.planStart || payload.planStart || ''),
+    version: Number(manifest.version || 0),
+    publicationReason: String(manifest.publicationReason || ''),
+    changeSummary: manifest.changeSummary || null,
+    publishedAt: String(manifest.publishedAt || '')
+  };
+}
+
+function PP_upsertManifestIndexRecord_(snapshotId, manifest, payload) {
+  try {
+    const list = PP_readManifestIndex_() || [];
+    const record = PP_manifestToRecord_(manifest, snapshotId, payload || {});
+    const index = list.findIndex(function(item) { return item.snapshotId === snapshotId; });
+    if (index >= 0) list[index] = record; else list.push(record);
+    PP_writeManifestIndex_(list);
+  } catch (ignored) {}
+}
+
+function PP_removeManifestIndexRecord_(snapshotId) {
+  const list = PP_readManifestIndex_();
+  if (!list) return;
+  try { PP_writeManifestIndex_(list.filter(function(item) { return item.snapshotId !== snapshotId; })); } catch (ignored) {}
+}
+
+function PP_ensureManifestIndex_() {
+  const existing = PP_readManifestIndex_();
+  if (existing && existing.length) return existing;
+  const manifests = PP_payloadStore_().getManifestProperties();
+  const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+  const list = [];
+  Object.keys(manifests).forEach(function(propertyKey) {
+    if (propertyKey.indexOf(prefix) !== 0) return;
+    const snapshotId = propertyKey.slice(prefix.length);
+    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0) return;
+    try {
+      const manifest = JSON.parse(manifests[propertyKey]);
+      if (!manifest || !manifest.chunks) return;
+      list.push(PP_manifestToRecord_(manifest, snapshotId, {}));
+    } catch (ignored) {}
+  });
+  PP_writeManifestIndex_(list);
+  return list;
+}
+
 function PP_listPlanSnapshots_(spreadsheet) {
-  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).concat(PP_readRows_(spreadsheet.getSheetByName('BORRADOR_PLAN')));
   const grouped = {};
-  rows.forEach(function(row) {
+  const historySheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  if (historySheet && historySheet.getLastRow() >= 2) {
+    const historyHeader = historySheet.getRange(1, 1, 1, historySheet.getLastColumn()).getDisplayValues()[0];
+    const snapshotCol = historyHeader ? historyHeader.indexOf('SNAPSHOT_ID') : -1;
+    if (snapshotCol >= 0) {
+      const ids = historySheet.getRange(2, snapshotCol + 1, historySheet.getLastRow() - 1, 1).getDisplayValues();
+      ids.forEach(function(cell) {
+        const snapshotId = String(cell[0] || '').trim();
+        if (!snapshotId) return;
+        if (!grouped[snapshotId]) grouped[snapshotId] = { snapshotId: snapshotId, generatedAt: '', user: '', planStart: '', horizonDays: 0, operations: 0 };
+        grouped[snapshotId].operations += 1;
+      });
+    }
+  }
+  PP_readRows_(spreadsheet.getSheetByName('BORRADOR_PLAN')).forEach(function(row) {
     const snapshotId = String(row.SNAPSHOT_ID || '').trim();
     if (!snapshotId) return;
     if (!grouped[snapshotId]) {
@@ -1034,20 +1199,15 @@ function PP_listPlanSnapshots_(spreadsheet) {
     grouped[snapshotId].operations += 1;
   });
   const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
-  const properties = PP_payloadStore_().getProperties();
-  Object.keys(properties).forEach(function(propertyKey) {
-    if (propertyKey.indexOf(prefix) !== 0) return;
-    const snapshotId = propertyKey.slice(prefix.length);
+  PP_ensureManifestIndex_().forEach(function(record) {
+    const snapshotId = String(record.snapshotId || '');
     if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0) return;
-    let manifest = null;
-    try { manifest = JSON.parse(properties[propertyKey]); } catch (ignored) {}
-    if (!manifest || !manifest.chunks) return;
     const metadata = {
-      snapshotId: snapshotId, generatedAt: String(manifest.generatedAt || ''), user: String(manifest.user || ''),
-      planStart: String(manifest.planStart || ''), horizonDays: Number(manifest.horizonDays || 0), operations: Number(manifest.operations || 0),
-      weekStart: String(manifest.weekStart || manifest.planStart || ''), version: Number(manifest.version || 0),
-      publicationReason: String(manifest.publicationReason || ''), changeSummary: manifest.changeSummary || null,
-      publishedAt: String(manifest.publishedAt || '')
+      snapshotId: snapshotId, generatedAt: String(record.generatedAt || ''), user: String(record.user || ''),
+      planStart: String(record.planStart || ''), horizonDays: Number(record.horizonDays || 0), operations: Number(record.operations || 0),
+      weekStart: String(record.weekStart || record.planStart || ''), version: Number(record.version || 0),
+      publicationReason: String(record.publicationReason || ''), changeSummary: record.changeSummary || null,
+      publishedAt: String(record.publishedAt || '')
     };
     grouped[snapshotId] = Object.assign({}, metadata, grouped[snapshotId] || {}, {
       weekStart: metadata.weekStart, version: metadata.version, publicationReason: metadata.publicationReason,

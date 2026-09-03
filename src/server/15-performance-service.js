@@ -48,6 +48,40 @@ function getAppStateIfChanged(clientRevision, options) {
   return state;
 }
 
+function debugStateCacheInfo() {
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const sheet = spreadsheet.getSheetByName('PP_STATE_CACHE');
+  let chunks = -1;
+  let sampleLengths = [];
+  if (sheet) {
+    chunks = Math.max(0, sheet.getLastRow() - 1);
+    const startRow = 2;
+    const n = Math.min(chunks, 3);
+    if (n > 0) {
+      const vals = sheet.getRange(startRow, 1, n, 1).getValues();
+      for (let i = 0; i < vals.length; i++) sampleLengths.push(String(vals[i][0] || '').length);
+    }
+  }
+  return {
+    revision: Number(config.revision || 0),
+    cacheRevision: Number(config.PP_STATE_CACHE_REVISION || 0),
+    cacheSheetExists: Boolean(sheet),
+    chunks: chunks,
+    sampleLengths: sampleLengths,
+    readTest: (function() {
+      try {
+        const cached = PP_readCachedState_(spreadsheet, Number(config.revision || 0));
+        if (!cached) return { hit: false, reason: 'null' };
+        return { hit: true, ops: (cached.operations || []).length };
+      } catch (error) {
+        return { hit: false, reason: String(error && error.message || error) };
+      }
+    })()
+  };
+}
+
 function getMaterialsForOt(ot, clientRevision) {
   const target = PP_normalizeKey_(ot);
   if (!target) throw new Error('Falta OT para consultar materiales');
