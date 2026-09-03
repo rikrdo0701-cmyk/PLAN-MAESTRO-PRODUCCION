@@ -5336,13 +5336,32 @@ async function publishCurrentPlan() {
     showToast("Genera el plan antes de publicarlo");
     return;
   }
+  const publishLabel = els.publishPlanBtn?.querySelector("[data-schedule-label]");
+  const publishPercent = els.publishPlanBtn?.querySelector("[data-schedule-percent]");
+  const publishFill = els.publishPlanBtn?.querySelector("[data-schedule-fill]");
+  const setPublishStatus = (message, percent = null) => {
+    if (publishLabel) publishLabel.textContent = message;
+    if (publishPercent) {
+      if (percent != null) {
+        publishPercent.textContent = `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+        publishPercent.hidden = false;
+      } else {
+        publishPercent.textContent = "";
+        publishPercent.hidden = true;
+      }
+    }
+    if (publishFill) publishFill.style.width = (percent != null ? Math.max(0, Math.min(100, percent)) : 0) + "%";
+  };
   els.publishPlanBtn.disabled = true;
+  els.publishPlanBtn.classList.add("is-running");
   try {
+    setPublishStatus("Preparando publicacion...", 5);
     const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
     const version = window.PlanningWorkflowCore.nextWeeklyVersion(state.publishedVersions, weekStart);
     let publicationReason = "";
     let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     if (version > 1) {
+      setPublishStatus(`Publicando ${window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version)}...`, 10);
       const identifier = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
       const result = await openPlanningDialog({
         title: "Publicar nueva version",
@@ -5362,6 +5381,7 @@ async function publishCurrentPlan() {
         .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
       if (previous?.snapshotId) {
         try {
+          setPublishStatus("Comparando con la version anterior...", 25);
           const previousSnapshot = isAppsScriptRuntime()
             ? await callAppsScript("getPlanSnapshot", previous.snapshotId)
             : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(previous.snapshotId)}`);
@@ -5382,11 +5402,13 @@ async function publishCurrentPlan() {
       changeSummary,
       publishedAt: new Date().toISOString(),
     };
+    setPublishStatus("Publicando plan...", version === 1 ? 40 : 55);
     const result = isAppsScriptRuntime()
       ? await callAppsScript("publishDraftPlan", payload)
       : { ok: true, activeVersion: await persistPlanSnapshot() };
     const active = result?.activeVersion || result;
     if (active?.snapshotId) {
+      setPublishStatus("Guardando version publicada...", 75);
       state.activePublishedVersionId = active.snapshotId;
       state.publishedVersions = [
         ...(state.publishedVersions || []).filter((item) => item.snapshotId !== active.snapshotId),
@@ -5394,12 +5416,20 @@ async function publishCurrentPlan() {
       ];
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
     }
+    setPublishStatus("Finalizando publicacion...", 90);
     await saveAppSheet(false);
     saveAndRender("Plan publicado");
   } catch (error) {
     showToast(`No se pudo publicar: ${error.message}`);
   } finally {
     els.publishPlanBtn.disabled = false;
+    els.publishPlanBtn.classList.remove("is-running", "is-indeterminate");
+    const liveLabel = els.publishPlanBtn?.querySelector("[data-schedule-label]") || publishLabel;
+    const livePercent = els.publishPlanBtn?.querySelector("[data-schedule-percent]") || publishPercent;
+    const liveFill = els.publishPlanBtn?.querySelector("[data-schedule-fill]") || publishFill;
+    if (liveLabel) liveLabel.textContent = "Publicar plan";
+    if (livePercent) { livePercent.textContent = ""; livePercent.hidden = true; }
+    if (liveFill) liveFill.style.width = "0%";
   }
 }
 

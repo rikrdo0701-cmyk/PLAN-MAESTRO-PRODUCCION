@@ -354,6 +354,38 @@ html, body {
   100% { transform: translateX(320%); }
 }
 
+#publishPlanBtn { position: relative; padding-bottom: 7px; gap: 6px; }
+#publishPlanBtn .schedule-percent {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+#publishPlanBtn .schedule-progress {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+#publishPlanBtn .schedule-progress-fill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background: #fff;
+  transition: width 260ms ease;
+}
+#publishPlanBtn.is-running .schedule-progress-fill { background: #c8f0ec; }
+
 .button.small { min-height: 30px; padding: 0 9px; font-size: 11px; }
 
 .button-icon,

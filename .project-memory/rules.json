@@ -747,7 +747,16 @@
       "source": "definicion de usuario 2026-09-02 ('que complete todas las OTs en una sola pasada; la estrategia solo elige la siguiente op, no corta por tiempo'); motor GAS compartido (PM_run_v4_8_13) como referencia; src/web/planning/planner-core.js checkPlanningBudget (guard completeAll en timerExceeded/counterExceeded), schedulePlan (completeAll + parada temprana con evaluated.length>=1), schedulePlanOnce (performanceState.completeAll); src/web/planning/app.js handleGeneratePlan (completeAll:true + toast de OTs sin hueco); test 2026-09-02 en tests/planner-core.test.mjs ('completeAll no corta la colocacion por presupuesto de tiempo y completa todas', 113 tests) ",
       "domain": "Balanceo",
       "updated_at": "2026-09-02T12:00:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-014",
+      "name": "Avance visual en el boton Publicar plan",
+      "status": "implementada",
+      "rule": "El boton 'Publicar plan' (publishPlanBtn) muestra avance visual con porcentaje y barra de progreso durante la publicacion, siguiendo la misma estructura HTML/CSS que el boton 'Generar plan'. El boton tiene data-schedule-label, data-schedule-percent y data-schedule-fill. Durante la publicacion, las fases muestran: 'Preparando publicacion...' (5%), 'Publicando <identifier>...' (10%, solo version > 1), 'Comparando con la version anterior...' (25%, solo si hay previa), 'Publicando plan...' (40% version 1 / 55% version > 1), 'Guardando version publicada...' (75%), 'Finalizando publicacion...' (90%). El boton gana clase 'is-running' para activar la animacion de spin en el icono. El finally INCONDICIONAL restaura el label a 'Publicar plan' y quita la clase is-running, similar al reset del boton Generar plan. La restauracion usa querySelector redundante para el label del DOM actualizado. El versionado consecutivo (nextWeeklyVersion) ya existia: cada publicacion en la misma semana recibe version N+1 con dialogo de motivo; en version > 1 se compara con la version anterior via compactVersionDiff.",
+      "source": "definicion de usuario 2026-09-03 ('quiero algo visual que me diga cuando se este publicando el plan el avance'); src/web/planning/app.js publishCurrentPlan (setPublishStatus helper, DOM updates, finally reset), scheduleCurrentPlanImpl (referencia de patron); src/web/planning/index.template.html publishPlanBtn con data-schedule-label/percent/fill; src/web/planning/styles.css #publishPlanBtn .schedule-progress; tests: 455 pass; Probe Playwright DOM (publish-progress structure verified); RULE-BAL-012 (patron hermano para Generar plan)",
+      "domain": "UI",
+      "updated_at": "2026-09-03T00:30:00-06:00"
     }
   ],
-  "updated_at": "2026-09-02T12:00:00-06:00"
+  "updated_at": "2026-09-03T00:30:00-06:00"
 }
