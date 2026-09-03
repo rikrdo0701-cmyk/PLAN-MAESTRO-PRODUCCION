@@ -3822,6 +3822,10 @@ function startDrag(event) {
     showToast(`OT ${op.ot} bloqueada; desbloqueala para moverla`);
     return;
   }
+  if (otHasCompletedOperation(op.ot)) {
+    showToast(`OT ${op.ot} tiene operaciones completadas; no se puede mover`);
+    return;
+  }
   checkpointState();
   const lane = bar.parentElement;
   const ganttRect = els.ganttCanvas.getBoundingClientRect();
@@ -6571,7 +6575,9 @@ function renderSubcontractReport() {
   renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportFutureDays, els.subcontractReportCount, selection);
   els.subcontractPrintContext.textContent = formatReportDateTime(new Date());
   els.subcontractReport.classList.toggle("report-show-all-table", selection.showAll);
+  const statusActions = reportSourceAllowsOperationTracking();
   const headers = ["OT", "Articulo", "Tipo de subcontrato", "Dias", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
+  if (statusActions) headers.push("Estado");
   const body = selection.rows.map((row) => {
     const missingType = !row.type;
     const missingDays = !(row.days > 0);
@@ -6585,10 +6591,19 @@ function renderSubcontractReport() {
       <td>${escapeHtml(formatReportDate(row.end))}</td>
       <td>${escapeHtml(formatReportTime(row.end))}</td>
       <td>${reportCommentEditor(row.operationIds, row.comment)}</td>
+      ${statusActions ? `<td class="report-status-action-column">${subcontractPlanStatusCell(row)}</td>` : ""}
     </tr>`;
   }).join("");
-  els.subcontractReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin subcontratos para el filtro seleccionado")}</tbody>`;
+  els.subcontractReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin subcontratos para el filtro seleccionado")}</tbody>`;
   bindReportCommentInputs(els.subcontractReport);
+  if (statusActions) bindPlanStatusActions(els.subcontractReport);
+}
+
+function subcontractPlanStatusCell(row) {
+  const key = row.statusOperation ? operationCompletionKey(row.statusOperation) : "";
+  if (!key) return "";
+  const completed = row.statusCompleted;
+  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
 }
 
 function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
@@ -6613,6 +6628,9 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
   return [...grouped.values()].map((group) => {
     const configuration = reportSnapshot ? {} : (state.otConfigurations[group.ot] || {});
     const workOrder = workOrderForOt(group.ot);
+    const reportOps = reportOperationsSource();
+    const statusOperation = reportOps.find((op) => group.operationIds.includes(op.id));
+    const completed = group.statuses.every(Boolean);
     return {
       ot: group.ot,
       article: workOrder?.item || state.operations.find((op) => op.ot === group.ot)?.parte || "",
@@ -6623,7 +6641,9 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
       operations: uniq(group.operations),
       operationIds: uniq(group.operationIds),
       comment: group.comments[0] || "",
-      planStatus: group.statuses.every(Boolean) ? "COMPLETADA_PLAN" : "PENDIENTE",
+      planStatus: completed ? "COMPLETADA_PLAN" : "PENDIENTE",
+      statusOperation: statusOperation || null,
+      statusCompleted: completed,
     };
   }).sort((a, b) => a.start - b.start || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }));
 }
@@ -6758,7 +6778,7 @@ function bindPlanStatusActions(container) {
 }
 
 function planStatusButtons(key) {
-  return [els.operatorReport, els.adjusterReport].flatMap((container) =>
+  return [els.operatorReport, els.adjusterReport, els.subcontractReport].flatMap((container) =>
     Array.from(container?.querySelectorAll("[data-plan-status-key]") || [])
   ).filter((button) => button.dataset.planStatusKey === key);
 }
@@ -6853,6 +6873,7 @@ function renderPlanStatusRow(key) {
     els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount,
     (op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }), renderAdjusterReport
   );
+  renderSubcontractReport();
   if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
 }
 
@@ -6946,8 +6967,41 @@ async function performToggleOperationPlanStatus(key) {
     operation.needsReschedule = false;
     operation.log = appendLog(operation.log, "COMPLETADA_PLAN_APP");
   }
+  completePriorSequenceOperations(operation?.ot || current?.ot || "", operation, key);
   return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,
     type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
+}
+
+function completePriorSequenceOperations(ot, completedOperation, completedKey) {
+  if (!ot || !Array.isArray(state.operations)) return;
+  const sequence = state.operations
+    .filter((op) => String(op.ot) === String(ot))
+    .sort((a, b) => sequenceSort(a, b) || ((opStart(a)?.getTime() || 0) - (opStart(b)?.getTime() || 0)));
+  const targetIndex = sequence.findIndex((op) => op === completedOperation || operationCompletionKey(op) === completedKey);
+  if (targetIndex < 0) return;
+  for (let i = 0; i < targetIndex; i++) {
+    const prior = sequence[i];
+    const priorKey = operationCompletionKey(prior);
+    if (!priorKey || state.operationPlanStatuses?.[priorKey]?.status === "COMPLETADA_PLAN") continue;
+    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
+    state.operationPlanStatuses[priorKey] = {
+      key: priorKey,
+      type: isToolChangeReportOperation(prior) ? "TOOL_CHANGE" : "OPERATION",
+      status: "COMPLETADA_PLAN",
+      operationId: prior.id || "",
+      ot: prior.ot || "",
+      sequence: Number(prior.secuencia || 0),
+      ct: prior.ct || "",
+      operator: prior.operador || "",
+      machine: prior.maquina || "",
+      article: prior.parte || "",
+      description: prior.descripcion || "",
+      completedAt: new Date().toISOString(),
+    };
+    prior.planStatus = "COMPLETADA_PLAN";
+    prior.needsReschedule = false;
+    prior.log = appendLog(prior.log, "COMPLETADA_PLAN_APP");
+  }
 }
 
 async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, message) {
@@ -9819,6 +9873,15 @@ function isJobScheduled(ot) {
 
 function isJobLocked(ot) {
   return state.lockedOts.includes(ot);
+}
+
+function otHasCompletedOperation(ot) {
+  if (Array.isArray(state.operations)) {
+    if (state.operations.some((op) => String(op.ot) === ot && isPlanCompletedOperation(op))) return true;
+  }
+  const statuses = state.operationPlanStatuses || {};
+  return Object.keys(statuses).some((statusKey) =>
+    String(statuses[statusKey]?.ot) === ot && statuses[statusKey]?.status === "COMPLETADA_PLAN");
 }
 
 function normalizeStatus(value) {

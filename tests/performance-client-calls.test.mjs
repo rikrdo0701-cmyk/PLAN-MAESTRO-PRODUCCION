@@ -624,6 +624,7 @@ function loadPlanStatus(options = {}) {
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
     "selectedJobOt", "escapeHtml", "operatorReportSelection", "adjusterReportSelection", "renderReportFilterStatus",
     "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport", "reportOperationsSource",
+    "sequenceSort", "opStart", "renderSubcontractReport",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -646,6 +647,7 @@ function loadPlanStatus(options = {}) {
     },
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`,
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {}, rerenderReport, () => {}, () => reportSource,
+    (a, b) => (Number(a?.secuencia || 0) - Number(b?.secuencia || 0)), () => null, () => {},
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport,

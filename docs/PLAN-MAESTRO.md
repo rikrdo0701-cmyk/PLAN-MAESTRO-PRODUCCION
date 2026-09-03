@@ -62,7 +62,7 @@ Restaurar publicado como borrador (reconciliación) o consultar histórico
 
 - `selectedOts`: lista de OTs del borrador. Gantt, KPI, backlog, cargas y reportes usan la misma lista. En Reportes, `Borrador` muestra el borrador actual en memoria; `PLANES_HISTORICOS` se usa solo cuando el usuario selecciona un publicado.
 - `lockedOts`: OTs bloqueadas (no se reprograman).
-- `operationPlanStatuses`: estados por operación (`PENDIENTE` / `COMPLETADA_PLAN`).
+- `operationPlanStatuses`: estados por operación (`PENDIENTE` / `COMPLETADA_PLAN`). Regla de bloqueo: al completar al menos una operación de una OT, esa OT queda inmóvil en el gantt (no se arrastra), no se puede mover a backlog (`canRemoveSelectedOt` y `otHasCompletedOperation`), y las operaciones completas no se reprograman ni consumen carga. Completar una operación marca en cascada (`COMPLETADA_PLAN`) todas las anteriores de la OT por orden de secuencia (`completePriorSequenceOperations`).
 
 ### 3.2 Sincronización NetSuite
 

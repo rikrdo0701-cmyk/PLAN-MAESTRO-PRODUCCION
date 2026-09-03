@@ -180,9 +180,23 @@
   function canRemoveSelectedOt(state, ot) {
     const key = normalize(ot);
     const locked = new Set((state?.lockedOts || []).map(normalize).filter(Boolean));
-    return locked.has(key)
-      ? { allowed: false, reason: "Desbloquea la OT antes de retirarla del plan" }
-      : { allowed: true, reason: "" };
+    if (locked.has(key)) {
+      return { allowed: false, reason: "Desbloquea la OT antes de retirarla del plan" };
+    }
+    if (otHasCompletedOperation_(state, key)) {
+      return { allowed: false, reason: "La OT tiene operaciones completadas; no se puede mover a backlog" };
+    }
+    return { allowed: true, reason: "" };
+  }
+
+  function otHasCompletedOperation_(state, key) {
+    const statuses = state?.operationPlanStatuses || {};
+    if (Object.keys(statuses).some((statusKey) => {
+      const entry = statuses[statusKey];
+      return normalize(entry?.ot) === key && normalize(entry?.status || entry?.planStatus) === "COMPLETADA_PLAN";
+    })) return true;
+    return Array.isArray(state?.operations) && state.operations.some((op) =>
+      normalize(op?.ot) === key && normalize(op?.planStatus) === "COMPLETADA_PLAN");
   }
 
   function ganttOperationTiming(productiveMinutes, start, end) {
