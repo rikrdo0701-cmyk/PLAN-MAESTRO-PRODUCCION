@@ -826,6 +826,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     next.horaFin = formatTime(assignment.end);
     next.needsReschedule = false;
     next.planStatus = "PENDIENTE";
+    if (assignment.setupMinutes > 0 && !(Number(next.tiempoSetup) > 0)) next.tiempoSetup = assignment.setupMinutes;
     Object.assign(next, waitDiagnostic(context, assignment));
     next.log = appendLog(next.log, assignment.subcontractRule
       ? `SUBCONTRATO ${assignment.subcontractRule.name || "DEFAULT"}`

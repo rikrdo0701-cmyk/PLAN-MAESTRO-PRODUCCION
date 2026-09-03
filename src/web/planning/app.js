@@ -4929,9 +4929,12 @@ onProgress: (event) => {
   } finally {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
-    if (label) label.textContent = "Generar plan";
-    if (percentEl) { percentEl.textContent = ""; percentEl.hidden = true; }
-    if (fillEl) fillEl.style.width = "0%";
+    const liveLabel = els.scheduleBtn?.querySelector("[data-schedule-label]") || label;
+    const livePercent = els.scheduleBtn?.querySelector("[data-schedule-percent]") || percentEl;
+    const liveFill = els.scheduleBtn?.querySelector("[data-schedule-fill]") || fillEl;
+    if (liveLabel) liveLabel.textContent = "Generar plan";
+    if (livePercent) { livePercent.textContent = ""; livePercent.hidden = true; }
+    if (liveFill) liveFill.style.width = "0%";
   }
 }
 
