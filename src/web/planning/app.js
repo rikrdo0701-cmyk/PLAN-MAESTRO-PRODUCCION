@@ -6160,7 +6160,7 @@ async function fetchJson(url) {
 
 async function fetchPlanSnapshot(snapshotId) {
   return isAppsScriptRuntime()
-    ? await callAppsScript("getPlanSnapshot", snapshotId)
+    ? await callAppsScript("getPlanSnapshotLight", snapshotId)
     : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
 }
 

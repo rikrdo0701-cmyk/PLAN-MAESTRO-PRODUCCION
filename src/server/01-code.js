@@ -182,6 +182,13 @@ function getPlanSnapshot(snapshotId) {
   return PP_getPlanSnapshot_(spreadsheet, snapshotId);
 }
 
+function getPlanSnapshotLight(snapshotId) {
+  if (!snapshotId) throw new Error('Falta snapshotId');
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return PP_getPlanSnapshotLight_(spreadsheet, snapshotId);
+}
+
 function restorePublishedPlanAsDraft(snapshotId, currentPayload) {
   return PP_restorePublishedPlanAsDraft_(snapshotId, currentPayload);
 }

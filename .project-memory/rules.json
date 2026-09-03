@@ -614,6 +614,15 @@
       "updated_at": "2026-09-01T15:40:00-06:00"
     },
     {
+      "rule_id": "RULE-GOV-010",
+      "name": "Carga liviana de snapshots para display (getPlanSnapshotLight) evita 'tiempo agotado' en planes grandes",
+      "status": "implementada",
+      "rule": "getPlanSnapshot (02-storage.js PP_getPlanSnapshot_) devolvia, ademas de operations y metadata, el payload COMPLETO del snapshot (result.fullState = PP_readPlanSnapshotPayload_), que para planes grandes (draft y publicados con 672-1757 operaciones mas workOrders/plant/configuracion) excede el limite de tiempo/transferencia de Apps Script: la UI mostraba el toast 'No se pudo abrir el plan guardado: Tiempo agotado al ejecutar getPlanSnapshot' (timeout de 120s del bridge, apps-script-bridge-client.js CALL_TIMEOUT_MS) al cambiar a un plan publicado, y se revertia a 'draft' (reproducido via Playwright local contra el bridge real: getPlanSnapshot no volvia ni en 360s). El flujo de DISPLAY (reportes/cargas/saturacion/PDF del reporte) SOLO necesita operations (filas con tiempos/setup/fechas) + metadata (weekStart/planStart/version/publishedAt), NO el fullState completo; fullState solo lo usan restore/regeneracion (loadIncrementalPlanningBase, compactVersionDiff en publish, preview de restauracion) que llaman getPlanSnapshot directamente. Por eso se agrego PP_getPlanSnapshotLight_ y la funcion Apps Script getPlanSnapshotLight(snapshotId): lee las filas del snapshot igual que getPlanSnapshot (PP_snapshotOperationFromRow_) y toma metadata del indice de manifests (PP_readManifestIndex_) en lugar de leer/transferir el payload completo (skipFullState:true). El cliente (app.js fetchPlanSnapshot, usado por loadPlanSnapshotById) ahora usa callAppsScript('getPlanSnapshotLight', snapshotId) en el camino de display; los flujos pesados siguen llamando getPlanSnapshot. Nota: para publicado, operations salen de las filas PLANES_HISTORICOS (campo TIEMPO_SETUP = row.TIEMPO_SETUP); al igual que en getPlanSnapshot, el setup del publicado proviene de lo guardado en esa hoja al publicarse.",
+      "source": "reproduccion Playwright local 2026-09-03 contra el bridge Apps Script real (toast 'Tiempo agotado al ejecutar getPlanSnapshot'; no volvia en 360s para e4841c36 673 ops ni para draft 672 ops); src/server/02-storage.js PP_getPlanSnapshot_/PP_getPlanSnapshotLight_/PP_snapshotOperationFromRow_; src/server/01-code.js getPlanSnapshotLight; src/web/planning/app.js fetchPlanSnapshot; src/web/shared/apps-script-bridge-client.js CALL_TIMEOUT_MS=120000; tests/build.test.mjs",
+      "domain": "GOV",
+      "updated_at": "2026-09-03T22:30:00-06:00"
+    },
+    {
       "rule_id": "RULE-LOAD-001",
       "name": "Capa 1 - Hidratar el cache local al boot para render instantaneo para visitantes recurrentes",
       "status": "implementada",

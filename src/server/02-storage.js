@@ -1265,69 +1265,78 @@ function PP_readMachineToolHistory_(spreadsheet) {
   }).slice(-2000);
 }
 
-function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
+function PP_getPlanSnapshot_(spreadsheet, snapshotId, options) {
+  const opts = options || {};
   const key = String(snapshotId || '').trim();
   const sourceSheet = key === 'draft' ? 'BORRADOR_PLAN' : 'PLANES_HISTORICOS';
   const rows = PP_readRows_(spreadsheet.getSheetByName(sourceSheet)).filter(function(row) {
     return String(row.SNAPSHOT_ID || '').trim() === key;
   });
-  const fullState = PP_readPlanSnapshotPayload_(key);
+  const fullState = opts.skipFullState ? null : PP_readPlanSnapshotPayload_(key);
+  const manifest = (opts.skipFullState ? (PP_readManifestIndex_() || []).find(function(item) { return item.snapshotId === key; }) || null : null);
   if (!rows.length && !fullState) throw new Error('Plan guardado no encontrado');
   const first = rows[0] || {};
+  const metaState = fullState || manifest || {};
   const result = {
     snapshotId: key,
-    generatedAt: String(first.FECHA_GENERACION || fullState && (fullState.generatedAt || fullState.savedAt) || ''),
-    user: String(first.USUARIO || ''),
-    planStart: String(first.PLAN_INICIO || fullState && fullState.planStart || ''),
-    horizonDays: Number(first.HORIZONTE_DIAS || fullState && fullState.horizonDays || 0),
+    generatedAt: String(first.FECHA_GENERACION || metaState.generatedAt || metaState.savedAt || ''),
+    user: String(first.USUARIO || metaState.user || ''),
+    planStart: String(first.PLAN_INICIO || metaState.planStart || ''),
+    horizonDays: Number(first.HORIZONTE_DIAS || metaState.horizonDays || 0),
     operations: rows.length ? rows.map(function(row, index) {
-      const description = String(row.OP || '');
-      const comments = String(row.COMENTARIOS || '');
-      const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
-      const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
-      return {
-        id: 'snapshot-' + key + '-' + (index + 1),
-        num: Number(row.NUM || index + 1),
-        ot: String(row.OT || ''),
-        parte: String(row.PARTE || ''),
-        descripcion: description,
-        contenido: '',
-        comentario: userComment,
-        prioridad: Number(row.PRIORIDAD || 999),
-        secuencia: Number(row.NUM || index + 1),
-        operador: String(row.OPERADOR || ''),
-        maquina: String(row.MAQ_AREA || ''),
-        tiempoCiclo: Number(row.TC_MIN || 0),
-        tiempoSetup: Number(row.TIEMPO_SETUP || 0),
-        tiempoProd: Number(row.TIEMPO_PROD || 0),
-        fechaInicio: String(row.F_INICIO || ''),
-        horaInicio: String(row.H_INICIO || ''),
-        fechaFin: String(row.F_FIN || ''),
-        horaFin: String(row.H_FIN || ''),
-        tipoInsercion: isToolChange ? 'CAMBIO_HERRAMENTAL' : 'OPERACION',
-        estatus: String(row.ESTATUS || ''),
-        log: isToolChange ? comments : '',
-        locked: PP_bool_(row.BLOQUEADA, false),
-        herramental: String(row.HERRAMENTAL || ''),
-        kitHerramental: String(row.KIT_HERRAMENTAL || ''),
-        subcontractType: String(row.TIPO_SUBCONTRATO || ''),
-        subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
-        pendingPieces: Number(row.PZAS_PENDIENTES || 0),
-        jobType: String(row.TIPO_OT || ''),
-        unitPrice: Number(row.PRECIO_UNITARIO || 0),
-        amount: Number(row.MONTO || 0)
-      };
-    }) : (fullState.operations || []).map(function(operation) { return Object.assign({}, operation); })
+      return PP_snapshotOperationFromRow_(row, key, index);
+    }) : (fullState && fullState.operations || []).map(function(operation) { return Object.assign({}, operation); })
   };
-  if (fullState) {
-    result.weekStart = String(fullState.weekStart || fullState.planStart || '');
-    result.version = Number(fullState.version || 0);
-    result.publicationReason = String(fullState.publicationReason || '');
-    result.changeSummary = fullState.changeSummary || null;
-    result.publishedAt = String(fullState.publishedAt || '');
-  }
+  result.weekStart = String(metaState.weekStart || metaState.planStart || first.PLAN_INICIO || '');
+  result.version = Number(metaState.version || 0);
+  result.publicationReason = String(metaState.publicationReason || '');
+  result.changeSummary = metaState.changeSummary || null;
+  result.publishedAt = String(metaState.publishedAt || '');
   if (fullState) result.fullState = fullState;
   return result;
+}
+
+function PP_getPlanSnapshotLight_(spreadsheet, snapshotId) {
+  return PP_getPlanSnapshot_(spreadsheet, snapshotId, { skipFullState: true });
+}
+
+function PP_snapshotOperationFromRow_(row, key, index) {
+  const description = String(row.OP || '');
+  const comments = String(row.COMENTARIOS || '');
+  const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
+  const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
+  return {
+    id: 'snapshot-' + key + '-' + (index + 1),
+    num: Number(row.NUM || index + 1),
+    ot: String(row.OT || ''),
+    parte: String(row.PARTE || ''),
+    descripcion: description,
+    contenido: '',
+    comentario: userComment,
+    prioridad: Number(row.PRIORIDAD || 999),
+    secuencia: Number(row.NUM || index + 1),
+    operador: String(row.OPERADOR || ''),
+    maquina: String(row.MAQ_AREA || ''),
+    tiempoCiclo: Number(row.TC_MIN || 0),
+    tiempoSetup: Number(row.TIEMPO_SETUP || 0),
+    tiempoProd: Number(row.TIEMPO_PROD || 0),
+    fechaInicio: String(row.F_INICIO || ''),
+    horaInicio: String(row.H_INICIO || ''),
+    fechaFin: String(row.F_FIN || ''),
+    horaFin: String(row.H_FIN || ''),
+    tipoInsercion: isToolChange ? 'CAMBIO_HERRAMENTAL' : 'OPERACION',
+    estatus: String(row.ESTATUS || ''),
+    log: isToolChange ? comments : '',
+    locked: PP_bool_(row.BLOQUEADA, false),
+    herramental: String(row.HERRAMENTAL || ''),
+    kitHerramental: String(row.KIT_HERRAMENTAL || ''),
+    subcontractType: String(row.TIPO_SUBCONTRATO || ''),
+    subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
+    pendingPieces: Number(row.PZAS_PENDIENTES || 0),
+    jobType: String(row.TIPO_OT || ''),
+    unitPrice: Number(row.PRECIO_UNITARIO || 0),
+    amount: Number(row.MONTO || 0)
+  };
 }
 
 function PP_readConfig_(sheet) {
