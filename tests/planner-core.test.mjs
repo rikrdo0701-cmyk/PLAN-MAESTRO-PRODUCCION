@@ -235,6 +235,43 @@ const last = events[events.length - 1];
   ]);
 });
 
+test("completeAll no corta la colocacion por presupuesto de tiempo y completa todas", async () => {
+  const core = loadPlannerCore();
+  const operations = Array.from({ length: 40 }, (_, index) => ({
+    id: `op-${index + 1}`,
+    ot: String(index + 1),
+    secuencia: 1,
+    ct: "100",
+    descripcion: "CORTE",
+    estatus: "PLAN",
+    tiempoProd: 1,
+  }));
+  let now = 0;
+  const result = await core.schedulePlan({
+    selectedOts: operations.map((op) => op.ot),
+    operations,
+    workOrders: operations.map((op) => ({ ot: op.ot })),
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 4, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    collectStats: true,
+    completeAll: true,
+    timeBudgetMs: 1,
+    nowMs: () => { now += 1; return now; },
+  });
+
+  assert.equal(result.lastSchedule.scheduled, 40, "debe programar todas");
+  assert.equal(result.lastSchedule.unscheduled, 0, "ninguna debe quedar sin hueco por presupuesto");
+  assert.equal(result.lastSchedule.performance.aborted, false, "no debe abortar por presupuesto");
+  assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 1, "debe detenerse en la primera estrategia completa");
+});
+
 test("la primera operacion respeta el orden de selectedOts sobre la prioridad calculada", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({

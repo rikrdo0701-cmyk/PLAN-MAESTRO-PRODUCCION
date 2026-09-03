@@ -91,3 +91,16 @@ El smoke test corrio con un fixture de 4 OTs (5 ops). Las estrategias balanced y
 - Build completo (`npm run check` + `npm run build`)
 - Deploy a GitHub Pages (push a main)
 - Prueba en produccion: generar plan con 8 OTs, verificar tiempo < 2 min, boton muestra fases, boton regresa a "Generar plan", plan completo (0 pendientes, 0 conflictos)
+
+## Extension: completeAll (2026-09-02, RULE-BAL-013)
+
+Tras el diagnostico de que el plan quedaba incompleto (54 de 68 OTs "por programar" sin aviso) por aborte de presupuesto en mitad de la colocacion, se agrego el modo `completeAll` (RULE-BAL-013):
+
+- `handleGeneratePlan` (app.js) invoca `schedulePlan(..., { completeAll: true })`.
+- Con `completeAll`, `checkPlanningBudget` ignora tanto el timer (`timeBudgetMs`) como el limite de contador (`budgetCheckLimit`) cuando `performanceState.completeAll === true`: una estrategia SIEMPRE coloca todas las operaciones factibles hasta `pending === 0` o hasta que no quedan candidatos, sin cortarse en mitad por tiempo.
+- La parada temprana se relaja: en `completeAll` el bucle se detiene tras la PRIMERA estrategia completa (0 pendientes, 0 conflictos), no tras la segunda, minimizando el tiempo.
+- La proteccion contra bucles infinitos queda en los limites estructurales (cursor < windowEnd de 366 dias, remaining > 0, contador safety = pending*4), no en el presupuesto de tiempo.
+- En app.js, si `lastSchedule.unscheduled > 0`, se muestra un toast listando las OTs dejadas fuera con su `cause` (UNSCHEDULED, p.ej. SIN_OPERADOR_CONFIGURADO / SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO), en lugar de descartarlas silenciosamente al reducir `selectedOts` a `scheduledOts`.
+- El modo esta DESACTIVADO por defecto en el motor (solo la UI lo activa), por lo que las pruebas unitarias existentes de aborto por presupuesto y la parada temprana estandar siguen funcionando.
+
+Benchmark de referencia en datos limpios (68 OTs, 273 ops): el motor sin presupuesto programa 273/273 en ~4.7 s. Todas las 113 pruebas del motor pasan; `npm run check` y `npm run build:pages` OK.

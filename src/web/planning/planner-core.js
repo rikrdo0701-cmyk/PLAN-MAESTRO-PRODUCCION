@@ -89,8 +89,8 @@
       performanceState.lastProgressElapsedMs = effectiveElapsedMs;
       emitPlanningProgress(performanceState, phase);
     }
-    const timerExceeded = performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
-    const counterExceeded = performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount >= performanceState.budgetCheckLimit;
+    const timerExceeded = performanceState.completeAll !== true && performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
+    const counterExceeded = performanceState.completeAll !== true && performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount >= performanceState.budgetCheckLimit;
     if (performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount % 100000 === 0 && typeof console !== "undefined" && typeof console.warn === "function") {
       console.warn(`[planner-budget] checks=${performanceState.budgetCheckCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
     }
@@ -173,6 +173,7 @@
     const earlyStop = options?.earlyStop !== false;
     const performanceState = createPlanningPerformanceState(options);
     const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
+    const completeAll = options?.completeAll === true;
     const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
     const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
     const fastQualityMode = options?.fastQualityMode === true || inputState?.settings?.fastQualityMode === true ||
@@ -204,7 +205,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         return result;
       }
       const hasCompletePlan = evaluated.some((item) => Number(item.metrics?.unscheduled || 0) === 0 && Number(item.metrics?.operatorConflicts || 0) === 0);
-      if (earlyStop && hasCompletePlan && evaluated.length >= 2) {
+      if (earlyStop && hasCompletePlan && (evaluated.length >= 2 || completeAll)) {
         for (const pending of strategies.slice(evaluated.length)) {
           strategySkips.push({ strategy: pending, reason: "COMPLETE_PLAN_FOUND" });
         }
@@ -262,7 +263,10 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   async function schedulePlanOnce(inputState, options) {
     const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
     const strategy = options?.strategy || "balanced";
-    if (performanceState) performanceState.strategy = strategy;
+    if (performanceState) {
+      performanceState.strategy = strategy;
+      if (options?.completeAll === true) performanceState.completeAll = true;
+    }
     const isDryRun = options?.isDryRun === true || options?.__dryRun === true;
     const strategyStarted = planningNowMs(performanceState);
     if (performanceState) {

@@ -738,7 +738,16 @@
       "source": "definicion de usuario 2026-09-02 ('debe mostrar en el boton como va avanzando entre fases'); src/web/planning/planner-core.js emitPlanningProgress (campo strategy), emitFinalizeProgress (fase finalize:select-best), schedulePlanOnce (performanceState.strategy = strategy); src/web/planning/app.js onProgress (label por fase), scheduleCurrentPlan finally (reset incondicional), scheduleCurrentPlanImpl finally (reset incondicional)",
       "domain": "Balanceo",
       "updated_at": "2026-09-02T00:30:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-013",
+      "name": "El plan siempre completa todas las OTs (completeAll)",
+      "status": "implementada",
+      "rule": "En el flujo de generacion real (handleGeneratePlan, app.js) el motor se invoca con completeAll:true. Con completeAll activo, el presupuesto de tiempo y el limite de chequeos del contador NO abortan la colocacion dentro de una estrategia: checkPlanningBudget ignora tanto el timer (timeBudgetMs) como el limite de contador (budgetCheckLimit) cuando performanceState.completeAll === true, por lo que una estrategia SIEMPRE coloca todas las operaciones posibles hasta pending===0 o hasta que no quedan candidatos factibles (nunca se corta en mitad por tiempo). La parada temprana se relaja: en completeAll el bucle de estrategias se detiene tras la PRIMERA estrategia completa (0 pendientes y 0 conflictos), no tras la segunda, para minimizar el tiempo total. Si ninguna estrategia logra un plan completo (quedan operaciones genuinamente infeasibles por configuracion o capacidad), finalizeMultiStrategyPlan elige la de menos pendientes/conflictos y mejor objective. En app.js, tras el resultado, si hay operaciones sin hueco (lastSchedule.unscheduled > 0) se muestra un toast que enumera las OTs dejadas fuera con su cause (state.lastSchedule.diagnostics UNSCHEDULED, p.ej. SIN_OPERADOR_CONFIGURADO / SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO) en vez de descartarlas silenciosamente al reducir selectedOts a scheduledOts. La proteccion contra bucles infinitos queda a cargo de los limites estructurales ya existentes (cursor < windowEnd de 366 dias, remaining > 0, contador safety = pending*4), no del presupuesto de tiempo. El modo completeAll esta DESACTIVADO por defecto en el motor (solo app.js lo activa), por lo que las pruebas unitarias existentes de aborto por presupuesto siguen pasando.",
+      "source": "definicion de usuario 2026-09-02 ('que complete todas las OTs en una sola pasada; la estrategia solo elige la siguiente op, no corta por tiempo'); motor GAS compartido (PM_run_v4_8_13) como referencia; src/web/planning/planner-core.js checkPlanningBudget (guard completeAll en timerExceeded/counterExceeded), schedulePlan (completeAll + parada temprana con evaluated.length>=1), schedulePlanOnce (performanceState.completeAll); src/web/planning/app.js handleGeneratePlan (completeAll:true + toast de OTs sin hueco); test 2026-09-02 en tests/planner-core.test.mjs ('completeAll no corta la colocacion por presupuesto de tiempo y completa todas', 113 tests) ",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-02T12:00:00-06:00"
     }
   ],
-  "updated_at": "2026-09-02T00:30:00-06:00"
+  "updated_at": "2026-09-02T12:00:00-06:00"
 }

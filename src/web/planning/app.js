@@ -4863,6 +4863,7 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
+      completeAll: true,
       timeBudgetMs: planningPlanTimeBudgetMs(readyOts),
       collectStats: true,
       progressEveryMs: 300,
@@ -4897,6 +4898,14 @@ onProgress: (event) => {
     state = { ...result, selectedOts: (result.lastSchedule?.scheduledOts || []).map(String).filter(Boolean) };
     invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
+    if (Number(summary.unscheduled || 0) > 0) {
+      const leftOut = (summary.diagnostics || [])
+        .filter((item) => item.code === "UNSCHEDULED")
+        .map((item) => `OT ${item.ot}${item.cause ? ` (${item.cause})` : ""}`);
+      const unique = [...new Set(leftOut)];
+      const preview = unique.slice(0, 8).join(", ") + (unique.length > 8 ? ` y ${unique.length - 8} mas` : "");
+      showToast(`No se pudieron programar ${unique.length} OT(s) sin hueco o configuracion: ${preview}`, 9000);
+    }
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     syncDraftReportWeek();
