@@ -785,6 +785,24 @@
       "updated_at": "2026-09-03T00:30:00-06:00"
     },
     {
+      "rule_id": "RULE-BAL-015",
+      "name": "El ancla de hora de ejecucion solo aplica al mismo dia; los dias siguientes respetan el calendario",
+      "status": "implementada",
+      "rule": "Al generar el plan, las operaciones NUEVAS (sin hora de inicio previa, isNewOperation) respetan el  inicio de turno del calendario (7:00 / windowStart) a partir del dia siguiente a la ejecucion; SOLO las operaciones  cuya earliest cae el MISMO dia calendario que la ejecucion se anclan a la hora actual (nowAnchor=executionTime) para  no programar trabajo de hoy hacia el pasado. Antes (2026-09-04) el ancla nowAnchor en computeEarliestStart  (planner-core.js) se aplicaba a TODA operacion nueva sin importar el dia, por lo que la primera operacion del turno de  un operador quedaba programada a la hora exacta en que se pulso 'Generar plan' (p. ej. 7:43, 7:09, 8:10 en vez de  7:00) aunque el operador estuviera ocioso hasta entonces y fuera un dia distinto. Fix: en computeEarliestStart, el  ancla solo se aplica si startOfDay(nowAnchor) == startOfDay(earliest); si la earliest cae en un dia distinto (futuro o  pasado) se respeta el inicio del calendario, no se desplaza a la hora de ejecucion. Esto implementa la regla de usuario  2026-09-04: 'las del dia arrancan posterior a la hora, y los siguientes dias respetan el horario segun el calendario'.  NOTA: hoy (dia de ejecucion) sigue anclandose a 'ahora' a proposito (test 'una operacion nueva del MISMO dia de  ejecucion no inicia antes de la hora actual'); los dias siguientes inician a las 7:00 del calendario (test 'una  operacion nueva de un dia FUTURO respeta el inicio del calendario (07:00)'). El comportamiento intencional original  'a partir de la hora actual para toda OT nueva' (tests anteriores) se restringio para no desplazar el arranque de los  dias siguientes.", 
+      "source": "requisito usuario 2026-09-04 (primera operacion del turno aparece a 8:10/7:43/7:33 en vez de 7:00;  'las del dia arrancan posterior a la hora, y los siguientes dias respetan el horario segun el calendario');  src/web/planning/planner-core.js computeEarliestStart (ancla condicionada al mismo dia calendario, ~L1021);  tests/planner-core.test.mjs (renombrado test 377 + 2 tests nuevos MISMO dia/FUTURO dia); 460 tests pass; check/build OK",
+      "domain": "BAL",
+      "updated_at": "2026-09-04T12:00:00-06:00"
+    },
+    {
+      "rule_id": "RULE-BAL-016",
+      "name": "La escala temporal del Gantt usa el horario real por dia (workSchedule/dailyBreaks/calendarExceptions)",
+      "status": "implementada",
+      "rule": "La escala de tiempo del Gantt (renderGantt y los helpers workWindowMinutes/workMinuteOffset/dateFromWorkOffset en app.js) deja de usar la constante fija 07:00-17:00 (WORK_START_HOUR/WORK_END_HOUR/WORK_DAY_MINUTES = 600 min/dia uniforme) y pasa a usar el horario REAL configurado por dia via window.PlannerCore.effectiveWindows(state, fecha, '', '') resolviendo workSchedule/dailyBreaks/calendarExceptions (los mismos que usa el planner para programar). Cada dia del horizonte aporta sus minutos laborables reales (ganttDayWorkMinutes). El ancho de cada columna de dia (ganttDayColumnWidth) es proporcional a los minutos laborables reales de ese dia (pxPorMinuto = ganttDayWidth/600; dias no laborables = 0 -> columna minima visible), de modo que una barra posicionada como % del total de minutos laborables mapea correctamente a px fisicos. El header y las filas pasan de CSS grid uniforme a flex con columnas de ancho variable. Los ticks de hora (ganttTimeScaleHtml) se dibujan dentro de cada dia segun sus ventanas reales (respeta descansos/dias parciales); los dias no laborables no muestran escala. El drag (moveDrag) y dateFromWorkOffset convierten px<->minutos laborables reales por dia. Antes (2026-09-04) la escala asumia 600 min/dia uniforme e ignoraba los horarios editables de la UI (workSchedule en app.js ~4470, dailyBreaks ~4493, calendarExceptions ~4630), por lo que el tiempo representado no correspondia al calendario real por dia. Decidido por usuario 2026-09-04: 'Usar el horario real por dia'.",
+      "source": "requisito usuario 2026-09-04 ('por que la escala no corresponde al tiempo' -> eleccion 'Usar el horario real por dia'); src/web/planning/app.js renderGantt, ganttDayColumnWidth(s), ganttTimeScaleHtml (por dia), workWindowMinutes/workMinuteOffset/dateFromWorkOffset/addWorkMinutes (rework multi-ventana por dia), ganttWindowsFor/ganttDayWorkMinutes/ganttCumulativeWorkBefore/ganttWithinDayMinute (helpers nuevos); src/web/planning/styles.css .gantt-header/.gantt-row flex con columnas proporcionales, .gantt-row-label/.gantt-lane flex; 460 tests pass; npm run check/build OK",
+      "domain": "BAL",
+      "updated_at": "2026-09-04T13:00:00-06:00"
+    },
+    {
       "rule_id": "RULE-UI-002",
       "name": "Navegar a Plan semanal re-renderiza el plan (evita pantalla en blanco)",
       "status": "implementada",
@@ -812,5 +830,5 @@
       "updated_at": "2026-09-03T03:10:00-06:00"
     }
   ],
-  "updated_at": "2026-09-04T02:40:00-06:00"
+  "updated_at": "2026-09-04T13:00:00-06:00"
 }

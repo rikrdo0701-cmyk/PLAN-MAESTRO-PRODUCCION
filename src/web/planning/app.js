@@ -3591,6 +3591,19 @@ function renderSelectedJobPanel() {
   bindPlanStatusActions(els.selectedJobPanel);
 }
 
+function ganttDayColumnWidth(day) {
+  const pxPerMinute = state.ganttDayWidth / WORK_DAY_MINUTES;
+  const minutes = ganttDayWorkMinutes(day);
+  if (minutes <= 0) return 0;
+  return Math.max(2, Math.round(minutes * pxPerMinute));
+}
+
+function ganttDayColumnWidths(windowStart) {
+  const widths = [];
+  for (let i = 0; i < state.horizonDays; i++) widths.push(ganttDayColumnWidth(addDays(windowStart, i)));
+  return widths;
+}
+
 function renderGantt() {
   const groups = getGanttGroups();
   const window = getPlanWindow();
@@ -3598,6 +3611,8 @@ function renderGantt() {
   const selectedOt = selectedJobOt();
   const zoomLevel = ganttZoomLevelForWidth(state.ganttDayWidth);
   const totalWindowMinutes = workWindowMinutes();
+  const dayWidths = ganttDayColumnWidths(window.start);
+  const totalWidth = 190 + dayWidths.reduce((sum, w) => sum + w, 0);
 
   els.ganttCanvas.innerHTML = "";
   const inner = document.createElement("div");
@@ -3606,14 +3621,12 @@ function renderGantt() {
   inner.style.setProperty("--gantt-day-width", `${state.ganttDayWidth}px`);
   inner.style.setProperty("--gantt-grid-minor-size", `${zoomLevel.minorMinutes / totalWindowMinutes * 100}%`);
   inner.style.setProperty("--gantt-grid-major-size", `${zoomLevel.majorMinutes / totalWindowMinutes * 100}%`);
-  inner.style.setProperty("--gantt-day-minor-size", `${zoomLevel.minorMinutes / WORK_DAY_MINUTES * 100}%`);
-  inner.style.setProperty("--gantt-day-major-size", `${zoomLevel.majorMinutes / WORK_DAY_MINUTES * 100}%`);
-  inner.style.minWidth = `${Math.max(980, 190 + state.horizonDays * state.ganttDayWidth)}px`;
+  inner.style.minWidth = `${Math.max(980, totalWidth)}px`;
 
   const header = document.createElement("div");
   header.className = "gantt-header";
   header.innerHTML = `<div>${escapeHtml(ganttHeaderLabel())}</div>${days
-    .map((day) => `<div class="gantt-day-heading ${isGeneralWorkingDay(day) ? "" : "non-working"}"><span class="gantt-day-title">${formatDayHeader(day)}</span>${ganttTimeScaleHtml(zoomLevel)}</div>`)
+    .map((day, i) => `<div class="gantt-day-heading ${isGeneralWorkingDay(day) ? "" : "non-working"}" style="flex:0 0 ${Math.max(dayWidths[i], 2)}px"><span class="gantt-day-title">${formatDayHeader(day)}</span>${ganttTimeScaleHtml(zoomLevel, day)}</div>`)
     .join("")}`;
   inner.appendChild(header);
 
@@ -3653,14 +3666,25 @@ function renderGantt() {
   els.ganttCanvas.appendChild(inner);
 }
 
-function ganttTimeScaleHtml(zoomLevel) {
+function ganttTimeScaleHtml(zoomLevel, day) {
+  const windows = ganttWindowsFor(day);
+  if (!windows.length) {
+    return `<div class="gantt-time-scale" aria-label="Dia no laborable"></div>`;
+  }
+  let daySpan = 0;
+  for (const w of windows) daySpan += Math.max(0, w.end - w.start);
+  if (daySpan <= 0) return `<div class="gantt-time-scale"></div>`;
   const ticks = [];
-  for (let minute = 0; minute < WORK_DAY_MINUTES; minute += zoomLevel.labelMinutes) {
-    const absoluteMinute = WORK_START_HOUR * 60 + minute;
-    const hour = String(Math.floor(absoluteMinute / 60)).padStart(2, "0");
-    const minuteText = String(absoluteMinute % 60).padStart(2, "0");
-    const edgeClass = minute === 0 ? " first" : "";
-    ticks.push(`<span class="gantt-time-tick${edgeClass}" style="left:${minute / WORK_DAY_MINUTES * 100}%">${hour}:${minuteText}</span>`);
+  let acc = 0;
+  for (const w of windows) {
+    const wm = Math.max(0, w.end - w.start);
+    for (let m = w.start; m < w.end; m += zoomLevel.labelMinutes) {
+      const hour = String(Math.floor(m / 60)).padStart(2, "0");
+      const minuteText = String(m % 60).padStart(2, "0");
+      const left = Math.max(0, Math.min(100, ((acc + Math.max(0, m - w.start)) / daySpan) * 100));
+      ticks.push(`<span class="gantt-time-tick" style="left:${left}%">${hour}:${minuteText}</span>`);
+    }
+    acc += wm;
   }
   return `<div class="gantt-time-scale" aria-label="Escala de tiempo cada ${escapeHtml(zoomLevel.label)}">${ticks.join("")}</div>`;
 }
@@ -9222,33 +9246,94 @@ function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60000);
 }
 
+function ganttWindowsFor(date) {
+  if (window.PlannerCore && typeof window.PlannerCore.effectiveWindows === "function") {
+    const windows = window.PlannerCore.effectiveWindows(state, date, "", "");
+    if (Array.isArray(windows)) return windows;
+  }
+  return isGeneralWorkingDay(date)
+    ? [{ start: WORK_START_HOUR * 60, end: WORK_END_HOUR * 60 }]
+    : [];
+}
+
+function ganttDayWorkMinutes(date) {
+  return (ganttWindowsFor(date) || []).reduce((sum, w) => sum + Math.max(0, (w.end || 0) - (w.start || 0)), 0);
+}
+
+function ganttDayIndexFor(date, windowStart) {
+  const current = new Date(date);
+  const ws = new Date(windowStart);
+  current.setHours(0, 0, 0, 0);
+  ws.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.min(state.horizonDays - 1, Math.round((current - ws) / 86400000)));
+}
+
+function ganttCumulativeWorkBefore(date, windowStart) {
+  const dayIndex = ganttDayIndexFor(date, windowStart);
+  let total = 0;
+  for (let i = 0; i < dayIndex; i++) total += ganttDayWorkMinutes(addDays(windowStart, i));
+  return { dayIndex, total };
+}
+
+function ganttWithinDayMinute(date, dayStart) {
+  const time = date.getTime();
+  let within = 0;
+  for (const w of ganttWindowsFor(dayStart)) {
+    const startMs = dayStart.getTime() + (w.start || 0) * 60000;
+    const endMs = dayStart.getTime() + (w.end || 0) * 60000;
+    if (time <= startMs) continue;
+    within += Math.max(0, Math.min(time, endMs) - startMs) / 60000;
+  }
+  return Math.max(0, within);
+}
+
 function workWindowMinutes() {
-  return state.horizonDays * WORK_DAY_MINUTES;
+  const windowStart = getPlanWindow().start;
+  let total = 0;
+  for (let i = 0; i < state.horizonDays; i++) total += ganttDayWorkMinutes(addDays(windowStart, i));
+  return total;
 }
 
 function workMinuteOffset(date, windowStart) {
-  const dayStart = new Date(windowStart);
+  const { dayIndex, total } = ganttCumulativeWorkBefore(date, windowStart);
+  const dayStart = new Date(date);
   dayStart.setHours(0, 0, 0, 0);
-  const current = new Date(date);
-  const dayIndex = Math.max(0, Math.min(state.horizonDays - 1, Math.floor((current - dayStart) / 86400000)));
-  const minuteOfDay = current.getHours() * 60 + current.getMinutes();
-  const workMinute = Math.max(0, Math.min(WORK_DAY_MINUTES, minuteOfDay - WORK_START_HOUR * 60));
-  return dayIndex * WORK_DAY_MINUTES + workMinute;
+  return total + ganttWithinDayMinute(date, dayStart);
 }
 
 function dateFromWorkOffset(windowStart, offset, boundaryMode = "start") {
-  const bounded = Math.max(0, Math.min(workWindowMinutes(), snap(offset, ganttSnapMinutes())));
-  let dayIndex = Math.floor(bounded / WORK_DAY_MINUTES);
-  let minuteInDay = bounded - dayIndex * WORK_DAY_MINUTES;
-  if (boundaryMode === "end" && bounded > 0 && minuteInDay === 0) {
-    dayIndex -= 1;
-    minuteInDay = WORK_DAY_MINUTES;
+  const totalMinutes = workWindowMinutes();
+  const bounded = Math.max(0, Math.min(totalMinutes, snap(offset, ganttSnapMinutes())));
+  let remaining = bounded;
+  let dayIndex = 0;
+  while (dayIndex < state.horizonDays) {
+    const dayMinutes = ganttDayWorkMinutes(addDays(windowStart, dayIndex));
+    if (remaining < dayMinutes) break;
+    if (remaining === dayMinutes && dayIndex < state.horizonDays - 1) { remaining = 0; dayIndex += 1; break; }
+    remaining -= dayMinutes;
+    dayIndex += 1;
   }
-  dayIndex = Math.min(state.horizonDays - 1, dayIndex);
-  minuteInDay = Math.min(WORK_DAY_MINUTES, minuteInDay);
-  const result = addDays(windowStart, dayIndex);
-  result.setHours(WORK_START_HOUR, 0, 0, 0);
-  return addMinutes(result, minuteInDay);
+  if (remaining === 0 && boundaryMode === "end" && bounded > 0) {
+    const prev = dateFromWorkOffset(windowStart, bounded - 1);
+    const prevDayStart = new Date(prev); prevDayStart.setHours(0, 0, 0, 0);
+    const windows = ganttWindowsFor(prevDayStart);
+    const lastEnd = windows.length ? (windows[windows.length - 1].end || WORK_END_HOUR * 60) : WORK_END_HOUR * 60;
+    return addMinutes(prevDayStart, lastEnd);
+  }
+  const dayStart = new Date(addDays(windowStart, dayIndex));
+  dayStart.setHours(0, 0, 0, 0);
+  const windows = ganttWindowsFor(dayStart);
+  let acc = 0;
+  for (const w of windows) {
+    const wm = Math.max(0, (w.end || 0) - (w.start || 0));
+    if (remaining <= acc + wm) {
+      const startMs = dayStart.getTime() + (w.start || 0) * 60000;
+      return new Date(startMs + (remaining - acc) * 60000);
+    }
+    acc += wm;
+  }
+  const lastEnd = windows.length ? (windows[windows.length - 1].end || WORK_END_HOUR * 60) : WORK_END_HOUR * 60;
+  return addMinutes(dayStart, lastEnd);
 }
 
 function addWorkMinutes(date, minutes, windowStart) {

@@ -1079,8 +1079,7 @@ summary:focus-visible,
 
 .gantt-header,
 .gantt-row {
-  display: grid;
-  grid-template-columns: 190px repeat(var(--gantt-days, 5), minmax(var(--gantt-day-width, 180px), 1fr));
+  display: flex;
 }
 
 .gantt-header {
@@ -1104,7 +1103,7 @@ summary:focus-visible,
   text-align: center;
 }
 
-.gantt-header > div:first-child { position: sticky; left: 0; z-index: 2; justify-content: flex-start; background: var(--surface-subtle); }
+.gantt-header > div:first-child { position: sticky; left: 0; z-index: 2; justify-content: flex-start; background: var(--surface-subtle); flex: 0 0 190px; width: 190px; }
 .gantt-header > div.non-working { background: #f3f4f5; color: #89959b; }
 .gantt-header .gantt-day-heading {
   display: grid;
@@ -1116,6 +1115,7 @@ summary:focus-visible,
   gap: 0;
   padding: 4px 0 0;
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .gantt-day-title { align-self: center; padding: 0 8px; }
 .gantt-time-scale {
@@ -1124,11 +1124,6 @@ summary:focus-visible,
   min-width: 100%;
   height: 28px;
   border-top: 1px solid var(--line-strong);
-  background-image:
-    linear-gradient(to right, #9ca8ae 1px, transparent 1px),
-    linear-gradient(to right, rgba(184, 195, 202, 0.55) 1px, transparent 1px);
-  background-size: var(--gantt-day-major-size) 100%, var(--gantt-day-minor-size) 100%;
-  background-position: left top;
 }
 .gantt-time-tick {
   position: absolute;
@@ -1158,12 +1153,15 @@ summary:focus-visible,
   position: sticky;
   left: 0;
   z-index: 4;
+  flex: 0 0 190px;
+  width: 190px;
   min-width: 0;
   display: grid;
   align-content: center;
   padding: 4px 10px;
   background: inherit;
   border-right: 1px solid var(--line);
+  box-sizing: border-box;
 }
 .gantt-row.job-summary .gantt-row-label { grid-template-columns: 22px minmax(0, 1fr) 18px; gap: 4px; align-items: center; align-content: center; }
 .gantt-row.operation-row .gantt-row-label { grid-template-columns: 18px minmax(0, 1fr); gap: 3px; padding-left: 8px; }
@@ -1191,8 +1189,9 @@ summary:focus-visible,
 .gantt-label-main span { display: block; }
 
 .gantt-lane {
-  grid-column: 2 / -1;
+  flex: 1 1 auto;
   position: relative;
+  min-width: 0;
   background-image:
     linear-gradient(to right, var(--line) 1px, transparent 1px),
     linear-gradient(to right, rgba(215, 221, 226, 0.45) 1px, transparent 1px);

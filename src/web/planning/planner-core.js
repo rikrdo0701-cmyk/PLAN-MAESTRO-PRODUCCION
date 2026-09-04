@@ -1020,7 +1020,11 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     }
     if (context?.nowAnchor && isNewOperation(context, op)) {
       const anchor = ceilToSnap(context.nowAnchor);
-      if (anchor > earliest) earliest = anchor;
+      // El ancla de "hora actual" solo aplica a operaciones del MISMO dia calendario
+      // de ejecucion: evita programar hoy hacia el pasado sin desplazar el arranque
+      // de turno de los dias siguientes (que respetan el inicio del calendario).
+      const onExecutionDay = startOfDay(anchor).getTime() === startOfDay(earliest).getTime();
+      if (onExecutionDay && anchor > earliest) earliest = anchor;
     }
 
     return nextAvailableMoment(context.state, earliest, "", "", context.windowEnd);

@@ -123,6 +123,8 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-BAL-007` | Validación previa de operador en la matriz antes de generar plan | IMPLEMENTADA | definición de usuario 2026-08-27; `app.js` `planner-core.js` |
 | `RULE-BAL-008` | Arranque por orden de Planeado/No planeado; sucesoras optimizables y terminación flexible | IMPLEMENTADA | definición de usuario 2026-08-29; `planner-core.js` |
 | `RULE-BAL-009` | Modo rápido 5 min con keep-best-on-timeout y estrategias acotadas | IMPLEMENTADA | definición de usuario 2026-08-29; `app.js` `planner-core.js` |
+| `RULE-BAL-015` | El ancla de hora de ejecución solo aplica al MISMO día; los días siguientes respetan el calendario (07:00) | IMPLEMENTADA | definición de usuario 2026-09-04; `planner-core.js` `computeEarliestStart`; afina `RULE-OT-015` |
+| `RULE-BAL-016` | La escala temporal del Gantt usa el horario real por día (workSchedule/dailyBreaks/calendarExceptions), con columnas de día proporcionales a sus minutos laborables | IMPLEMENTADA | definición de usuario 2026-09-04; `app.js` `renderGantt`/`workWindowMinutes`/`workMinuteOffset`/`dateFromWorkOffset` rework multi-ventana por día; `styles.css` flex con columnas proporcionales; afina `RULE-BAL-015` (escala) |
 
 ## BOM
 
