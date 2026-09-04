@@ -12,7 +12,7 @@
       "integration_id": "INT-GOOGLE_APPS_SCRIPT",
       "name": "google_apps_script",
       "status": "active",
-      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml; deployment de produccion AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q @201 (2026-08-28). El limite de 200 versiones se libero borrando versiones en la UI (Project History -> Bulk delete versions); quedan 52 (74-123, 171 y 200; 171 usada por el deployment de debug AKfycbw4-zuT y 200 por el deployment de produccion anterior AKfycbzI4...). La Apps Script API no soporta borrar versiones (projects.versions solo create/list/get; DELETE devuelve 404); el borrado solo existe en la UI.",
+      "detail": "Backend (dist/ via clasp) y bridge webapp (?app=bridge) en /exec. Desplegados por .github/workflows/deploy-appscript.yml (corre al hacer push a main con paths src/server/** y src/web/**; re-apunta el deployment de produccion con clasp deploy --deploymentId). Deployment de produccion AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q @283 - GitHub 2644815c8df50901604c2c2e6a821c5fa899e8b4 (2026-09-03, fix getPlanSnapshotLight + permitido en Bridge.html; desplegado EXCLUSIVAMENTE por el workflow GitHub, no por clasp local manual). En un momento intermedio se desplego @282 manualmente por clasp local, pero el push a main hizo que el workflow re-apuntara la produccion a @283 (mismo codigo). El limite de 200 versiones se libero borrando versiones en la UI (Project History -> Bulk delete versions); quedan 52 (74-123, 171 y 200; 171 usada por el deployment de debug AKfycbw4-zuT y 200 por el deployment de produccion anterior AKfycbzI4...). La Apps Script API no soporta borrar versiones (projects.versions solo create/list/get; DELETE devuelve 404); el borrado solo existe en la UI.",
       "hosts": "backend"
     },
     {
@@ -65,5 +65,5 @@
       "hosts": "tooling"
     }
   ],
-  "updated_at": "2026-08-28T20:00:00-06:00"
+  "updated_at": "2026-09-04T00:40:00-06:00"
 }
