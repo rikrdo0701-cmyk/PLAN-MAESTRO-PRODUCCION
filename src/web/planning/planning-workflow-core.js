@@ -693,6 +693,49 @@
     };
   }
 
+  function removeClosedWorkOrdersFromDraft(state, closedOts, nowIso) {
+    const source = state || {};
+    const closed = new Set((Array.isArray(closedOts) ? closedOts : []).map(normalize).filter(Boolean));
+    if (!closed.size) return { ...(source || {}) };
+    const keep = (items) => (items || []).filter((item) => !closed.has(normalize(item)));
+    const keepRow = (row) => !closed.has(normalize(row?.ot));
+    const summaries = { ...(source.closedWorkOrderSummaries || {}) };
+    const workOrderByOt = new Map((source.workOrders || []).map((item) => [normalize(item?.ot), item]));
+    for (const ot of closed) {
+      const current = workOrderByOt.get(ot) || { ot };
+      const existingKey = Object.keys(summaries).find((key) => normalize(key) === ot);
+      if (!existingKey) {
+        const relatedOperations = (source.operations || []).filter((operation) => normalize(operation?.ot) === ot);
+        summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
+      }
+    }
+    const operations = (source.operations || []).filter(keepRow).map((operation) => ({ ...operation }));
+    const selectedOperationRemoved = Boolean(source.selectedOperationId) && !operations
+      .some((operation) => String(operation?.id) === String(source.selectedOperationId));
+    return {
+      ...source,
+      workOrders: (source.workOrders || []).filter(keepRow).map((item) => ({ ...item })),
+      selectedOts: keep(source.selectedOts),
+      lockedOts: keep(source.lockedOts),
+      expandedOts: keep(source.expandedOts),
+      operations,
+      operationPlanStatuses: Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
+        .filter(([, status]) => !closed.has(normalize(status?.ot)))
+        .map(([key, status]) => [key, { ...status }])),
+      materials: (source.materials || []).filter(keepRow).map((item) => ({ ...item })),
+      otConfigurations: withoutOtKeyedValues(source.otConfigurations, closed),
+      planningConfigByOt: withoutOtKeyedValues(source.planningConfigByOt, closed),
+      preparedPlanningByOt: withoutOtKeyedValues(source.preparedPlanningByOt, closed),
+      lastSchedule: source.lastSchedule ? {
+        ...source.lastSchedule,
+        scheduledOts: keep(source.lastSchedule.scheduledOts),
+      } : source.lastSchedule,
+      selectedDetailOt: closed.has(normalize(source.selectedDetailOt)) ? "" : source.selectedDetailOt,
+      selectedOperationId: selectedOperationRemoved ? "" : source.selectedOperationId,
+      closedWorkOrderSummaries: summaries,
+    };
+  }
+
   function purgeClosedWorkOrderRetention(state, nowIso) {
     const source = state || {};
     const now = new Date(nowIso).getTime();
@@ -1236,7 +1279,7 @@
     mergeOtRouteOperation, mergeOtRouteOperations,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, isPublishedPlanSnapshot, operationalPlanOptions, draftExportOperations,
-    draftScheduledOperations, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, purgeClosedWorkOrderRetention,
+    draftScheduledOperations, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, removeClosedWorkOrdersFromDraft, purgeClosedWorkOrderRetention,
     needsPlanningPreparation, canReusePlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
     buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection, effectiveJobTool,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,

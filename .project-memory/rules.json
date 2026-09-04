@@ -704,6 +704,15 @@
       "updated_at": "2026-09-03T23:00:00-06:00"
     },
     {
+      "rule_id": "RULE-REP-006",
+      "name": "El motor de generacion de plan elimina totalmente las OTs cerradas antes de programar (libera capacidad)",
+      "status": "implementada",
+      "rule": "Al pulsar 'Generar plan', las OTs cerradas (no movibles, es decir cuyo estado via isMovablePlanningStatus NO es programable: CERRAD/CLOSED/COMPLETE/COMPLETAD/CANCELAD/CANCELED/CANCELLED) se ELIMINAN totalmente del estado antes de programar, no solo se excluyen del scheduling. scheduleCurrentPlanImpl detecta closedOts = state.selectedOts.filter(ot => !isMovablePlanningStatus(jobStatusForOt(ot))) y llama removeClosedWorkOrdersFromDraft(state, closedOts, nowIso) (planning-workflow-core), que las quita de workOrders, operations, operationPlanStatuses, selectedOts, lockedOts, expandedOts, materials, otConfigurations, planningConfigByOt, preparedPlanningByOt, lastSchedule.scheduledOts, selectedDetailOt y selectedOperationId, y guarda un resumen en closedWorkOrderSummaries (compactClosedWorkOrder). De ese modo la OT cerrada desaparece por completo de las listas 'planeado' (renderPriorityQueue, que usa state.selectedOts) y 'no planeado'/backlog (renderPriorityList ya filtra job.closed y el estado queda sin la OT), y deja de ocupar capacidad de carga. El guardado del borrador posterior (persistPlanSnapshot + saveAppSheet(false) via persistableState, que tambien persiste closedWorkOrderSummaries) hace permanente la eliminacion al recargar. Antes (2026-09-04) el motor solo las excluia del scheduling con schedulingSelectedOts(state, closedOts) pero las conservaba en selectedOts/operations; el boton Sincronizar OTs ya las eliminaba por ausencia en NetSuite via reconcileActiveWorkOrders. Nota: el caso de TODAS las seleccionadas cerradas aborta antes (no hay OTs desbloqueables) sin persistir la limpieza; la sincronizacion cubre ese caso.",
+      "source": "requisito usuario 2026-09-04 ('que el motor elimine porque eso da mas lugar a capacidad de carga'; 'eliminarlas y quitar de lista de planeado/no planeado total ya no existe'); src/web/planning/app.js scheduleCurrentPlanImpl (bloque closedOts -> removeClosedWorkOrdersFromDraft), renderPriorityQueue (selectedOts), renderPriorityList (filtra job.closed), persistableState/createAppSheetPayload; src/web/planning/planning-workflow-core.js removeClosedWorkOrdersFromDraft (nueva, 2026-09-04), compactClosedWorkOrder, withoutOtKeyedValues; tests/planning-workflow-core.test.mjs (removeClosedWorkOrdersFromDraft elimina totalmente / no-op)",
+      "domain": "REP",
+      "updated_at": "2026-09-04T02:40:00-06:00"
+    },
+    {
       "rule_id": "RULE-REP-004",
       "name": "TC siempre derivado = tiempo de produccion / piezas a producir",
       "status": "implementada",
@@ -803,5 +812,5 @@
       "updated_at": "2026-09-03T03:10:00-06:00"
     }
   ],
-  "updated_at": "2026-09-04T01:00:00-06:00"
+  "updated_at": "2026-09-04T02:40:00-06:00"
 }

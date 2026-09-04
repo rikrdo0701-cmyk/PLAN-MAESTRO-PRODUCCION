@@ -546,6 +546,66 @@ test("purgeClosedWorkOrderRetention conserva antes de cinco dias y elimina exact
   assert.deepEqual(structuredClone(purged.closedWorkOrderSummaries), structuredClone(state.closedWorkOrderSummaries));
 });
 
+test("removeClosedWorkOrdersFromDraft elimina totalmente la OT cerrada y quita sus operaciones del estado", () => {
+  const state = {
+    selectedOts: ["100", "200"], lockedOts: ["200"], expandedOts: ["200"],
+    lastSchedule: { scheduledOts: ["100", "200"] },
+    workOrders: [
+      { ot: "100", item: "ACTIVA", quantity: 4 },
+      { ot: "200", item: "CERRADA", quantity: 7 },
+    ],
+    operations: [
+      { id: "100-p", ot: "100", planStatus: "PENDIENTE" },
+      { id: "200-p", ot: "200", planStatus: "PENDIENTE", fechaInicio: "2026-07-20", horaInicio: "10:00", fechaFin: "2026-07-20", horaFin: "12:00" },
+    ],
+    materials: [{ ot: "100" }, { ot: "200" }],
+    otConfigurations: { 100: { machine: "A" }, 200: { machine: "B" } },
+    planningConfigByOt: { 100: { priority: 1 }, 200: { priority: 2 } },
+    preparedPlanningByOt: { 200: "obsolete" },
+    operationPlanStatuses: {
+      "200-p": { ot: "200", status: "PENDIENTE" },
+      "100-p": { ot: "100", status: "PENDIENTE" },
+    },
+    selectedDetailOt: "200", selectedOperationId: "200-p",
+  };
+  const original = structuredClone(state);
+
+  const next = core.removeClosedWorkOrdersFromDraft(state, ["200"], "2026-07-22T10:00:00Z");
+
+  assert.deepEqual(state, original);
+  assert.deepEqual(structuredClone(next.selectedOts), ["100"]);
+  assert.deepEqual(structuredClone(next.lockedOts), []);
+  assert.deepEqual(structuredClone(next.expandedOts), []);
+  assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["100"]);
+  assert.deepEqual(structuredClone(next.workOrders.map((row) => row.ot)), ["100"]);
+  assert.deepEqual(structuredClone(next.operations.map((row) => row.id)), ["100-p"]);
+  assert.deepEqual(structuredClone(next.materials.map((row) => row.ot)), ["100"]);
+  assert.deepEqual(structuredClone(next.otConfigurations), { 100: { machine: "A" } });
+  assert.deepEqual(structuredClone(next.planningConfigByOt), { 100: { priority: 1 } });
+  assert.equal(next.preparedPlanningByOt[200], undefined);
+  assert.deepEqual(structuredClone(next.operationPlanStatuses), {
+    "100-p": { ot: "100", status: "PENDIENTE" },
+  });
+  assert.equal(next.selectedDetailOt, "");
+  assert.equal(next.selectedOperationId, "");
+  assert.deepEqual(structuredClone(next.closedWorkOrderSummaries[200]), {
+    ot: "200", item: "CERRADA", quantity: 7,
+    scheduledStart: "2026-07-20T10:00:00Z", scheduledEnd: "2026-07-20T12:00:00Z",
+    weekStart: "2026-07-20", finalStatus: "CERRADA", closedDetectedAt: "2026-07-22T10:00:00Z",
+  });
+});
+
+test("removeClosedWorkOrdersFromDraft no modifica el estado si no hay OTs cerradas", () => {
+  const state = {
+    selectedOts: ["100"], workOrders: [{ ot: "100" }],
+    operations: [{ id: "100-p", ot: "100", planStatus: "PENDIENTE" }],
+  };
+  const next = core.removeClosedWorkOrdersFromDraft(state, [], "2026-07-22T10:00:00Z");
+  assert.deepEqual(structuredClone(next.selectedOts), ["100"]);
+  assert.deepEqual(structuredClone(next.operations), structuredClone(state.operations));
+  assert.deepEqual(structuredClone(next.closedWorkOrderSummaries || {}), {});
+});
+
 test("confirmar preparacion selecciona la OT y conserva su firma en una transicion", () => {
   const next = core.commitPreparedOtSelection({ selectedOts: [], preparedPlanningByOt: {} }, "1095", "machine=39");
   assert.deepEqual(structuredClone(next.selectedOts), ["1095"]);

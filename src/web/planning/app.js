@@ -4848,7 +4848,9 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   }
   const closedOts = state.selectedOts.filter((ot) => !isMovablePlanningStatus(jobStatusForOt(ot)));
   if (closedOts.length) {
-    showToast(`OT(s) cerrada(s) fuera del plan: ${closedOts.join(", ")}`, 6000);
+    state = window.PlanningWorkflowCore.removeClosedWorkOrdersFromDraft(state, closedOts, new Date().toISOString());
+    invalidateCurrentPlanOperationsCache();
+    showToast(`OT(s) cerrada(s) eliminadas del plan: ${closedOts.join(", ")}`, 6000);
   }
   if (!readyOts.length) {
     showToast("No hay OTs desbloqueadas para programar");
