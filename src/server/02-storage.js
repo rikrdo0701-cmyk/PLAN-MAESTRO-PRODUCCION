@@ -21,8 +21,8 @@ const PP_SHEETS = {
   SUBCONTRATOS: ['ID', 'PARTE', 'TIPO', 'DIAS_HABILES', 'ACTIVO'],
   TIPOS_OT: ['ID', 'NOMBRE', 'ACTIVO'],
   ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA'],
-  PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
-  BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
+  PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
+  BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
   SNAPSHOT_PAYLOADS: ['KEY', 'VALUE'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
@@ -1083,7 +1083,8 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
       op.fechaInicio || '', op.horaInicio || '', op.fechaFin || '', op.horaFin || '', PP_snapshotComment_(op),
       Number(op.prioridad || 999), op.estatus || '', op.locked === true,
       op.herramental || '', op.kitHerramental || '', op.subcontractType || '', Number(op.subcontractDays || 0),
-      pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
+      pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces,
+      op.id || ''
     ];
   });
   if (options && options.requireRows && !rows.length) throw new Error('La instantanea no contiene operaciones programadas para guardar');
@@ -1306,7 +1307,7 @@ function PP_snapshotOperationFromRow_(row, key, index) {
   const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
   const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
   return {
-    id: 'snapshot-' + key + '-' + (index + 1),
+    id: String(row.COMPLETION_KEY || '').trim() || 'snapshot-' + key + '-' + (index + 1),
     num: Number(row.NUM || index + 1),
     ot: String(row.OT || ''),
     parte: String(row.PARTE || ''),

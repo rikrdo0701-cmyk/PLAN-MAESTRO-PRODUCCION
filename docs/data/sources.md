@@ -218,10 +218,11 @@ FECHA_REAPERTURA`.
 
 ## PLANES_HISTORICOS
 
-Headers (30): `SNAPSHOT_ID, FECHA_GENERACION, USUARIO, PLAN_INICIO, HORIZONTE_DIAS, NUM, OT,
+Headers (31): `SNAPSHOT_ID, FECHA_GENERACION, USUARIO, PLAN_INICIO, HORIZONTE_DIAS, NUM, OT,
 PARTE, OP, MAQ_AREA, OPERADOR, TC_MIN, TIEMPO_SETUP, TIEMPO_PROD, F_INICIO, H_INICIO, F_FIN,
 H_FIN, COMENTARIOS, PRIORIDAD, ESTATUS, BLOQUEADA, HERRAMENTAL, KIT_HERRAMENTAL,
-TIPO_SUBCONTRATO, DIAS_SUBCONTRATO, PZAS_PENDIENTES, TIPO_OT, PRECIO_UNITARIO, MONTO`.
+TIPO_SUBCONTRATO, DIAS_SUBCONTRATO, PZAS_PENDIENTES, TIPO_OT, PRECIO_UNITARIO, MONTO,
+COMPLETION_KEY`.
 
 - Readers: `PP_listPlanSnapshots_`, `PP_getPlanSnapshot_`, `PP_readMachineToolHistory_`,
   `loadIncrementalPlanningBase` para generación normal y `window.runPlanningPerformanceDryRun()`
@@ -229,12 +230,15 @@ TIPO_SUBCONTRATO, DIAS_SUBCONTRATO, PZAS_PENDIENTES, TIPO_OT, PRECIO_UNITARIO, M
   `options.timeoutMs`, devuelve métricas parciales sin persistir, y `options.skipScheduler`/
   `profileOnly` omite el scheduler).
 - Writer: `PP_appendPlanSnapshot_` (append por filas en `getLastRow()+1`).
+- `COMPLETION_KEY`: guarda el `id` real de la operación del borrador al publicar, para que la clave de
+  completado (`operationCompletionKey`) del snapshot publicado coincida con la del borrador y el estado de
+  completado (botones Completar/Reabrir) se comparta entre ambos. Vacío en filas antiguas.
 - Restricción: al publicar no se incluyen operaciones `COMPLETADA_PLAN` ni sin fechas.
 - `PLAN_INICIO` conserva la fecha exacta `INICIO` del Gantt; la metadata `weekStart` del payload/snapshot identifica la semana normalizada al lunes para reportes/publicación (RULE-OT-011).
 
 ## BORRADOR_PLAN
 
-Mismos 30 headers que `PLANES_HISTORICOS`.
+Mismos 31 headers que `PLANES_HISTORICOS` (incluida `COMPLETION_KEY`).
 
 - Readers: `PP_getPlanSnapshot_` (`sourceSheet='BORRADOR_PLAN'` si `snapshotId === 'draft'`),
   `PP_listPlanSnapshots_`, `PP_replaceDraftSnapshot_` (backup previo),

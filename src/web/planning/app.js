@@ -7032,6 +7032,7 @@ async function performToggleOperationPlanStatus(key) {
   if (!operation && !current) return showToast("No se encontro la operacion");
   const previousStatus = current ? deepClone(current) : undefined;
   const previousOperation = operation ? deepClone(operation) : undefined;
+  const previousLockedOts = Array.isArray(state.lockedOts) ? [...state.lockedOts] : [];
   checkpointState();
   if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
   if (completed) {
@@ -7048,7 +7049,9 @@ async function performToggleOperationPlanStatus(key) {
       }
       operation.log = appendLog(operation.log, "REABIERTA_PLAN_APP");
     }
-    return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,
+    const reopenedOt = String(operation?.ot || current?.ot || "").trim();
+    if (reopenedOt) unblockOtAfterCompletion(reopenedOt);
+    return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts,
       "Operacion reabierta; se incluira en la siguiente reprogramacion");
   }
 
@@ -7086,7 +7089,9 @@ async function performToggleOperationPlanStatus(key) {
     operation.log = appendLog(operation.log, "COMPLETADA_PLAN_APP");
   }
   completePriorSequenceOperations(operation?.ot || current?.ot || "", operation, key);
-  return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation,
+  const completedOt = String(operation?.ot || current?.ot || "").trim();
+  if (completedOt) blockOtForCompletion(completedOt);
+  return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts,
     type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
 }
 
@@ -7122,7 +7127,29 @@ function completePriorSequenceOperations(ot, completedOperation, completedKey) {
   }
 }
 
-async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, message) {
+function blockOtForCompletion(ot) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+  if (!Array.isArray(state.lockedOts)) state.lockedOts = [];
+  if (!state.lockedOts.includes(key)) state.lockedOts.push(key);
+  state.operations.filter((op) => String(op.ot) === key).forEach((op) => {
+    op.locked = true;
+  });
+  appSheetMarkDirtyScope("plan");
+}
+
+function unblockOtAfterCompletion(ot) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+  if (typeof otHasCompletedOperation === "function" && otHasCompletedOperation(key)) return;
+  state.lockedOts = (Array.isArray(state.lockedOts) ? state.lockedOts : []).filter((item) => String(item) !== key);
+  state.operations.filter((op) => String(op.ot) === key).forEach((op) => {
+    op.locked = false;
+  });
+  appSheetMarkDirtyScope("plan");
+}
+
+async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts, message) {
   const renderPlanStatusChange = () => {
     renderPlanStatusRow(key);
     schedulePlanStatusBackgroundWork();
@@ -7167,6 +7194,11 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
   if (previousStatus) state.operationPlanStatuses[key] = previousStatus;
   else delete state.operationPlanStatuses[key];
   if (operation && previousOperation) Object.assign(operation, previousOperation);
+  if (Array.isArray(previousLockedOts)) {
+    state.lockedOts = [...previousLockedOts];
+    state.operations.forEach((op) => { op.locked = previousLockedOts.includes(String(op.ot)); });
+    appSheetMarkDirtyScope("plan");
+  }
   renderPlanStatusChange();
   showToast("No se pudo guardar el estado; se restauro el valor anterior");
   return false;

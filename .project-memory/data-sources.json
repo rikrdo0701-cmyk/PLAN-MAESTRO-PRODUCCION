@@ -19,17 +19,37 @@
       "type": "google_sheet",
       "name": "CONFIG",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["KEY", "VALUE"],
+      "columns": [
+        "KEY",
+        "VALUE"
+      ],
       "readers": [
-        "PP_readConfig_", "PP_readState_", "PP_assertCurrentRevision_", "PP_nextRevision_",
-        "PP_writeConfigPatch_", "PP_appRevisionMetadata_", "getAppStateIfChanged",
-        "savePlanningStateOptimized", "saveOperationPlanStatus", "syncNetSuiteWorkOrdersLite",
+        "PP_readConfig_",
+        "PP_readState_",
+        "PP_assertCurrentRevision_",
+        "PP_nextRevision_",
+        "PP_writeConfigPatch_",
+        "PP_appRevisionMetadata_",
+        "getAppStateIfChanged",
+        "savePlanningStateOptimized",
+        "saveOperationPlanStatus",
+        "syncNetSuiteWorkOrdersLite",
         "ensurePlanningDataLoaded (frontend usa syncedAt)"
       ],
-      "writers": ["PP_writeConfigPatch_", "PP_writeState_", "seed PP_ensureWorkbook_"],
-      "rules": ["RULE-OT-014", "RULE-CAL-001"],
+      "writers": [
+        "PP_writeConfigPatch_",
+        "PP_writeState_",
+        "seed PP_ensureWorkbook_"
+      ],
+      "rules": [
+        "RULE-OT-014",
+        "RULE-CAL-001"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-OPERACIONES",
@@ -37,31 +57,96 @@
       "name": "OPERACIONES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "ID", "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
-        "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
-        "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
-        "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
-        "LOG", "GENERATED_BY", "LOCKED", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN",
-        "TIPO_SUBCONTRATO", "HERRAMENTAL_ORIGEN", "KIT_ORIGEN", "HERRAMENTAL_DESTINO",
-        "KIT_DESTINO", "COMENTARIO", "TIEMPO_FALLBACK"
+        "ID",
+        "NUM",
+        "OT",
+        "PARTE",
+        "DESCRIPCION",
+        "CONTENIDO",
+        "PRIORIDAD",
+        "FECHA_REQ",
+        "CANT_TOTAL",
+        "SECUENCIA",
+        "CT",
+        "OPERADOR",
+        "MAQUINA",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "CANT_PENDIENTE",
+        "TIEMPO_CICLO",
+        "TIEMPO_SETUP",
+        "TIEMPO_PROD",
+        "FECHA_INICIO",
+        "HORA_INICIO",
+        "FECHA_FIN",
+        "HORA_FIN",
+        "TIPO_INSERCION",
+        "ESTATUS",
+        "LOG",
+        "GENERATED_BY",
+        "LOCKED",
+        "DIAS_SUBCONTRATO",
+        "KIT_PENDIENTE",
+        "AUTO_FROZEN",
+        "TIPO_SUBCONTRATO",
+        "HERRAMENTAL_ORIGEN",
+        "KIT_ORIGEN",
+        "HERRAMENTAL_DESTINO",
+        "KIT_DESTINO",
+        "COMENTARIO",
+        "TIEMPO_FALLBACK"
       ],
-      "readers": ["PP_readState_ (PP_mapOperation_ via PP_OPERATION_FIELDS)"],
-      "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-005", "RULE-OT-013", "RULE-OT-014", "RULE-DOB-001", "RULE-HER-004"],
+      "readers": [
+        "PP_readState_ (PP_mapOperation_ via PP_OPERATION_FIELDS)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeNetSuiteSyncState_",
+        "PP_writeWorkOrderSyncState_",
+        "savePlanningStateOptimized"
+      ],
+      "rules": [
+        "RULE-OT-005",
+        "RULE-OT-013",
+        "RULE-OT-014",
+        "RULE-DOB-001",
+        "RULE-HER-004"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-OPERADORES",
       "type": "google_sheet",
       "name": "OPERADORES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["OPERADOR", "ACTIVO", "MINUTOS_CAPACIDAD", "RENDIMIENTO_PCT", "NOMBRE", "CATEGORIA"],
-      "readers": ["PP_readState_", "PP_mapNetSuiteOperation_ (referencia de operadores activos para validar/normalizar el operador de las operaciones sincronizadas de NetSuite)"],
-      "writers": ["PP_writeState_", "PP_writeSkillState_"],
-      "rules": ["RULE-BAL-005"],
+      "columns": [
+        "OPERADOR",
+        "ACTIVO",
+        "MINUTOS_CAPACIDAD",
+        "RENDIMIENTO_PCT",
+        "NOMBRE",
+        "CATEGORIA"
+      ],
+      "readers": [
+        "PP_readState_",
+        "PP_mapNetSuiteOperation_ (referencia de operadores activos para validar/normalizar el operador de las operaciones sincronizadas de NetSuite)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeSkillState_"
+      ],
+      "rules": [
+        "RULE-BAL-005"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/08-netsuite.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/08-netsuite.js"
+      ]
     },
     {
       "source_id": "SHEET-CAPACIDADES",
@@ -69,26 +154,64 @@
       "name": "CAPACIDADES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "KEY", "CT", "OPERACION", "ACTIVA", "CAPACIDAD", "SOLAPAMIENTO", "PALABRAS_CLAVE",
-        "REQUIERE_HERRAMENTAL", "REQUIERE_KIT", "CUSTOM", "EFICIENCIA_PCT"
+        "KEY",
+        "CT",
+        "OPERACION",
+        "ACTIVA",
+        "CAPACIDAD",
+        "SOLAPAMIENTO",
+        "PALABRAS_CLAVE",
+        "REQUIERE_HERRAMENTAL",
+        "REQUIERE_KIT",
+        "CUSTOM",
+        "EFICIENCIA_PCT"
       ],
-      "readers": ["PP_readState_"],
-      "writers": ["PP_writeState_", "PP_writeSkillState_"],
-      "rules": ["RULE-MAT-001", "RULE-MAT-002", "RULE-MAT-003", "RULE-MAT-009"],
+      "readers": [
+        "PP_readState_"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeSkillState_"
+      ],
+      "rules": [
+        "RULE-MAT-001",
+        "RULE-MAT-002",
+        "RULE-MAT-003",
+        "RULE-MAT-009"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-CATALOGO_OPERACIONES",
       "type": "google_sheet",
       "name": "CATALOGO_OPERACIONES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["KEY", "CT", "OPERACION", "ORIGEN", "ACTIVA"],
-      "readers": ["PP_readState_ (PP_mapOperationCatalog_)"],
-      "writers": ["PP_writeState_", "PP_writeSkillState_", "PP_writeNetSuiteSyncState_"],
-      "rules": ["RULE-MAT-001", "RULE-MAT-003"],
+      "columns": [
+        "KEY",
+        "CT",
+        "OPERACION",
+        "ORIGEN",
+        "ACTIVA"
+      ],
+      "readers": [
+        "PP_readState_ (PP_mapOperationCatalog_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeSkillState_",
+        "PP_writeNetSuiteSyncState_"
+      ],
+      "rules": [
+        "RULE-MAT-001",
+        "RULE-MAT-003"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-ORDENES_TRABAJO",
@@ -96,88 +219,224 @@
       "name": "ORDENES_TRABAJO",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "ID", "WO_INTERNAL_ID", "OT", "ARTICULO", "DESCRIPCION", "FOTO_URL",
-        "FECHA_INICIO_NS", "FECHA_FIN_NS", "FECHA_VENCIMIENTO", "FECHA_ENTREGA_AJUSTADA",
-        "CANTIDAD", "ESTATUS", "CLIENTE", "CANT_ENSAMBLADA", "CANT_PENDIENTE",
-        "PRECIO_PROMEDIO_VENTA", "PRECIO_DESDE", "PRECIO_HASTA"
+        "ID",
+        "WO_INTERNAL_ID",
+        "OT",
+        "ARTICULO",
+        "DESCRIPCION",
+        "FOTO_URL",
+        "FECHA_INICIO_NS",
+        "FECHA_FIN_NS",
+        "FECHA_VENCIMIENTO",
+        "FECHA_ENTREGA_AJUSTADA",
+        "CANTIDAD",
+        "ESTATUS",
+        "CLIENTE",
+        "CANT_ENSAMBLADA",
+        "CANT_PENDIENTE",
+        "PRECIO_PROMEDIO_VENTA",
+        "PRECIO_DESDE",
+        "PRECIO_HASTA"
       ],
-      "readers": ["PP_readState_ (PP_mapWorkOrder_)", "syncNetSuiteWorkOrdersLite"],
-      "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeNetSuiteWorkOrdersState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-008", "RULE-OT-014"],
+      "readers": [
+        "PP_readState_ (PP_mapWorkOrder_)",
+        "syncNetSuiteWorkOrdersLite"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeNetSuiteSyncState_",
+        "PP_writeNetSuiteWorkOrdersState_",
+        "PP_writeWorkOrderSyncState_",
+        "savePlanningStateOptimized"
+      ],
+      "rules": [
+        "RULE-OT-008",
+        "RULE-OT-014"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-CONFIGURACION_OT",
       "type": "google_sheet",
       "name": "CONFIGURACION_OT",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["OT", "MAQUINA", "KIT_HERRAMENTAL", "KIT_PENDIENTE", "TIPO_SUBCONTRATO", "DIAS_SUBCONTRATO", "ACTUALIZADO", "HERRAMENTAL", "HERRAMENTALES_EXTRA_JSON (JSON: strings legacy u objetos {herramental, machine})"],
-      "readers": ["PP_readState_ (PP_buildOtConfigurations_)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized"],
-      "rules": ["RULE-OT-010", "RULE-DOB-001", "RULE-HER-003"],
+      "columns": [
+        "OT",
+        "MAQUINA",
+        "KIT_HERRAMENTAL",
+        "KIT_PENDIENTE",
+        "TIPO_SUBCONTRATO",
+        "DIAS_SUBCONTRATO",
+        "ACTUALIZADO",
+        "HERRAMENTAL",
+        "HERRAMENTALES_EXTRA_JSON (JSON: strings legacy u objetos {herramental, machine})"
+      ],
+      "readers": [
+        "PP_readState_ (PP_buildOtConfigurations_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_",
+        "PP_writeWorkOrderSyncState_",
+        "savePlanningStateOptimized"
+      ],
+      "rules": [
+        "RULE-OT-010",
+        "RULE-DOB-001",
+        "RULE-HER-003"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-CONFIGURACION_ARTICULO",
       "type": "google_sheet",
       "name": "CONFIGURACION_ARTICULO",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "ACTUALIZADO"],
-      "readers": ["PP_readState_ (PP_buildArticleConfigurations_)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_", "savePlanningStateOptimized"],
+      "columns": [
+        "ARTICULO",
+        "TIPO_OT",
+        "TIPO_TRABAJO",
+        "PRECIO_MANUAL",
+        "ACTUALIZADO"
+      ],
+      "readers": [
+        "PP_readState_ (PP_buildArticleConfigurations_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_",
+        "savePlanningStateOptimized"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-MATRIZ",
       "type": "google_sheet",
       "name": "MATRIZ",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["CAPACIDAD_KEY", "OPERADOR", "HABILITADO"],
-      "readers": ["PP_readState_"],
-      "writers": ["PP_writeState_", "PP_writeSkillState_"],
-      "rules": ["RULE-MAT-008"],
+      "columns": [
+        "CAPACIDAD_KEY",
+        "OPERADOR",
+        "HABILITADO"
+      ],
+      "readers": [
+        "PP_readState_"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeSkillState_"
+      ],
+      "rules": [
+        "RULE-MAT-008"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-MAQUINAS",
       "type": "google_sheet",
       "name": "MAQUINAS",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "ACTIVA"],
-      "readers": ["PP_readState_ (PP_mapMachine_)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_"],
-      "rules": ["RULE-MAQ-001"],
+      "columns": [
+        "ID",
+        "ACTIVA"
+      ],
+      "readers": [
+        "PP_readState_ (PP_mapMachine_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_"
+      ],
+      "rules": [
+        "RULE-MAQ-001"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-HERRAMENTALES",
       "type": "google_sheet",
       "name": "HERRAMENTALES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "PARTE", "HERRAMENTAL", "KIT_HERRAMENTAL", "TIEMPO_AJUSTE_HERR", "TIEMPO_AJUSTE_KIT", "ACTIVO"],
-      "readers": ["PP_readState_ (PP_mapTool_)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_"],
-      "rules": ["RULE-HER-001", "RULE-HER-002"],
+      "columns": [
+        "ID",
+        "PARTE",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "TIEMPO_AJUSTE_HERR",
+        "TIEMPO_AJUSTE_KIT",
+        "ACTIVO"
+      ],
+      "readers": [
+        "PP_readState_ (PP_mapTool_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_"
+      ],
+      "rules": [
+        "RULE-HER-001",
+        "RULE-HER-002"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-MATERIALES",
       "type": "google_sheet",
       "name": "MATERIALES",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "OT", "WO_INTERNAL_ID", "ENSAMBLE", "COMPONENTE_ID", "COMPONENTE", "DESCRIPCION", "UNIDAD", "REQUERIDO", "EMITIDO", "PENDIENTE"],
-      "readers": ["PP_readState_ (PP_mapMaterial_)", "getMaterialsForOt"],
-      "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeWorkOrderSyncState_"],
-      "rules": ["RULE-BOM-001", "RULE-BOM-002"],
+      "columns": [
+        "ID",
+        "OT",
+        "WO_INTERNAL_ID",
+        "ENSAMBLE",
+        "COMPONENTE_ID",
+        "COMPONENTE",
+        "DESCRIPCION",
+        "UNIDAD",
+        "REQUERIDO",
+        "EMITIDO",
+        "PENDIENTE"
+      ],
+      "readers": [
+        "PP_readState_ (PP_mapMaterial_)",
+        "getMaterialsForOt"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeNetSuiteSyncState_",
+        "PP_writeWorkOrderSyncState_"
+      ],
+      "rules": [
+        "RULE-BOM-001",
+        "RULE-BOM-002"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-CALENDARIO",
@@ -185,38 +444,82 @@
       "name": "CALENDARIO",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "ID", "CONCEPTO (GENERAL/MAQUINA/ASUETO/VACACIONES; OPERADOR solo lo filtra el motor)",
-        "MAQUINA", "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "MOTIVO", "ACTIVO"
+        "ID",
+        "CONCEPTO (GENERAL/MAQUINA/ASUETO/VACACIONES; OPERADOR solo lo filtra el motor)",
+        "MAQUINA",
+        "FECHA_INICIO",
+        "HORA_INICIO",
+        "FECHA_FIN",
+        "HORA_FIN",
+        "MOTIVO",
+        "ACTIVO"
       ],
-      "readers": ["PP_readState_ (PP_mapCalendar_) -> state.calendarExceptions; PlannerCore.effectiveWindows (frontend)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_"],
-      "rules": ["RULE-CAL-001", "RULE-CAL-002"],
+      "readers": [
+        "PP_readState_ (PP_mapCalendar_) -> state.calendarExceptions; PlannerCore.effectiveWindows (frontend)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_"
+      ],
+      "rules": [
+        "RULE-CAL-001",
+        "RULE-CAL-002"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/web/planning/planner-core.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/web/planning/planner-core.js"
+      ]
     },
     {
       "source_id": "SHEET-SUBCONTRATOS",
       "type": "google_sheet",
       "name": "SUBCONTRATOS",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "PARTE", "TIPO", "DIAS_HABILES", "ACTIVO"],
-      "readers": ["PP_readState_ (PP_mapSubcontract_)"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_", "seed PP_ensureWorkbook_"],
+      "columns": [
+        "ID",
+        "PARTE",
+        "TIPO",
+        "DIAS_HABILES",
+        "ACTIVO"
+      ],
+      "readers": [
+        "PP_readState_ (PP_mapSubcontract_)"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_",
+        "seed PP_ensureWorkbook_"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-TIPOS_OT",
       "type": "google_sheet",
       "name": "TIPOS_OT",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["ID", "NOMBRE", "ACTIVO"],
-      "readers": ["PP_readState_"],
-      "writers": ["PP_writeState_", "PP_writeCatalogState_", "seed PP_ensureWorkbook_"],
+      "columns": [
+        "ID",
+        "NOMBRE",
+        "ACTIVO"
+      ],
+      "readers": [
+        "PP_readState_"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeCatalogState_",
+        "seed PP_ensureWorkbook_"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-ESTADOS_OPERACION_PLAN",
@@ -224,16 +527,50 @@
       "name": "ESTADOS_OPERACION_PLAN",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "KEY", "TIPO", "ESTATUS_PLAN", "OPERATION_ID", "OT", "SECUENCIA", "CT", "OPERADOR",
-        "MAQUINA", "ARTICULO", "DESCRIPCION", "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN",
-        "HORA_FIN", "HERRAMENTAL_ORIGEN", "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO",
-        "TOOL_KEY_DESTINO", "FECHA_COMPLETADO", "FECHA_REAPERTURA"
+        "KEY",
+        "TIPO",
+        "ESTATUS_PLAN",
+        "OPERATION_ID",
+        "OT",
+        "SECUENCIA",
+        "CT",
+        "OPERADOR",
+        "MAQUINA",
+        "ARTICULO",
+        "DESCRIPCION",
+        "FECHA_INICIO",
+        "HORA_INICIO",
+        "FECHA_FIN",
+        "HORA_FIN",
+        "HERRAMENTAL_ORIGEN",
+        "KIT_ORIGEN",
+        "HERRAMENTAL_DESTINO",
+        "KIT_DESTINO",
+        "TOOL_KEY_DESTINO",
+        "FECHA_COMPLETADO",
+        "FECHA_REAPERTURA"
       ],
-      "readers": ["PP_readState_ (PP_buildOperationPlanStatuses_)", "saveOperationPlanStatus", "syncNetSuiteWorkOrdersLite"],
-      "writers": ["PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeNetSuiteWorkOrdersState_", "PP_writeWorkOrderSyncState_", "savePlanningStateOptimized", "saveOperationPlanStatus"],
-      "rules": ["RULE-OT-008"],
+      "readers": [
+        "PP_readState_ (PP_buildOperationPlanStatuses_)",
+        "saveOperationPlanStatus",
+        "syncNetSuiteWorkOrdersLite"
+      ],
+      "writers": [
+        "PP_writeState_",
+        "PP_writeNetSuiteSyncState_",
+        "PP_writeNetSuiteWorkOrdersState_",
+        "PP_writeWorkOrderSyncState_",
+        "savePlanningStateOptimized",
+        "saveOperationPlanStatus"
+      ],
+      "rules": [
+        "RULE-OT-008"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-PLANES_HISTORICOS",
@@ -241,17 +578,54 @@
       "name": "PLANES_HISTORICOS",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "SNAPSHOT_ID", "FECHA_GENERACION", "USUARIO", "PLAN_INICIO", "HORIZONTE_DIAS", "NUM",
-        "OT", "PARTE", "OP", "MAQ_AREA", "OPERADOR", "TC_MIN", "TIEMPO_SETUP", "TIEMPO_PROD",
-        "F_INICIO", "H_INICIO", "F_FIN", "H_FIN", "COMENTARIOS", "PRIORIDAD", "ESTATUS",
-        "BLOQUEADA", "HERRAMENTAL", "KIT_HERRAMENTAL", "TIPO_SUBCONTRATO", "DIAS_SUBCONTRATO",
-        "PZAS_PENDIENTES", "TIPO_OT", "PRECIO_UNITARIO", "MONTO"
+        "SNAPSHOT_ID",
+        "FECHA_GENERACION",
+        "USUARIO",
+        "PLAN_INICIO",
+        "HORIZONTE_DIAS",
+        "NUM",
+        "OT",
+        "PARTE",
+        "OP",
+        "MAQ_AREA",
+        "OPERADOR",
+        "TC_MIN",
+        "TIEMPO_SETUP",
+        "TIEMPO_PROD",
+        "F_INICIO",
+        "H_INICIO",
+        "F_FIN",
+        "H_FIN",
+        "COMENTARIOS",
+        "PRIORIDAD",
+        "ESTATUS",
+        "BLOQUEADA",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "TIPO_SUBCONTRATO",
+        "DIAS_SUBCONTRATO",
+        "PZAS_PENDIENTES",
+        "TIPO_OT",
+        "PRECIO_UNITARIO",
+        "MONTO",
+        "COMPLETION_KEY"
       ],
-      "readers": ["PP_listPlanSnapshots_", "PP_getPlanSnapshot_", "PP_readMachineToolHistory_", "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)"],
-      "writers": ["PP_appendPlanSnapshot_"],
-      "rules": ["RULE-OT-011"],
+      "readers": [
+        "PP_listPlanSnapshots_",
+        "PP_getPlanSnapshot_",
+        "PP_readMachineToolHistory_",
+        "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)"
+      ],
+      "writers": [
+        "PP_appendPlanSnapshot_"
+      ],
+      "rules": [
+        "RULE-OT-011"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "SHEET-BORRADOR_PLAN",
@@ -259,17 +633,56 @@
       "name": "BORRADOR_PLAN",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
       "columns": [
-        "SNAPSHOT_ID", "FECHA_GENERACION", "USUARIO", "PLAN_INICIO", "HORIZONTE_DIAS", "NUM",
-        "OT", "PARTE", "OP", "MAQ_AREA", "OPERADOR", "TC_MIN", "TIEMPO_SETUP", "TIEMPO_PROD",
-        "F_INICIO", "H_INICIO", "F_FIN", "H_FIN", "COMENTARIOS", "PRIORIDAD", "ESTATUS",
-        "BLOQUEADA", "HERRAMENTAL", "KIT_HERRAMENTAL", "TIPO_SUBCONTRATO", "DIAS_SUBCONTRATO",
-        "PZAS_PENDIENTES", "TIPO_OT", "PRECIO_UNITARIO", "MONTO"
+        "SNAPSHOT_ID",
+        "FECHA_GENERACION",
+        "USUARIO",
+        "PLAN_INICIO",
+        "HORIZONTE_DIAS",
+        "NUM",
+        "OT",
+        "PARTE",
+        "OP",
+        "MAQ_AREA",
+        "OPERADOR",
+        "TC_MIN",
+        "TIEMPO_SETUP",
+        "TIEMPO_PROD",
+        "F_INICIO",
+        "H_INICIO",
+        "F_FIN",
+        "H_FIN",
+        "COMENTARIOS",
+        "PRIORIDAD",
+        "ESTATUS",
+        "BLOQUEADA",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "TIPO_SUBCONTRATO",
+        "DIAS_SUBCONTRATO",
+        "PZAS_PENDIENTES",
+        "TIPO_OT",
+        "PRECIO_UNITARIO",
+        "MONTO",
+        "COMPLETION_KEY"
       ],
-      "readers": ["PP_getPlanSnapshot_ (snapshotId='draft')", "PP_listPlanSnapshots_", "PP_replaceDraftSnapshot_", "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)"],
-      "writers": ["PP_replaceDraftSnapshot_", "PP_clearDraftSnapshot_"],
-      "rules": ["RULE-OT-005", "RULE-OT-011"],
+      "readers": [
+        "PP_getPlanSnapshot_ (snapshotId='draft')",
+        "PP_listPlanSnapshots_",
+        "PP_replaceDraftSnapshot_",
+        "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)"
+      ],
+      "writers": [
+        "PP_replaceDraftSnapshot_",
+        "PP_clearDraftSnapshot_"
+      ],
+      "rules": [
+        "RULE-OT-005",
+        "RULE-OT-011"
+      ],
       "status": "documented",
-      "references": ["src/server/02-storage.js"]
+      "references": [
+        "src/server/02-storage.js"
+      ]
     },
     {
       "source_id": "CSV-PLAN_PRODUCCION",
@@ -277,46 +690,113 @@
       "name": "plan-produccion.csv",
       "location/origin": "Frontend de planeacion, boton Exportar; generado en memoria desde el borrador programado actual",
       "columns": [
-        "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
-        "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
-        "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
-        "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
-        "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
-        "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO"
+        "NUM",
+        "OT",
+        "PARTE",
+        "DESCRIPCION",
+        "CONTENIDO",
+        "PRIORIDAD",
+        "FECHA_REQ",
+        "CANT_TOTAL",
+        "SECUENCIA",
+        "CT",
+        "OPERADOR",
+        "MAQUINA",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "CANT_PENDIENTE",
+        "TIEMPO_CICLO",
+        "TIEMPO_SETUP",
+        "TIEMPO_PROD",
+        "FECHA_INICIO",
+        "HORA_INICIO",
+        "FECHA_FIN",
+        "HORA_FIN",
+        "TIPO_INSERCION",
+        "ESTATUS",
+        "LOG",
+        "DIAS_SUBCONTRATO",
+        "KIT_PENDIENTE",
+        "AUTO_FROZEN",
+        "HERRAMENTAL_ORIGEN",
+        "KIT_ORIGEN",
+        "HERRAMENTAL_DESTINO",
+        "KIT_DESTINO",
+        "COMENTARIO"
       ],
       "readers": [],
-      "writers": ["exportCsv"],
-      "rules": ["RULE-OT-005", "RULE-MAT-007", "RULE-BAL-003", "RULE-HER-004"],
+      "writers": [
+        "exportCsv"
+      ],
+      "rules": [
+        "RULE-OT-005",
+        "RULE-MAT-007",
+        "RULE-BAL-003",
+        "RULE-HER-004"
+      ],
       "status": "documented",
-      "references": ["src/web/planning/app.js", "src/web/planning/planning-workflow-core.js"]
+      "references": [
+        "src/web/planning/app.js",
+        "src/web/planning/planning-workflow-core.js"
+      ]
     },
     {
       "source_id": "SHEET-AUDITORIA",
       "type": "google_sheet",
       "name": "AUDITORIA",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
-      "columns": ["FECHA", "USUARIO", "ACCION", "REVISION", "DETALLE"],
+      "columns": [
+        "FECHA",
+        "USUARIO",
+        "ACCION",
+        "REVISION",
+        "DETALLE"
+      ],
       "readers": [],
       "writers": [
-        "PP_writeState_", "PP_writeNetSuiteSyncState_", "PP_writeNetSuiteWorkOrdersState_",
-        "PP_writeWorkOrderSyncState_", "PP_finishPartialWrite_", "PP_appendPlanSnapshot_",
-        "savePlanningStateOptimized", "saveOperationPlanStatus"
+        "PP_writeState_",
+        "PP_writeNetSuiteSyncState_",
+        "PP_writeNetSuiteWorkOrdersState_",
+        "PP_writeWorkOrderSyncState_",
+        "PP_finishPartialWrite_",
+        "PP_appendPlanSnapshot_",
+        "savePlanningStateOptimized",
+        "saveOperationPlanStatus"
       ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/02-storage.js", "src/server/15-performance-service.js"]
+      "references": [
+        "src/server/02-storage.js",
+        "src/server/15-performance-service.js"
+      ]
     },
     {
       "source_id": "SHEET-INSPECCION_TRAMOS",
       "type": "google_sheet",
       "name": "Tramos",
       "location/origin": "Workbook de inspección (INSPECTION_SPREADSHEET_ID)",
-      "columns": ["Articulo", "Materia prima", "Tramo", "DIBUJO", "Ultima modificacion"],
-      "readers": ["PP_Inspection_routeIndex_", "PP_Inspection_routeIndexV2_", "saveInspectionLink", "getInspectionDrawingRoutes"],
-      "writers": ["saveInspectionLink"],
+      "columns": [
+        "Articulo",
+        "Materia prima",
+        "Tramo",
+        "DIBUJO",
+        "Ultima modificacion"
+      ],
+      "readers": [
+        "PP_Inspection_routeIndex_",
+        "PP_Inspection_routeIndexV2_",
+        "saveInspectionLink",
+        "getInspectionDrawingRoutes"
+      ],
+      "writers": [
+        "saveInspectionLink"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/16-inspection-service.js", "src/server/17-inspection-drawing-service.js"]
+      "references": [
+        "src/server/16-inspection-service.js",
+        "src/server/17-inspection-drawing-service.js"
+      ]
     },
     {
       "source_id": "SHEET-HISTORIAL_IMPRESION_INSPEC",
@@ -324,14 +804,30 @@
       "name": "HISTORIAL_IMPRESION_INSPEC",
       "location/origin": "Workbook de inspección (INSPECTION_SPREADSHEET_ID)",
       "columns": [
-        "FECHA_HORA", "WO", "ARTICULO", "CANTIDAD", "ESTADO_TRABAJO", "SEMAFORO", "ALERTAS",
-        "MATERIALES_PENDIENTES", "MATERIALES_DEFICIT", "SIN_DIBUJO", "FALTA_TRAMO", "DETALLE_JSON"
+        "FECHA_HORA",
+        "WO",
+        "ARTICULO",
+        "CANTIDAD",
+        "ESTADO_TRABAJO",
+        "SEMAFORO",
+        "ALERTAS",
+        "MATERIALES_PENDIENTES",
+        "MATERIALES_DEFICIT",
+        "SIN_DIBUJO",
+        "FALTA_TRAMO",
+        "DETALLE_JSON"
       ],
-      "readers": ["getInspectionHistory"],
-      "writers": ["recordInspectionPrint"],
+      "readers": [
+        "getInspectionHistory"
+      ],
+      "writers": [
+        "recordInspectionPrint"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/16-inspection-service.js"]
+      "references": [
+        "src/server/16-inspection-service.js"
+      ]
     },
     {
       "source_id": "SHEET-CONTROL_DE_TRABAJOS",
@@ -339,16 +835,39 @@
       "name": "Control de trabajos",
       "location/origin": "Pipeline legacy (raíz); headers en FILA 2",
       "columns": [
-        "STATUS", "TRABAJO", "PARTE", "REVISION", "CANTIDAD", "PRIORIDAD",
-        "FECHA REQUERIMIENTO", "FECHA FIN ORACLE", "CLIENTE", "MAQUINA", "MEDIDA",
-        "HERRAMENTAL", "KIT HERRAMENTAL", "CONTENIDO", "SUBCONTRATO", "COSTO DE PIEZA",
-        "COSTO TOTAL", "% AVANCE"
+        "STATUS",
+        "TRABAJO",
+        "PARTE",
+        "REVISION",
+        "CANTIDAD",
+        "PRIORIDAD",
+        "FECHA REQUERIMIENTO",
+        "FECHA FIN ORACLE",
+        "CLIENTE",
+        "MAQUINA",
+        "MEDIDA",
+        "HERRAMENTAL",
+        "KIT HERRAMENTAL",
+        "CONTENIDO",
+        "SUBCONTRATO",
+        "COSTO DE PIEZA",
+        "COSTO TOTAL",
+        "% AVANCE"
       ],
-      "readers": ["parser_control.js"],
-      "writers": ["ACTUALIZAR CENTRO DE TRABAJOS.js"],
-      "rules": ["RULE-OT-001"],
+      "readers": [
+        "parser_control.js"
+      ],
+      "writers": [
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ],
+      "rules": [
+        "RULE-OT-001"
+      ],
       "status": "documented",
-      "references": ["parser_control.js", "ACTUALIZAR CENTRO DE TRABAJOS.js"]
+      "references": [
+        "parser_control.js",
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ]
     },
     {
       "source_id": "SHEET-TRABAJOS_PROGRAMADOS",
@@ -356,14 +875,31 @@
       "name": "Trabajos programados",
       "location/origin": "Pipeline legacy (raíz)",
       "columns": [
-        "Folio de trabajo (link)", "Artículo", "Cantidad", "Estado",
-        "Fecha inicio de producción", "Fecha finalización de producción", "Ubicación", "ID Interno"
+        "Folio de trabajo (link)",
+        "Artículo",
+        "Cantidad",
+        "Estado",
+        "Fecha inicio de producción",
+        "Fecha finalización de producción",
+        "Ubicación",
+        "ID Interno"
       ],
-      "readers": ["parser_trabajos.js"],
-      "writers": ["TRABAJOS FINAL.js"],
-      "rules": ["RULE-OT-001", "RULE-OT-002", "RULE-OT-003"],
+      "readers": [
+        "parser_trabajos.js"
+      ],
+      "writers": [
+        "TRABAJOS FINAL.js"
+      ],
+      "rules": [
+        "RULE-OT-001",
+        "RULE-OT-002",
+        "RULE-OT-003"
+      ],
       "status": "documented",
-      "references": ["parser_trabajos.js", "TRABAJOS FINAL.js"]
+      "references": [
+        "parser_trabajos.js",
+        "TRABAJOS FINAL.js"
+      ]
     },
     {
       "source_id": "SHEET-TRABAJOS_PROGRAMADOS",
@@ -372,10 +908,14 @@
       "location/origin": "Pipeline legacy (raíz); conflicto de nombre con 'Trabajos programados'",
       "columns": [],
       "readers": [],
-      "writers": ["Actualizador herramentales.js"],
+      "writers": [
+        "Actualizador herramentales.js"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["Actualizador herramentales.js"]
+      "references": [
+        "Actualizador herramentales.js"
+      ]
     },
     {
       "source_id": "SHEET-OPERACIONES_PROGRAMADAS",
@@ -383,17 +923,40 @@
       "name": "Operaciones Programadas",
       "location/origin": "Pipeline legacy (raíz); conflicto 'Operaciones programadas' (OPERACION FINAL.js) y esquema incompatible de testoperaciones.js",
       "columns": [
-        "ID (link)", "Operación", "Orden de trabajo", "Secuencia", "Fecha inicio programada",
-        "Fecha fin programada", "Estado", "Centro de trabajo", "Tiempo preparación (min)",
-        "Tiempo estimado (min)", "Tiempo real (min)", "Trabajo restante (min)",
-        "Tasa producción", "Recurso humano", "Recurso máquina", "Fecha inicio real",
-        "Fecha fin real", "Cantidad realizada"
+        "ID (link)",
+        "Operación",
+        "Orden de trabajo",
+        "Secuencia",
+        "Fecha inicio programada",
+        "Fecha fin programada",
+        "Estado",
+        "Centro de trabajo",
+        "Tiempo preparación (min)",
+        "Tiempo estimado (min)",
+        "Tiempo real (min)",
+        "Trabajo restante (min)",
+        "Tasa producción",
+        "Recurso humano",
+        "Recurso máquina",
+        "Fecha inicio real",
+        "Fecha fin real",
+        "Cantidad realizada"
       ],
-      "readers": ["parser_operaciones.js"],
-      "writers": ["OPERACION FINAL.js"],
-      "rules": ["RULE-OT-001", "RULE-OT-004"],
+      "readers": [
+        "parser_operaciones.js"
+      ],
+      "writers": [
+        "OPERACION FINAL.js"
+      ],
+      "rules": [
+        "RULE-OT-001",
+        "RULE-OT-004"
+      ],
       "status": "documented",
-      "references": ["parser_operaciones.js", "OPERACION FINAL.js"]
+      "references": [
+        "parser_operaciones.js",
+        "OPERACION FINAL.js"
+      ]
     },
     {
       "source_id": "SHEET-PLAN_MAESTRO",
@@ -401,40 +964,82 @@
       "name": "Plan Maestro",
       "location/origin": "Pipeline legacy (raíz); salida del scheduler legacy",
       "columns": [
-        "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
-        "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
-        "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
-        "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS", "LOG"
+        "NUM",
+        "OT",
+        "PARTE",
+        "DESCRIPCION",
+        "CONTENIDO",
+        "PRIORIDAD",
+        "FECHA_REQ",
+        "CANT_TOTAL",
+        "SECUENCIA",
+        "CT",
+        "OPERADOR",
+        "MAQUINA",
+        "HERRAMENTAL",
+        "KIT_HERRAMENTAL",
+        "CANT_PENDIENTE",
+        "TIEMPO_CICLO",
+        "TIEMPO_SETUP",
+        "TIEMPO_PROD",
+        "FECHA_INICIO",
+        "HORA_INICIO",
+        "FECHA_FIN",
+        "HORA_FIN",
+        "TIPO_INSERCION",
+        "ESTATUS",
+        "LOG"
       ],
       "readers": [],
-      "writers": ["WRITTER.js"],
-      "rules": ["RULE-OT-001"],
+      "writers": [
+        "WRITTER.js"
+      ],
+      "rules": [
+        "RULE-OT-001"
+      ],
       "status": "documented",
-      "references": ["WRITTER.js"]
+      "references": [
+        "WRITTER.js"
+      ]
     },
     {
       "source_id": "SHEET-BALANCE_DE_CARGAS",
       "type": "google_sheet",
       "name": "BALANCE DE CARGAS",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["OPERADOR", "ID CENTRO DE TRABAJO"],
-      "readers": ["global.js"],
+      "columns": [
+        "OPERADOR",
+        "ID CENTRO DE TRABAJO"
+      ],
+      "readers": [
+        "global.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["global.js"]
+      "references": [
+        "global.js"
+      ]
     },
     {
       "source_id": "SHEET-SUBCONTRATOS_LEGACY",
       "type": "google_sheet",
       "name": "Subcontratos (legacy)",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["PARTE", "TIPO", "DIAS"],
-      "readers": ["modelo_logico.js"],
+      "columns": [
+        "PARTE",
+        "TIPO",
+        "DIAS"
+      ],
+      "readers": [
+        "modelo_logico.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["modelo_logico.js"]
+      "references": [
+        "modelo_logico.js"
+      ]
     },
     {
       "source_id": "SHEET-INVENTARIO_TOTAL",
@@ -442,14 +1047,30 @@
       "name": "Inventario Total",
       "location/origin": "Pipeline legacy (raíz)",
       "columns": [
-        "ID Artículo", "Artículo", "Descripción", "Ubicación", "Disponible", "Física",
-        "Comprometida", "Pickeada", "En Tránsito", "Última Modificación", "Precio"
+        "ID Artículo",
+        "Artículo",
+        "Descripción",
+        "Ubicación",
+        "Disponible",
+        "Física",
+        "Comprometida",
+        "Pickeada",
+        "En Tránsito",
+        "Última Modificación",
+        "Precio"
       ],
-      "readers": ["modelo_logico.js"],
-      "writers": ["INVENTARIO FINAL.js"],
+      "readers": [
+        "modelo_logico.js"
+      ],
+      "writers": [
+        "INVENTARIO FINAL.js"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["INVENTARIO FINAL.js", "modelo_logico.js"]
+      "references": [
+        "INVENTARIO FINAL.js",
+        "modelo_logico.js"
+      ]
     },
     {
       "source_id": "SHEET-HERRAMENTALES_LEGACY",
@@ -457,74 +1078,137 @@
       "name": "Herramentales (legacy)",
       "location/origin": "Pipeline legacy (raíz)",
       "columns": [
-        "PARTE", "HERRAMENTAL", "KIT HERRAMENTAL", "TIEMPO DE AJUSTE HERRAMENTAL",
+        "PARTE",
+        "HERRAMENTAL",
+        "KIT HERRAMENTAL",
+        "TIEMPO DE AJUSTE HERRAMENTAL",
         "TIEMPO DE AJUSTE KIT"
       ],
-      "readers": ["modelo_logico.js", "ACTUALIZAR CENTRO DE TRABAJOS.js"],
-      "writers": ["Actualizador herramentales.js"],
-      "rules": ["RULE-HER-001"],
+      "readers": [
+        "modelo_logico.js",
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ],
+      "writers": [
+        "Actualizador herramentales.js"
+      ],
+      "rules": [
+        "RULE-HER-001"
+      ],
       "status": "documented",
-      "references": ["modelo_logico.js", "ACTUALIZAR CENTRO DE TRABAJOS.js", "Actualizador herramentales.js"]
+      "references": [
+        "modelo_logico.js",
+        "ACTUALIZAR CENTRO DE TRABAJOS.js",
+        "Actualizador herramentales.js"
+      ]
     },
     {
       "source_id": "SHEET-DIAS_FESTIVOS",
       "type": "google_sheet",
       "name": "Días festivos",
       "location/origin": "Pipeline legacy (raíz); columna A = fecha ISO sin headers",
-      "columns": ["FECHA"],
-      "readers": ["SCHEDULER.js"],
-      "writers": ["CALENDARIO VACACIONES.js"],
+      "columns": [
+        "FECHA"
+      ],
+      "readers": [
+        "SCHEDULER.js"
+      ],
+      "writers": [
+        "CALENDARIO VACACIONES.js"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["SCHEDULER.js", "CALENDARIO VACACIONES.js"]
+      "references": [
+        "SCHEDULER.js",
+        "CALENDARIO VACACIONES.js"
+      ]
     },
     {
       "source_id": "SHEET-EXCEPCIONES_DE_DIA",
       "type": "google_sheet",
       "name": "Excepciones de dia",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["TIPO", "FECHA", "INICIO TURNO", "COMIDA INICIO", "COMIDA FIN", "BREAK INICIO", "BREAK FIN", "FIN DE TURNO", "MOTIVO"],
-      "readers": ["SCHEDULER.js"],
+      "columns": [
+        "TIPO",
+        "FECHA",
+        "INICIO TURNO",
+        "COMIDA INICIO",
+        "COMIDA FIN",
+        "BREAK INICIO",
+        "BREAK FIN",
+        "FIN DE TURNO",
+        "MOTIVO"
+      ],
+      "readers": [
+        "SCHEDULER.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["SCHEDULER.js"]
+      "references": [
+        "SCHEDULER.js"
+      ]
     },
     {
       "source_id": "SHEET-MATERIALES_PROGRAMADOS",
       "type": "google_sheet",
       "name": "Materiales programados",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["ID", "Artículo", "Material", "Descripción", "Cantidad", "Emitido", "Pendiente por emitir"],
+      "columns": [
+        "ID",
+        "Artículo",
+        "Material",
+        "Descripción",
+        "Cantidad",
+        "Emitido",
+        "Pendiente por emitir"
+      ],
       "readers": [],
-      "writers": ["MATERIALES FINAL.js"],
+      "writers": [
+        "MATERIALES FINAL.js"
+      ],
       "rules": [],
       "status": "documented",
-      "references": ["MATERIALES FINAL.js"]
+      "references": [
+        "MATERIALES FINAL.js"
+      ]
     },
     {
       "source_id": "SHEET-CONTENIDO",
       "type": "google_sheet",
       "name": "Contenido",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["PARTE", "CONTENIDO"],
-      "readers": ["ACTUALIZAR CENTRO DE TRABAJOS.js"],
+      "columns": [
+        "PARTE",
+        "CONTENIDO"
+      ],
+      "readers": [
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["ACTUALIZAR CENTRO DE TRABAJOS.js"]
+      "references": [
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ]
     },
     {
       "source_id": "SHEET-COSTO_DE_PIEZAS",
       "type": "google_sheet",
       "name": "Costo de piezas",
       "location/origin": "Pipeline legacy (raíz)",
-      "columns": ["PARTE", "COSTO"],
-      "readers": ["ACTUALIZAR CENTRO DE TRABAJOS.js"],
+      "columns": [
+        "PARTE",
+        "COSTO"
+      ],
+      "readers": [
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["ACTUALIZAR CENTRO DE TRABAJOS.js"]
+      "references": [
+        "ACTUALIZAR CENTRO DE TRABAJOS.js"
+      ]
     },
     {
       "source_id": "NS-RESTLETS",
@@ -537,11 +1221,22 @@
         "1763: materiales",
         "2080 WO_INSPECCION: inspección"
       ],
-      "readers": ["PP_fetchRestletPages_", "PP_fetchNetSuitePlantData_", "PP_fetchNetSuiteWorkOrdersData_", "PP_fetchNetSuitePlanningData_", "PP_Inspection_restlet_"],
+      "readers": [
+        "PP_fetchRestletPages_",
+        "PP_fetchNetSuitePlantData_",
+        "PP_fetchNetSuiteWorkOrdersData_",
+        "PP_fetchNetSuitePlanningData_",
+        "PP_Inspection_restlet_"
+      ],
       "writers": [],
-      "rules": ["RULE-MAT-004"],
+      "rules": [
+        "RULE-MAT-004"
+      ],
       "status": "documented",
-      "references": ["src/server/08-netsuite.js", "src/server/16-inspection-service.js"]
+      "references": [
+        "src/server/08-netsuite.js",
+        "src/server/16-inspection-service.js"
+      ]
     },
     {
       "source_id": "NS-SUITEQL",
@@ -553,36 +1248,66 @@
         "CustInvc (6 meses) -> promedios de facturación",
         "manufacturingoperationtask WHERE workorder -> ruta directa de OT; por operación: 'Tiempo estimado (min)' = setuptime + runrate x cantidad pendiente y 'Cantidad a procesar' = cantidad pendiente de la OT (PP_pendingWorkOrderQuantity_ = Cantidad - Cantidad ensamblada), de donde PP_mapNetSuiteOperation_ deriva cantTotal/cantPendiente"
       ],
-      "readers": ["PP_fetchNetSuiteOperationCatalog_", "PP_fetchInvoiceSalesAverages_", "PP_fetchDirectWorkOrderSuiteQl_"],
+      "readers": [
+        "PP_fetchNetSuiteOperationCatalog_",
+        "PP_fetchInvoiceSalesAverages_",
+        "PP_fetchDirectWorkOrderSuiteQl_"
+      ],
       "writers": [],
-      "rules": ["RULE-MAT-001", "RULE-MAT-002", "RULE-MAT-003", "RULE-MAT-009", "RULE-OT-014"],
+      "rules": [
+        "RULE-MAT-001",
+        "RULE-MAT-002",
+        "RULE-MAT-003",
+        "RULE-MAT-009",
+        "RULE-OT-014"
+      ],
       "status": "documented",
-      "references": ["src/server/08-netsuite.js", "src/server/18-planning-work-order-service.js"]
+      "references": [
+        "src/server/08-netsuite.js",
+        "src/server/18-planning-work-order-service.js"
+      ]
     },
     {
       "source_id": "NS-REST_RECORD_API",
       "type": "netsuite_rest_record",
       "name": "REST Record API v1 (legacy)",
       "location/origin": "https://{accountId}.suitetalk.api.netsuite.com/services/rest/record/v1/",
-      "columns": ["workorder", "workorder/{id}/billOfMaterialsRevision/component", "inventoryItem/{itemId}"],
-      "readers": ["TRABAJOS FINAL.js", "MATERIALES FINAL.js"],
+      "columns": [
+        "workorder",
+        "workorder/{id}/billOfMaterialsRevision/component",
+        "inventoryItem/{itemId}"
+      ],
+      "readers": [
+        "TRABAJOS FINAL.js",
+        "MATERIALES FINAL.js"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["TRABAJOS FINAL.js", "MATERIALES FINAL.js"]
+      "references": [
+        "TRABAJOS FINAL.js",
+        "MATERIALES FINAL.js"
+      ]
     },
     {
       "source_id": "DRIVE-FOTOS",
       "type": "google_drive",
       "name": "Carpeta de fotografías",
       "location/origin": "PHOTO_FOLDER_ID (Drive)",
-      "columns": ["archivo -> thumbnail (drive.google.com/thumbnail?id=...&sz=w400)"],
-      "readers": ["PP_loadPhotoCatalog_", "PP_enrichWorkOrderPhotos_"],
+      "columns": [
+        "archivo -> thumbnail (drive.google.com/thumbnail?id=...&sz=w400)"
+      ],
+      "readers": [
+        "PP_loadPhotoCatalog_",
+        "PP_enrichWorkOrderPhotos_"
+      ],
       "writers": [],
       "rules": [],
       "status": "documented",
-      "references": ["src/server/09-photos.js"]
+      "references": [
+        "src/server/09-photos.js"
+      ]
     }
   ],
-  "updated_at": "2026-08-26T00:00:00-06:00"
+  "updated_at": "2026-09-04T01:00:00-06:00"
 }

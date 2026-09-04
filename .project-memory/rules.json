@@ -695,6 +695,15 @@
       "updated_at": "2026-09-03T21:20:00-06:00"
     },
     {
+      "rule_id": "RULE-REP-005",
+      "name": "Completar bloquea la OT y comparte el estado de completado entre plan publicado y borrador",
+      "status": "implementada",
+      "rule": "Al marcar 'Completar' una operacion (desde un plan publicado seleccionado en reportes) se cumple que: (1) la OT queda BLOQUEADA: performToggleOperationPlanStatus -> blockOtForCompletion añade la OT a state.lockedOts y marca op.locked=true en state.operations (por OT), y marca appSheetDirtyScope('plan') para que saveAppSheet/queueAppSheetSave persista lockedOts junto con el estado; (2) las operaciones completadas se reflejan en el DETALLE de OT (renderSelectedJobPanel usa isPlanCompletedOperation sobre state.operations del borrador) y en el reporte del plan publicado, porque compartes la MISMA clave de operacion: la columna COMPLETION_KEY de PLANES_HISTORICOS/BORRADOR_PLAN guarda el id real de la operacion del borrador al publicar (PP_appendPlanSnapshot_ escribe op.id), y PP_snapshotOperationFromRow_ lo usa como id de la operacion del snapshot (fallback al sintetico 'snapshot-<key>-<N>' si viene vacio, filas antiguas), de modo que operationCompletionKey(snapshotOp) == operationCompletionKey(borradorOp) == 'OP|<id>' (o clave TOOL_CHANGE) y state.operationPlanStatuses se comparte entre ambos sin duplicar claves. Al 'Reabrir' la unica operacion completada de la OT, unblockOtAfterCompletion la quita de lockedOts solo si otHasCompletedOperation() es false (no quedan operaciones completadas); si quedan otras completadas la OT permanece bloqueada. En caso de fallo de guardado, persistOptimisticPlanStatus restaura previousLockedOts y op.locked. Antes de este cambio la clave del snapshot publicado era sintetica ('OP|snapshot-<id>-<N>') distinta de la del borrador ('OP|<id>'), por lo que completar en un publicado NO se reflejaba en el detalle de OT y la OT NO se bloqueaba, habilitando que el motor reprogramara operaciones ya hechas (RULE-OT-011/OT-017).",
+      "source": "requisito usuario 2026-09-03 ('el boton completar debe afectar a la ot la cual se bloquea y en detalle de ot debe aparecer como completadas las operaciones que se hayan completado', enfoque aprobado: clave estable compartida); src/server/02-storage.js (columna COMPLETION_KEY en PP_SHEETS, PP_snapshotOperationFromRow_ usa row.COMPLETION_KEY como id, PP_appendPlanSnapshot_ guarda op.id); src/web/planning/app.js (performToggleOperationPlanStatus, blockOtForCompletion, unblockOtAfterCompletion, previousLockedOts rollback en persistOptimisticPlanStatus, operationCompletionKey prioriza genCompl key/id); tests/performance-client-calls.test.mjs",
+      "domain": "REP",
+      "updated_at": "2026-09-03T23:00:00-06:00"
+    },
+    {
       "rule_id": "RULE-REP-004",
       "name": "TC siempre derivado = tiempo de produccion / piezas a producir",
       "status": "implementada",
@@ -768,7 +777,7 @@
     },
     {
       "rule_id": "RULE-UI-002",
-      "name": "Navegar a Plan semanal re-renderiza el plan (evita pantalla en blanco)", 
+      "name": "Navegar a Plan semanal re-renderiza el plan (evita pantalla en blanco)",
       "status": "implementada",
       "rule": "showWorkspaceView (src/web/planning/app.js) re-renderiza el plan al navegar a la seccion 'plan-semanal' (workspace dataset.view='plan'): si el destino es la vista plan, invoca renderTop(), renderPlanAlerts(), renderDraftExecutiveSummary() y renderGantt() antes de salir. Antes del fix no se llamaba ningun render para la vista plan (a diferencia de loads/saturation/reports/configuration que si despachaban renderLoads/renderSaturation/renderReports/renderConfiguration), por lo que al navegar a 'Plan semanal' el area quedaba con el contenido anterior (en blanco si el Gantt nunca se habia pintado, p. ej. al entrar durante/proximo a una generacion). Fix: se agrego en showWorkspaceView el bloque if con el destino de vista igual a 'plan' que invoca renderTop(); renderPlanAlerts(); renderDraftExecutiveSummary(); renderGantt(). Ademas, renderGantt muestra el mensaje 'Generando plan...' (en vez de 'Sin operaciones programadas') cuando el boton #generatePlanBtn/scheduleBtn tiene la clase 'is-running' y no hay grupos aun (generacion en curso), evitando que una generacion activa se interprete como plan vacio. Verificado con Playwright: navegar a Cargas y volver a Plan semanal deja dataset.view='plan' y pinta el gantt (gantt-inner presente) sin errores de consola; 455 tests pass; npm run build + npm run check validan.",
       "source": "bug usuario 2026-09-03 (pantalla en blanco al navegar a Plan semanal); src/web/planning/app.js showWorkspaceView (bloque view==='plan'), renderGantt (mensaje is-running); tests/performance-client-calls.test.mjs (stubs renderTop/renderPlanAlerts/renderDraftExecutiveSummary/renderGantt en el test de navegacion manual); verificacion Playwright local 2026-09-03",
@@ -777,12 +786,12 @@
     },
     {
       "rule_id": "RULE-PUB-001",
-  "name": "Retencion de solo el ultimo plan publicado por semana con version que sigue avanzando",
-  "status": "implementada",
-  "rule": "Al publicar un plan (publishCurrentPlan, app.js) el numero de version (V1, V2, ...) se calcula con PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart), donde versionBase es la union de (a) state.publishedVersions, (b) los planSnapshots cargados del servidor y (c) un contador persistente por semana plan-version-counter-v1 en localStorage (readPlanVersionCounter/writePlanVersionCounter), filtrando items con version > 0. Como la retencion conserva solo el ULTIMO publicado, el contador de localStorage garantiza que las versiones sigan avanzando (V1->V2->V3) incluso tras recargar o cuando los snapshots viejos ya se borraron. Tras publicar: se escribe el contador, state.publishedVersions queda SOLO con la version nueva (se sueltan las anteriores), se recarga listPlanSnapshots. Retencion / pruning del lado servidor: PP_publishDraftPlan_ (05-publishing-service.js) llama a PP_prunePublishedSnapshots_(spreadsheet, snapshot.snapshotId, weekStart) que, via PP_deletePlanSnapshot_ (02-storage.js: elimina filas de PLANES_HISTORICOS/BORRADOR_PLAN con el SNAPSHOT_ID, el payload PLAN_SNAPSHOT_PAYLOAD::<id> y el registro del manifest index), borra las OTROS publicados de la misma semana, dejando solo el ultimo publicado y el borrador. Por eso 'solo persisten el ultimo plan publicado y el borrador'. Las publicaciones de OTRA semana no se borran (pruning es por semana).",
-  "source": "cambio de retencion usuario 2026-09-03 ('los que me interesa que esten cacheados es el borrador y el ultimo plan publicado'; 'solo persistan el ultimo plan publicado y el borrador'; 'contador persistente que sigue avanzando'); src/web/planning/app.js publishCurrentPlan (versionBase, writePlanVersionCounter, state.publishedVersions = [solo nuevo]), readPlanVersionCounter/writePlanVersionCounter; src/server/05-publishing-service.js PP_publishDraftPlan_/PP_prunePublishedSnapshots_; src/server/02-storage.js PP_deletePlanSnapshot_/PP_deletePlanSnapshotPayload_/PP_removeManifestIndexRecord_; src/web/planning/planning-workflow-core.js nextWeeklyVersion/weeklyPlanIdentifier",
-  "domain": "PUB",
-  "updated_at": "2026-09-03T03:10:00-06:00"
+      "name": "Retencion de solo el ultimo plan publicado por semana con version que sigue avanzando",
+      "status": "implementada",
+      "rule": "Al publicar un plan (publishCurrentPlan, app.js) el numero de version (V1, V2, ...) se calcula con PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart), donde versionBase es la union de (a) state.publishedVersions, (b) los planSnapshots cargados del servidor y (c) un contador persistente por semana plan-version-counter-v1 en localStorage (readPlanVersionCounter/writePlanVersionCounter), filtrando items con version > 0. Como la retencion conserva solo el ULTIMO publicado, el contador de localStorage garantiza que las versiones sigan avanzando (V1->V2->V3) incluso tras recargar o cuando los snapshots viejos ya se borraron. Tras publicar: se escribe el contador, state.publishedVersions queda SOLO con la version nueva (se sueltan las anteriores), se recarga listPlanSnapshots. Retencion / pruning del lado servidor: PP_publishDraftPlan_ (05-publishing-service.js) llama a PP_prunePublishedSnapshots_(spreadsheet, snapshot.snapshotId, weekStart) que, via PP_deletePlanSnapshot_ (02-storage.js: elimina filas de PLANES_HISTORICOS/BORRADOR_PLAN con el SNAPSHOT_ID, el payload PLAN_SNAPSHOT_PAYLOAD::<id> y el registro del manifest index), borra las OTROS publicados de la misma semana, dejando solo el ultimo publicado y el borrador. Por eso 'solo persisten el ultimo plan publicado y el borrador'. Las publicaciones de OTRA semana no se borran (pruning es por semana).",
+      "source": "cambio de retencion usuario 2026-09-03 ('los que me interesa que esten cacheados es el borrador y el ultimo plan publicado'; 'solo persistan el ultimo plan publicado y el borrador'; 'contador persistente que sigue avanzando'); src/web/planning/app.js publishCurrentPlan (versionBase, writePlanVersionCounter, state.publishedVersions = [solo nuevo]), readPlanVersionCounter/writePlanVersionCounter; src/server/05-publishing-service.js PP_publishDraftPlan_/PP_prunePublishedSnapshots_; src/server/02-storage.js PP_deletePlanSnapshot_/PP_deletePlanSnapshotPayload_/PP_removeManifestIndexRecord_; src/web/planning/planning-workflow-core.js nextWeeklyVersion/weeklyPlanIdentifier",
+      "domain": "PUB",
+      "updated_at": "2026-09-03T03:10:00-06:00"
     },
     {
       "rule_id": "RULE-REP-004",
@@ -794,5 +803,5 @@
       "updated_at": "2026-09-03T03:10:00-06:00"
     }
   ],
-  "updated_at": "2026-09-03T03:10:00-06:00"
+  "updated_at": "2026-09-04T01:00:00-06:00"
 }

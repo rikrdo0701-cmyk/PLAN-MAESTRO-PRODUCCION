@@ -688,6 +688,7 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
   assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
   assert.equal(calls[0][1].status.operationId, "op-1");
   assert.equal(fixture.deferredWork.length, 1);
+  assert.deepEqual(fixture.state.lockedOts, ["100"]);
 
   gate.resolve({ revision: 2, savedAt: "2026-08-01T00:00:00.000Z" });
   await saved;
@@ -727,6 +728,37 @@ test("completar funciona con operaciones de un plan publicado seleccionado", asy
   assert.equal(fixture.buttons[0].textContent, "Reabrir");
   assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
   assert.equal(fixture.state.operations.length, 0);
+  assert.deepEqual(fixture.state.lockedOts, ["200"]);
+});
+
+test("reabrir la unica operacion completada desbloquea la OT", async () => {
+  const calls = [];
+  const publishedOperation = {
+    id: "published-op-1",
+    ot: "200",
+    ct: "CORTE",
+    planStatus: "COMPLETADA_PLAN",
+    fechaInicio: "2026-08-01",
+    horaInicio: "07:00",
+    fechaFin: "2026-08-01",
+    horaFin: "08:00",
+  };
+  const fixture = loadPlanStatus({
+    rows: ["published-op-1"],
+    operations: [],
+    reportOperations: [publishedOperation],
+    operationPlanStatuses: { "published-op-1": { key: "published-op-1", status: "COMPLETADA_PLAN", ot: "200" } },
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return Promise.resolve({ revision: 3, savedAt: "2026-08-01T00:00:00.000Z" });
+    },
+  });
+
+  fixture.api.bindPlanStatusActions({ querySelectorAll: () => fixture.buttons });
+  await fixture.buttons[0].listener();
+
+  assert.equal(fixture.state.operationPlanStatuses["published-op-1"].status, "PENDIENTE");
+  assert.deepEqual(fixture.state.lockedOts, []);
 });
 
 test("un error revierte unicamente la fila editada", async () => {
