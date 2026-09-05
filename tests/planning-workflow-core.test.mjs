@@ -375,6 +375,82 @@ test("ganttOperationTiming separa minutos productivos y no operativos", () => {
   });
 });
 
+const ganttFmt = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+test("ganttDayIndex admite dias anteriores a la ventana (sin clamp a 0) y acota el horizonte", () => {
+  const ws = new Date(2026, 8, 7);
+  assert.equal(core.ganttDayIndex(new Date(2026, 8, 7), ws, 14), 0);
+  assert.equal(core.ganttDayIndex(new Date(2026, 8, 10), ws, 14), 3);
+  assert.equal(core.ganttDayIndex(new Date(2026, 8, 4), ws, 14), -3);
+  assert.equal(core.ganttDayIndex(new Date(2026, 9, 20), ws, 14), 13);
+});
+
+test("workMinuteOffset puro devuelve desplazamiento NEGATIVO para una op anterior a windowStart", () => {
+  const ws = new Date(2026, 8, 7);
+  const dayMinutes = (date) => (date.getDay() >= 1 && date.getDay() <= 5 ? 600 : 0);
+  const withinDay = (date) => {
+    const hour = date.getHours();
+    if (hour <= 7) return 0;
+    return Math.max(0, Math.min(hour * 60 + date.getMinutes(), 1020) - 420);
+  };
+  const friday = new Date(2026, 8, 4, 10, 0);
+  const { dayIndex, total } = core.ganttCumulativeWorkBefore(friday, ws, 14, dayMinutes);
+  assert.equal(dayIndex, -3);
+  assert.equal(total, -600);
+  assert.ok(total + withinDay(friday) < 0, "el offset total de la op anterior a la ventana debe ser negativo");
+});
+
+test("workMinuteOffset puro alinea una op que inicia en windowStart (sin desplazamiento y >= 0)", () => {
+  const ws = new Date(2026, 8, 7);
+  const dayMinutes = (date) => (date.getDay() >= 1 && date.getDay() <= 5 ? 600 : 0);
+  const { dayIndex, total } = core.ganttCumulativeWorkBefore(ws, ws, 14, dayMinutes);
+  assert.equal(dayIndex, 0);
+  assert.equal(total, 0);
+  const later = core.ganttCumulativeWorkBefore(new Date(2026, 8, 7, 12, 0), ws, 14, dayMinutes);
+  assert.equal(later.dayIndex, 0);
+  assert.equal(later.total, 0);
+});
+
+test("getPlanWindow puro nunca inicia despues de la fecha mas temprana de una op activa", () => {
+  const win = core.ganttPlanWindow({
+    planStart: "2026-09-14",
+    horizonDays: 14,
+    operations: [
+      { id: "op-a", fechaInicio: "2026-09-05", horaInicio: "07:00", planStatus: "PENDIENTE" },
+      { id: "op-b", fechaInicio: "2026-09-07", horaInicio: "07:00", planStatus: "PENDIENTE" },
+    ],
+    today: new Date(2026, 8, 10, 12, 0),
+  });
+  assert.ok(win.start <= new Date(2026, 8, 5), "la ventana arranca en la primer op activa, no despues");
+  assert.equal(ganttFmt(win.start), "2026-09-05");
+  assert.equal(ganttFmt(win.end), "2026-09-18");
+});
+
+test("getPlanWindow puro ignora ops historicas y completadas para anclar", () => {
+  const win = core.ganttPlanWindow({
+    planStart: "2026-09-14",
+    horizonDays: 14,
+    operations: [
+      { id: "op-hist", fechaInicio: "2026-08-01", horaInicio: "07:00", planStatus: "PUBLICADO" },
+      { id: "op-hecha", fechaInicio: "2026-08-02", horaInicio: "07:00", planStatus: "COMPLETADA_PLAN" },
+      { id: "op-activa", fechaInicio: "2026-09-10", horaInicio: "07:00", planStatus: "PENDIENTE" },
+    ],
+    today: new Date(2026, 8, 10, 12, 0),
+  });
+  assert.equal(ganttFmt(win.start), "2026-09-10");
+});
+
+test("getPlanWindow puro cae al lunes de la semana como fallback sin planStart ni operaciones", () => {
+  const win = core.ganttPlanWindow({ planStart: "", horizonDays: 10, operations: [], today: new Date(2026, 8, 14, 9, 0) });
+  assert.equal(ganttFmt(win.start), "2026-09-14");
+  assert.equal(ganttFmt(win.end), "2026-09-23");
+});
+
+test("ganttTotalWidth suma Math.max(dia,2) por dia no laborable para alinear header y cuerpo", () => {
+  assert.equal(core.ganttTotalWidth([600, 0, 450, 0], 190), 190 + 600 + 2 + 450 + 2);
+  assert.equal(core.ganttTotalWidth([], 190), 190);
+});
+
 test("normaliza la vista Gantt y mantiene un unico control activo", () => {
   for (const view of ["job", "ct", "machine", "operator"]) {
     assert.equal(core.normalizeGanttView(view), view);

@@ -235,6 +235,109 @@
     };
   }
 
+  const GANTT_DAY_MS = 86400000;
+
+  function parseGanttDate(value) {
+    const text = String(value || "").trim();
+    const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (iso) return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
+    const slash = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+    if (slash) {
+      const year = Number(slash[3].length === 2 ? `20${slash[3]}` : slash[3]);
+      return { year, month: Number(slash[2]), day: Number(slash[1]) };
+    }
+    const date = new Date(text);
+    if (!Number.isNaN(date.getTime())) return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() };
+    return null;
+  }
+
+  function parseGanttTime(value) {
+    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return { hour: Number(match[1]), minute: Number(match[2]) };
+  }
+
+  function ganttOperationStart(op) {
+    if (!op) return null;
+    const datePart = parseGanttDate(op.fechaInicio);
+    const timePart = parseGanttTime(op.horaInicio);
+    if (!datePart || !timePart) return null;
+    return new Date(datePart.year, datePart.month - 1, datePart.day, timePart.hour, timePart.minute, 0, 0);
+  }
+
+  function ganttStartOfDay(date) {
+    const result = new Date(date);
+    result.setHours(0, 0, 0, 0);
+    return result;
+  }
+
+  function ganttAddDays(date, days) {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  function ganttWeekStart(date) {
+    const result = ganttStartOfDay(date);
+    const day = result.getDay() || 7;
+    result.setDate(result.getDate() - day + 1);
+    return result;
+  }
+
+  function ganttIsCompletedOperation(op) {
+    return normalize(op?.planStatus || op?.estatus) === "COMPLETADA_PLAN";
+  }
+
+  function ganttPlanWindow(options) {
+    const opts = options || {};
+    const horizonDays = Math.max(1, Number(opts.horizonDays) || 14);
+    let today = opts.today != null ? new Date(opts.today) : new Date();
+    if (Number.isNaN(today.getTime())) today = new Date();
+    const operations = Array.isArray(opts.operations) ? opts.operations : [];
+    const activeStarts = operations
+      .map((op) => (ganttIsCompletedOperation(op) || isHistorical(op) ? null : ganttOperationStart(op)))
+      .filter(Boolean);
+    const configured = parseGanttDate(opts.planStart);
+    const todayStart = ganttStartOfDay(today).getTime();
+    const configuredStart = configured ? new Date(configured.year, configured.month - 1, configured.day).getTime() : null;
+    const earliestStart = activeStarts.length ? Math.min(...activeStarts.map((date) => date.getTime())) : null;
+    let base;
+    if (configuredStart != null) {
+      base = earliestStart != null
+        ? Math.min(configuredStart, todayStart, earliestStart)
+        : Math.min(configuredStart, todayStart);
+    } else {
+      base = earliestStart != null ? earliestStart : ganttStartOfDay(ganttWeekStart(today)).getTime();
+    }
+    const start = ganttStartOfDay(new Date(base));
+    return { start, end: ganttAddDays(start, horizonDays - 1) };
+  }
+
+  function ganttDayIndex(date, windowStart, horizonDays) {
+    const current = ganttStartOfDay(date).getTime();
+    const ws = ganttStartOfDay(windowStart).getTime();
+    return Math.min(horizonDays - 1, Math.round((current - ws) / GANTT_DAY_MS));
+  }
+
+  function ganttCumulativeWorkBefore(date, windowStart, horizonDays, dayWorkMinutes) {
+    const dayIndex = ganttDayIndex(date, windowStart, horizonDays);
+    const minutesFor = typeof dayWorkMinutes === "function" ? dayWorkMinutes : () => 0;
+    let total = 0;
+    if (dayIndex < 0) {
+      for (let i = dayIndex; i < 0; i++) total += minutesFor(ganttAddDays(windowStart, i));
+      total = -total;
+    } else {
+      for (let i = 0; i < dayIndex; i++) total += minutesFor(ganttAddDays(windowStart, i));
+    }
+    return { dayIndex, total };
+  }
+
+  function ganttTotalWidth(dayWidths, labelWidth) {
+    const widths = Array.isArray(dayWidths) ? dayWidths : [];
+    const label = Math.max(0, Number(labelWidth) || 0);
+    return label + widths.reduce((sum, width) => sum + Math.max(Number(width) || 0, 2), 0);
+  }
+
   const WORK_ORDER_LITE_FIELDS = ["item", "quantity", "builtQuantity", "pendingQuantity", "status", "exists"];
 
   function normalizedLiteWorkOrder(workOrder) {
@@ -1296,6 +1399,7 @@
   return { withTimeout, hasPlanningData, planningOtSyncedAt, planningOtsWithData, planningDataAvailability, markPlanningOtSynced,
     prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
+    ganttPlanWindow, ganttDayIndex, ganttCumulativeWorkBefore, ganttTotalWidth,
     isOtLockedInState, otHasCompletedOperations, pendingOperationsForOt, operationsRouteSignature,
     classifySmartSyncChange, finalizeSmartSyncSummary, smartSyncSummaryMessage,
     mergeOtRouteOperation, mergeOtRouteOperations,

@@ -3621,7 +3621,7 @@ function renderGantt() {
   const zoomLevel = ganttZoomLevelForWidth(state.ganttDayWidth);
   const totalWindowMinutes = workWindowMinutes();
   const dayWidths = ganttDayColumnWidths(window.start);
-  const totalWidth = 190 + dayWidths.reduce((sum, w) => sum + w, 0);
+  const totalWidth = globalThis.PlanningWorkflowCore.ganttTotalWidth(dayWidths, 190);
 
   els.ganttCanvas.innerHTML = "";
   const inner = document.createElement("div");
@@ -8842,22 +8842,13 @@ function parseCsv(text) {
 }
 
 function getPlanWindow() {
-  const configured = parseDate(state.planStart);
-  const starts = currentPlanOperations().map(opStart).filter(Boolean);
-  const todayStart = (() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  })();
-  const base = configured
-    ? new Date(Math.min(
-      new Date(configured.year, configured.month - 1, configured.day).getTime(),
-      todayStart
-    ))
-    : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date()));
-  const start = new Date(base);
-  start.setHours(0, 0, 0, 0);
-  return { start, end: addDays(start, state.horizonDays - 1) };
+  const activeOperations = currentPlanOperations().filter((op) => !isPlanCompletedOperation(op) && opStart(op));
+  return globalThis.PlanningWorkflowCore.ganttPlanWindow({
+    planStart: state.planStart,
+    horizonDays: state.horizonDays,
+    operations: activeOperations,
+    today: new Date(),
+  });
 }
 
 function getGanttGroups() {
@@ -9304,18 +9295,11 @@ function ganttDayWorkMinutes(date) {
 }
 
 function ganttDayIndexFor(date, windowStart) {
-  const current = new Date(date);
-  const ws = new Date(windowStart);
-  current.setHours(0, 0, 0, 0);
-  ws.setHours(0, 0, 0, 0);
-  return Math.max(0, Math.min(state.horizonDays - 1, Math.round((current - ws) / 86400000)));
+  return globalThis.PlanningWorkflowCore.ganttDayIndex(date, windowStart, state.horizonDays);
 }
 
 function ganttCumulativeWorkBefore(date, windowStart) {
-  const dayIndex = ganttDayIndexFor(date, windowStart);
-  let total = 0;
-  for (let i = 0; i < dayIndex; i++) total += ganttDayWorkMinutes(addDays(windowStart, i));
-  return { dayIndex, total };
+  return globalThis.PlanningWorkflowCore.ganttCumulativeWorkBefore(date, windowStart, state.horizonDays, (day) => ganttDayWorkMinutes(day));
 }
 
 function ganttWithinDayMinute(date, dayStart) {
