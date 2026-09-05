@@ -574,6 +574,32 @@ test("mapea headers reales de ruta NetSuite (velocidad/configuracion/cantidades)
   assert.equal(setupReal.tiempoSetup, 34.8);
 });
 
+test("ruta directa por OT: el setuptime de manufacturingoperationtask puebla tiempoSetup", () => {
+  const { context } = load();
+  const current = { operations: [], workOrders: [{ ot: "1556", pendingQuantity: 15 }] };
+  const row = {
+    "Orden de trabajo": "1556",
+    Operacion: "1OC : CORTE DE DIMENSIÓN",
+    Secuencia: 1,
+    "Centro de trabajo": "1OC",
+    Estado: "No iniciado",
+    "Cantidad a procesar": 15,
+    "Tiempo estimado (min)": 19,
+    "Tiempo de configuracion (minutos)": 4,
+  };
+  const operation = context.PP_mapNetSuiteOperation_(row, 0, current);
+  assert.equal(operation.tiempoSetup, 4);
+  assert.equal(operation.tiempoProd, 19);
+  assert.equal(operation.maquina, "");
+  assert.equal(operation.operador, "SIN_OPERADOR");
+  const op2 = context.PP_mapNetSuiteOperation_(
+    { ...row, Secuencia: 2, "Tiempo de configuracion (minutos)": 10, "Tiempo estimado (min)": 10 },
+    1,
+    current,
+  );
+  assert.equal(op2.tiempoSetup, 10);
+});
+
 test("normaliza al operador activo y rechaza el operador foraneo inexistente", () => {
   const { context } = load();
   const base = {

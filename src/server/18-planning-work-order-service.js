@@ -107,7 +107,8 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
       'Centro de trabajo': row.manufacturingworkcenter,
       'Estado': 'No iniciado',
       'Cantidad a procesar': quantity,
-      'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity
+      'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity,
+      'Tiempo de configuracion (minutos)': Number(row.setuptime || 0)
     };
   });
 }
