@@ -299,6 +299,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     const diagnostics = [];
     state.__windowCache = new Map();
     state.__workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
+    state.__lockedProgrammedOts = lockedProgrammedOts(state);
     const allOperations = state.operations;
     const preservedCompletedChanges = allOperations
       .filter((op) => op.generatedBy === GENERATED_BY && isPlanCompletedOperation(state, op))
@@ -2639,7 +2640,39 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
 
   function isFixedOperation(state, op) {
     const ot = normalizeKey(op?.ot);
-    return Array.isArray(state?.lockedOts) && state.lockedOts.some((item) => normalizeKey(item) === ot);
+    if (!Array.isArray(state?.lockedOts) || !state.lockedOts.some((item) => normalizeKey(item) === ot)) return false;
+    const programmed = state?.__lockedProgrammedOts;
+    if (programmed instanceof Set) return programmed.has(ot);
+    return lockedOtHasProgram(state, ot);
+  }
+
+  function lockedProgrammedOts(state) {
+    const locked = new Set((state?.lockedOts || []).map(normalizeKey).filter(Boolean));
+    const programmed = new Set();
+    for (const item of state?.operations || []) {
+      if (!item || !locked.has(normalizeKey(item?.ot))) continue;
+      if (normalizeKey(item?.planStatus) === "COMPLETADA_PLAN") continue;
+      if (isHistoricalOperation(item)) continue;
+      if (hasCompleteProgram(item)) programmed.add(normalizeKey(item?.ot));
+    }
+    return programmed;
+  }
+
+  function lockedOtHasProgram(state, ot) {
+    const key = normalizeKey(ot);
+    return (state?.operations || []).some((item) => {
+      if (!item || normalizeKey(item?.ot) !== key) return false;
+      if (normalizeKey(item?.planStatus) === "COMPLETADA_PLAN") return false;
+      if (isHistoricalOperation(item)) return false;
+      return hasCompleteProgram(item);
+    });
+  }
+
+  function hasCompleteProgram(item) {
+    return Boolean(
+      String(item?.fechaInicio || "").trim() && String(item?.horaInicio || "").trim() &&
+      String(item?.fechaFin || "").trim() && String(item?.horaFin || "").trim()
+    );
   }
 
   function operationCompletionKey(op) {

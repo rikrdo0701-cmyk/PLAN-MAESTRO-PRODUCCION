@@ -159,6 +159,42 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no
   })));
 });
 
+test("prepareDraftForReschedule reprograma OT bloqueada SIN operaciones con programa (se limpian fechas)", () => {
+  const undated = { id: "undated", ot: "200", secuencia: 1, estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1" };
+  const partial = { id: "partial", ot: "200", secuencia: 2, estatus: "PLAN", planStatus: "PENDIENTE", fechaInicio: "2026-06-28" };
+  const completed = { id: "done", ot: "200", secuencia: 1, planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-06-27", horaInicio: "08:00", fechaFin: "2026-06-27", horaFin: "09:00" };
+  const state = { selectedOts: ["200"], lockedOts: ["200"], operations: [undated, partial, completed] };
+  const original = structuredClone(state);
+
+  const result = core.prepareDraftForReschedule(state, ["200"]);
+
+  assert.deepEqual(state, original);
+  const byId = Object.fromEntries(result.operations.map((operation) => [operation.id, operation]));
+  assert.equal(byId.done, undefined);
+  assert.equal(byId.undated.fechaInicio, "");
+  assert.equal(byId.undated.horaInicio, "");
+  assert.equal(byId.undated.fechaFin, "");
+  assert.equal(byId.undated.horaFin, "");
+  assert.equal(byId.undated.operador, "");
+  assert.equal(byId.undated.estatus, "PLAN");
+  assert.equal(byId.undated.planStatus, "PENDIENTE");
+  assert.equal(byId.partial.fechaInicio, "");
+});
+
+test("prepareDraftForReschedule conserva OT bloqueada que SI tiene operacion con programa completo", () => {
+  const dated = { id: "dated", ot: "200", secuencia: 1, estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1", fechaInicio: "2026-06-28", horaInicio: "08:00", fechaFin: "2026-06-28", horaFin: "10:00" };
+  const pending = { id: "pending", ot: "200", secuencia: 2, estatus: "PLAN", planStatus: "PENDIENTE" };
+  const state = { selectedOts: ["200"], lockedOts: ["200"], operations: [dated, pending] };
+
+  const result = core.prepareDraftForReschedule(state, ["200"]);
+
+  const byId = Object.fromEntries(result.operations.map((operation) => [operation.id, operation]));
+  assert.equal(byId.dated.fechaInicio, "2026-06-28");
+  assert.equal(byId.dated.horaFin, "10:00");
+  assert.equal(byId.pending.fechaInicio, undefined);
+  assert.equal(byId.pending.estatus, "PLAN");
+});
+
 test("buildDraftSnapshot conserva el INICIO exacto y agrega identidad semanal de lunes", () => {
   const snapshot = core.buildDraftSnapshot({
     planStart: "2026-08-13",

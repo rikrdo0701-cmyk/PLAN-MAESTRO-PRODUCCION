@@ -511,6 +511,40 @@ test("OT bloqueada antes del Gantt queda fija completa y reserva carga", async (
   assert.ok(new Date(`${newOp.fechaInicio}T${newOp.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
 
+test("OT bloqueada SIN operaciones programadas se reprograma y recibe fechas del motor", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100", "200"],
+    lockedOts: ["100"],
+    operations: [
+      {
+        id: "undated-locked", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE",
+        estatus: "PLAN", planStatus: "PENDIENTE", tiempoProd: 60,
+      },
+      { id: "new-op", ot: "200", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "200" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-13",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    respectPlanStart: true,
+  });
+
+  const scheduled = result.operations.find((item) => item.id === "undated-locked");
+  assert.ok(scheduled, "la OT bloqueada sin programa debe conservarse en la salida");
+  assert.ok(String(scheduled.fechaInicio || "").trim(), "debe recibir fechaInicio");
+  assert.ok(String(scheduled.horaInicio || "").trim(), "debe recibir horaInicio");
+  assert.ok(String(scheduled.fechaFin || "").trim(), "debe recibir fechaFin");
+  assert.ok(String(scheduled.horaFin || "").trim(), "debe recibir horaFin");
+  assert.ok(new Date(`${scheduled.fechaInicio}T${scheduled.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
+});
+
 test("OT no bloqueada con operacion pendiente programada antes del Gantt se replanea desde INICIO", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({

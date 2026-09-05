@@ -120,12 +120,15 @@
 
   function prepareDraftForReschedule(state, ots) {
     const selected = new Set((ots || state?.selectedOts || []).map(normalize).filter(Boolean));
+    const lockedProgrammed = lockedOtsWithProgram(state);
     return {
       ...(state || {}),
       operations: (state?.operations || [])
         .filter((operation) => normalize(operation?.planStatus) !== "COMPLETADA_PLAN")
         .map((operation) => {
-          const preserved = !selected.has(normalize(operation?.ot)) || isLockedOperation(state, operation) ||
+          const ot = normalize(operation?.ot);
+          const preserved = !selected.has(ot) ||
+            (isLockedOperation(state, operation) && lockedProgrammed.has(ot)) ||
             isHistorical(operation);
           if (preserved) return { ...operation };
           return {
@@ -136,6 +139,25 @@
           };
         }),
     };
+  }
+
+  function lockedOtsWithProgram(state) {
+    const locked = new Set((state?.lockedOts || []).map(normalize).filter(Boolean));
+    const programmed = new Set();
+    for (const item of state?.operations || []) {
+      if (!item || !locked.has(normalize(item?.ot))) continue;
+      if (normalize(item?.planStatus) === "COMPLETADA_PLAN") continue;
+      if (isHistorical(item)) continue;
+      if (hasCompleteProgram(item)) programmed.add(normalize(item?.ot));
+    }
+    return programmed;
+  }
+
+  function hasCompleteProgram(item) {
+    return Boolean(
+      String(item?.fechaInicio || "").trim() && String(item?.horaInicio || "").trim() &&
+      String(item?.fechaFin || "").trim() && String(item?.horaFin || "").trim()
+    );
   }
 
   function isLockedOperation(state, operation) {
