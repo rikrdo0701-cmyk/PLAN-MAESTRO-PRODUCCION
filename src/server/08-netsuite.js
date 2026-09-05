@@ -140,9 +140,18 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
   const plantOperations = snapshot.plantOperations || [];
   const catalogFilter = PP_buildPlantFilterFromWorkOrders_(workOrderCatalog);
   const contextForOperations = Object.assign({}, current, { workOrders: workOrderCatalog });
+  const droppedPlaceholderOperations = [];
   const operations = plantOperations
     .filter(PP_isSchedulable_)
     .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
+    .filter(function(row) {
+      const reason = PP_placeholderOperationReason_(row);
+      if (reason) {
+        droppedPlaceholderOperations.push('EXCLUIDA_NOMBRE_PLACEHOLDER ' + reason + ' (OT ' + String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid']) || '') + ')');
+        return false;
+      }
+      return true;
+    })
     .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, contextForOperations); });
   const materials = snapshot.materials || [];
 
@@ -150,6 +159,7 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
   merged.operations = operations;
   merged.workOrders = workOrderCatalog;
   merged.materials = materials;
+  merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
   merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
   merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   const openOts = {};
@@ -211,14 +221,24 @@ function PP_applyNetSuitePlanningData_(current, snapshot) {
   if (snapshot.workOrders) return PP_applyNetSuitePlantData_(current, snapshot);
   const plantOperations = snapshot.plantOperations || [];
   const catalogFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
+  const droppedPlaceholderOperations = [];
   const operations = plantOperations
     .filter(PP_isSchedulable_)
     .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
+    .filter(function(row) {
+      const reason = PP_placeholderOperationReason_(row);
+      if (reason) {
+        droppedPlaceholderOperations.push('EXCLUIDA_NOMBRE_PLACEHOLDER ' + reason + ' (OT ' + String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid']) || '') + ')');
+        return false;
+      }
+      return true;
+    })
     .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
   const materials = snapshot.materials || [];
   const merged = JSON.parse(JSON.stringify(current || {}));
   merged.operations = operations;
   merged.materials = materials;
+  merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
   merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
   merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   merged.plant = Object.assign({}, merged.plant || {}, {
@@ -637,6 +657,13 @@ function PP_isSchedulable_(row) {
     'COMPLETE', 'COMPLETAD', 'CERRAD', 'CLOSED',
     'CANCELAD', 'CANCELED', 'CANCELLED'
   ].some(function(terminal) { return status.indexOf(terminal) >= 0; });
+}
+
+function PP_placeholderOperationReason_(row) {
+  const descripcion = String(PP_pick_(row, ['Operacion', 'operation']) || '').trim();
+  if (!descripcion) return null;
+  const single = descripcion.toLowerCase().replace(/[\s_]+/g, '');
+  return /^(delete\d*|prueba\d*|test\d*|x{2,}|\d+)$/.test(single) ? descripcion : null;
 }
 
 function PP_workOrderPendingQuantity_(current, ot) {

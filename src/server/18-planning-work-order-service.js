@@ -11,7 +11,9 @@ function getPlanningWorkOrderData(ot) {
     const pendingQuantity = PP_pendingWorkOrderQuantity_(workOrder);
     const rawOperations = PP_fetchDirectWorkOrderOperations_(workOrderId, folio, pendingQuantity);
     const current = { operations: [] };
-    const operations = rawOperations.map(function(row, index) {
+    const operations = rawOperations
+      .filter(function(row) { return !PP_placeholderOperationReason_(row); })
+      .map(function(row, index) {
       const normalized = Object.assign({}, row, {
         'ID (link)': folio + '-' + String(PP_Inspection_value_(row, ['ID (link)', 'id']) || (index + 1)),
         'Orden de trabajo': folio,

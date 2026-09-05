@@ -600,6 +600,32 @@ test("ruta directa por OT: el setuptime de manufacturingoperationtask puebla tie
   assert.equal(op2.tiempoSetup, 10);
 });
 
+test("nombres placeholder se detectan y los legitimos no", () => {
+  const { context } = load();
+  const placeholder = ["delete2", "xxx", "TEST", "test 1", "prueba", "42", "DelEtE7"];
+  const legitimas = ["1OC : CORTE DE DIMENSIÓN", "test pieza 1", "delete2 op", "PROTOTIPO", "32OTD : INSPECCIÓN DE PUNTEADO", "x"];
+
+  for (const name of placeholder) {
+    assert.ok(context.PP_placeholderOperationReason_({ Operacion: name }), `se esperaba detectar ${name}`);
+  }
+  for (const name of legitimas) {
+    assert.equal(context.PP_placeholderOperationReason_({ Operacion: name }), null, `no deberia detectar ${name}`);
+  }
+});
+
+test("sync de planeación excluye operaciones placeholder y registra syncWarnings", () => {
+  const { context } = load();
+  const rows = [
+    { "Orden de trabajo": "1905", Operacion: "delete2", Secuencia: 4, "Centro de trabajo": "5463", Estado: "No iniciado", "Cantidad a procesar": 480, "Tiempo estimado (min)": 4.8 },
+    { "Orden de trabajo": "1905", Operacion: "12OTD : CORTE DE EXTREMOS", Secuencia: 5, "Centro de trabajo": "5461", Estado: "No iniciado", "Cantidad a procesar": 480, "Tiempo estimado (min)": 374.4 }
+  ];
+  const current = { operations: [], workOrders: [{ ot: "1905", pendingQuantity: 480 }] };
+  const merged = context.PP_applyNetSuitePlanningData_(current, { plantOperations: rows, materials: [], operationCatalog: [] });
+
+  assert.deepEqual(merged.operations.map((op) => op.descripcion), ["12OTD : CORTE DE EXTREMOS"]);
+  assert.ok(merged.syncWarnings.some((warning) => warning.indexOf("delete2") >= 0 && warning.indexOf("1905") >= 0));
+});
+
 test("normaliza al operador activo y rechaza el operador foraneo inexistente", () => {
   const { context } = load();
   const base = {

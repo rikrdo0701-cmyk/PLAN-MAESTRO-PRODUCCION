@@ -230,6 +230,7 @@ const sampleState = {
   netSuiteChangeAlerts: [],
   netSuiteSyncAlert: null,
   operationCatalogWarning: "",
+  syncWarnings: [],
   capacityModes: {
     5459: "FINITA",
     5527: "FINITA",
@@ -1847,6 +1848,7 @@ function planAlertItems() {
     operationCatalogWarning: state.operationCatalogWarning || "",
     netSuiteSyncAlert: state.netSuiteSyncAlert?.message || "",
     netSuiteChangeAlerts: (state.netSuiteChangeAlerts || []).map((alert) => [alert.ot, alert.severity, alert.summary]),
+    syncWarnings: (state.syncWarnings || []).join("|"),
   });
   const cache = typeof planAlertItemsCache === "undefined" ? planAlertItems.cache : planAlertItemsCache;
   if (cache?.signature === signature) return cache.result;
@@ -1856,6 +1858,13 @@ function planAlertItems() {
       level: "warning",
       title: "Catalogo de operaciones NetSuite",
       message: state.operationCatalogWarning,
+    });
+  }
+  for (const warning of state.syncWarnings || []) {
+    alerts.push({
+      level: "warning",
+      title: "Sincronizacion NetSuite",
+      message: warning,
     });
   }
   if (state.netSuiteSyncAlert) {
@@ -7688,6 +7697,7 @@ function applyNetSuitePlanningPayload(payload) {
   if (Array.isArray(payload?.materials)) state.materials = payload.materials;
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
+  if (Array.isArray(payload?.syncWarnings)) state.syncWarnings = payload.syncWarnings;
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
   if (typeof payload?.syncedAt === "string" && Array.isArray(payload?.operations)) {
     state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}) };
@@ -8511,6 +8521,7 @@ async function applyImported(imported, options = {}) {
   if (imported.plant) state.plant = imported.plant;
   if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;
   if (typeof imported.operationCatalogWarning === "string") state.operationCatalogWarning = imported.operationCatalogWarning;
+  if (Array.isArray(imported.syncWarnings)) state.syncWarnings = imported.syncWarnings;
   if (Array.isArray(imported.configuredCapabilities)) state.configuredCapabilities = imported.configuredCapabilities;
   if (imported.customCapabilities) state.customCapabilities = imported.customCapabilities;
   if (imported.hiddenCapabilities) state.hiddenCapabilities = imported.hiddenCapabilities;
@@ -8755,11 +8766,35 @@ async function exportSourceOperations(sourceId) {
 function operationToRow(op) {
   return PLAN_HEADERS.map((header) => {
     if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
+    if (header === "LOG") return scheduledLogForExport(op);
     if (header === "PRECIO") return Number.isFinite(Number(op.unitPrice)) ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
     if (header === "MONTO") return Number.isFinite(Number(op.amount)) ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
     return op[field] ?? "";
   });
+}
+
+function scheduledLogForExport(op) {
+  let logText = op.log ?? "";
+  const endMs = exportScheduledEndMs(op);
+  const horizonMs = businessHorizonEndMs();
+  if (endMs && horizonMs && endMs > horizonMs) logText = appendLog(logText, "FUERA_DE_HORIZONTE_PLANEACION");
+  return logText;
+}
+
+function exportScheduledEndMs(op) {
+  const date = String(op.fechaFin || "").trim();
+  if (!date) return 0;
+  const time = String(op.horaFin || "").trim() || "00:00:00";
+  const ms = Date.parse(`${date}T${time}`);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function businessHorizonEndMs() {
+  const start = Date.parse(`${String(state.planStart || "").trim()}T00:00:00`);
+  if (!Number.isFinite(start)) return 0;
+  const days = Math.max(1, Math.min(45, Number(state.horizonDays) || DEFAULT_HORIZON_DAYS));
+  return start + days * 86400000;
 }
 
 function scheduledProductionMinutesForExport(op) {
