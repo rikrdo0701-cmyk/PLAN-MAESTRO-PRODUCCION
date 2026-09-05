@@ -4899,7 +4899,7 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   setScheduleStatus("Preparando OTs...");
   const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state, closedOts);
   checkpointState();
-  state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, readyOts);
+  state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, engineSelectedOts);
   invalidateCurrentPlanOperationsCache();
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
@@ -5184,7 +5184,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     await yieldToBrowser();
     engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
     metrics.engineSelectedOtsCount = engineSelectedOts.length;
-    let temporaryState = window.PlanningWorkflowCore.prepareDraftForReschedule(deepClone({ ...state, planStart }), readyOts);
+    let temporaryState = window.PlanningWorkflowCore.prepareDraftForReschedule(deepClone({ ...state, planStart }), engineSelectedOts);
     state = temporaryState;
     invalidateCurrentPlanOperationsCache();
     applyQueuePriorities();
