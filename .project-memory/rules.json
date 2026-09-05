@@ -838,7 +838,16 @@
       "source": "bug usuario 2026-09-04 (parte D66-2896: promedio de venta 6 meses 784.5923671 vs 45 en el plan; 45 era USD sin convertir, TC 17.4354); decision usuario 2026-09-05 (TC por factura desde SuiteQL); src/server/08-netsuite.js PP_fetchInvoiceSalesAverages_ (netamount * exchangerate); src/server/02-storage.js PP_applyInvoiceAverages_/PP_mapWorkOrder_/PP_appendPlanSnapshot_; src/web/planning/app.js effectiveUnitPriceForOt/amountForOt/formatCurrency; tests/netsuite-operation-catalog.test.mjs (promedios de venta convierten facturas no-MXN a MXN)",
       "domain": "FIN",
       "updated_at": "2026-09-05"
+    },
+    {
+      "rule_id": "RULE-GOV-011",
+      "name": "Las reglas de ajuste se documentan y no se pierden entre modificaciones",
+      "status": "implementada",
+      "rule": "Toda regla o ajuste definido por el usuario o descubierto en el codigo se documenta de inmediato en .project-memory/rules.json como entrada completa (rule_id, name, status, rule, source, domain, updated_at) y, cuando aplique, en los docs asociados (docs/, .project-memory/). Estas reglas SON la referencia normativa de futuras modificaciones: no se pierden, no se ignoran, no se cambian ni se eliminan salvo solicitud explicita del usuario (p. ej. 'cambia la regla a X' o 'ya no aplica'). Si una modificacion implica cambiar una regla documentada, el cambio SIEMPRE incluye la actualizacion de la propia regla (updated_at + registro del cambio en source); nunca se modifica el codigo contradiciendo una regla documentada sin actualizarla (eso es una regresion). Al cerrar una TASK que toca comportamiento, verificar que las reglas implicadas queden documentadas/actualizadas (refuerza RULE-GOV-003).",
+      "source": "definicion de usuario 2026-09-05 ('puedes guardar estas reglas de lo que se va haciendo para que en futuras modificaciones no se pierdan? definir esto como una regla que se tienen que documentar las reglas de los ajustes realizados para que no se pierdan a menos que yo solicite que se cambien'); AGENTS.md; RULE-GOV-003",
+      "domain": "GOV",
+      "updated_at": "2026-09-05T17:40:00-06:00"
     }
   ],
-  "updated_at": "2026-09-05"
+  "updated_at": "2026-09-05T17:40:00-06:00"
 }
