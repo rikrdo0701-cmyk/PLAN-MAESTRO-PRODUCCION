@@ -140,6 +140,13 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-CAL-001` | Turno y ventanas de trabajo por defecto 07:00–17:00 | IMPLEMENTADA | `planner-core.js`, `app.js`, `02-storage.js` |
 | `RULE-CAL-002` | Partición de operaciones entre días laborables consecutivos | IMPLEMENTADA | definición de usuario 2026-08-16; `planner-core.js`; `tests/planner-core.test.mjs` |
 
+## Montos
+
+| ID | Nombre | Estado | Fuente |
+|---|---|---|---|
+| `RULE-MON-001` | Monto de liberación en el export CSV del plan | DOCUMENTADA | definición de usuario 2026-08-17; `app.js`; `planning-workflow-core.js` |
+| `RULE-FIN-001` | Precios y montos en MXN: TC por factura desde SuiteQL | IMPLEMENTADA | bug usuario 2026-09-04 (D66-2896); decisión usuario 2026-09-05; `08-netsuite.js`; `02-storage.js`; `tests/netsuite-operation-catalog.test.mjs` |
+
 ## Pendientes y ambigüedades
 
 - Balanceo y BOM carecen de reglas explícitas más allá de lo listado (evidencia insuficiente).

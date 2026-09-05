@@ -121,6 +121,26 @@ const catalogPage = {
   }),
 };
 
+const invoiceAveragesPage = {
+  body: JSON.stringify({
+    items: [
+      { item_id: 1 === 1 ? 1001 : 0, item_name: "D66-2896", billed_quantity: 2, net_amount: 1569.1846734 },
+    ],
+  }),
+};
+
+test("promedios de venta convierten facturas no-MXN a MXN via exchangerate en SuiteQL", () => {
+  const { context, requests } = load([invoiceAveragesPage]);
+
+  const averages = context.PP_fetchInvoiceSalesAverages_(config, { from: "2026-03-05", to: "2026-09-05" });
+
+  const payload = JSON.parse(requests[0].options.payload);
+  assert.match(payload.q, /\* NVL\(t\.exchangerate, 1\)/);
+  assert.ok(Math.abs(averages.byItem["D66-2896"] - 784.5923367) < 1e-6);
+  assert.equal(averages.from, "2026-03-05");
+  assert.equal(averages.to, "2026-09-05");
+});
+
 test("catálogo maestro reutiliza caché por una hora", () => {
   const { context, requests, cachePuts } = load([catalogPage]);
 

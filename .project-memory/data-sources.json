@@ -251,7 +251,8 @@
       ],
       "rules": [
         "RULE-OT-008",
-        "RULE-OT-014"
+        "RULE-OT-014",
+        "RULE-FIN-001"
       ],
       "status": "documented",
       "references": [
@@ -1245,7 +1246,7 @@
       "location/origin": "https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql",
       "columns": [
         "manufacturingroutingstep JOIN ruta/centro -> catálogo de operaciones",
-        "CustInvc (6 meses) -> promedios de facturación",
+        "CustInvc (6 meses) -> promedios de facturación en MXN: billed_quantity = SUM(ABS(quantity)), net_amount = SUM(ABS(netamount * NVL(t.exchangerate,1))); el exchangerate por transacción convierte facturas no-MXN a MXN antes de promediar (en MXN el TC es 1)",
         "manufacturingoperationtask WHERE workorder -> ruta directa de OT; por operación: 'Tiempo estimado (min)' = setuptime + runrate x cantidad pendiente y 'Cantidad a procesar' = cantidad pendiente de la OT (PP_pendingWorkOrderQuantity_ = Cantidad - Cantidad ensamblada), de donde PP_mapNetSuiteOperation_ deriva cantTotal/cantPendiente"
       ],
       "readers": [
@@ -1259,7 +1260,8 @@
         "RULE-MAT-002",
         "RULE-MAT-003",
         "RULE-MAT-009",
-        "RULE-OT-014"
+        "RULE-OT-014",
+        "RULE-FIN-001"
       ],
       "status": "documented",
       "references": [
@@ -1309,5 +1311,5 @@
       ]
     }
   ],
-  "updated_at": "2026-09-04T01:00:00-06:00"
+  "updated_at": "2026-09-05"
 }

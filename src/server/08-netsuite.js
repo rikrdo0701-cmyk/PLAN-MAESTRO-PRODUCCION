@@ -428,7 +428,7 @@ function PP_fetchInvoiceSalesAverages_(config, window) {
   const sql = [
     "SELECT tl.item AS item_id, BUILTIN.DF(tl.item) AS item_name,",
     "ABS(SUM(NVL(tl.quantity, 0))) AS billed_quantity,",
-    "ABS(SUM(NVL(tl.netamount, 0))) AS net_amount",
+    "ABS(SUM(NVL(tl.netamount, 0) * NVL(t.exchangerate, 1))) AS net_amount",
     "FROM transaction t",
     "INNER JOIN transactionline tl ON tl.transaction = t.id",
     "WHERE t.type = 'CustInvc'",

@@ -829,7 +829,16 @@
       "source": "cambio usuario 2026-09-03 ('los reportes deben mostrar por defecto el ultimo plan publicado'; 'antes de publicar te pregunte si quieres guardar pdf que es el reporte de la version anterior'); src/web/planning/app.js planSourceOptionsMarkup (solo ultimo publicado), maybeLoadDefaultPublishedReportSnapshot/activePublishedSnapshotId/publishedPlanSnapshots (default ultimo publicado), publishCurrentPlan (dialogo Guardar PDF de la version anterior), generatePlanPdfForSnapshot/generatePlanPdf (parametro explicito)",
       "domain": "REP",
       "updated_at": "2026-09-03T03:10:00-06:00"
+    },
+    {
+      "rule_id": "RULE-FIN-001",
+      "name": "Precios y montos: averageSalePrice debe estar en MXN (TC por factura desde SuiteQL)",
+      "status": "implementada",
+      "rule": "El averageSalePrice de cada ORDEN_TRABAJO se calcula en el servidor con PP_fetchInvoiceSalesAverages_ (src/server/08-netsuite.js): una SuiteQL sobre facturas (CustInvc, no voided, no mainline/taxline/iscogs, item no nulo, dentro de la ventana invoicePriceWindow de 6 meses) agrupa por item y devuelve billed_quantity = SUM(ABS(quantity)) y net_amount = SUM(ABS(netamount * NVL(exchangerate, 1))). El tipo de cambio por factura (t.exchangerate) convierte cada linea no-MXN a MXN ANTES de promediar: para facturas en moneda base (MXN) el exchangerate es 1 y no afecta; para facturas USD/EUR multiplıca netamount por el TC de esa transaccion. El promedio por item es net_amount / billed_quantity y se persiste como PRECIO_PROMEDIO_VENTA (con PRECIO_DESDE/PRECIO_HASTA = ventana) en ORDENES_TRABAJO (02-storage.js PP_mapWorkOrder_/PP_applyInvoiceAverages_). En el plan, PRECIO_UNITARIO = workOrder.averageSalePrice si > 0, si no el manualUnitPrice del ARTICULO (precioManual); MONTO = unitPrice * pendingPieces. El frontend formatea como MXN (formatCurrency, app.js:7288) y NUNCA multiplica: por eso el averageSalePrice debe estar ya en pesos en el origen. No hay conversion de moneda local: todo el TC se aplica en SuiteQL. Precios manuales (manualUnitPrice/precioManual) se interpretan directamente en MXN sin TC.",
+      "source": "bug usuario 2026-09-04 (parte D66-2896: promedio de venta 6 meses 784.5923671 vs 45 en el plan; 45 era USD sin convertir, TC 17.4354); decision usuario 2026-09-05 (TC por factura desde SuiteQL); src/server/08-netsuite.js PP_fetchInvoiceSalesAverages_ (netamount * exchangerate); src/server/02-storage.js PP_applyInvoiceAverages_/PP_mapWorkOrder_/PP_appendPlanSnapshot_; src/web/planning/app.js effectiveUnitPriceForOt/amountForOt/formatCurrency; tests/netsuite-operation-catalog.test.mjs (promedios de venta convierten facturas no-MXN a MXN)",
+      "domain": "FIN",
+      "updated_at": "2026-09-05"
     }
   ],
-  "updated_at": "2026-09-04T13:00:00-06:00"
+  "updated_at": "2026-09-05"
 }
