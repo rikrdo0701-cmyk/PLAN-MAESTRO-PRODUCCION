@@ -287,9 +287,11 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(filterExcludedOperations(state, state.operations)));
     const requestedStart = atMinute(planStart, DEFAULT_START_MINUTE);
     const executionTime = parseExecutionTime(options?.executionTime);
-    const windowStart = options?.respectPlanStart === true
-      ? requestedStart
-      : (executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart);
+    const windowStart = options?.startFromExecutionTime === true
+      ? (executionTime ? ceilToSnap(executionTime) : requestedStart)
+      : (options?.respectPlanStart === true
+        ? requestedStart
+        : (executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart));
     const newnessBase = options?.baseSnapshot?.fullState || options?.baseSnapshot || null;
     const newnessIndex = newnessBase ? buildNewnessIndex(newnessBase) : null;
     const nowAnchor = executionTime;

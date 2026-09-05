@@ -1803,7 +1803,7 @@ function renderTop() {
   els.kpiAlerts.textContent = String(planAlertItems().length);
   const plantName = state.plant?.name ? `${state.plant.name} - ` : "";
   els.planWindow.textContent = `${plantName}${formatShortDate(window.start)} a ${formatShortDate(window.end)}`;
-  els.planStartInput.value = formatDate(window.start);
+  els.planStartInput.value = state.planStart ? String(state.planStart) : formatDate(window.start);
   els.horizonSelect.value = String(state.horizonDays);
   renderGanttDisplayControls();
   els.undoBtn.disabled = stateHistory.length === 0;
@@ -4913,7 +4913,7 @@ state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
-      respectPlanStart: true,
+      startFromExecutionTime: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
@@ -5209,7 +5209,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       planStart: temporaryState.planStart,
       horizonDays: temporaryState.horizonDays,
       executionTime: new Date().toISOString(),
-      respectPlanStart: true,
+      startFromExecutionTime: true,
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
@@ -8809,8 +8809,16 @@ function parseCsv(text) {
 function getPlanWindow() {
   const configured = parseDate(state.planStart);
   const starts = currentPlanOperations().map(opStart).filter(Boolean);
+  const todayStart = (() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  })();
   const base = configured
-    ? new Date(configured.year, configured.month - 1, configured.day)
+    ? new Date(Math.min(
+      new Date(configured.year, configured.month - 1, configured.day).getTime(),
+      todayStart
+    ))
     : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date()));
   const start = new Date(base);
   start.setHours(0, 0, 0, 0);

@@ -62,7 +62,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-008` | OTs cerradas conservadas (`CLOSED_KEPT`) | IMPLEMENTADA | task-2-report |
 | `RULE-OT-009` | Tipos de trabajo (PROTOTIPO/URGENTE/EXPEDITACION) | IMPLEMENTADA | `legacy/IndexPlanning.html` |
 | `RULE-OT-010` | Persistencia de `CONFIGURACION_OT` mientras OT abierta | DOCUMENTADA | definición de usuario 2026-08-12 |
-| `RULE-OT-011` | Inicio del borrador desde Gantt | IMPLEMENTADA | definición de usuario 2026-08-13 |
+| `RULE-OT-011` | Inicio del borrador: arranque desde la hora de ejecución con semana = lunes | IMPLEMENTADA | definición de usuario 2026-08-13; cambio usuario 2026-09-04 |
 | `RULE-OT-012` | Precedencia por secuencia incluida | IMPLEMENTADA | definición de usuario 2026-08-13 |
 | `RULE-OT-013` | Vigencia por OT de datos de planeacion (24h) y fallback parcial | IMPLEMENTADA | definición de usuario 2026-08-13, 2026-08-27 |
 | `RULE-OT-014` | Sincronización inteligente y actualización por OT | IMPLEMENTADA | definición de usuario 2026-08-14 |

@@ -449,6 +449,31 @@ test("una OT nueva sin programacion previa respeta el calendario del planStart c
   assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-03", "07:00"]);
 });
 
+test("startFromExecutionTime arranca desde la hora de ejecucion aunque planStart sea futuro", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    operations: [
+      { id: "op-1", ot: "100", secuencia: 1, ct: "100", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "100::CORTE": ["OP 1"] },
+    configuredCapabilities: ["100::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1 },
+    workSchedule: {},
+  }, {
+    planStart: "2026-08-17",
+    horizonDays: 5,
+    executionTime: "2026-08-13T10:30:00",
+    startFromExecutionTime: true,
+  });
+
+  const operation = result.operations.find((item) => item.id === "op-1");
+  assert.equal(result.planStart, "2026-08-17");
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-13", "10:30"]);
+});
+
 test("OT bloqueada antes del Gantt queda fija completa y reserva carga", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
