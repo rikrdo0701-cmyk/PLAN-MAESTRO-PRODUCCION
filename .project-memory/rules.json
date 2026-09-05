@@ -847,7 +847,16 @@
       "source": "definicion de usuario 2026-09-05 ('puedes guardar estas reglas de lo que se va haciendo para que en futuras modificaciones no se pierdan? definir esto como una regla que se tienen que documentar las reglas de los ajustes realizados para que no se pierdan a menos que yo solicite que se cambien'); AGENTS.md; RULE-GOV-003",
       "domain": "GOV",
       "updated_at": "2026-09-05T17:40:00-06:00"
+    },
+    {
+      "rule_id": "RULE-REP-007",
+      "name": "Setup en el plan proviene de NetSuite o de transiciones de herramental; 0 en otro caso es correcto",
+      "status": "implementada",
+      "rule": "El tiempo de setup (op.tiempoSetup / columna 'Tiempo setup' del reporte Plan por operador, Ajustador y export CSV, via operationSetupMinutesForReport conforme RULE-OT-025) se puebla SOLO desde dos fuentes: (a) el campo de ruta de NetSuite 'Tiempo preparacion (min)'/'setup_min'/'Tiempo de configuracion (minutos)'/'setup_time' mapeado por PP_mapNetSuiteOperation_ (RULE-OT-027) que llega a op.tiempoSetup, y (b) las transiciones de herramental/kit que el motor computa: CAMBIO_HERRAMENTAL con tiempoSetup = setupMinutes (createToolChangeOperation) y las operaciones que reciben la transicion (commitAssignment escribe assignment.setupMinutes solo si la op no trae tiempoSetup>0). Las operaciones SIN cambio de herramental Y SIN tiempo de preparacion en NetSuite muestran 0, y eso es COMPORTAMIENTO ACEPTADO (decision usuario 2026-09-05 'dejarlo como esta'), no un bug de display. Verificado 2026-09-05 contra NetSuite real: getPlanningWorkOrderData de OT 1556 ct 5514 (Cortador Inicial) devuelve tiempoSetup:0; el borrador actual (41 ops) tiene 240 min de setup solo en 2 filas (1 CAMBIO_HERRAMENTAL 120 min + 1 doblez 120 min). PROHIBIDO fabricar setups por defecto (p. ej. inventar preparacion a la primera op del dia/maquina) sin decision explicita del usuario.",
+      "source": "decision usuario 2026-09-05 (setup en reporte Plan por operador de Cortador Inicial); verificacion 2026-09-05 probes contra NetSuite/bridge real y estado de produccion; src/web/planning/planner-core.js createToolChangeOperation/toolChangeFor/commitAssignment:832; src/server/08-netsuite.js PP_mapNetSuiteOperation_; src/web/planning/app.js operationSetupMinutesForReport; RULE-OT-025/RULE-OT-027/RULE-GOV-011",
+      "domain": "REP",
+      "updated_at": "2026-09-05T17:55:00-06:00"
     }
   ],
-  "updated_at": "2026-09-05T17:40:00-06:00"
+  "updated_at": "2026-09-05T17:55:00-06:00"
 }
