@@ -100,7 +100,7 @@ function diagnoseOtOperatingStatuses(ot) {
       .filter(function(row) {
         return String(row.OT || '').toUpperCase() === target || String(row.KEY || '').toUpperCase().indexOf(target) >= 0;
       })
-      .map(function(row) { return { KEY: row.KEY, ESTATUS_PLAN: row.ESTATUS_PLAN, OPERATION_ID: row.OPERATION_ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, FECHA_INICIO: row.FECHA_INICIO, FECHA_REAPERTURA: row.FECHA_REAPERTURA }; }),
+      .map(function(row) { return { KEY: row.KEY, ESTATUS_PLAN: row.ESTATUS_PLAN, OPERATION_ID: row.OPERATION_ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, FECHA_INICIO: row.FECHA_INICIO, FECHA_REAPERTURA: row.FECHA_REAPERTURA, ORIGEN: row.ORIGEN || 'draft' }; }),
     operationRows: operationRows
       .filter(function(row) { return String(row.OT || '').toUpperCase() === target; })
       .map(function(row) { return { ID: row.ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, DESC: row.DESCRIPCION, ESTATUS: row.ESTATUS, INICIO: row.FECHA_INICIO, FIN: row.FECHA_FIN, LOCKED: row.LOCKED }; })
