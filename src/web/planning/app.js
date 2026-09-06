@@ -5044,6 +5044,8 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
+  const backup = await persistPlanAutoBackup();
+  if (!backup?.ok) showToast("Aviso: no se pudo crear el respaldo del borrador antes de generar", 8000);
   const chosenWeek = await askGeneratingPlanWeek();
   if (!chosenWeek) return;
   setScheduleStatus("Revisando plan...");
@@ -5583,6 +5585,22 @@ async function persistPlanSnapshot() {
     console.error("[persistPlanSnapshot] No se pudo guardar la instantanea del plan:", error, error && error.stack);
     showToast(`Plan generado; no se pudo guardar la instantanea: ${error.message}`);
     return null;
+  }
+}
+
+async function persistPlanAutoBackup() {
+  if (!isAppsScriptRuntime()) return { ok: false, reason: "runtime-local", snapshotId: "" };
+  try {
+    const payload = window.PlanningWorkflowCore.buildDraftSnapshot({
+      ...createAppSheetPayload(),
+      operations: currentPlanOperations(),
+    }, new Date().toISOString());
+    const saved = await callAppsScript("savePlanSnapshot", payload);
+    await loadPlanSnapshots(false, { deferPublishedLoad: true });
+    return Object.assign({ ok: true, kind: "RESPALDO" }, saved || {});
+  } catch (error) {
+    console.error("[persistPlanAutoBackup] No se pudo crear el respaldo del borrador:", error, error && error.stack);
+    return { ok: false, reason: error && error.message || String(error), snapshotId: "" };
   }
 }
 
@@ -6144,6 +6162,21 @@ function emptyTableRow(columns, message) {
   return `<tr><td colspan="${columns}" class="status-note">${escapeHtml(message)}</td></tr>`;
 }
 
+const PLAN_RESTORE_RECENT_BACKUP_WINDOW_MS = 8 * 86400000;
+
+function restoreDraftCandidateSnapshots() {
+  const publishedIds = publishedSnapshotIds();
+  const cutoff = Date.now() - PLAN_RESTORE_RECENT_BACKUP_WINDOW_MS;
+  return planSnapshots
+    .filter((snapshot) => {
+      if (snapshot.snapshotId === "draft") return false;
+      if (publishedIds.has(snapshot.snapshotId)) return true;
+      const stamp = String(snapshot.publishedAt || snapshot.generatedAt || "").trim();
+      return Boolean(stamp) && new Date(stamp).getTime() >= cutoff;
+    })
+    .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+}
+
 async function openRestoreDraftDialog() {
   if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
@@ -6158,17 +6191,18 @@ async function openRestoreDraftDialog() {
     setPlanningActionsBusy("restore", false);
   }
   const publishedIds = publishedSnapshotIds();
-  const published = planSnapshots.filter((snapshot) => snapshot.snapshotId !== "draft" && publishedIds.has(snapshot.snapshotId));
-  if (!published.length) return showToast("No hay planes publicados historicos para restaurar");
-  const options = published.map((snapshot, index) => {
+  const candidates = restoreDraftCandidateSnapshots();
+  if (!candidates.length) return showToast("No hay planes publicados ni respaldos recientes para restaurar");
+  const options = candidates.map((snapshot, index) => {
     const when = snapshot.publishedAt || snapshot.generatedAt;
     const user = snapshot.publishedBy || snapshot.createdBy || snapshot.user || "usuario";
     const operations = Array.isArray(snapshot.operations) ? snapshot.operations.length : Number(snapshot.operations || 0);
-    return `<label class="restore-draft-option"><input type="radio" name="snapshot_id" value="${escapeHtml(snapshot.snapshotId)}" ${index === 0 ? "checked" : ""} required><span><strong>${escapeHtml(when ? formatDateTime(new Date(when)) : "Sin fecha")}</strong><small>${escapeHtml(user)} · Inicio ${escapeHtml(snapshot.planStart || "sin fecha")} · ${operations} operaciones</small></span></label>`;
+    const kind = publishedIds.has(snapshot.snapshotId) ? "" : " · Respaldo automatico";
+    return `<label class="restore-draft-option"><input type="radio" name="snapshot_id" value="${escapeHtml(snapshot.snapshotId)}" ${index === 0 ? "checked" : ""} required><span><strong>${escapeHtml(when ? formatDateTime(new Date(when)) : "Sin fecha")}</strong><small>${escapeHtml(user)}${kind} · Inicio ${escapeHtml(snapshot.planStart || "sin fecha")} · ${operations} operaciones</small></span></label>`;
   }).join("");
   const synced = state.syncedAt ? formatDateTime(new Date(state.syncedAt)) : "Sin sincronizacion registrada";
   const choice = await openPlanningDialog({
-    title: "Restaurar borrador desde publicado",
+    title: "Restaurar borrador",
     summary: `Ultima sincronizacion: ${synced}`,
     body: `<div class="restore-draft-list">${options}</div><fieldset><legend>Datos de NetSuite</legend><label><input type="radio" name="sync_choice" value="sync" checked> Sincronizar antes de restaurar</label><label><input type="radio" name="sync_choice" value="loaded"> Continuar con datos cargados</label></fieldset>`,
     confirmLabel: "Ver vista previa",
