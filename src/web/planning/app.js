@@ -6931,7 +6931,7 @@ function bindPlanStatusActions(container) {
 }
 
 function planStatusButtons(key) {
-  return [els.operatorReport, els.adjusterReport, els.subcontractReport].flatMap((container) =>
+  return [els.operatorReport, els.adjusterReport, els.subcontractReport, els.selectedJobPanel].flatMap((container) =>
     Array.from(container?.querySelectorAll("[data-plan-status-key]") || [])
   ).filter((button) => button.dataset.planStatusKey === key);
 }

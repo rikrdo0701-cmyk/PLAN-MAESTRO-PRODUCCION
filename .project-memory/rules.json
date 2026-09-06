@@ -804,6 +804,15 @@
       "updated_at": "2026-09-03T01:15:00-06:00"
     },
     {
+      "rule_id": "RULE-UI-003",
+      "name": "Botones Completar/Reabrir del panel de detalle de OT se re-habilitan cuando termina el guardado",
+      "status": "implementada",
+      "rule": "En el panel 'Detalle de OT' (els.selectedJobPanel) y en los reportes (operador, ajustador y subcontrato), los botones de estado de operacion (Completar/Reabrir, data-plan-status-key) comparten el mismo ciclo de espera de guardado: planStatusButtons(key) (app.js) recolecta TODOS los botones con esa clave de completado (OP|<id> o TOOL_CHANGE|...), incluido el del panel de detalle, y toggleOperationPlanStatus los deshabilita (setPlanStatusButtonsDisabled) mientras saveOperationPlanStatus esta en vuelo; al resolver (finally) se re-habilitan. Al togglear desde el detalle, renderPlanStatusRow re-renderiza renderSelectedJobPanel, y el boton recien creado viene deshabilitado mientras el guardado no termina (operationPlanStatusActions pendiente). Fix 2026-09-06: els.selectedJobPanel se anadio a la lista de contenedores de planStatusButtons; antes quedaba fuera y, tras completar/reabrir desde el detalle, el boton re-renderizado permanecia disabled para siempre (no se re-habilitaba al resolver el guardado), por lo que 'Completar'/'Reabrir' dejaban de responder hasta un render global. RULE-OT-031 garantiza que la clave OP|<id> sea estable (el id de operacion se conserva en las fusiones de ruta) para que el estado guardado siga casando con la operacion del detalle.",
+      "source": "bug usuario 2026-09-06 ('en detalle de ot como que los botones de completar y reabrir no funcionan correctamente'); src/web/planning/app.js planStatusButtons/setPlanStatusButtonsDisabled/toggleOperationPlanStatus/renderPlanStatusRow/renderSelectedJobPanel; tests/performance-client-calls.test.mjs (nuevo test 'completar desde el panel de detalle re-habilita el boton del detalle despues de guardar', falla sin el fix: boton queda disabled=true); RULE-OT-031",
+      "domain": "UI",
+      "updated_at": "2026-09-06T00:10:00-06:00"
+    },
+    {
       "rule_id": "RULE-PUB-001",
       "name": "Retencion de solo el ultimo plan publicado por semana con version que sigue avanzando",
       "status": "implementada",

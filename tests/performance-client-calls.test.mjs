@@ -545,8 +545,8 @@ function loadPlanStatus(options = {}) {
     operationPlanStatuses: options.operationPlanStatuses || {},
     ...(options.state || {}),
   };
-  const reportSource = options.reportOperations || state.operations;
-  const buttons = buttonKeys.map((key) => {
+const reportSource = options.reportOperations || state.operations;
+  const createButton = (key) => {
     const operation = state.operations.find((item) => item.id === key);
     const completed = state.operationPlanStatuses[key]?.status === "COMPLETADA_PLAN" || operation?.planStatus === "COMPLETADA_PLAN";
     const classes = new Set(["plan-status-action", completed ? "reopen" : "complete"]);
@@ -560,7 +560,9 @@ function loadPlanStatus(options = {}) {
       get classes() { return [...classes].sort(); },
     };
     return button;
-  });
+  };
+  const buttons = buttonKeys.map(createButton);
+  const detailButtons = (options.detailKeys || []).map(createButton);
   const createReportRow = (key) => ({
     dataset: { planStatusRowKey: key }, removed: false, html: "", nextSibling: null,
     remove() { this.removed = true; },
@@ -589,6 +591,7 @@ function loadPlanStatus(options = {}) {
   const els = {
     operatorReport,
     adjusterReport: { querySelectorAll: () => [] },
+    selectedJobPanel: { querySelectorAll: (selector) => selector === "[data-plan-status-key]" ? detailButtons : [] },
     operatorReportStartInput: { value: "" },
     operatorReportFutureDays: { value: "" },
     operatorReportCount: { textContent: "", title: "" },
@@ -634,11 +637,11 @@ function loadPlanStatus(options = {}) {
     }, () => true, () => options.reportTrackingAllowed !== false,
     (operation) => operation?.planStatus === "COMPLETADA_PLAN", (operation) => operation?.id || "",
     structuredClone, (log, entry) => [log, entry].filter(Boolean).join(" | "), () => false, () => null,
-    () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), () => {},
+    () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), options.renderSelectedJobPanel || (() => {}),
     () => broadRenders.push("summary"), () => broadRenders.push("gantt"), () => broadRenders.push("loads"), (callback) => { callback(); return 1; },
     () => {}, (message) => toasts.push(message), true, () => true, null, 0,
     (...args) => options.callAppsScript?.(...args), new Set(), () => {}, () => {}, async () => false,
-    { warn: () => {} }, () => broadRenders.push("render"), () => "", (value) => String(value || ""),
+    { warn: () => {} }, () => broadRenders.push("render"), options.selectedJobOt || (() => ""), (value) => String(value || ""),
     reportSelection, () => ({ rows: [], total: 0, date: "2026-08-01", futureDays: 1 }),
     (_type, input, future, output, selection) => {
       input.value = selection.date;
@@ -650,7 +653,7 @@ function loadPlanStatus(options = {}) {
     (a, b) => (Number(a?.secuencia || 0) - Number(b?.secuencia || 0)), () => null, () => {},
   );
   return {
-    api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport,
+    api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport, detailButtons,
     visibleReportKeys: () => activeReportRows.filter((row) => !row.removed).map((row) => row.dataset.planStatusRowKey),
     reportRenderCount: () => reportRenders,
   };
@@ -759,6 +762,34 @@ test("reabrir la unica operacion completada desbloquea la OT", async () => {
 
   assert.equal(fixture.state.operationPlanStatuses["published-op-1"].status, "PENDIENTE");
   assert.deepEqual(fixture.state.lockedOts, []);
+});
+
+test("completar desde el panel de detalle re-habilita el boton del detalle despues de guardar", async () => {
+  const calls = [];
+  const fixture = loadPlanStatus({
+    rows: ["op-1"],
+    detailKeys: ["op-1"],
+    selectedJobOt: () => "100",
+    renderSelectedJobPanel: () => {
+      fixture.detailButtons.forEach((button) => { button.disabled = true; });
+    },
+    operations: [
+      { id: "op-1", ot: "100", ct: "CORTE", secuencia: 1, fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+    ],
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return Promise.resolve({ revision: 2, savedAt: "2026-08-01T00:00:00.000Z" });
+    },
+  });
+  const detailButton = fixture.detailButtons[0];
+  assert.equal(detailButton.disabled, false);
+  assert.equal(detailButton.textContent, "Completar");
+
+  await fixture.api.toggleOperationPlanStatus("op-1");
+
+  assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "COMPLETADA_PLAN");
+  assert.equal(detailButton.disabled, false);
+  assert.equal(detailButton.textContent, "Reabrir");
 });
 
 test("un error revierte unicamente la fila editada", async () => {

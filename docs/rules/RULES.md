@@ -35,6 +35,7 @@ Detalle y mediciones: `docs/superpowers/plans/2026-09-01-arranque-con-datos-real
 | ID | Nombre | Estado | Fuente |
 |---|---|---|---|
 | `RULE-UI-001` | Cada vista no-plan ocupa todo el workspace (el plan/Gantt queda oculto en Reportes, Cargas, Cuello de botella y Config) | IMPLEMENTADA | `src/web/planning/styles.css`, commit `34c5802` |
+| `RULE-UI-003` | Botones Completar/Reabrir del panel de detalle de OT se re-habilitan cuando termina el guardado (incluidos en `planStatusButtons`; antes quedaban `disabled` para siempre tras togglear desde el detalle) | IMPLEMENTADA | `app.js` (`planStatusButtons`), `tests/performance-client-calls.test.mjs` |
 
 Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):not(.planning-dialog) { display: none; }`, espejo de lo que `src/web/inspection/inspection.css` hace con `data-view="inspection"`.
 
