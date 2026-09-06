@@ -426,3 +426,70 @@ test("reabrir todo: PP_clearAllOperationPlanStatuses_ vacia los buckets de estad
   assert.deepEqual(state.operationPlanStatuses, {});
   assert.deepEqual(state.publishedPlanStatuses, {});
 });
+
+test("estados por origen: un guardado completo con bucket draft vacio preserva las filas draft existentes", () => {
+  const fixture = loadStorage([["revision", "10"]]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 10,
+    operations: [],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100" },
+      "kDraft2": { key: "kDraft2", status: "COMPLETADA_PLAN", ot: "100" },
+    },
+    publishedPlanStatuses: {
+      "snap-A": { "kA": { key: "kA", status: "COMPLETADA_PLAN", ot: "200" } },
+    },
+  }, "pruebas");
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 11,
+    operations: [],
+    operationPlanStatuses: {},
+    publishedPlanStatuses: {},
+  }, "pruebas");
+
+  const state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(state.operationPlanStatuses["kDraft"].status, "COMPLETADA_PLAN");
+  assert.equal(state.operationPlanStatuses["kDraft2"].status, "COMPLETADA_PLAN");
+  assert.equal(state.publishedPlanStatuses["snap-A"]["kA"].status, "COMPLETADA_PLAN");
+});
+
+test("estados por origen: un guardado completo con bucket draft incompleto conserva las claves existentes no incluidas", () => {
+  const fixture = loadStorage([["revision", "10"]]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 10,
+    operations: [],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100" },
+      "kDraft2": { key: "kDraft2", status: "PENDIENTE", ot: "100" },
+    },
+    publishedPlanStatuses: {},
+  }, "pruebas");
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 11,
+    operations: [{
+      id: "ns-1", key: "ns-1", ot: "100", secuencia: 1, ct: "5458",
+      descripcion: "OP", operador: "", maquina: "", estatus: "No iniciado",
+    }],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100", operator: "nuevo" },
+    },
+    publishedPlanStatuses: {},
+  }, "pruebas");
+
+  const state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(state.operationPlanStatuses["kDraft"].status, "COMPLETADA_PLAN");
+  assert.equal(state.operationPlanStatuses["kDraft"].operator, "nuevo");
+  assert.equal(state.operationPlanStatuses["kDraft2"].status, "PENDIENTE");
+});

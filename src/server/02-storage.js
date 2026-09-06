@@ -620,7 +620,7 @@ function PP_preservePublishedPlanStatuses_(spreadsheet, payload) {
   const byOrigin = PP_readOperationStatusesByOrigin_(PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN')));
   const hasPublished = payload.publishedPlanStatuses && Object.keys(payload.publishedPlanStatuses).length;
   return {
-    operationPlanStatuses: payload.operationPlanStatuses || byOrigin['draft'] || {},
+    operationPlanStatuses: Object.assign({}, byOrigin['draft'] || {}, payload.operationPlanStatuses || {}),
     publishedPlanStatuses: hasPublished ? payload.publishedPlanStatuses
       : Object.keys(byOrigin).filter(function(origin) { return origin !== 'draft'; })
         .reduce(function(out, origin) { out[origin] = byOrigin[origin]; return out; }, {})
