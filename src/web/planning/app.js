@@ -4966,6 +4966,47 @@ function updateArticleConfigForm() {
   els.articleConfigPriceInput.value = config.manualUnitPrice > 0 ? String(config.manualUnitPrice) : "";
 }
 
+function planVersionIdentifierFor(monday) {
+  const weekStartIso = formatDate(monday);
+  const counterBase = readPlanVersionCounter(weekStartIso);
+  const versionBase = [
+    ...(state.publishedVersions || []),
+    ...(Array.isArray(planSnapshots) ? planSnapshots : []),
+    ...(counterBase ? [{ weekStart: weekStartIso, version: counterBase }] : []),
+  ].filter((item) => Number(item?.version || 0) > 0);
+  const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStartIso);
+  return window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStartIso, version);
+}
+
+async function askGeneratingPlanWeek() {
+  const currentMonday = weekStart(new Date());
+  const nextMonday = addDays(currentMonday, 7);
+  const currentLabel = planVersionIdentifierFor(currentMonday);
+  const nextLabel = planVersionIdentifierFor(nextMonday);
+  const weekdayLabel = (date) => date.toLocaleDateString("es-MX", {
+    weekday: "long", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+  const answer = await openPlanningDialog({
+    title: "Generar plan",
+    summary: "Elige la semana a la que pertenecera el plan. Las cargas se asignaran desde la fecha de ejecucion siguiendo el calendario.",
+    body: [
+      `<label class="restore-draft-option"><input type="radio" name="plan_week" value="${formatDate(currentMonday)}" checked><span><strong>Semana actual</strong><small>${weekdayLabel(currentMonday)} — se publicaria como \"${currentLabel}\"</small></span></label>`,
+      `<label class="restore-draft-option"><input type="radio" name="plan_week" value="${formatDate(nextMonday)}"><span><strong>Semana proxima</strong><small>${weekdayLabel(nextMonday)} — se publicaria como \"${nextLabel}\"</small></span></label>`,
+    ].join(""),
+    confirmLabel: "Generar plan",
+    cancelVisible: true,
+  });
+  const iso = answer?.plan_week;
+  if (!iso) return null;
+  const mondayDate = weekStart(new Date(`${iso}T00:00:00`));
+  const mondayIso = formatDate(mondayDate);
+  checkpointState();
+  state.planStart = mondayIso;
+  state.loadWeekStart = normalizeWeekStartValue(mondayIso);
+  state.reportWeekStart = normalizeWeekStartValue(mondayIso);
+  return { planStartIso: mondayIso };
+}
+
 async function scheduleCurrentPlan() {
   if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
   setPlanningActionsBusy("schedule", true);
@@ -5003,8 +5044,10 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
+  const chosenWeek = await askGeneratingPlanWeek();
+  if (!chosenWeek) return;
   setScheduleStatus("Revisando plan...");
-state.planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
+  state.planStart = state.planStart || formatDate(weekStart(new Date()));
   const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
   let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
   if (incrementalBase && !window.PlanningWorkflowCore.planAnchoredAt(incrementalBase, state.planStart)) {
