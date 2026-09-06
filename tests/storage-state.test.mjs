@@ -22,13 +22,17 @@ function createSheet(headers = ["KEY"], body = []) {
     getLastRow: () => rows.length,
     getDataRange: () => ({ getDisplayValues: () => rows.map((row) => row.map(String)) }),
     clearContents: () => { rows = []; },
-    getRange: (row, column) => ({
+    getRange: (row, column, rowCount, columnCount) => ({
       setValues(values) {
         write(row, column, values);
         return this;
       },
       setFontWeight() { return this; },
       setBackground() { return this; },
+      clearContent() {
+        rows.splice(row - 1, rowCount == null ? 1 : rowCount);
+        return this;
+      },
     }),
     setFrozenRows: () => {},
     appendRow: (row) => rows.push([...row]),
@@ -399,4 +403,26 @@ test("estados por origen: guardar un origin no borra los demas buckets ni el bor
   assert.equal(state.publishedPlanStatuses["snap-B"]["kB"].status, "COMPLETADA_PLAN");
   assert.equal(state.publishedPlanStatuses["snap-B"]["kB"].origin, "snap-B");
   assert.equal(state.publishedPlanStatuses["draft"], undefined);
+});
+
+test("reabrir todo: PP_clearAllOperationPlanStatuses_ vacia los buckets de estados", () => {
+  const fixture = loadStorage([["revision", "10"]]);
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 10,
+    operations: [],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100" },
+    },
+    publishedPlanStatuses: {
+      "snap-A": { "kA": { key: "kA", status: "COMPLETADA_PLAN", ot: "200" } },
+    },
+  }, "pruebas");
+
+  const result = fixture.context.PP_clearAllOperationPlanStatuses_();
+  const state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(result.clearedRows, 2);
+  assert.deepEqual(state.operationPlanStatuses, {});
+  assert.deepEqual(state.publishedPlanStatuses, {});
 });

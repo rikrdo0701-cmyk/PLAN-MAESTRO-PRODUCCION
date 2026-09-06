@@ -112,6 +112,10 @@ function diagnoseOt3124() {
   Logger.log(JSON.stringify(data, null, 2));
 }
 
+function reabrirTodoPlanificacion() {
+  Logger.log(JSON.stringify(PP_clearAllOperationPlanStatuses_()));
+}
+
 function getPlanningProductionVersion() {
   const spreadsheet = PP_getWorkbook_();
   return {
