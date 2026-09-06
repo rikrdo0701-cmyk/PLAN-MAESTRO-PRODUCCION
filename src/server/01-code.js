@@ -93,7 +93,7 @@ function diagnoseOtOperatingStatuses(ot) {
   const spreadsheet = PP_getWorkbook_();
   const statusRows = PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
   const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
-  return {
+  const data = {
     ot: target,
     spreadsheetId: spreadsheet.getId(),
     statusRows: statusRows
@@ -105,11 +105,12 @@ function diagnoseOtOperatingStatuses(ot) {
       .filter(function(row) { return String(row.OT || '').toUpperCase() === target; })
       .map(function(row) { return { ID: row.ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, DESC: row.DESCRIPCION, ESTATUS: row.ESTATUS, INICIO: row.FECHA_INICIO, FIN: row.FECHA_FIN, LOCKED: row.LOCKED }; })
   };
+  Logger.log(JSON.stringify(data, null, 2));
+  return data;
 }
 
 function diagnoseOt3124() {
-  const data = diagnoseOtOperatingStatuses('3124');
-  Logger.log(JSON.stringify(data, null, 2));
+  diagnoseOtOperatingStatuses('3124');
 }
 
 function reabrirTodoPlanificacion() {
