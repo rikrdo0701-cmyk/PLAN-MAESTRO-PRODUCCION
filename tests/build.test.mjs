@@ -449,7 +449,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
-  assert.match(pagesIndex, /function isPlanCompletedOperation\(op\)[\s\S]*const stored = state\.operationPlanStatuses\?\.\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
+  assert.match(pagesIndex, /function isPlanCompletedOperation\(op, statusesOverride\)[\s\S]*const stored = \(statusesOverride \|\| draftViewStatuses\(\)\)\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
   assert.match(pagesIndex, /function reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /statusActions: reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);

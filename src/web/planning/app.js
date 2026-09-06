@@ -227,6 +227,7 @@ const sampleState = {
   subcontracts: DEFAULT_SUBCONTRACTS.map((item) => ({ ...item })),
   otTypes: DEFAULT_OT_TYPES.map((item) => ({ ...item })),
   operationPlanStatuses: {},
+  publishedPlanStatuses: {},
   netSuiteChangeAlerts: [],
   netSuiteSyncAlert: null,
   operationCatalogWarning: "",
@@ -1175,6 +1176,8 @@ function normalizeState() {
     }))
     .filter((item) => item.name);
   state.operationPlanStatuses = normalizeOperationPlanStatuses(state.operationPlanStatuses);
+  state.publishedPlanStatuses = normalizePublishedPlanStatuses(state.publishedPlanStatuses);
+  draftViewStatusesCache = null;
   state.netSuiteChangeAlerts = normalizeNetSuiteChangeAlerts(state.netSuiteChangeAlerts);
   state.netSuiteSyncAlert = normalizeNetSuiteSyncAlert(state.netSuiteSyncAlert);
   state.capacityModes = state.capacityModes && typeof state.capacityModes === "object" ? state.capacityModes : {};
@@ -1187,7 +1190,7 @@ function normalizeState() {
   state.operations = (Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index));
   invalidateCurrentPlanOperationsCache();
   for (const op of state.operations) {
-    const status = state.operationPlanStatuses[operationCompletionKey(op)];
+    const status = draftViewStatuses()[operationCompletionKey(op)];
     op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
   }
   applyWorkOrderDueDates();
@@ -1432,6 +1435,16 @@ function normalizeOperationPlanStatuses(source) {
   }, {});
 }
 
+function normalizePublishedPlanStatuses(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.keys(source).reduce((out, origin) => {
+    const originKey = String(origin || "").trim();
+    if (!originKey || originKey === "draft") return out;
+    out[originKey] = normalizeOperationPlanStatuses(source[originKey]);
+    return out;
+  }, {});
+}
+
 function normalizeNetSuiteChangeAlerts(source) {
   return (Array.isArray(source) ? source : []).map((item, index) => {
     const ot = String(item?.ot || "").trim();
@@ -1608,9 +1621,105 @@ function operationCompletionKey(op) {
   return op?.id ? `OP|${normalizeStatus(op.id)}` : `OP|${normalizeStatus(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeStatus(op?.ct)}`;
 }
 
-function isPlanCompletedOperation(op) {
+let draftViewStatusesCache = null;
+
+function invalidateDraftViewStatuses() {
+  draftViewStatusesCache = null;
+}
+
+function latestPublishedOriginId() {
+  return activePublishedSnapshotId();
+}
+
+function statusesForPlanOrigin(origin) {
+  if (!origin || origin === "draft") return state.operationPlanStatuses || {};
+  return state.publishedPlanStatuses?.[origin] || {};
+}
+
+function draftViewStatuses() {
+  if (draftViewStatusesCache) return draftViewStatusesCache;
+  const latest = latestPublishedOriginId();
+  const folded = latest ? { ...(state.publishedPlanStatuses?.[latest] || {}) } : {};
+  Object.assign(folded, state.operationPlanStatuses || {});
+  draftViewStatusesCache = folded;
+  return folded;
+}
+
+function planStatusOriginForSource() {
+  const snapshotId = reportSnapshot?.snapshotId || "draft";
+  return snapshotId === "draft" ? "draft" : String(snapshotId).trim();
+}
+
+function activePlanReportStatuses() {
+  if (planStatusOriginForSource() === "draft") return draftViewStatuses();
+  return statusesForPlanOrigin(planStatusOriginForSource());
+}
+
+function shouldMutateDraftFromSource() {
+  const origin = planStatusOriginForSource();
+  return origin === "draft" || origin === latestPublishedOriginId();
+}
+
+function writePlanStatusByOrigin(key, status) {
+  const origin = planStatusOriginForSource();
+  const row = { ...(status || {}), key, origin };
+  if (origin === "draft") {
+    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
+    state.operationPlanStatuses[key] = row;
+    invalidateDraftViewStatuses();
+    return row;
+  }
+  if (!state.publishedPlanStatuses) state.publishedPlanStatuses = {};
+  if (!state.publishedPlanStatuses[origin]) state.publishedPlanStatuses[origin] = {};
+  state.publishedPlanStatuses[origin][key] = row;
+  if (origin === latestPublishedOriginId()) {
+    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
+    state.operationPlanStatuses[key] = { ...row, origin: "draft" };
+    invalidateDraftViewStatuses();
+  }
+  return row;
+}
+
+function deletePlanStatusByOrigin(key) {
+  const origin = planStatusOriginForSource();
+  if (origin === "draft") {
+    if (state.operationPlanStatuses) delete state.operationPlanStatuses[key];
+    invalidateDraftViewStatuses();
+    return;
+  }
+  if (state.publishedPlanStatuses?.[origin]) delete state.publishedPlanStatuses[origin][key];
+  if (origin === latestPublishedOriginId()) {
+    if (state.operationPlanStatuses) delete state.operationPlanStatuses[key];
+    invalidateDraftViewStatuses();
+  }
+}
+
+function rollbackPlanStatusByOrigin(key, previousStatus) {
+  const origin = planStatusOriginForSource();
+  if (!previousStatus) {
+    deletePlanStatusByOrigin(key);
+    return;
+  }
+  if (origin === "draft") {
+    const belongsToDraft = !previousStatus.origin || previousStatus.origin === "draft";
+    if (belongsToDraft) writePlanStatusByOrigin(key, { ...previousStatus, origin: "draft" });
+    else deletePlanStatusByOrigin(key);
+    return;
+  }
+  if (origin === latestPublishedOriginId()) {
+    writePlanStatusByOrigin(key, previousStatus);
+    if (state.operationPlanStatuses) {
+      state.operationPlanStatuses[key] = { ...previousStatus, origin: "draft" };
+    }
+    invalidateDraftViewStatuses();
+    return;
+  }
+  writePlanStatusByOrigin(key, previousStatus);
+}
+
+function isPlanCompletedOperation(op, statusesOverride) {
   if (!op) return false;
-  const stored = state.operationPlanStatuses?.[operationCompletionKey(op)];
+  const stored = (statusesOverride || draftViewStatuses())[operationCompletionKey(op)];
   if (stored?.status) return stored.status === "COMPLETADA_PLAN";
   return normalizeStatus(op.planStatus) === "COMPLETADA_PLAN";
 }
@@ -3516,7 +3625,7 @@ function renderSelectedJobPanel() {
         <div class="job-op-list">
         ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
-          const completed = isPlanCompletedOperation(op);
+          const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
             : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "Completada " : ""}${planStatusActionCell(op)}</span>`;
           return `
@@ -5491,6 +5600,7 @@ async function publishCurrentPlan() {
       changeSummary,
       publishedAt: new Date().toISOString(),
     };
+    const publishFold = draftViewStatuses();
     setPublishStatus("Publicando plan...", version === 1 ? 40 : 55);
     const result = isAppsScriptRuntime()
       ? await callAppsScript("publishDraftPlan", payload)
@@ -5506,6 +5616,9 @@ async function publishCurrentPlan() {
       ].filter(Boolean);
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
       try { await loadPlanSnapshots(false); } catch (snapErr) { console.warn("No se pudieron recargar los historicos tras publicar", snapErr); }
+      state.publishedPlanStatuses = { ...(state.publishedPlanStatuses || {}) };
+      state.publishedPlanStatuses[active.snapshotId] = { ...(publishFold || {}) };
+      invalidateDraftViewStatuses();
     }
     setPublishStatus("Finalizando publicacion...", 90);
     await saveAppSheet(false);
@@ -6295,13 +6408,7 @@ function activePublishedSnapshotId() {
 }
 
 function reportSourceAllowsOperationTracking() {
-  const snapshotId = reportSnapshot?.snapshotId || "draft";
-  if (snapshotId === "draft") return false;
-  const publishedIds = publishedSnapshotIds();
-  const selected = (planSnapshots || []).find((s) => String(s?.snapshotId || s?.id || "") === snapshotId);
-  if (selected && isPublishedSnapshotOption(selected, publishedIds)) return true;
-  if (publishedIds.has(snapshotId)) return true;
-  return isPublishedSnapshotOption(reportSnapshot, publishedIds);
+  return true;
 }
 
 function currentDraftReportSnapshot() {
@@ -6772,7 +6879,7 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
     current.ends.push(end);
     current.operations.push(op.descripcion || `CT ${op.ct}`);
     current.operationIds.push(op.id);
-    current.statuses.push(isPlanCompletedOperation(op));
+    current.statuses.push(isPlanCompletedOperation(op, activePlanReportStatuses()));
     if (op.comentario) current.comments.push(op.comentario);
     if (op.subcontractType) current.types.push(op.subcontractType);
     if (Number(op.subcontractDays) > 0) current.days.push(Number(op.subcontractDays));
@@ -6918,8 +7025,7 @@ const operationPlanStatusActions = new Map();
 const detachedPlanStatusRows = new WeakMap();
 
 function planStatusActionCell(op) {
-  if (!reportSourceAllowsOperationTracking()) return "";
-  const completed = isPlanCompletedOperation(op);
+  const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
   const key = operationCompletionKey(op);
   return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
 }
@@ -7005,9 +7111,10 @@ function discardDetachedPlanStatusRows(key) {
 function renderPlanStatusRow(key) {
   const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
   const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
-  const operation = stateOperation || reportOperation;
-  const current = state.operationPlanStatuses?.[key];
-  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
+const operation = stateOperation || reportOperation;
+  const sourceStatuses = activePlanReportStatuses();
+  const current = sourceStatuses[key];
+  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation, sourceStatuses);
   planStatusButtons(key).forEach((button) => {
     button.classList.toggle("complete", !completed);
     button.classList.toggle("reopen", completed);
@@ -7044,7 +7151,6 @@ function schedulePlanStatusBackgroundWork() {
 }
 
 function toggleOperationPlanStatus(key) {
-  if (!reportSourceAllowsOperationTracking()) return Promise.resolve();
   if (operationPlanStatusActions.has(key)) return operationPlanStatusActions.get(key);
   operationPlanStatusActions.set(key, true);
   setPlanStatusButtonsDisabled(key, true);
@@ -7062,16 +7168,16 @@ async function performToggleOperationPlanStatus(key) {
   const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
   const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
   const operation = stateOperation || reportOperation;
-  const current = state.operationPlanStatuses?.[key];
-  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
+  const sourceStatuses = activePlanReportStatuses();
+  const current = sourceStatuses[key];
+  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation, sourceStatuses);
   if (!operation && !current) return showToast("No se encontro la operacion");
   const previousStatus = current ? deepClone(current) : undefined;
   const previousOperation = operation ? deepClone(operation) : undefined;
   const previousLockedOts = Array.isArray(state.lockedOts) ? [...state.lockedOts] : [];
   checkpointState();
-  if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
   if (completed) {
-    state.operationPlanStatuses[key] = { ...(current || {}), key, status: "PENDIENTE", reopenedAt: new Date().toISOString() };
+    writePlanStatusByOrigin(key, { ...(current || {}), status: "PENDIENTE", reopenedAt: new Date().toISOString() });
     if (operation) {
       operation.planStatus = "PENDIENTE";
       if (stateOperation) {
@@ -7095,7 +7201,7 @@ async function performToggleOperationPlanStatus(key) {
   const toToolKey = window.PlannerCore?.operationToolKey
     ? window.PlannerCore.operationToolKey(operation)
     : "";
-  state.operationPlanStatuses[key] = {
+  writePlanStatusByOrigin(key, {
     key,
     type,
     status: "COMPLETADA_PLAN",
@@ -7117,7 +7223,7 @@ async function performToggleOperationPlanStatus(key) {
     toKit: operation?.toolChangeToKit || operation?.kitHerramental || "",
     toToolKey,
     completedAt: new Date().toISOString(),
-  };
+  });
   if (operation) {
     operation.planStatus = "COMPLETADA_PLAN";
     operation.needsReschedule = false;
@@ -7132,6 +7238,9 @@ async function performToggleOperationPlanStatus(key) {
 
 function completePriorSequenceOperations(ot, completedOperation, completedKey) {
   if (!ot || !Array.isArray(state.operations)) return;
+  const origin = planStatusOriginForSource();
+  const statuses = origin === "draft" ? draftViewStatuses() : statusesForPlanOrigin(origin);
+  const affectsDraft = origin === "draft" || origin === latestPublishedOriginId();
   const sequence = state.operations
     .filter((op) => String(op.ot) === String(ot))
     .sort((a, b) => sequenceSort(a, b) || ((opStart(a)?.getTime() || 0) - (opStart(b)?.getTime() || 0)));
@@ -7140,9 +7249,8 @@ function completePriorSequenceOperations(ot, completedOperation, completedKey) {
   for (let i = 0; i < targetIndex; i++) {
     const prior = sequence[i];
     const priorKey = operationCompletionKey(prior);
-    if (!priorKey || state.operationPlanStatuses?.[priorKey]?.status === "COMPLETADA_PLAN") continue;
-    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
-    state.operationPlanStatuses[priorKey] = {
+    if (!priorKey || statuses[priorKey]?.status === "COMPLETADA_PLAN") continue;
+    writePlanStatusByOrigin(priorKey, {
       key: priorKey,
       type: isToolChangeReportOperation(prior) ? "TOOL_CHANGE" : "OPERATION",
       status: "COMPLETADA_PLAN",
@@ -7155,14 +7263,17 @@ function completePriorSequenceOperations(ot, completedOperation, completedKey) {
       article: prior.parte || "",
       description: prior.descripcion || "",
       completedAt: new Date().toISOString(),
-    };
-    prior.planStatus = "COMPLETADA_PLAN";
-    prior.needsReschedule = false;
-    prior.log = appendLog(prior.log, "COMPLETADA_PLAN_APP");
+    });
+    if (affectsDraft && state.operations.includes(prior)) {
+      prior.planStatus = "COMPLETADA_PLAN";
+      prior.needsReschedule = false;
+      prior.log = appendLog(prior.log, "COMPLETADA_PLAN_APP");
+    }
   }
 }
 
 function blockOtForCompletion(ot) {
+  if (!shouldMutateDraftFromSource()) return;
   const key = String(ot || "").trim();
   if (!key) return;
   if (!Array.isArray(state.lockedOts)) state.lockedOts = [];
@@ -7174,6 +7285,7 @@ function blockOtForCompletion(ot) {
 }
 
 function unblockOtAfterCompletion(ot) {
+  if (!shouldMutateDraftFromSource()) return;
   const key = String(ot || "").trim();
   if (!key) return;
   if (typeof otHasCompletedOperation === "function" && otHasCompletedOperation(key)) return;
@@ -7202,9 +7314,11 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       window.clearTimeout(appSheetSaveTimer);
       operationStatusSavesInFlight += 1;
       try {
+        const origin = planStatusOriginForSource();
+        const savedStatus = (origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin])?.[key];
         saved = await callAppsScript("saveOperationPlanStatus", {
           revision: Number(state.revision || 0),
-          status: state.operationPlanStatuses[key],
+          status: savedStatus || {},
         });
         state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
         state.savedAt = saved?.savedAt || state.savedAt;
@@ -7226,8 +7340,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
     console.warn("No se pudo guardar el estado de la operacion:", error);
     showToast("Error de guardado; intente recargar la pagina", 5000);
   }
-  if (previousStatus) state.operationPlanStatuses[key] = previousStatus;
-  else delete state.operationPlanStatuses[key];
+  rollbackPlanStatusByOrigin(key, previousStatus);
   if (operation && previousOperation) Object.assign(operation, previousOperation);
   if (Array.isArray(previousLockedOts)) {
     state.lockedOts = [...previousLockedOts];
@@ -8513,6 +8626,8 @@ async function applyImported(imported, options = {}) {
       if (key) state.operationsSyncedAt[key] = imported.syncedAt;
     }
   }
+  if (imported.operationPlanStatuses) state.operationPlanStatuses = normalizeOperationPlanStatuses(imported.operationPlanStatuses);
+  if (imported.publishedPlanStatuses) state.publishedPlanStatuses = normalizePublishedPlanStatuses(imported.publishedPlanStatuses);
   if (Number.isFinite(Number(imported.schemaVersion))) state.schemaVersion = Number(imported.schemaVersion);
   if (Number.isFinite(Number(imported.revision))) state.revision = Number(imported.revision);
   if (imported.operators) state.operators = imported.operators;
@@ -8645,6 +8760,7 @@ function captureLocalPlanningState() {
     "subcontracts",
     "otTypes",
     "operationPlanStatuses",
+    "publishedPlanStatuses",
     "preparedPlanningByOt",
     "workSchedule",
     "dailyBreaks",
@@ -8720,6 +8836,8 @@ function importJson(text) {
     calendarExceptions: Array.isArray(parsed.calendarExceptions) ? parsed.calendarExceptions : null,
     subcontracts: Array.isArray(parsed.subcontracts) ? parsed.subcontracts : null,
     netSuiteChangeAlerts: Array.isArray(parsed.netSuiteChangeAlerts) ? parsed.netSuiteChangeAlerts : null,
+    operationPlanStatuses: parsed.operationPlanStatuses,
+    publishedPlanStatuses: parsed.publishedPlanStatuses,
     lastSchedule: parsed.lastSchedule,
   };
 }

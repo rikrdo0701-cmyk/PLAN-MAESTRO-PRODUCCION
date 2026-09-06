@@ -324,3 +324,79 @@ test("la sincronizacion persiste y devuelve la advertencia del catalogo maestro"
   assert.equal(config.operationCatalogWarning, "Catalogo NetSuite no disponible");
   assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
 });
+
+test("estados por origen: saveOperationPlanStatus conserva los buckets publicados y escribe el origin", () => {
+  const fixture = loadStorage([["revision", "10"]]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+  vm.runInContext(performanceSource, fixture.context, { filename: "15-performance-service.js" });
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 10,
+    operations: [],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "PENDIENTE", ot: "100" },
+    },
+    publishedPlanStatuses: {
+      "snap-A": {
+        "kA": { key: "kA", status: "COMPLETADA_PLAN", ot: "200" },
+      },
+    },
+  }, "pruebas");
+
+  fixture.context.saveOperationPlanStatus({
+    revision: 10,
+    status: { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100" },
+  });
+
+  let state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(state.operationPlanStatuses["kDraft"].status, "COMPLETADA_PLAN");
+  assert.equal(state.operationPlanStatuses["kA"], undefined);
+  assert.equal(state.publishedPlanStatuses["snap-A"]["kA"].status, "COMPLETADA_PLAN");
+
+  const headers = fixture.sheets.ESTADOS_OPERACION_PLAN.rows()[0];
+  const originIndex = headers.indexOf("ORIGEN");
+  assert.ok(originIndex >= 0, "columna ORIGEN existe en ESTADOS_OPERACION_PLAN");
+  const rowsByKey = Object.fromEntries(
+    fixture.sheets.ESTADOS_OPERACION_PLAN.rows().slice(1)
+      .filter((row) => row[0])
+      .map((row) => [row[0], row])
+  );
+  assert.equal(rowsByKey["kA"][originIndex], "snap-A");
+  assert.equal(rowsByKey["kDraft"][originIndex], "draft");
+});
+
+test("estados por origen: guardar un origin no borra los demas buckets ni el borrador", () => {
+  const fixture = loadStorage([["revision", "10"]]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+  vm.runInContext(performanceSource, fixture.context, { filename: "15-performance-service.js" });
+
+  fixture.context.PP_writeState_(fixture.spreadsheet, {
+    revision: 10,
+    operations: [],
+    operationPlanStatuses: {
+      "kDraft": { key: "kDraft", status: "COMPLETADA_PLAN", ot: "100" },
+    },
+    publishedPlanStatuses: {
+      "snap-A": { "kA": { key: "kA", status: "COMPLETADA_PLAN", ot: "200" } },
+      "snap-B": { "kB": { key: "kB", status: "PENDIENTE", ot: "300" } },
+    },
+  }, "pruebas");
+
+  fixture.context.saveOperationPlanStatus({
+    revision: 10,
+    status: { key: "kB", status: "COMPLETADA_PLAN", ot: "300", origin: "snap-B" },
+  });
+
+  const state = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.equal(state.operationPlanStatuses["kDraft"].status, "COMPLETADA_PLAN");
+  assert.equal(state.publishedPlanStatuses["snap-A"]["kA"].status, "COMPLETADA_PLAN");
+  assert.equal(state.publishedPlanStatuses["snap-B"]["kB"].status, "COMPLETADA_PLAN");
+  assert.equal(state.publishedPlanStatuses["snap-B"]["kB"].origin, "snap-B");
+  assert.equal(state.publishedPlanStatuses["draft"], undefined);
+});

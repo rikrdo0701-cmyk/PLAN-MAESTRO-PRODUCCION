@@ -627,7 +627,9 @@ const reportSource = options.reportOperations || state.operations;
     "appSheetDirtyScopes", "queueAppSheetSave", "appSheetMarkDirtyScope", "saveAppSheet", "console", "render",
     "selectedJobOt", "escapeHtml", "operatorReportSelection", "adjusterReportSelection", "renderReportFilterStatus",
     "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport", "reportOperationsSource",
-    "sequenceSort", "opStart", "renderSubcontractReport",
+    "sequenceSort", "opStart", "renderSubcontractReport", "planStatusOriginForSource", "statusesForPlanOrigin",
+    "draftViewStatuses", "latestPublishedOriginId", "activePlanReportStatuses", "writePlanStatusByOrigin",
+    "rollbackPlanStatusByOrigin", "shouldMutateDraftFromSource",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -651,6 +653,11 @@ const reportSource = options.reportOperations || state.operations;
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`,
     (operation) => `<tr data-plan-status-row-key="${operation.id}"></tr>`, () => {}, rerenderReport, () => {}, () => reportSource,
     (a, b) => (Number(a?.secuencia || 0) - Number(b?.secuencia || 0)), () => null, () => {},
+    () => "draft", (origin) => origin === "draft" ? (state.operationPlanStatuses || {}) : (state.publishedPlanStatuses?.[origin] || {}),
+    () => state.operationPlanStatuses || {}, () => "", () => state.operationPlanStatuses || {},
+    (key, status) => { if (!state.operationPlanStatuses) state.operationPlanStatuses = {}; const row = { ...(status || {}), key, origin: "draft" }; state.operationPlanStatuses[key] = row; return row; },
+    (key, previousStatus) => { if (previousStatus) state.operationPlanStatuses[key] = previousStatus; else delete state.operationPlanStatuses[key]; },
+    () => true,
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport, detailButtons,

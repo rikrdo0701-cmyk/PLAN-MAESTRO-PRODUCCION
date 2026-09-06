@@ -767,6 +767,18 @@
     return Object.fromEntries(Object.entries(values || {}).filter(([key]) => !closed.has(normalize(key))));
   }
 
+  function compactPublishedPlanStatuses(source, keep) {
+    const isKeep = typeof keep === "function" ? keep : () => true;
+    return Object.fromEntries(Object.entries(source.publishedPlanStatuses || {})
+      .map(([origin, rows]) => [
+        origin,
+        Object.fromEntries(Object.entries(rows || {})
+          .filter(([, status]) => isKeep(status?.ot))
+          .map(([key, status]) => [key, { ...status }])),
+      ])
+      .filter(([, rows]) => Object.keys(rows).length > 0));
+  }
+
   function reconcileActiveWorkOrders(state, incomingWorkOrders, nowIso) {
     const source = state || {};
     const incoming = (incomingWorkOrders || []).map(normalizedLiteWorkOrder).filter((item) => normalize(item.ot));
@@ -807,6 +819,7 @@
       workOrders: nextWorkOrders,
       operations: currentOperations,
       operationPlanStatuses,
+      publishedPlanStatuses: compactPublishedPlanStatuses(source, keepOt),
       materials: compactRows(source.materials),
       otConfigurations: withoutOtKeyedValues(source.otConfigurations, closed),
       planningConfigByOt: withoutOtKeyedValues(source.planningConfigByOt, closed),
@@ -850,6 +863,7 @@
       operationPlanStatuses: Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
         .filter(([, status]) => !closed.has(normalize(status?.ot)))
         .map(([key, status]) => [key, { ...status }])),
+      publishedPlanStatuses: compactPublishedPlanStatuses(source, (ot) => !closed.has(normalize(ot))),
       materials: (source.materials || []).filter(keepRow).map((item) => ({ ...item })),
       otConfigurations: withoutOtKeyedValues(source.otConfigurations, closed),
       planningConfigByOt: withoutOtKeyedValues(source.planningConfigByOt, closed),
@@ -879,6 +893,7 @@
       operationPlanStatuses: Object.fromEntries(Object.entries(source.operationPlanStatuses || {})
         .filter(([, status]) => !expired.has(normalize(status?.ot)))
         .map(([key, status]) => [key, { ...status }])),
+      publishedPlanStatuses: compactPublishedPlanStatuses(source, (ot) => !expired.has(normalize(ot))),
       selectedDetailOt: expired.has(normalize(source.selectedDetailOt)) ? "" : source.selectedDetailOt,
       selectedOperationId: selectedOperationRemoved ? "" : source.selectedOperationId,
       closedWorkOrderSummaries: { ...(source.closedWorkOrderSummaries || {}) },

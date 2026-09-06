@@ -20,7 +20,7 @@ const PP_SHEETS = {
   CALENDARIO: ['ID', 'CONCEPTO', 'MAQUINA', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'MOTIVO', 'ACTIVO'],
   SUBCONTRATOS: ['ID', 'PARTE', 'TIPO', 'DIAS_HABILES', 'ACTIVO'],
   TIPOS_OT: ['ID', 'NOMBRE', 'ACTIVO'],
-  ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA'],
+  ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA', 'ORIGEN'],
   PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
   BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
   SNAPSHOT_PAYLOADS: ['KEY', 'VALUE'],
@@ -232,6 +232,7 @@ function PP_buildState_(spreadsheet) {
       return { id: String(row.ID || ''), name: String(row.NOMBRE || '').trim().toUpperCase(), active: PP_bool_(row.ACTIVO, true) };
     }).filter(function(item) { return Boolean(item.name); }),
     operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
     operations: operationRows.map(PP_mapOperation_)
   };
 
@@ -342,7 +343,7 @@ function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
   }));
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('MATERIALES'), PP_SHEETS.MATERIALES, PP_materialRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_NETSUITE', revision, JSON.stringify({
     operations: (payload.operations || []).length,
     workOrders: (payload.workOrders || []).length,
@@ -370,7 +371,7 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
     invoicePriceWindow: payload.invoicePriceWindow || null
   });
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_NETSUITE_OT', revision, JSON.stringify({
     workOrders: (payload.workOrders || []).length
   })]);
@@ -413,7 +414,7 @@ function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
   PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   PP_writeTable_(spreadsheet.getSheetByName('MATERIALES'), PP_SHEETS.MATERIALES, PP_materialRows_({ materials: activeMaterials }));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_OT_LIGERA', revision, JSON.stringify({
     operations: (payload.operations || []).length,
@@ -582,20 +583,48 @@ function PP_materialRows_(payload) {
   });
 }
 
+function PP_operationStatusRow_(item) {
+  return [
+    item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
+    item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
+    item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
+    item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
+    item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
+    item.completedAt || '', item.reopenedAt || '', String(item.origin || item.origen || '').trim() || 'draft'
+  ];
+}
+
 function PP_operationStatusRows_(payload) {
-  const statusRows = Array.isArray(payload.operationPlanStatuses)
-    ? payload.operationPlanStatuses
-    : Object.keys(payload.operationPlanStatuses || {}).map(function(key) { return Object.assign({ key: key }, payload.operationPlanStatuses[key]); });
-  return statusRows.map(function(item) {
-    return [
-      item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
-      item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
-      item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
-      item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
-      item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
-      item.completedAt || '', item.reopenedAt || ''
-    ];
+  const rows = [];
+  const pushFlat = function(map, origin) {
+    Object.keys(map || {}).forEach(function(key) {
+      const item = map[key] || {};
+      rows.push({ origin: origin, ...item, key: String(item.key || key || '') });
+    });
+  };
+  if (Array.isArray(payload.operationPlanStatuses)) {
+    payload.operationPlanStatuses.forEach(function(item) {
+      if (!item) return;
+      rows.push({ ...item, origin: String(item.origin || item.origen || '').trim() || 'draft' });
+    });
+  } else {
+    pushFlat(payload.operationPlanStatuses, 'draft');
+  }
+  Object.keys(payload.publishedPlanStatuses || {}).forEach(function(origin) {
+    pushFlat(payload.publishedPlanStatuses[origin], origin);
   });
+  return rows.map(PP_operationStatusRow_);
+}
+
+function PP_preservePublishedPlanStatuses_(spreadsheet, payload) {
+  const byOrigin = PP_readOperationStatusesByOrigin_(PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN')));
+  const hasPublished = payload.publishedPlanStatuses && Object.keys(payload.publishedPlanStatuses).length;
+  return {
+    operationPlanStatuses: payload.operationPlanStatuses || byOrigin['draft'] || {},
+    publishedPlanStatuses: hasPublished ? payload.publishedPlanStatuses
+      : Object.keys(byOrigin).filter(function(origin) { return origin !== 'draft'; })
+        .reduce(function(out, origin) { out[origin] = byOrigin[origin]; return out; }, {})
+  };
 }
 
 function PP_writeState_(spreadsheet, payload, user, force) {
@@ -750,19 +779,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
   PP_writeTable_(spreadsheet.getSheetByName('TIPOS_OT'), PP_SHEETS.TIPOS_OT, (payload.otTypes || []).map(function(item) {
     return [item.id, String(item.name || item.nombre || '').trim().toUpperCase(), item.active !== false];
   }));
-  const statusRows = Array.isArray(payload.operationPlanStatuses)
-    ? payload.operationPlanStatuses
-    : Object.keys(payload.operationPlanStatuses || {}).map(function(key) { return Object.assign({ key: key }, payload.operationPlanStatuses[key]); });
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, statusRows.map(function(item) {
-    return [
-      item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
-      item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
-      item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
-      item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
-      item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
-      item.completedAt || '', item.reopenedAt || ''
-    ];
-  }));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   const audit = spreadsheet.getSheetByName('AUDITORIA');
   audit.appendRow([savedAt, user, 'GUARDAR_PLAN', revision, JSON.stringify({ operations: (payload.operations || []).length })]);
   SpreadsheetApp.flush();
@@ -1048,6 +1065,14 @@ function PP_clearDraftSnapshot_(spreadsheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.BORRADOR_PLAN.length).clearContent();
   PP_deletePlanSnapshotPayload_('draft');
+}
+
+function PP_clearAllOperationPlanStatuses_() {
+  const spreadsheet = PP_getWorkbook_();
+  const sheet = spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN');
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.ESTADOS_OPERACION_PLAN.length).clearContent();
+  return { clearedRows: Math.max(0, lastRow - 1) };
 }
 
 function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
@@ -1394,18 +1419,34 @@ function PP_mapWorkOrder_(row) {
   };
 }
 
-function PP_buildOperationPlanStatuses_(rows) {
-  return (rows || []).reduce(function(out, row) {
+function PP_readOperationStatusesByOrigin_(rows) {
+  return (rows || []).reduce(function(byOrigin, row) {
     const key = String(row.KEY || '').trim();
-    if (!key) return out;
-    out[key] = {
+    if (!key) return byOrigin;
+    const origin = String(row.ORIGEN || '').trim() || 'draft';
+    if (!byOrigin[origin]) byOrigin[origin] = {};
+    byOrigin[origin][key] = {
       key: key, type: String(row.TIPO || 'OPERATION').trim().toUpperCase(), status: String(row.ESTATUS_PLAN || 'PENDIENTE').trim().toUpperCase(),
       operationId: String(row.OPERATION_ID || ''), ot: String(row.OT || ''), sequence: Number(row.SECUENCIA || 0), ct: String(row.CT || ''),
       operator: String(row.OPERADOR || ''), machine: String(row.MAQUINA || ''), article: String(row.ARTICULO || ''), description: String(row.DESCRIPCION || ''),
       startDate: String(row.FECHA_INICIO || ''), startTime: String(row.HORA_INICIO || ''), endDate: String(row.FECHA_FIN || ''), endTime: String(row.HORA_FIN || ''),
       fromHerramental: String(row.HERRAMENTAL_ORIGEN || ''), fromKit: String(row.KIT_ORIGEN || ''), toHerramental: String(row.HERRAMENTAL_DESTINO || ''),
-      toKit: String(row.KIT_DESTINO || ''), toToolKey: String(row.TOOL_KEY_DESTINO || ''), completedAt: String(row.FECHA_COMPLETADO || ''), reopenedAt: String(row.FECHA_REAPERTURA || '')
+      toKit: String(row.KIT_DESTINO || ''), toToolKey: String(row.TOOL_KEY_DESTINO || ''), completedAt: String(row.FECHA_COMPLETADO || ''), reopenedAt: String(row.FECHA_REAPERTURA || ''),
+      origin: origin
     };
+    return byOrigin;
+  }, {});
+}
+
+function PP_buildOperationPlanStatuses_(rows) {
+  return PP_readOperationStatusesByOrigin_(rows)['draft'] || {};
+}
+
+function PP_buildPublishedPlanStatuses_(rows) {
+  const byOrigin = PP_readOperationStatusesByOrigin_(rows);
+  return Object.keys(byOrigin).reduce(function(out, origin) {
+    if (origin === 'draft') return out;
+    out[origin] = byOrigin[origin];
     return out;
   }, {});
 }

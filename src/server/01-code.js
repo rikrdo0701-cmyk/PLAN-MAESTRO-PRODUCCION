@@ -1,5 +1,5 @@
-const PP_APP_VERSION = '2.41.0';
-const PP_SCHEMA_VERSION = 29;
+const PP_APP_VERSION = '2.42.0';
+const PP_SCHEMA_VERSION = 30;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
 function PP_dateToIso_(value) {
@@ -80,6 +80,96 @@ function verifyProductionPlanningDatabase() {
         headers: PP_SHEETS[name]
       };
     })
+  };
+}
+
+function getPlanningPureProbe_() {
+  return { ok: true, appVersion: PP_APP_VERSION, schemaVersion: PP_SCHEMA_VERSION, source: 'pure-probe' };
+}
+
+function diagnoseOtOperatingStatuses(ot) {
+  const target = String(ot || '').trim().toUpperCase();
+  if (!target) throw new Error('Indica el numero de OT: diagnoseOtOperatingStatuses(ot)');
+  const spreadsheet = PP_getWorkbook_();
+  const statusRows = PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
+  return {
+    ot: target,
+    spreadsheetId: spreadsheet.getId(),
+    statusRows: statusRows
+      .filter(function(row) {
+        return String(row.OT || '').toUpperCase() === target || String(row.KEY || '').toUpperCase().indexOf(target) >= 0;
+      })
+      .map(function(row) { return { KEY: row.KEY, ESTATUS_PLAN: row.ESTATUS_PLAN, OPERATION_ID: row.OPERATION_ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, FECHA_INICIO: row.FECHA_INICIO, FECHA_REAPERTURA: row.FECHA_REAPERTURA }; }),
+    operationRows: operationRows
+      .filter(function(row) { return String(row.OT || '').toUpperCase() === target; })
+      .map(function(row) { return { ID: row.ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, DESC: row.DESCRIPCION, ESTATUS: row.ESTATUS, INICIO: row.FECHA_INICIO, FIN: row.FECHA_FIN, LOCKED: row.LOCKED }; })
+  };
+}
+
+function diagnoseOt3124() {
+  const data = diagnoseOtOperatingStatuses('3124');
+  Logger.log(JSON.stringify(data, null, 2));
+}
+
+function getPlanningProductionVersion() {
+  const spreadsheet = PP_getWorkbook_();
+  return {
+    ok: true,
+    spreadsheetId: spreadsheet.getId(),
+    appVersion: PP_APP_VERSION,
+    schemaVersion: PP_SCHEMA_VERSION
+  };
+}
+
+function resetPlanningEphemeralState() {
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+
+  const clearBelowHeader = function(sheet) {
+    if (!sheet) return 0;
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+    return Math.max(0, lastRow - 1);
+  };
+
+  const cleared = {
+    operations: clearBelowHeader(spreadsheet.getSheetByName('OPERACIONES')),
+    operationStatuses: clearBelowHeader(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN')),
+    draftPlan: clearBelowHeader(spreadsheet.getSheetByName('BORRADOR_PLAN')),
+    publishedPlans: clearBelowHeader(spreadsheet.getSheetByName('PLANES_HISTORICOS')),
+    snapshotPayloads: clearBelowHeader(spreadsheet.getSheetByName('SNAPSHOT_PAYLOADS'))
+  };
+
+  const cacheSheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+  if (cacheSheet) cacheSheet.clearContents();
+
+  const transientConfig = {
+    schemaVersion: PP_SCHEMA_VERSION,
+    appVersion: PP_APP_VERSION,
+    revision: 0,
+    savedAt: '',
+    source: 'reset-planning-ephemeral',
+    selectedOts: [],
+    lockedOts: [],
+    expandedOts: [],
+    selectedOperationId: '',
+    planStart: '',
+    loadWeekStart: '',
+    reportWeekStart: '',
+    preparedPlanningByOt: {},
+    closedWorkOrderSummaries: {},
+    lastSchedule: null,
+    PP_STATE_CACHE_REVISION: 0
+  };
+  PP_writeConfigPatch_(spreadsheet, transientConfig);
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    message: 'Estado transitorio reiniciado: operaciones vacias, OTs de vuelta al backlog, sin completados, borradores ni planes.',
+    revision: 0,
+    cleared: cleared
   };
 }
 

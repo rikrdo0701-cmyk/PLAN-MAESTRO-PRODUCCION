@@ -143,7 +143,7 @@ function savePlanningStateOptimized(payload) {
     PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
     PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
     PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
-    PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+    PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
     spreadsheet.getSheetByName('AUDITORIA').appendRow([
       savedAt,
       Session.getActiveUser().getEmail() || 'usuario',
@@ -174,18 +174,22 @@ function saveOperationPlanStatus(payload) {
   if (normalizedStatus !== 'COMPLETADA_PLAN' && normalizedStatus !== 'PENDIENTE') {
     throw new Error('Estado de operacion no valido');
   }
+  const origin = String(status.origin || payload && payload.origin || '').trim();
+  const normalizedOrigin = origin === 'draft' || !origin ? 'draft' : origin;
 
   const lock = PP_acquireScriptLock_('guardar estado de operacion', 30000);
   try {
     const spreadsheet = PP_getWorkbook_();
     PP_ensureWorkbook_(spreadsheet);
     const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
-    const current = PP_buildOperationPlanStatuses_(
+    const byOrigin = PP_readOperationStatusesByOrigin_(
       PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'))
     );
-    current[key] = Object.assign({}, current[key] || {}, status, {
+    if (!byOrigin[normalizedOrigin]) byOrigin[normalizedOrigin] = {};
+    byOrigin[normalizedOrigin][key] = Object.assign({}, byOrigin[normalizedOrigin][key] || {}, status, {
       key: key,
-      status: normalizedStatus
+      status: normalizedStatus,
+      origin: normalizedOrigin
     });
 
     const revision = Number(config.revision || 0) + 1;
@@ -194,21 +198,29 @@ function saveOperationPlanStatus(payload) {
       revision: revision,
       savedAt: savedAt
     });
+    const publishedPlanStatuses = Object.keys(byOrigin).reduce(function(out, originKey) {
+      if (originKey === 'draft') return out;
+      out[originKey] = byOrigin[originKey];
+      return out;
+    }, {});
     PP_writeTable_(
       spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'),
       PP_SHEETS.ESTADOS_OPERACION_PLAN,
-      PP_operationStatusRows_({ operationPlanStatuses: current })
+      PP_operationStatusRows_({
+        operationPlanStatuses: byOrigin['draft'] || {},
+        publishedPlanStatuses: publishedPlanStatuses
+      })
     );
     spreadsheet.getSheetByName('AUDITORIA').appendRow([
       savedAt,
       Session.getActiveUser().getEmail() || 'usuario',
       'GUARDAR_ESTADO_OPERACION',
       revision,
-      JSON.stringify({ key: key, status: normalizedStatus })
+      JSON.stringify({ key: key, status: normalizedStatus, origin: normalizedOrigin })
     ]);
     SpreadsheetApp.flush();
     return PP_writeStateAck_(revision, savedAt, {
-      operationPlanStatus: current[key]
+      operationPlanStatus: byOrigin[normalizedOrigin][key]
     });
   } finally {
     lock.releaseLock();
