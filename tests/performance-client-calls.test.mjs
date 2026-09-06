@@ -629,7 +629,7 @@ const reportSource = options.reportOperations || state.operations;
     "renderProductionReportRow", "renderAdjusterReportRow", "bindReportCommentInputs", "renderOperatorReport", "renderAdjusterReport", "reportOperationsSource",
     "sequenceSort", "opStart", "renderSubcontractReport", "planStatusOriginForSource", "statusesForPlanOrigin",
     "draftViewStatuses", "latestPublishedOriginId", "activePlanReportStatuses", "writePlanStatusByOrigin",
-    "rollbackPlanStatusByOrigin", "shouldMutateDraftFromSource",
+    "rollbackPlanStatusByOrigin", "shouldMutateDraftFromSource", "clearPendingPlanStatusSaveKeys",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -657,7 +657,7 @@ const reportSource = options.reportOperations || state.operations;
     () => state.operationPlanStatuses || {}, () => "", () => state.operationPlanStatuses || {},
     (key, status) => { if (!state.operationPlanStatuses) state.operationPlanStatuses = {}; const row = { ...(status || {}), key, origin: "draft" }; state.operationPlanStatuses[key] = row; return row; },
     (key, previousStatus) => { if (previousStatus) state.operationPlanStatuses[key] = previousStatus; else delete state.operationPlanStatuses[key]; },
-    () => true,
+    () => true, () => {},
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport, detailButtons,

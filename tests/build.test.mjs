@@ -1127,12 +1127,29 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
   const twoPhaseEnd = app.indexOf("function applyNetSuitePlanningPayload(payload)", twoPhaseStart);
   const syncTwoPhase = app.slice(twoPhaseStart, twoPhaseEnd);
 
-  assert.match(renderPriorityList, /document\.activeElement\?\.dataset\?\.dueOt/);
+assert.match(renderPriorityList, /document\.activeElement\?\.dataset\?\.dueOt/);
   assert.match(renderPriorityList, /dataset\.dueOt === focusedDueOt[\s\S]*\.focus\(\)/);
   assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
   assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
   assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*render\(\{ save: false \}\)/);
   assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
+});
+
+test("la importacion de buckets de estados es no destructiva y respeta los guardados en vuelo", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importedStart = app.indexOf("function applyImported(imported, options = {})");
+  const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
+  const applyImported = app.slice(importedStart, importedEnd);
+  const helpers = app.slice(app.indexOf("const pendingPlanStatusSaveKeys = new Set();"),
+    app.indexOf("function deletePlanStatusByOrigin(key)"));
+
+  assert.match(applyImported, /state\.operationPlanStatuses = mergeImportedPlanStatuses\(/);
+  assert.match(applyImported, /state\.publishedPlanStatuses = mergeImportedPublishedPlanStatuses\(/);
+  assert.match(helpers, /function writePlanStatusByOrigin\(key, status\)/);
+  assert.match(helpers, /const pendingPlanStatusSaveKeys = new Set\(\);/);
+  assert.match(helpers, /function clearPendingPlanStatusSaveKeys\(key\)/);
+  assert.match(helpers, /function mergeImportedPlanStatuses\(local, remote\)/);
+  assert.match(helpers, /function mergeImportedPublishedPlanStatuses\(local, remote\)/);
 });
 
 test("tombstones locales evitan que import remoto o snapshot stale reviva OTs retiradas", async () => {

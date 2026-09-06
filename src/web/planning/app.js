@@ -1660,9 +1660,12 @@ function shouldMutateDraftFromSource() {
   return origin === "draft" || origin === latestPublishedOriginId();
 }
 
+const pendingPlanStatusSaveKeys = new Set();
+
 function writePlanStatusByOrigin(key, status) {
   const origin = planStatusOriginForSource();
   const row = { ...(status || {}), key, origin };
+  pendingPlanStatusSaveKeys.add(origin + "\u0000" + key);
   if (origin === "draft") {
     if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
     state.operationPlanStatuses[key] = row;
@@ -1675,9 +1678,48 @@ function writePlanStatusByOrigin(key, status) {
   if (origin === latestPublishedOriginId()) {
     if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
     state.operationPlanStatuses[key] = { ...row, origin: "draft" };
+    pendingPlanStatusSaveKeys.add("draft\u0000" + key);
     invalidateDraftViewStatuses();
   }
   return row;
+}
+
+function clearPendingPlanStatusSaveKeys(key) {
+  for (const entry of [...pendingPlanStatusSaveKeys]) {
+    if (entry.slice(entry.indexOf("\u0000") + 1) === String(key || "")) pendingPlanStatusSaveKeys.delete(entry);
+  }
+}
+
+function mergeImportedPlanStatuses(local, remote) {
+  const result = { ...(remote || {}) };
+  if (!local || !pendingPlanStatusSaveKeys.size) return result;
+  for (const entry of pendingPlanStatusSaveKeys) {
+    const sep = entry.indexOf("\u0000");
+    if (sep < 0 || entry.slice(0, sep) !== "draft") continue;
+    const key = entry.slice(sep + 1);
+    const localRow = local[key];
+    if (localRow && !result[key]) result[key] = localRow;
+  }
+  return result;
+}
+
+function mergeImportedPublishedPlanStatuses(local, remote) {
+  const result = {};
+  Object.keys(remote || {}).forEach((origin) => { result[origin] = { ...(remote[origin] || {}) }; });
+  if (!local || !pendingPlanStatusSaveKeys.size) return result;
+  for (const entry of pendingPlanStatusSaveKeys) {
+    const sep = entry.indexOf("\u0000");
+    if (sep < 0) continue;
+    const origin = entry.slice(0, sep);
+    if (origin === "draft") continue;
+    const key = entry.slice(sep + 1);
+    const localRow = local[origin] && local[origin][key];
+    if (localRow && !(result[origin] && result[origin][key])) {
+      if (!result[origin]) result[origin] = {};
+      result[origin][key] = localRow;
+    }
+  }
+  return result;
 }
 
 function deletePlanStatusByOrigin(key) {
@@ -7322,10 +7364,9 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
         });
         state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
         state.savedAt = saved?.savedAt || state.savedAt;
-        if (state.revision > Number(state.revision || 0)) {
-          discardDetachedPlanStatusRows(key);
-          return true;
-        }
+        clearPendingPlanStatusSaveKeys(key);
+        discardDetachedPlanStatusRows(key);
+        return true;
       } finally {
         operationStatusSavesInFlight -= 1;
         if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
@@ -7334,12 +7375,14 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       appSheetMarkDirtyScope("plan");
       if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
     }
+    clearPendingPlanStatusSaveKeys(key);
     discardDetachedPlanStatusRows(key);
     return true;
   } catch (error) {
     console.warn("No se pudo guardar el estado de la operacion:", error);
     showToast("Error de guardado; intente recargar la pagina", 5000);
   }
+  clearPendingPlanStatusSaveKeys(key);
   rollbackPlanStatusByOrigin(key, previousStatus);
   if (operation && previousOperation) Object.assign(operation, previousOperation);
   if (Array.isArray(previousLockedOts)) {
@@ -8626,8 +8669,12 @@ async function applyImported(imported, options = {}) {
       if (key) state.operationsSyncedAt[key] = imported.syncedAt;
     }
   }
-  if (imported.operationPlanStatuses) state.operationPlanStatuses = normalizeOperationPlanStatuses(imported.operationPlanStatuses);
-  if (imported.publishedPlanStatuses) state.publishedPlanStatuses = normalizePublishedPlanStatuses(imported.publishedPlanStatuses);
+  if (imported.operationPlanStatuses) {
+    state.operationPlanStatuses = mergeImportedPlanStatuses(state.operationPlanStatuses, normalizeOperationPlanStatuses(imported.operationPlanStatuses));
+  }
+  if (imported.publishedPlanStatuses) {
+    state.publishedPlanStatuses = mergeImportedPublishedPlanStatuses(state.publishedPlanStatuses, normalizePublishedPlanStatuses(imported.publishedPlanStatuses));
+  }
   if (Number.isFinite(Number(imported.schemaVersion))) state.schemaVersion = Number(imported.schemaVersion);
   if (Number.isFinite(Number(imported.revision))) state.revision = Number(imported.revision);
   if (imported.operators) state.operators = imported.operators;
