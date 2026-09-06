@@ -21,8 +21,11 @@ relevante por primera vez debe añadirse aquí.
 | **TIPO_SUBCONTRATO** | Tipo de subcontrato (cromado, metokote, maka) referenciado en `SUBCONTRATOS` por `PARTE`. |
 | **ESTATUS_PLAN** | Estado de una operación en el plan: `PENDIENTE` (default) o `COMPLETADA_PLAN`. |
 | **selectedOts** | Lista de OTs seleccionadas del borrador; fuente única para Gantt, KPI, backlog, cargas y reportes. |
-| **lockedOts** | OTs bloqueadas que no se reprograman. |
+| **lockedOts** | OTs bloqueadas que no se reprograman; conservan fechas, recursos y carga al regenerar. |
 | **operationPlanStatuses** | Estados por operación (`ESTADOS_OPERACION_PLAN`). |
+| **FUERA_DE_HORIZONTE_PLANEACION** | Marcador que se agrega al `LOG` de una operación **solo al exportar el CSV** cuando su `FECHA_FIN` supera `planStart + horizonDays`; el plan no se recorta por horizonte y el marcador no se persiste. |
+| **CONGELADA_AL_EJECUTAR_PLAN** | Marcador en `LOG` de operaciones seleccionadas pendientes cuyo inicio ya ocurrió (`autoFrozen=true`); legitiman fechas pasadas al evaluar el anclaje incremental y protegen la programación mientras la OT no se regenere. |
+| **AUTO_FROZEN** | Columna/bandera de congelado automático; no equivale a `lockedOts` (no deshabilita edición manual, solo protege la programación). |
 | **Doblado** | Operaciones de los CT 5459/5527; la preparación de la OT precarga máquina/herramental/kit desde el catálogo del artículo. |
 | **Subcontrato** | Proceso externo (cromado/metokote/maka) con `DIAS_HABILES`; una OT puede tener operaciones de subcontrato. |
 | **Planta MM del Llano** | Ubicación NetSuite de la planta (`locationId = 1`, `PP_PLANT_NAME`); filtro fijo de sincronización. |

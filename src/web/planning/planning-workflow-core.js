@@ -501,6 +501,9 @@
       if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
     });
     const merged = { ...existingOperation, ...route };
+    if (existingOperation && String(existingOperation?.id || "").trim()) {
+      merged.id = existingOperation.id;
+    }
     if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
     return merged;
   }

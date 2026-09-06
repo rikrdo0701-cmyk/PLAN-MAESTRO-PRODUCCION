@@ -943,7 +943,8 @@ test("las filas validas existentes no sustituyen la primera carga directa de la 
   assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "remote" });
   assert.deepEqual(plain(await fixture.context.ensureWorkOrderPlanningData("2773")), { ready: true, source: "cached" });
   assert.equal(calls, 1);
-  assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["direct-2773-1"]);
+  assert.deepEqual(plain(fixture.state.operations.map((operation) => operation.id)), ["sync-2773-1"]);
+  assert.equal(fixture.state.operations[0].tiempoProd, 12);
 });
 
 test("una ruta eliminada despues de configurar la matriz se vuelve a consultar", async () => {
@@ -1274,7 +1275,7 @@ test("la fusion directa actualiza la ruta y conserva campos locales de una OT pl
   assert.equal(merged, true);
   assert.equal(fixture.state.selectedOperationId, "planned-2773-10");
   assert.deepEqual(plain(fixture.state.operations), [{
-    id: "direct-2773-10", ot: "2773", secuencia: 10, ct: "5458", descripcion: "CORTE NETSUITE",
+    id: "planned-2773-10", ot: "2773", secuencia: 10, ct: "5458", descripcion: "CORTE NETSUITE",
     tiempoProd: 15, cantTotal: 9, cantPendiente: 7, fechaReq: "2026-08-15",
     fechaInicio: "2026-07-30", horaInicio: "08:00", fechaFin: "2026-07-30", horaFin: "09:00",
     operador: "OPERADOR LOCAL", maquina: "DOB-01", herramental: "H-18", kitHerramental: "K-18",

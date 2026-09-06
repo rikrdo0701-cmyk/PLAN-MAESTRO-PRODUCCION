@@ -1246,6 +1246,17 @@ test("mergeOtRouteOperation conserva campos locales y aplica campos de ruta remo
   assert.equal(merged.secuenciaNueva, undefined);
 });
 
+test("mergeOtRouteOperation conserva el id existente para no romper la clave de COMPLETADA_PLAN", () => {
+  const existing = { id: "ns-1234", ot: "1556", secuencia: "10", ct: "M1", planStatus: "COMPLETADA_PLAN" };
+  const remote = { id: "ns-1556-1234", ot: "1556", secuencia: "10", ct: "M1", tiempoProd: 4 };
+  const merged = core.mergeOtRouteOperation(remote, existing);
+  assert.equal(merged.id, "ns-1234");
+  assert.equal(merged.tiempoProd, 4);
+  assert.equal(merged.planStatus, "COMPLETADA_PLAN");
+  const adopted = core.mergeOtRouteOperation(remote, null);
+  assert.equal(adopted.id, "ns-1556-1234");
+});
+
 test("mergeOtRouteOperations preserva completadas y CAMBIO_HERRAMENTAL y combina por secuencia/CT", () => {
   const existing = [
     { ot: "OT-1", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN", tiempoCiclo: 3 },

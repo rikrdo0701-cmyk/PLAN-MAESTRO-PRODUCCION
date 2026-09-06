@@ -46,5 +46,57 @@ if (manifest.webapp?.access !== "ANYONE_ANONYMOUS" || manifest.webapp?.executeAs
   throw new Error("El manifest no conserva la implementacion web publica");
 }
 
+const rules = await readRules();
+const ruleWarnings = await verifyRuleOverlaps(rules);
+
 const size = (await stat(path.join(distDir, "Index.html"))).size;
 console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo.`);
+for (const warning of ruleWarnings) console.log(`aviso: ${warning}`);
+
+async function readRules() {
+  let content;
+  try {
+    content = await readFile(path.join(root, ".project-memory/rules.json"), "utf8");
+  } catch {
+    return [];
+  }
+  const parsed = JSON.parse(content);
+  const list = Array.isArray(parsed) ? parsed : parsed?.rules;
+  if (!Array.isArray(list)) throw new Error("rules.json no contiene una lista de reglas valida");
+  return list;
+}
+
+async function verifyRuleOverlaps(list) {
+  const warnings = [];
+  const seenIds = new Map();
+  for (const rule of list) {
+    const id = String(rule?.rule_id || "").trim();
+    if (!id) throw new Error(`rules.json contiene una regla sin rule_id: ${JSON.stringify(rule?.name || "")}`);
+    if (seenIds.has(id)) throw new Error(`rules.json tiene rule_id duplicado: ${id}`);
+    seenIds.set(id, rule);
+  }
+  const tokenize = (value) =>
+    String(value || "").toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ").filter(Boolean);
+  const stop = new Set(["de", "del", "la", "las", "el", "los", "en", "y", "no", "con", "para", "una", "un", "entre", "por", "que", "a", "al", "se", "su", "sus"]);
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i];
+      const b = list[j];
+      if (String(a?.domain || "").trim().toUpperCase() !== String(b?.domain || "").trim().toUpperCase()) continue;
+      const ta = tokenize(a?.name).filter((token) => !stop.has(token));
+      const tb = tokenize(b?.name).filter((token) => !stop.has(token));
+      const setA = new Set(ta);
+      let intersection = 0;
+      tb.forEach((token) => { if (setA.has(token)) intersection += 1; });
+      const union = new Set([...setA, ...tb]).size;
+      const similarity = union ? intersection / union : 0;
+      if (similarity >= 0.65) {
+        warnings.push(`posible solape entre ${a.rule_id} y ${b.rule_id} (similitud ${Math.round(similarity * 100)}%); revisarlo y decidir cual regla permanece`);
+      }
+    }
+  }
+  return warnings;
+}

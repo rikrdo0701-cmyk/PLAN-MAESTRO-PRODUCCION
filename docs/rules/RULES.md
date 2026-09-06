@@ -13,7 +13,7 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-GOV-002` | Single writer | DOCUMENTADA | ADR-0001 |
 | `RULE-GOV-003` | Document discovered knowledge | DOCUMENTADA | ADR-0001 |
 | `RULE-GIT-001` | Private independent remote | DOCUMENTADA | ADR-0001 |
-| `RULE-GOV-004` | Dry-run == ejecución real (sin fallbacks que la web no hace) | IMPLEMENTADA | `planner-core.js` |
+| `RULE-GOV-004` | Dry-run == ejecución real (sin fallbacks que la web no hace) y snapshots en SNAPSHOT_PAYLOADS (consolidada 2026-09-05) | IMPLEMENTADA | `planner-core.js`, `02-storage.js` |
 | `RULE-GOV-005` | GitHub Pages es el punto de acceso público a la app | ACTIVA | `deploy-pages.yml` |
 | `RULE-GOV-006` | Sin estado de demostración en el arranque público; datos reales se autoaplican | IMPLEMENTADA | `scripts/build-appscript.mjs` |
 | `RULE-GOV-007` | El arranque real es `performance-client.js`; parches del boot vía `scripts/build-appscript.mjs` | IMPLEMENTADA | `scripts/build-appscript.mjs` |
@@ -45,7 +45,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-REP-001` | Fechas de reportes: día = hoy (operador/ajustador/subcontrato); semana = lunes del plan seleccionado, sin campo "Semana" | IMPLEMENTADA | `app.js`, `index.template.html`, commit `221f4d8` |
 | `RULE-REP-002` | Rango de fechas de reportes diarios: muestran operaciones con fecha anterior al día seleccionado y hacia adelante según la casilla de días; no se limitan a la semana del plan (`operationsForDayReport`, `filteredReportRows`, `reportDateRange`) | IMPLEMENTADA | `app.js` (`operationsForDayReport`, `operatorReportSelection`, `adjusterReportSelection`) |
 | `RULE-REP-003` | El seguimiento de completado (Completar/Reabrir y columna Estado) solo aplica al último plan publicado; el borrador y los planes anteriores son solo lectura (`reportSourceAllowsOperationTracking`) | IMPLEMENTADA | `app.js` (`reportSourceAllowsOperationTracking`, `planStatusActionCell`) |
-| `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir (importación `08-netsuite.js` + fallback de visualización `operationCycleMinutesForReport`) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
+| `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir; fuente de reportes solo borrador + último publicado (consolidada 2026-09-05) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
 | `RULE-OT-027` | Mapeo de tiempos de operación NetSuite: headers reales de ruta (`Velocidad de ejecución (minutos/unidad)`, `Tiempo de configuración (minutos)`, `Cantidad de entrada`/`Cantidad completada`) y SIN topes (`setup>20→15` y `rate>10→0.67` eliminados) | IMPLEMENTADA | `08-netsuite.js` |
 
 ## OT
