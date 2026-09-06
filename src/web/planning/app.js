@@ -8842,7 +8842,7 @@ function parseCsv(text) {
 }
 
 function getPlanWindow() {
-  const activeOperations = currentPlanOperations().filter((op) => !isPlanCompletedOperation(op) && opStart(op));
+  const activeOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && opStart(op));
   return globalThis.PlanningWorkflowCore.ganttPlanWindow({
     planStart: state.planStart,
     horizonDays: state.horizonDays,

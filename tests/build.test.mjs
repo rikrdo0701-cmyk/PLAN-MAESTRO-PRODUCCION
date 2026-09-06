@@ -294,7 +294,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /startFromExecutionTime: true/);
 const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWindow()"), pagesIndex.indexOf("function scheduledPlanWindowStart()"));
   assert.match(planWindowSource, /PlanningWorkflowCore\.ganttPlanWindow\(\{/);
-  assert.match(planWindowSource, /currentPlanOperations\(\)\.filter\(\(op\) => !isPlanCompletedOperation\(op\) && opStart\(op\)\)/);
+  assert.match(planWindowSource, /currentPlanOperations\(\)\.filter\(\(op\) => isJobScheduled\(op\.ot\) && !isPlanCompletedOperation\(op\) && opStart\(op\)\)/);
   assert.doesNotMatch(planWindowSource, /scheduledPlanWindowStart\(\)/);
   assert.match(pagesIndex, /const affected = new Set\(state\.selectedOts\.map\(normalizeStatus\)\);/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);

@@ -440,6 +440,40 @@ test("getPlanWindow puro ignora ops historicas y completadas para anclar", () =>
   assert.equal(ganttFmt(win.start), "2026-09-10");
 });
 
+test("getPlanWindow puro: el scope de la app (solo OTs en plan) evita anclar en fechas huerfanas de OTs externas", () => {
+  const selectedOts = ["1905", "2233"];
+  const lastSchedule = { scheduledOts: ["1905", "2233"] };
+  const isJobScheduled = (ot) => selectedOts.includes(ot) && lastSchedule.scheduledOts.includes(ot);
+  const operations = [
+    { id: "stray", ot: "2466", fechaInicio: "2026-07-14", horaInicio: "06:00", planStatus: "PENDIENTE" },
+    { id: "1905-1", ot: "1905", fechaInicio: "2027-05-25", horaInicio: "07:00", planStatus: "PENDIENTE" },
+    { id: "1905-3", ot: "1905", fechaInicio: "2026-09-07", horaInicio: "07:00", planStatus: "PENDIENTE" },
+    { id: "2233-1", ot: "2233", fechaInicio: "2026-09-07", horaInicio: "07:00", planStatus: "PENDIENTE" },
+  ];
+  const scoped = operations.filter((op) => isJobScheduled(op.ot) && op.planStatus !== "COMPLETADA_PLAN");
+  const win = core.ganttPlanWindow({
+    planStart: "2026-09-07",
+    horizonDays: 15,
+    operations: scoped,
+    today: new Date(2026, 8, 5, 23, 30),
+  });
+  assert.equal(ganttFmt(win.start), "2026-09-05", "sin la op huerfana externa la ventana ancla en hoy/planStart, no en julio");
+  assert.equal(ganttFmt(win.end), "2026-09-19");
+});
+
+test("getPlanWindow puro: la op huerfana de una OT fuera del plan desvia la ventana (por eso la app la excluye)", () => {
+  const win = core.ganttPlanWindow({
+    planStart: "2026-09-07",
+    horizonDays: 15,
+    operations: [
+      { id: "stray", ot: "2466", fechaInicio: "2026-07-14", horaInicio: "06:00", planStatus: "PENDIENTE" },
+      { id: "2233-1", ot: "2233", fechaInicio: "2026-09-07", horaInicio: "07:00", planStatus: "PENDIENTE" },
+    ],
+    today: new Date(2026, 8, 5, 23, 30),
+  });
+  assert.equal(ganttFmt(win.start), "2026-07-14");
+});
+
 test("getPlanWindow puro cae al lunes de la semana como fallback sin planStart ni operaciones", () => {
   const win = core.ganttPlanWindow({ planStart: "", horizonDays: 10, operations: [], today: new Date(2026, 8, 14, 9, 0) });
   assert.equal(ganttFmt(win.start), "2026-09-14");
