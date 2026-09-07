@@ -919,6 +919,24 @@
       "source": "bug usuario 2026-09-06 (OT agregada y maquina de OT vuelven a preguntarse tras conflicto tácito); FIX 2026-09-06 app.js (rememberLocalOtConfigurationEdit, markers, saveAppSheet), performance-client.js (reloadStateAfterConflict + reapplyLocalAddedDraftOts/reapplyLocalOtConfigurations), planning-workflow-core.js (removeOtFromDraft); probe-bug2.mjs CASE A-E (motor lee otConfigurations correctamente); tests/performance-client-conflict.test.mjs; RULE-GOV-003/RULE-GOV-012",
       "domain": "GOV",
       "updated_at": "2026-09-06"
+    },
+    {
+      "rule_id": "RULE-UI-004",
+      "name": "El Gantt reconstruye su DOM solo cuando cambia la estructura; abrir el detalle de OT actualiza solo la seleccion",
+      "status": "implementada",
+      "rule": "renderGantt (src/web/planning/app.js) evitaba reconstruir todo el DOM del Gantt en cada llamada y, sobre todo, al abrir el detalle de una OT. Con planes grandes (512 filas / ~356 barras en produccion 2026-09-06), cada reconstruccion completa tardaba decenas de segundos y los handlers de click de tarjeta/cola que abren el detalle llaman renderGantt() en cada apertura. FIX 2026-09-06: renderGantt mantiene un memo renderGanttStructureMemo { groups, windowStart, dayWidth, horizonDays, selectedOt }. Compara por referencia el resultado de getGanttGroups() (memoizado en GANTT_GROUPS_CACHE por visibleOperations.length + ganttView + GANTT_GROUPS_CACHE_VERSION) mas window.start (getPlanWindow), state.ganttDayWidth y state.horizonDays; si no cambiaron y el canvas ya tiene contenido, el cambio es SOLO de seleccion y se usa applyGanttSelection: togglea la clase selected-operation en la fila resumen data-group='job:<ot>' y la clase in-sequence en las barras cuya operacion pertenece a la OT de state.selectedOperationId, sin reconstruir el DOM. Cualquier cambio estructural (toggleExpandedJob/Ct, setGanttView, changeGanttZoom, invalidateGanttCache/GroupsCache, visibles reordenados/agregados que cambian la referencia de getGanttGroups) dispara la reconstruccion completa como antes. La clase selected-operation se aplica solo en vista job sobre la fila resumen; las OTs no programadas no tienen fila y quedan sin resaltar (igual que antes). Verificado con Playwright local: abrir detalle pasa de ~33 s a ~0.1-0.2 s y la fila seleccionada se actualiza; expandir/cambiar vista/zoom/invalidar cache conservan la reconstruccion completa. Complementa RULE-MAT-008 (memo de currentPlanOperations) sin solaparse.",
+      "source": "bug usuario 2026-09-06 ('ABRIR DETALLE DE OT TARDA MUCHO, MAS QUE ANTES'); medicion Playwright produccion 2026-09-06 (renderGantt ~33 s por llamada, getGanttGroups 512 grupos); FIX 2026-09-06 src/web/planning/app.js renderGantt/applyGanttSelection/renderGanttStructureMemo; verificacion Playwright local (probe-fix-verify.mjs/probe-fix-structure.mjs/probe-click-e2e.mjs); RULE-MAT-008",
+      "domain": "UI",
+      "updated_at": "2026-09-06"
+    },
+    {
+      "rule_id": "RULE-UI-005",
+      "name": "El modal Preparar OT muestra el primer material (MP) de la OT",
+      "status": "implementada",
+      "rule": "El modal de preparacion ('Preparar OT <folio>', showPlanningRequirements en src/web/planning/app.js) incorpora al inicio una seccion 'Materia prima base' con el campo 'Primer MP' de solo lectura. El valor se obtiene de materialsForOt(job.ot)[0] (hoja MATERIALES, lista state.materials indexada por materialOtKey/planningStateIndexes.materialsByOt) y se muestra como '<component> - <descripcion>' (component = MP, descripcion = descripcion del material); si la OT no tiene materias primas cargadas se muestra 'Sin materia prima registrada'. Definicion de usuario resumida: 'el modal de preparar OT debe mostrar el primer MP de la OT'. RULE-BOM-002 define materialsForOt; aqui solo es presentacion.",
+      "source": "definicion de usuario 2026-09-06 ('Preparar OT modal should show the first materia prima (MP) of the OT'); FIX 2026-09-06 src/web/planning/app.js showPlanningRequirements (materialField/materialLabel, materialsForOt(job.ot)[0]); RULE-BOM-002/RULE-GOV-011",
+      "domain": "UI",
+      "updated_at": "2026-09-06"
     }
   ],
   "updated_at": "2026-09-06"

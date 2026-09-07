@@ -560,6 +560,7 @@ let operatorLoadsCache = null;
 let operatorLoadsRenderMemo = null;
 let planStateMutationVersion = 0;
 let planStatusBackgroundRefreshPending = false;
+let renderGanttStructureMemo = null;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -3165,6 +3166,16 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const compatibleMachines = compatibleMachineOptionsForOps(bendingOps);
   const configuration = otConfigurationFor(job.ot);
+  const firstMaterial = materialsForOt(job.ot)[0];
+  const materialLabel = firstMaterial
+    ? [firstMaterial.component, firstMaterial.description].filter(Boolean).join(" - ")
+    : "Sin materia prima registrada";
+  const materialField = `<section class="planning-requirement planning-requirement-material">
+    <div class="planning-requirement-title"><strong>Materia prima base</strong></div>
+    <div class="planning-requirement-fields">
+      <label>Primer MP<input type="text" value="${escapeHtml(materialLabel)}" readonly></label>
+    </div>
+  </section>`;
   const needsOtKit = requirements.some((item) => item.codes.has("OPTIONAL_KIT"));
   const needsSubcontract = requirements.some((item) => item.codes.has("MISSING_SUBCONTRACT_TYPE") || item.codes.has("MISSING_SUBCONTRACT_DAYS") || item.codes.has("OT_SUBCONTRACT"));
   const registeredSubcontract = subcontractRegistrationForJob(job.ot, job.ops);
@@ -3248,7 +3259,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
       openPlanningDialog({
         title: planningPreparationTitle(job),
         summary: "",
-        body: `${commercialFields}${commonFields}${operationFields}`,
+        body: `${materialField}${commercialFields}${commonFields}${operationFields}`,
         confirmLabel: "Agregar al plan",
         cancelVisible: true,
         setup: () => {
@@ -3779,8 +3790,28 @@ function ganttDayColumnWidths(windowStart) {
 function renderGantt() {
   const groups = getGanttGroups();
   const window = getPlanWindow();
-  const days = range(state.horizonDays).map((i) => addDays(window.start, i));
   const selectedOt = selectedJobOt();
+  const memo = typeof renderGanttStructureMemo !== "undefined" ? renderGanttStructureMemo : null;
+  const structureUnchanged = memo
+    && memo.groups === groups
+    && memo.windowStart === window.start.getTime()
+    && memo.dayWidth === state.ganttDayWidth
+    && memo.horizonDays === state.horizonDays
+    && typeof els.ganttCanvas !== "undefined"
+    && Boolean(els.ganttCanvas.firstElementChild);
+  if (structureUnchanged) {
+    if (memo.selectedOt === selectedOt) return;
+    applyGanttSelection(selectedOt);
+    renderGanttStructureMemo = {
+      groups,
+      windowStart: window.start.getTime(),
+      dayWidth: state.ganttDayWidth,
+      horizonDays: state.horizonDays,
+      selectedOt,
+    };
+    return;
+  }
+  const days = range(state.horizonDays).map((i) => addDays(window.start, i));
   const zoomLevel = ganttZoomLevelForWidth(state.ganttDayWidth);
   const totalWindowMinutes = workWindowMinutes();
   const dayWidths = ganttDayColumnWidths(window.start);
@@ -3836,6 +3867,33 @@ function renderGantt() {
   }
 
   els.ganttCanvas.appendChild(inner);
+  renderGanttStructureMemo = {
+    groups,
+    windowStart: window.start.getTime(),
+    dayWidth: state.ganttDayWidth,
+    horizonDays: state.horizonDays,
+    selectedOt,
+  };
+}
+
+function applyGanttSelection(selectedOt) {
+  const canvas = els.ganttCanvas;
+  if (!canvas || !canvas.firstElementChild) return;
+  canvas.querySelectorAll(".gantt-row.selected-operation").forEach((row) => {
+    row.classList.remove("selected-operation");
+  });
+  if (selectedOt) {
+    const groupKey = `job:${String(selectedOt).replace(/["\\]/g, "")}`;
+    const row = canvas.querySelector(`.gantt-row[data-group="${groupKey}"]`);
+    if (row) row.classList.add("selected-operation");
+  }
+  const selectedOperationOt = typeof findOperation === "function" ? findOperation(state.selectedOperationId)?.ot : "";
+  const ids = selectedOperationOt
+    ? new Set(currentPlanOperations().filter((op) => op.ot === selectedOperationOt).map((op) => op.id))
+    : new Set();
+  canvas.querySelectorAll(".gantt-bar").forEach((bar) => {
+    bar.classList.toggle("in-sequence", ids.has(bar.dataset.id));
+  });
 }
 
 function ganttTimeScaleHtml(zoomLevel, day) {

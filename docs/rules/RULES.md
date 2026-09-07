@@ -37,6 +37,8 @@ Detalle y mediciones: `docs/superpowers/plans/2026-09-01-arranque-con-datos-real
 |---|---|---|---|
 | `RULE-UI-001` | Cada vista no-plan ocupa todo el workspace (el plan/Gantt queda oculto en Reportes, Cargas, Cuello de botella y Config) | IMPLEMENTADA | `src/web/planning/styles.css`, commit `34c5802` |
 | `RULE-UI-003` | Botones Completar/Reabrir del panel de detalle de OT se re-habilitan cuando termina el guardado (incluidos en `planStatusButtons`; antes quedaban `disabled` para siempre tras togglear desde el detalle) | IMPLEMENTADA | `app.js` (`planStatusButtons`), `tests/performance-client-calls.test.mjs` |
+| `RULE-UI-004` | Gantt: reconstruye el DOM solo cuando cambia la estructura; abrir el detalle de OT actualiza solo la selección (memo `renderGanttStructureMemo`) | IMPLEMENTADA | bug 2026-09-06 (abrir detalle de OT tarda), `app.js` (`renderGantt`/`applyGanttSelection`) |
+| `RULE-UI-005` | Modal Preparar OT muestra el primer material (MP) de la OT en una sección "Materia prima base" | IMPLEMENTADA | definición de usuario 2026-09-06, `app.js` (`showPlanningRequirements`) |
 
 Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):not(.planning-dialog) { display: none; }`, espejo de lo que `src/web/inspection/inspection.css` hace con `data-view="inspection"`.
 

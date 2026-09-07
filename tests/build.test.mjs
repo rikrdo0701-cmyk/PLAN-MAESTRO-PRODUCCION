@@ -37,6 +37,9 @@ test("cola de planeacion expone mover sin flechas y modal de preparacion sin tex
   assert.match(planningApp, /planStatusBackgroundRefreshPending/);
   assert.match(planningApp, /operatorLoadsSourceMemoized/);
   assert.match(planningApp, /planStateMutationVersion/);
+  assert.match(planningApp, /renderGanttStructureMemo/);
+  assert.match(planningApp, /Materia prima base/);
+  assert.match(planningApp, /materialsForOt\(job\.ot\)\[0\]/);
   assert.doesNotMatch(planningApp, /<span>Cantidad<\/span><strong>\$\{escapeHtml\(quantityLabel\)\}<\/strong>/);
   assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
   assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
