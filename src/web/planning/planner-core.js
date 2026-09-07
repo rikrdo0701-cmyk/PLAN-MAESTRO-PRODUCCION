@@ -180,7 +180,12 @@
       (performanceState?.timeBudgetMs > 0 && performanceState.timeBudgetMs <= FAST_QUALITY_BUDGET_MS);
     const volumePassLimit = operationCount <= 80 ? 4 : 1;
     const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
-    const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
+    const configuredStrategyPool = Array.isArray(options?.strategyPool) ? options.strategyPool
+      : Array.isArray(inputState?.settings?.strategyPool) ? inputState.settings.strategyPool
+        : null;
+    const strategyPool = configuredStrategyPool && configuredStrategyPool.length
+      ? configuredStrategyPool
+      : ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
     const strategyLimit = fastQualityMode ? Math.min(3, passCount + 2) : passCount + 2;
     const strategies = strategyPool.slice(0, Math.min(strategyLimit, strategyPool.length));
 const evaluated = [];
@@ -227,7 +232,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         }
       }
     }
-    if (flowBalancedEnabled && !completePlanFound) {
+    if (flowBalancedEnabled && !completePlanFound && strategyPool.length > 1) {
       const skipFastFlow = fastQualityMode && operationCount > 80;
       if (skipFastFlow) {
         strategySkips.push({ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" });
@@ -2171,6 +2176,9 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     if (strategy === "tools") {
       return a.assignment.start - b.assignment.start || a.assignment.toolPenalty - b.assignment.toolPenalty || a.assignment.end - b.assignment.end || a.assignment.operatorLoad - b.assignment.operatorLoad || tie;
     }
+    if (strategy === "balanced_goal") {
+      return a.assignment.start - b.assignment.start || a.assignment.toolPenalty - b.assignment.toolPenalty || a.assignment.operatorLoad - b.assignment.operatorLoad || a.assignment.end - b.assignment.end || ad - bd || tie;
+    }
     if (strategy === "makespan") {
       const aDur = operationDuration(a.op, 100, 100);
       const bDur = operationDuration(b.op, 100, 100);
@@ -2229,6 +2237,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     if (strategy === "finish") return a.end - b.end || a.start - b.start || a.toolPenalty - b.toolPenalty || a.operatorLoad - b.operatorLoad || tie;
     if (strategy === "load") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || tie;
     if (strategy === "tools") return a.toolPenalty - b.toolPenalty || a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
+    if (strategy === "balanced_goal") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.toolPenalty - b.toolPenalty || a.end - b.end || tie;
     return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
   }
 

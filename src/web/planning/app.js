@@ -5207,6 +5207,9 @@ async function scheduleCurrentPlanImpl() {
       affectedOts: readyOts,
       fastQualityMode: true,
       completeAll: true,
+      strategyPool: Array.isArray(state.settings?.strategyPool) && state.settings.strategyPool.length
+        ? state.settings.strategyPool
+        : ["balanced_goal"],
       timeBudgetMs: planningPlanTimeBudgetMs(readyOts),
       collectStats: true,
       progressEveryMs: 300,
@@ -5502,6 +5505,9 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
+      strategyPool: Array.isArray(temporaryState.settings?.strategyPool) && temporaryState.settings.strategyPool.length
+        ? temporaryState.settings.strategyPool
+        : ["balanced_goal"],
     };
     plannerOptions.timeBudgetMs = configuredTimeoutMs;
     if (dryRunOptions.collectStats !== false && (plannerOptions.timeBudgetMs || dryRunOptions.collectStats === true)) plannerOptions.collectStats = true;
