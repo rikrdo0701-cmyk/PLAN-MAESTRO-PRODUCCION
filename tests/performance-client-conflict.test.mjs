@@ -271,6 +271,108 @@ test("un conflicto no revive OTs devueltas a backlog desde el estado remoto obso
   assert.equal(fixture.timers.length, 1);
 });
 
+test("un conflicto conserva una OT recien agregada localmente y la reintenta persistir", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200", 300: "firma-300" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200" },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.equal(fixture.state.preparedPlanningByOt["300"], "firma-300");
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state._locallyAddedDraftOts)), ["300"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
+test("un conflicto no revive una OT agregada localmente que no existe en el estado remoto", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["404"],
+      selectedOts: ["200"],
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      operations: [{ ot: "200", id: "op-200" }],
+      workOrders: [{ ot: "200" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(fixture.state.selectedOts, ["200"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], []);
+});
+
+test("un conflicto conserva configuraciones de OT editadas localmente y no pierde la maquina", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyEditedOtConfigurations: ["300"],
+      otConfigurations: {
+        300: { ot: "300", machine: "DOBLADORA 2", herramental: "H1", additionalHerramentales: [], kitPending: false },
+      },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: {
+        300: { ot: "300", machine: "", herramental: "", kitPending: false },
+      },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "300" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.equal(fixture.state.revision, 2);
+  assert.equal(fixture.state.otConfigurations["300"].machine, "DOBLADORA 2");
+  assert.equal(fixture.state.otConfigurations["300"].herramental, "H1");
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
+test("un conflicto reinserta la configuracion local cuando el remoto no tiene la fila", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyEditedOtConfigurations: ["500"],
+      otConfigurations: {
+        500: { ot: "500", machine: "PRENSA 1", herramental: "", kitPending: false },
+      },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: {},
+      operations: [{ ot: "500", id: "op-500" }],
+      workOrders: [{ ot: "500" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.equal(fixture.state.otConfigurations["500"].machine, "PRENSA 1");
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+});
+
 test("el arranque optimizado purga despues de importar y renderiza sin guardar", async () => {
   const events = [];
   const fixture = loadClient({

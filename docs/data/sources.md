@@ -115,12 +115,18 @@ ACTUALIZADO, HERRAMENTAL, HERRAMENTALES_EXTRA_JSON`.
 
 - Readers: `PP_readState_` → `PP_buildOtConfigurations_`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `PP_writeWorkOrderSyncState_`,
-  `savePlanningStateOptimized`.
+  `savePlanningStateOptimized`; edición en el cliente vía `applyMachineToJob`, `applyToolToJob`,
+  `applyKitToJob`, `applySubcontractToJob` (cada una marca la clave en `state._locallyEditedOtConfigurations`
+  con `rememberLocalOtConfigurationEdit`).
 - Restricción: precarga de máquina/herramental/kit para doblado (CT 5459/5527).
 - Restricción: antes de generar plan, la preparación y validación deben usar esta configuración
   efectiva persistida para las OTs realmente reprogramables del alcance incremental; no debe
   volver a pedir máquina, herramental, kit o tipo/días de subcontrato si el dato requerido ya
-  existe aquí.
+  existe aquí. Si el dato ya guardado no se encontró, confirmar que las claves de OT coinciden
+  (mismo formato) entre donde se edita y donde se valida.
+- Restricción: tras una recarga por conflicto (`CONFLICT_REVISION`), las ediciones locales marcadas
+  en `state._locallyEditedOtConfigurations` se re-fusionan sobre la fila remota y los tombstones
+  se limpian solo con el acuse durable del guardado (RULE-GOV-013).
 - `HERRAMENTAL` guarda el herramental principal; `HERRAMENTALES_EXTRA_JSON` guarda un arreglo JSON
   de herramentales adicionales de la OT. El motor expande cada adicional como operación artificial
   de doblado con la misma capacidad y tiempos del primer doblado.

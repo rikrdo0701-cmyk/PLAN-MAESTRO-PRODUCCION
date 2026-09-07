@@ -2613,6 +2613,7 @@ async function performSelectJob(ot, selected, outcome = {}) {
   if (selected && !alreadySelected) {
     const signature = String(state.preparedPlanningByOt?.[ot] || "");
     Object.assign(state, window.PlanningWorkflowCore.commitPreparedOtSelection(state, ot, signature));
+    state._locallyAddedDraftOts = [...new Set([...(state._locallyAddedDraftOts || []), String(ot)])];
     if (typeof forgetDraftRemovedOt === "function") forgetDraftRemovedOt(ot);
     if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
     delete state._pendingAddOt;
@@ -3585,7 +3586,7 @@ function renderSelectedJobPanel() {
   const currentBendingTool = bendingToolValues.length === 1 ? bendingToolValues[0] : "";
   const currentAdditionalTools = configuredAdditionalTools.length ? configuredAdditionalTools : additionalToolListValue(detailOps.find((op) => isBendingAppOperation(op) && additionalToolListValue(op.additionalHerramentales).length)?.additionalHerramentales);
   const articleToolOptions = uniq(state.toolCatalog
-    .filter((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(job.parte))
+    .filter((item) => item.active !== false)
     .map((item) => cleanToolValue(item.herramental)).filter(Boolean));
   const subcontractOps = job.ops.filter(isSubcontractAppOperation);
   const catalogSubcontract = subcontractOps.map(subcontractCatalogForAppOperation).find(Boolean);
@@ -9868,11 +9869,18 @@ function getBulkMachineValue(ops) {
   return machines.length === 1 ? machines[0] : "__MULTIPLE__";
 }
 
+function rememberLocalOtConfigurationEdit(ot) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+  state._locallyEditedOtConfigurations = [...new Set([...(state._locallyEditedOtConfigurations || []), key])];
+}
+
 function applyMachineToJob(ot, machine) {
   const normalized = normalizeMachineValue(machine);
   const configuration = otConfigurationFor(ot);
   configuration.machine = normalized;
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   for (const op of state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item))) {
     op.maquina = normalizeMachineValue(normalized, op);
     op.log = appendLog(op.log, "MAQUINA_OT_APP");
@@ -9886,6 +9894,7 @@ function applyToolToJob(ot, tool, additionalTools = []) {
   configuration.herramental = normalized;
   configuration.additionalHerramentales = extras;
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   state.operations = window.PlanningWorkflowCore.applyDraftToolSelection(state.operations, ot, normalized, ["5459", "5527"], extras);
   const bendingOps = state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item));
   const part = String(bendingOps[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
@@ -9938,6 +9947,7 @@ function applyKitToJob(ot, kit, pending = false) {
   configuration.kitHerramental = pending ? "" : normalized;
   configuration.kitPending = pending;
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   for (const op of state.operations.filter((item) => item.ot === ot && operationUsesOtKit(item))) {
     op.kitHerramental = pending ? "" : normalized;
     op.kitPending = pending;
@@ -10050,6 +10060,7 @@ function applySubcontractToJob(ot, type, days) {
   configuration.subcontractType = String(type || "").trim().toUpperCase();
   configuration.subcontractDays = Math.max(0, Math.min(90, Math.round(Number(days) || 0)));
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   const jobOperations = state.operations.filter((item) => item.ot === ot);
   const part = String(jobOperations[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
   if (part && configuration.subcontractType && configuration.subcontractDays > 0) {
@@ -10883,6 +10894,8 @@ async function saveAppSheet(showMessage) {
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
     delete state._locallyRemovedDraftOts;
+    delete state._locallyAddedDraftOts;
+    delete state._locallyEditedOtConfigurations;
     if (showMessage) showToast("Hoja app guardada");
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;
@@ -10894,6 +10907,8 @@ async function saveAppSheet(showMessage) {
       const snapshot = state._pendingAddOtSnapshot;
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
+      delete state._locallyAddedDraftOts;
+      delete state._locallyEditedOtConfigurations;
       state.selectedOts = snapshot || state.selectedOts.filter((item) => item !== ot);
       state.operations.filter((op) => op.ot === ot).forEach((op) => { op.locked = false; op.prioridad = 999; });
       saveState("ui");

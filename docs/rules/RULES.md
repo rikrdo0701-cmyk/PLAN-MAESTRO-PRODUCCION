@@ -18,6 +18,7 @@ fuente canónica y una clasificación: **DOCUMENTADA**, **IMPLEMENTADA**, **INFE
 | `RULE-GOV-006` | Sin estado de demostración en el arranque público; datos reales se autoaplican | IMPLEMENTADA | `scripts/build-appscript.mjs` |
 | `RULE-GOV-007` | El arranque real es `performance-client.js`; parches del boot vía `scripts/build-appscript.mjs` | IMPLEMENTADA | `scripts/build-appscript.mjs` |
 | `RULE-GOV-008` | Código inyectado por el build no usa helpers internos de `planner-core` | IMPLEMENTADA | `scripts/build-appscript.mjs` |
+| `RULE-GOV-013` | Recarga por conflicto (`CONFLICT_REVISION`) conserva altas locales y ediciones de `CONFIGURACION_OT` mediante tombstones reversos | IMPLEMENTADA | FIX 2026-09-06, `performance-client.js`, `app.js` |
 
 ## Arranque (boot / carga)
 
@@ -89,6 +90,7 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-HER-001` | Preservación de `HERRAMENTALES` | DOCUMENTADA | spec 2026-07-12 |
 | `RULE-HER-002` | Herramental en doblado (complemento DOB-001) | INFERIDA | spec 2026-07-12 |
 | `RULE-HER-003` | Múltiples herramentales simultáneos en doblado | IMPLEMENTADA | definición de usuario 2026-08-12 |
+| `RULE-HER-005` | Selector de herramental del panel de OT sin filtro por artículo (unión de activos del catálogo) | IMPLEMENTADA | bug 2026-09-06, `app.js` |
 
 ## Máquinas
 

@@ -381,19 +381,98 @@
     return /Otro proceso esta actualizando el plan/i.test(String(error?.message || error));
   }
 
+  function reapplyLocalAddedDraftOts(addedOts, localPrepared) {
+    if (!Array.isArray(addedOts) || addedOts.length === 0) return 0;
+    const removed = new Set((state._locallyRemovedDraftOts || []).map(materialOtKey).filter(Boolean));
+    const universe = new Set([
+      ...(Array.isArray(state.operations) ? state.operations : []).map((item) => materialOtKey(item?.ot)).filter(Boolean),
+      ...(Array.isArray(state.workOrders) ? state.workOrders : []).map((item) => materialOtKey(item?.ot)).filter(Boolean),
+    ]);
+    const selected = new Set((state.selectedOts || []).map(materialOtKey).filter(Boolean));
+    const preserved = (addedOts || []).filter((ot) => {
+      const key = materialOtKey(ot);
+      return Boolean(key) && !removed.has(key) && universe.has(key) && !selected.has(key);
+    });
+    if (!preserved.length) return 0;
+    state.selectedOts = [...new Set([...(state.selectedOts || []), ...preserved])];
+    if (localPrepared && typeof localPrepared === "object") {
+      if (!state.preparedPlanningByOt || typeof state.preparedPlanningByOt !== "object") state.preparedPlanningByOt = {};
+      for (const [storedKey, signature] of Object.entries(localPrepared)) {
+        const key = materialOtKey(storedKey);
+        if (preserved.some((ot) => materialOtKey(ot) === key)) state.preparedPlanningByOt[storedKey] = signature;
+      }
+    }
+    return preserved.length;
+  }
+
+  function reapplyLocalOtConfigurations(localOtConfigurations, editedOtKeys) {
+    if (!localOtConfigurations || !Array.isArray(editedOtKeys) || editedOtKeys.length === 0) return 0;
+    if (!state.otConfigurations || typeof state.otConfigurations !== "object") state.otConfigurations = {};
+    const current = state.otConfigurations;
+    let restored = 0;
+    const setField = (target, field, value) => {
+      if (value === undefined || value === null) return false;
+      const previous = target[field];
+      if (previous === undefined || previous === null || previous === "") {
+        target[field] = value;
+        return true;
+      }
+      if (String(previous) !== String(value)) {
+        target[field] = value;
+        return true;
+      }
+      return false;
+    };
+    for (const key of editedOtKeys) {
+      let local = null;
+      for (const value of Object.values(localOtConfigurations)) {
+        if (materialOtKey(value?.ot) === key) { local = value; break; }
+      }
+      if (!local || typeof local !== "object") continue;
+      let target = null;
+      for (const value of Object.values(current)) {
+        if (materialOtKey(value?.ot) === key) { target = value; break; }
+      }
+      let changed = false;
+      if (!target) {
+        target = clone(local);
+        const stored = String(local.ot || key).trim();
+        current[stored] = target;
+        changed = true;
+      } else {
+        for (const field of ["machine", "maquina", "herramental", "tool", "kitHerramental", "kit", "additionalHerramentales", "subcontractType", "tipoSubcontrato", "subcontractDays", "diasSubcontrato"]) {
+          if (setField(target, field, local[field])) changed = true;
+        }
+        if (local.kitPending === true && target.kitPending !== true) {
+          target.kitPending = true;
+          changed = true;
+        }
+      }
+      if (changed) restored += 1;
+    }
+    return restored;
+  }
+
   async function reloadStateAfterConflict() {
     try {
       const localRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
+      const localAddedDraftOts = [...(state._locallyAddedDraftOts || [])];
+      const localEditedOtConfigurations = (state._locallyEditedOtConfigurations || []).map(materialOtKey).filter(Boolean);
+      const localOtConfigurations = state.otConfigurations && typeof state.otConfigurations === "object" ? clone(state.otConfigurations) : null;
+      const localPrepared = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? clone(state.preparedPlanningByOt) : null;
       const imported = await callAppsScript("getAppState");
       applyImported(imported, { preserveLocalPlanning: false });
       const reappliedDraftRemovals = applyLocalDraftRemovalTombstones(localRemovedDraftOts);
+      const reappliedDraftAdditions = reapplyLocalAddedDraftOts(localAddedDraftOts, localPrepared);
+      const reappliedConfigurations = reapplyLocalOtConfigurations(localOtConfigurations, localEditedOtConfigurations);
       deferredRevision = Number(imported.revision || state.revision || 0);
+      if (reappliedDraftAdditions > 0 || reappliedConfigurations > 0) appSheetMarkDirtyScope("plan");
       writeMeta({ revision: deferredRevision, syncedAt: state.syncedAt || "" });
       scheduleLocalStorageFlush();
-      return { reloaded: true, reappliedDraftRemovals };
+      return { reloaded: true, reappliedDraftRemovals, reappliedDraftAdditions, reappliedConfigurations };
     } catch (error) {
       console.warn("No se pudo recargar el estado despues del conflicto:", error);
-      return { reloaded: false, reappliedDraftRemovals: 0 };
+      return { reloaded: false, reappliedDraftRemovals: 0, reappliedDraftAdditions: 0, reappliedConfigurations: 0 };
     }
   }
 
@@ -415,6 +494,12 @@
     const preparedPlanningByOt = { ...(state.preparedPlanningByOt || {}) };
     Object.keys(preparedPlanningByOt).forEach((key) => { if (removed.has(materialOtKey(key))) delete preparedPlanningByOt[key]; });
     state.preparedPlanningByOt = preparedPlanningByOt;
+    if (Array.isArray(state._locallyAddedDraftOts)) {
+      state._locallyAddedDraftOts = state._locallyAddedDraftOts.filter((ot) => !removed.has(materialOtKey(ot)));
+    }
+    if (Array.isArray(state._locallyEditedOtConfigurations)) {
+      state._locallyEditedOtConfigurations = state._locallyEditedOtConfigurations.filter((ot) => !removed.has(materialOtKey(ot)));
+    }
     state._locallyRemovedDraftOts = [...removed];
     return [...removed].filter((ot) => before.has(ot)).length;
   }
@@ -471,6 +556,8 @@
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
       delete state._locallyRemovedDraftOts;
+      delete state._locallyAddedDraftOts;
+      delete state._locallyEditedOtConfigurations;
       scheduleLocalStorageFlush();
       if (showMessage) showToast("Cambios guardados");
       return true;
