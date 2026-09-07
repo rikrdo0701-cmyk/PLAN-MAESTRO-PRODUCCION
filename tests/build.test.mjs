@@ -469,7 +469,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /class="individual-print-code">MP CD 28-02 V02/);
   assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N DIARIO INDIVIDUAL/);
   assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N SEMANAL/);
-  assert.match(pagesIndex, /function prepareIndividualPrint\(target\)/);
+  assert.match(pagesIndex, /function prepareIndividualPrint\(target, orientation/);
   assert.match(pagesIndex, /querySelector\("\.individual-print-date"\)/);
   assert.match(pagesIndex, /document\.body\.classList\.add\("printing-individual-plan"\)/);
   assert.match(pagesIndex, /document\.body\.classList\.remove\("printing-individual-plan"\)/);
@@ -489,7 +489,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
-  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 1);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 3);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
