@@ -900,10 +900,7 @@ function bindEvents() {
     showToast("WIP objetivo actualizado");
   });
   els.closeDetailPanelBtn.addEventListener("click", () => {
-    state.selectedDetailOt = "";
-    state.selectedOperationId = "";
-    saveState();
-    render();
+    closeSelectedJobDetail();
   });
   els.returnToBacklogBtn.addEventListener("click", () => {
     const ot = getSelectedPriorityJob()?.ot;
@@ -2424,6 +2421,23 @@ function openSelectedJobDetail(ot) {
   state.expandedOts = uniq([...state.expandedOts, job.ot]);
   renderSelectedJobPanel();
   void loadSelectedJobDetailOperations(ot);
+}
+
+function closeSelectedJobDetail() {
+  state.selectedDetailOt = "";
+  state.selectedOperationId = "";
+  const panel = typeof document !== "undefined" ? document.querySelector(".detail-panel") : null;
+  if (panel) {
+    panel.hidden = true;
+    if (document.body) document.body.classList.remove("detail-panel-open");
+  }
+  if (typeof els !== "undefined" && els.selectedJobPanel) els.selectedJobPanel.innerHTML = "";
+  if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+    document.querySelectorAll(".priority-card.focused").forEach((item) => item.classList.remove("focused"));
+    document.querySelectorAll(".queue-item.focused").forEach((item) => item.classList.remove("focused"));
+  }
+  if (typeof applyGanttSelection === "function") applyGanttSelection("");
+  saveState();
 }
 
 function finishBacklogDrag(commit, pointerId = null) {
@@ -5762,8 +5776,12 @@ async function publishCurrentPlan() {
         }
       }
     }
+    const persisted = persistableState();
+    delete persisted._locallyRemovedDraftOts;
+    delete persisted._pendingAddOt;
+    delete persisted._pendingAddOtSnapshot;
     const payload = {
-      ...createAppSheetPayload(),
+      ...persisted,
       operations: currentPlanOperations(),
       planStatus: "PUBLICADO",
       draftVersionId: state.draftVersionId || "",
@@ -5772,6 +5790,8 @@ async function publishCurrentPlan() {
       publicationReason,
       changeSummary,
       publishedAt: new Date().toISOString(),
+      source: "plan-app-sheet",
+      savedAt: new Date().toISOString(),
     };
     const publishFold = draftViewStatuses();
     setPublishStatus("Publicando plan...", version === 1 ? 40 : 55);
@@ -8203,7 +8223,7 @@ function flushPlanningWorkOrderPrefetchQueue() {
     const task = individualPlanningPrefetchQueue.shift();
     individualPlanningPrefetchActive += 1;
     Promise.resolve()
-      .then(() => ensureWorkOrderPlanningData(task.ot))
+      .then(() => ensureWorkOrderPlanningData(task.ot, { skipWhenLocal: true }))
       .then(task.resolve, (error) => task.resolve({ ready: false, error: String(error?.message || error) }))
       .finally(() => {
         individualPlanningPrefetchActive -= 1;
@@ -8365,9 +8385,12 @@ function mergeIndividualPlanningData(payload, ot) {
   return true;
 }
 
-function ensureWorkOrderPlanningData(ot) {
+function ensureWorkOrderPlanningData(ot, options = {}) {
   const key = materialOtKey(ot);
   if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (options.skipWhenLocal && hasIndividualPlanningOperations(key)) {
+    return Promise.resolve({ ready: true, source: "cached" });
+  }
   if (Number(individualPlanningLoadCompleted.get(key) || 0) > Date.now() && hasIndividualPlanningOperations(key)) {
     return Promise.resolve({ ready: true, source: "cached" });
   }
@@ -8506,7 +8529,7 @@ function loadSelectedJobDetailOperations(ot) {
 
   const request = Promise.resolve().then(async () => {
     renderSelectedJobPanel();
-    const result = await ensureWorkOrderPlanningData(ot);
+    const result = await ensureWorkOrderPlanningData(ot, { skipWhenLocal: true });
     const currentSelectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
     const selectionStillBelongsToOt = selectedDetailOt
       ? materialOtKey(state.selectedDetailOt) === key

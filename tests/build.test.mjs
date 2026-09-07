@@ -13,7 +13,20 @@ test("la identidad del detalle es UI local y no se envia al estado compartido", 
     planningApp.indexOf("function persistableState("),
     planningApp.indexOf("function createAppSheetPayload("),
   );
-  assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*queueMoveOt,\s*\.\.\.persisted\s*\}/);
+assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*queueMoveOt,\s*\.\.\.persisted\s*\}/);
+});
+
+test("publicar el plan no duplica el clonado del estado ni usa createAppSheetPayload", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const publishSource = planningApp.slice(
+    planningApp.indexOf("async function publishCurrentPlan("),
+    planningApp.indexOf("async function generatePlanPdf("),
+  );
+  assert.match(publishSource, /const persisted = persistableState\(\);/);
+  assert.match(publishSource, /delete persisted\._locallyRemovedDraftOts;/);
+  assert.match(publishSource, /operations: currentPlanOperations\(\),/);
+  assert.doesNotMatch(publishSource, /createAppSheetPayload\(\)/);
+  assert.doesNotMatch(publishSource, /deepClone/);
 });
 
 test("cola de planeacion expone mover sin flechas y modal de preparacion sin textos removidos", async () => {

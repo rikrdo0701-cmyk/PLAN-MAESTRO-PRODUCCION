@@ -200,6 +200,28 @@ test("las precargas repetidas comparten el limite global de dos solicitudes", as
   assert.ok(second instanceof Promise);
 });
 
+test("la precarga no re-descarga OTs que ya tienen operaciones locales", async () => {
+  const started = [];
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "1" }, { ot: "2" }, { ot: "3" }],
+      operations: [{ id: "1-1", ot: "1", ct: "CORTE", tiempoProd: 10 }],
+    },
+    callAppsScript: async (_method, ot) => {
+      started.push(ot);
+      return { ok: true, data: { workOrder: { ot }, operations: [{ ot, ct: "CORTE", tiempoProd: 10 }], materials: [] } };
+    },
+  });
+
+  const prefetch = fixture.context.prefetchRecentPlanningWorkOrders();
+  await settleMicrotasks();
+  await fixture.context.ensureWorkOrderPlanningData("2");
+  await prefetch;
+
+  assert.deepEqual(started, ["2", "3"]);
+});
+
 test("la precarga usa startDate descendente y conserva el orden recibido cuando empata", async () => {
   const started = [];
   const fixture = loadClient({
@@ -1414,26 +1436,51 @@ test("la OT explicita resuelve IDs de operacion duplicados y el estado legacy co
   assert.equal(fixture.context.selectedJobOt(), "1325");
 });
 
-test("cerrar el detalle limpia la OT y la operacion seleccionada", () => {
-  const match = appSource.match(/els\.closeDetailPanelBtn\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\);/);
-  assert.ok(match);
+test("cerrar el detalle limpia la OT y la operacion seleccionada sin render global", () => {
+  const handler = appSource.match(/els\.closeDetailPanelBtn\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\);/);
+  assert.ok(handler);
+  assert.match(handler[1], /closeSelectedJobDetail\(\)/);
+  assert.doesNotMatch(handler[1], /render\(\)/);
+  const fn = appSource.match(/function closeSelectedJobDetail\(\) \{([\s\S]*?)\n}/);
+  assert.ok(fn);
   const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
-  const close = Function("state", "saveState", "render", `return () => {${match[1]}};`)(
+  const calls = [];
+  const close = Function("state", "saveState", "document", "els", "applyGanttSelection",
+    `return () => {${fn[1]}};`)(
     state,
-    () => {},
-    () => {},
+    () => calls.push("save"),
+    undefined,
+    { selectedJobPanel: { innerHTML: "x" } },
+    (ot) => calls.push("gantt:" + ot),
   );
-
   close();
 
   assert.equal(state.selectedDetailOt, "");
   assert.equal(state.selectedOperationId, "");
+  assert.deepEqual(calls, ["gantt:", "save"]);
 });
 
 test("abrir el detalle carga operaciones sin perder la seleccion", () => {
   assert.match(detailSelectionSource, /renderSelectedJobPanel\(\);\s*void loadSelectedJobDetailOperations\(ot\)/);
-  assert.match(detailOperationsSource, /ensureWorkOrderPlanningData\(ot\)/);
+  assert.match(detailOperationsSource, /ensureWorkOrderPlanningData\(ot, \{ skipWhenLocal: true \}\)/);
   assert.match(detailOperationsSource, /renderSelectedJobPanel\(\)/);
+});
+
+test("abrir el detalle con operaciones locales no usa red", async () => {
+  let calls = 0;
+  const fixture = loadClient({
+    installDetailOperations: true,
+    state: { operations: [{ id: "2773-1", ot: "2773", ct: "CORTE", tiempoProd: 10 }], workOrders: [{ ot: "2773" }] },
+    callAppsScript: async () => { calls += 1; return { ok: true }; },
+  });
+  fixture.context.getSelectedPriorityJob = () => ({ ot: "2773" });
+  fixture.context.materialOtKey = (value) => String(value || "");
+  fixture.context.renderSelectedJobPanel = () => {};
+
+  const result = await fixture.context.loadSelectedJobDetailOperations("2773");
+
+  assert.deepEqual(plain(result), { ready: true, source: "cached" });
+  assert.equal(calls, 0);
 });
 
 test("dos aperturas del detalle comparten la carga y muestran las operaciones fusionadas", async () => {
