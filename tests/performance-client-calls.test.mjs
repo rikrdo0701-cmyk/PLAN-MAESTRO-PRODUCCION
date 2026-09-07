@@ -705,7 +705,7 @@ test("completar actualiza solo la fila, guarda atomico y confirma en segundo pla
 
   assert.equal(fixture.state.revision, 2);
   fixture.deferredWork.forEach((callback) => callback());
-  assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt", "loads"]);
+  assert.deepEqual(fixture.broadRenders, ["top", "alerts", "summary", "gantt"]);
 });
 
 test("completar funciona con operaciones de un plan publicado seleccionado", async () => {

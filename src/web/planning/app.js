@@ -557,6 +557,9 @@ let priorityJobsCache = null;
 let planningStateIndexesCache = null;
 let planAlertItemsCache = null;
 let operatorLoadsCache = null;
+let operatorLoadsRenderMemo = null;
+let planStateMutationVersion = 0;
+let planStatusBackgroundRefreshPending = false;
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -1821,12 +1824,15 @@ function invalidateCurrentPlanOperationsCache() {
   priorityJobsCache = null;
   planAlertItemsCache = null;
   operatorLoadsCache = null;
+  if (typeof operatorLoadsRenderMemo !== "undefined") operatorLoadsRenderMemo = null;
 }
 
 function invalidatePriorityJobsCache() {
   priorityJobsCache = null;
   planAlertItemsCache = null;
   operatorLoadsCache = null;
+  if (typeof operatorLoadsRenderMemo !== "undefined") operatorLoadsRenderMemo = null;
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
 }
 
 function planningStateIndexes() {
@@ -4219,7 +4225,7 @@ function renderLoads() {
     state.operations,
     loadMode
   );
-  const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
+  const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
   const week = selectedWeekRange(state.loadWeekStart);
   const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
   els.loadWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
@@ -7264,13 +7270,18 @@ const operation = stateOperation || reportOperation;
 
 function schedulePlanStatusBackgroundWork() {
   const refresh = () => {
+    if (typeof planStatusBackgroundRefreshPending !== "undefined") planStatusBackgroundRefreshPending = false;
     invalidateGanttCache();
     renderTop();
     renderPlanAlerts();
     renderDraftExecutiveSummary();
-    renderGantt();
-    renderLoads();
+    const activeView = typeof document !== "undefined" ? document.querySelector(".workspace")?.dataset.view : "";
+    const view = activeView || "plan";
+    if (view === "plan") renderGantt();
+    if (view === "loads" || view === "saturation") renderLoads();
   };
+  if (typeof planStatusBackgroundRefreshPending !== "undefined" && planStatusBackgroundRefreshPending) return;
+  if (typeof planStatusBackgroundRefreshPending !== "undefined") planStatusBackgroundRefreshPending = true;
   if (typeof window.schedulePlanStatusBackgroundRefresh === "function") window.schedulePlanStatusBackgroundRefresh(refresh);
   else window.setTimeout(refresh, 24);
 }
@@ -7290,6 +7301,7 @@ function toggleOperationPlanStatus(key) {
 }
 
 async function performToggleOperationPlanStatus(key) {
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
   const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
   const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
   const operation = stateOperation || reportOperation;
@@ -7473,6 +7485,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
     state.operations.forEach((op) => { op.locked = previousLockedOts.includes(String(op.ot)); });
     appSheetMarkDirtyScope("plan");
   }
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
   renderPlanStatusChange();
   showToast("No se pudo guardar el estado; se restauro el valor anterior");
   return false;
@@ -8754,6 +8767,7 @@ async function applyImported(imported, options = {}) {
   }
   if (imported.operationPlanStatuses) {
     state.operationPlanStatuses = mergeImportedPlanStatuses(state.operationPlanStatuses, normalizeOperationPlanStatuses(imported.operationPlanStatuses));
+    if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
   }
   if (imported.publishedPlanStatuses) {
     state.publishedPlanStatuses = mergeImportedPublishedPlanStatuses(state.publishedPlanStatuses, normalizePublishedPlanStatuses(imported.publishedPlanStatuses));
@@ -9302,6 +9316,34 @@ function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loa
       };
     })
     .sort((a, b) => b.percent - a.percent);
+}
+
+function operatorLoadsSourceMemoized(sourceOperations, weekStartValue, horizonDays) {
+  const operations = sourceOperations || [];
+  const memo = operatorLoadsRenderMemo;
+  const changed = !memo
+    || memo.sourceLength !== operations.length
+    || memo.weekStartValue !== weekStartValue
+    || memo.horizonDays !== horizonDays
+    || memo.lastSchedule !== state.lastSchedule
+    || memo.operators !== state.operators
+    || memo.loadSnapshot !== loadSnapshot
+    || memo.loadMode !== loadMode
+    || memo.versions !== planStateMutationVersion;
+  if (!changed) return memo.result;
+  const result = operatorLoadsForOperations(operations, weekStartValue, horizonDays);
+  operatorLoadsRenderMemo = {
+    sourceLength: operations.length,
+    weekStartValue,
+    horizonDays,
+    lastSchedule: state.lastSchedule,
+    operators: state.operators,
+    loadSnapshot,
+    loadMode,
+    versions: planStateMutationVersion,
+    result,
+  };
+  return result;
 }
 
 function operationMinutesInRange(op, rangeStart, rangeEnd) {
