@@ -800,7 +800,7 @@ function printPlanHeader(title) {
   </header>`;
 }
 
-function prepareIndividualPrint(target) {
+function prepareIndividualPrint(target, orientation = "portrait") {
   if (!target) return;
   if (!target.querySelector(".individual-print-header")) {
     const title = target.id === "weekTab" ? "PLAN DE PRODUCCIÓN SEMANAL" : "PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL";
@@ -811,9 +811,20 @@ function prepareIndividualPrint(target) {
   const date = target.querySelector(".individual-print-date");
   if (date) date.textContent = formatReportDateTime(new Date());
   document.body.classList.add("printing-individual-plan");
+  if (orientation === "landscape") document.documentElement.classList.add("printing-landscape");
+  const pageSize = orientation === "landscape"
+    ? "@media print { @page { size: 297mm 210mm; margin: 7mm; } }"
+    : "@media print { @page { size: 210mm 297mm; margin: 7mm; } }";
+  const styleEl = document.createElement("style");
+  styleEl.id = "planning-print-page-size";
+  styleEl.textContent = pageSize;
+  document.head.appendChild(styleEl);
   const cleanup = () => {
     target.classList.remove("print-target");
     document.body.classList.remove("printing-individual-plan");
+    document.documentElement.classList.remove("printing-landscape");
+    const injected = document.getElementById("planning-print-page-size");
+    if (injected) injected.remove();
     window.removeEventListener("afterprint", cleanup);
   };
   window.addEventListener("afterprint", cleanup, { once: true });
@@ -926,7 +937,7 @@ function bindEvents() {
   });
   els.subcontractReportFutureDays.addEventListener("change", () => updateReportFilter("subcontract", { futureDays: Number(els.subcontractReportFutureDays.value) }));
   els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
-  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); prepareIndividualPrint(els.subcontractReport.closest(".tab-panel")); });
+  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); prepareIndividualPrint(els.subcontractReport.closest(".tab-panel"), "landscape"); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
   els.planSnapshotSelect.addEventListener("change", () => loadSelectedPlanSnapshot(els.planSnapshotSelect.value));
   document.querySelectorAll("[data-report-source-select]").forEach((select) => {
@@ -935,11 +946,11 @@ function bindEvents() {
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
   els.printOperatorBtn.addEventListener("click", () => {
     renderOperatorReport();
-    prepareIndividualPrint(els.operatorReport.closest(".tab-panel"));
+    prepareIndividualPrint(els.operatorReport.closest(".tab-panel"), "landscape");
   });
   els.printAdjusterBtn.addEventListener("click", () => {
     renderAdjusterReport();
-    prepareIndividualPrint(els.adjusterReport.closest(".tab-panel"));
+    prepareIndividualPrint(els.adjusterReport.closest(".tab-panel"), "landscape");
   });
   els.addToolBtn.addEventListener("click", addToolCatalogItem);
   els.toolHerrInput.addEventListener("change", () => updateCatalogCustomInput(els.toolHerrInput, els.toolHerrNewInput));
