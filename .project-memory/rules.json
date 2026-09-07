@@ -370,6 +370,15 @@
       "updated_at": "2026-08-30T11:00:00-06:00"
     },
     {
+      "rule_id": "RULE-BAL-017",
+      "name": "Reorden de la fila Planeado/No planeado permite cruzar trabajos fijos; la OT bloqueada no se mueve",
+      "status": "implementada",
+      "rule": "En la lista Planeado / No planeado, una OT que NO este bloqueada (lockedOts) ni con estado programado (isProgrammedJobStatus) puede reordenarse libremente a cualquier posicion, incluso cruzando 'trabajos fijos' (OTs bloqueadas u OTs con estatus programado) y quedar antes de una OT bloqueada. FIX 2026-09-06 (el usuario necesitaba colocar una OT antes de una OT bloqueada): antes canReorderSelectedJobs (app.js:3505-3525) rechazaba cualquier reorden cuyo camino lineal cruzara un trabajo fijo (toast 'No puedes mover una OT a traves de un trabajo fijo'); se elimino esa restriccion. Las OTs bloqueadas/programadas permanecen como barreras fijas: su programacion no cambia (las operaciones fijas siguen siendo anclas de capacidad, RULE-OT-011/OT-018, BLOQUEAR no se desplaza en la hoja de operaciones) y la OT movida, al generar, busca huecos de carga disponibles respetando esos anclajes (RULE-BAL-008). Una OT bloqueada o programada JAMAS se puede mover como origen: si se intenta, se muestra 'OT <ot> esta bloqueada y no se puede mover' y la operacion se rechaza. El reorden se aplica con insercion antes del destino (reorderSelectedJobs), de modo que el orden relativo de los trabajos fijos se conserva.",
+      "source": "definicion de usuario 2026-09-06 (que la OT se pueda mover antes de una bloqueada; la bloqueada permanece con su programacion y busca huecos de carga); FIX 2026-09-06 src/web/planning/app.js canReorderSelectedJobs (elimina restriccion crossedFixed) y reorderSelectedJobs; tests/build.test.mjs (guard de ausencia del toast 'a traves de un trabajo fijo'); RULE-BAL-008/RULE-OT-011/RULE-OT-018",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-06"
+    },
+    {
       "rule_id": "RULE-BOM-001",
       "name": "MATERIALES en limpieza del borrador",
       "status": "documentada",

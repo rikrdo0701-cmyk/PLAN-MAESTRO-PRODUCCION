@@ -33,6 +33,7 @@ test("cola de planeacion expone mover sin flechas y modal de preparacion sin tex
   assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*reorderSelectedJobs\(state\.queueMoveOt, button\.dataset\.placeQueueOt\)/);
   assert.match(planningStyles, /\.queue-move-actions \{ position: absolute; right: 10px; bottom: 10px;/);
   assert.match(planningApp, /function canReorderSelectedJobs\(sourceOt, targetOt, options = \{\}\)/);
+  assert.doesNotMatch(planningApp, /No puedes mover una OT a traves de un trabajo fijo/);
   assert.doesNotMatch(planningApp, /<span>Cantidad<\/span><strong>\$\{escapeHtml\(quantityLabel\)\}<\/strong>/);
   assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
   assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);

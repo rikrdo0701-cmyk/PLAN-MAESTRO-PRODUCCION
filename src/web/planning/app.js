@@ -3515,12 +3515,6 @@ function canReorderSelectedJobs(sourceOt, targetOt, options = {}) {
   if (sourceIndex < 0) return false;
   if (options.allowMissingTarget && targetIndex < 0) return true;
   if (targetIndex < 0) return false;
-  const crossedFixed = order.slice(Math.min(sourceIndex, targetIndex), Math.max(sourceIndex, targetIndex) + 1)
-    .some((ot) => ot !== sourceOt && (isJobLocked(ot) || isProgrammedJobStatus(jobStatusForOt(ot))));
-  if (crossedFixed) {
-    if (!options.silent) showToast("No puedes mover una OT a traves de un trabajo fijo");
-    return false;
-  }
   return true;
 }
 
