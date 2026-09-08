@@ -3801,13 +3801,27 @@ function ganttDayColumnWidths(windowStart) {
   return widths;
 }
 
+function ganttGroupsSignature(groups) {
+  const parts = [];
+  for (const group of groups || []) {
+    parts.push(`${group.type || ""}:${group.key || ""}:${group.expanded ? "e" : ""}${group.locked ? "l" : ""}:${(group.ops || []).length}`);
+    for (const op of group.ops || []) {
+      const startMs = opStart(op) ? opStart(op).getTime() : "";
+      const endMs = opEnd(op) ? opEnd(op).getTime() : "";
+      parts.push(`${op.id || ""}:${op.secuencia || ""}:${startMs}:${endMs}:${op.operador || ""}:${op.maquina || ""}:${op.parte || ""}:${op.ct || ""}:${op.descripcion || ""}`);
+    }
+  }
+  return parts.join("|");
+}
+
 function renderGantt() {
   const groups = getGanttGroups();
   const window = getPlanWindow();
   const selectedOt = selectedJobOt();
   const memo = typeof renderGanttStructureMemo !== "undefined" ? renderGanttStructureMemo : null;
+  let groupsSignature = null;
   const structureUnchanged = memo
-    && memo.groups === groups
+    && (memo.groups === groups || (groupsSignature = ganttGroupsSignature(groups)) === memo.groupsSignature)
     && memo.windowStart === window.start.getTime()
     && memo.dayWidth === state.ganttDayWidth
     && memo.horizonDays === state.horizonDays
@@ -3818,6 +3832,7 @@ function renderGantt() {
     applyGanttSelection(selectedOt);
     renderGanttStructureMemo = {
       groups,
+      groupsSignature: groupsSignature !== null ? groupsSignature : memo.groupsSignature,
       windowStart: window.start.getTime(),
       dayWidth: state.ganttDayWidth,
       horizonDays: state.horizonDays,
@@ -3883,6 +3898,7 @@ function renderGantt() {
   els.ganttCanvas.appendChild(inner);
   renderGanttStructureMemo = {
     groups,
+    groupsSignature: ganttGroupsSignature(groups),
     windowStart: window.start.getTime(),
     dayWidth: state.ganttDayWidth,
     horizonDays: state.horizonDays,
@@ -9137,9 +9153,19 @@ function scheduledLogForExport(op) {
 function exportScheduledEndMs(op) {
   const date = String(op.fechaFin || "").trim();
   if (!date) return 0;
-  const time = String(op.horaFin || "").trim() || "00:00:00";
+  const time = normalizeExportScheduleTime(op.horaFin) || "00:00:00";
   const ms = Date.parse(`${date}T${time}`);
   return Number.isFinite(ms) ? ms : 0;
+}
+
+function normalizeExportScheduleTime(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?/);
+  if (!match) return "";
+  const hour = String(Number(match[1])).padStart(2, "0");
+  const minute = String(Number(match[2])).padStart(2, "0");
+  const second = String(Number(match[3] || 0)).padStart(2, "0");
+  return `${hour}:${minute}:${second}`;
 }
 
 function businessHorizonEndMs() {
@@ -9386,7 +9412,7 @@ function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loa
   return loadOperators
     .map((operator) => {
       const minutes = (sourceOperations || [])
-        .filter((op) => op.operador === operator && isLoadBearingOperator(op.operador))
+        .filter((op) => op.operador === operator && isLoadBearingOperator(op.operador) && isFiniteCapacityOperation(op))
         .reduce((sum, op) => sum + operationMinutesInRange(op, range.start, range.end), 0);
       const available = window.PlannerCore?.availableMinutes
         ? window.PlannerCore.availableMinutes(state, operator, formatDate(range.start), horizonDays)

@@ -990,6 +990,42 @@
       "source": "diagnostico 2026-09-07 (operaciones con 0 CAMBIO_HERRAMENTAL y lastSchedule.changes>0 en produccion; probe-toolchange-pipeline.py replico el run real con isDryRun:true y confirmo 43 cambios en result.operations y 43 en draftExportOperations -> motor/export lossless); FIX src/server/08-netsuite.js (PP_preservedToolChanges_, concat en PP_applyNetSuitePlanningData_/PP_applyNetSuitePlantData_); tests/netsuite-sync-preserves-toolchanges.test.mjs (carga 02-storage.js + 08-netsuite.js en vm; OT presente se preserva, OT ausente se descarta)",
       "domain": "Herramentales",
       "updated_at": "2026-09-07"
+    },
+    {
+      "rule_id": "RULE-BAL-021",
+      "name": "Cargas por operador excluyen capacidades NO_FINITA; CAMBIO_HERRAMENTAL se cuenta",
+      "status": "implementada",
+      "rule": "operatorLoadsForOperations (app.js:9380-9406) suma los minutos de carga por operador filtrando op.operador===operator y isLoadBearingOperator(op.operador); antes NO filtraba por capacidad finita, por lo que operaciones cuya capacidad es NO_FINITA (LIBERACION/INSPECCION via isFiniteCapacityOperation app.js:10813-10819) y traen OPERADOR 'LIBERACION'/'INSPECCION' en la hoja contaban como carga fantasma del operador correspondiente (medido en plan-produccion (27).csv: 235 filas con OPERADOR='LIBERACION' que sumaban minutos reales). Era inconsistente con getCtLoads (app.js:9451) y operatorOverlapConflicts (planner-core.js:1916), que si excluyen no-finitas. FIX 2026-09-07: el reduce de minutos agrega && isFiniteCapacityOperation(op). CAMBIO_HERRAMENTAL permanece contado en la carga del AJUSTADOR porque es capacidad finita (isFiniteOperation planner-core.js:1522-1532). isLoadBearingOperator (app.js:10821-10824) solo excluye SIN_OPERADOR/SUBCONTRATO y no basta por si solo.",
+      "source": "investigacion usuario 2026-09-07 (operador LIBERACION con carga >0 en Cargas de operadores); src/web/planning/app.js:9380-9406, 9451, 10813-10819, 10821-10824; src/web/planning/planner-core.js:1522-1532, 1916; csv plan-produccion (27).csv",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-07"
+    },
+    {
+      "rule_id": "RULE-OT-032",
+      "name": "Hora sin padding en export anulaba el flag FUERA_DE_HORIZONTE_PLANEACION",
+      "status": "implementada",
+      "rule": "scheduledLogForExport/exportScheduledEndMs (app.js:9129-9143) formaban `fechaFinT<horaFin>` para Date.parse; con hora sin padding (ej. '4:47') Date.parse devuelve NaN -> retorna 0 -> NO se agrega FUERA_DE_HORIZONTE_PLANEACION aunque la operacion termine despues del horizonte (businessHorizonEndMs app.js:9145-9150 = planStart + horizonDays*86400000, clamp 1-45). Explicaba la asimetria observada en OT 2613: SEC 147 (fechaFin 2027-05-01, horaFin '4:47') sin flag vs SEC 149 (fechaFin 2027-05-01, horaFin '10:23' con padding) con flag. FIX 2026-09-07: normalizeExportScheduleTime normaliza la hora a HH:mm:ss (regex ^(\\d{1,2})[:.](\\d{1,2})) antes de Date.parse. Verificado en Node 2026-09-07: Date.parse('2027-05-01T4:47')=NaN antes; con fix '04:47:00' -> 1809168420000 > horizonte (planStart 2026-09-02 + 45d = 2026-10-17) -> SEC 147 ahora recibe el flag. El bloqueo de OT 2613 (lockedOts, prepareDraftForReschedule planning-workflow-core.js:121-139) NO se modifica: es intencional.",
+      "source": "investigacion usuario 2026-09-07 (asimetria SEC 147/149 en OT 2613); src/web/planning/app.js:9129-9150; src/web/planning/planning-workflow-core.js:121-139; verificacion node C:\\Users\\plane\\AppData\\Local\\Temp\\opencode\\verify-export-fix.mjs",
+      "domain": "OT",
+      "updated_at": "2026-09-07"
+    },
+    {
+      "rule_id": "RULE-REP-008",
+      "name": "Ajustador: el filtro por fecha del reporte ES correcto; no se invento fix",
+      "status": "documentada",
+      "rule": "El reporte Ajustador (isToolChangeReportOperation/operationsForDayReport + reportDateRange planning-workflow-core.js:1164-1170) filtra los CAMBIO_HERRAMENTAL por interseccion del rango diario seleccionado (date + futureDays 1-5, UTC, end inclusivo). CONFIRMACION 2026-09-07 con reproduccion END-TO-END sobre el bundle real (site/ en :4173, probe-adjuster-synthetic.mjs): inyectando el estado real del CSV plan-produccion (27).csv (1547 operaciones, 43 CAMBIO_HERRAMENTAL con fechas 2026-09-08..2026-09-24, 26 OTs, draft con scheduledOts), el reporte Plan=Borrador / Dia=07/09/2026 / fd=1 / Pendientes devuelve EXACTAMENTE 4 filas (total 4: OT 3298 07:08 y 09:23, OT 3294 13:14, etc.), no 0. Matriz de conteo verificada: fd1 en 07=4, 08=7; fd2 en 07=7; fd3 en 07=8; ...; solo devuelve 0 cuando el draft no tiene cambios con FECHA_INICIO <= date+fd. POR TANTO el filtro ES CORRECTO y el '0 de 0' con Plan=Borrador indica que el draft ACTUAL no contiene esas filas CAMBIO_HERRAMENTAL (vacio o sin fechas/fuera de scheduledOts), no un bug de comparacion (no hay confusion DD/MM vs MM/DD: el input es type=date y se normaliza a YYYY-MM-DD; no hay bug de zona horaria: opStart se compara por formatDate local vs end ISO). Causas probables del draft sin cambios: (a) el plan que genero los 43 cambios no se persistio/regenero en la sesion actual, o (b) un sync NetSuite previo al fix RULE-HER-006 ya borro esas filas de la hoja y de state.operations sin que se volviera a generar el plan. ACCION recomendada (sin cambio de codigo): en la sesion real, verificar cuantas CAMBIO_HERRAMENTAL con fecha 09-08+ tiene el Borrador (si 0, regenerar plan con 'Generar plan' - el motor las recrea RULE-HER-004 - y/o confirmar deploy del fix RULE-HER-006); el CSV (27) es evidencia de un estado anterior con los cambios.",
+      "source": "reproduccion usuario 2026-09-07 (0 de 0); reproducion e2e bundle real 2026-09-07 (.openchamber/probe-adjuster-synthetic.mjs sobre site/ :4173 con CSV real; y .openchamber/probe-adjuster-live.mjs sobre produccion muestra sourceOps=0 en draft); src/web/planning/app.js:6662-6665, 7017-7024, 7194-7220, 9634-9651; src/web/planning/planning-workflow-core.js:689-723, 1164-1170; csv plan-produccion (27).csv; RULE-HER-006",
+      "domain": "Reportes",
+      "updated_at": "2026-09-07"
+    },
+    {
+      "rule_id": "RULE-UI-008",
+      "name": "El Gantt reutiliza su DOM cuando la estructura no cambio, incluso tras invalidar la cache de grupos",
+      "status": "implementada",
+      "rule": "saveAndRender/schedulePlanStatusBackgroundWork invalidan la cache de grupos (GANTT_GROUPS_CACHE_VERSION bump, app.js:566-578) en cada mutacion aunque la vista actual no dibuje el Gantt, de modo que al volver de Reportes a la vista Plan el renderGantt reconstruia ~1700 barras (freeze de segundos). El memo previo (renderGanttStructureMemo, comparacion por identidad memo.groups===groups app.js:3809) hacia MISS al cambiar la referencia de groups tras la invalidacion. FIX 2026-09-07: ganttGroupsSignature (app.js, antes de renderGantt) genera una firma version-independente por grupo (type/key/expanded/locked + por operacion id/secuencia/startMs/endMs/operador/maquina/parte/ct/descripcion); el memo compara la firma, de modo que si la estructura no cambio reutiliza el DOM y solo re-aplica la seleccion, aunque groups sea otra referencia. Si el contenido cambia de verdad (nueva programacion, Completar/Reabrir que oculta ops, expandir/colapsar OT, cambiar vista/dia/ancho) la firma difiere y se reconstruye igual que antes. Sin cambios visuales.",
+      "source": "freeze usuario 2026-09-07 (entrar a Plan desde Reportes); src/web/planning/app.js:563-578, 3804-3827, 3884-3890, 9235-9318, 10898-10926, 7355-7369; RULE-UI-004/RULE-UI-006/RULE-UI-007",
+      "domain": "UI",
+      "updated_at": "2026-09-07"
     }
   ]
 }
