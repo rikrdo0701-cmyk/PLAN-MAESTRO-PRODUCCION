@@ -616,7 +616,8 @@ async function loadAppStateInBackground() {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
     : Promise.resolve(false);
-  void Promise.resolve(bootSync).then(() => {
+  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+    void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
@@ -627,13 +628,20 @@ async function loadAppStateInBackground() {
 }
 
 async function maybeRestoreSavedDraftOnBoot() {
-  const bootFlag = (globalThis.__draftBootRestoreAttempted === true);
-  if (bootFlag) return;
+  if (globalThis.__draftBootRestoreAttempted === true) return;
   globalThis.__draftBootRestoreAttempted = true;
   try {
-    if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) return;
+    if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) {
+      globalThis.__draftBootRestoreAttempted = false;
+      scheduleDraftBootRestoreRetry();
+      return;
+    }
     const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
-    if (!draftMeta || Number(draftMeta.operations || 0) <= 0) return;
+    if (!draftMeta || Number(draftMeta.operations || 0) <= 0) {
+      globalThis.__draftBootRestoreAttempted = false;
+      scheduleDraftBootRestoreRetry();
+      return;
+    }
     const snapshot = await fetchPlanSnapshot("draft");
     const payload = (snapshot && snapshot.fullState) || snapshot || {};
     const savedOps = Array.isArray(snapshot?.operations) && snapshot.operations.length
@@ -691,6 +699,13 @@ async function maybeRestoreSavedDraftOnBoot() {
   } catch (error) {
     console.warn("[maybeRestoreSavedDraftOnBoot] No se pudo restaurar el borrador guardado:", error && error.message || error);
   }
+}
+
+function scheduleDraftBootRestoreRetry() {
+  const retries = Number(globalThis.__draftBootRestoreRetries || 0);
+  if (retries >= 15) return;
+  globalThis.__draftBootRestoreRetries = retries + 1;
+  setTimeout(() => { void maybeRestoreSavedDraftOnBoot(); }, 2500);
 }
 
 function bindElements() {

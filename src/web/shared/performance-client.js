@@ -702,7 +702,8 @@
       const bootSync = (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded))
         ? syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 })
         : Promise.resolve(false);
-      void Promise.resolve(bootSync).then(() => {
+      void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+        void Promise.resolve(bootResult);
         if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
         return null;
       });

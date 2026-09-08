@@ -78,7 +78,8 @@ function patchPlanningApp(app) {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
     : Promise.resolve(false);
-  void Promise.resolve(bootSync).then(() => {
+  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+    void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
@@ -109,7 +110,8 @@ function patchPlanningApp(app) {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
     : Promise.resolve(false);
-  void Promise.resolve(bootSync).then(() => {
+  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+    void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
