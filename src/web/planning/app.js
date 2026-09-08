@@ -613,11 +613,77 @@ async function loadAppStateInBackground() {
   saveState("ui");
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
-  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+  const bootSync = isAppsScriptRuntime()
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    : Promise.resolve(false);
+  void Promise.resolve(bootSync).then(() => {
+    if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
+    return null;
+  });
   void snapshotsRequest.then(() => {
     if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
     return null;
   });
+}
+
+async function maybeRestoreSavedDraftOnBoot() {
+  const bootFlag = (globalThis.__draftBootRestoreAttempted === true);
+  if (bootFlag) return;
+  globalThis.__draftBootRestoreAttempted = true;
+  try {
+    if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) return;
+    const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
+    if (!draftMeta || Number(draftMeta.operations || 0) <= 0) return;
+    const snapshot = isAppsScriptRuntime()
+      ? await callAppsScript("getPlanSnapshot", "draft")
+      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent("draft")}`);
+    const payload = (snapshot && snapshot.fullState) || snapshot || {};
+    const savedOps = Array.isArray(snapshot?.operations) && snapshot.operations.length
+      ? snapshot.operations
+      : (Array.isArray(payload.operations) ? payload.operations : []);
+    if (!savedOps.length) return;
+    const localDraft = captureLocalPlanningState();
+    if (!planningDraftDiffers(localDraft, { ...payload, operations: savedOps })) return;
+    const savedToolChanges = savedOps.filter(isToolChangeReportOperation).length;
+    const localToolChanges = (state.operations || []).filter(isToolChangeReportOperation).length;
+    if (savedToolChanges === 0) return;
+    if (localToolChanges >= savedToolChanges) return;
+    const restored = savedOps.map((op, index) => normalizeOperation({
+      ...op,
+      id: op.id || `draft-boot-${snapshot.snapshotId || "draft"}-${index + 1}`,
+    }, index));
+    const draftByOt = new Map();
+    for (const op of restored) {
+      const key = normalizeKey(op.ot);
+      if (!key) continue;
+      if (!draftByOt.has(key)) draftByOt.set(key, []);
+      draftByOt.get(key).push(op);
+    }
+    const merged = [];
+    for (const op of (state.operations || [])) {
+      const key = normalizeKey(op.ot);
+      if (!key || !draftByOt.has(key)) { merged.push(op); continue; }
+      merged.push(...draftByOt.get(key));
+      draftByOt.delete(key);
+    }
+    for (const ops of draftByOt.values()) merged.push(...ops);
+    state.operations = merged;
+    if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
+    if (Array.isArray(payload.lockedOts)) state.lockedOts = payload.lockedOts;
+    if (payload.lastSchedule && typeof payload.lastSchedule === "object") state.lastSchedule = payload.lastSchedule;
+    if (payload.planStart) state.planStart = payload.planStart;
+    if (Number.isFinite(Number(payload.horizonDays))) state.horizonDays = Number(payload.horizonDays);
+    normalizeState();
+    invalidateCurrentPlanOperationsCache();
+    syncDraftReportWeek();
+    state.reportWeekStart = normalizeWeekStartValue(state.planStart);
+    saveState("plan");
+    render({ save: false });
+    const changes = restored.filter(isToolChangeReportOperation).length;
+    showToast(`Borrador restaurado al iniciar: ${restored.length} operaciones programadas (${changes} cambios de herramental)`, 3200);
+  } catch (error) {
+    console.warn("[maybeRestoreSavedDraftOnBoot] No se pudo restaurar el borrador guardado:", error && error.message || error);
+  }
 }
 
 function bindElements() {

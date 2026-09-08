@@ -75,7 +75,13 @@ function patchPlanningApp(app) {
   saveState("ui");
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
-  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+  const bootSync = isAppsScriptRuntime()
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    : Promise.resolve(false);
+  void Promise.resolve(bootSync).then(() => {
+    if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
+    return null;
+  });
   void snapshotsRequest.then(() => {
     if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
     return null;
@@ -100,7 +106,13 @@ function patchPlanningApp(app) {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   if (restoredDraft) showToast("Se cargo el plan guardado desde Google Sheets");
-  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
+  const bootSync = isAppsScriptRuntime()
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    : Promise.resolve(false);
+  void Promise.resolve(bootSync).then(() => {
+    if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
+    return null;
+  });
   if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") {
     void maybeLoadDefaultPublishedReportSnapshot();
   }

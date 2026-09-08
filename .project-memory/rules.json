@@ -1026,6 +1026,15 @@
       "source": "freeze usuario 2026-09-07 (entrar a Plan desde Reportes); src/web/planning/app.js:563-578, 3804-3827, 3884-3890, 9235-9318, 10898-10926, 7355-7369; RULE-UI-004/RULE-UI-006/RULE-UI-007",
       "domain": "UI",
       "updated_at": "2026-09-07"
+    },
+    {
+      "rule_id": "RULE-REP-010",
+      "name": "Restauracion automatica del borrador guardado al arrancar (fix Ajustador/export sin CAMBIO_HERRAMENTAL)",
+      "status": "implementada",
+      "rule": "Al recargar la app, la hoja App (NetSuite crudo) puebla state.operations (2055 ops, 0 CAMBIO_HERRAMENTAL) y los reportes/export 'Borrador' leen ese estado en memoria (draftScheduledOperations/reportOperationsSource/exportSourceOperations) en vez del snapshot 'draft' guardado en BORRADOR_PLAN (1547 ops, 43 cambios), por lo que Ajustador mostraba '0 de 0' y el CSV (28) perdia los 43 CAMBIO_HERRAMENTAL del CSV (27). FIX 2026-09-08: maybeRestoreSavedDraftOnBoot() (app.js) se cuelga despues del sync de arranque (tras syncNetSuiteInBackground en loadAppStateInBackground y tras syncWorkOrdersOnce en performance-client.js optimizedLoadAppStateInBackground, ambas rutas de boot) y, una sola vez por sesion (globalThis.__draftBootRestoreAttempted), si el borrador guardado tiene operaciones y MAS cambios de herramental que el estado en memoria (savedToolChanges>0 y localToolChanges<savedToolChanges) y planningDraftDiffers detecta diferencia, fusiona las operaciones del snapshot draft por OT (reemplaza las ops de OTs programadas, conserva el resto de NetSuite), restaura selectedOts/lockedOts/lastSchedule/planStart/horizonDays, normaliza, invalida cache de plan, syncDraftReportWeek, guarda y renderiza con toast. Se dispara en el bundle de produccion tanto por app.js como por performance-client (que overridea loadAppStateInBackground); el hook usa fetchJson / callAppsScript('getPlanSnapshot','draft') y la ruta esta acotada en try/catch.",
+      "source": "diagnostico en vivo 2026-09-08 (probe-ajustador-vivo.mjs: reportSource=draft, stateOps=2055, stateToolChanges=0, reportOps=1504, toolOpsInReportSource=0 vs CSV (27) 43 cambios distribuidos 2026-09-08..09-24); FIX src/web/planning/app.js (loadAppStateInBackground 601-628, maybeRestoreSavedDraftOnBoot 630+) y src/web/shared/performance-client.js (optimizedLoadAppStateInBackground 673+); build scripts/build-appscript.mjs (startupMarker/startupReplacement 62-107, helpers inyectados); RULE-REP-008/RULE-HER-006",
+      "domain": "Reportes",
+      "updated_at": "2026-09-08"
     }
   ]
 }

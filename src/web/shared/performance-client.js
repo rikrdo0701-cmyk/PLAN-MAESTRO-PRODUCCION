@@ -699,9 +699,13 @@
       render({ save: false });
       applyInitialWorkspaceView({ scrollToTop: false });
 
-      if (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded)) {
-        syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 });
-      }
+      const bootSync = (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded))
+        ? syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 })
+        : Promise.resolve(false);
+      void Promise.resolve(bootSync).then(() => {
+        if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
+        return null;
+      });
       void snapshotsRequest?.then(() => {
         if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
         return null;
