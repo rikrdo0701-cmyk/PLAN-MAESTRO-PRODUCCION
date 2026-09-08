@@ -634,9 +634,7 @@ async function maybeRestoreSavedDraftOnBoot() {
     if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) return;
     const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
     if (!draftMeta || Number(draftMeta.operations || 0) <= 0) return;
-    const snapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", "draft")
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent("draft")}`);
+    const snapshot = await fetchPlanSnapshot("draft");
     const payload = (snapshot && snapshot.fullState) || snapshot || {};
     const savedOps = Array.isArray(snapshot?.operations) && snapshot.operations.length
       ? snapshot.operations
@@ -668,11 +666,20 @@ async function maybeRestoreSavedDraftOnBoot() {
     }
     for (const ops of draftByOt.values()) merged.push(...ops);
     state.operations = merged;
-    if (Array.isArray(payload.selectedOts)) state.selectedOts = payload.selectedOts;
-    if (Array.isArray(payload.lockedOts)) state.lockedOts = payload.lockedOts;
+    if (Array.isArray(payload.selectedOts) && payload.selectedOts.length) state.selectedOts = payload.selectedOts;
+    else state.selectedOts = uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean));
+    if (Array.isArray(payload.lockedOts) && payload.lockedOts.length) state.lockedOts = payload.lockedOts;
+    else state.lockedOts = uniq(restored.filter((op) => op.locked === true).map((op) => String(op.ot || "").trim()).filter(Boolean));
     if (payload.lastSchedule && typeof payload.lastSchedule === "object") state.lastSchedule = payload.lastSchedule;
-    if (payload.planStart) state.planStart = payload.planStart;
-    if (Number.isFinite(Number(payload.horizonDays))) state.horizonDays = Number(payload.horizonDays);
+    else state.lastSchedule = {
+      ...(state.lastSchedule || {}),
+      scheduled: restored.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").length,
+      scheduledOts: uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean)),
+      changes: restored.filter(isToolChangeReportOperation).length,
+      restoredFromSnapshot: true,
+    };
+    if (snapshot.planStart || payload.planStart) state.planStart = snapshot.planStart || payload.planStart;
+    if (Number.isFinite(Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays))) state.horizonDays = Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays);
     normalizeState();
     invalidateCurrentPlanOperationsCache();
     syncDraftReportWeek();

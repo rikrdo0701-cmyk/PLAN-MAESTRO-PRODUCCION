@@ -180,7 +180,7 @@ function planningLoadSnapshotIntoState(snapshot) {
 async function planningFetchSnapshotById(snapshotId) {
   if (!snapshotId) return null;
   return isAppsScriptRuntime()
-    ? await callAppsScript("getPlanSnapshot", snapshotId)
+    ? await callAppsScript("getPlanSnapshotLight", snapshotId)
     : await fetchJson(PLAN_SNAPSHOTS_API + "/" + encodeURIComponent(snapshotId));
 }
 
