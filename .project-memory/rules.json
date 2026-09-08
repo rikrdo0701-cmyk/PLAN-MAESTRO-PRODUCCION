@@ -981,6 +981,15 @@
       "source": "medicion A/B real 2026-09-07 (.openchamber/probe-a-b-strategy.mjs: bundle local site/ en :4173, API /api proxied a https://rikrdo0701-cmyk.github.io, 50 OTs primer pool vs balanced_goal, 240s budget, fastQualityMode true; wall 303.6s vs 156.0s); src/web/planning/planner-core.js (strategyPool configurable L175-186, compareReadyCandidates balanced_goal L2174-2176, compareAssignments L2231-2232, flow_balanced omitido si strategyPool.length<=1 L232); decision usuario 2026-09-07 (estrategia single-pass + A/B).",
       "domain": "Balanceo",
       "updated_at": "2026-09-07T20:14:06.727Z"
+    },
+    {
+      "rule_id": "RULE-HER-006",
+      "name": "El sync de NetSuite (planning y planta) preserva las filas CAMBIO_HERRAMENTAL generadas",
+      "status": "implementada",
+      "rule": "PP_applyNetSuitePlanningData_ (08-netsuite.js:250) y PP_applyNetSuitePlantData_ (08-netsuite.js:159) reconstruian merged.operations SOLO a partir de las filas NetSuite (merged.operations = operations), descartando las operaciones CAMBIO_HERRAMENTAL generadas por el motor (tipoInsercion 'CAMBIO_HERRAMENTAL'). Como syncNetSuitePlanningData (01-code.js:320) se dispara en background/refresh y PP_writeNetSuiteSyncState_ (02-storage.js:319) escribe OPERACIONES con bump de revision/savedAt pero NO toca lastSchedule, el efecto observado era: lastSchedule.changes (p. ej. 22) intacto mientras la hoja OPERACIONES perdia todas las filas de cambio; el cliente ademas terminaba pisando state.operations (applyImported reemplaza operations; selectNewestCoherentDraft ordena por revision/savedAt ascendente). FIX 2026-09-07 en 08-netsuite.js: helper PP_preservedToolChanges_ conserva las CAMBIO_HERRAMENTAL cuyas OT siguen presentes en las operaciones entrantes (filtro por OT con PP_belongsToPlant_, match contra el contenido calculado de las filas NetSuite), y ambas funciones aplican merged.operations = PP_preservedToolChanges_(current, operations).concat(operations). Las filas ya borradas de produccion NO se recuperan retroactivamente; solo se evita el borrado futuro y la regeneracion del plan vuelve a crearlas.",
+      "source": "diagnostico 2026-09-07 (operaciones con 0 CAMBIO_HERRAMENTAL y lastSchedule.changes>0 en produccion; probe-toolchange-pipeline.py replico el run real con isDryRun:true y confirmo 43 cambios en result.operations y 43 en draftExportOperations -> motor/export lossless); FIX src/server/08-netsuite.js (PP_preservedToolChanges_, concat en PP_applyNetSuitePlanningData_/PP_applyNetSuitePlantData_); tests/netsuite-sync-preserves-toolchanges.test.mjs (carga 02-storage.js + 08-netsuite.js en vm; OT presente se preserva, OT ausente se descarta)",
+      "domain": "Herramentales",
+      "updated_at": "2026-09-07"
     }
   ]
 }

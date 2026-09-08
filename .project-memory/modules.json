@@ -143,6 +143,7 @@
         "tests/inspection-service.test.mjs",
         "tests/matrix-integration-app.test.mjs",
         "tests/netsuite-operation-catalog.test.mjs",
+        "tests/netsuite-sync-preserves-toolchanges.test.mjs",
         "tests/performance-client-calls.test.mjs",
         "tests/performance-client-conflict.test.mjs",
         "tests/planner-core.test.mjs",

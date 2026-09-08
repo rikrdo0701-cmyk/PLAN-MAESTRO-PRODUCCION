@@ -127,6 +127,17 @@ function PP_assertNetSuiteRows_(rows, label, context) {
   throw new Error('NetSuite devolvio 0 ' + label + ' para Planta MM del Llano. Revisa propiedades NS_*, permisos del deployment, permisos del token y RESTlets 1764/1, 1762/17 y 1763/14.' + detail);
 }
 
+function PP_preservedToolChanges_(current, operations) {
+  const presentOts = {};
+  (operations || []).forEach(function(row) {
+    const key = PP_normalizeKey_(row && row.ot);
+    if (key) presentOts[key] = true;
+  });
+  return (current && current.operations || []).filter(function(op) {
+    return op && PP_normalizeKey_(op.tipoInsercion) === 'CAMBIO_HERRAMENTAL' && presentOts[PP_normalizeKey_(op.ot)];
+  });
+}
+
 function PP_applyNetSuitePlantData_(current, snapshot) {
   const workOrderCatalog = JSON.parse(JSON.stringify(snapshot.workOrders || []));
   const previousWorkOrders = {};
@@ -156,7 +167,7 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
   const materials = snapshot.materials || [];
 
   const merged = JSON.parse(JSON.stringify(current || {}));
-  merged.operations = operations;
+  merged.operations = PP_preservedToolChanges_(current, operations).concat(operations);
   merged.workOrders = workOrderCatalog;
   merged.materials = materials;
   merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
@@ -236,7 +247,7 @@ function PP_applyNetSuitePlanningData_(current, snapshot) {
     .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
   const materials = snapshot.materials || [];
   const merged = JSON.parse(JSON.stringify(current || {}));
-  merged.operations = operations;
+  merged.operations = PP_preservedToolChanges_(current, operations).concat(operations);
   merged.materials = materials;
   merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
   merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
