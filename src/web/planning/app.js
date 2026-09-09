@@ -9171,7 +9171,15 @@ async function exportCsv() {
 
 function lastScheduleGeneratedAt(sourceId) {
   if (sourceId && sourceId !== "draft") return "";
-  return state.lastSchedule?.generatedAt || "";
+  const live = state.lastSchedule?.generatedAt || "";
+  const draftMeta = typeof planSnapshots !== "undefined" && Array.isArray(planSnapshots)
+    ? planSnapshots.find((item) => item.snapshotId === "draft")
+    : null;
+  const snapshotGeneratedAt = draftMeta?.generatedAt || "";
+  const liveMs = Date.parse(live) || 0;
+  const snapshotMs = Date.parse(snapshotGeneratedAt) || 0;
+  if (snapshotMs > liveMs) return snapshotGeneratedAt;
+  return live || snapshotGeneratedAt;
 }
 
 async function exportSourceOperations(sourceId) {

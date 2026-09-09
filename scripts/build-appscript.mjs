@@ -187,8 +187,14 @@ async function planningFetchSnapshotById(snapshotId) {
 }
 
 async function restoreDraftPlanFromSharedState() {
-  if (Array.isArray(state.selectedOts) && state.selectedOts.length) return false;
-  if ((state.operations || []).length && !planningStateHasDemoOnly()) return false;
+  const hasPlanData = (Array.isArray(state.selectedOts) && state.selectedOts.length)
+    || ((state.operations || []).length && !planningStateHasDemoOnly());
+  const draftPlanMeta = (Array.isArray(planSnapshots) ? planSnapshots : [])
+    .find((item) => item.snapshotId === "draft");
+  const currentGeneratedAtMs = Date.parse(state.lastSchedule?.generatedAt || "") || 0;
+  const draftGeneratedAtMs = draftPlanMeta ? (Date.parse(draftPlanMeta.generatedAt || "") || 0) : 0;
+  const draftIsNewer = hasPlanData && draftGeneratedAtMs > 0 && draftGeneratedAtMs > currentGeneratedAtMs;
+  if (hasPlanData && !draftIsNewer) return false;
 
   try {
     const draftSnapshot = await planningFetchSnapshotById("draft");
