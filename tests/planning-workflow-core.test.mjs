@@ -962,6 +962,20 @@ test("selecciona el borrador coherente mas reciente sin mezclar colecciones", ()
   assert.equal(core.selectNewestCoherentDraft(mixed, older).revision, 2);
 });
 
+test("la frescura del plan (lastSchedule.generatedAt) prevalece sobre savedAt/revision", () => {
+  const fresh = { revision: 0, savedAt: "2026-09-09T16:29:46Z", lastSchedule: { generatedAt: "2026-09-09T16:26:58.145Z" }, selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  const oldButLaterSaved = { revision: 5, savedAt: "2026-09-09T16:31:20Z", lastSchedule: { generatedAt: "2026-09-08T04:02:26.688Z" }, selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  const withoutGeneratedAt = { revision: 9, savedAt: "2026-09-09T17:00:00Z", selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  assert.equal(core.selectNewestCoherentDraft(fresh, oldButLaterSaved).lastSchedule.generatedAt, "2026-09-09T16:26:58.145Z");
+  assert.equal(core.selectNewestCoherentDraft(oldButLaterSaved, fresh).lastSchedule.generatedAt, "2026-09-09T16:26:58.145Z");
+  assert.equal(core.selectNewestCoherentDraft(withoutGeneratedAt, fresh).lastSchedule.generatedAt, "2026-09-09T16:26:58.145Z");
+  assert.equal(core.selectNewestCoherentDraft(withoutGeneratedAt, oldButLaterSaved).lastSchedule.generatedAt, "2026-09-08T04:02:26.688Z");
+  const plainOlder = { revision: 2, savedAt: "2026-07-12T10:00:00Z", selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
+  const plainNewer = { revision: 3, savedAt: "2026-07-12T11:00:00Z", selectedOts: ["200"], workOrders: [{ ot: "200" }], operations: [{ ot: "200" }] };
+  assert.equal(core.selectNewestCoherentDraft(plainOlder, plainNewer).revision, 3);
+  assert.equal(core.selectNewestCoherentDraft(plainNewer, plainOlder).revision, 3);
+});
+
 test("PLANDATA prevalece sobre una copia local coherente pero obsoleta", () => {
   const local = { revision: 99, selectedOts: ["100"], workOrders: [{ ot: "100" }], operations: [{ ot: "100" }] };
   const remote = { revision: 10, selectedOts: [], workOrders: [{ ot: "200" }], operations: [] };

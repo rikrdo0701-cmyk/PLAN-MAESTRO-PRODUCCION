@@ -1084,8 +1084,23 @@ expandedOts: without(state?.expandedOts),
 
   function selectNewestCoherentDraft(localDraft, remoteDraft) {
     const candidates = [localDraft, remoteDraft].filter(isCoherentDraft);
-    return candidates.sort((left, right) => Number(right?.revision || 0) - Number(left?.revision || 0) ||
-      String(right?.savedAt || "").localeCompare(String(left?.savedAt || "")))[0] || null;
+    return candidates.sort((left, right) => {
+      const freshness = (draft) => {
+        const value = draft?.lastSchedule?.generatedAt;
+        const parsed = typeof value === "string" && value ? Date.parse(value) : NaN;
+        return Number.isFinite(parsed) ? parsed : -Infinity;
+      };
+      const leftFreshness = freshness(left);
+      const rightFreshness = freshness(right);
+      if (leftFreshness !== rightFreshness) {
+        if (rightFreshness === -Infinity) return -1;
+        if (leftFreshness === -Infinity) return 1;
+        return rightFreshness - leftFreshness;
+      }
+      const revisionDiff = Number(right?.revision || 0) - Number(left?.revision || 0);
+      if (revisionDiff !== 0) return revisionDiff;
+      return String(right?.savedAt || "").localeCompare(String(left?.savedAt || ""));
+    })[0] || null;
   }
 
   function selectAuthoritativeRemoteDraft(localDraft, remoteDraft) {
