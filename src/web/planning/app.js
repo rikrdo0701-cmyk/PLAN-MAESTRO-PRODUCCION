@@ -629,6 +629,7 @@ async function loadAppStateInBackground() {
 
 async function maybeRestoreSavedDraftOnBoot() {
   if (globalThis.__draftBootRestoreAttempted === true) return;
+  if (globalThis.__planningRestoredFromServer === true) return;
   globalThis.__draftBootRestoreAttempted = true;
   try {
     if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) {
@@ -9318,12 +9319,14 @@ function getPlanWindow() {
 }
 
 function getGanttGroups() {
-  const visibleOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
-  const cacheKey = `${visibleOperations.length}-${state.ganttView}-${GANTT_GROUPS_CACHE_VERSION}`;
+  const plan = currentPlanOperations();
+  const cacheKey = `${plan.length}-${state.ganttView}-${GANTT_GROUPS_CACHE_VERSION}-m${planStateMutationVersion}-s${(state.selectedOts || []).length}-l${(state.lastSchedule?.scheduledOts || []).length}`;
   
   if (GANTT_GROUPS_CACHE.has(cacheKey)) {
     return GANTT_GROUPS_CACHE.get(cacheKey);
   }
+  
+  const visibleOperations = plan.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   
   let groups;
   
