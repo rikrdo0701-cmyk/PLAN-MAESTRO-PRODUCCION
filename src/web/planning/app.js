@@ -10931,6 +10931,10 @@ function isCapabilityConfigured(capability) {
 function capabilityFromOperation(op) {
   const label = capabilityLabelForOperation(op);
   const ct = String(op.ct || "SIN_CT").trim();
+  const resolved = window.PlannerCore?.capabilityForOperation
+    ? window.PlannerCore.capabilityForOperation(op, state)
+    : null;
+  if (resolved) return resolved;
   return { key: capabilityKey(ct, label), ct, label };
 }
 

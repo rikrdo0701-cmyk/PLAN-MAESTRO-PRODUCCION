@@ -1636,6 +1636,36 @@ test("RULE-BAL-007: la validacion previa NO marca MISSING_OPERATOR si la matriz 
   assert.equal(issues.some((issue) => issue.code === "MISSING_OPERATOR"), false);
 });
 
+test("una op restaurada con ct SIN_CT resuelve su capability por descripcion contra la matriz configurada", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    selectedOts: ["1556"],
+    operations: [{ id: "ns-1", ot: "1556", secuencia: 10, ct: "SIN_CT", descripcion: "16OC : LIBERACIÓN DE PIEZAS", estatus: "PLAN", operador: "LIBERACION", cantidadPendiente: 10 }],
+    matrix: { "5537::16OC_:_LIBERACION_DE_PIEZAS": ["LIBERACION"], "SIN_CT": [] },
+    configuredCapabilities: ["5537::16OC_:_LIBERACION_DE_PIEZAS"],
+    operators: ["LIBERACION"],
+    operationCatalog: [{ key: "5537::16OC_:_LIBERACION_DE_PIEZAS", ct: "5537", label: "16OC : LIBERACIÓN DE PIEZAS" }],
+    workSchedule: {},
+  };
+  const [operation] = state.operations;
+  const issues = core.planningConfigurationIssues(state, [operation]);
+  assert.equal(issues.some((issue) => issue.code === "MISSING_CAPABILITY" || issue.code === "MISSING_OPERATOR"), false);
+});
+
+test("la resolucion de capability por descripcion no altera claves con CT real ni ops sin match en el catalogo", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    configuredCapabilities: ["5459::DOBLEZ_DE_TUBERIA", "5537::16OC_:_LIBERACION_DE_PIEZAS"],
+    matrix: { "5459::DOBLEZ_DE_TUBERIA": ["OP"], "5537::16OC_:_LIBERACION_DE_PIEZAS": ["LIBERACION"], "SIN_CT": [] },
+    operationCatalog: [{ key: "5537::16OC_:_LIBERACION_DE_PIEZAS", ct: "5537", label: "16OC : LIBERACIÓN DE PIEZAS" }],
+    operators: ["OP", "LIBERACION"],
+    workSchedule: {},
+  };
+  assert.equal(core.capabilityForOperation({ ct: "5459", descripcion: "DOBLEZ DE TUBERIA" }, state).key, "5459::DOBLEZ_DE_TUBERIA");
+  assert.equal(core.capabilityForOperation({ ct: "SIN_CT", descripcion: "OP NO CATALOGADA" }, state).ct, "SIN_CT");
+  assert.equal(core.capabilityForOperation({ ct: "", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }, state).ct, "5537");
+});
+
 test("un indice de configuracion restaurado como objeto plano (round-trip JSON) no rompe la validacion ni la asignacion", async () => {
   const core = loadPlannerCore();
   const operation = { id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "", herramental: "", tiempoCiclo: 1, cantidadPendiente: 1 };

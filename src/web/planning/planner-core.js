@@ -1281,7 +1281,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function operatorCandidates(state, op, finite) {
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     if (Array.isArray(state.configuredCapabilities) && !state.configuredCapabilities.includes(capability.key)) return [];
     const matrix = state.matrix || {};
     const allowed = matrix[capability.key] || matrix[capability.ct] || [];
@@ -1353,7 +1353,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
     for (const op of effectiveOperations) {
       if (String(op.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL") continue;
-      const capability = capabilityForOperation(op);
+      const capability = capabilityForOperation(op, state);
       const isSubcontract = isSubcontractOperation(state, op);
       const isConfigured = configured
         ? configured.has(capability.key)
@@ -1452,7 +1452,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     for (const d of capacityOps) {
       const op = opsById.get(String(d.operationId));
       if (!op) continue;
-      const capability = capabilityForOperation(op);
+      const capability = capabilityForOperation(op, state);
       const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
       const prodMinutes = productionMinutes(op);
       const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
@@ -1480,11 +1480,12 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     const details = unscheduledDiags.map((d) => {
       const op = opsById.get(String(d.operationId));
       if (!op) return { ...d, capability: "", operators: [], prodMinutes: 0, effectiveMinutes: 0, totalAvailableMinutes: 0, machine: "" };
-      const capability = capabilityForOperation(op);
+      const capability = capabilityForOperation(op, state);
       const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
       const prodMinutes = productionMinutes(op);
       const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
       const avgPerf = opPerf.length ? opPerf.reduce((a, b) => a + b, 0) / opPerf.length : 100;
+
       const effectiveMinutes = prodMinutes / (avgPerf / 100);
       const totalAvailable = operators.reduce((sum, name) => sum + availableMinutes(state, name, state.planStart, state.horizonDays || 15), 0);
       return {
@@ -1522,7 +1523,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   function isFiniteOperation(state, op) {
     if (op.tipoInsercion === "SUBCONTRATO" || isSubcontractOperation(state, op)) return false;
     if (op.tipoInsercion === "CAMBIO_HERRAMENTAL") return true;
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     const matchedRule = operationRuleForOperation(state, op);
     const mode = [capability.key, matchedRule?.key, capability.ct]
       .filter((k, i, arr) => k && arr.indexOf(k) === i)
@@ -1560,7 +1561,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function operationRuleForOperation(state, op) {
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     const rules = state.operationRules || {};
     const directKey = rules[capability.key] ? capability.key : (rules[capability.ct] ? capability.ct : "");
     if (directKey) return { ...rules[directKey], key: directKey };
@@ -1574,9 +1575,32 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     return null;
   }
 
-  function capabilityForOperation(op) {
-    const ct = String(op.ct || "SIN_CT").trim();
-    const label = String(op.descripcion || op.tipoInsercion || "OPERACION").trim();
+  function resolveOperationCt(state, label) {
+    if (!state) return "SIN_CT";
+    const labelKey = normalizeKey(label).replace(/\s+/g, "_");
+    const normalized = (value) => normalizeKey(value).replace(/\s+/g, "_");
+    const candidates = [];
+    for (const key of state.configuredCapabilities || []) {
+      const separator = String(key).indexOf("::");
+      if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+    }
+    for (const item of state.operationCatalog || []) {
+      const ct = String(item?.ct || "").trim();
+      const itemLabel = String(item?.label || item?.operation || "").trim();
+      if (ct && itemLabel) candidates.push({ ct, label: itemLabel });
+    }
+    for (const key of Object.keys(state.matrix || {})) {
+      const separator = key.indexOf("::");
+      if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+    }
+    const match = candidates.find((item) => item.ct && item.ct !== "SIN_CT" && normalized(item.label) === labelKey);
+    return match ? match.ct : "SIN_CT";
+  }
+
+  function capabilityForOperation(op, state) {
+    const label = String(op?.descripcion || op?.tipoInsercion || "OPERACION").trim();
+    const rawCt = String(op?.ct || "").trim();
+    const ct = rawCt && rawCt !== "SIN_CT" ? rawCt : resolveOperationCt(state, label);
     return { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
   }
 
@@ -1636,7 +1660,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return false;
     const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
     if (!excluded.length) return false;
-    const operationKey = normalizedCapabilityKey(capabilityForOperation(operation || {}));
+    const operationKey = normalizedCapabilityKey(capabilityForOperation(operation || {}, state));
     return excluded.some((capability) => normalizedCapabilityKey(capability) === operationKey);
   }
 
@@ -1648,7 +1672,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   function filterExcludedOperations(state, operations, excludedSet = excludedCapabilityKeySet(state)) {
     return (Array.isArray(operations) ? operations : []).filter((operation) => {
       if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return true;
-      return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {})));
+      return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {}, state)));
     });
   }
   // TODO: Consider memoizing filterExcludedOperations for performance improvement (RULE-BAL-009 / RULE-MAT-008)
@@ -2199,8 +2223,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
       if (toolChange) return toolChange;
       const matrix = state.matrix || {};
-      const capabilityA = capabilityForOperation(a.op);
-      const capabilityB = capabilityForOperation(b.op);
+      const capabilityA = capabilityForOperation(a.op, state);
+      const capabilityB = capabilityForOperation(b.op, state);
       const keyA = capabilityA.key;
       const keyB = capabilityB.key;
       const operatorsA = matrix[keyA] || matrix[capabilityA.ct] || [];
@@ -3115,5 +3139,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     isBendingOperation,
     isSubcontractOperation,
     toolChangeCapability: () => ({ ...TOOL_CHANGE_CAPABILITY }),
+    capabilityForOperation,
+    resolveOperationCt,
   };
 });
