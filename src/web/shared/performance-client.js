@@ -5,7 +5,7 @@
   const NETSUITE_REFRESH_MS = 15 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 850;
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
-  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v4";
+  const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v5";
   const initialPerformanceMeta = readMeta();
   const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
   let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
@@ -97,7 +97,7 @@
   document.addEventListener("DOMContentLoaded", installPerformanceAdapters, { once: true });
 
   function compactLocalState() {
-    const { matrixSearch, ...persisted } = state;
+    const { matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, ...persisted } = state;
     const revision = Number(state.revision || 0);
     return {
       ...persisted,
@@ -606,7 +606,6 @@
         cached
         && typeof cached === "object"
         && !Array.isArray(cached)
-        && Array.isArray(cached.operations)
         && Array.isArray(cached.workOrders)
         && revision > 0
         && Number(state.revision) === revision

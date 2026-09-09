@@ -653,10 +653,15 @@ async function maybeRestoreSavedDraftOnBoot() {
     if (!savedOps.length) return;
     const localDraft = captureLocalPlanningState();
     if (!planningDraftDiffers(localDraft, { ...payload, operations: savedOps })) return;
-    const savedToolChanges = savedOps.filter(isToolChangeReportOperation).length;
-    const localToolChanges = (state.operations || []).filter(isToolChangeReportOperation).length;
-    if (savedToolChanges === 0) return;
-    if (localToolChanges >= savedToolChanges) return;
+    const savedGeneratedAtMs = Date.parse((snapshot && (snapshot.generatedAt || payload.generatedAt)) || "") || 0;
+    const currentGeneratedAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
+    const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;
+    if (!savedIsNewer) {
+      const savedToolChanges = savedOps.filter(isToolChangeReportOperation).length;
+      if (savedToolChanges === 0) return;
+      const localToolChanges = (state.operations || []).filter(isToolChangeReportOperation).length;
+      if (localToolChanges >= savedToolChanges) return;
+    }
     const restored = savedOps.map((op, index) => normalizeOperation({
       ...op,
       id: op.id || `draft-boot-${snapshot.snapshotId || "draft"}-${index + 1}`,
@@ -689,6 +694,10 @@ async function maybeRestoreSavedDraftOnBoot() {
       changes: restored.filter(isToolChangeReportOperation).length,
       restoredFromSnapshot: true,
     };
+    if (state.lastSchedule && savedIsNewer) {
+      const embeddedAtMs = Date.parse(state.lastSchedule.generatedAt || "") || 0;
+      if (savedGeneratedAtMs > embeddedAtMs) state.lastSchedule.generatedAt = String(snapshot.generatedAt || state.lastSchedule.generatedAt || "");
+    }
     if (snapshot.planStart || payload.planStart) state.planStart = snapshot.planStart || payload.planStart;
     if (Number.isFinite(Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays))) state.horizonDays = Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays);
     normalizeState();
@@ -8915,12 +8924,15 @@ async function applyImported(imported, options = {}) {
   const backlogDatasetChanged = Array.isArray(imported.operations)
     || Array.isArray(imported.materials)
     || Array.isArray(imported.workOrders);
+  const currentScheduleAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
+  const importedScheduleAtMs = Date.parse((imported && imported.lastSchedule && imported.lastSchedule.generatedAt) || "") || 0;
+  const importedIsStaleSchedule = currentScheduleAtMs > 0 && importedScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
     ? detectNetSuiteOtChanges(state, imported, { detectedAt: new Date().toISOString() })
     : null;
-  if (Array.isArray(imported.operations)) state.operations = imported.operations;
+  if (Array.isArray(imported.operations) && !importedIsStaleSchedule) state.operations = imported.operations;
   const importedSyncedMap = imported.operationsSyncedAt && typeof imported.operationsSyncedAt === "object" &&
     Object.keys(imported.operationsSyncedAt).length ? imported.operationsSyncedAt : null;
   state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), ...(importedSyncedMap || {}) };
@@ -8961,13 +8973,13 @@ async function applyImported(imported, options = {}) {
   if (Number.isFinite(Number(imported.ganttDayWidth))) state.ganttDayWidth = Number(imported.ganttDayWidth);
   if (imported.selectedOperationId) state.selectedOperationId = imported.selectedOperationId;
   if (Number.isFinite(imported.capacityMinutes)) state.capacityMinutes = imported.capacityMinutes;
-  if (imported.planStart) state.planStart = imported.planStart;
+  if (imported.planStart && !importedIsStaleSchedule) state.planStart = imported.planStart;
   if (Number.isFinite(Number(imported.horizonDays))) state.horizonDays = Number(imported.horizonDays);
-  if (imported.loadWeekStart) state.loadWeekStart = imported.loadWeekStart;
-  if (imported.reportWeekStart) state.reportWeekStart = imported.reportWeekStart;
-  if (Array.isArray(imported.selectedOts)) state.selectedOts = imported.selectedOts;
-  if (Array.isArray(imported.lockedOts)) state.lockedOts = imported.lockedOts;
-  if (Array.isArray(imported.expandedOts)) state.expandedOts = imported.expandedOts;
+  if (imported.loadWeekStart && !importedIsStaleSchedule) state.loadWeekStart = imported.loadWeekStart;
+  if (imported.reportWeekStart && !importedIsStaleSchedule) state.reportWeekStart = imported.reportWeekStart;
+  if (Array.isArray(imported.selectedOts) && !importedIsStaleSchedule) state.selectedOts = imported.selectedOts;
+  if (Array.isArray(imported.lockedOts) && !importedIsStaleSchedule) state.lockedOts = imported.lockedOts;
+  if (Array.isArray(imported.expandedOts) && !importedIsStaleSchedule) state.expandedOts = imported.expandedOts;
   if (imported.workSchedule) state.workSchedule = imported.workSchedule;
   if (imported.dailyBreaks) state.dailyBreaks = imported.dailyBreaks;
   if (imported.settings) state.settings = imported.settings;
@@ -8979,7 +8991,7 @@ async function applyImported(imported, options = {}) {
   if (Array.isArray(imported.calendarExceptions)) state.calendarExceptions = imported.calendarExceptions;
   if (Array.isArray(imported.subcontracts)) state.subcontracts = imported.subcontracts;
   if (Array.isArray(imported.netSuiteChangeAlerts)) state.netSuiteChangeAlerts = imported.netSuiteChangeAlerts;
-  if (imported.lastSchedule) state.lastSchedule = imported.lastSchedule;
+  if (imported.lastSchedule && !importedIsStaleSchedule) state.lastSchedule = imported.lastSchedule;
   if (preservedLocalPlanning) {
     const remotePlanning = captureLocalPlanningState();
     const coherentLocal = window.PlanningWorkflowCore.isCoherentDraft(preservedLocalPlanning);

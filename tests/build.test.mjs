@@ -738,6 +738,29 @@ assert.match(snapshotsLoad, /renderReports\(\);/);
   assert.match(storageService, /BORRADOR_PLAN/);
 });
 
+test("un import o cache stale no pisa un borrador mas reciente; el restore de boot respeta frescura", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const bootRestoreStart = app.indexOf("async function maybeRestoreSavedDraftOnBoot()");
+  const bootRestoreEnd = app.indexOf("function scheduleDraftBootRestoreRetry()", bootRestoreStart);
+  const bootRestore = app.slice(bootRestoreStart, bootRestoreEnd);
+  assert.match(bootRestore, /const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;/);
+  assert.match(bootRestore, /if \(!savedIsNewer\) \{\s*const savedToolChanges[\s\S]*if \(savedToolChanges === 0\) return;[\s\S]*if \(localToolChanges >= savedToolChanges\) return;\s*\}/);
+  assert.match(bootRestore, /if \(state\.lastSchedule && savedIsNewer\)[\s\S]*savedGeneratedAtMs > embeddedAtMs/);
+
+  const importStart = app.indexOf("async function applyImported(imported, options = {})");
+  const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  assert.match(importFlow, /const importedIsStaleSchedule = currentScheduleAtMs > 0 && importedScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;/);
+  assert.match(importFlow, /Array\.isArray\(imported\.operations\) && !importedIsStaleSchedule/);
+  assert.match(importFlow, /imported\.lastSchedule && !importedIsStaleSchedule/);
+  assert.match(importFlow, /Array\.isArray\(imported\.selectedOts\) && !importedIsStaleSchedule/);
+  assert.match(importFlow, /imported\.planStart && !importedIsStaleSchedule/);
+
+  const perfClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  assert.match(perfClient, /const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
+  assert.match(perfClient, /plan-produccion-cache-v5/);
+});
+
 test("el detalle de OT muestra carga de operaciones mientras espera una ruta valida", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const renderStart = app.indexOf("function renderSelectedJobPanel()");
@@ -893,7 +916,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
   assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
-  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, \.\.\.persisted \} = state;/);
+  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
   assert.match(performanceClient, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
 });
