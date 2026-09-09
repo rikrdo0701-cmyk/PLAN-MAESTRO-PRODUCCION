@@ -1695,6 +1695,7 @@ assert.deepEqual(PLAN_HEADERS, [
     "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
     "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
     "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO", "PRECIO", "MONTO",
+    "GENERADO_EL",
   ]);
 });
 
@@ -1721,6 +1722,36 @@ test("operationToRow calcula PRECIO y MONTO desde la OT cuando la operacion no l
 
   const computed = operationToRow({ ot: "200" });
   assert.deepEqual(computed, [12.5, 250]);
+});
+
+test("operationToRow resuelve CT por descripcion y cantidad desde la OT cuando la operacion trae SIN_CT o 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt", "window", "state",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["CT", "CANT_PENDIENTE", "CANT_TOTAL"],
+    { CT: "ct", CANT_PENDIENTE: "cantPendiente", CANT_TOTAL: "cantTotal" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+    { PlannerCore: { capabilityForOperation: (op) => ({ ct: op.ct === "SIN_CT" ? "5458" : op.ct, label: op.descripcion }) } },
+    { configuredCapabilities: ["5458::3OTD_:_CORTE_DE_TUBO"] },
+    () => 50,
+    () => ({ pendingQuantity: 50 }),
+  );
+
+  const resolved = operationToRow({ ot: "3298", ct: "SIN_CT", descripcion: "3OTD : CORTE DE TUBO", cantPendiente: 0, cantTotal: 0 });
+  assert.deepEqual(resolved, ["5458", 50, 50]);
+
+  const preserved = operationToRow({ ot: "3298", ct: "5458", descripcion: "3OTD : CORTE DE TUBO", cantPendiente: 12, cantTotal: 15 });
+  assert.deepEqual(preserved, ["5458", 12, 15]);
 });
 
 test("importJson adopta y limpia operationCatalogWarning", async () => {

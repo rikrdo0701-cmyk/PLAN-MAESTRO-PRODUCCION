@@ -79,6 +79,7 @@ const PLAN_HEADERS = [
   "COMENTARIO",
   "PRECIO",
   "MONTO",
+  "GENERADO_EL",
 ];
 
 const FIELD_MAP = {
@@ -9162,9 +9163,15 @@ function importCsv(text) {
 async function exportCsv() {
   const sourceId = els.exportSnapshotSelect ? els.exportSnapshotSelect.value : "draft";
   const operations = await exportSourceOperations(sourceId);
-  const rows = [PLAN_HEADERS, ...operations.map(operationToRow)];
+  const generatedAt = lastScheduleGeneratedAt(sourceId);
+  const rows = [PLAN_HEADERS, ...operations.map((op) => operationToRow(op, generatedAt))];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
+}
+
+function lastScheduleGeneratedAt(sourceId) {
+  if (sourceId && sourceId !== "draft") return "";
+  return state.lastSchedule?.generatedAt || "";
 }
 
 async function exportSourceOperations(sourceId) {
@@ -9186,15 +9193,31 @@ async function exportSourceOperations(sourceId) {
   }
 }
 
-function operationToRow(op) {
+function operationToRow(op, generatedAt) {
   return PLAN_HEADERS.map((header) => {
+    if (header === "GENERADO_EL") return generatedAt ?? "";
     if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
     if (header === "LOG") return scheduledLogForExport(op);
     if (header === "PRECIO") return Number.isFinite(Number(op.unitPrice)) ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
     if (header === "MONTO") return Number.isFinite(Number(op.amount)) ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
-    return op[field] ?? "";
+    const value = op[field];
+    if (header === "CT") return exportCtForOperation(op, value);
+    if (header === "CANT_PENDIENTE" || header === "CANT_TOTAL") return exportQuantityForOperation(op, value);
+    return value ?? "";
   });
+}
+
+function exportCtForOperation(op, value) {
+  const raw = String(value ?? "").trim();
+  if (raw && raw !== "SIN_CT") return value;
+  const resolved = window.PlannerCore?.capabilityForOperation ? window.PlannerCore.capabilityForOperation(op, state) : null;
+  return resolved?.ct && resolved.ct !== "SIN_CT" ? resolved.ct : raw || "SIN_CT";
+}
+
+function exportQuantityForOperation(op, value) {
+  if (Number(value) > 0) return value;
+  return pendingPiecesForWorkOrder(workOrderForOt(op?.ot || ""));
 }
 
 function scheduledLogForExport(op) {
