@@ -189,16 +189,19 @@ async function planningFetchSnapshotById(snapshotId) {
 async function restoreDraftPlanFromSharedState() {
   const hasPlanData = (Array.isArray(state.selectedOts) && state.selectedOts.length)
     || ((state.operations || []).length && !planningStateHasDemoOnly());
+  const currentGeneratedAtMs = Date.parse(state.lastSchedule?.generatedAt || "") || 0;
   const draftPlanMeta = (Array.isArray(planSnapshots) ? planSnapshots : [])
     .find((item) => item.snapshotId === "draft");
-  const currentGeneratedAtMs = Date.parse(state.lastSchedule?.generatedAt || "") || 0;
-  const draftGeneratedAtMs = draftPlanMeta ? (Date.parse(draftPlanMeta.generatedAt || "") || 0) : 0;
-  const draftIsNewer = hasPlanData && draftGeneratedAtMs > 0 && draftGeneratedAtMs > currentGeneratedAtMs;
-  if (hasPlanData && !draftIsNewer) return false;
+  const metaDraftGeneratedAtMs = draftPlanMeta ? (Date.parse(draftPlanMeta.generatedAt || "") || 0) : 0;
+  if (hasPlanData && metaDraftGeneratedAtMs > 0 && !(metaDraftGeneratedAtMs > currentGeneratedAtMs)) return false;
 
   try {
     const draftSnapshot = await planningFetchSnapshotById("draft");
-    if (draftSnapshot && planningLoadSnapshotIntoState(draftSnapshot)) return true;
+    if (draftSnapshot) {
+      const snapshotGeneratedAtMs = draftSnapshot.generatedAt ? (Date.parse(draftSnapshot.generatedAt) || 0) : 0;
+      if (hasPlanData && snapshotGeneratedAtMs > 0 && !(snapshotGeneratedAtMs > currentGeneratedAtMs)) return false;
+      if (planningLoadSnapshotIntoState(draftSnapshot)) return true;
+    }
   } catch (error) {
     console.warn("No se pudo recuperar el borrador directamente:", error);
   }
