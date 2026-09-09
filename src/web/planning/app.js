@@ -548,6 +548,7 @@ function writePlanVersionCounter(weekStart, version) {
 }
 let reportSnapshot = null;
 let loadSnapshot = null;
+let planSourceLoadVersion = 0;
 let loadMode = "pending";
 let inspectionRouteCatalogRows = [];
 let inspectionRouteCatalogReady = false;
@@ -6484,7 +6485,9 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
     const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
       (!reportSnapshot || (reportSnapshot.snapshotId === "draft" && !hasDraftReport));
     if (preferPublished) {
+      const bootSourceVersion = planSourceLoadVersion;
       for (const snapshot of publishedPlanSnapshots()) {
+        if (planSourceLoadVersion !== bootSourceVersion) break;
         const loaded = await loadPlanSnapshotById(snapshot.snapshotId, { render: false, silent: true });
         if (loaded) break;
       }
@@ -6519,6 +6522,7 @@ function maybeLoadDefaultPublishedReportSnapshot() {
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
   const snapshotId = String(selectedSnapshotId ?? els.planSnapshotSelect.value);
+  planSourceLoadVersion += 1;
   if (snapshotId === "draft") {
     syncDraftReportWeek();
     reportSnapshot = currentDraftReportSnapshot();
@@ -6547,9 +6551,11 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
 
 async function loadPlanSnapshotById(snapshotId, options = {}) {
   if (!snapshotId) return;
+  const requestVersion = ++planSourceLoadVersion;
   setPlanSourceControlsDisabled(true);
   try {
     const snapshot = await fetchPlanSnapshot(snapshotId);
+    if (requestVersion !== planSourceLoadVersion) return null;
     reportSnapshot = {
       ...snapshot,
       snapshotId,

@@ -725,7 +725,11 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
   assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
   assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;/);
-  assert.match(snapshotsLoad, /renderReports\(\);/);
+assert.match(snapshotsLoad, /renderReports\(\);/);
+  assert.match(pagesIndex, /let planSourceLoadVersion = 0;/);
+  assert.match(pagesIndex, /async function loadSelectedPlanSnapshot\(selectedSnapshotId\)[\s\S]*planSourceLoadVersion \+= 1/);
+  assert.match(pagesIndex, /async function loadPlanSnapshotById\(snapshotId, options = \{\}\)[\s\S]*const requestVersion = \+\+planSourceLoadVersion;[\s\S]*requestVersion !== planSourceLoadVersion/);
+  assert.match(pagesIndex, /const bootSourceVersion = planSourceLoadVersion;[\s\S]*planSourceLoadVersion !== bootSourceVersion\) break/);
   assert.match(pagesIndex, /return reportSnapshot;[\s\S]*catch \(error\)[\s\S]*return null;/);
   assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
   assert.match(pagesIndex, /Sincronizando OTs/);
