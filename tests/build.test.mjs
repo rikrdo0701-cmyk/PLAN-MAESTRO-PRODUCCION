@@ -232,7 +232,7 @@ assert.match(dryRunSource, /totalMs/);
   assert.doesNotMatch(dryRunSource, /\bensurePlanningDataLoaded\s*\(/);
   assert.match(scheduleSource, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas/);
   assert.match(scheduleSource, /persistPlanSnapshot\(\)/);
-  assert.match(scheduleSource, /state = \{ \.\.\.result, selectedOts: \(result\.lastSchedule\?\.scheduledOts \|\| \[\]\)\.map\(String\)\.filter\(Boolean\) \}/);
+  assert.match(scheduleSource, /const preservedQueueOrder = \[\.\.\.state\.selectedOts\];[\s\S]{0,200}state = \{ \.\.\.result, selectedOts: preservedQueueOrder \}/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
@@ -347,7 +347,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*if \(typeof rememberDraftRemovedOts === "function"\) rememberDraftRemovedOts\(\[ot\]\);\s*\}/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state, closedOts\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
-  assert.match(pagesIndex, /state = \{ \.\.\.result, selectedOts: \(result\.lastSchedule\?\.scheduledOts \|\| \[\]\)\.map\(String\)\.filter\(Boolean\) \};/);
+  assert.match(pagesIndex, /const preservedQueueOrder = \[\.\.\.state\.selectedOts\];[\s\S]{0,200}state = \{ \.\.\.result, selectedOts: preservedQueueOrder \};/);
   assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
   assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
   assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);

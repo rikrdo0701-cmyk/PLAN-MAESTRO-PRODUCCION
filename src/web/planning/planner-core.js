@@ -474,7 +474,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         const op = job.operations[index];
         op.operador = "SIN_OPERADOR";
         op.fechaInicio = ""; op.horaInicio = ""; op.fechaFin = ""; op.horaFin = "";
-        if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
+        if (!isBendingOperationResolved(state, op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
         op.log = appendLog(op.log, "WARN_SIN_HUECO_EN_HORIZONTE");
         unscheduled.push(op);
         diagnostics.push({
@@ -570,7 +570,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       })),
       ...(operations || []).map((op) => ({
         machine: op.maquina,
-        toolKey: operationToolKey(op),
+        toolKey: operationToolKey(op, context.state),
         operationId: op.id,
         start: operationStart(op),
         end: operationEnd(op),
@@ -625,7 +625,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
 
     const assignments = [];
     const selectedMachine = String(op.maquina || "").trim();
-    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(op.ct) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
+    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(resolvedBendingCt(op, context.state)) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
 
     for (const operator of operators) {
       for (const machine of machineOrder) {
@@ -872,7 +872,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       context.generatedChanges.push(returnChange);
     }
 
-    const toolKey = operationToolKey(next);
+    const toolKey = operationToolKey(next, context.state);
     if (hasMachineResource(assignment.machine) && toolKey) {
       const events = context.machineTools.get(assignment.machine) || [];
       const newEvent = {
@@ -1012,9 +1012,9 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments, { ...busyMetadata, resourceType: "MAQUINA" });
       if (tracksOperator) context.operatorLoad.set(op.operador, (context.operatorLoad.get(op.operador) || 0) + diffMinutes(start, end));
     }
-    if (end && hasMachineResource(op.maquina) && operationToolKey(op)) {
+    if (end && hasMachineResource(op.maquina) && operationToolKey(op, context.state)) {
       const events = context.machineTools.get(op.maquina) || [];
-      events.push({ start: start?.getTime() || end.getTime(), end: end.getTime(), toolKey: operationToolKey(op), operationId: op.id, isChange: op.tipoInsercion === "CAMBIO_HERRAMENTAL" });
+      events.push({ start: start?.getTime() || end.getTime(), end: end.getTime(), toolKey: operationToolKey(op, context.state), operationId: op.id, isChange: op.tipoInsercion === "CAMBIO_HERRAMENTAL" });
       context.machineTools.set(op.maquina, events);
     }
     context.scheduledByKey.set(operationKey(op), op);
@@ -1154,7 +1154,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function toolChangeFor(context, op, machine, candidateStart) {
-    const toKey = operationToolKey(op);
+    const toKey = operationToolKey(op, context.state);
     if (!machine || machine === "SIN_MAQUINA" || !toKey) return { required: false, minutes: 0, fromLabel: "", toLabel: toKey };
     const events = context.machineTools.get(machine);
     let fromKey = "SIN_ANTECEDENTE";
@@ -1215,7 +1215,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function findPostToolChange(context, op, machine, allocation) {
-    const fromLabel = operationToolKey(op);
+    const fromLabel = operationToolKey(op, context.state);
     if (!fromLabel || !machine || machine === "SIN_MAQUINA") return { required: false };
     const future = firstEventAfter(context.machineTools.get(machine), allocation.end.getTime());
     if (!future || normalizeKey(future.toolKey) === normalizeKey(fromLabel) || future.isChange || Number.isFinite(future.preChangeStart)) {
@@ -1248,7 +1248,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
 
   function enrichToolsFromCatalog(state, operations) {
     for (const op of operations) {
-      if (!isBendingOperation(op)) continue;
+      if (!isBendingOperationResolved(state, op)) continue;
       const item = toolCatalogForOperation(state, op);
       if (!item) continue;
       if (!cleanTool(op.herramental)) op.herramental = cleanTool(item.herramental);
@@ -1257,7 +1257,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function toolCatalogForOperation(state, op) {
-    if (!isBendingOperation(op)) return null;
+    if (!isBendingOperationResolved(state, op)) return null;
     const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
     const performanceState = state.__performanceState;
     countPlanningStat(performanceState, "toolCatalogLookups");
@@ -1294,8 +1294,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
 
   function unscheduledCause(state, op) {
     if (!operatorCandidates(state, op, isFiniteOperation(state, op)).length) return "SIN_OPERADOR_CONFIGURADO";
-    if (isBendingOperation(op) && !machineCandidates(state, op).length) return "SIN_MAQUINA_O_HERRAMENTAL_VALIDO";
-    if (isBendingOperation(op) && operationToolKey(op) && !toolChangeOperator(state, state.settings || {})) return "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL";
+    if (isBendingOperationResolved(state, op) && !machineCandidates(state, op).length) return "SIN_MAQUINA_O_HERRAMENTAL_VALIDO";
+    if (isBendingOperationResolved(state, op) && operationToolKey(op, state) && !toolChangeOperator(state, state.settings || {})) return "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL";
     return "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO";
   }
 
@@ -1330,17 +1330,17 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function machineCandidates(state, op) {
-    if (!isBendingOperation(op)) return [""];
+    if (!isBendingOperationResolved(state, op)) return [""];
     const assignedMachine = String(op.maquina || "").trim();
     if (assignedMachine && normalizeKey(assignedMachine) !== "SIN_MAQUINA") {
-      return validBendingMachine(assignedMachine, op.ct) ? [assignedMachine] : [];
+      return validBendingMachine(assignedMachine, resolvedBendingCt(op, state)) ? [assignedMachine] : [];
     }
     const catalog = (state.machines || [])
       .filter((machine) => machine.active !== false)
       .map((machine) => machine.id || machine.machine || machine.maquina)
       .filter(Boolean);
     const candidates = unique([op.maquina, ...catalog].filter(Boolean))
-      .filter((machine) => normalizeKey(machine) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(machine) === "1"));
+      .filter((machine) => normalizeKey(machine) !== "SIN_MAQUINA" && !(String(resolvedBendingCt(op, state)) === "5459" && String(machine) === "1"));
     return candidates;
   }
 
@@ -1366,19 +1366,19 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
         if (!operators.length) issues.push({ code: "MISSING_OPERATOR", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
-      if (isBendingOperation(op) && !validBendingMachine(op.maquina, op.ct)) {
+      if (isBendingOperationResolved(state, op) && !validBendingMachine(op.maquina, resolvedBendingCt(op, state))) {
         issues.push({ code: "MISSING_MACHINE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
       const catalog = toolCatalogForOperation(state, op);
-      if (isBendingOperation(op) && !cleanTool(op.herramental) && !cleanTool(catalog?.herramental)) {
+      if (isBendingOperationResolved(state, op) && !cleanTool(op.herramental) && !cleanTool(catalog?.herramental)) {
         issues.push({ code: "MISSING_TOOL", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
-      if (isBendingOperation(op) && validBendingMachine(op.maquina, op.ct)) {
+      if (isBendingOperationResolved(state, op) && validBendingMachine(op.maquina, resolvedBendingCt(op, state))) {
         const toolKey = operationToolKey({
           ...op,
           herramental: cleanTool(op.herramental) || cleanTool(catalog?.herramental),
           kitHerramental: op.kitPending === true ? "" : (cleanTool(op.kitHerramental) || cleanTool(catalog?.kitHerramental)),
-        });
+        }, state);
         if (toolKey) {
           const machine = String(op.maquina).trim();
           const group = toolsByMachine.get(machine) || { tools: new Set(), operation: op, capability };
@@ -1414,16 +1414,33 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
    function isBendingOperation(op) {
-     const ct = String(op.ct || "").trim();
-     return ct === "5459" || ct === "5527";
-   }
+    const ct = String(op.ct || "").trim();
+    return ct === "5459" || ct === "5527";
+  }
 
-    function isClosedOt(ot) {
-     if (!ot) return false;
-     if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
-     if (String(ot.planStatus || "").toUpperCase() === "COMPLETADA") return true;
-     return false;
-   }
+  function resolvedBendingCt(op, state) {
+    const raw = String(op?.ct || "").trim();
+    if (raw && raw !== "SIN_CT") return raw;
+    try {
+      if (!state) return "SIN_CT";
+      return String(capabilityForOperation(op, state).ct || "").trim();
+    } catch (_error) {
+      return "SIN_CT";
+    }
+  }
+
+  function isBendingOperationResolved(state, op) {
+    if (isBendingOperation(op)) return true;
+    const ct = resolvedBendingCt(op, state);
+    return ct === "5459" || ct === "5527";
+  }
+
+  function isClosedOt(ot) {
+    if (!ot) return false;
+    if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
+    if (String(ot.planStatus || "").toUpperCase() === "COMPLETADA") return true;
+    return false;
+  }
 
   function analyzeUnscheduledOperations(state, scheduleResult) {
     const diagnostics = Array.isArray(scheduleResult?.diagnostics) ? scheduleResult.diagnostics : [];
@@ -2052,7 +2069,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   function expandAdditionalToolOperations(state, operations) {
     const byOt = new Map();
     operations.forEach((op) => {
-      if (!isBendingOperation(op)) return;
+      if (!isBendingOperationResolved(state, op)) return;
       const extras = additionalToolList(op.additionalHerramentales || op.herramentalesExtra);
       if (!extras.length) return;
       const key = normalizeKey(op.ot);
@@ -2169,8 +2186,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function compareReadyCandidates(a, b, firstOperation, strategy, context) {
-    const isFirstA = a.job.index === 0 && a.op.secuencia === 1 && a.op._protectedSequence;
-    const isFirstB = b.job.index === 0 && b.op.secuencia === 1 && b.op._protectedSequence;
+    const isFirstA = Boolean(a.job.operations[0]) && a.op === a.job.operations[0];
+    const isFirstB = Boolean(b.job.operations[0]) && b.op === b.job.operations[0];
     if (isFirstA && !isFirstB) return usesOrderedStartFlow(strategy, context) ? compareFirstAndSuccessorCandidates(a, b) : -1;
     if (!isFirstA && isFirstB) return usesOrderedStartFlow(strategy, context) ? -compareFirstAndSuccessorCandidates(b, a) : 1;
     if (isFirstA && isFirstB) return compareFirstOperationCandidates(a, b, strategy, context);
@@ -2500,7 +2517,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   function isGapFillCandidate(state, operations, op, operator, gapStart, gapEnd) {
     const start = operationStart(op);
     if (!start || start < gapEnd || isFixedOperation(state, op) || !isAssignableOperation(state, op)) return false;
-    if (operationToolKey(op) || isHardWaitCause(op.causaEspera)) return false;
+    if (operationToolKey(op, state) || isHardWaitCause(op.causaEspera)) return false;
     if (!operatorCandidates(state, op, isFiniteOperation(state, op)).includes(operator)) return false;
     const predecessors = operations.filter((candidate) => normalizeKey(candidate.ot) === normalizeKey(op.ot) &&
       compareOperationSequence(candidate, op) < 0);
@@ -2621,9 +2638,9 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     return !operationStart(op) && !operationEnd(op);
   }
 
-  function operationToolKey(op) {
+function operationToolKey(op, state) {
     const type = String(op.tipoInsercion || "").toUpperCase();
-    if (type !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(op)) return "";
+    if (type !== "CAMBIO_HERRAMENTAL" && !isBendingOperationResolved(state, op)) return "";
     const herr = cleanTool(op.herramental);
     const kit = cleanTool(op.kitHerramental);
     if (!herr && !kit) return "";
@@ -2804,7 +2821,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
     };
-    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next) && !isFixedOperation(state, next)) {
+    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperationResolved(state, next) && !isFixedOperation(state, next)) {
       next.maquina = "";
       next.herramental = "";
       next.additionalHerramentales = [];
@@ -2827,16 +2844,16 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
 
      if (isClosedOt(op)) return op;
 
-     if (match && isBendingOperation(op)) {
+     if (match && isBendingOperationResolved(state, op)) {
        op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
        op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
        op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
        op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
        op.kitPending = configuration.kitPending === true;
-      } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
+      } else if (!isBendingOperationResolved(state, op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
         op.maquina = "";
       }
-      if (isBendingOperation(op) && !isSubcontractOperation(state, op)) {
+      if (isBendingOperationResolved(state, op) && !isSubcontractOperation(state, op)) {
         const catalogTool = toolCatalogForOperation(state, op);
         if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
           if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();

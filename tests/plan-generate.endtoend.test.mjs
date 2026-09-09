@@ -299,3 +299,77 @@ test("flujo e2e: el reporte semanal del plan generado queda lleno y cubre el pla
   const categorizedRows = report.rows.filter((row) => WORKFLOW.classifyReportOperation(row) === "operator");
   assert.ok(categorizedRows.length >= 7, "el reporte debe incluir las operaciones productivas del plan");
 });
+
+test("regresion: doblez con ct SIN_CT conserva maquina/herramental configurado y genera cambios", async () => {
+  const base = buildDataset();
+  const data = {
+    ...base,
+    otConfigurations: {
+      "OT-1001": { machine: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1" },
+      "OT-1002": { machine: "DOBLADORA 2", herramental: "H2", kitHerramental: "K2" },
+      "OT-1004": { machine: "DOBLADORA 2", herramental: "H1", kitHerramental: "K1" },
+    },
+    operations: base.operations.map((op) => (String(op.ct).trim() === "5459"
+      ? { ...op, ct: "SIN_CT", maquina: "", herramental: "", kitHerramental: "" }
+      : op)),
+  };
+
+  const result = await PLANNER.schedulePlan(structuredClone(data), {
+    planStart: PLAN_START,
+    horizonDays: 5,
+    executionTime: EXECUTION_TIME,
+    respectPlanStart: true,
+    collectStats: true,
+  });
+
+  const doblez = result.operations.filter((op) =>
+    op.tipoInsercion === "OPERACION" && norm(op.descripcion) === "DOBLEZ");
+  assert.ok(doblez.length >= 3, "las doblez SIN_CT deben programarse igual que las que traen CT");
+
+  for (const op of doblez) {
+    assert.ok(String(op.maquina || "").trim(), `la doblez ${op.id} debe quedar con maquina de su configuracion, no vacia`);
+    assert.ok(String(op.herramental || "").trim(), `la doblez ${op.id} debe quedar con herramental configurado, no vacio`);
+  }
+
+  const changes = result.operations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  assert.ok(changes.length >= 1, "debe generarse al menos un cambio de herramental para doblez SIN_CT");
+  assert.ok(result.lastSchedule.changes >= 1);
+});
+
+test("la lista Planeado (selectedOts + prioridad 1..N en su orden) define el arranque, no la prioridad NetSuite", async () => {
+  const base = buildDataset();
+  const inverted = ["OT-1004", "OT-1003", "OT-1002", "OT-1001"];
+  const byOt = new Map();
+  for (const op of base.operations) {
+    if (!byOt.has(op.ot)) byOt.set(op.ot, []);
+    byOt.get(op.ot).push(op);
+  }
+  const operations = [];
+  inverted.forEach((ot, index) => {
+    const originals = byOt.get(ot);
+    const rows = ot === "OT-1004"
+      ? [{ id: "op-1004-05", ot: "OT-1004", secuencia: 5, ct: "100", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", prioridad: index + 1, cantidadPendiente: 10, tiempoCiclo: 0.5 }, ...originals]
+      : originals;
+    for (const op of rows) operations.push({ ...op, prioridad: index + 1 });
+  });
+  const data = { ...base, selectedOts: [...inverted], operations };
+
+  const result = await PLANNER.schedulePlan(structuredClone(data), {
+    planStart: PLAN_START,
+    horizonDays: 5,
+    executionTime: EXECUTION_TIME,
+    respectPlanStart: true,
+    collectStats: true,
+    fastQualityMode: true,
+    strategyPool: ["balanced_goal"],
+    timeBudgetMs: 30000,
+  });
+
+  const startOf = (op) => `${op.fechaInicio}T${op.horaInicio}`;
+  const productive = result.operations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && op.fechaInicio);
+  const firstOf = (ot) => productive.filter((op) => op.ot === ot).map(startOf).sort()[0];
+  const doblez = productive.filter((op) => norm(op.descripcion) === "DOBLEZ").sort((a, b) => startOf(a).localeCompare(startOf(b)));
+  assert.equal(firstOf("OT-1004"), `2026-07-13T07:00`, "la primera OT de la lista arranca lo antes posible (early start)");
+  assert.ok(firstOf("OT-1004") <= firstOf("OT-1001"), "la primera OT de la lista arranca antes o igual que la ultima");
+  assert.equal(doblez[0].ot, "OT-1004", "la primera OT de la lista tiene la primera operacion de la maquina de doblez");
+});

@@ -1357,17 +1357,6 @@ function normalizeState() {
     : (activeSelectedOperationOt ? [activeSelectedOperationOt] : []);
   state.expandedCts = Array.isArray(state.expandedCts) ? state.expandedCts : [];
   for (const op of state.operations) op.locked = state.lockedOts.includes(op.ot);
-  const priorityByOt = new Map();
-  for (const op of currentPlanOperations()) {
-    const current = priorityByOt.get(op.ot);
-    priorityByOt.set(op.ot, current == null ? op.prioridad : Math.min(current, op.prioridad));
-  }
-  for (const op of state.operations) op.prioridad = priorityByOt.get(op.ot) || 999;
-  const selectedOrderIndex = new Map(state.selectedOts.map((ot, index) => [ot, index]));
-  state.selectedOts.sort((a, b) =>
-    (priorityByOt.get(a) || 999) - (priorityByOt.get(b) || 999) ||
-    (selectedOrderIndex.get(a) || 0) - (selectedOrderIndex.get(b) || 0)
-  );
   let movablePriority = 1;
   state.selectedOts.forEach((ot) => {
     state.operations.filter((op) => op.ot === ot).forEach((op) => { op.prioridad = movablePriority; });
@@ -5349,7 +5338,8 @@ onProgress: (event) => {
       const conflict = operatorConflicts[0];
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
-    state = { ...result, selectedOts: (result.lastSchedule?.scheduledOts || []).map(String).filter(Boolean) };
+    const preservedQueueOrder = [...state.selectedOts];
+    state = { ...result, selectedOts: preservedQueueOrder };
     invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
     if (Number(summary.unscheduled || 0) > 0) {

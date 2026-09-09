@@ -1789,7 +1789,7 @@ test("dos doblados con el mismo herramental en distinto uso de mayusculas no gen
   assert.equal(changes.length, 0, "el herramental 3 X 4.5 y 3 x 4.5 son el mismo, no debe generarse cambio");
 });
 
-test("balanceo prefiere agrupar doblados con herramental montado en la misma maquina", async () => {
+test("el arranque respeta el orden de la lista aunque la primera operacion requiera cambio de herramental", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
     { id: "prev-a", ot: "100", secuencia: 1, ct: "100", descripcion: "PREVIO", estatus: "PLAN", operationState: "COMPLETADA", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "06:10", tiempoProd: 10 },
@@ -1811,7 +1811,7 @@ test("balanceo prefiere agrupar doblados con herramental montado en la misma maq
     const scheduled = result.operations
       .filter((op) => ["change-first", "keep-mounted"].includes(op.id))
       .sort((a, b) => new Date(`${a.fechaInicio}T${a.horaInicio}:00`) - new Date(`${b.fechaInicio}T${b.horaInicio}:00`));
-    assert.equal(scheduled[0].id, "keep-mounted", strategy);
+    assert.equal(scheduled[0].id, "change-first", strategy);
   }
 });
 
