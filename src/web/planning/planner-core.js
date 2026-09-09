@@ -2740,15 +2740,27 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       .some((blocked) => normalized.includes(blocked));
   }
 
+  let _otScheduledSelected = null;
+  let _otScheduledScheduled = null;
+  let _otScheduledSet = null;
+
   function isOtScheduled(state, ot) {
     const key = normalizeKey(ot);
-    const selected = Array.isArray(state?.selectedOts)
-      ? state.selectedOts.some((item) => normalizeKey(item) === key)
-      : false;
-    if (!selected) return false;
-    return Array.isArray(state?.lastSchedule?.scheduledOts)
-      ? state.lastSchedule.scheduledOts.some((item) => normalizeKey(item) === key)
-      : false;
+    const selected = state?.selectedOts;
+    const scheduled = state?.lastSchedule?.scheduledOts;
+    if (!Array.isArray(selected) || !Array.isArray(scheduled)) return false;
+    if (_otScheduledSelected !== selected || _otScheduledScheduled !== scheduled) {
+      const scheduledSet = new Set(scheduled.map(normalizeKey));
+      const intersection = new Set();
+      for (const item of selected) {
+        const normalized = normalizeKey(item);
+        if (scheduledSet.has(normalized)) intersection.add(normalized);
+      }
+      _otScheduledSet = intersection;
+      _otScheduledSelected = selected;
+      _otScheduledScheduled = scheduled;
+    }
+    return _otScheduledSet.has(key);
   }
 
   function normalizeOperation(op, index, state) {

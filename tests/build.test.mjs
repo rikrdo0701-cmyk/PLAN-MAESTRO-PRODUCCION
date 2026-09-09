@@ -187,8 +187,7 @@ test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultado
   assert.match(dryRunSource, /elapsedMs/);
   assert.match(dryRunSource, /aborted/);
   assert.match(dryRunSource, /TIME_BUDGET_EXCEEDED/);
-  assert.match(dryRunSource, /markPhase\("incremental-base"/);
-  assert.match(dryRunSource, /markPhase\("readiness"/);
+assert.match(dryRunSource, /markPhase\("readiness"/);
   assert.match(dryRunSource, /markPhase\("prepare-draft"/);
   assert.match(dryRunSource, /markPhase\("scheduler-start"/);
   assert.match(dryRunSource, /markPhase\("scheduler-end"/);
@@ -209,9 +208,8 @@ test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultado
   assert.match(dryRunSource, /selectedStrategy/);
   assert.match(dryRunSource, /planStart/);
   assert.match(dryRunSource, /horizonDays/);
-  assert.match(dryRunSource, /incrementalBaseSnapshotId/);
-  assert.match(dryRunSource, /totalMs/);
-  assert.match(dryRunSource, /incrementalBaseMs/);
+  assert.doesNotMatch(dryRunSource, /incrementalBase/);
+assert.match(dryRunSource, /totalMs/);
   assert.match(dryRunSource, /readinessMs/);
   assert.match(dryRunSource, /prepareDraftMs/);
   assert.match(dryRunSource, /schedulePlanMs/);
@@ -309,8 +307,8 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(pagesIndex, /serviceWorker\.register/);
   assert.match(pagesIndex, /PlannerCore/);
   assert.match(pagesIndex, /PlanningWorkflowCore/);
-  assert.match(pagesIndex, /state\.planStart = state\.planStart \|\| formatDate\(weekStart\(new Date\(\)\)\)/);
-  assert.match(pagesIndex, /loadIncrementalPlanningBase\(planningWeekStart\)/);
+assert.match(pagesIndex, /state\.planStart = state\.planStart \|\| formatDate\(weekStart\(new Date\(\)\)\)/);
+  assert.doesNotMatch(pagesIndex, /loadIncrementalPlanningBase/);
   assert.match(pagesIndex, /startFromExecutionTime: true/);
 const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWindow()"), pagesIndex.indexOf("function scheduledPlanWindowStart()"));
   assert.match(planWindowSource, /PlanningWorkflowCore\.ganttPlanWindow\(\{/);

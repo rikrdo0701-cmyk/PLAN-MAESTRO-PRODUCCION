@@ -3968,16 +3968,16 @@ function renderGantt() {
     row.innerHTML = `<div class="gantt-row-label">${ganttGroupLabelHtml(group)}</div><div class="gantt-lane"></div>`;
     const lane = row.querySelector(".gantt-lane");
     if (group.type === "job-summary") {
-      const summaryBar = createGanttSummaryBar(group, window);
+      const summaryBar = createGanttSummaryBar(group, window, totalWindowMinutes);
       if (summaryBar) lane.appendChild(summaryBar);
       row.querySelector("[data-expand-ot]").addEventListener("click", () => toggleExpandedJob(group.ot));
     } else if (group.type === "ct-summary") {
-      const summaryBar = createGanttSummaryBar(group, window);
+      const summaryBar = createGanttSummaryBar(group, window, totalWindowMinutes);
       if (summaryBar) lane.appendChild(summaryBar);
       row.querySelector("[data-expand-ct]").addEventListener("click", () => toggleExpandedCt(group.key));
     } else {
       for (const op of group.ops) {
-        const bar = createGanttBar(op, window);
+        const bar = createGanttBar(op, window, totalWindowMinutes);
         if (bar) lane.appendChild(bar);
       }
     }
@@ -4122,14 +4122,13 @@ function toggleExpandedCt(key) {
   saveState();
 }
 
-function createGanttSummaryBar(group, window) {
+function createGanttSummaryBar(group, window, windowMinutes) {
   const starts = group.ops.map(opStart).filter(Boolean);
   const ends = group.ops.map(opEnd).filter(Boolean);
   if (!starts.length || !ends.length) return null;
   const start = new Date(Math.min(...starts.map((date) => date.getTime())));
   const end = new Date(Math.max(...ends.map((date) => date.getTime())));
   const startMin = workMinuteOffset(start, window.start);
-  const windowMinutes = workWindowMinutes();
   const endMin = Math.max(startMin + MIN_OPERATION_MINUTES, workMinuteOffset(end, window.start, "end"));
   const bar = document.createElement("div");
   const job = getPriorityJobs().find((item) => item.ot === group.ot);
@@ -4145,13 +4144,12 @@ function createGanttSummaryBar(group, window) {
   return bar;
 }
 
-function createGanttBar(op, window) {
+function createGanttBar(op, window, windowMinutes) {
   const start = opStart(op);
   const end = opEnd(op);
   if (!start || !end) return null;
 
   const startMin = workMinuteOffset(start, window.start);
-  const windowMinutes = workWindowMinutes();
   const endMin = Math.max(startMin + MIN_OPERATION_MINUTES, workMinuteOffset(end, window.start, "end"));
   const widthMin = Math.max(MIN_OPERATION_MINUTES, Math.min(endMin - startMin, windowMinutes - startMin));
   const left = (startMin / windowMinutes) * 100;
@@ -5239,11 +5237,6 @@ async function scheduleCurrentPlanImpl() {
   if (!chosenWeek) return;
   setScheduleStatus("Revisando plan...");
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
-  const planningWeekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
-  let incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
-  if (incrementalBase && !window.PlanningWorkflowCore.planAnchoredAt(incrementalBase, state.planStart)) {
-    incrementalBase = null;
-  }
   const affected = new Set(state.selectedOts.map(normalizeStatus));
   const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
     !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
@@ -5308,7 +5301,6 @@ async function scheduleCurrentPlanImpl() {
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
       startFromExecutionTime: true,
-      baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
       completeAll: true,
@@ -5399,7 +5391,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
   let lastPhase = "init";
   const timings = {
     totalMs: 0,
-    incrementalBaseMs: 0,
     readinessMs: 0,
     prepareDraftMs: 0,
     schedulePlanMs: 0,
@@ -5424,7 +5415,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     selectedStrategy: "",
     planStart: "",
     horizonDays: Number(state.horizonDays || 0),
-    incrementalBaseSnapshotId: "",
     plannerElapsedMs: 0,
     plannerLastPhase: "",
     plannerStrategiesStarted: 0,
@@ -5495,21 +5485,11 @@ async function dryRunCurrentPlanPerformance(options = {}) {
 
   const planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
   metrics.planStart = planStart;
-  const planningWeekStart = window.PlanningWorkflowCore.mondayIso(planStart);
-  let incrementalBase = null;
   let readyOts = [];
   let engineSelectedOts = [];
   const originalState = state;
   try {
     let started = dryRunNowMs();
-    markPhase("incremental-base", "cargando base incremental");
-    await yieldToBrowser();
-    incrementalBase = await loadIncrementalPlanningBase(planningWeekStart);
-    timings.incrementalBaseMs = Math.round(dryRunNowMs() - started);
-    if (incrementalBase?.snapshotId) metrics.incrementalBaseSnapshotId = incrementalBase.snapshotId;
-    const affected = new Set(selectedOts.map(normalizeStatus).filter(Boolean));
-    metrics.affectedOtsCount = affected.size;
-
     markPhase("readiness", "validando OTs listas");
     await yieldToBrowser();
     const hasLoadedData = window.PlanningWorkflowCore.hasPlanningData(state, selectedOts);
@@ -5525,6 +5505,8 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     }
 
     started = dryRunNowMs();
+    const affected = new Set(selectedOts.map(normalizeStatus).filter(Boolean));
+    metrics.affectedOtsCount = affected.size;
     const jobs = new Map(getPriorityJobs().map((job) => [materialOtKey(job.ot), job]));
     readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
       !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
@@ -5607,7 +5589,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
       horizonDays: temporaryState.horizonDays,
       executionTime: new Date().toISOString(),
       startFromExecutionTime: true,
-      baseSnapshot: incrementalBase,
       affectedOts: readyOts,
       fastQualityMode: true,
       strategyPool: Array.isArray(temporaryState.settings?.strategyPool) && temporaryState.settings.strategyPool.length
@@ -5704,21 +5685,6 @@ function renderLoadSourceSelect() {
 
 async function loadSelectedLoadPlan(snapshotId) {
   await loadSelectedPlanSnapshot(snapshotId);
-}
-
-async function loadIncrementalPlanningBase(weekStart) {
-  const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
-  const candidate = window.PlanningWorkflowCore.selectIncrementalBase(planSnapshots, weekStart, draftMeta);
-  if (!candidate?.snapshotId) return null;
-  if (candidate.fullState || Array.isArray(candidate.operations)) return candidate;
-  try {
-    return isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", candidate.snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(candidate.snapshotId)}`);
-  } catch (error) {
-    console.warn("No se pudo cargar la base incremental", error);
-    return null;
-  }
 }
 
 async function ensureSelectedJobsReadyForScheduling(ots) {

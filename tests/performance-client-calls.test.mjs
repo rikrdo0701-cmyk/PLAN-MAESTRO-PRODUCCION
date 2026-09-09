@@ -81,7 +81,7 @@ const applyWorkOrdersPayloadSource = appSource.slice(
 );
 const loadSourceSelectionSource = appSource.slice(
   appSource.indexOf("async function loadSelectedLoadPlan("),
-  appSource.indexOf("async function loadIncrementalPlanningBase("),
+  appSource.indexOf("async function ensureSelectedJobsReadyForScheduling("),
 );
 const adjustedProductionSource = appSource.slice(
   appSource.indexOf("function adjustedProductionMinutes("),
