@@ -1098,6 +1098,15 @@
       "source": "decision usuario 2026-09-09; src/web/planning/app.js (normalizeState sin re-sort por prioridad NetSuite, applyQueuePriorities, preservedQueueOrder); src/web/planning/planner-core.js (compareReadyCandidates isFirst por job.operations[0], compareFirstOperationCandidates, compareFirstAndSuccessorCandidates, buildJobs orderIndex); tests/plan-generate.endtoend.test.mjs y planner-core.test.mjs:1792; RULE-BAL-019; RULE-DOB-004",
       "domain": "Planificacion",
       "updated_at": "2026-09-09T23:10:00.000Z"
+    },
+    {
+      "rule_id": "RULE-HER-007",
+      "name": "No existe cambio de herramental de salida: solo cambios de ENTRADA, cada uno generado justo antes de la operacion que requiere el herramental destino y atribuido a su OT/articulo",
+      "status": "implementada",
+      "rule": "El motor NO genera cambios de herramental de salida/preparacion (post-change) tras una doblez para premontar la maquina con el herramental de la siguiente operacion. Modelo del usuario (2026-09-10): solo existen cambios de ENTRADA; cada operacion programada que requiere un herramental distinto al montado en su maquina (o la primera, sin antecedente) lleva su CAMBIO_HERRAMENTAL justo ANTES de ella, terminando al inicio de la operacion objetivo y atribuido a la OT/articulo que lo requiere. Cierre del bug usuario 2026-09-10 (reporte Ajustador plan-produccion (35): OT 3298 mostraba doble cambio 'SIN -> 1.75 X 3' y '1.75 X 3 -> 1 x 2'): eliminar findPostToolChange/createPostToolChangeOperation/returnChangeId/firstEventAfter y la insercion del postEvent en machineTools (planner-core.js), y quitar operationById/scheduledById del contexto (ya no usados). Basta con toolChangeFor (entrada derivada del ultimo evento toolKey de la maquina; primera operacion from=SIN_ANTECEDENTE reportado como vacio por reportableToolValue) + createToolChangeOperation. Consecuencia: la secuencia parte1(H1)->parte2(H1)->parte3(H2) en la misma maquina genera exactamente dos cambios (SIN->H1 atribuido a parte1 y H1->H2 atribuido a parte3, ambos antes de su objetivo) y NINGUNO de salida. Las operaciones FIJAS (commitFixedOperation) se registran en machineTools con su toolKey pero los cambios de entrada solo los generan las operaciones que programa el motor; el operador AJUSTADOR y los minutos (toolChangeMinutesForTransition) se conservan.",
+      "source": "decision usuario 2026-09-10 ('tecnicamente no habria un cambio de salida solo de entrada', modelo parte1/parte2/parte3 misma maquina m1); FIX 2026-09-10 src/web/planning/planner-core.js (remocion de findPostToolChange/createPostToolChangeOperation/returnChangeId/firstEventAfter y postEvent en machineTools en findEarliestSlot/commitAssignment); tests/planner-core.test.mjs ('no existe cambio de salida: solo cambios de entrada atribuidos a la OT que los requiere'); reemplaza a la version anterior de RULE-HER-007 (atribucion del post-change) que quedo obsoleta",
+      "domain": "Herramentales",
+      "updated_at": "2026-09-10"
     }
   ]
 }

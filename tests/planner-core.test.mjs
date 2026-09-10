@@ -1747,6 +1747,42 @@ test("dos doblados en la misma maquina conservan operaciones y generan cambio de
   assert.ok(new Date(`${changedProduct.fechaInicio}T${changedProduct.horaInicio}:00`) >= new Date(`${transition.fechaFin}T${transition.horaFin}:00`));
 });
 
+test("no existe cambio de salida: solo cambios de entrada atribuidos a la OT que los requiere", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100", "101", "200"],
+    operations: [
+      { id: "bend-100", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "A", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "M1", herramental: "H1", tiempoProd: 20 },
+      { id: "bend-101", ot: "101", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "A1", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "M1", herramental: "H1", tiempoProd: 20 },
+      { id: "bend-200", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", parte: "B", tipoInsercion: "OPERACION", estatus: "PLAN", maquina: "M1", herramental: "H2", tiempoProd: 20 },
+    ],
+    workOrders: [{ ot: "100", item: "A" }, { ot: "101", item: "A1" }, { ot: "200", item: "B" }],
+    operators: ["OP A", "AJUSTADOR"],
+    matrix: { "5459::DOBLEZ": ["OP A"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] },
+    configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"],
+    settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
+  }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
+  const changes = result.operations.filter((op) => op.tipoInsercion === "CAMBIO_HERRAMENTAL");
+  assert.equal(changes.length, 2, "solo debe haber un cambio de entrada por transicion (SIN->H1 y H1->H2)");
+  const firstChange = changes.find((op) => !op.toolChangeFromHerramental && op.toolChangeToHerramental === "H1");
+  const secondChange = changes.find((op) => op.toolChangeFromHerramental === "H1" && op.toolChangeToHerramental === "H2");
+  assert.ok(firstChange, "debe proyectarse el cambio de entrada SIN -> H1");
+  assert.equal(firstChange.ot, "100");
+  assert.equal(firstChange.parte, "A");
+  assert.equal(firstChange.herramental, "H1");
+  assert.ok(secondChange, "debe proyectarse el cambio de entrada H1 -> H2 para la OT que lo requiere");
+  assert.equal(secondChange.ot, "200");
+  assert.equal(secondChange.parte, "B");
+  assert.equal(secondChange.herramental, "H2");
+  const noPostChange = changes.every((change) => {
+    const target = result.operations.find((op) => op.herramental === change.toolChangeToHerramental && op.tipoInsercion === "OPERACION" && op.ot === change.ot && op.parte === change.parte);
+    return Boolean(target) && new Date(`${change.fechaFin}T${change.horaFin}:00`) <= new Date(`${target.fechaInicio}T${target.horaInicio}:00`);
+  });
+  assert.ok(noPostChange, "cada cambio de entrada debe terminar antes de su operacion objetivo (no hay cambios de salida tras la operacion previa)");
+  const isMontedSequence = result.operations.filter((op) => ["bend-100", "bend-101", "bend-200"].includes(op.id));
+  assert.equal(isMontedSequence.length, 3);
+});
+
 test("dos herramentales sin kit generan cambio aunque el catalogo tenga duracion cero", async () => {
   const core = loadPlannerCore();
   const operations = [

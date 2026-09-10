@@ -334,7 +334,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       operatorLoad: new Map(),
       machineTools: new Map(),
       scheduledByKey: new Map(),
-      scheduledById: new Map(),
       generatedChanges: [],
       changeCounter: 0,
       gapFilled: 0,
@@ -649,7 +648,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         return null;
       }
       context.lastAllocationConflictEnd = null;
-      let postToolChangeFailed = false;
       const toolChange = toolChangeFor(context, op, machine, cursor);
       const setupMinutes = toolChange.minutes;
       const performance = operatorPerformanceForOperation(context.state, op, operator);
@@ -703,34 +701,26 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         }
       }
       if (allocation) {
-        const postToolChange = findPostToolChange(context, op, machine, allocation);
-        if (postToolChange === null) {
-          postToolChangeFailed = true;
-          allocation = null;
-        } else {
-          return {
-            ...allocation,
-            operator,
-            machine,
-            finite,
-            setupMinutes,
-            productionMinutes,
-            setupOperator,
-            toolChange,
-            postToolChange,
-            toolPenalty: toolChange.required ? 1 : 0,
-            operatorLoad: context.operatorLoad.get(operator) || 0,
-            projectedOperatorLoad: (context.operatorLoad.get(operator) || 0) + productionMinutes,
-          };
-        }
+        return {
+          ...allocation,
+          operator,
+          machine,
+          finite,
+          setupMinutes,
+          productionMinutes,
+          setupOperator,
+          toolChange,
+          toolPenalty: toolChange.required ? 1 : 0,
+          operatorLoad: context.operatorLoad.get(operator) || 0,
+          projectedOperatorLoad: (context.operatorLoad.get(operator) || 0) + productionMinutes,
+        };
       }
-      const postChangeMinutes = postToolChangeFailed ? Math.max(1, numberOr(context.settings.toolChangeMinutes, 120)) : 0;
       const allocationConflictEnd = context.lastAllocationConflictEnd;
       const conflictEnd = allocationConflictEnd && allocationConflictEnd > cursor ? allocationConflictEnd : nextBusyConflictEnd(
         context,
         cursor,
-        addMinutes(cursor, setupMinutes + productionMinutes + postChangeMinutes),
-        [operator, setupOperator, postToolChangeFailed ? toolChangeOperator(context.state, context.settings) : ""].filter(Boolean),
+        addMinutes(cursor, setupMinutes + productionMinutes),
+        [operator, setupOperator].filter(Boolean),
         machine,
         finite
       );
@@ -861,16 +851,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       context.generatedChanges.push(change);
       next.log = appendLog(next.log, `CAMBIO_HERR_KIT ${assignment.toolChange.fromLabel} -> ${assignment.toolChange.toLabel}`);
     }
-    if (assignment.postToolChange?.required) {
-      addBusySegments(context.operatorBusy, assignment.postToolChange.operator, assignment.postToolChange.segments, { ...busyMetadata, resourceType: "OPERADOR" });
-      if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.postToolChange.segments, { ...busyMetadata, resourceType: "MAQUINA" });
-      context.operatorLoad.set(
-        assignment.postToolChange.operator,
-        (context.operatorLoad.get(assignment.postToolChange.operator) || 0) + assignment.postToolChange.minutes
-      );
-      const returnChange = createPostToolChangeOperation(context, next, assignment.postToolChange);
-      context.generatedChanges.push(returnChange);
-    }
 
     const toolKey = operationToolKey(next, context.state);
     if (hasMachineResource(assignment.machine) && toolKey) {
@@ -890,23 +870,10 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         else hi = mid;
       }
       events.splice(lo, 0, newEvent);
-      if (assignment.postToolChange?.required) {
-        const postEvent = {
-          start: assignment.postToolChange.start.getTime(),
-          end: assignment.postToolChange.end.getTime(),
-          toolKey: assignment.postToolChange.toLabel,
-          operationId: returnChangeId(next.id, context.changeCounter),
-          isChange: true,
-        };
-        const postEnd = postEvent.end;
-        while (lo < events.length && events[lo].end <= postEnd) lo++;
-        events.splice(lo, 0, postEvent);
-      }
       context.machineTools.set(assignment.machine, events);
     }
 
     context.scheduledByKey.set(operationKey(next), next);
-    context.scheduledById.set(next.id, next);
     return {
       operation: next,
       start: assignment.operationStart,
@@ -949,47 +916,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       toolChangeToKit: reportableToolValue(toKit),
       log: `${GENERATED_BY} ${assignment.toolChange.fromLabel} -> ${assignment.toolChange.toLabel}`,
     };
-  }
-
-  function createPostToolChangeOperation(context, operation, postToolChange) {
-    context.changeCounter += 1;
-    const target = context.scheduledById.get(postToolChange.targetOperationId) || operation;
-    const [herramental, kit] = splitToolKey(postToolChange.toLabel);
-    const [fromHerramental, fromKit] = splitToolKey(postToolChange.fromLabel);
-    const completionKey = toolChangeCompletionKey(target, operation.maquina, postToolChange.toLabel);
-    return {
-      ...target,
-      id: returnChangeId(operation.id, context.changeCounter),
-      num: 0,
-      descripcion: "CAMBIO DE HERRAMENTAL / KIT",
-      contenido: "",
-      ct: TOOL_CHANGE_CAPABILITY.ct,
-      operador: postToolChange.operator,
-      maquina: operation.maquina,
-      herramental: herramental === "SIN_HERR" ? "" : herramental,
-      kitHerramental: kit === "SIN_KIT" ? "" : kit,
-      fechaInicio: formatDate(postToolChange.start),
-      horaInicio: formatTime(postToolChange.start),
-      fechaFin: formatDate(postToolChange.end),
-      horaFin: formatTime(postToolChange.end),
-      tiempoCiclo: 0,
-      tiempoSetup: postToolChange.minutes,
-      tiempoProd: 0,
-      tipoInsercion: "CAMBIO_HERRAMENTAL",
-      estatus: "PLAN",
-      generatedBy: GENERATED_BY,
-      generatedAdditionalTool: false,
-      completionKey,
-      toolChangeFromHerramental: reportableToolValue(fromHerramental),
-      toolChangeFromKit: reportableToolValue(fromKit),
-      toolChangeToHerramental: reportableToolValue(herramental),
-      toolChangeToKit: reportableToolValue(kit),
-      log: `${GENERATED_BY} ${postToolChange.fromLabel} -> ${postToolChange.toLabel}`,
-    };
-  }
-
-  function returnChangeId(operationId, counter) {
-    return `chg-return-${operationId}-${counter}`;
   }
 
   function toolChangeCompletionKey(operation, machine, toToolKey) {
@@ -1136,7 +1062,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       operatorLoad: new Map(context.operatorLoad),
       machineTools: new Map([...context.machineTools.entries()].map(([key, events]) => [key, events.map((event) => ({ ...event }))])),
       scheduledByKey: new Map(context.scheduledByKey),
-      scheduledById: new Map(context.scheduledById),
       generatedChanges: [],
     };
   }
@@ -1198,52 +1123,6 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       return fallbackMinutes;
     }
     return 0;
-  }
-
-  function firstEventAfter(events, time) {
-    if (!events || events.length === 0) return null;
-    let lo = 0, hi = events.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (events[mid].end < time) lo = mid + 1;
-      else hi = mid;
-    }
-    for (let i = lo; i < events.length; i++) {
-      if (Number.isFinite(events[i].start) && events[i].start >= time) return events[i];
-    }
-    return null;
-  }
-
-  function findPostToolChange(context, op, machine, allocation) {
-    const fromLabel = operationToolKey(op, context.state);
-    if (!fromLabel || !machine || machine === "SIN_MAQUINA") return { required: false };
-    const future = firstEventAfter(context.machineTools.get(machine), allocation.end.getTime());
-    if (!future || normalizeKey(future.toolKey) === normalizeKey(fromLabel) || future.isChange || Number.isFinite(future.preChangeStart)) {
-      return { required: false };
-    }
-    const operator = toolChangeOperator(context.state, context.settings);
-    if (!operator) return null;
-    const target = context.scheduledById.get(future.operationId) || op;
-    const minutes = toolChangeMinutesForTransition(context.state, target, fromLabel, future.toolKey, context.settings);
-    if (minutes <= 0) return { required: false };
-    const postAllocation = allocateWork(context, allocation.end, minutes, {
-      operator,
-      machine,
-      finite: true,
-      setupMinutes: 0,
-    });
-    if (!postAllocation || postAllocation.end.getTime() > future.start) return null;
-    return {
-      required: true,
-      operator,
-      minutes,
-      start: postAllocation.start,
-      end: postAllocation.end,
-      segments: postAllocation.segments,
-      fromLabel,
-      toLabel: future.toolKey,
-      targetOperationId: future.operationId,
-    };
   }
 
   function enrichToolsFromCatalog(state, operations) {
