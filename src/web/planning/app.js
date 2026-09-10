@@ -5801,63 +5801,13 @@ async function publishCurrentPlan() {
       ...(counterBase ? [{ weekStart, version: counterBase }] : []),
     ].filter((item) => Number(item?.version || 0) > 0);
     const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart);
-    let publicationReason = "";
-    let changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
-    if (version > 1) {
-      const previousPublished = [...(state.publishedVersions || []), ...(Array.isArray(planSnapshots) ? planSnapshots : [])]
-        .filter((item) => window.PlanningWorkflowCore.mondayIso(item.weekStart || item.planStart) === weekStart && Number(item?.version || 0) > 0)
-        .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
-      if (previousPublished?.snapshotId) {
-        const previousLabel = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, Number(previousPublished.version || 1));
-        const nextLabel = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
-        const pdfAnswer = await openPlanningDialog({
-          title: "Guardar PDF de la version anterior",
-          summary: `Ya existe una version publicada (${previousLabel}). Al publicar la nueva version (${nextLabel}) la anterior sera reemplazada y solo se mantendran el ultimo publicado y el borrador.`,
-          body: `<label>¿Quieres guardar un PDF del reporte de la version anterior antes de publicar?<select name="save_pdf">
-            <option value="yes" selected>Si, guardar PDF y luego publicar</option>
-            <option value="no">No, publicar sin guardar PDF</option>
-          </select></label>`,
-          confirmLabel: "Continuar",
-          cancelVisible: true,
-        });
-        if (!pdfAnswer) return;
-        if (pdfAnswer.save_pdf === "yes") {
-          setPublishStatus("Abriendo PDF de la version anterior...", 15);
-          await generatePlanPdfForSnapshot(previousPublished.snapshotId);
-        }
-      }
-      setPublishStatus(`Publicando ${window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version)}...`, 10);
-      const identifier = window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStart, version);
-      const result = await openPlanningDialog({
-        title: "Publicar nueva version",
-        summary: `Motivo de publicacion de ${identifier}:`,
-        body: `<label>Motivo de la nueva version<textarea name="publication_reason" required placeholder="Ej. Reasignacion de operadores por avance de la semana"></textarea></label>`,
-        confirmLabel: "Publicar",
-        cancelVisible: true,
-      });
-      const reason = String(result?.publication_reason || "").trim();
-      if (!result || !reason) {
-        if (result) showToast("Captura el motivo de la nueva version");
-        return;
-      }
-      publicationReason = reason;
-      const previous = previousPublished;
-      if (previous?.snapshotId) {
-        try {
-          setPublishStatus("Comparando con la version anterior...", 25);
-          const previousSnapshot = isAppsScriptRuntime()
-            ? await callAppsScript("getPlanSnapshot", previous.snapshotId)
-            : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(previous.snapshotId)}`);
-          changeSummary = window.PlanningWorkflowCore.compactVersionDiff(previousSnapshot, state);
-        } catch (error) {
-          console.warn("No se pudo comparar la version anterior", error);
-        }
-      }
-    }
+    const publicationReason = "";
+    const changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
     const persisted = persistableState();
     delete persisted._locallyRemovedDraftOts;
     delete persisted._pendingAddOt;
     delete persisted._pendingAddOtSnapshot;
+    delete persisted.machineToolHistory;
     const payload = {
       ...persisted,
       operations: currentPlanOperations(),
@@ -5872,7 +5822,7 @@ async function publishCurrentPlan() {
       savedAt: new Date().toISOString(),
     };
     const publishFold = draftViewStatuses();
-    setPublishStatus("Publicando plan...", version === 1 ? 40 : 55);
+    setPublishStatus("Publicando plan...", 40);
     const result = isAppsScriptRuntime()
       ? await callAppsScript("publishDraftPlan", payload)
       : { ok: true, activeVersion: await persistPlanSnapshot() };
@@ -5988,17 +5938,7 @@ async function generatePlanPdf(explicitSnapshotId = "") {
     els.pdfBtn.removeAttribute("aria-busy");
     els.pdfBtn.innerHTML = originalLabel;
   }
-}
-
-async function generatePlanPdfForSnapshot(snapshotId) {
-  if (!snapshotId) return;
-  const wasRunning = Boolean(els.scheduleBtn?.classList.contains("is-running"));
-  try {
-    await generatePlanPdf(snapshotId);
-  } finally {
-    if (wasRunning) els.scheduleBtn?.classList.add("is-running");
-  }
-}
+} 
 
 function validateScheduleConfiguration(executionTime, ots = state.selectedOts, options = {}) {
   const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
@@ -11213,6 +11153,7 @@ function createAppSheetPayload(source = state) {
   delete payload._locallyRemovedDraftOts;
   delete payload._pendingAddOt;
   delete payload._pendingAddOtSnapshot;
+  delete payload.machineToolHistory;
   return {
     ...payload,
     source: "plan-app-sheet",

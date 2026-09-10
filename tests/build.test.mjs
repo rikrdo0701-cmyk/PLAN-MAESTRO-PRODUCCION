@@ -24,6 +24,7 @@ test("publicar el plan no duplica el clonado del estado ni usa createAppSheetPay
   );
   assert.match(publishSource, /const persisted = persistableState\(\);/);
   assert.match(publishSource, /delete persisted\._locallyRemovedDraftOts;/);
+  assert.match(publishSource, /delete persisted\.machineToolHistory;/);
   assert.match(publishSource, /operations: currentPlanOperations\(\),/);
   assert.doesNotMatch(publishSource, /createAppSheetPayload\(\)/);
   assert.doesNotMatch(publishSource, /deepClone/);
@@ -1210,9 +1211,10 @@ const importStart = app.indexOf("async function applyImported(imported, options 
   assert.match(importFlow, /normalizeState\(\);\s*applyLocalDraftRemovalTombstones\(locallyRemovedDraftOts\);/);
   assert.match(importFlow, /function rememberDraftRemovedOts\(ots\)/);
   assert.match(importFlow, /function forgetDraftRemovedOt\(ot\)/);
-  assert.match(createPayloadSource, /delete payload\._locallyRemovedDraftOts;/);
+assert.match(createPayloadSource, /delete payload\._locallyRemovedDraftOts;/);
   assert.match(createPayloadSource, /delete payload\._pendingAddOt;/);
   assert.match(createPayloadSource, /delete payload\._pendingAddOtSnapshot;/);
+  assert.match(createPayloadSource, /delete payload\.machineToolHistory;/);
 
   const state = {
     selectedOts: ["100", "200"],
@@ -1831,7 +1833,7 @@ test("identificador semanal distingue versiones y nextWeeklyVersion cuenta publi
   assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-17", version: 9 }], "2026-08-24"), 1);
 });
 
-test("publicar nueva version pide motivo obligatorio en el dialogo del planificador y no usa window.prompt", async () => {
+test("publicar plan guarda la nueva version directo, sin dialogo de motivo ni comparacion con version anterior y no usa window.prompt", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const publish = app.slice(
     app.indexOf("async function publishCurrentPlan("),
@@ -1839,8 +1841,9 @@ test("publicar nueva version pide motivo obligatorio en el dialogo del planifica
   );
 
   assert.doesNotMatch(publish, /window\.prompt/);
-  assert.match(publish, /version > 1\) \{[\s\S]*openPlanningDialog\(\{[\s\S]*Motivo de publicacion de \$\{identifier\}:?/);
-  assert.match(publish, /name="publication_reason"[\s\S]*required/);
-  assert.match(publish, /if \(!result \|\| !reason\)/);
-  assert.match(publish, /showToast\("Captura el motivo de la nueva version"\)/);
+  assert.doesNotMatch(publish, /Guardar PDF de la version anterior/);
+  assert.doesNotMatch(publish, /name="publication_reason"[\s\S]*required/);
+  assert.doesNotMatch(publish, /Captura el motivo de la nueva version/);
+  assert.doesNotMatch(publish, /compactVersionDiff\(/);
+  assert.match(publish, /callAppsScript\("publishDraftPlan", payload\)/);
 });
