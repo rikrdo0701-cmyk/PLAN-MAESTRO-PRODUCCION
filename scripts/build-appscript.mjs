@@ -400,16 +400,31 @@ function patchPerformanceClient(performanceClient) {
 }
 
 export async function buildProject() {
-  await Promise.all([
+  // ---- generar version.json para detección de actualizaciones ----
+await writeFile(path.join(siteDir, "version.json"), JSON.stringify({
+  commit: process.env.GIT_SHA || "dev",
+  built: new Date().toISOString()
+}), "utf8");
+await Promise.all([
     rm(distDir, { recursive: true, force: true }),
     rm(siteDir, { recursive: true, force: true }),
   ]);
-  await Promise.all([
+  // ---- generar version.json para detección de actualizaciones ----
+await writeFile(path.join(siteDir, "version.json"), JSON.stringify({
+  commit: process.env.GIT_SHA || "dev",
+  built: new Date().toISOString()
+}), "utf8");
+await Promise.all([
     mkdir(distDir, { recursive: true }),
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles] = // ---- generar version.json para detección de actualizaciones ----
+await writeFile(path.join(siteDir, "version.json"), JSON.stringify({
+  commit: process.env.GIT_SHA || "dev",
+  built: new Date().toISOString()
+}), "utf8");
+await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -457,7 +472,12 @@ export async function buildProject() {
   );
   const pagesBuildId = createHash("sha256").update(pagesIndex).digest("hex").slice(0, 12);
 
-  await Promise.all([
+  // ---- generar version.json para detección de actualizaciones ----
+await writeFile(path.join(siteDir, "version.json"), JSON.stringify({
+  commit: process.env.GIT_SHA || "dev",
+  built: new Date().toISOString()
+}), "utf8");
+await Promise.all([
     writeFile(path.join(distDir, "Index.html"), appsScriptIndex, "utf8"),
     writeFile(path.join(siteDir, "index.html"), pagesIndex, "utf8"),
     writeFile(path.join(siteDir, ".nojekyll"), "", "utf8"),
