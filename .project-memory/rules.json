@@ -1118,6 +1118,15 @@
       "updated_at": "2026-09-11"
     },
     {
+      "rule_id": "RULE-PERF-001",
+      "name": "Los payloads de publicacion y guardado excluyen machineToolHistory desde persistableState(): < 2 MB y el guardado automatico deja de deep-clonar ~565 KB por save",
+      "status": "implementada",
+      "rule": "machineToolHistory es dato DERIVADO solo-lectura: el servidor lo reconstruye en cada getAppState/PP_readState_ desde la hoja PLANES_HISTORICOS (PP_readMachineToolHistory_, 02-storage.js:1270-1292, ultimas 2000 filas) y NINGUN writer del backend (PP_writeState_, 15-performance-service.js, 05-publishing-service.js) lee payload.machineToolHistory, por lo que incluirlo en el payload es peso muerto. FIX 2026-09-10: publishCurrentPlan y createAppSheetPayload borraban payload.machineToolHistory DESPUES de construir el payload (persistableState lo incluia, asi que createAppSheetPayload seguia haciendo deepClone del arreglo de ~565 KB en CADA guardado automatico antes de borrarlo). FIX 2026-09-12: la exclusion sube a persistableState() (app.js:11264): `const { matrixSearch, selectedDetailOt, queueMoveOt, ...persisted } = source; delete persisted.machineToolHistory; return persisted;` — se conserva el contrato del test (solo matrixSearch/selectedDetailOt/queueMoveOt se excluyen por destructuring) y se borra machineToolHistory explicitamente (misma convencion que los deletes de markers). Con esto BOTH: (1) publishCurrentPlan y createAppSheetPayload reciben persistableState() YA sin machineToolHistory (sus `delete persisted.machineToolHistory`/`delete payload.machineToolHistory` quedan como no-op defensivos que los tests exigen), (2) el deepClone de createAppSheetPayload ya no clona machineToolHistory (~565 KB menos de JSON.parse/stringify por guardado + nombres mas cortos), (3) la formula de medicion JSON.stringify({...persistableState(), operations: currentPlanOperations()}).length baja de 2,068,735 B (2026-09-12, 1476 ops/140 selectedOts/2351 revision) a ~1.5 MB < 2 MB. Se conservan operations/workOrders/materials; el snapshot persistido no lleva la copia de machineToolHistory; al restaurar el motor lo re-deriva por PP_readState_/seedMachineToolHistory. Complementa RULE-PUB-002.",
+      "source": "medicion Playwright produccion 2026-09-10 (probe-perf-prod-2026-09-10.mjs: 2,077,555 B) y 2026-09-12 (probe-perf-maintenance-2026-09-12.mjs: 2,068,735 B con top keys operations 1,218,086 / machineToolHistory 564,814 / workOrders 97,326 / materials 64,387); FIX 2026-09-12 app.js persistableState() (delete persisted.machineToolHistory, linea 11264); tests/build.test.mjs (134/503 y build 2.41.1 OK); docs/REGLAS.md y docs/rules/RULES.md",
+      "domain": "PERF",
+      "updated_at": "2026-09-12"
+    },
+    {
       "rule_id": "RULE-PERF-002",
       "name": "Cuello de botella (saturation) usa operatorLoadsSourceMemoized compartido con Cargas: el render de la vista baja de ~1.6 s a ~0 ms tras el primer render",
       "status": "implementada",
@@ -1143,6 +1152,15 @@
       "source": "medicion 2026-09-11 perf_probe_gen1.py (dry-run baseline 89.5s/88.7s scheduler, 114-140 OTs, 1128-1403 scheduled) + perf_probe_genprof2/3.py profiling CDP (normalizeKey 45.5%, resolveOperationCt 26.5%, capabilityForOperation 6.1%, normalized 5.6%, luego defaultNowMs 10.8% e isGapFillCandidate ~12%); FIX 2026-09-11 src/web/planning/planner-core.js (normalizeKey cache, resolveOperationCt cache, capabilityForOperation WeakMap, isSubcontractOperation WeakMap, BUDGET_CLOCK_SAMPLE); verificacion Playwright local perf_probe_gen1.py (15.6/15.3s, 1403/1403, 0 errores) y suite 503/503 + build OK; window.runPlanningPerformanceDryRun:586 (app.js)",
       "domain": "planning-core",
       "updated_at": "2026-09-11"
+    },
+    {
+      "rule_id": "RULE-PERF-005",
+      "name": "Reportes/PDF/publish: plan de bajo riesgo DOCUMENTADO, NO implementado (medicion ANTES headless BLOQUEADA reproduciblemente: operations=0 en boot limpio, bridge {unchanged:true} + compactLocalState retira operations; wo/cards reales si fluyen 232/140-170 pero ops=0)",
+      "status": "documentada",
+      "rule": "Objetivo usuario: reportes/PDF/publish 'casi instantaneos'. HALLAZGO EMPIRICO 2026-09-12 (perf_probe_ante.py headless Playwright local site/ :8787, contexto limpio, sin sembrar/capturar/sintetico): el bridge Apps Script responde {unchanged:true} (stale-while-revalidate en 15-performance-service.js) cuando la revision coincide, y compactLocalState retira operations/cache del estado minimo -> en arranque limpio headless operations SIEMPRE llegan 0 aunque workOrders/cards reales si hidraten (una corrida aislada entrego wo=232/cards=170 reales pero ops=0; otras wo=0/cards=140-170). Sin operations reales no hay reportes/PDF/publish ANTES medibles y segun RULE-GOV-004 si no puedes medir ANTES no tocas codigo sin numero comprobable. INTENTO (memo de reportOperationsSource con planStateMutationVersion) ROMPIO tests/build.test.mjs:1642 (la funcion se evalua con scope restringido sin esa variable) -> REVERTIDO; app.js quedo identico a HEAD (git diff app.js vacio), suite 503/503 PASS y build OK. PLAN PENDIENTE documentado (patron probado): contenido-semantic memo para renderReports/renderWeekReport (app.js:6715/6727) con cache por semana estilo reportOperatorLoadsWeekCache (RULE-PERF-003), reutilizado en generatePlanPdf (5897) y publishCurrentPlan/createAppSheetPayload (5805/11269) SIN tocar el server publishing (05-publishing-service.js) ni el scheduler/planner-core (RULE-PERF-004).",
+      "source": "auditoria 2026-09-12: perf_probe_antes.py + perf_probe_report_pdf_publish_antes.py / perf_probe_reportes_pdf_publish_antes.py (+_prod), Playwright local site/ :8787; FIX de app.js REVERTIDO tras fallo build.test.mjs:1642; suite 503/503 PASS + build OK con app.js identico a HEAD",
+      "domain": "planning-core",
+      "updated_at": "2026-09-12"
     }
   ]
 }
