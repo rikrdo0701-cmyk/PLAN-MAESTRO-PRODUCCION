@@ -9561,6 +9561,7 @@ function reportOperatorLoadsSourceMemoized(sourceOperations, weekStartValue) {
   const reportOperations = sourceOperations || [];
   if (reportOperatorLoadsWeekCache === null || reportLoadsCacheInvalidated()) {
     reportOperatorLoadsWeekCache = new Map();
+    reportOperatorLoadsRenderMemo = null;
   }
   const weekMonday = selectedWeekRange(weekStartValue).start.getTime();
   const memo = reportOperatorLoadsRenderMemo;
