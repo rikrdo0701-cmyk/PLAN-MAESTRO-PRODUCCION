@@ -78,29 +78,46 @@
     performanceState.stats[name] += amount;
   }
 
+  const BUDGET_CLOCK_SAMPLE = 4096;
   function checkPlanningBudget(performanceState, phase, context) {
     if (!performanceState) return false;
     performanceState.lastPhase = phase;
     performanceState.budgetCheckCount = (performanceState.budgetCheckCount || 0) + 1;
-    const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
-    const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
-    const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
-    if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
-      performanceState.lastProgressElapsedMs = effectiveElapsedMs;
-      emitPlanningProgress(performanceState, phase);
+    const checkCount = performanceState.budgetCheckCount;
+    if (performanceState.completeAll !== true) {
+      const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
+      const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
+      const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
+      if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+        performanceState.lastProgressElapsedMs = effectiveElapsedMs;
+        emitPlanningProgress(performanceState, phase);
+      }
+      const timerExceeded = performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
+      const counterExceeded = performanceState.budgetCheckLimit > 0 && checkCount >= performanceState.budgetCheckLimit;
+      if (performanceState.budgetCheckLimit > 0 && checkCount % 100000 === 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget] checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
+      }
+      if (timerExceeded || counterExceeded) {
+        if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(`[planner-budget] ABORT checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} timer=${timerExceeded} counter=${counterExceeded}`);
+        if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
+        performanceState.aborted = true;
+        performanceState.reason = "TIME_BUDGET_EXCEEDED";
+        emitPlanningProgress(performanceState, phase);
+        return true;
+      }
+      return false;
     }
-    const timerExceeded = performanceState.completeAll !== true && performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
-    const counterExceeded = performanceState.completeAll !== true && performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount >= performanceState.budgetCheckLimit;
-    if (performanceState.budgetCheckLimit > 0 && performanceState.budgetCheckCount % 100000 === 0 && typeof console !== "undefined" && typeof console.warn === "function") {
-      console.warn(`[planner-budget] checks=${performanceState.budgetCheckCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
-    }
-    if (timerExceeded || counterExceeded) {
-      if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(`[planner-budget] ABORT checks=${performanceState.budgetCheckCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} timer=${timerExceeded} counter=${counterExceeded}`);
-      if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
-      performanceState.aborted = true;
-      performanceState.reason = "TIME_BUDGET_EXCEEDED";
-      emitPlanningProgress(performanceState, phase);
-      return true;
+    if (checkCount % BUDGET_CLOCK_SAMPLE === 0 || checkCount % 100000 === 0) {
+      const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
+      const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
+      const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
+      if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+        performanceState.lastProgressElapsedMs = effectiveElapsedMs;
+        emitPlanningProgress(performanceState, phase);
+      }
+      if (checkCount % 100000 === 0 && performanceState.budgetCheckLimit > 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget] checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
+      }
     }
     return false;
   }
@@ -1429,10 +1446,15 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function isSubcontractOperation(state, op) {
-    if (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") return true;
-    if (op.subcontractType && String(op.subcontractType).trim()) return true;
-    const description = normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`);
-    return isSpecialSubcontractCapability({ ct: op.ct, label: description });
+    if (op && typeof op === "object") {
+      const cached = __subcontractCache.get(op);
+      if (cached !== undefined) return cached;
+    }
+    const result = (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") ||
+      (op.subcontractType && String(op.subcontractType).trim()) ||
+      isSpecialSubcontractCapability({ ct: op.ct, label: normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`) });
+    if (op && typeof op === "object") __subcontractCache.set(op, result);
+    return result;
   }
 
   function subcontractRule(state, op) {
@@ -1474,30 +1496,56 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   function resolveOperationCt(state, label) {
     if (!state) return "SIN_CT";
     const labelKey = normalizeKey(label).replace(/\s+/g, "_");
-    const normalized = (value) => normalizeKey(value).replace(/\s+/g, "_");
-    const candidates = [];
-    for (const key of state.configuredCapabilities || []) {
-      const separator = String(key).indexOf("::");
-      if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+    let resolution = state.__ctResolution;
+    if (!resolution ||
+        resolution.configuredCapabilities !== state.configuredCapabilities ||
+        resolution.operationCatalog !== state.operationCatalog ||
+        resolution.matrix !== state.matrix) {
+      const candidates = [];
+      for (const key of state.configuredCapabilities || []) {
+        const separator = String(key).indexOf("::");
+        if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+      }
+      for (const item of state.operationCatalog || []) {
+        const ct = String(item?.ct || "").trim();
+        const itemLabel = String(item?.label || item?.operation || "").trim();
+        if (ct && itemLabel) candidates.push({ ct, label: itemLabel });
+      }
+      for (const key of Object.keys(state.matrix || {})) {
+        const separator = key.indexOf("::");
+        if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+      }
+      const byKey = new Map();
+      for (const item of candidates) {
+        if (!item.ct || item.ct === "SIN_CT") continue;
+        const itemKey = normalizeKey(item.label).replace(/\s+/g, "_");
+        if (!byKey.has(itemKey)) byKey.set(itemKey, item.ct);
+      }
+      resolution = {
+        configuredCapabilities: state.configuredCapabilities,
+        operationCatalog: state.operationCatalog,
+        matrix: state.matrix,
+        byKey,
+      };
+      state.__ctResolution = resolution;
     }
-    for (const item of state.operationCatalog || []) {
-      const ct = String(item?.ct || "").trim();
-      const itemLabel = String(item?.label || item?.operation || "").trim();
-      if (ct && itemLabel) candidates.push({ ct, label: itemLabel });
-    }
-    for (const key of Object.keys(state.matrix || {})) {
-      const separator = key.indexOf("::");
-      if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
-    }
-    const match = candidates.find((item) => item.ct && item.ct !== "SIN_CT" && normalized(item.label) === labelKey);
-    return match ? match.ct : "SIN_CT";
+    const matched = resolution.byKey.get(labelKey);
+    return matched || "SIN_CT";
   }
 
   function capabilityForOperation(op, state) {
+    const source = op || {};
+    const resolutionRef = state && state.__ctResolution ? state.__ctResolution : null;
+    if (state) {
+      const cached = __capabilityCache.get(source);
+      if (cached && cached.resolution === resolutionRef) return cached.result;
+    }
     const label = String(op?.descripcion || op?.tipoInsercion || "OPERACION").trim();
     const rawCt = String(op?.ct || "").trim();
     const ct = rawCt && rawCt !== "SIN_CT" ? rawCt : resolveOperationCt(state, label);
-    return { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
+    const result = { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
+    if (state) __capabilityCache.set(source, { resolution: resolutionRef, result });
+    return result;
   }
 
   function filterCapabilities(capabilities, query) {
@@ -2914,13 +2962,21 @@ function operationToolKey(op, state) {
     return Math.max(0, Math.min(1, numeric));
   }
 
+  const __normalizeKeyCache = new Map();
+  const __NORMALIZE_KEY_CACHE_MAX = 200000;
+  const __capabilityCache = new WeakMap();
+  const __subcontractCache = new WeakMap();
   function normalizeKey(value) {
-    return String(value || "")
+    const cached = __normalizeKeyCache.get(value);
+    if (cached !== undefined) return cached;
+    const result = String(value || "")
       .trim()
       .toUpperCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/\s+/g, " ");
+    if (__normalizeKeyCache.size < __NORMALIZE_KEY_CACHE_MAX) __normalizeKeyCache.set(value, result);
+    return result;
   }
 
   function normalizeSearchText(value) {
