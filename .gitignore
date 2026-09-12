@@ -20,6 +20,7 @@ oauth*.json
 service-account*.json
 service_account*.json
 .codex/
+.openchamber/
 reports/
 __pycache__/
 *.pyc
