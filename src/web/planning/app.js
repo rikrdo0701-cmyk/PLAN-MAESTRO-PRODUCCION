@@ -5275,7 +5275,12 @@ async function scheduleCurrentPlanImpl() {
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   const affected = new Set(state.selectedOts.map(normalizeStatus));
 // Procesar todas las OTs en la lista de planeado/no planeado (ignorando bloqueos y advertencias)
-const replannableOts = state.selectedOts.filter((ot) => affected.has(normalizeStatus(ot)));
+const replannableOts = state.selectedOts.filter((ot) =>
+    affected.has(normalizeStatus(ot)) &&
+    !isJobLocked(ot) &&
+    isMovablePlanningStatus(jobStatusForOt(ot)) &&
+    !hasClosedWorkOrderSyncWarning(ot)
+  );
 
   if (!replannableOts.length) {
     showToast("No hay OTs desbloqueables para programar");
