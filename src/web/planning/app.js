@@ -560,9 +560,11 @@ let planningStateIndexesCache = null;
 let planAlertItemsCache = null;
 let operatorLoadsCache = null;
 let operatorLoadsRenderMemo = null;
+let reportOperatorLoadsRenderMemo = null;
 let planStateMutationVersion = 0;
 let planStatusBackgroundRefreshPending = false;
 let renderGanttStructureMemo = null;
+let ganttStructureDomCache = new Map();
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -3929,6 +3931,33 @@ function renderGantt() {
     };
     return;
   }
+  groupsSignature = ganttGroupsSignature(groups);
+  const structureCacheKey = `${state.ganttView}|${groupsSignature}|${window.start.getTime()}|${state.ganttDayWidth}|${state.horizonDays}`;
+  if (ganttStructureDomCache) {
+    const currentKey = memo && typeof memo.structureCacheKey === "string" ? memo.structureCacheKey : null;
+    if (currentKey && currentKey !== structureCacheKey) {
+      const currentInner = els.ganttCanvas.querySelector(".gantt-inner");
+      if (currentInner && !ganttStructureDomCache.has(currentKey)) {
+        ganttStructureDomCache.set(currentKey, currentInner);
+      }
+    }
+    const cachedInner = ganttStructureDomCache.get(structureCacheKey);
+    if (cachedInner && els.ganttCanvas.firstElementChild !== cachedInner) {
+      els.ganttCanvas.innerHTML = "";
+      els.ganttCanvas.appendChild(cachedInner);
+      applyGanttSelection(selectedOt);
+      renderGanttStructureMemo = {
+        groups,
+        groupsSignature,
+        windowStart: window.start.getTime(),
+        dayWidth: state.ganttDayWidth,
+        horizonDays: state.horizonDays,
+        structureCacheKey,
+        selectedOt,
+      };
+      return;
+    }
+  }
   const days = range(state.horizonDays).map((i) => addDays(window.start, i));
   const zoomLevel = ganttZoomLevelForWidth(state.ganttDayWidth);
   const totalWindowMinutes = workWindowMinutes();
@@ -3985,12 +4014,19 @@ function renderGantt() {
   }
 
   els.ganttCanvas.appendChild(inner);
+  if (ganttStructureDomCache) {
+    ganttStructureDomCache.set(structureCacheKey, inner);
+    while (ganttStructureDomCache.size > 4) {
+      ganttStructureDomCache.delete(ganttStructureDomCache.keys().next().value);
+    }
+  }
   renderGanttStructureMemo = {
     groups,
-    groupsSignature: ganttGroupsSignature(groups),
+    groupsSignature,
     windowStart: window.start.getTime(),
     dayWidth: state.ganttDayWidth,
     horizonDays: state.horizonDays,
+    structureCacheKey,
     selectedOt,
   };
 }
@@ -4490,7 +4526,7 @@ function renderSaturation() {
   const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
   els.bottleneckWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
 
-  const loads = operatorLoadsForOperations(source, state.loadWeekStart, 7);
+  const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
   const saturated = loads.filter((item) => item.percent > 100);
   els.bottleneckOperators.innerHTML = `
     <thead><tr><th>ID</th><th>Nombre</th><th>Recurso</th><th>Carga</th></tr></thead>
@@ -6710,7 +6746,7 @@ function renderWeekReport() {
 }
 
 function renderReportOperatorLoads(reportOps, weekDate = state.reportWeekStart) {
-  const loads = operatorLoadsForOperations(reportOps, weekDate)
+  const loads = reportOperatorLoadsSourceMemoized(reportOps, weekDate)
     .filter((item) => Number(item.minutes || 0) > 0 && resourceIsInPlan(item.operator));
   if (!loads.length) return `<div class="report-empty-state">No hay cargas programadas en la semana.</div>`;
   const rows = loads.map((item, index) => {
@@ -6745,7 +6781,7 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
   const releaseTarget = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   const releaseGap = Math.max(0, releaseTarget - releaseAmount);
   const laborDays = workingDaysInRange(range.start, range.end);
-  const inPlanOperators = operatorLoadsForOperations(sourceOperations, weekDate)
+  const inPlanOperators = reportOperatorLoadsSourceMemoized(sourceOperations, weekDate)
     .filter((item) => Number(item.minutes || 0) > 0 && resourceIsInPlan(item.operator));
   const topOperator = inPlanOperators[0] || null;
   const topOperation = operations
@@ -9489,6 +9525,88 @@ function operatorLoadsSourceMemoized(sourceOperations, weekStartValue, horizonDa
     operators: state.operators,
     loadSnapshot,
     loadMode,
+    versions: planStateMutationVersion,
+    result,
+  };
+  return result;
+}
+
+function reportLoadsSignature(reportOperations) {
+  return (reportOperations || []).map((op, index) => {
+    const start = opStart(op);
+    const end = opEnd(op);
+    return `${op.id || op.ot || index}:${op.operador || ""}:${start ? start.getTime() : 0}:${end ? end.getTime() : 0}:${isFiniteCapacityOperation(op) ? 1 : 0}`;
+  }).join("|");
+}
+
+let reportOperatorLoadsWeekCache = null;
+
+function reportLoadsCacheInvalidated() {
+  const memo = reportOperatorLoadsRenderMemo;
+  return !memo
+    || memo.operations !== state.operations
+    || memo.operators !== state.operators
+    || memo.operatorProfiles !== state.operatorProfiles
+    || memo.lastSchedule !== state.lastSchedule
+    || memo.selectedOts !== state.selectedOts
+    || memo.capacityModes !== state.capacityModes
+    || memo.workSchedule !== state.workSchedule
+    || memo.dailyBreaks !== state.dailyBreaks
+    || memo.calendarExceptions !== state.calendarExceptions
+    || memo.reportSnapshot !== reportSnapshot
+    || memo.versions !== planStateMutationVersion;
+}
+
+function reportOperatorLoadsSourceMemoized(sourceOperations, weekStartValue) {
+  const reportOperations = sourceOperations || [];
+  if (reportOperatorLoadsWeekCache === null || reportLoadsCacheInvalidated()) {
+    reportOperatorLoadsWeekCache = new Map();
+  }
+  const weekMonday = selectedWeekRange(weekStartValue).start.getTime();
+  const memo = reportOperatorLoadsRenderMemo;
+  if (memo && memo.weekMonday === weekMonday && memo.reportOps === reportOperations) {
+    return memo.result;
+  }
+  const signature = reportLoadsSignature(reportOperations);
+  const hit = reportOperatorLoadsWeekCache.get(weekMonday);
+  if (hit && hit.sourceSignature === signature) {
+    reportOperatorLoadsRenderMemo = {
+      weekMonday,
+      reportOps: reportOperations,
+      operations: state.operations,
+      operators: state.operators,
+      operatorProfiles: state.operatorProfiles,
+      lastSchedule: state.lastSchedule,
+      selectedOts: state.selectedOts,
+      capacityModes: state.capacityModes,
+      workSchedule: state.workSchedule,
+      dailyBreaks: state.dailyBreaks,
+      calendarExceptions: state.calendarExceptions,
+      reportSnapshot,
+      versions: planStateMutationVersion,
+      result: hit.result,
+    };
+    return hit.result;
+  }
+  const result = operatorLoadsForOperations(reportOperations, weekStartValue, 7);
+  reportOperatorLoadsWeekCache.set(weekMonday, { sourceSignature: signature, result });
+  if (reportOperatorLoadsWeekCache.size > 4) {
+    const oldest = reportOperatorLoadsWeekCache.keys().next().value;
+    reportOperatorLoadsWeekCache.delete(oldest);
+  }
+  reportOperatorLoadsRenderMemo = {
+    weekMonday,
+    reportOps: reportOperations,
+    operations: state.operations,
+    operators: state.operators,
+    operatorProfiles: state.operatorProfiles,
+    lastSchedule: state.lastSchedule,
+    selectedOts: state.selectedOts,
+    capacityModes: state.capacityModes,
+    workSchedule: state.workSchedule,
+    dailyBreaks: state.dailyBreaks,
+    calendarExceptions: state.calendarExceptions,
+    reportSnapshot,
     versions: planStateMutationVersion,
     result,
   };

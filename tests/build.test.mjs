@@ -56,8 +56,35 @@ test("cola de planeacion expone mover sin flechas y modal de preparacion sin tex
   assert.match(planningApp, /materialsForOt\(job\.ot\)\[0\]/);
   assert.doesNotMatch(planningApp, /<span>Cantidad<\/span><strong>\$\{escapeHtml\(quantityLabel\)\}<\/strong>/);
   assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
-  assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
+assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
   assert.doesNotMatch(planningApp, /<span>CT \$\{escapeHtml\(op\.ct\)\}<\/span>/);
+});
+
+test("saturation y reportes usan las memos de cargas; el Gantt cachea DOM por firma estructural", async () => {
+  const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(app, /ganttStructureDomCache/);
+  assert.match(app, /structureCacheKey/);
+  assert.match(app, /reportOperatorLoadsRenderMemo/);
+  assert.match(app, /reportLoadsSignature/);
+  assert.match(app, /reportOperatorLoadsWeekCache/);
+  assert.match(app, /memo\.reportOps === reportOperations/);
+
+  const saturationStart = app.indexOf("function renderSaturation()");
+  const saturationEnd = app.indexOf("function focusCapabilityPlanState(", saturationStart);
+  const saturation = app.slice(saturationStart, saturationEnd);
+  assert.match(saturation, /operatorLoadsSourceMemoized\(source, state\.loadWeekStart, 7\)/);
+  assert.doesNotMatch(saturation, /const loads = operatorLoadsForOperations\(/);
+
+  const loadsStart = app.indexOf("function renderReportOperatorLoads(");
+  const execStart = app.indexOf("function weeklyExecutiveSummary(", loadsStart);
+  const loadsSlice = app.slice(loadsStart, execStart);
+  assert.match(loadsSlice, /reportOperatorLoadsSourceMemoized\(reportOps, weekDate\)/);
+
+  const execSliceStart = app.indexOf("function weeklyExecutiveSummary(summary = weeklyJobSummary()");
+  const execSliceEnd = app.indexOf("function renderWeeklyExecutiveSummary(", execSliceStart);
+  const execSlice = app.slice(execSliceStart, execSliceEnd);
+  assert.match(execSlice, /reportOperatorLoadsSourceMemoized\(sourceOperations, weekDate\)/);
+  assert.match(execSlice, /inPlanOperators = reportOperatorLoadsSourceMemoized/);
 });
 
 test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion", async () => {
