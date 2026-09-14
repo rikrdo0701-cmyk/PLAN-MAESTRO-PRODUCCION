@@ -2542,6 +2542,20 @@ test("flow balanced conserva precedencia y bloqueos", async () => {
   assert.ok(new Date(`${successor.fechaInicio}T${successor.horaInicio}:00`) >= new Date("2026-07-13T09:00:00"));
 });
 
+test("un asueto con horas 0:00-0:00 (guion de hoja) bloquea el dia completo", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    workSchedule: {},
+    dailyBreaks: {},
+    calendarExceptions: [
+      { date: "2026-07-14", concept: "ASUETO", start: "0:00", end: "0:00", reason: "Guion Sheets" },
+    ],
+  };
+  const date = new Date(2026, 6, 14, 0, 0, 0);
+  const windows = core.effectiveWindows(state, date, "", "");
+  assert.deepEqual(structuredClone(windows), [], "un asueto 0:00-0:00 debe dejar el dia sin ventanas disponibles");
+});
+
 test("un asueto general detiene operaciones finitas y subcontratos al buscar el primer fin posible", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({

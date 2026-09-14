@@ -1672,8 +1672,14 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     for (const entry of entries) {
       const startDate = String(entry.startDate || entry.fechaInicio || entry.date || entry.fecha || dateKey);
       const endDate = String(entry.endDate || entry.fechaFin || entry.date || entry.fecha || startDate);
-      const start = dateKey === startDate ? parseClock(entry.start || entry.horaInicio, 0) : 0;
-      const end = dateKey === endDate ? parseClock(entry.end || entry.horaFin, 24 * 60) : 24 * 60;
+      const concept = normalizeKey(entry.concept || entry.concepto || entry.resourceType || entry.tipoRecurso || "GENERAL");
+      const fullDayConcept = concept === "ASUETO" || concept === "VACACIONES";
+      let start = dateKey === startDate ? parseClock(entry.start || entry.horaInicio, 0) : 0;
+      let end = dateKey === endDate ? parseClock(entry.end || entry.horaFin, 24 * 60) : 24 * 60;
+      // ASUETO/VACACIONES guardados o leidos con horas 00:00-00:00 (p. ej. Sheets normaliza 24:00 a 0:00
+      // en celdas de hora, o el formulario quedo sin horas) representan el dia completo: sin lapso util
+      // se bloquean las 24 horas. Un GENERAL con horas explicitas nunca cae aqui.
+      if (fullDayConcept && end <= start) { start = 0; end = 24 * 60; }
       if (end > start) windows = subtractWindow(windows, { start, end });
     }
     const result = windows.filter((window) => window.end > window.start);
