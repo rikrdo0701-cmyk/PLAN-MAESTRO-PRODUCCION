@@ -6262,7 +6262,8 @@ function addMachine() {
   saveAndRender("Maquina agregada", "catalogs");
 }
 
-function addCalendarException() {
+async function addCalendarException() {
+  if (els.addCalendarBtn.disabled) return;
   const concept = els.calendarConceptInput.value;
   const machine = concept === "MAQUINA" ? els.calendarMachineInput.value.trim().toUpperCase() : "";
   const resource = concept === "OPERADOR" ? els.calendarOperatorInput.value.trim().toUpperCase() : "";
@@ -6282,15 +6283,39 @@ function addCalendarException() {
     return showToast("Captura la hora inicial y final");
   }
   if (startDate === endDate && end <= start) return showToast("La hora final debe ser posterior a la inicial");
-  checkpointState();
-  state.calendarExceptions.push({
-    id: uid("cal"), concept, machine, resource, startDate, endDate, start, end, reason, active: true,
-  });
-  els.calendarReasonInput.value = "";
-  els.calendarStartDateInput.value = "";
-  els.calendarEndDateInput.value = "";
-  updateCalendarForm(true);
-  saveAndRender("Periodo no laborable agregado", "catalogs");
+  const buttonLabel = els.addCalendarBtn.textContent;
+  els.addCalendarBtn.disabled = true;
+  els.addCalendarBtn.textContent = "Guardando periodo...";
+  els.addCalendarBtn.setAttribute("aria-busy", "true");
+  try {
+    while (appSheetSaveInFlight) await appSheetWaitForIdle();
+    const entry = { concept, machine, resource, startDate, endDate, start, end, reason, active: true };
+    // Un reintento del mismo formulario no debe duplicar el periodo pendiente.
+    const existing = state.calendarExceptions.find((item) =>
+      Object.entries(entry).every(([key, value]) => (item[key] ?? "") === value));
+    if (!existing) {
+      checkpointState();
+      state.calendarExceptions = [...state.calendarExceptions, { id: uid("cal"), ...entry }];
+    }
+    appSheetMarkDirtyScope("catalogs");
+    const saved = await saveAppSheet(true);
+    if (!saved) {
+      showToast("Periodo sin confirmar en la hoja. Conservamos el formulario; vuelve a pulsar Agregar periodo y espera la confirmacion antes de recargar.", 6500);
+      return;
+    }
+    els.calendarReasonInput.value = "";
+    els.calendarStartDateInput.value = "";
+    els.calendarEndDateInput.value = "";
+    updateCalendarForm(true);
+    showToast("Periodo no laborable guardado en la hoja", 4200);
+  } catch (error) {
+    showToast(`No se pudo guardar el periodo: ${error.message}. Conservamos el formulario para reintentar.`, 6500);
+  } finally {
+    renderCalendarExceptions();
+    els.addCalendarBtn.disabled = false;
+    els.addCalendarBtn.textContent = buttonLabel;
+    els.addCalendarBtn.removeAttribute("aria-busy");
+  }
 }
 
 function addSubcontract() {

@@ -441,6 +441,7 @@
     },
     {
       "source_id": "SHEET-CALENDARIO",
+      "save_confirmation": "Agregar periodo espera saveAppSheet con scope catalogs y confirma solo tras exito; si falla conserva formulario para reintentar sin duplicar la misma entrada. No confirma la causa del asueto perdido al recargar ni protege peticiones interrumpidas antes del acuse. Ver docs/project/calendar-save.md y tests/calendar-save.test.mjs.",
       "type": "google_sheet",
       "name": "CALENDARIO",
       "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
