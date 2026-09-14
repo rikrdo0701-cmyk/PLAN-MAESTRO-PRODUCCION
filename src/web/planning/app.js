@@ -5942,8 +5942,12 @@ async function generatePlanPdf(explicitSnapshotId = "") {
     const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
-    const usingDraft = explicitSnapshotId ? false : (reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft");
-    let snapshotId = explicitSnapshotId || (usingDraft ? "" : reportSnapshot?.snapshotId);
+    const exportSourceId = explicitSnapshotId || (els.exportSnapshotSelect ? els.exportSnapshotSelect.value : "") || "";
+    let usingDraft = exportSourceId === "draft";
+    if (!explicitSnapshotId && !exportSourceId) {
+      usingDraft = reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft";
+    }
+    let snapshotId = explicitSnapshotId || (usingDraft ? "" : (exportSourceId || reportSnapshot?.snapshotId || ""));
   if (!usingDraft && !snapshotId && planSnapshots.length > 0) {
     const publishedIds = publishedSnapshotIds();
     const draftSnapshots = planSnapshots.filter((s) => !publishedIds.has(s.snapshotId));
@@ -6828,7 +6832,10 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
   const finishingRows = summary.finishes || [];
   const finishingCost = window.PlanningWorkflowCore.weeklyFinishingCost(finishingRows);
   const finishingPieces = finishingCost.finishingPieces;
-  const startingPieces = 0;
+  const startingPieces = (summary.starts || []).reduce(
+    (sum, row) => sum + Math.max(0, Number(row.pendingPieces ?? 0)),
+    0,
+  );
   const releaseAmount = finishingCost.totalCost;
   const releaseTarget = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   const releaseGap = Math.max(0, releaseTarget - releaseAmount);
