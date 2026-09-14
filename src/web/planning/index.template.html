@@ -229,6 +229,15 @@
           <div class="load-screen-heading">
             <div><h2 id="operatorLoadTitle">Cargas de operadores</h2><span id="loadWeekRange">Semana seleccionada</span></div>
             <div class="load-screen-actions">
+              <div class="week-stepper">
+                <button id="loadWeekPrevBtn" class="icon-button" type="button" aria-label="Semana anterior" title="Semana anterior">
+                  <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg>
+                </button>
+                <label class="compact-control"><span>Semana</span><input id="loadWeekStartInput" type="date" /></label>
+                <button id="loadWeekNextBtn" class="icon-button" type="button" aria-label="Semana siguiente" title="Semana siguiente">
+                  <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                </button>
+              </div>
               <label class="compact-control"><span>Plan</span><select id="loadPlanSelect"></select></label>
               <label class="compact-control"><span>Estado</span><select id="loadModeSelect"><option value="pending">Pendientes</option><option value="completed">Completadas</option><option value="original">Plan original</option></select></label>
             </div>
@@ -399,10 +408,19 @@
             <button data-tab="subcontractReport" type="button">Subcontratos</button>
           </div>
           <section id="weekTab" class="tab-panel">
-            <div class="report-toolbar">
-              <div><h2>Plan de la semana</h2><span id="reportSnapshotMeta">Plan vigente</span></div>
-              <div class="report-actions">
-                <label class="compact-control report-plan-selector"><span>Plan</span><select id="planSnapshotSelect"><option value="draft">Borrador</option><option value="">Ultima publicada</option></select></label>
+<div class="report-toolbar">
+                <div><h2>Plan de la semana</h2><span id="reportSnapshotMeta">Plan vigente</span></div>
+                <div class="report-actions">
+                  <div class="week-stepper">
+                    <button id="reportWeekPrevBtn" class="icon-button" type="button" aria-label="Semana anterior" title="Semana anterior">
+                      <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg>
+                    </button>
+                    <label class="compact-control"><span>Semana</span><input id="reportWeekStartInput" type="date" /></label>
+                    <button id="reportWeekNextBtn" class="icon-button" type="button" aria-label="Semana siguiente" title="Semana siguiente">
+                      <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                    </button>
+                  </div>
+                  <label class="compact-control report-plan-selector"><span>Plan</span><select id="planSnapshotSelect"><option value="draft">Borrador</option><option value="">Ultima publicada</option></select></label>
                 <button id="refreshSnapshotsBtn" class="icon-button" type="button" aria-label="Actualizar planes guardados" title="Actualizar planes guardados"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 18 15"/></svg></button>
                 <button id="printWeekBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
               </div>

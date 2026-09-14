@@ -773,6 +773,9 @@ function bindElements() {
     "ganttCanvas",
     "loadList",
     "loadWeekRange",
+    "loadWeekStartInput",
+    "loadWeekPrevBtn",
+    "loadWeekNextBtn",
     "loadPlanSelect",
     "loadModeSelect",
     "bottleneckOperators",
@@ -811,6 +814,9 @@ function bindElements() {
     "subcontractPrintContext",
     "subcontractReportCount",
     "planSnapshotSelect",
+    "reportWeekStartInput",
+    "reportWeekPrevBtn",
+    "reportWeekNextBtn",
     "refreshSnapshotsBtn",
     "reportSnapshotMeta",
     "weekPrintContext",
@@ -887,6 +893,20 @@ function bindElements() {
   els.scheduleBtn = els.generatePlanBtn || els.scheduleBtn;
   els.loadNsExerciseBtn = els.syncBtn || els.loadNsExerciseBtn;
   els.saveAppSheetBtn = els.saveBtn || els.saveAppSheetBtn;
+}
+
+function bindWeekStepper(inputEl, prevBtn, nextBtn, onChange) {
+  if (!inputEl) return;
+  const shiftWeek = (deltaDays) => {
+    const current = normalizeWeekStartValue(inputEl.value || state.planStart || formatDate(new Date()));
+    const base = parseDate(current);
+    const date = new Date(base.year, base.month - 1, base.day);
+    inputEl.value = formatDate(addDays(date, deltaDays));
+    onChange(inputEl.value);
+  };
+  inputEl.addEventListener("change", () => onChange(normalizeWeekStartValue(inputEl.value)));
+  if (prevBtn) prevBtn.addEventListener("click", () => shiftWeek(-7));
+  if (nextBtn) nextBtn.addEventListener("click", () => shiftWeek(7));
 }
 
 function debounce(fn, ms) {
@@ -970,6 +990,15 @@ function bindEvents() {
     state.planStart = els.planStartInput.value;
     if (state.planStart) state.reportWeekStart = normalizeWeekStartValue(state.planStart);
     saveAndRender("Inicio del horizonte actualizado");
+  });
+  bindWeekStepper(els.loadWeekStartInput, els.loadWeekPrevBtn, els.loadWeekNextBtn, (iso) => {
+    state.loadWeekStart = normalizeWeekStartValue(iso);
+    renderLoads();
+    renderSaturation();
+  });
+  bindWeekStepper(els.reportWeekStartInput, els.reportWeekPrevBtn, els.reportWeekNextBtn, (iso) => {
+    state.reportWeekStart = normalizeWeekStartValue(iso);
+    renderReports();
   });
   els.horizonSelect.addEventListener("change", () => {
     checkpointState();
@@ -4440,6 +4469,7 @@ function renderLoads() {
   const week = selectedWeekRange(state.loadWeekStart);
   const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
   els.loadWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
+  if (els.loadWeekStartInput) els.loadWeekStartInput.value = state.loadWeekStart;
   let rowNumber = 0;
   const groups = RESOURCE_CATEGORIES.map((category) => {
     const categoryRows = loads.filter((item) => resourceCategoryFor(item.operator) === category).map((item) => {
@@ -6748,6 +6778,7 @@ function renderReports() {
 function renderWeekReport() {
   els.reportSnapshotMeta.textContent = reportSourceLabel();
   els.weekPrintContext.textContent = formatReportDateTime(new Date());
+  if (els.reportWeekStartInput) els.reportWeekStartInput.value = state.reportWeekStart;
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
   els.weekExecutiveSummary.innerHTML = reportOps.length
