@@ -704,8 +704,7 @@ async function maybeRestoreSavedDraftOnBoot() {
     if (Number.isFinite(Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays))) state.horizonDays = Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays);
     normalizeState();
     invalidateCurrentPlanOperationsCache();
-    syncDraftReportWeek();
-    state.reportWeekStart = normalizeWeekStartValue(state.planStart);
+    alignReportWeekStartToFirstScheduledOperation(restored, new Date());
     saveState("plan");
     render({ save: false });
     const changes = restored.filter(isToolChangeReportOperation).length;
@@ -969,6 +968,7 @@ function bindEvents() {
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
     state.planStart = els.planStartInput.value;
+    if (state.planStart) state.reportWeekStart = normalizeWeekStartValue(state.planStart);
     saveAndRender("Inicio del horizonte actualizado");
   });
   els.horizonSelect.addEventListener("change", () => {
@@ -1182,7 +1182,7 @@ function normalizeState() {
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   state.horizonDays = Math.max(1, Math.min(45, Number(state.horizonDays || DEFAULT_HORIZON_DAYS)));
   state.loadWeekStart = normalizeWeekStartValue(state.loadWeekStart || state.planStart);
-  state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
+  if (!state.reportWeekStart) state.reportWeekStart = normalizeWeekStartValue(state.planStart);
   state.draftVersionId = String(state.draftVersionId || "");
   state.activePublishedVersionId = String(state.activePublishedVersionId || "");
   state.publishedVersions = Array.isArray(state.publishedVersions) ? state.publishedVersions : [];
@@ -5393,7 +5393,7 @@ onProgress: (event) => {
     }
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    syncDraftReportWeek();
+    alignReportWeekStartToFirstScheduledOperation(currentDraftScheduledOperations(), executionTime);
     reportSnapshot = currentDraftReportSnapshot();
     loadSnapshot = null;
     syncDraftLoadWeek();
@@ -6699,6 +6699,22 @@ function syncDraftReportWeek() {
   const reportStart = state.planStart || state.reportWeekStart;
   if (!reportStart) return;
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
+}
+
+function firstScheduledOperationStart(operations, executionTime) {
+  const executionDay = formatDate(new Date(executionTime));
+  const starts = (Array.isArray(operations) ? operations : [])
+    .map((op) => opStart(op))
+    .filter(Boolean)
+    .map(formatDate)
+    .filter((value) => value >= executionDay);
+  if (!starts.length) return "";
+  return starts.sort()[0];
+}
+
+function alignReportWeekStartToFirstScheduledOperation(operations, executionTime) {
+  const firstStart = firstScheduledOperationStart(operations, executionTime);
+  state.reportWeekStart = normalizeWeekStartValue(firstStart || state.planStart || state.reportWeekStart || formatDate(new Date()));
 }
 
 function reportOperationsSource() {
@@ -11269,6 +11285,10 @@ function purgeClosedWorkOrderRetention() {
 
 function persistableState(source = state) {
   const { matrixSearch, selectedDetailOt, queueMoveOt, ...persisted } = source;
+  delete persisted.machineToolHistory;
+  for (const key of Object.keys(persisted)) {
+    if (key.indexOf("__") === 0) delete persisted[key];
+  }
   return persisted;
 }
 

@@ -944,6 +944,8 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
   assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
   assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
+  assert.match(persistence, /delete persisted\.machineToolHistory;/);
+  assert.match(persistence, /key\.indexOf\("__"\) === 0/);
   assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
   assert.match(performanceClient, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\)/);
   assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
