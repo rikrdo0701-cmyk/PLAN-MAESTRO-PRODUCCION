@@ -828,6 +828,8 @@ function bindElements() {
     "saveAppSheetBtn",
     "exportSnapshotSelect",
     "exportCsvBtn",
+    "exportBacklogXlsxBtn",
+    "exportQueueXlsxBtn",
     "balanceBtn",
     "printWeekBtn",
     "toolPartInput",
@@ -1041,6 +1043,8 @@ function bindEvents() {
   els.loadNsExerciseBtn.addEventListener("click", loadNetSuiteExercise);
   els.saveAppSheetBtn.addEventListener("click", () => saveAppSheet(true));
   els.exportCsvBtn.addEventListener("click", exportCsv);
+  els.exportBacklogXlsxBtn.addEventListener("click", exportBacklogXlsx);
+  els.exportQueueXlsxBtn.addEventListener("click", exportQueueXlsx);
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
@@ -9235,6 +9239,201 @@ async function exportCsv() {
   const rows = [PLAN_HEADERS, ...operations.map((op) => operationToRow(op, generatedAt))];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
+}
+
+const XLSX_BACKLOG_HEADERS = ["OT", "Articulo", "Descripcion", "Cantidad", "Fecha entrega"];
+const XLSX_QUEUE_HEADERS = ["OT", "Articulo", "Descripcion", "Cantidad", "Fecha entrega", "Maquina", "Herramental", "Tipo"];
+
+function exportBacklogXlsx() {
+  const query = els.searchInput.value.trim().toLowerCase();
+  const statusFilter = els.statusFilter.value;
+  const jobs = getPriorityJobs()
+    .filter((job) => {
+      return !job.closed && !isJobSelected(job.ot) && jobMatchesSearch(job, query) && matchesStatusFilter(job, statusFilter);
+    });
+  const rows = jobs.map((job) => [
+    job.ot || "",
+    job.parte || "SIN ARTICULO",
+    job.descripcion || job.materialBase || "Sin descripcion",
+    jobExportCantidad(job),
+    normalizeOtDate(job.dueDate) || "",
+  ]);
+  const bytes = buildXlsxBytes(XLSX_BACKLOG_HEADERS, rows, "Backlog");
+  downloadBlob(bytes, "backlog.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+function exportQueueXlsx() {
+  const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
+  const ordered = state.selectedOts.map((ot) => jobsByOt.get(ot)).filter(Boolean);
+  const rows = ordered.map((job) => [
+    job.ot || "",
+    job.parte || "SIN ARTICULO",
+    job.descripcion || job.materialBase || "Sin descripcion",
+    jobExportCantidad(job),
+    normalizeOtDate(job.dueDate) || "",
+    jobMaquinas(job),
+    jobHerramentales(job),
+    jobExportTipo(job),
+  ]);
+  const bytes = buildXlsxBytes(XLSX_QUEUE_HEADERS, rows, "Planeado / Por planear");
+  downloadBlob(bytes, "planeado-por-planear.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+function jobExportCantidad(job) {
+  const workOrder = workOrderForOt(job.ot);
+  if (Number.isFinite(Number(job.quantity)) && workOrder) return Number(job.quantity);
+  return Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente
+    ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal
+    ?? job.quantity
+    ?? 0);
+}
+
+function jobMaquinas(job) {
+  const bending = (job.ops || []).filter(isBendingAppOperation);
+  const machines = uniq((bending.length ? bending : job.ops || []).map((op) => String(op.maquina || "").trim()).filter(Boolean));
+  return machines.join(" | ");
+}
+
+function jobHerramentales(job) {
+  const tools = uniq((job.ops || []).map((op) => cleanToolValue(op.herramental)).filter(Boolean));
+  if (tools.length) return tools.join(" | ");
+  const tool = cleanToolValue(window.PlanningWorkflowCore?.effectiveJobTool?.(state, job, ["5459", "5527"]));
+  return tool || "";
+}
+
+function jobExportTipo(job) {
+  return jobDisplayType(job) || "";
+}
+
+function buildXlsxBytes(headers, rows, sheetName) {
+  const encoder = new TextEncoder();
+  const sheetXml = buildSheetXml(headers, rows);
+  const entries = [
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
+    ["xl/worksheets/sheet1.xml", sheetXml],
+  ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
+  return buildZipBytes(entries);
+}
+
+function buildSheetXml(headers, rows) {
+  const writeRow = (values, rowNumber) => values.map((value, colIndex) => {
+    const ref = `${xlsxColumnLetter(colIndex)}${rowNumber}`;
+    return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
+  }).join("");
+  const body = [headers, ...rows].map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    return `<row r="${rowNumber}">${writeRow(row, rowNumber)}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`;
+}
+
+function xlsxColumnLetter(index) {
+  let col = "";
+  let value = index + 1;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    col = String.fromCharCode(65 + remainder) + col;
+    value = Math.floor((value - 1) / 26);
+  }
+  return col;
+}
+
+function xmlEscape(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function buildZipBytes(entries) {
+  const encoder = new TextEncoder();
+  const parts = [];
+  const centralDirectory = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(entry.name);
+    const dataBytes = entry.data;
+    const crc = crc32(dataBytes);
+    const local = new Uint8Array(entry.name.length + 30 + dataBytes.length);
+    const localView = new DataView(local.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, 0, true);
+    localView.setUint16(12, 0, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, dataBytes.length, true);
+    localView.setUint32(22, dataBytes.length, true);
+    localView.setUint16(26, entry.name.length, true);
+    localView.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    local.set(dataBytes, 30 + nameBytes.length);
+    parts.push(local);
+    const central = new Uint8Array(46 + entry.name.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, 0, true);
+    centralView.setUint16(14, 0, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, dataBytes.length, true);
+    centralView.setUint32(24, dataBytes.length, true);
+    centralView.setUint16(28, entry.name.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centralDirectory.push(central);
+    offset += local.length;
+  }
+  const centralStart = offset;
+  const centralSize = centralDirectory.reduce((sum, part) => sum + part.length, 0);
+  const endOfCentral = new Uint8Array(22);
+  const endView = new DataView(endOfCentral.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, entries.length, true);
+  endView.setUint16(10, entries.length, true);
+  endView.setUint32(12, centralSize, true);
+  endView.setUint32(16, centralStart, true);
+  endView.setUint16(20, 0, true);
+  centralDirectory.push(endOfCentral);
+  const totalLength = centralStart + centralDirectory.reduce((sum, part) => sum + part.length, 0);
+  const zip = new Uint8Array(totalLength);
+  let cursor = 0;
+  for (const part of parts) {
+    zip.set(part, cursor);
+    cursor += part.length;
+  }
+  for (const part of centralDirectory) {
+    zip.set(part, cursor);
+    cursor += part.length;
+  }
+  return zip;
+}
+
+function crc32(bytes) {
+  let crc = 0 ^ -1;
+  for (let index = 0; index < bytes.length; index += 1) {
+    crc ^= bytes[index];
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
 }
 
 function lastScheduleGeneratedAt(sourceId) {

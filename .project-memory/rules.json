@@ -1118,6 +1118,15 @@
       "updated_at": "2026-09-11"
     },
     {
+      "rule_id": "RULE-UI-011",
+      "name": "Los paneles Backlog y Planeado / Por planear exportan listas OT a Excel (.xlsx) sin librerias",
+      "status": "implementada",
+      "rule": "Botones Exportar en los headers de Backlog y Planeado / Por planear (exportBacklogXlsxBtn/exportQueueXlsxBtn). Backlog exporta ot, articulo, descripcion, cantidad y fecha entrega (mismos filtros de busqueda/estatus que el render, excluyendo OTs seleccionadas y cerradas); Planeado exporta ot, articulo, descripcion, cantidad, fecha entrega, maquina, herramental y tipo (OTs en orden de cola). El .xlsx se genera en cliente sin dependencias: escritor XLSX minimo buildXlsxBytes que arma el contenedor ZIP con metodo STORE + CRC-32 (buildZipBytes/crc32, sin CompressionStream) y la hoja OOXML SpreadsheetML (buildSheetXml, celdas inlineStr escapadas con xmlEscape). Filenames backlog.xlsx y planeado-por-planear.xlsx. Formato .xlsx real (no CSV) validado: ZIP parselo y XML de hoja con headers y filas correctas.",
+      "source": "definicion de usuario 2026-09-19; src/web/planning/index.template.html (botones), src/web/planning/app.js (exportBacklogXlsx/exportQueueXlsx/buildXlsxBytes/buildSheetXml/buildZipBytes/crc32), src/web/planning/styles.css (.backlog-actions)",
+      "domain": "UI",
+      "updated_at": "2026-09-19"
+    },
+    {
       "rule_id": "RULE-PERF-001",
       "name": "Los payloads de publicacion y guardado excluyen machineToolHistory desde persistableState(): < 2 MB y el guardado automatico deja de deep-clonar ~565 KB por save",
       "status": "implementada",

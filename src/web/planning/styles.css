@@ -575,6 +575,9 @@ html, body {
 .panel-header span,
 .capacity-heading span,
 .load-screen-heading span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.backlog-actions { display: flex; align-items: center; gap: 6px; }
+.backlog-actions .button,
+.queue-actions .button { min-height: 25px; padding: 0 8px; font-size: 9px; white-space: nowrap; }
 .backlog-sync-button { min-height: 25px; padding: 0 8px; font-size: 9px; white-space: nowrap; }
 .work-order-sync-warning { display: block; margin-top: 3px; color: #9a5d00; font-size: 9px; font-weight: 700; }
 
