@@ -118,13 +118,33 @@
     return request;
   }
 
+  const LOCAL_CACHE_QUOTA_GUARD_BYTES = 4 * 1024 * 1024;
+  const LOCAL_CACHE_TRIM_KEYS = [
+    "_locallyRemovedDraftOts",
+    "_pendingAddOt",
+    "_pendingAddOtSnapshot",
+    "_locallyAddedDraftOts",
+    "_locallyEditedOtConfigurations",
+    "expandedOts",
+  ];
+
+  function trimLocalCachePayload(payload) {
+    let serialized = JSON.stringify(payload);
+    if (serialized.length * 2 > LOCAL_CACHE_QUOTA_GUARD_BYTES) {
+      for (const key of LOCAL_CACHE_TRIM_KEYS) delete payload[key];
+      serialized = JSON.stringify(payload);
+    }
+    return serialized;
+  }
+
   scheduleLocalStorageFlush = function optimizedScheduleLocalStorageFlush() {
     if (localFlushHandle) return;
     localFlushHandle = requestIdle(() => {
       localFlushHandle = null;
       try {
         const compacted = compactLocalState();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(compacted));
+        const serialized = trimLocalCachePayload(compacted);
+        localStorage.setItem(STORAGE_KEY, serialized);
         writeMeta({
           revision: compacted.revision,
           cacheIdentity: LOCAL_CACHE_IDENTITY,

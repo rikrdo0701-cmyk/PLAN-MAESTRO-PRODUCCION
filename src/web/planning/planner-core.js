@@ -3072,6 +3072,7 @@ function operationToolKey(op, state) {
   return {
     GENERATED_BY,
     SNAP_MINUTES,
+    normalizeKey,
     schedulePlan,
     filterCapabilities,
     isSpecialSubcontractCapability,

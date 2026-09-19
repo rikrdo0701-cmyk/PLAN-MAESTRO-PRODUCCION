@@ -947,8 +947,10 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(persistence, /delete persisted\.machineToolHistory;/);
   assert.match(persistence, /key\.indexOf\("__"\) === 0/);
   assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
-  assert.match(performanceClient, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\)/);
-  assert.match(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
+  assert.match(performanceClient, /const LOCAL_CACHE_QUOTA_GUARD_BYTES = 4 \* 1024 \* 1024;/);
+  assert.match(performanceClient, /const serialized = trimLocalCachePayload\(compacted\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\)/);
+  assert.match(persistence, /const payload = persistableState\(source\);/);
+  assert.doesNotMatch(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
 });
 
 test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
@@ -969,7 +971,47 @@ test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
   assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
   assert.deepEqual(persisted.materials, []);
   assert.match(compactSource, /performanceCache:\s*\{[\s\S]*identity: LOCAL_CACHE_IDENTITY[\s\S]*revision[,:\s]/);
-  assert.match(performanceClient, /const compacted = compactLocalState\(\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(compacted\)\);[\s\S]*writeMeta\(\{[\s\S]*deferredMaterials: true/);
+  assert.match(performanceClient, /const compacted = compactLocalState\(\);[\s\S]*const serialized = trimLocalCachePayload\(compacted\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\);[\s\S]*writeMeta\(\{[\s\S]*deferredMaterials: true/);
+});
+
+test("el cache local descarta tombstones de UI cuando supera 4MB y nunca pierde workOrders/materials/otConfigurations", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const trimStart = performanceClient.indexOf("const LOCAL_CACHE_QUOTA_GUARD_BYTES =");
+  const trimEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", trimStart);
+  const trimSource = performanceClient.slice(trimStart, trimEnd);
+  const { trimLocalCachePayload } = Function(`${trimSource}; return { trimLocalCachePayload };`)();
+
+  const small = trimLocalCachePayload({
+    _locallyRemovedDraftOts: ["100"],
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    otConfigurations: { k: { ot: "WO-1" } },
+  });
+  assert.ok(small.includes('"_locallyRemovedDraftOts"'));
+
+  const filler = "x".repeat(3 * 1024 * 1024);
+  const trimmed = JSON.parse(trimLocalCachePayload({
+    _locallyRemovedDraftOts: ["100"],
+    _pendingAddOt: { ot: "WO-9" },
+    _pendingAddOtSnapshot: { ot: "WO-9" },
+    _locallyAddedDraftOts: ["200"],
+    _locallyEditedOtConfigurations: ["WO-3"],
+    expandedOts: ["300"],
+    workOrders: [{ ot: "WO-1" }],
+    materials: [{ ot: "WO-1" }],
+    otConfigurations: { k: { ot: "WO-1" } },
+    filler,
+  }));
+  assert.equal(trimmed._locallyRemovedDraftOts, undefined);
+  assert.equal(trimmed._pendingAddOt, undefined);
+  assert.equal(trimmed._pendingAddOtSnapshot, undefined);
+  assert.equal(trimmed._locallyAddedDraftOts, undefined);
+  assert.equal(trimmed._locallyEditedOtConfigurations, undefined);
+  assert.equal(trimmed.expandedOts, undefined);
+  assert.deepEqual(trimmed.workOrders, [{ ot: "WO-1" }]);
+  assert.deepEqual(trimmed.materials, [{ ot: "WO-1" }]);
+  assert.deepEqual(trimmed.otConfigurations, { k: { ot: "WO-1" } });
+  assert.ok(trimmed.filler);
 });
 
 test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {
@@ -1298,8 +1340,72 @@ assert.match(createPayloadSource, /delete payload\._locallyRemovedDraftOts;/);
   assert.equal(state.preparedPlanningByOt[100], undefined);
   assert.equal(state.operations.find((op) => op.id === "100-op").fechaInicio, "");
   assert.equal(invalidations, 1);
-  api.forgetDraftRemovedOt("100");
+api.forgetDraftRemovedOt("100");
   assert.equal(state._locallyRemovedDraftOts, undefined);
+});
+
+test("la config de capacidades editada localmente sobrevive a un import remoto", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importFlow = app.slice(
+    app.indexOf("function applyImported(imported, options = {})"),
+    app.indexOf("function captureLocalPlanningState()", app.indexOf("function applyImported(imported, options = {})")),
+  );
+  const payload = app.slice(
+    app.indexOf("function createAppSheetPayload(source = state)"),
+    app.indexOf("function isAppsScriptRuntime()", app.indexOf("function createAppSheetPayload(source = state)")),
+  );
+  const helpers = app.slice(
+    app.indexOf("const CAPABILITY_CONFIG_KEYS ="),
+    app.indexOf("function uniq(items)", app.indexOf("const CAPABILITY_CONFIG_KEYS =")),
+  );
+
+  assert.match(importFlow, /const localCapabilityConfigEdited = state\._locallyEditedCapabilityConfig === true;/);
+  assert.match(importFlow, /const preservedLocalCapabilityConfig = localCapabilityConfigEdited \? captureLocalCapabilityConfig\(\) : null;/);
+  assert.match(importFlow, /if \(preservedLocalCapabilityConfig\) restoreLocalCapabilityConfig\(preservedLocalCapabilityConfig\);/);
+  assert.match(payload, /delete payload\._locallyEditedCapabilityConfig;/);
+
+  const state = {
+    _locallyEditedCapabilityConfig: true,
+    configuredCapabilities: ["5467::CORTE"],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    excludedCapabilities: [],
+    capacityModes: { "5467::CORTE": "FINITA" },
+    matrix: { "5467::CORTE": ["OP1", "OP2"] },
+    operators: ["OP1", "OP2"],
+    operatorProfiles: { OP1: { name: "OP1", category: "FUERA_DE_PLAN" } },
+    operatorPerformance: { OP1: 100 },
+    cts: ["5467"],
+  };
+  const remote = {
+    configuredCapabilities: ["9999::OTRO"],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    excludedCapabilities: ["9999::OTRO"],
+    capacityModes: {},
+    matrix: {},
+    operators: [],
+    operatorProfiles: {},
+    operatorPerformance: {},
+    cts: [],
+  };
+  const api = Function(
+    "state",
+    "deepClone",
+    `${helpers}; return { rememberLocalCapabilityConfigEdit, captureLocalCapabilityConfig, restoreLocalCapabilityConfig };`,
+  )(state, (value) => JSON.parse(JSON.stringify(value)));
+
+  api.rememberLocalCapabilityConfigEdit();
+  const snapshot = api.captureLocalCapabilityConfig();
+  for (const [key, value] of Object.entries(remote)) state[key] = value;
+  api.restoreLocalCapabilityConfig(snapshot);
+
+  assert.deepEqual(state.configuredCapabilities, ["5467::CORTE"]);
+  assert.deepEqual(state.matrix, { "5467::CORTE": ["OP1", "OP2"] });
+  assert.deepEqual(state.operators, ["OP1", "OP2"]);
+  assert.deepEqual(state.excludedCapabilities, []);
+  assert.deepEqual(state.cts, ["5467"]);
+  assert.equal(state._locallyEditedCapabilityConfig, true);
 });
 
 test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
@@ -1480,13 +1586,14 @@ test("RUL-PRE-?: pedir operadores agrega la habilidad a la matriz y la persiste 
   const invalidateCurrentPlanOperationsCache = () => {};
   const build = Function(
     "state", "normalizeStatus", "uniq", "TOOL_CHANGE_CAPABILITY", "capabilityFromOperation", "findOperation",
-    "assignPlanningOperators", "invalidateCurrentPlanOperationsCache",
+    "assignPlanningOperators", "invalidateCurrentPlanOperationsCache", "rememberLocalCapabilityConfigEdit",
     "enableOperatorsForCapability", "capabilityOperatorRequirements", "groupPlanConfigurationGaps",
     `; ${helpers};
      return { enableOperatorsForCapability, capabilityOperatorRequirements, groupPlanConfigurationGaps };`,
   )(
     state, normalizeStatus, uniq, TOOL_CHANGE_CAPABILITY, capabilityFromOperation, findOperation,
     assignPlanningOperators, invalidateCurrentPlanOperationsCache,
+    () => { state._locallyEditedCapabilityConfig = true; },
   );
   const issues = [
     { code: "MISSING_OPERATOR", operationId: "x", capability: { key: "5459::DOBLADO_BASE_SUPERIOR", ct: "5459", label: "DOBLADO BASE SUPERIOR" } },

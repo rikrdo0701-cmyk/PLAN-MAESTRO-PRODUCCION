@@ -2305,6 +2305,29 @@ function renderPriorityList() {
   focusedDueDateInput?.focus();
 }
 
+function queueItemSignature(job) {
+  const workOrder = workOrderForOt(job.ot);
+  const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+  return [
+    job.parte || "",
+    job.descripcion || "",
+    job.status || "",
+    job.movable ? "1" : "0",
+    `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`,
+    job.dueDate || "",
+    formatOtDateValue(workOrder?.dueDate),
+    workOrder?.dueDateOverride ? "1" : "0",
+    job.photoUrl || "",
+    Number(job.minutes || 0),
+    jobRiskCardClass(job),
+    jobRiskIndicatorHtml(job),
+    netSuiteChangeBadgeHtml(job.ot),
+    workOrderSyncWarningHtml(job.ot),
+    jobTypeTagHtml(job),
+    jobToolMiniHtml(job),
+  ].join("|");
+}
+
 function renderPriorityQueue() {
   const query = els.queueSearchInput.value.trim().toLowerCase();
   const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
@@ -2336,10 +2359,13 @@ function renderPriorityQueue() {
   existingItems.forEach((el) => existingOts.add(el.dataset.queueOt));
   const sameMoveMode = (els.priorityQueue.dataset.queueMoveOt || "") === activeMoveOt;
   const sameSet = sameMoveMode && existingItems.length === visibleJobs.length && visibleJobs.every((job) => existingOts.has(job.ot));
+  const otToElement = new Map();
+  existingItems.forEach((el) => otToElement.set(el.dataset.queueOt, el));
 
-  if (sameSet) {
-    const otToElement = new Map();
-    existingItems.forEach((el) => otToElement.set(el.dataset.queueOt, el));
+  if (sameSet && visibleJobs.every((job) => {
+    const el = otToElement.get(job.ot);
+    return el && el.dataset.queueSig === queueItemSignature(job);
+  })) {
     const parent = els.priorityQueue;
     const queueEmpty = parent.querySelector(".queue-empty");
     if (queueEmpty) queueEmpty.remove();
@@ -2377,7 +2403,7 @@ function renderPriorityQueue() {
       ? "Trabajo programado fijo"
       : (job.locked ? "Trabajo bloqueado" : "Trabajo planeado");
     return `
-      <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
+      <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" data-queue-sig="${escapeHtml(queueItemSignature(job))}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
         <div class="queue-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="queue-main">
           <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>${workOrderSyncWarningHtml(job.ot)}
@@ -3083,6 +3109,7 @@ function applyPlanningOperatorSelectionsFromForm(form, requirements, options = {
         state.operators.push(name);
         if (state.operatorPerformance) state.operatorPerformance[name] = 100;
         addedOperators += 1;
+        rememberLocalCapabilityConfigEdit();
       }
     }
     enableOperatorsForCapability(entry.capability, filtered);
@@ -3101,6 +3128,7 @@ function enableOperatorsForCapability(capability, operators) {
   for (const name of selected) {
     if (!state.matrix[capability.key].includes(name)) state.matrix[capability.key].push(name);
   }
+rememberLocalCapabilityConfigEdit();
   assignPlanningOperators(state.operations.filter((op) => capabilityFromOperation(op).key === capability.key));
   if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
 }
@@ -4689,6 +4717,7 @@ function renderMatrix() {
         ? uniq([...state.excludedCapabilities, key])
         : state.excludedCapabilities.filter((item) => item !== key);
       invalidateCurrentPlanOperationsCache();
+      rememberLocalCapabilityConfigEdit();
       saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
       focusCapabilityPlanState(key);
     });
@@ -4721,6 +4750,7 @@ function renderMatrix() {
       checkpointState();
       const percent = Math.max(1, Math.min(300, Number(input.value) || 100));
       state.operatorPerformance[input.dataset.operator] = percent;
+      rememberLocalCapabilityConfigEdit();
       saveAndRender("Rendimiento del operador actualizado", "matrix");
     });
   });
@@ -4741,6 +4771,7 @@ function renderMatrix() {
     select.addEventListener("change", () => {
       checkpointState();
       state.capacityModes[select.dataset.capacityKey] = normalizeCapacityMode(select.value);
+      rememberLocalCapabilityConfigEdit();
       saveAndRender(`Capacidad ${select.value === "FINITA" ? "finita" : "no finita"} aplicada`, "matrix");
     });
   });
@@ -7801,6 +7832,7 @@ function addOperator() {
   state.operators.push(value);
   state.operatorProfiles[value] = { name: value, category: "FUERA_DE_PLAN" };
   state.operatorPerformance[value] = 100;
+  rememberLocalCapabilityConfigEdit();
   els.newOperatorInput.value = "";
   saveAndRender("Operador agregado", "matrix");
 }
@@ -7814,6 +7846,7 @@ function updateResourceProfile(resource, patch) {
   };
   state.operatorProfiles[resource].name = String(state.operatorProfiles[resource].name || resource).trim() || resource;
   state.operatorProfiles[resource].category = normalizeResourceCategory(state.operatorProfiles[resource].category);
+  rememberLocalCapabilityConfigEdit();
   saveAndRender("Recurso actualizado", "matrix");
 }
 
@@ -7839,6 +7872,7 @@ function addCt() {
   if (!state.matrix[capability.key]) state.matrix[capability.key] = [];
   if (!CAPACITY_MODES.includes(state.capacityModes[capability.key])) state.capacityModes[capability.key] = "FINITA";
   els.newCtInput.value = "";
+  rememberLocalCapabilityConfigEdit();
   saveAndRender("Operacion agregada", "matrix");
 }
 
@@ -7863,6 +7897,7 @@ function removeCapability(key) {
     delete state.matrix[capability.ct];
     delete state.capacityModes[capability.ct];
   }
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operacion retirada de la matriz; ${capability.count} operaciones del plan se conservaron`, "matrix");
 }
 
@@ -7883,6 +7918,7 @@ function removeOperator(operator) {
     op.log = appendLog(op.log, `OPERADOR_ELIMINADO_APP ${operator}`);
     released++;
   }
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operador eliminado; ${released} operaciones quedaron sin asignar`);
 }
 
@@ -7947,6 +7983,7 @@ function renameOperator(operator, requestedName) {
     state.settings.toolChangeOperator = nextName;
   }
 
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operador renombrado; ${reassigned} operaciones actualizadas`);
 }
 
@@ -7956,6 +7993,7 @@ function toggleMatrix(key, operator, checked, capability) {
   }
   if (checked && !state.matrix[key].includes(operator)) state.matrix[key].push(operator);
   if (!checked) state.matrix[key] = state.matrix[key].filter((name) => name !== operator);
+  rememberLocalCapabilityConfigEdit();
 }
 
 function operatorPerformanceForOperator(operator) {
@@ -8983,6 +9021,8 @@ async function applyImported(imported, options = {}) {
   const importedIsStaleSchedule = currentScheduleAtMs > 0 && importedScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
+  const localCapabilityConfigEdited = state._locallyEditedCapabilityConfig === true;
+  const preservedLocalCapabilityConfig = localCapabilityConfigEdited ? captureLocalCapabilityConfig() : null;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
     ? detectNetSuiteOtChanges(state, imported, { detectedAt: new Date().toISOString() })
     : null;
@@ -9077,6 +9117,7 @@ async function applyImported(imported, options = {}) {
   if (backlogDatasetChanged) resetBacklogWindow();
   normalizeState();
   applyLocalDraftRemovalTombstones(locallyRemovedDraftOts);
+  if (preservedLocalCapabilityConfig) restoreLocalCapabilityConfig(preservedLocalCapabilityConfig);
 }
 
 function applyLocalDraftRemovalTombstones(ots) {
@@ -10462,6 +10503,34 @@ function rememberLocalOtConfigurationEdit(ot) {
   state._locallyEditedOtConfigurations = [...new Set([...(state._locallyEditedOtConfigurations || []), key])];
 }
 
+const CAPABILITY_CONFIG_KEYS = [
+  "configuredCapabilities",
+  "customCapabilities",
+  "hiddenCapabilities",
+  "excludedCapabilities",
+  "capacityModes",
+  "matrix",
+  "operators",
+  "operatorProfiles",
+  "operatorPerformance",
+  "cts",
+];
+
+function rememberLocalCapabilityConfigEdit() {
+  state._locallyEditedCapabilityConfig = true;
+}
+
+function captureLocalCapabilityConfig() {
+  return CAPABILITY_CONFIG_KEYS.reduce((out, key) => {
+    if (Object.prototype.hasOwnProperty.call(state, key)) out[key] = deepClone(state[key]);
+    return out;
+  }, {});
+}
+
+function restoreLocalCapabilityConfig(snapshot) {
+  for (const [key, value] of Object.entries(snapshot || {})) state[key] = deepClone(value);
+}
+
 function applyMachineToJob(ot, machine) {
   const normalized = normalizeMachineValue(machine);
   const configuration = otConfigurationFor(ot);
@@ -10842,6 +10911,13 @@ function materialBaseForOt(ot) {
 }
 
 function materialOtKey(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function normalizeKey(value) {
+  if (typeof window !== "undefined" && typeof window.PlannerCore?.normalizeKey === "function") {
+    return window.PlannerCore.normalizeKey(value);
+  }
   return String(value || "").trim().toUpperCase();
 }
 
@@ -11487,6 +11563,7 @@ async function saveAppSheet(showMessage) {
     delete state._locallyRemovedDraftOts;
     delete state._locallyAddedDraftOts;
     delete state._locallyEditedOtConfigurations;
+    delete state._locallyEditedCapabilityConfig;
     if (showMessage) showToast("Hoja app guardada");
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;
@@ -11555,10 +11632,11 @@ function persistableState(source = state) {
 }
 
 function createAppSheetPayload(source = state) {
-  const payload = { ...deepClone(persistableState(source)) };
+  const payload = persistableState(source);
   delete payload._locallyRemovedDraftOts;
   delete payload._pendingAddOt;
   delete payload._pendingAddOtSnapshot;
+  delete payload._locallyEditedCapabilityConfig;
   delete payload.machineToolHistory;
   return {
     ...payload,

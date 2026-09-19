@@ -240,7 +240,8 @@
       ],
       "readers": [
         "PP_readState_ (PP_mapWorkOrder_)",
-        "syncNetSuiteWorkOrdersLite"
+        "syncNetSuiteWorkOrdersLite",
+        "DASH_getOrdenesRows_ (dashboard-control-prod: cuadrante 2 Saldrán; JOIN por OT normalizada con fallback de dígitos para cliente/cobertura)"
       ],
       "writers": [
         "PP_writeState_",
@@ -555,7 +556,8 @@
       "readers": [
         "PP_readState_ (PP_buildOperationPlanStatuses_)",
         "saveOperationPlanStatus",
-        "syncNetSuiteWorkOrdersLite"
+        "syncNetSuiteWorkOrdersLite",
+        "DASH_getEstadosRows_ (dashboard-control-prod: cuadrante 1 Arrancan → primera operación completada)"
       ],
       "writers": [
         "PP_writeState_",
@@ -671,7 +673,8 @@
         "PP_getPlanSnapshot_ (snapshotId='draft')",
         "PP_listPlanSnapshots_",
         "PP_replaceDraftSnapshot_",
-        "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)"
+        "loadIncrementalPlanningBase / window.runPlanningPerformanceDryRun (frontend, solo lectura)",
+        "DASH_getBorradorRows_ (dashboard-control-prod: cuadrantes 1 Arrancan y 2 Saldrán; solo filas SNAPSHOT_ID='draft')"
       ],
       "writers": [
         "PP_replaceDraftSnapshot_",
@@ -1302,7 +1305,8 @@
       ],
       "readers": [
         "PP_loadPhotoCatalog_",
-        "PP_enrichWorkOrderPhotos_"
+        "PP_enrichWorkOrderPhotos_",
+        "DASH.getFotosBatch vía biblioteca inventario (dashboard-control-prod: thumbs del cuadrante 4 excesos/obsoletos)"
       ],
       "writers": [],
       "rules": [],

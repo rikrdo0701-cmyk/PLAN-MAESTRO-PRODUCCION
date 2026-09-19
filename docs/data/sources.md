@@ -101,7 +101,9 @@ Headers (18): `ID, WO_INTERNAL_ID, OT, ARTICULO, DESCRIPCION, FOTO_URL, FECHA_IN
 FECHA_FIN_NS, FECHA_VENCIMIENTO, FECHA_ENTREGA_AJUSTADA, CANTIDAD, ESTATUS, CLIENTE,
 CANT_ENSAMBLADA, CANT_PENDIENTE, PRECIO_PROMEDIO_VENTA, PRECIO_DESDE, PRECIO_HASTA`.
 
-- Readers: `PP_readState_` → `PP_mapWorkOrder_`; `syncNetSuiteWorkOrdersLite`.
+- Readers: `PP_readState_` → `PP_mapWorkOrder_`; `syncNetSuiteWorkOrdersLite`;
+  `DASH_getOrdenesRows_` (dashboard-control-prod: cuadrante 2 "Saldrán"; JOIN por OT
+  normalizada con fallback de dígitos para mostrar cliente y cobertura vía `CANT_ENSAMBLADA`).
 - Writers: `PP_writeState_`, `PP_writeNetSuiteSyncState_`, `PP_writeNetSuiteWorkOrdersState_`,
   `PP_writeWorkOrderSyncState_`, `savePlanningStateOptimized`.
 - Restricción: el payload ligero de `fetchNetSuiteWorkOrdersLite` no incluye tiempos de operación
