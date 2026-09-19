@@ -167,15 +167,31 @@ function savePlanningStateOptimized(payload) {
  * No reemplaza el borrador, las OTs ni la tabla de operaciones.
  */
 function saveOperationPlanStatus(payload) {
-  const status = payload && payload.status;
-  const key = String(status && (status.key || status.completionKey) || '').trim();
-  if (!key) throw new Error('Falta la clave del estado de operacion');
-  const normalizedStatus = String(status.status || status.planStatus || '').trim().toUpperCase();
-  if (normalizedStatus !== 'COMPLETADA_PLAN' && normalizedStatus !== 'PENDIENTE') {
-    throw new Error('Estado de operacion no valido');
-  }
-  const origin = String(status.origin || payload && payload.origin || '').trim();
+  const origin = String(payload && payload.origin || '').trim();
   const normalizedOrigin = origin === 'draft' || !origin ? 'draft' : origin;
+  let statuses;
+  if (Array.isArray(payload && payload.statuses) && payload.statuses.length) {
+    statuses = payload.statuses;
+  } else if (payload && payload.status) {
+    statuses = [payload.status];
+  } else {
+    throw new Error('Falta el estado de operacion');
+  }
+  const normalizedStatuses = statuses.map(function(status) {
+    const key = String(status && (status.key || status.completionKey) || '').trim();
+    if (!key) throw new Error('Falta la clave del estado de operacion');
+    const normalizedStatus = String(status.status || status.planStatus || '').trim().toUpperCase();
+    if (normalizedStatus !== 'COMPLETADA_PLAN' && normalizedStatus !== 'PENDIENTE') {
+      throw new Error('Estado de operacion no valido');
+    }
+    const statusOrigin = String(status.origin || '').trim();
+    return {
+      data: status,
+      key: key,
+      status: normalizedStatus,
+      origin: statusOrigin === 'draft' || !statusOrigin ? 'draft' : statusOrigin
+    };
+  });
 
   const lock = PP_acquireScriptLock_('guardar estado de operacion', 30000);
   try {
@@ -185,11 +201,14 @@ function saveOperationPlanStatus(payload) {
     const byOrigin = PP_readOperationStatusesByOrigin_(
       PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'))
     );
-    if (!byOrigin[normalizedOrigin]) byOrigin[normalizedOrigin] = {};
-    byOrigin[normalizedOrigin][key] = Object.assign({}, byOrigin[normalizedOrigin][key] || {}, status, {
-      key: key,
-      status: normalizedStatus,
-      origin: normalizedOrigin
+    const affectedKeys = normalizedStatuses.map(function(item) {
+      if (!byOrigin[item.origin]) byOrigin[item.origin] = {};
+      byOrigin[item.origin][item.key] = Object.assign({}, byOrigin[item.origin][item.key] || {}, item.data, {
+        key: item.key,
+        status: item.status,
+        origin: item.origin
+      });
+      return { key: item.key, status: item.status, origin: item.origin };
     });
 
     const revision = Number(config.revision || 0) + 1;
@@ -216,11 +235,12 @@ function saveOperationPlanStatus(payload) {
       Session.getActiveUser().getEmail() || 'usuario',
       'GUARDAR_ESTADO_OPERACION',
       revision,
-      JSON.stringify({ key: key, status: normalizedStatus, origin: normalizedOrigin })
+      JSON.stringify(affectedKeys)
     ]);
     SpreadsheetApp.flush();
+    const first = affectedKeys[0];
     return PP_writeStateAck_(revision, savedAt, {
-      operationPlanStatus: byOrigin[normalizedOrigin][key]
+      operationPlanStatus: byOrigin[first.origin][first.key]
     });
   } finally {
     lock.releaseLock();

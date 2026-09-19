@@ -763,6 +763,43 @@ test("completar funciona con operaciones de un plan publicado seleccionado", asy
   assert.deepEqual(fixture.state.lockedOts, ["200"]);
 });
 
+test("completar la ultima de una secuencia persiste todas las anteriores en un solo guardado", async () => {
+  const calls = [];
+  const fixture = loadPlanStatus({
+    rows: ["op-1", "op-2", "op-3"],
+    reportStatus: "PENDIENTES",
+    operations: [
+      { id: "op-1", ot: "300", ct: "CORTE", secuencia: 1, fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "300", ct: "DOBLEZ", secuencia: 2, fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-3", ot: "300", ct: "SOLDEO", secuencia: 3, fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+    ],
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return Promise.resolve({ revision: 2, savedAt: "2026-08-01T00:00:00.000Z" });
+    },
+  });
+
+  fixture.api.bindPlanStatusActions({ querySelectorAll: () => fixture.buttons });
+  await fixture.buttons[2].listener();
+
+  assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operationPlanStatuses["op-2"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operationPlanStatuses["op-3"].status, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operations[0].planStatus, "COMPLETADA_PLAN");
+  assert.equal(fixture.state.operations[1].planStatus, "COMPLETADA_PLAN");
+  assert.deepEqual(calls.map(([method]) => method), ["saveOperationPlanStatus"]);
+  const payload = calls[0][1];
+  assert.ok(Array.isArray(payload.statuses), "debe enviar statuses[] para persistir la cascada");
+  assert.deepEqual(
+    payload.statuses.map((item) => item.key).sort(),
+    ["op-1", "op-2", "op-3"],
+    JSON.stringify(payload.statuses),
+  );
+  assert.ok(payload.statuses.every((item) => item.status === "COMPLETADA_PLAN"), JSON.stringify(payload.statuses));
+  assert.equal(payload.status.operationId, "op-3");
+  assert.deepEqual(fixture.state.lockedOts, ["300"]);
+});
+
 test("reabrir la unica operacion completada desbloquea la OT", async () => {
   const calls = [];
   const publishedOperation = {

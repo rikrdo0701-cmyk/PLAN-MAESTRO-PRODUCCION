@@ -2380,7 +2380,7 @@ function renderPriorityQueue() {
       el.classList.toggle("locked", !job.programmed && job.locked);
       const cannotMove = job.programmed || job.locked;
       const startMoveButton = el.querySelector("[data-start-queue-move]");
-      if (startMoveButton) startMoveButton.disabled = cannotMove || activeMoveOt === job.ot;
+if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt === job.ot;
       const lockButton = el.querySelector("[data-lock-ot]");
       if (lockButton) {
         lockButton.classList.toggle("locked", !job.programmed && job.locked);
@@ -3637,6 +3637,26 @@ function toggleJobLock(ot) {
   scheduleJobLockBackgroundWork();
   showToast(`OT ${ot} ${locked ? "bloqueada" : "desbloqueada"}`);
   saveState("plan");
+}
+
+function updateQueueLockCard(ot) {
+  if (!els.priorityQueue) return;
+  els.priorityQueue.querySelectorAll("[data-queue-ot]").forEach((el) => {
+    if (materialOtKey(el.dataset.queueOt) !== materialOtKey(ot)) return;
+    const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
+    if (!job) return;
+    const cannotMove = job.programmed || job.locked;
+    const lockButton = el.querySelector("[data-lock-ot]");
+    if (lockButton) {
+      lockButton.classList.toggle("locked", !job.programmed && job.locked);
+      lockButton.disabled = Boolean(job.programmed);
+      lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+      lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+    }
+    el.classList.toggle("locked", !job.programmed && job.locked);
+    const startMoveButton = el.querySelector("[data-start-queue-move]");
+    if (startMoveButton) startMoveButton.disabled = cannotMove || activeMoveOt === job.ot;
+  });
 }
 
 function updateJobLockDetail(ot) {
@@ -7670,15 +7690,16 @@ async function performToggleOperationPlanStatus(key) {
     operation.needsReschedule = false;
     operation.log = appendLog(operation.log, "COMPLETADA_PLAN_APP");
   }
-  completePriorSequenceOperations(operation?.ot || current?.ot || "", operation, key);
+  const cascadeChanges = completePriorSequenceOperations(operation?.ot || current?.ot || "", operation, key);
   const completedOt = String(operation?.ot || current?.ot || "").trim();
   if (completedOt) blockOtForCompletion(completedOt);
   return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts,
-    type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
+    type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada", cascadeChanges);
 }
 
 function completePriorSequenceOperations(ot, completedOperation, completedKey) {
-  if (!ot || !Array.isArray(state.operations)) return;
+  const cascadeChanges = [];
+  if (!ot || !Array.isArray(state.operations)) return cascadeChanges;
   const origin = planStatusOriginForSource();
   const statuses = origin === "draft" ? draftViewStatuses() : statusesForPlanOrigin(origin);
   const affectsDraft = origin === "draft" || origin === latestPublishedOriginId();
@@ -7686,11 +7707,13 @@ function completePriorSequenceOperations(ot, completedOperation, completedKey) {
     .filter((op) => String(op.ot) === String(ot))
     .sort((a, b) => sequenceSort(a, b) || ((opStart(a)?.getTime() || 0) - (opStart(b)?.getTime() || 0)));
   const targetIndex = sequence.findIndex((op) => op === completedOperation || operationCompletionKey(op) === completedKey);
-  if (targetIndex < 0) return;
+  if (targetIndex < 0) return cascadeChanges;
   for (let i = 0; i < targetIndex; i++) {
     const prior = sequence[i];
     const priorKey = operationCompletionKey(prior);
     if (!priorKey || statuses[priorKey]?.status === "COMPLETADA_PLAN") continue;
+    const previousStatus = statuses[priorKey] ? deepClone(statuses[priorKey]) : undefined;
+    const previousPlanStatus = prior.planStatus;
     writePlanStatusByOrigin(priorKey, {
       key: priorKey,
       type: isToolChangeReportOperation(prior) ? "TOOL_CHANGE" : "OPERATION",
@@ -7710,7 +7733,9 @@ function completePriorSequenceOperations(ot, completedOperation, completedKey) {
       prior.needsReschedule = false;
       prior.log = appendLog(prior.log, "COMPLETADA_PLAN_APP");
     }
+    cascadeChanges.push({ key: priorKey, ot: prior.ot || "", previousStatus, previousPlanStatus, prior });
   }
+  return cascadeChanges;
 }
 
 function blockOtForCompletion(ot) {
@@ -7737,16 +7762,20 @@ function unblockOtAfterCompletion(ot) {
   appSheetMarkDirtyScope("plan");
 }
 
-async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts, message) {
+async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts, message, cascadeChanges = []) {
+  const affectedKeys = [key, ...cascadeChanges.map((item) => item.key).filter((itemKey) => itemKey && itemKey !== key)];
+  const affectedOts = [operation?.ot, ...cascadeChanges.map((item) => item.ot)].filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
   const renderPlanStatusChange = () => {
-    renderPlanStatusRow(key);
+    affectedKeys.forEach((itemKey) => renderPlanStatusRow(itemKey));
+    if (typeof updateQueueLockCard === "function") affectedOts.forEach((ot) => updateQueueLockCard(ot));
     schedulePlanStatusBackgroundWork();
   };
 
   renderPlanStatusChange();
   showToast(message);
   if (!appSheetAvailable) {
-    discardDetachedPlanStatusRows(key);
+    affectedKeys.forEach(discardDetachedPlanStatusRows);
     return true;
   }
   try {
@@ -7756,15 +7785,17 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       operationStatusSavesInFlight += 1;
       try {
         const origin = planStatusOriginForSource();
-        const savedStatus = (origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin])?.[key];
+        const bucket = origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin] || {};
+        const savedStatuses = affectedKeys.map((itemKey) => bucket[itemKey]).filter(Boolean);
         saved = await callAppsScript("saveOperationPlanStatus", {
           revision: Number(state.revision || 0),
-          status: savedStatus || {},
+          status: savedStatuses[0] || {},
+          statuses: savedStatuses,
         });
         state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
         state.savedAt = saved?.savedAt || state.savedAt;
-        clearPendingPlanStatusSaveKeys(key);
-        discardDetachedPlanStatusRows(key);
+        affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+        affectedKeys.forEach(discardDetachedPlanStatusRows);
         return true;
       } finally {
         operationStatusSavesInFlight -= 1;
@@ -7774,16 +7805,20 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       appSheetMarkDirtyScope("plan");
       if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
     }
-    clearPendingPlanStatusSaveKeys(key);
-    discardDetachedPlanStatusRows(key);
+    affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+    affectedKeys.forEach(discardDetachedPlanStatusRows);
     return true;
   } catch (error) {
     console.warn("No se pudo guardar el estado de la operacion:", error);
     showToast("Error de guardado; intente recargar la pagina", 5000);
   }
-  clearPendingPlanStatusSaveKeys(key);
+  affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
   rollbackPlanStatusByOrigin(key, previousStatus);
   if (operation && previousOperation) Object.assign(operation, previousOperation);
+  cascadeChanges.forEach((item) => {
+    rollbackPlanStatusByOrigin(item.key, item.previousStatus);
+    if (item.prior) item.prior.planStatus = item.previousPlanStatus;
+  });
   if (Array.isArray(previousLockedOts)) {
     state.lockedOts = [...previousLockedOts];
     state.operations.forEach((op) => { op.locked = previousLockedOts.includes(String(op.ot)); });
