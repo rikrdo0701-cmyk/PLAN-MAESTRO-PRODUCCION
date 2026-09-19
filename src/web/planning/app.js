@@ -563,6 +563,7 @@ let operatorLoadsRenderMemo = null;
 let reportOperatorLoadsRenderMemo = null;
 let planStateMutationVersion = 0;
 let planStatusBackgroundRefreshPending = false;
+let jobLockBackgroundRefreshPending = false;
 let renderGanttStructureMemo = null;
 let ganttStructureDomCache = new Map();
 const els = {};
@@ -2380,6 +2381,13 @@ function renderPriorityQueue() {
       const cannotMove = job.programmed || job.locked;
       const startMoveButton = el.querySelector("[data-start-queue-move]");
       if (startMoveButton) startMoveButton.disabled = cannotMove || activeMoveOt === job.ot;
+      const lockButton = el.querySelector("[data-lock-ot]");
+      if (lockButton) {
+        lockButton.classList.toggle("locked", !job.programmed && job.locked);
+        lockButton.disabled = Boolean(job.programmed);
+        lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+        lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+      }
       if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
     });
     return;
@@ -3619,11 +3627,34 @@ function toggleJobLock(ot) {
   const locked = !isJobLocked(ot);
   state.lockedOts = locked ? uniq([...state.lockedOts, ot]) : state.lockedOts.filter((item) => item !== ot);
   invalidatePriorityJobsCache();
-  state.operations.filter((op) => op.ot === ot).forEach((op) => {
+  const operationsByOt = (planningStateIndexes().operationsByOt.get(materialOtKey(ot)) || []);
+  for (const op of operationsByOt) {
     op.locked = locked;
     op.log = appendLog(op.log, locked ? "OT_BLOQUEADA_APP" : "OT_DESBLOQUEADA_APP");
-  });
-  saveAndRender(`OT ${ot} ${locked ? "bloqueada" : "desbloqueada"}`);
+  }
+  renderPriorityQueue();
+  updateJobLockDetail(ot);
+  scheduleJobLockBackgroundWork();
+  showToast(`OT ${ot} ${locked ? "bloqueada" : "desbloqueada"}`);
+  saveState("plan");
+}
+
+function updateJobLockDetail(ot) {
+  if (!els.selectedJobPanel || selectedJobOt() !== ot) return;
+  const job = getPriorityJobs().find((item) => item.ot === ot);
+  if (!job) return;
+  const lockButton = els.selectedJobPanel.querySelector("[data-detail-lock]");
+  if (lockButton) {
+    lockButton.classList.toggle("locked", job.locked);
+    lockButton.disabled = Boolean(job.programmed);
+    lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+    lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+  }
+  const refreshButton = els.selectedJobPanel.querySelector("[data-detail-ot-refresh]");
+  if (refreshButton) {
+    refreshButton.disabled = Boolean(job.locked);
+    refreshButton.setAttribute("title", job.locked ? "OT bloqueada: no se actualizan tiempos porque esta fija" : "Actualizar OT desde NetSuite");
+  }
 }
 
 function toggleAllJobs(locked) {
@@ -7539,6 +7570,23 @@ function schedulePlanStatusBackgroundWork() {
   if (typeof planStatusBackgroundRefreshPending !== "undefined" && planStatusBackgroundRefreshPending) return;
   if (typeof planStatusBackgroundRefreshPending !== "undefined") planStatusBackgroundRefreshPending = true;
   if (typeof window.schedulePlanStatusBackgroundRefresh === "function") window.schedulePlanStatusBackgroundRefresh(refresh);
+  else window.setTimeout(refresh, 24);
+}
+
+function scheduleJobLockBackgroundWork() {
+  const refresh = () => {
+    if (typeof jobLockBackgroundRefreshPending !== "undefined") jobLockBackgroundRefreshPending = false;
+    invalidateGanttCache();
+    renderTop();
+    renderPlanAlerts();
+    const activeView = typeof document !== "undefined" ? document.querySelector(".workspace")?.dataset.view : "";
+    const view = activeView || "plan";
+    if (view === "plan") renderGantt();
+    if (view === "loads" || view === "saturation") renderLoads();
+  };
+  if (typeof jobLockBackgroundRefreshPending !== "undefined" && jobLockBackgroundRefreshPending) return;
+  if (typeof jobLockBackgroundRefreshPending !== "undefined") jobLockBackgroundRefreshPending = true;
+  if (typeof window.scheduleJobLockBackgroundRefresh === "function") window.scheduleJobLockBackgroundRefresh(refresh);
   else window.setTimeout(refresh, 24);
 }
 

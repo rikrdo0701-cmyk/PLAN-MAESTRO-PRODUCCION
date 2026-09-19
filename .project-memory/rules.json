@@ -1136,6 +1136,15 @@
       "updated_at": "2026-09-19"
     },
     {
+      "rule_id": "RULE-UI-012",
+      "name": "Bloquear/Desbloquear OT usa render dirigido de cola + fondo coalescido, sin render global",
+      "status": "implementada",
+      "rule": "toggleJobLock(ot) (app.js) terminaba en saveAndRender(..., 'plan'): con parts={} el render() reconstruia TODO (renderTop + renderPlanAlerts + renderDraftExecutiveSummary + renderPriorityList ~1498 tarjetas + renderPriorityQueue + renderGantt + renderLoads + renderSaturation + renderMatrix + renderConfiguration + renderReports) e invalidaba la cache del Gantt en cada click de candado, mientras toggleAllJobs ya era barato (saveAndRenderQueueChange: solo renderPriorityQueue). Ademas aplicaba state.operations.filter((op) => op.ot === ot) O(n) sobre ~2163 ops. FIX 2026-09-19: (1) la mutacion de op.locked/appendLog usa planningStateIndexes().operationsByOt.get(materialOtKey(ot)) O(k) por OT (indice RULE-OT-002); (2) en lugar de saveAndRender se llama renderPriorityQueue() (tiene fast-path por data-queue-sig, app.js:2366-2387, que sin reconstruir la cola re-aplica clases .locked/pinned/focused, disabled de mover y AHORA tambien actualiza el boton [data-lock-ot] de la tarjeta: clase locked, disabled por programmed, aria-label/title), mas updateJobLockDetail(ot) que actualiza SOLO [data-detail-lock] y [data-detail-ot-refresh] del panel de detalle abierto sin reconstruir renderSelectedJobPanel (aria-label/title/disabled reflejan locked/programmed), mas scheduleJobLockBackgroundWork() coalescido (flag jobLockBackgroundRefreshPending, patron schedulePlanStatusBackgroundWork, app.js:565): invalidateGanttCache + renderTop + renderPlanAlerts y renderGantt solo si la vista activa es plan (renderLoads si loads/saturation); (3) se conserva checkpointState() (undo) y saveState('plan'). El SVG/candado del detalle y de la tarjeta quedan coherentes al instante sin barrido global. RULE-UI-007/RULE-UI-008 complementarios.",
+      "source": "pedido usuario 2026-09-19 (fast o clean re-calc al bloquear/desbloquear, aprobado); FIX 2026-09-19 src/web/planning/app.js (toggleJobLock, updateJobLockDetail, scheduleJobLockBackgroundWork, fast-path renderPriorityQueue boton [data-lock-ot]); tests/build.test.mjs ('bloquear/desbloquear OT no vuelve al render global y usa el indice operationsByOt'); RULE-OT-002/RULE-UI-003/RULE-UI-007",
+      "domain": "UI",
+      "updated_at": "2026-09-19"
+    },
+    {
       "rule_id": "RULE-PERF-001",
       "name": "Los payloads de publicacion y guardado excluyen machineToolHistory desde persistableState(): < 2 MB y el guardado automatico deja de deep-clonar ~565 KB por save",
       "status": "implementada",

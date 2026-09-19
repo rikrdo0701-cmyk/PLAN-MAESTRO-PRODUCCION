@@ -1983,3 +1983,20 @@ test("publicar plan guarda la nueva version directo, sin dialogo de motivo ni co
   assert.doesNotMatch(publish, /compactVersionDiff\(/);
   assert.match(publish, /callAppsScript\("publishDraftPlan", payload\)/);
 });
+
+test("bloquear/desbloquear OT no vuelve al render global y usa el indice operationsByOt", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const lockSource = planningApp.slice(
+    planningApp.indexOf("function toggleJobLock("),
+    planningApp.indexOf("function toggleAllJobs("),
+  );
+  assert.match(lockSource, /planningStateIndexes\(\)\.operationsByOt\.get\(materialOtKey\(ot\)\)/);
+  assert.match(lockSource, /renderPriorityQueue\(\)/);
+  assert.match(lockSource, /updateJobLockDetail\(ot\)/);
+  assert.match(lockSource, /scheduleJobLockBackgroundWork\(\)/);
+  assert.match(lockSource, /saveState\("plan"\)/);
+  assert.doesNotMatch(lockSource, /saveAndRender\(/);
+  assert.doesNotMatch(lockSource, /state\.operations\.filter\(\(op\) => op\.ot === ot\)/);
+  assert.match(planningApp, /function scheduleJobLockBackgroundWork\(\)/);
+  assert.match(planningApp, /jobLockBackgroundRefreshPending/);
+});
