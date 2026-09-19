@@ -677,13 +677,20 @@ async function maybeRestoreSavedDraftOnBoot() {
       draftByOt.get(key).push(op);
     }
     const merged = [];
+    const emittedIds = new Set();
+    const pushUnique = (op) => {
+      const id = String(op.id || "");
+      if (id && emittedIds.has(id)) return;
+      if (id) emittedIds.add(id);
+      merged.push(op);
+    };
     for (const op of (state.operations || [])) {
       const key = normalizeKey(op.ot);
-      if (!key || !draftByOt.has(key)) { merged.push(op); continue; }
-      merged.push(...draftByOt.get(key));
+      if (!draftByOt.has(key)) { pushUnique(op); continue; }
+      for (const rop of draftByOt.get(key)) pushUnique(rop);
       draftByOt.delete(key);
     }
-    for (const ops of draftByOt.values()) merged.push(...ops);
+    for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
     state.operations = merged;
     if (Array.isArray(payload.selectedOts) && payload.selectedOts.length) state.selectedOts = payload.selectedOts;
     else state.selectedOts = uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean));
@@ -1335,7 +1342,7 @@ function normalizeState() {
   state.operatorPerformance = normalizeOperatorPerformance(state.operatorPerformance, state.operators);
   state.cts = Array.isArray(state.cts) ? state.cts : [];
   ensureToolChangeCapability();
-  state.operations = (Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index));
+  state.operations = dedupeOperationsById((Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index)));
   invalidateCurrentPlanOperationsCache();
   for (const op of state.operations) {
     const status = draftViewStatuses()[operationCompletionKey(op)];
@@ -1437,6 +1444,29 @@ function ensureToolChangeCapability() {
   if (!state.configuredCapabilities.includes(key)) state.configuredCapabilities.push(key);
   if (!Array.isArray(state.matrix[key])) state.matrix[key] = uniq(legacyOperators);
   if (!CAPACITY_MODES.includes(state.capacityModes[key])) state.capacityModes[key] = "FINITA";
+}
+
+function dedupeOperationsById(operations) {
+  const byId = new Map();
+  for (const op of operations || []) {
+    const id = String(op.id || "");
+    if (!id) continue;
+    const existing = byId.get(id);
+    if (!existing) { byId.set(id, op); continue; }
+    const score = (candidate) => {
+      let s = 0;
+      if (String(candidate.estatus || "").toUpperCase() === "PLAN") s += 2;
+      if (candidate.fechaInicio && candidate.horaInicio) s += 1;
+      if (candidate.herramental) s += 1;
+      if (candidate.maquina) s += 1;
+      return s;
+    };
+    if (score(op) > score(existing)) byId.set(id, op);
+  }
+  return (operations || []).filter((op) => {
+    const id = String(op.id || "");
+    return !id || byId.get(id) === op;
+  });
 }
 
 function normalizeOperation(op, index) {
