@@ -9,6 +9,11 @@ const context = { globalThis: {}, setTimeout, clearTimeout };
 vm.runInNewContext(source, context, { filename: "planning-workflow-core.js" });
 const core = context.globalThis.PlanningWorkflowCore;
 
+const plannerSource = await readFile(path.resolve("src/web/planning/planner-core.js"), "utf8");
+const plannerContext = { globalThis: {} };
+vm.runInNewContext(plannerSource, plannerContext, { filename: "planner-core.js" });
+const PlannerCore = plannerContext.globalThis.PlannerCore;
+
 test("normaliza el inicio semanal y elige publicado o borrador como base incremental", () => {
   assert.equal(core.mondayIso("2026-07-23"), "2026-07-20");
   const draft = { snapshotId: "draft", planStart: "2026-07-20" };
@@ -117,7 +122,7 @@ test("markPlanningOtSynced registra el timestamp por OT sin tocar las demas", ()
   assert.equal(core.planningOtSyncedAt(stamped, "3"), 0);
 });
 
-test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y descarta completadas", () => {
+test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y conserva completadas", () => {
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",
     fechaFin: "2026-07-01", horaFin: "10:00", operador: "OP 1", maquina: "M1",
@@ -140,16 +145,16 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no
   assert.notEqual(result, state);
   assert.notEqual(result.operations, state.operations);
   assert.deepEqual(structuredClone(result.operations.map((operation) => operation.id)),
-    ["movable", "marked-locked-only", "other", "historical", "locked-by-ot", "programmed", "frozen"]);
-  assert.equal(result.operations.some((operation) => operation.id === "completed"), false);
+    ["movable", "completed", "marked-locked-only", "other", "historical", "locked-by-ot", "programmed", "frozen"]);
+  assert.deepEqual(structuredClone(result.operations[1]), completed);
   assert.deepEqual(structuredClone(result.operations[0]), {
     ...movable,
     fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
     operador: "",
     needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
   });
-  assert.deepEqual(structuredClone(result.operations.slice(2, 5)), original.operations.slice(3, 6));
-  assert.deepEqual(structuredClone([result.operations[1], ...result.operations.slice(5)]), [
+  assert.deepEqual(structuredClone(result.operations.slice(3, 6)), original.operations.slice(3, 6));
+  assert.deepEqual(structuredClone([result.operations[2], result.operations[6], result.operations[7]]), [
     markedLockedOnly, programmed, frozen,
   ].map((operation) => ({
     ...operation,
@@ -159,7 +164,7 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no
   })));
 });
 
-test("prepareDraftForReschedule reprograma OT bloqueada SIN operaciones con programa (se limpian fechas)", () => {
+test("prepareDraftForReschedule reprograma OT bloqueada SIN operaciones con programa (se limpian fechas) y conserva completadas", () => {
   const undated = { id: "undated", ot: "200", secuencia: 1, estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1" };
   const partial = { id: "partial", ot: "200", secuencia: 2, estatus: "PLAN", planStatus: "PENDIENTE", fechaInicio: "2026-06-28" };
   const completed = { id: "done", ot: "200", secuencia: 1, planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-06-27", horaInicio: "08:00", fechaFin: "2026-06-27", horaFin: "09:00" };
@@ -170,7 +175,7 @@ test("prepareDraftForReschedule reprograma OT bloqueada SIN operaciones con prog
 
   assert.deepEqual(state, original);
   const byId = Object.fromEntries(result.operations.map((operation) => [operation.id, operation]));
-  assert.equal(byId.done, undefined);
+  assert.deepEqual(structuredClone(byId.done), completed);
   assert.equal(byId.undated.fechaInicio, "");
   assert.equal(byId.undated.horaInicio, "");
   assert.equal(byId.undated.fechaFin, "");
@@ -1362,4 +1367,90 @@ test("planAnchoredAt: casos borde (vacio, sin planStart valido, array plano)", (
   assert.equal(core.planAnchoredAt([], "2026-08-28"), false);
   assert.equal(core.planAnchoredAt({}, "2026-08-28"), false);
   assert.equal(core.planAnchoredAt([{ ot: "3143", fechaInicio: "2026-08-28" }], ""), false);
+});
+
+test("marcar completadas desde el borrador y generar plan no las reprograma y el export solo muestra pendientes", async () => {
+  const base = { ot: "3177", estatus: "PLAN", operador: "OP 1", maquina: "M1", tiempoProd: 10, tiempoSetup: 5 };
+  const ops = [
+    { ...base, id: "3177-op-1", secuencia: 106, ct: "5458", descripcion: "3OTD CORTE",
+      fechaInicio: "2026-09-13", horaInicio: "07:00", fechaFin: "2026-09-13", horaFin: "07:15", planStatus: "COMPLETADA_PLAN" },
+    { ...base, id: "3177-op-2", secuencia: 107, ct: "5459", descripcion: "10OTD DOBLEZ",
+      fechaInicio: "2026-09-13", horaInicio: "07:15", fechaFin: "2026-09-13", horaFin: "07:30", planStatus: "COMPLETADA_PLAN" },
+    { ...base, id: "3177-op-3", secuencia: 108, ct: "5461", descripcion: "12OTD", planStatus: "PENDIENTE" },
+  ];
+  const operationPlanStatuses = {
+    "OP|3177|106|5458": { key: "OP|3177|106|5458", status: "COMPLETADA_PLAN", origin: "draft", ot: "3177", sequence: 106, ct: "5458", completedAt: "2026-09-13T18:00:00Z" },
+    "OP|3177|107|5459": { key: "OP|3177|107|5459", status: "COMPLETADA_PLAN", origin: "draft", ot: "3177", sequence: 107, ct: "5459", completedAt: "2026-09-13T18:00:00Z" },
+  };
+  const state = {
+    selectedOts: ["3177"],
+    lockedOts: ["3177"],
+    operations: ops,
+    operationPlanStatuses,
+    workOrders: [{ ot: "3177", status: "En curso" }],
+    matrix: { "5458::3OTD_CORTE": ["OP 1"], "5459::10OTD_DOBLEZ": ["OP 1"], "5461::12OTD": ["OP 1"] },
+    configuredCapabilities: ["5458::3OTD_CORTE", "5459::10OTD_DOBLEZ", "5461::12OTD"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false },
+    workSchedule: {},
+  };
+  const prepared = core.prepareDraftForReschedule(structuredClone(state), Object.keys(operationPlanStatuses)
+    .map(() => "3177"));
+
+  const result = await PlannerCore.schedulePlan(structuredClone(prepared), {
+    planStart: "2026-09-14",
+    horizonDays: 7,
+    executionTime: "2026-09-14T07:00:00",
+    respectPlanStart: true,
+    fastQualityMode: true,
+    completeAll: true,
+    affectedOts: ["3177"],
+  });
+
+  const byId = Object.fromEntries(result.operations.map((op) => [op.id, op]));
+  assert.equal(byId["3177-op-1"].planStatus, "COMPLETADA_PLAN");
+  assert.equal(byId["3177-op-1"].fechaInicio, "2026-09-13");
+  assert.equal(byId["3177-op-2"].planStatus, "COMPLETADA_PLAN");
+  assert.equal(byId["3177-op-2"].fechaFin, "2026-09-13");
+  assert.ok(byId["3177-op-3"].fechaInicio, "la pendiente debe reprogramarse");
+
+  const exported = core.draftExportOperations({ ...result, selectedOts: ["3177"] });
+  assert.deepEqual(structuredClone(exported.map((op) => op.id)), ["3177-op-3"]);
+});
+
+test("reconcileOperationPlanStatuses migra claves legacy OP|<id> a la clave estable y poda huérfanos", () => {
+  const state = {
+    operations: [
+      { id: "netsuite-999", ot: "3177", secuencia: 106, ct: "5458", tipoInsercion: "OPERACION" },
+      { id: "netsuite-1000", ot: "3177", secuencia: 107, ct: "5459", tipoInsercion: "OPERACION" },
+      { id: "tool-change-1", ot: "3177", secuencia: 0, ct: "5458", tipoInsercion: "CAMBIO_HERRAMENTAL", maquina: "M1", herramental: "H1" },
+    ],
+    operationPlanStatuses: {
+      "OP|netsuite-999": { key: "OP|netsuite-999", type: "OPERATION", status: "COMPLETADA_PLAN", ot: "3177", sequence: 106, ct: "5458" },
+      "OP|netsuite-1000": { key: "OP|netsuite-1000", type: "OPERATION", status: "COMPLETADA_PLAN", ot: "3177", sequence: 107, ct: "5459" },
+      "OP|netsuite-9999": { key: "OP|netsuite-9999", type: "OPERATION", status: "COMPLETADA_PLAN", ot: "3177", sequence: 999, ct: "5400" },
+      "TOOL_CHANGE|3177|M1|H1": { key: "TOOL_CHANGE|3177|M1|H1", type: "TOOL_CHANGE", status: "COMPLETADA_PLAN", ot: "3177" },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.equal(reconciled["OP|3177|106|5458"].key, "OP|3177|106|5458");
+  assert.equal(reconciled["OP|3177|107|5459"].key, "OP|3177|107|5459");
+  assert.ok(!reconciled["OP|netsuite-999"], "la clave legacy OP|<id> debe migrarse");
+  assert.ok(!reconciled["OP|netsuite-9999"], "la clave huerfana debe podarse");
+  assert.ok(reconciled["TOOL_CHANGE|3177|M1|H1"], "las claves TOOL_CHANGE se conservan");
+});
+
+test("reconcileOperationPlanStatuses conserva marcas de OTs aun no cargadas y deja inmutables las estables", () => {
+  const state = {
+    operations: [
+      { id: "netsuite-999", ot: "3177", secuencia: 106, ct: "5458", tipoInsercion: "OPERACION" },
+    ],
+    operationPlanStatuses: {
+      "OP|3177|106|5458": { key: "OP|3177|106|5458", type: "OPERATION", status: "COMPLETADA_PLAN", ot: "3177", sequence: 106, ct: "5458" },
+      "OP|4000|50|7001": { key: "OP|4000|50|7001", type: "OPERATION", status: "COMPLETADA_PLAN", ot: "4000", sequence: 50, ct: "7001" },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.equal(reconciled["OP|3177|106|5458"].key, "OP|3177|106|5458");
+  assert.equal(reconciled["OP|4000|50|7001"].key, "OP|4000|50|7001", "marcas de OT sin operaciones cargadas se conservan");
 });

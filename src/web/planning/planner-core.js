@@ -2663,9 +2663,7 @@ function operationToolKey(op, state) {
     if (normalizeKey(op?.tipoInsercion) === "CAMBIO_HERRAMENTAL") {
       return toolChangeCompletionKey(op, op?.maquina, operationToolKey(op));
     }
-    const id = String(op?.id || "").trim();
-    if (id) return `OP|${normalizeKey(id)}`;
-    return `OP|${normalizeKey(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeKey(op?.ct)}`;
+    return `OP|${normalizeKey(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeKey(op?.ct || "SIN_CT")}`;
   }
 
   function isHistoricalOperation(op) {

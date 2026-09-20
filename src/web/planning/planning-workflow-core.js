@@ -124,10 +124,11 @@
     return {
       ...(state || {}),
       operations: (state?.operations || [])
-        .filter((operation) => normalize(operation?.planStatus) !== "COMPLETADA_PLAN")
         .map((operation) => {
           const ot = normalize(operation?.ot);
+          const completed = normalize(operation?.planStatus) === "COMPLETADA_PLAN";
           const preserved = !selected.has(ot) ||
+            completed ||
             (isLockedOperation(state, operation) && lockedProgrammed.has(ot)) ||
             isHistorical(operation);
           if (preserved) return { ...operation };
@@ -699,6 +700,73 @@ expandedOts: without(state?.expandedOts),
       { id: "draft", name: "Borrador", status: "BORRADOR" },
       ...(snapshots || []).filter(isPublishedPlanSnapshot),
     ];
+  }
+
+  function stableOperationCompletionKey(operation) {
+    if (normalize(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return null;
+    return `OP|${normalize(operation?.ot)}|${Number(operation?.secuencia || 0)}|${normalize(operation?.ct || "SIN_CT")}`;
+  }
+
+  function reconcileOperationPlanStatuses(state) {
+    const statuses = state?.operationPlanStatuses;
+    if (!statuses || typeof statuses !== "object") return statuses;
+    const operations = Array.isArray(state?.operations) ? state.operations : [];
+    const byOt = new Map();
+    for (const op of operations) {
+      const ot = normalize(op?.ot);
+      if (!ot) continue;
+      if (!byOt.has(ot)) byOt.set(ot, []);
+      byOt.get(ot).push(op);
+    }
+    const byStableKey = new Map();
+    const byId = new Map();
+    for (const op of operations) {
+      const key = stableOperationCompletionKey(op);
+      if (key) byStableKey.set(key, op);
+      const id = String(op?.id || "").trim();
+      if (id) byId.set(normalize(id), op);
+    }
+    const rows = Array.isArray(statuses) ? statuses : Object.values(statuses);
+    const out = {};
+    for (const entry of rows) {
+      const rawKey = String(entry?.key || entry?.completionKey || "").trim();
+      if (!rawKey) continue;
+      const type = normalize(entry?.type || entry?.tipo);
+      if (type === "TOOL_CHANGE" || rawKey.indexOf("TOOL_CHANGE|") === 0) {
+        out[rawKey] = entry;
+        continue;
+      }
+      const ot = normalize(entry?.ot);
+      const otLoaded = Boolean(ot) && byOt.has(ot);
+      let operation = null;
+      if (rawKey.indexOf("OP|") === 0) {
+        operation = byStableKey.get(rawKey) || null;
+        if (!operation && rawKey.indexOf("|", 3) === -1) {
+          operation = byId.get(normalize(rawKey.slice(3))) || null;
+        }
+      }
+      if (!operation && otLoaded) {
+        const seq = Number(entry?.sequence ?? entry?.secuencia ?? 0);
+        const ct = normalize(entry?.ct || "SIN_CT");
+        operation = byOt.get(ot).find((op) =>
+          Number(op?.secuencia || 0) === seq && normalize(op?.ct || "SIN_CT") === ct) || null;
+      }
+      if (operation) {
+        const canonical = stableOperationCompletionKey(operation);
+        out[canonical] = {
+          ...entry,
+          key: canonical,
+          ot: String(operation?.ot || "").trim(),
+          sequence: Number(operation?.secuencia || 0),
+          ct: String(operation?.ct || "").trim(),
+          operationId: String(operation?.id || "").trim(),
+        };
+        continue;
+      }
+      if (otLoaded) continue;
+      out[rawKey] = entry;
+    }
+    return out;
   }
 
   function draftExportOperations(state) {
@@ -1440,7 +1508,7 @@ expandedOts: without(state?.expandedOts),
     mergeOtRouteOperation, mergeOtRouteOperations,
     compareWorkOrderLite, applyConfirmedWorkOrderChanges, schedulingSelectedOts, removeOtFromDraft,
     setDraftOperationCompletion, isPendingDraftOperation, isPublishedPlanSnapshot, operationalPlanOptions, draftExportOperations,
-    draftScheduledOperations, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, removeClosedWorkOrdersFromDraft, purgeClosedWorkOrderRetention,
+    draftScheduledOperations, reconcileOperationPlanStatuses, pruneDraftToOpenWorkOrders, reconcileActiveWorkOrders, removeClosedWorkOrdersFromDraft, purgeClosedWorkOrderRetention,
     needsPlanningPreparation, canReusePlanningPreparation, markPlanningPrepared, commitPreparedOtSelection, planningPreparationSignature,
     buildDraftSnapshot, reconcilePublishedPlan, applyDraftToolSelection, effectiveJobTool,
     isCoherentDraft, selectNewestCoherentDraft, selectAuthoritativeRemoteDraft, defaultDailyPlanSource,

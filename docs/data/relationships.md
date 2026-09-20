@@ -112,8 +112,12 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 
 ### 1.11 `ESTADOS_OPERACION_PLAN`
 
-- `KEY` único (compuesto); `OPERATION_ID` → `OPERACIONES.ID`.
-- `OT` + `SECUENCIA` + `CT` identifican la operación NetSuite origen; `TOOL_KEY_DESTINO` →
+- `KEY` único y estable = `OP|<OT>|<SECUENCIA>|<CT>` (CT vacío → `SIN_CT`); es la identidad de la
+  operación para `COMPLETADA_PLAN` (RULE-OT-031). Claves legacy `OP|<id>` se migran a la clave
+  canónica por coincidencia de id o identidad ot+secuencia+ct, y las huérfanas se podan al
+  normalizar estado (`reconcileOperationPlanStatuses`, planning-workflow-core.js).
+- `OPERATION_ID` → `OPERACIONES.ID` es informativo (no forma parte de la clave, el id es volátil
+  entre reimports). `OT` + `SECUENCIA` + `CT` identifican la operación NetSuite origen; `TOOL_KEY_DESTINO` →
   `CAPACIDADES.KEY` (capacidad de cambio de herramental).
 - `TIPO` default `OPERATION`, `ESTATUS_PLAN` default `PENDIENTE`.
 - `FECHA_COMPLETADO`/`FECHA_REAPERTURA` registran el ciclo completo→reabrir.

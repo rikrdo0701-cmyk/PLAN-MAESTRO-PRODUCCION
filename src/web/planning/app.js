@@ -1344,6 +1344,10 @@ function normalizeState() {
   ensureToolChangeCapability();
   state.operations = dedupeOperationsById((Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index)));
   invalidateCurrentPlanOperationsCache();
+  if (window.PlanningWorkflowCore?.reconcileOperationPlanStatuses) {
+    state.operationPlanStatuses = window.PlanningWorkflowCore.reconcileOperationPlanStatuses(state);
+    draftViewStatusesCache = null;
+  }
   for (const op of state.operations) {
     const status = draftViewStatuses()[operationCompletionKey(op)];
     op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
@@ -1785,7 +1789,7 @@ function operationCompletionKey(op) {
   if (normalizeStatus(op?.tipoInsercion) === "CAMBIO_HERRAMENTAL") {
     return `TOOL_CHANGE|${normalizeStatus(op?.id || `${op?.ot}-${op?.secuencia}`)}|${normalizeStatus(op?.maquina)}|${normalizeStatus(op?.herramental)}|${normalizeStatus(op?.kitHerramental)}`;
   }
-  return op?.id ? `OP|${normalizeStatus(op.id)}` : `OP|${normalizeStatus(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeStatus(op?.ct)}`;
+  return `OP|${normalizeStatus(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeStatus(op?.ct || "SIN_CT")}`;
 }
 
 let draftViewStatusesCache = null;
