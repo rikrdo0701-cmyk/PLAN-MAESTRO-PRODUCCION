@@ -7640,6 +7640,8 @@ function scheduleJobLockBackgroundWork() {
   else window.setTimeout(refresh, 24);
 }
 
+const operationPlanStatusWatchdogTimeouts = new Map();
+
 function toggleOperationPlanStatus(key) {
   if (operationPlanStatusActions.has(key)) return operationPlanStatusActions.get(key);
   operationPlanStatusActions.set(key, true);
@@ -7651,6 +7653,22 @@ function toggleOperationPlanStatus(key) {
     setPlanStatusButtonsDisabled(key, false);
   });
   operationPlanStatusActions.set(key, tracked);
+  const watchdog = setTimeout(() => {
+    if (operationPlanStatusActions.get(key) !== tracked) return;
+    operationPlanStatusActions.delete(key);
+    setPlanStatusButtonsDisabled(key, false);
+    showToast("La persistencia de estado tardo demasiado; intenta de nuevo", 5000);
+  }, 20000);
+  const previous = operationPlanStatusWatchdogTimeouts.get(key);
+  if (previous) clearTimeout(previous);
+  operationPlanStatusWatchdogTimeouts.set(key, watchdog);
+  void tracked.finally(() => {
+    const current = operationPlanStatusWatchdogTimeouts.get(key);
+    if (current === watchdog) {
+      clearTimeout(watchdog);
+      operationPlanStatusWatchdogTimeouts.delete(key);
+    }
+  });
   return tracked;
 }
 
