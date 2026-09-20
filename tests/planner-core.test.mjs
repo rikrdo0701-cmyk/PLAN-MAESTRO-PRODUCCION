@@ -1666,6 +1666,28 @@ test("la resolucion de capability por descripcion no altera claves con CT real n
   assert.equal(core.capabilityForOperation({ ct: "", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }, state).ct, "5537");
 });
 
+test("una op de doblado con ct SIN_CT resuelta por descripcion se marca como doblado (REG inv 2026-09-20)", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    configuredCapabilities: ["5459::12OTD_:_CORTE_DE_EXTREMOS"],
+    matrix: {
+      "5459::12OTD_:_CORTE_DE_EXTREMOS": ["OP 1"],
+      "SIN_CT": [],
+    },
+    operationCatalog: [{ key: "5459::12OTD_:_CORTE_DE_EXTREMOS", ct: "5459", label: "12OTD : CORTE DE EXTREMOS" }],
+    operators: ["OP 1"],
+    machines: [{ id: "40", active: true }, { id: "211", active: true }],
+    excludedCapabilities: [],
+    settings: {},
+    workSchedule: {},
+  };
+  const op = { id: "ns-3562", ot: "3562", secuencia: 5, ct: "SIN_CT", descripcion: "12OTD : CORTE DE EXTREMOS", tipoInsercion: "OPERACION", maquina: "" };
+  assert.equal(core.isBendingOperation(op), false, "el ct directo SIN_CT no se clasifica doblado solo");
+  assert.equal(core.isBendingOperationResolved(state, op), true, "con catalogo la descripcion resuelve a doblado");
+  const issues = core.planningConfigurationIssues(state, [op]);
+  assert.ok(issues.some((issue) => issue.code === "MISSING_MACHINE"), "sin maquina la op de doblado resuelta emite MISSING_MACHINE (por eso la UI debe ofrecer maquinas)");
+});
+
 test("un indice de configuracion restaurado como objeto plano (round-trip JSON) no rompe la validacion ni la asignacion", async () => {
   const core = loadPlannerCore();
   const operation = { id: "bend-2433", ot: "2433", secuencia: 3, ct: "5459", descripcion: "DOBLEZ DE TUBERIA", estatus: "PLAN", maquina: "", herramental: "", tiempoCiclo: 1, cantidadPendiente: 1 };

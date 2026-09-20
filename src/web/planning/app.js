@@ -10747,6 +10747,7 @@ function applyKitToJob(ot, kit, pending = false) {
 }
 
 function isBendingAppOperation(op) {
+  if (window.PlannerCore?.isBendingOperationResolved) return window.PlannerCore.isBendingOperationResolved(state, op);
   if (window.PlannerCore?.isBendingOperation) return window.PlannerCore.isBendingOperation(op);
   return ["5459", "5527"].includes(String(op.ct || ""));
 }

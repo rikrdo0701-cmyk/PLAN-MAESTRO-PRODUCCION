@@ -3094,6 +3094,7 @@ function operationToolKey(op, state) {
     planningConfigurationIssues,
     analyzeUnscheduledOperations,
     isBendingOperation,
+    isBendingOperationResolved,
     isSubcontractOperation,
     toolChangeCapability: () => ({ ...TOOL_CHANGE_CAPABILITY }),
     capabilityForOperation,
