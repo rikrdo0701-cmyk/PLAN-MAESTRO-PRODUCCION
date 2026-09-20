@@ -8443,7 +8443,7 @@ function validateNetSuiteImportedData(imported, mode) {
     const operations = Array.isArray(imported?.operations) ? imported.operations : [];
     const catalog = Array.isArray(imported?.operationCatalog) ? imported.operationCatalog : [];
     if (!operations.length || !catalog.length) {
-      throw new Error("NetSuite devolvio OTs pero no devolvio operaciones/catalogo. Revisa RESTlet 1762 deploy 17 y permisos del token.");
+      throw new Error("NetSuite devolvio OTs pero no devolvio operaciones/catalogo. Revisa el RESTlet de operaciones de planta y permisos del token.");
     }
   }
 }

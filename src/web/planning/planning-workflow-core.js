@@ -707,6 +707,11 @@ expandedOts: without(state?.expandedOts),
     return `OP|${normalize(operation?.ot)}|${Number(operation?.secuencia || 0)}|${normalize(operation?.ct || "SIN_CT")}`;
   }
 
+  function operationLeafId(value) {
+    const match = String(value || "").trim().match(/(\d+)\s*$/);
+    return match ? match[1] : "";
+  }
+
   function reconcileOperationPlanStatuses(state) {
     const statuses = state?.operationPlanStatuses;
     if (!statuses || typeof statuses !== "object") return statuses;
@@ -720,11 +725,16 @@ expandedOts: without(state?.expandedOts),
     }
     const byStableKey = new Map();
     const byId = new Map();
+    const byLeafId = new Map();
     for (const op of operations) {
       const key = stableOperationCompletionKey(op);
       if (key) byStableKey.set(key, op);
       const id = String(op?.id || "").trim();
-      if (id) byId.set(normalize(id), op);
+      if (id) {
+        byId.set(normalize(id), op);
+        const leaf = operationLeafId(id);
+        if (leaf && !byLeafId.has(leaf)) byLeafId.set(leaf, op);
+      }
     }
     const rows = Array.isArray(statuses) ? statuses : Object.values(statuses);
     const out = {};
@@ -742,8 +752,14 @@ expandedOts: without(state?.expandedOts),
       if (rawKey.indexOf("OP|") === 0) {
         operation = byStableKey.get(rawKey) || null;
         if (!operation && rawKey.indexOf("|", 3) === -1) {
-          operation = byId.get(normalize(rawKey.slice(3))) || null;
+          operation = byId.get(normalize(rawKey.slice(3))) ||
+            byLeafId.get(operationLeafId(rawKey.slice(3))) || null;
         }
+      }
+      if (!operation && String(entry?.operationId || "").trim()) {
+        const entryId = String(entry.operationId || "").trim();
+        operation = byId.get(normalize(entryId)) ||
+          byLeafId.get(operationLeafId(entryId)) || null;
       }
       if (!operation && otLoaded) {
         const seq = Number(entry?.sequence ?? entry?.secuencia ?? 0);

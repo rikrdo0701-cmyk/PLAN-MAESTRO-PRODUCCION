@@ -1,6 +1,12 @@
 const PP_PLANT_LOCATION_ID = 1;
 const PP_PLANT_NAME = 'Planta MM del Llano';
 
+const PP_OPERATIONS_RESTLET_ = { script: '2240', deploy: '1' };
+
+function PP_operationsRestlet_() {
+  return PP_OPERATIONS_RESTLET_;
+}
+
 function PP_hasNetSuiteCredentials_() {
   const properties = PropertiesService.getScriptProperties();
   return ['NS_ACCOUNT_ID', 'NS_CONSUMER_KEY', 'NS_CONSUMER_SECRET', 'NS_TOKEN', 'NS_TOKEN_SECRET']
@@ -47,7 +53,7 @@ function PP_fetchNetSuitePlantData_() {
   const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const plantFilter = PP_buildPlantFilter_(workOrders.rows);
-  const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
+  const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
   let invoiceAverages = { byItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
@@ -60,7 +66,7 @@ function PP_fetchNetSuitePlantData_() {
     PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations), invoiceAverages
   ));
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
-  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: '1762/17', workOrders: workOrderCatalog.length });
+  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: workOrderCatalog.length });
   const materialsResponse = PP_fetchRestletPages_({ script: '1763', deploy: '14' }, { locationId: config.locationId, onlyOpen: true, maxWOs: 50000 }, config, 20);
   const materials = materialsResponse.rows
     .filter(function(row) { return PP_belongsToPlant_(row, plantFilter); })
@@ -105,9 +111,9 @@ function PP_fetchNetSuitePlanningData_(current) {
   const config = PP_netSuiteConfig_();
   const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const plantFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
-  const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
+  const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
-  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: '1762/17', workOrders: current.workOrders.length });
+  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: current.workOrders.length });
   const materialsResponse = PP_fetchRestletPages_({ script: '1763', deploy: '14' }, { locationId: config.locationId, onlyOpen: true, maxWOs: 50000 }, config, 20);
   const materials = materialsResponse.rows
     .filter(function(row) { return PP_belongsToPlant_(row, plantFilter); })
@@ -124,7 +130,7 @@ function PP_fetchNetSuitePlanningData_(current) {
 function PP_assertNetSuiteRows_(rows, label, context) {
   if (Array.isArray(rows) && rows.length > 0) return;
   const detail = context ? ' Detalle: ' + JSON.stringify(context) : '';
-  throw new Error('NetSuite devolvio 0 ' + label + ' para Planta MM del Llano. Revisa propiedades NS_*, permisos del deployment, permisos del token y RESTlets 1764/1, 1762/17 y 1763/14.' + detail);
+  throw new Error('NetSuite devolvio 0 ' + label + ' para Planta MM del Llano. Revisa propiedades NS_*, permisos del deployment, permisos del token y RESTlets 1764/1, operaciones ' + PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy + ' y 1763/14.' + detail);
 }
 
 function PP_preservedToolChanges_(current, operations) {

@@ -771,3 +771,99 @@ test("operación de OT cerrada o eliminada desaparece del sync de planeación", 
   assert.equal(merged.operations[0].ot, "2476");
   assert.equal(merged.operations[0].cantTotal, 3);
 });
+
+test("RESTlet 2240: la fila con id emite operationId estable ns-<id> (no posicional)", () => {
+  const { context } = load();
+  const current = { operations: [], workOrders: [{ ot: "3427", pendingQuantity: 10 }] };
+  const row = {
+    id: "5507",
+    workorder_id: "981",
+    workorder_tranid: "3427",
+    item_name: "CCA 419 A",
+    operation: "FORMADO",
+    sequence: "1",
+    qty_to_process: "10",
+    start_planned: "2026-09-30",
+    end_planned: "2026-09-30",
+    status_op: "NOTSTART",
+    workcenter: "5507",
+    setup_min: "0.2",
+    est_min: "200",
+    real_min: "0",
+    remaining_min: "200",
+    production_rate: "20",
+    human_resource: "FORMADOR 1",
+    machine_resource: "",
+    start_actual: "",
+    end_actual: "",
+    qty_completed: "0",
+  };
+  const operation = context.PP_mapNetSuiteOperation_(row, 0, current);
+
+  assert.equal(operation.id, "ns-5507", "el id real debe reemplazar al indice");
+  assert.equal(operation.ot, "3427");
+  assert.equal(operation.secuencia, 1);
+  assert.equal(operation.ct, "5507");
+  assert.equal(operation.cantTotal, 10);
+  assert.equal(operation.tiempoProd, 200);
+});
+
+test("PP_operationsRestlet_ apunta al RESTlet exclusivo 2240/1", () => {
+  const { context } = load();
+  assert.deepEqual(
+    { script: context.PP_operationsRestlet_().script, deploy: context.PP_operationsRestlet_().deploy },
+    { script: "2240", deploy: "1" }
+  );
+});
+
+test("RESTlet 2240: sin columna id la operacion vuelve al indice posicional ns-<index+1>", () => {
+  const { context } = load();
+  const current = { operations: [], workOrders: [{ ot: "3427", pendingQuantity: 10 }] };
+  const row = {
+    workorder_id: "981",
+    workorder_tranid: "3427",
+    operation: "FORMADO",
+    sequence: "1",
+    workcenter: "5507",
+    qty_to_process: "10",
+  };
+  const operation = context.PP_mapNetSuiteOperation_(row, 3, current);
+
+  assert.equal(operation.id, "ns-4", "sin id el mapper cae a index + 1");
+});
+
+test("RESTlet 2240: PP_fetchRestletPages_ no altera filas objeto y respeta paginacion hasMore", () => {
+  const page1 = {
+    ok: true,
+    headers: ["ID (link)", "Operacion"],
+    rows: [
+      { id: "100", workorder_tranid: "3427", operation: "FORMADO", sequence: "1", workcenter: "5507", qty_to_process: "10" },
+    ],
+    totalRows: 2,
+    hasMore: true,
+  };
+  const page2 = {
+    ok: true,
+    headers: ["ID (link)", "Operacion"],
+    rows: [
+      { id: "101", workorder_tranid: "3427", operation: "CORTE", sequence: "2", workcenter: "5461", qty_to_process: "10" },
+    ],
+    totalRows: 2,
+    hasMore: false,
+  };
+  const { context, requests } = load([
+    { status: 200, body: JSON.stringify(page1) },
+    { status: 200, body: JSON.stringify(page2) },
+  ]);
+  const config = { accountId: "ACME_SB1", consumerKey: "c", consumerSecret: "cs", token: "t", tokenSecret: "ts", locationId: 1 };
+
+  const results = context.PP_fetchRestletPages_(context.PP_operationsRestlet_(), { locationId: 1, onlyOpen: true }, config, 20);
+
+  assert.equal(results.rows.length, 2);
+  assert.equal(results.rows[0].id, "100");
+  assert.equal(results.rows[1].id, "101");
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].options.payload, /"pageIndex":0/);
+  assert.match(requests[1].options.payload, /"pageIndex":1/);
+  assert.equal(results.rows[0].operation, "FORMADO");
+});

@@ -1454,3 +1454,79 @@ test("reconcileOperationPlanStatuses conserva marcas de OTs aun no cargadas y de
   assert.equal(reconciled["OP|3177|106|5458"].key, "OP|3177|106|5458");
   assert.equal(reconciled["OP|4000|50|7001"].key, "OP|4000|50|7001", "marcas de OT sin operaciones cargadas se conservan");
 });
+
+test("reconcileOperationPlanStatuses remapea la completada via operationId cuando cambia la secuencia entre sin cronizaciones", () => {
+  const state = {
+    operations: [
+      { id: "ns-5507", ot: "3427", secuencia: 1, ct: "5507", tipoInsercion: "OPERACION" },
+    ],
+    operationPlanStatuses: {
+      "OP|3427|12|5507": {
+        key: "OP|3427|12|5507", type: "OPERATION", status: "COMPLETADA_PLAN",
+        operationId: "ns-5507", ot: "3427", sequence: 12, ct: "5507",
+      },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.ok(!reconciled["OP|3427|12|5507"], "la entrada con secuencia vieja se migra");
+  assert.equal(reconciled["OP|3427|1|5507"].key, "OP|3427|1|5507");
+  assert.equal(reconciled["OP|3427|1|5507"].sequence, 1);
+  assert.equal(reconciled["OP|3427|1|5507"].operationId, "ns-5507");
+  assert.equal(reconciled["OP|3427|1|5507"].status, "COMPLETADA_PLAN");
+});
+
+test("reconcileOperationPlanStatuses conserva la completada quo la operacion ya carga la secuencia nueva en su clave", () => {
+  const state = {
+    operations: [
+      { id: "ns-5461", ot: "3427", secuencia: 34, ct: "5461", tipoInsercion: "OPERACION" },
+    ],
+    operationPlanStatuses: {
+      "OP|3427|34|5461": {
+        key: "OP|3427|34|5461", type: "OPERATION", status: "COMPLETADA_PLAN",
+        operationId: "ns-5461", ot: "3427", sequence: 34, ct: "5461",
+      },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.equal(reconciled["OP|3427|34|5461"].key, "OP|3427|34|5461");
+  assert.equal(reconciled["OP|3427|34|5461"].operationId, "ns-5461");
+});
+
+test("reconcileOperationPlanStatuses matchea por id de hoja cuando el operationId cambia de prefijo entre batch y detalle", () => {
+  const state = {
+    operations: [
+      { id: "ns-3427-5507", ot: "3427", secuencia: 1, ct: "5507", tipoInsercion: "OPERACION" },
+    ],
+    operationPlanStatuses: {
+      "OP|3427|12|5507": {
+        key: "OP|3427|12|5507", type: "OPERATION", status: "COMPLETADA_PLAN",
+        operationId: "ns-5507", ot: "3427", sequence: 12, ct: "5507",
+      },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.ok(!reconciled["OP|3427|12|5507"], "la clave con secuencia y prefijo viejos se migra");
+  assert.equal(reconciled["OP|3427|1|5507"].key, "OP|3427|1|5507");
+  assert.equal(reconciled["OP|3427|1|5507"].sequence, 1);
+  assert.equal(reconciled["OP|3427|1|5507"].operationId, "ns-3427-5507");
+  assert.equal(reconciled["OP|3427|1|5507"].status, "COMPLETADA_PLAN");
+});
+
+test("reconcileOperationPlanStatuses matchea por id de hoja desde la clave legacy OP|<id> prefijada", () => {
+  const state = {
+    operations: [
+      { id: "ns-3427-5464", ot: "3427", secuencia: 40, ct: "5464", tipoInsercion: "OPERACION" },
+    ],
+    operationPlanStatuses: {
+      "OP|ns-5464": {
+        key: "OP|ns-5464", type: "OPERATION", status: "COMPLETADA_PLAN",
+        operationId: "ns-5464", ot: "3427", sequence: 65, ct: "5464",
+      },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.ok(!reconciled["OP|ns-5464"], "la clave legacy se migra");
+  assert.equal(reconciled["OP|3427|40|5464"].key, "OP|3427|40|5464");
+  assert.equal(reconciled["OP|3427|40|5464"].operationId, "ns-3427-5464");
+  assert.equal(reconciled["OP|3427|40|5464"].status, "COMPLETADA_PLAN");
+});

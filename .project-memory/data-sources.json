@@ -1222,7 +1222,7 @@
       "location/origin": "https://{accountId}.restlets.api.netsuite.com/app/site/hosting/restlet.nl",
       "columns": [
         "1764 WO_LISTA: OTs (folios, internal ids, cantidades, fechas, precios)",
-        "1762: operaciones programadas de la planta",
+        "1762 (RESTlet exclusivo de esta instancia; config PP_OPERATIONS_RESTLET_): operaciones programadas de la planta. Devuelve id = manufacturingoperationtask.id para ids estables ns-<id>; claves de fila en minusculas (workorder_id, workorder_tranid, item_name, operation, sequence, workcenter, start/end_planned, status_op, setup/est/real/remaining_min, production_rate, human_resource, machine_resource, qty_completed)",
         "1763: materiales",
         "2080 WO_INSPECCION: inspección"
       ],
