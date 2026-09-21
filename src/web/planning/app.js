@@ -7806,7 +7806,7 @@ function unblockOtAfterCompletion(ot) {
   if (!shouldMutateDraftFromSource()) return;
   const key = String(ot || "").trim();
   if (!key) return;
-  if (typeof otHasCompletedOperation === "function" && otHasCompletedOperation(key)) return;
+  if (typeof otHasPendingOperation === "function" && !otHasPendingOperation(key)) return;
   state.lockedOts = (Array.isArray(state.lockedOts) ? state.lockedOts : []).filter((item) => String(item) !== key);
   state.operations.filter((op) => String(op.ot) === key).forEach((op) => {
     op.locked = false;
@@ -11212,6 +11212,15 @@ function otHasCompletedOperation(ot) {
   const statuses = state.operationPlanStatuses || {};
   return Object.keys(statuses).some((statusKey) =>
     String(statuses[statusKey]?.ot) === ot && statuses[statusKey]?.status === "COMPLETADA_PLAN");
+}
+
+function otHasPendingOperation(ot) {
+  if (Array.isArray(state.operations)) {
+    if (state.operations.some((op) => String(op.ot) === ot && !isPlanCompletedOperation(op))) return true;
+  }
+  const statuses = state.operationPlanStatuses || {};
+  return Object.keys(statuses).some((statusKey) =>
+    String(statuses[statusKey]?.ot) === ot && statuses[statusKey]?.status !== "COMPLETADA_PLAN");
 }
 
 function normalizeStatus(value) {

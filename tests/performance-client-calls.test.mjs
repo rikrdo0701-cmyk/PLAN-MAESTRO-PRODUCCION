@@ -641,7 +641,7 @@ const reportSource = options.reportOperations || state.operations;
     });
   };
   const api = new Function(
-    "state", "els", "window", "isReportSnapshotEditable", "reportSourceAllowsOperationTracking", "isPlanCompletedOperation", "operationCompletionKey",
+    "state", "els", "window", "isReportSnapshotEditable", "reportSourceAllowsOperationTracking", "isPlanCompletedOperation", "operationCompletionKey", "otHasPendingOperation",
     "deepClone", "appendLog", "isToolChangeReportOperation", "workOrderForOt", "checkpointState",
     "invalidateGanttCache", "renderTop", "renderPlanAlerts", "renderSelectedJobPanel", "renderDraftExecutiveSummary",
     "renderGantt", "renderLoads", "requestAnimationFrame", "scheduleLocalStorageFlush", "showToast", "appSheetAvailable",
@@ -660,6 +660,11 @@ const reportSource = options.reportOperations || state.operations;
       PlannerCore: { operationToolKey: () => "" },
     }, () => true, () => options.reportTrackingAllowed !== false,
     (operation) => operation?.planStatus === "COMPLETADA_PLAN", (operation) => operation?.id || "",
+    (ot) => (Array.isArray(state.operations) &&
+      state.operations.some((op) => String(op.ot) === String(ot) && op.planStatus !== "COMPLETADA_PLAN")) ||
+      Object.keys(state.operationPlanStatuses || {}).some((statusKey) =>
+        String(state.operationPlanStatuses[statusKey]?.ot) === String(ot) &&
+        state.operationPlanStatuses[statusKey]?.status !== "COMPLETADA_PLAN"),
     structuredClone, (log, entry) => [log, entry].filter(Boolean).join(" | "), () => false, () => null,
     () => {}, () => {}, () => broadRenders.push("top"), () => broadRenders.push("alerts"), options.renderSelectedJobPanel || (() => {}),
     () => broadRenders.push("summary"), () => broadRenders.push("gantt"), () => broadRenders.push("loads"), (callback) => { callback(); return 1; },
@@ -827,6 +832,34 @@ test("reabrir la unica operacion completada desbloquea la OT", async () => {
   await fixture.buttons[0].listener();
 
   assert.equal(fixture.state.operationPlanStatuses["published-op-1"].status, "PENDIENTE");
+  assert.deepEqual(fixture.state.lockedOts, []);
+});
+
+test("reabrir una operacion desbloquea la OT si quedan operaciones pendientes por reprocesar", async () => {
+  const calls = [];
+  const fixture = loadPlanStatus({
+    rows: ["op-1"],
+    operations: [
+      { id: "op-1", ot: "100", ct: "CORTE", secuencia: 1, planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-08-01", fechaFin: "2026-08-01" },
+      { id: "op-2", ot: "100", ct: "DOBLEZ", secuencia: 2, planStatus: "PENDIENTE", fechaInicio: "2026-08-02", fechaFin: "2026-08-02" },
+    ],
+    operationPlanStatuses: {
+      "op-1": { key: "op-1", status: "COMPLETADA_PLAN", ot: "100" },
+      "op-2": { key: "op-2", status: "PENDIENTE", ot: "100" },
+    },
+    state: { lockedOts: ["100"] },
+    callAppsScript: (method, payload) => {
+      calls.push([method, payload]);
+      return Promise.resolve({ revision: 3, savedAt: "2026-08-01T00:00:00.000Z" });
+    },
+  });
+
+  fixture.api.bindPlanStatusActions({ querySelectorAll: () => fixture.buttons });
+  await fixture.buttons[0].listener();
+
+  assert.equal(fixture.state.operationPlanStatuses["op-1"].status, "PENDIENTE");
+  assert.equal(fixture.state.operations[0].planStatus, "PENDIENTE");
+  assert.equal(fixture.state.operations[0].needsReschedule, true);
   assert.deepEqual(fixture.state.lockedOts, []);
 });
 
