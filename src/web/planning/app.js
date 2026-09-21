@@ -5880,9 +5880,9 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     if (window.PlannerCore?.analyzeUnscheduledOperations) {
       metrics.unscheduledAnalysis = window.PlannerCore.analyzeUnscheduledOperations(temporaryState, summary);
     }
-    if (!result.aborted && temporaryState) {
+    if (!result.aborted && scheduleResult) {
       try {
-        metrics.diagnosticLoads = buildDryRunDiagnosticLoads(temporaryState, planStart);
+        metrics.diagnosticLoads = buildDryRunDiagnosticLoads(scheduleResult, planStart);
       } catch (error) {
         metrics.diagnosticLoads = { error: String(error && error.message || error) };
       }
