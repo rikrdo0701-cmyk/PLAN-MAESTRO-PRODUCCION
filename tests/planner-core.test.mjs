@@ -2121,6 +2121,45 @@ test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", async
   assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
 });
 
+test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fechas antiguas se agenda (las completadas no actuan como sucesora fija fantasma)", async () => {
+  const core = loadPlannerCore();
+  const result = await core.schedulePlan({
+    selectedOts: ["100"],
+    lockedOts: [],
+    operations: [
+      { id: "pred", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:10", tiempoProd: 10 },
+      { id: "pend", ot: "100", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "PENDIENTE", tiempoProd: 20 },
+      { id: "succ", ot: "100", secuencia: 3, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:10", tiempoProd: 10 },
+    ],
+    workOrders: [{ ot: "100" }],
+    matrix: { "CORTE::CORTE": ["OP 1"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false },
+    workSchedule: {},
+  }, {
+    planStart: "2026-07-13",
+    horizonDays: 5,
+    executionTime: "2026-07-13T07:00:00",
+    respectPlanStart: true,
+  });
+
+  const pending = result.operations.find((item) => item.id === "pend");
+  assert.equal(
+    result.lastSchedule.diagnostics.some((item) => item.code === "UNSCHEDULED" && item.operationId === "pend"),
+    false,
+    "la pendiente encerrada por completadas no debe quedar sin hueco"
+  );
+  assert.equal(pending.fechaInicio, "2026-07-13");
+  assert.ok(pending.horaInicio >= "07:10", "debe iniciar despues de que termino su predecesora completada");
+  assert.ok(pending.horaFin > pending.horaInicio, "debe tener fin posterior al inicio");
+  assert.ok(result.lastSchedule.scheduledOts.includes("100"), "la OT con pendiente agendada debe quedar en scheduledOts");
+  const pred = result.operations.find((item) => item.id === "pred");
+  const succ = result.operations.find((item) => item.id === "succ");
+  assert.deepEqual([pred.horaInicio, pred.horaFin], ["07:00", "07:10"], "las completadas conservan sus fechas historicas");
+  assert.deepEqual([succ.horaInicio, succ.horaFin], ["07:00", "07:10"], "las completadas conservan sus fechas historicas");
+});
+
 test("expone metricas comunes finitas para comparar estrategias", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({

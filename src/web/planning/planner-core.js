@@ -1006,10 +1006,11 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function respectsFixedSuccessor(context, job, op, assignment) {
-    const fixed = new Set(job.fixedOperations);
+    const isConstraint = (operation) => !isPlanCompletedOperation(context.state, operation);
+    const fixed = new Set(job.fixedOperations.filter(isConstraint));
     const future = [
       ...job.operations.slice(job.index + 1),
-      ...job.fixedOperations.filter((operation) => compareOperationSequence(operation, op) > 0),
+      ...job.fixedOperations.filter((operation) => isConstraint(operation) && compareOperationSequence(operation, op) > 0),
     ].sort(compareOperationSequence);
     const fixedIndex = future.findIndex((operation) => fixed.has(operation));
     if (fixedIndex < 0) return true;
