@@ -1530,3 +1530,20 @@ test("reconcileOperationPlanStatuses matchea por id de hoja desde la clave legac
   assert.equal(reconciled["OP|3427|40|5464"].operationId, "ns-3427-5464");
   assert.equal(reconciled["OP|3427|40|5464"].status, "COMPLETADA_PLAN");
 });
+
+test("reconcileOperationPlanStatuses conserva la clave legible por app.js (PlannerCore.operationCompletionKey) cuando ct lleva espacios internos multiples", () => {
+  const op = { id: "ns-5507", ot: "3427", secuencia: 1, ct: "54  58", tipoInsercion: "OPERACION", maquina: "", herramental: "", kitHerramental: "" };
+  const appKey = PlannerCore.operationCompletionKey(op);
+  const state = {
+    operations: [op],
+    operationPlanStatuses: {
+      [appKey]: {
+        key: appKey, type: "OPERATION", status: "COMPLETADA_PLAN",
+        operationId: "ns-5507", ot: "3427", sequence: 1, ct: "54  58",
+      },
+    },
+  };
+  const reconciled = core.reconcileOperationPlanStatuses(state);
+  assert.equal(reconciled[appKey]?.status, "COMPLETADA_PLAN",
+    "la clave que app.js relee tras el reconcile (draftViewStatuses()[operationCompletionKey(op)]) debe seguir existiendo");
+});
