@@ -5921,9 +5921,9 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
       const capability = typeof window?.PlannerCore?.capabilityForOperation === "function"
         ? window.PlannerCore.capabilityForOperation(op, draftState)
         : null;
-      const ct = String((capability && (capability.ct || capability.key)) || op.ct || "").trim() || "SIN_CT";
-      const label = String((capability && capability.label) || op.descripcion || op.tipoInsercion || "").trim();
-      const bucket = ct === "SIN_CT" && label ? `SIN_CT (${label})` : ct;
+      const rawLabel = String((capability && capability.label) || op.descripcion || op.tipoInsercion || "").replace(/\s+/g, " ").trim();
+      const rawCt = String((capability && capability.ct) || op.ct || "").trim();
+      const bucket = rawCt && rawCt !== "SIN_CT" ? `${rawCt} ${rawLabel}` : (rawLabel || "SIN_DESCRIPCION");
       const min = operationMinutesInRange(op, rangeStart, rangeEnd);
       if (!(min > 0)) continue;
       if (!byCt[bucket]) byCt[bucket] = { minutes: 0, ops: 0 };
