@@ -2257,6 +2257,8 @@ function renderPriorityList() {
     const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
     const toolMini = jobToolMiniHtml(job);
     const actionStatus = individualPlanningActionStatus(job.ot);
+    const actionFeedbackMessage = individualPlanningActionMessage(job.ot);
+    const actionStatusLabel = individualPlanningActionStatusLabel(actionStatus, actionFeedbackMessage || individualPlanningUnavailableReason(job.ot));
     const photoMarkup = job.photoUrl
       ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
@@ -2272,7 +2274,7 @@ function renderPriorityList() {
         <div class="priority-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
-          <span class="job-action-status" aria-live="polite">${individualPlanningActionStatusLabel(actionStatus)}</span>
+          <span class="job-action-status" aria-live="polite">${actionStatusLabel}</span>
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
           ${toolMini}
@@ -2657,12 +2659,13 @@ function canStartBacklogDrag(card, job, event) {
     && !event.target.closest("button, input, select");
 }
 
-function setIndividualPlanningActionStatus(ot, status) {
+function setIndividualPlanningActionStatus(ot, status, message = "") {
   const key = materialOtKey(ot);
   if (!key) return;
   if (status) {
     individualPlanningActionFeedback.set(key, {
       status,
+      message,
       expiresAt: ["saved", "error"].includes(status) ? Date.now() + INDIVIDUAL_PLANNING_FEEDBACK_MS : Infinity,
     });
   } else {
@@ -2672,7 +2675,7 @@ function setIndividualPlanningActionStatus(ot, status) {
     .find((item) => materialOtKey(item.dataset.ot) === key);
   if (!card) return;
   const statusNode = card.querySelector(".job-action-status");
-  const statusLabel = individualPlanningActionStatusLabel(status);
+  const statusLabel = individualPlanningActionStatusLabel(status, message);
   if (statusNode) statusNode.textContent = statusLabel;
   if (statusLabel) card.dataset.individualPlanningStatus = status;
   else delete card.dataset.individualPlanningStatus;
@@ -2689,13 +2692,33 @@ function individualPlanningActionStatus(ot) {
   return feedback.status;
 }
 
-function individualPlanningActionStatusLabel(status) {
+function individualPlanningActionMessage(ot) {
+  const key = materialOtKey(ot);
+  const feedback = individualPlanningActionFeedback.get(key);
+  if (!feedback) return "";
+  if (feedback.expiresAt <= Date.now()) {
+    individualPlanningActionFeedback.delete(key);
+    return "";
+  }
+  return feedback.message || "";
+}
+
+function individualPlanningActionStatusLabel(status, message = "") {
+  if (status === "error" && /completada|no apta para programarse/i.test(message)) {
+    return "OT completada";
+  }
   return {
     loading: "Cargando",
     saving: "Guardando",
     saved: "Guardado",
     error: "Error",
   }[status] || "";
+}
+
+function individualPlanningUnavailableReason(ot) {
+  const key = materialOtKey(ot);
+  const message = individualPlanningUnavailableReasons.get(key) || "";
+  return /completada|no apta para programarse/i.test(message) ? message : "";
 }
 
 function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
@@ -2742,7 +2765,7 @@ function selectJob(ot, selected) {
       return false;
     } finally {
       individualPlanningActions.delete(key);
-      setIndividualPlanningActionStatus(ot, status);
+      setIndividualPlanningActionStatus(ot, status, outcome.errorMessage || "");
       setIndividualPlanningBusy(ot, false);
       if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-add", perfMark);
     }
@@ -2784,22 +2807,26 @@ async function performSelectJob(ot, selected, outcome = {}) {
       }
       job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
       if (!loaded?.ready) {
+        outcome.errorMessage = loaded?.error || "";
         if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
         return;
       }
       if (job && !job.movable && !job.programmed) {
+        outcome.errorMessage = "";
         if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
         return false;
       }
       if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
+        outcome.errorMessage = loaded?.error || `La OT ${ot} no devolvio operaciones validas de NetSuite`;
         if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
         showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
         return;
       }
       if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
     } catch (error) {
+      outcome.errorMessage = error?.message || "";
       if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-load", loadPerfMark);
       if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
       showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
@@ -3836,6 +3863,9 @@ function renderSelectedJobPanel() {
     }
     : op);
   const loadingOperations = selectedJobDetailOperationLoads.has(materialOtKey(job.ot)) && !hasIndividualPlanningOperations(job.ot);
+  const unavailableReason = individualPlanningUnavailableReason(job.ot);
+  const completedOperationsNotice = !job.ops.length && unavailableReason
+    ? `<div class="job-op-empty">${escapeHtml(unavailableReason)}</div>` : "";
   const toolGroups = getJobToolGroups(detailOps);
   const bulkMachineValue = getBulkMachineValue(job.ops);
   const machineOptions = getMachineOptions(job.ops);
@@ -3936,10 +3966,10 @@ function renderSelectedJobPanel() {
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
       </details>
       <div class="job-detail-operations-scroll">
-        <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
+        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${job.ops.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : detailOps.map((op) => {
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
@@ -8478,6 +8508,7 @@ const SMART_SYNC_TIME_REFRESH_LIMIT = 10;
 const individualPlanningPrefetchTasks = new Map();
 const individualPlanningPrefetchQueue = [];
 let individualPlanningPrefetchActive = 0;
+const individualPlanningUnavailableReasons = new Map();
 
 function normalizeIndividualPlanningOperation(operation) {
   if (Number(operation?.tiempoProd) > 0) return operation;
@@ -8733,12 +8764,16 @@ function ensureWorkOrderPlanningData(ot, options = {}) {
         return { ready: true, source: "cached" };
       }
       if (!mergeIndividualPlanningData(payload, key)) {
+        individualPlanningUnavailableReasons.set(key, "La OT no devolvio operaciones de planeacion");
         return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
       }
       individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+      individualPlanningUnavailableReasons.delete(key);
       return { ready: true, source: "remote" };
     } catch (error) {
-      return { ready: false, error: String(error?.message || error || "No se pudieron cargar las operaciones") };
+      const message = String(error?.message || error || "No se pudieron cargar las operaciones");
+      individualPlanningUnavailableReasons.set(key, message);
+      return { ready: false, error: message };
     } finally {
       individualPlanningRequests.delete(key);
     }

@@ -481,6 +481,11 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
 - `onlyOpen: true` en los RESTlets; filtro de planta (`PP_buildPlantFilter_`/`PP_belongsToPlant_`).
 - `PP_isSchedulable_` excluye estados que contienen `COMPLETE, COMPLETAD, CERRAD, CLOSED,
   CANCELAD, CANCELED, CANCELLED`.
+- La ruta directa por OT (`getPlanningWorkOrderData` → `PP_fetchDirectWorkOrderOperations_`)
+  distingue: sin filas en `manufacturingoperationtask` → "Ruta de manufactura vacia para la OT X";
+  filas presentes pero todas con status terminal (filtradas por `PP_isSchedulable_` de `08-netsuite.js`)
+  → "OT X completada: todas sus operaciones estan en estado terminal (...); no apta para programarse"
+  (RULE-OT-034).
 - `PP_assertNetSuiteRows_` lanza error si NetSuite devuelve 0 filas.
 - Los estados terminales de OT (`CERRADA, CERRADO, CLOSED, CANCELADA, CANCELADO`) no se restauran.
 - Catálogo: un fallback nunca reemplaza el catálogo anterior por una lista vacía.

@@ -101,7 +101,15 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
   ].join(' '), config);
   const rows = route.items || [];
   if (!rows.length) throw new Error('Ruta de manufactura vacia para la OT ' + folio);
-  return rows.filter(PP_isSchedulable_).map(function(row) {
+  const schedulableRows = rows.filter(PP_isSchedulable_);
+  if (!schedulableRows.length) {
+    const statuses = rows.map(function(row) { return String(row.status || '').trim(); })
+      .filter(Boolean);
+    throw new Error('OT ' + folio + ' completada: todas sus operaciones estan en estado terminal ('
+      + (statuses.join(', ') || 'COMPLETE/CERRADA/CANCELADA')
+      + '); no apta para programarse');
+  }
+  return schedulableRows.map(function(row) {
     return {
       'Orden de trabajo': folio,
       'Operacion': row.work_center || row.title,

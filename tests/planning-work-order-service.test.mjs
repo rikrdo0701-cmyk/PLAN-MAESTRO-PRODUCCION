@@ -142,10 +142,33 @@ test("excluye de la ruta las tareas terminales de una OT activa", () => {
     structuredClone(result.data.operations.map((operation) => operation.descripcion)),
     ["CORTE"],
   );
-  assert.deepEqual(
+assert.deepEqual(
     structuredClone(result.data.operations.map((operation) => operation.estatus)),
     ["IN PROGRESS"],
   );
+});
+
+test("reporta 'OT completada' cuando todas las operaciones estan en estado terminal", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  context.UrlFetchApp.fetch = (_url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    const items = /FROM transaction/i.test(sql)
+      ? [{ id: "913", tranid: "2773" }]
+      : [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "COMPLETE" },
+        { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "COMPLETED" },
+        { id: "3", operationsequence: 30, manufacturingworkcenter: "5460", work_center: "PINTURA", setuptime: 6, runrate: 0.62, title: "PINTURA", status: "CLOSED" }];
+    assert.match(sql, /manufacturingoperationtask|FROM transaction/i);
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.equal(result.ok, false);
+assert.match(result.error, /OT 2773 completada/i);
+  assert.match(result.error, /estado terminal/i);
+  assert.match(result.error, /no apta para programarse/i);
 });
 
 test("toma CT y tiempo de la ruta directa aunque inspeccion no los incluya", () => {
