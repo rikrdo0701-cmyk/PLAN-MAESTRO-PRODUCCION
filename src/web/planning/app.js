@@ -5942,6 +5942,32 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
       enabledOperators: uniq([...(Array.isArray(matrix[capability.key]) ? matrix[capability.key] : []), ...(Array.isArray(matrix[capability.ct]) ? matrix[capability.ct] : [])]),
     }))
     .sort((a, b) => b.opsInPlan - a.opsInPlan);
+  const operatorWeekOps = {};
+  const bestSeqByOt = {};
+  for (const op of ops) {
+    if (!op || !op.ot) continue;
+    const min = operationMinutesInRange(op, weekRange.start, weekRange.end);
+    if (min > 0 && op.operador) {
+      operatorWeekOps[op.operador] ||= { ops: 0, minutes: 0 };
+      operatorWeekOps[op.operador].ops += 1;
+      operatorWeekOps[op.operador].minutes += min;
+    }
+    const seq = Number(op.secuencia);
+    if (Number.isFinite(seq) && (bestSeqByOt[op.ot] === undefined || seq < bestSeqByOt[op.ot].seq)) {
+      bestSeqByOt[op.ot] = { seq, ct: String(op.ct || "").trim() || "SIN_CT" };
+    }
+  }
+  const firstOpByCt = {};
+  const firstOpsByOperator = {};
+  for (const ot of Object.keys(bestSeqByOt)) {
+    const { ct } = bestSeqByOt[ot];
+    firstOpByCt[ct] = (firstOpByCt[ct] || 0) + 1;
+    for (const op of ops) {
+      if (op && op.ot === ot && Number(op.secuencia) === bestSeqByOt[ot].seq && op.operador) {
+        firstOpsByOperator[op.operador] = (firstOpsByOperator[op.operador] || 0) + 1;
+      }
+    }
+  }
   return {
     weekMonday: weekStart,
     horizonDays: draftState?.horizonDays || 15,
@@ -5950,6 +5976,9 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     weekDemandByCt: demandAt(weekRange.start, weekRange.end),
     horizonDemandByCt: demandAt(weekRange.start, horizonEnd),
     matrixCapabilities,
+    operatorWeekOps,
+    firstOpByCt,
+    firstOpsByOperator,
   };
 }
 
