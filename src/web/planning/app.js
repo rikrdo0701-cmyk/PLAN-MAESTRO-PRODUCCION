@@ -5918,12 +5918,17 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     const byCt = {};
     for (const op of ops) {
       if (!op || !isFiniteCapacityOperation(op)) continue;
+      const capability = typeof window?.PlannerCore?.capabilityForOperation === "function"
+        ? window.PlannerCore.capabilityForOperation(op, draftState)
+        : null;
+      const ct = String((capability && (capability.ct || capability.key)) || op.ct || "").trim() || "SIN_CT";
+      const label = String((capability && capability.label) || op.descripcion || op.tipoInsercion || "").trim();
+      const bucket = ct === "SIN_CT" && label ? `SIN_CT (${label})` : ct;
       const min = operationMinutesInRange(op, rangeStart, rangeEnd);
       if (!(min > 0)) continue;
-      const ct = String(op.ct || "").trim() || "SIN_CT";
-      if (!byCt[ct]) byCt[ct] = { minutes: 0, ops: 0 };
-      byCt[ct].minutes += min;
-      byCt[ct].ops += 1;
+      if (!byCt[bucket]) byCt[bucket] = { minutes: 0, ops: 0 };
+      byCt[bucket].minutes += min;
+      byCt[bucket].ops += 1;
     }
     return byCt;
   };
@@ -7021,7 +7026,7 @@ function renderWeekReport() {
       ${renderReportOperatorLoads(reportOps, state.reportWeekStart)}
     </section>
     <section class="weekly-job-panel"><header><h3>OT que inician</h3><span>Fecha de la primera operacion</span></header>${renderWeeklyJobDays(summary.starts, false)}</section>
-    <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
+    <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion de liberacion final (39OTD/16OC)</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
   `;
 }
 
@@ -7254,8 +7259,9 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const sequenced = operations.sort((a, b) => sequenceSort(a, b));
     const first = sequenced[0];
     const last = sequenced[sequenced.length - 1];
+    const release = sequenced.find(isFinalReleaseOperation) || last;
     const start = opStart(first);
-    const finish = opEnd(last);
+    const finish = opEnd(release);
     const workOrder = workOrderForOt(ot);
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
     const pendingPiecesValue = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
@@ -7537,6 +7543,11 @@ function operationsForWeekSource(source, operator = "", weekDate = state.reportW
 function isToolChangeReportOperation(op) {
   return normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" ||
     /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
+}
+
+const FINAL_RELEASE_OPERATION_CTS = new Set(["5504", "5537"]);
+function isFinalReleaseOperation(op) {
+  return FINAL_RELEASE_OPERATION_CTS.has(String(op?.ct ?? "").trim());
 }
 
 function reportOperationCommentCell(op) {
