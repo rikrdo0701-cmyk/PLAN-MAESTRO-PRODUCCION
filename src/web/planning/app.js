@@ -5880,6 +5880,13 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     if (window.PlannerCore?.analyzeUnscheduledOperations) {
       metrics.unscheduledAnalysis = window.PlannerCore.analyzeUnscheduledOperations(temporaryState, summary);
     }
+    if (!result.aborted && temporaryState) {
+      try {
+        metrics.diagnosticLoads = buildDryRunDiagnosticLoads(temporaryState, planStart);
+      } catch (error) {
+        metrics.diagnosticLoads = { error: String(error && error.message || error) };
+      }
+    }
     metrics.selectedStrategy = summary.optimization?.selectedStrategy || "balanced";
     metrics.horizonDays = Number(scheduleResult.horizonDays || temporaryState.horizonDays || metrics.horizonDays || 0);
     result.ok = result.blockers.length === 0 && !result.aborted;
@@ -5897,6 +5904,48 @@ async function dryRunCurrentPlanPerformance(options = {}) {
 
 function dryRunNowMs() {
   return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
+function buildDryRunDiagnosticLoads(draftState, planStartValue) {
+  const weekStart = formatDate(parseDateOnlyValue(planStartValue) || new Date());
+  const ops = Array.isArray(draftState?.operations) ? draftState.operations : [];
+  const weekLoads = operatorLoadsForOperations(ops, weekStart, 7);
+  const horizonLoads = operatorLoadsForOperations(ops, weekStart, 15);
+  const weekRange = selectedWeekRange(weekStart);
+  const horizonDays = Math.min(45, Math.max(1, Number(draftState?.horizonDays) || 15));
+  const horizonEnd = new Date(weekRange.start.getTime() + horizonDays * 86400000);
+  const demandAt = (rangeStart, rangeEnd) => {
+    const byCt = {};
+    for (const op of ops) {
+      if (!op || !isFiniteCapacityOperation(op)) continue;
+      const min = operationMinutesInRange(op, rangeStart, rangeEnd);
+      if (!(min > 0)) continue;
+      const ct = String(op.ct || "").trim() || "SIN_CT";
+      if (!byCt[ct]) byCt[ct] = { minutes: 0, ops: 0 };
+      byCt[ct].minutes += min;
+      byCt[ct].ops += 1;
+    }
+    return byCt;
+  };
+  const matrix = draftState?.matrix && typeof draftState.matrix === "object" ? draftState.matrix : {};
+  const matrixCapabilities = getCapabilityRows()
+    .map((capability) => ({
+      key: capability.key,
+      label: capability.label,
+      ct: capability.ct,
+      opsInPlan: capability.count,
+      enabledOperators: uniq([...(Array.isArray(matrix[capability.key]) ? matrix[capability.key] : []), ...(Array.isArray(matrix[capability.ct]) ? matrix[capability.ct] : [])]),
+    }))
+    .sort((a, b) => b.opsInPlan - a.opsInPlan);
+  return {
+    weekMonday: weekStart,
+    horizonDays: draftState?.horizonDays || 15,
+    weekLoads,
+    horizonLoads,
+    weekDemandByCt: demandAt(weekRange.start, weekRange.end),
+    horizonDemandByCt: demandAt(weekRange.start, horizonEnd),
+    matrixCapabilities,
+  };
 }
 
 function renderLoadSourceSelect() {
