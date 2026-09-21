@@ -406,7 +406,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       }
 
       enrichToolsFromCatalog(state, movable);
-      jobs = buildJobs(movable, [...completed.filter(isSelected), ...fixed], state);
+      jobs = buildJobs(movable, fixed, state);
       excluded = activeSourceOperations.filter((op) =>
         op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
         (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))

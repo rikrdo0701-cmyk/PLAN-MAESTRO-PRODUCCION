@@ -133,10 +133,17 @@
           const ot = normalize(operation?.ot);
           const completed = normalize(operation?.planStatus) === "COMPLETADA_PLAN";
           const preserved = !selected.has(ot) ||
-            completed ||
-            (isLockedOperation(state, operation) && lockedProgrammed.has(ot)) ||
-            isHistorical(operation);
+            isHistorical(operation) ||
+            (isLockedOperation(state, operation) && (lockedProgrammed.has(ot) || completed));
           if (preserved) return { ...operation };
+          if (completed) {
+            return {
+              ...operation,
+              fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
+              operador: "",
+              needsReschedule: false, autoFrozen: false,
+            };
+          }
           return {
             ...operation,
             fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",

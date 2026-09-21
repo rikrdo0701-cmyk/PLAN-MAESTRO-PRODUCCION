@@ -970,7 +970,7 @@ test("al excluir una operacion intermedia la sucesora depende de la ultima inclu
   );
 });
 
-test("una sucesora conserva precedencia si la ultima incluida anterior esta fija", async () => {
+test("una sucesora de una completada en OT desbloqueada busca el hueco mas proximo sin anclarse a su fin", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -999,12 +999,15 @@ test("una sucesora conserva precedencia si la ultima incluida anterior esta fija
   const last = result.operations.find((operation) => operation.id === "last");
 
   assert.ok(last.fechaInicio, JSON.stringify(result.lastSchedule.diagnostics));
-  assert.ok(
-    new Date(`${last.fechaInicio}T${last.horaInicio}:00`) >= new Date(`${fixed.fechaFin}T${fixed.horaFin}:00`),
+  assert.deepEqual(
+    [last.fechaInicio, last.horaInicio],
+    ["2026-07-13", "07:00"],
+    "la sucesora toma el hueco mas proximo sin anclarse a la completada",
   );
+  assert.deepEqual([fixed.fechaInicio, fixed.horaInicio], ["2026-07-13", "07:00"], "la completada conserva su registro");
 });
 
-test("un antecedente fijo que cruza tiempo no laborable limita por su fin real", async () => {
+test("una completada que cruza tiempo no laborable ya no limita el inicio de su sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1031,10 +1034,10 @@ test("un antecedente fijo que cruza tiempo no laborable limita por su fin real",
   });
   const last = result.operations.find((operation) => operation.id === "last-weekend");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
 });
 
-test("un solapamiento parcial usa la duracion productiva del antecedente fijo", async () => {
+test("una completada con solapamiento parcial ya no limita el inicio de su sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1062,10 +1065,10 @@ test("un solapamiento parcial usa la duracion productiva del antecedente fijo", 
   });
   const last = result.operations.find((operation) => operation.id === "last-partial");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "07:00"]);
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
 });
 
-test("un solapamiento parcial sin duracion productiva respeta el fin fijo", async () => {
+test("una completada sin duracion productiva ya no limita el inicio de su sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1093,10 +1096,10 @@ test("un solapamiento parcial sin duracion productiva respeta el fin fijo", asyn
   });
   const last = result.operations.find((operation) => operation.id === "last-no-duration");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"]);
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
 });
 
-test("un hito parcial nunca supera el fin real del antecedente fijo", async () => {
+test("una completada con hito parcial ya no retrasa a su sucesora", async () => {
   const core = loadPlannerCore();
   const starts = await Promise.all([0.5, 1].map(async (overlap) => {
     const result = await core.schedulePlan({
@@ -1128,8 +1131,8 @@ test("un hito parcial nunca supera el fin real del antecedente fijo", async () =
   }));
 
   assert.deepEqual(starts, [
-    ["2026-07-13", "08:00"],
-    ["2026-07-13", "08:00"],
+    ["2026-07-13", "07:00"],
+    ["2026-07-13", "07:00"],
   ]);
 });
 
@@ -1232,7 +1235,7 @@ test("OT tipo 1325 respeta secuencia despues de subcontrato largo", async () => 
   assert.ok(new Date(`${seq14.fechaInicio}T${seq14.horaInicio}:00`) >= new Date(`${seq13.fechaFin}T${seq13.horaFin}:00`));
 });
 
-test("una movible respeta la operacion anterior incluida con fin real mas tardio aunque haya secuencias completadas intermedias", async () => {
+test("una movible en OT desbloqueada ignora secuencias completadas intermedias y toma el hueco mas proximo", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["1325"],
@@ -1256,7 +1259,7 @@ test("una movible respeta la operacion anterior incluida con fin real mas tardio
   }, { planStart: "2026-08-10", horizonDays: 5, executionTime: "2026-08-10T07:00:00" });
 
   const pending = result.operations.find((item) => item.id === "pending-after-completed");
-  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-31", "07:00"]);
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-10", "07:00"], "la movible toma el hueco mas proximo sin anclarse a las completadas");
 });
 
 test("una completada conserva fechas y no consume capacidad pendiente", async () => {
@@ -2121,7 +2124,7 @@ test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", async
   assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
 });
 
-test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fechas antiguas se agenda (las completadas no actuan como sucesora fija fantasma)", async () => {
+test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fechas antiguas se agenda en el hueco mas proximo (las completadas no limitan ni como sucesora ni como predecesora)", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100"],
@@ -2151,7 +2154,7 @@ test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fech
     "la pendiente encerrada por completadas no debe quedar sin hueco"
   );
   assert.equal(pending.fechaInicio, "2026-07-13");
-  assert.ok(pending.horaInicio >= "07:10", "debe iniciar despues de que termino su predecesora completada");
+  assert.equal(pending.horaInicio, "07:00", "la pendiente toma el hueco mas proximo sin anclarse a las completadas");
   assert.ok(pending.horaFin > pending.horaInicio, "debe tener fin posterior al inicio");
   assert.ok(result.lastSchedule.scheduledOts.includes("100"), "la OT con pendiente agendada debe quedar en scheduledOts");
   const pred = result.operations.find((item) => item.id === "pred");
@@ -2642,7 +2645,7 @@ test("un asueto general detiene operaciones finitas y subcontratos al buscar el 
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("una completada fija la precedencia de su sucesora sin consumir capacidad para otras OTs", async () => {
+test("una completada no limita a su sucesora en OT desbloqueada pero si conserva su registro", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
@@ -2660,9 +2663,11 @@ test("una completada fija la precedencia de su sucesora sin consumir capacidad p
   }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
 
   const successor = result.operations.find((op) => op.id === "successor-after-completed");
+  const completed = result.operations.find((op) => op.id === "completed-predecessor");
   const other = result.operations.find((op) => op.id === "other-ot-can-use-capacity");
-  assert.deepEqual([other.fechaInicio, other.horaInicio], ["2026-07-13", "07:00"]);
-  assert.deepEqual([successor.fechaInicio, successor.horaInicio], ["2026-07-13", "12:00"]);
+  assert.deepEqual([successor.fechaInicio, successor.horaInicio], ["2026-07-13", "07:00"], "la sucesora toma el hueco mas proximo");
+  assert.deepEqual([other.fechaInicio, other.horaInicio], ["2026-07-13", "07:30"]);
+  assert.deepEqual([completed.fechaInicio, completed.horaInicio], ["2026-07-13", "07:00"], "la completada conserva su registro");
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 

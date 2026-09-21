@@ -122,7 +122,7 @@ test("markPlanningOtSynced registra el timestamp por OT sin tocar las demas", ()
   assert.equal(core.planningOtSyncedAt(stamped, "3"), 0);
 });
 
-test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y conserva completadas", () => {
+test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y limpia fechas de completadas de OT desbloqueada", () => {
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",
     fechaFin: "2026-07-01", horaFin: "10:00", operador: "OP 1", maquina: "M1",
@@ -146,7 +146,12 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no
   assert.notEqual(result.operations, state.operations);
   assert.deepEqual(structuredClone(result.operations.map((operation) => operation.id)),
     ["movable", "completed", "marked-locked-only", "other", "historical", "locked-by-ot", "programmed", "frozen"]);
-  assert.deepEqual(structuredClone(result.operations[1]), completed);
+  assert.deepEqual(structuredClone(result.operations[1]), {
+    ...completed,
+    fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
+    operador: "",
+    needsReschedule: false, autoFrozen: false,
+  });
   assert.deepEqual(structuredClone(result.operations[0]), {
     ...movable,
     fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
