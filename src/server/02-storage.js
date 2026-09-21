@@ -469,8 +469,62 @@ function PP_writeStateAck_(revision, savedAt, extra) {
   return Object.assign({ ok: true, revision: revision, savedAt: savedAt }, extra || {});
 }
 
+function PP_dedupeOperationGenerations_(operations) {
+  const GENERATION_GAP = 200;
+  const norm = function(value) {
+    return String(value || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+  };
+  if (!Array.isArray(operations) || operations.length < 2) return operations || [];
+  const groups = {};
+  operations.forEach(function(op) {
+    const key = norm(op.ot) + '::' + norm(op.parte);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(op);
+  });
+  const output = [];
+  Object.keys(groups).forEach(function(key) {
+    const group = groups[key];
+    const toolChanges = [];
+    const others = [];
+    const numerics = [];
+    group.forEach(function(op) {
+      if (norm(op.tipoInsercion) === 'CAMBIO_HERRAMENTAL') { toolChanges.push(op); return; }
+      const m = /^ns-(\d+)$/.exec(String(op.id || '').trim());
+      if (m) numerics.push({ num: parseInt(m[1], 10), op: op });
+      else others.push(op);
+    });
+    toolChanges.forEach(function(op) { output.push(op); });
+    if (numerics.length < 2) {
+      others.forEach(function(op) { output.push(op); });
+      numerics.forEach(function(item) { output.push(item.op); });
+      return;
+    }
+    numerics.sort(function(a, b) { return a.num - b.num; });
+    const families = [];
+    let current = [numerics[0]];
+    for (let i = 1; i < numerics.length; i++) {
+      if (numerics[i].num - numerics[i - 1].num > GENERATION_GAP) { families.push(current); current = []; }
+      current.push(numerics[i]);
+    }
+    families.push(current);
+    if (families.length < 2) {
+      others.forEach(function(op) { output.push(op); });
+      numerics.forEach(function(item) { output.push(item.op); });
+      return;
+    }
+    let maxLast = -1;
+    let keepIndex = -1;
+    families.forEach(function(family, index) {
+      const last = family[family.length - 1].num;
+      if (last > maxLast) { maxLast = last; keepIndex = index; }
+    });
+    families[keepIndex].forEach(function(item) { output.push(item.op); });
+  });
+  return output;
+}
+
 function PP_operationRows_(payload) {
-  return (payload.operations || []).map(function(op) {
+  return PP_dedupeOperationGenerations_(payload.operations || []).map(function(op) {
     return PP_SHEETS.OPERACIONES.map(function(header) { return PP_cellValue_(op[PP_OPERATION_FIELDS[header]]); });
   });
 }
@@ -667,10 +721,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
   ];
   PP_writeTable_(spreadsheet.getSheetByName('CONFIG'), PP_SHEETS.CONFIG, configRows);
 
-  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES,
-    (payload.operations || []).map(function(op) {
-      return PP_SHEETS.OPERACIONES.map(function(header) { return PP_cellValue_(op[PP_OPERATION_FIELDS[header]]); });
-    }));
+  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
 
   PP_writeTable_(spreadsheet.getSheetByName('OPERADORES'), PP_SHEETS.OPERADORES,
     (payload.operators || []).map(function(operator) {
