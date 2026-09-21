@@ -117,7 +117,7 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
   assert.equal(result.data.operations[11].cantTotal, 3);
 });
 
-test("conserva la ruta de una OT activa aunque sus tareas aparezcan terminales", () => {
+test("excluye de la ruta las tareas terminales de una OT activa", () => {
   const context = loadService({
     trabajo: { wo: "2773", id: "913", cantidad: 3 },
   });
@@ -140,11 +140,11 @@ test("conserva la ruta de una OT activa aunque sus tareas aparezcan terminales",
   assert.equal(result.ok, true);
   assert.deepEqual(
     structuredClone(result.data.operations.map((operation) => operation.descripcion)),
-    ["CORTE", "DOBLEZ", "PINTURA"],
+    ["CORTE"],
   );
   assert.deepEqual(
     structuredClone(result.data.operations.map((operation) => operation.estatus)),
-    ["No iniciado", "No iniciado", "No iniciado"],
+    ["IN PROGRESS"],
   );
 });
 

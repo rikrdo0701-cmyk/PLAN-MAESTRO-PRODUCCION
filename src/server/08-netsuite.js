@@ -671,7 +671,7 @@ function PP_netSuiteDate_(value) {
 function PP_isSchedulable_(row) {
   const status = PP_normalizeKey_(PP_pick_(row, ['Estado', 'Status', 'status_op'])).replace(/[ _-]/g, '');
   return ![
-    'COMPLETE', 'COMPLETAD', 'CERRAD', 'CLOSED',
+    'COMPLETE', 'COMPLET', 'CERRAD', 'CLOSED',
     'CANCELAD', 'CANCELED', 'CANCELLED'
   ].some(function(terminal) { return status.indexOf(terminal) >= 0; });
 }

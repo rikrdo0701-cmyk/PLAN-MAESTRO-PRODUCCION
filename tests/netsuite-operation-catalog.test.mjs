@@ -12,6 +12,8 @@ test("el filtro conserva variantes activas y excluye solo estados terminales", (
   assert.equal(context.PP_isSchedulable_({ Estado: "In Process" }), true);
   assert.equal(context.PP_isSchedulable_({ Estado: "Pendiente de liberación" }), true);
   assert.equal(context.PP_isSchedulable_({ Estado: "Completado" }), false);
+  assert.equal(context.PP_isSchedulable_({ Estado: "Completar" }), false);
+  assert.equal(context.PP_isSchedulable_({ status_op: "COMPLETED" }), false);
   assert.equal(context.PP_isSchedulable_({ Estado: "Closed" }), false);
 });
 

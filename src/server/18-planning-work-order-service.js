@@ -92,7 +92,7 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
   if (!resolvedId) throw new Error('OT no encontrada en NetSuite: ' + folio);
 
   const route = PP_fetchDirectWorkOrderSuiteQl_([
-    'SELECT id, operationsequence, manufacturingworkcenter,',
+    'SELECT id, operationsequence, manufacturingworkcenter, status,',
     'BUILTIN.DF(manufacturingworkcenter) AS work_center,',
     'setuptime, runrate, title',
     'FROM manufacturingoperationtask',
@@ -101,13 +101,13 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
   ].join(' '), config);
   const rows = route.items || [];
   if (!rows.length) throw new Error('Ruta de manufactura vacia para la OT ' + folio);
-  return rows.map(function(row) {
+  return rows.filter(PP_isSchedulable_).map(function(row) {
     return {
       'Orden de trabajo': folio,
       'Operacion': row.work_center || row.title,
       'Secuencia': row.operationsequence,
       'Centro de trabajo': row.manufacturingworkcenter,
-      'Estado': 'No iniciado',
+      'Estado': row.status || 'No iniciado',
       'Cantidad a procesar': quantity,
       'Tiempo estimado (min)': Number(row.setuptime || 0) + Number(row.runrate || 0) * quantity,
       'Tiempo de configuracion (minutos)': Number(row.setuptime || 0)
