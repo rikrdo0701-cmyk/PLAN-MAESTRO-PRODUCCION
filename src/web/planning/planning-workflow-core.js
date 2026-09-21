@@ -712,6 +712,28 @@ expandedOts: without(state?.expandedOts),
     return `OP|${normalize(operation?.ot)}|${Number(operation?.secuencia || 0)}|${normalize(operation?.ct || "SIN_CT")}`;
   }
 
+  function operationPlanStatusEntry(state, operation) {
+    const statuses = state?.operationPlanStatuses;
+    if (!statuses || !operation) return null;
+    const rows = Array.isArray(statuses) ? statuses : Object.values(statuses);
+    const key = stableOperationCompletionKey(operation);
+    const operationId = String(operation?.id || "").trim();
+    const direct = key && (statuses[key] || rows.find((item) => String(item?.key || item?.completionKey || "") === key));
+    if (direct) return direct;
+    return rows.find((item) => {
+      if (operationId && String(item?.operationId || "").trim() === operationId) return true;
+      return normalize(item?.ot) === normalize(operation?.ot) &&
+        Number(item?.sequence ?? item?.secuencia ?? 0) === Number(operation?.secuencia || 0) &&
+        normalize(item?.ct || "SIN_CT") === normalize(operation?.ct || "SIN_CT");
+    }) || null;
+  }
+
+  function isCompletedDraftOperation(state, operation) {
+    const entry = operationPlanStatusEntry(state, operation);
+    return !isPendingDraftOperation(operation) ||
+      normalize(entry?.status || entry?.planStatus) === "COMPLETADA_PLAN";
+  }
+
   function operationLeafId(value) {
     const match = String(value || "").trim().match(/(\d+)\s*$/);
     return match ? match[1] : "";
@@ -796,7 +818,7 @@ expandedOts: without(state?.expandedOts),
       : state?.selectedOts;
     const selected = new Set((scope || []).map(normalize));
     return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
-      isPendingDraftOperation(operation) && !isHistorical(operation) &&
+      !isCompletedDraftOperation(state, operation) && !isHistorical(operation) &&
       Boolean(operation?.fechaInicio && operation?.fechaFin));
   }
 

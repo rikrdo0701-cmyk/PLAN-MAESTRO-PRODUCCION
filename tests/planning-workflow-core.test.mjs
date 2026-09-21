@@ -236,6 +236,20 @@ test("draftExportOperations usa lastSchedule.scheduledOts como alcance del borra
   assert.deepEqual(exported.map((operation) => operation.id), ["scheduled"]);
 });
 
+test("draftExportOperations excluye completadas aunque la fila aun tenga planStatus pendiente", () => {
+  const completed = { id: "ns-11", ot: "3427", secuencia: 11, ct: "5458", planStatus: "PENDIENTE", fechaInicio: "2026-09-17", fechaFin: "2026-09-17" };
+  const pending = { id: "ns-16", ot: "3427", secuencia: 16, ct: "5461", planStatus: "PENDIENTE", fechaInicio: "2026-09-17", fechaFin: "2026-09-17" };
+  const exported = core.draftExportOperations({
+    selectedOts: ["3427"],
+    lastSchedule: { scheduledOts: ["3427"] },
+    operations: [completed, pending],
+    operationPlanStatuses: {
+      "legacy-11": { key: "legacy-11", operationId: "ns-11", status: "COMPLETADA_PLAN", ot: "3427", sequence: 11, ct: "5458" },
+    },
+  });
+  assert.deepEqual(exported.map((operation) => operation.id), ["ns-16"]);
+});
+
 test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloqueada", () => {
   const state = { lockedOts: ["100"] };
   assert.deepEqual(structuredClone(core.canRemoveSelectedOt(state, 100)), {

@@ -336,6 +336,15 @@
       "domain": "OT"
     },
     {
+      "rule_id": "RULE-OT-033",
+      "name": "Exportacion defensiva contra estados completados desincronizados",
+      "status": "implementada",
+      "rule": "La exportacion del borrador debe excluir una operacion COMPLETADA_PLAN aunque la fila de OPERACIONES todavia tenga planStatus PENDIENTE: debe consultar ESTADOS_OPERACION_PLAN por clave estable, operationId o la tupla OT+SECUENCIA+CT. Para una OT no bloqueada, el CSV conserva unicamente las operaciones pendientes restantes, como 16-20 cuando 11-15 muestran Reabrir; la logica de OT bloqueada permanece separada.",
+      "source": "definicion de usuario 2026-09-20; SHEET-OPERACIONES; SHEET-ESTADOS_OPERACION_PLAN; src/web/planning/planning-workflow-core.js; tests/planning-workflow-core.test.mjs",
+      "domain": "OT",
+      "updated_at": "2026-09-20"
+    },
+    {
       "rule_id": "RULE-BAL-007",
       "name": "Validacion previa de operador en la matriz de habilidades",
       "status": "implementada",
