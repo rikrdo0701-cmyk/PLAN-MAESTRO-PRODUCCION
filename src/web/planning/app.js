@@ -6013,6 +6013,28 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     totals: { cortadorInicial: otsByFirstOp.cortadorInicial.length, otros: otsByFirstOp.otros.length },
   };
   const corteTuboPattern = /CORTE DE TUBO|\b3OTD\b/i;
+  const anyCortePattern = /\bCORTE\b/i;
+  const firstOpDescCounts = {};
+  const anyCorteByOperator = {};
+  let anyCorteOpCount = 0;
+  let anyCorteOtsCount = 0;
+  let firstOpTotal = 0;
+  for (const [ot, info] of Object.entries(bestSeqByOt)) {
+    const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
+    const minOp = otOps.find((op) => Number(op.secuencia) === info.seq);
+    const desc = minOp ? String(minOp.descripcion || "(vacio)").replace(/\s+/g, " ").trim().slice(0, 60) : "(sin op)";
+    firstOpDescCounts[desc] = (firstOpDescCounts[desc] || 0) + 1;
+    firstOpTotal += 1;
+    const cortes = otOps.filter((op) => anyCortePattern.test(String(op.descripcion || "")));
+    if (cortes.length) {
+      anyCorteOtsCount += 1;
+      anyCorteOpCount += cortes.length;
+      for (const cop of cortes) {
+        const copName = String(cop.operador || "(vacio)").trim() || "(vacio)";
+        anyCorteByOperator[copName] = (anyCorteByOperator[copName] || 0) + 1;
+      }
+    }
+  }
   const corteTuboAnalysis = {
     totalOts: Object.keys(bestSeqByOt).length,
     otsWithCorteTubo: 0,
@@ -6075,7 +6097,14 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     firstOpByCt,
     firstOpsByOperator,
     exampleOts,
-    corteTuboAnalysis,
+    corteTuboAnalysis: {
+      ...corteTuboAnalysis,
+      anyCorteOtsCount,
+      anyCorteOpCount,
+      anyCorteByOperator,
+      firstOpTotal,
+      firstOpDescCounts,
+    },
   };
 }
 
