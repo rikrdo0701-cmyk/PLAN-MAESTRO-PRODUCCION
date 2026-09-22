@@ -6020,6 +6020,9 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
   let anyCorteOpCount = 0;
   let anyCorteOtsCount = 0;
   let firstOpTotal = 0;
+  let withoutCorteTuboCount = 0;
+  let withoutCorteTuboSelected = 0;
+  const otsWithoutCorteTuboSelected = [];
   for (const [ot, info] of Object.entries(bestSeqByOt)) {
     const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
     const hasCorteTubo = otOps.some((op) => corteTuboPattern.test(String(op.descripcion || "")));
@@ -6027,17 +6030,31 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     const desc = minOp ? String(minOp.descripcion || "(vacio)").replace(/\s+/g, " ").trim().slice(0, 60) : "(sin op)";
     firstOpDescCounts[desc] = (firstOpDescCounts[desc] || 0) + 1;
     firstOpTotal += 1;
+    if (!hasCorteTubo) {
+      withoutCorteTuboCount += 1;
+      if (selectedSet.has(String(ot))) {
+        withoutCorteTuboSelected += 1;
+        if (otsWithoutCorteTuboSelected.length < 40) otsWithoutCorteTuboSelected.push(ot);
+      }
+    }
     if (!hasCorteTubo && samplesWithoutCorteTubo.length < 5) {
+      const syncedKey = materialOtKey(ot);
       samplesWithoutCorteTubo.push({
         ot,
         firstOpSeq: info.seq,
         firstOpDesc: desc,
         firstOpOperator: minOp ? (String(minOp.operador || "(vacio)").trim() || "(vacio)") : "?",
         opsInRoute: otOps.length,
-        routeSample: otOps.slice(0, 6).map((op) => ({
+        inSelectedOts: selectedSet.has(String(ot)),
+        inLockedOts: lockedSet.has(String(ot)),
+        operationsSyncedAt: (draftState?.operationsSyncedAt && draftState.operationsSyncedAt[syncedKey]) || "",
+        routeSample: otOps.map((op) => ({
           secuencia: Number(op.secuencia),
+          ct: String(op.ct || "").trim() || "SIN_CT",
           descripcion: String(op.descripcion || "").replace(/\s+/g, " ").trim().slice(0, 50),
           operador: String(op.operador || "").trim() || "(vacio)",
+          planStatus: String(op.planStatus || ""),
+          estatus: String(op.estatus || ""),
         })),
       });
     }
@@ -6121,6 +6138,9 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
       firstOpTotal,
       firstOpDescCounts,
       samplesWithoutCorteTubo,
+      withoutCorteTuboCount,
+      withoutCorteTuboSelected,
+      otsWithoutCorteTuboSelected,
     },
   };
 }
