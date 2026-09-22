@@ -8623,9 +8623,139 @@ function applyNetSuitePlanningPayload(payload) {
   const selected = new Set((state.selectedOts || []).map(normalizeKey));
   const detailOt = normalizeKey(selectedJobOt());
   if (detailOt) selected.add(detailOt);
-  const preservedDraft = state.operations.filter((op) => selected.has(normalizeKey(op.ot)));
-  const refreshed = (payload?.operations || []).filter((op) => !selected.has(normalizeKey(op.ot)));
-  if (Array.isArray(payload?.operations)) state.operations = [...preservedDraft, ...refreshed];
+  const locked = new Set((state.lockedOts || []).map(normalizeKey));
+  const upper = (value) => String(value || "").trim().toUpperCase();
+  const isHistoricalOperation = (operation) =>
+    operation?.historical === true || operation?.isHistorical === true ||
+    ["PUBLICADO", "PUBLICADA", "GUARDADO", "GUARDADA", "HISTORICO", "HISTORICA"]
+      .includes(upper(operation?.planStatus || operation?.estatus));
+  const isCompletedOperation = (operation) =>
+    upper(operation?.planStatus || operation?.estatus) === "COMPLETADA_PLAN";
+  const isToolChangeOperation = (operation) => upper(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL";
+  const isPreservedOperation = (operation) =>
+    isHistoricalOperation(operation) || isCompletedOperation(operation) || isToolChangeOperation(operation);
+  const sequenceOf = (operation) => String(operation?.secuencia ?? "").trim();
+  const ctOf = (operation) => {
+    const ct = String(operation?.ct ?? "").trim().toUpperCase();
+    return ct && ct !== "SIN_CT" ? ct : "";
+  };
+  const descriptionOf = (operation) =>
+    upper(operation?.descripcion || operation?.tipoInsercion || "");
+  const routeFields = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tiempoFallback", "tipoInsercion",
+  ];
+  const mergeRoute = (remoteOperation, existingOperation) => {
+    if (!existingOperation) return remoteOperation;
+    const route = {};
+    routeFields.forEach((field) => {
+      if (remoteOperation && Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+    });
+    const merged = { ...existingOperation, ...route };
+    if (String(existingOperation?.id || "").trim()) merged.id = existingOperation.id;
+    if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+    return merged;
+  };
+  const mergeSelectedOt = (remoteOperations, localOperations) => {
+    const local = (localOperations || []).filter(Boolean);
+    const preserved = local.filter(isPreservedOperation);
+    const matchable = local.filter((operation) => !isPreservedOperation(operation));
+    const bySequence = new Map();
+    const byCt = new Map();
+    const byDescription = new Map();
+    matchable.forEach((operation) => {
+      const sequence = sequenceOf(operation);
+      if (sequence && !bySequence.has(sequence)) bySequence.set(sequence, operation);
+      const ct = ctOf(operation);
+      if (ct && !byCt.has(ct)) byCt.set(ct, operation);
+      const description = descriptionOf(operation);
+      if (description) {
+        if (!byDescription.has(description)) byDescription.set(description, []);
+        byDescription.get(description).push(operation);
+      }
+    });
+    const used = new Set();
+    const matchRemote = (remoteOperation) => {
+      const sequence = sequenceOf(remoteOperation);
+      if (sequence && bySequence.has(sequence) && !used.has(bySequence.get(sequence))) {
+        return bySequence.get(sequence);
+      }
+      const ct = ctOf(remoteOperation);
+      if (ct && byCt.has(ct) && !used.has(byCt.get(ct))) return byCt.get(ct);
+      const description = descriptionOf(remoteOperation);
+      const candidates = (byDescription.get(description) || []).filter((operation) => !used.has(operation));
+      if (candidates.length) return candidates[0];
+      return null;
+    };
+    const merged = (remoteOperations || []).map((remoteOperation) => {
+      const existing = matchRemote(remoteOperation);
+      if (existing) used.add(existing);
+      return mergeRoute(remoteOperation, existing);
+    });
+    return [...preserved, ...merged];
+  };
+  const refreshedOts = [];
+  if (Array.isArray(payload?.operations)) {
+    const localByOt = new Map();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key) continue;
+      if (!localByOt.has(key)) localByOt.set(key, []);
+      localByOt.get(key).push(operation);
+    }
+    const payloadByOt = new Map();
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key) continue;
+      if (!payloadByOt.has(key)) payloadByOt.set(key, []);
+      payloadByOt.get(key).push(operation);
+    }
+    const selectedMerged = new Map();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || selectedMerged.has(key)) continue;
+      const localOps = localByOt.get(key) || [];
+      const remoteOps = payloadByOt.get(key);
+      if (!remoteOps || locked.has(key)) {
+        selectedMerged.set(key, localOps);
+      } else {
+        selectedMerged.set(key, mergeSelectedOt(remoteOps, localOps));
+        refreshedOts.push(key);
+      }
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || selectedMerged.has(key)) continue;
+      if (!locked.has(key)) {
+        selectedMerged.set(key, payloadByOt.get(key) || []);
+        refreshedOts.push(key);
+      }
+    }
+    const nextOperations = [];
+    const emitted = new Set();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      const ops = selectedMerged.get(key);
+      if (ops) nextOperations.push(...ops);
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      const ops = selectedMerged.get(key);
+      if (ops) nextOperations.push(...ops);
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      nextOperations.push(...(payloadByOt.get(key) || []));
+      refreshedOts.push(key);
+    }
+    state.operations = nextOperations;
+  }
   if (Array.isArray(payload?.materials)) state.materials = payload.materials;
   if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
   if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
@@ -8633,8 +8763,7 @@ function applyNetSuitePlanningPayload(payload) {
   if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
   if (typeof payload?.syncedAt === "string" && Array.isArray(payload?.operations)) {
     state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}) };
-    for (const operation of refreshed) {
-      const key = materialOtKey(operation?.ot);
+    for (const key of refreshedOts) {
       if (key) state.operationsSyncedAt[key] = payload.syncedAt;
     }
   }

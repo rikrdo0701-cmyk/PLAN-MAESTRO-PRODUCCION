@@ -12,6 +12,7 @@
     restorePublishedPlanAsDraft: 300000,
     savePlanningStateOptimized: 180000,
     saveAppState: 180000,
+    syncNetSuitePlanningData: 360000,
   };
 
   let iframe = null;
