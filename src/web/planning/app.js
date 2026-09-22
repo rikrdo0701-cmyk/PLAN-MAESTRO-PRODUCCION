@@ -5975,21 +5975,38 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     const target = /cortador\s*inicial/i.test(firstOpAssigneeByOt[ot]) ? otsByFirstOp.cortadorInicial : otsByFirstOp.otros;
     target.push(ot);
   }
-  const buildOtsDetail = (otList, max) => otList.slice(0, max).map((ot) => ({
-    ot,
-    firstOpAssignee: firstOpAssigneeByOt[ot] || "",
-    sequence: ops
+  const selectedSet = new Set((draftState?.selectedOts || []).map((v) => String(v)));
+  const lockedSet = new Set((draftState?.lockedOts || []).map((v) => String(v)));
+  const buildOtsDetail = (otList, max) => otList.slice(0, max).map((ot) => {
+    const otOps = ops
       .filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)))
-      .sort((a, b) => Number(a.secuencia) - Number(b.secuencia))
-      .map((op) => ({
+      .sort((a, b) => Number(a.secuencia) - Number(b.secuencia));
+    const first = otOps[0] || null;
+    return {
+      ot,
+      firstOpAssignee: firstOpAssigneeByOt[ot] || "",
+      inSelectedOts: selectedSet.has(String(ot)),
+      inLockedOts: lockedSet.has(String(ot)),
+      firstOpStatus: first ? {
+        planStatus: String(first.planStatus || ""),
+        estatus: String(first.estatus || ""),
+        historical: !!first.historical,
+        autoFrozen: !!first.autoFrozen,
+        locked: !!first.locked,
+        fechaInicio: first.fechaInicio || "",
+        log: String(first.log || "").slice(-240),
+      } : null,
+      sequence: otOps.map((op) => ({
         secuencia: Number(op.secuencia),
         ct: String(op.ct || "").trim() || "SIN_CT",
         descripcion: String(op.descripcion || "").trim(),
         operador: String(op.operador || "").trim() || "(sin operador)",
         minutos: Math.round(operationMinutesInRange(op, weekRange.start, weekRange.end) * 10) / 10,
         fechaInicio: op.fechaInicio || "",
+        planStatus: String(op.planStatus || ""),
       })),
-  }));
+    };
+  });
   const exampleOts = {
     startsWithCortadorInicial: buildOtsDetail(otsByFirstOp.cortadorInicial, 2),
     startsWithOther: buildOtsDetail(otsByFirstOp.otros, 2),
