@@ -6016,15 +6016,31 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
   const anyCortePattern = /\bCORTE\b/i;
   const firstOpDescCounts = {};
   const anyCorteByOperator = {};
+  const samplesWithoutCorteTubo = [];
   let anyCorteOpCount = 0;
   let anyCorteOtsCount = 0;
   let firstOpTotal = 0;
   for (const [ot, info] of Object.entries(bestSeqByOt)) {
     const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
+    const hasCorteTubo = otOps.some((op) => corteTuboPattern.test(String(op.descripcion || "")));
     const minOp = otOps.find((op) => Number(op.secuencia) === info.seq);
     const desc = minOp ? String(minOp.descripcion || "(vacio)").replace(/\s+/g, " ").trim().slice(0, 60) : "(sin op)";
     firstOpDescCounts[desc] = (firstOpDescCounts[desc] || 0) + 1;
     firstOpTotal += 1;
+    if (!hasCorteTubo && samplesWithoutCorteTubo.length < 5) {
+      samplesWithoutCorteTubo.push({
+        ot,
+        firstOpSeq: info.seq,
+        firstOpDesc: desc,
+        firstOpOperator: minOp ? (String(minOp.operador || "(vacio)").trim() || "(vacio)") : "?",
+        opsInRoute: otOps.length,
+        routeSample: otOps.slice(0, 6).map((op) => ({
+          secuencia: Number(op.secuencia),
+          descripcion: String(op.descripcion || "").replace(/\s+/g, " ").trim().slice(0, 50),
+          operador: String(op.operador || "").trim() || "(vacio)",
+        })),
+      });
+    }
     const cortes = otOps.filter((op) => anyCortePattern.test(String(op.descripcion || "")));
     if (cortes.length) {
       anyCorteOtsCount += 1;
@@ -6104,6 +6120,7 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
       anyCorteByOperator,
       firstOpTotal,
       firstOpDescCounts,
+      samplesWithoutCorteTubo,
     },
   };
 }
