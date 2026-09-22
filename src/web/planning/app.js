@@ -5959,15 +5959,42 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
   }
   const firstOpByCt = {};
   const firstOpsByOperator = {};
+  const firstOpAssigneeByOt = {};
   for (const ot of Object.keys(bestSeqByOt)) {
     const { ct } = bestSeqByOt[ot];
     firstOpByCt[ct] = (firstOpByCt[ct] || 0) + 1;
     for (const op of ops) {
       if (op && op.ot === ot && Number(op.secuencia) === bestSeqByOt[ot].seq && op.operador) {
         firstOpsByOperator[op.operador] = (firstOpsByOperator[op.operador] || 0) + 1;
+        firstOpAssigneeByOt[ot] = op.operador;
       }
     }
   }
+  const otsByFirstOp = { cortadorInicial: [], otros: [] };
+  for (const ot of Object.keys(firstOpAssigneeByOt)) {
+    const target = /cortador\s*inicial/i.test(firstOpAssigneeByOt[ot]) ? otsByFirstOp.cortadorInicial : otsByFirstOp.otros;
+    target.push(ot);
+  }
+  const buildOtsDetail = (otList, max) => otList.slice(0, max).map((ot) => ({
+    ot,
+    firstOpAssignee: firstOpAssigneeByOt[ot] || "",
+    sequence: ops
+      .filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)))
+      .sort((a, b) => Number(a.secuencia) - Number(b.secuencia))
+      .map((op) => ({
+        secuencia: Number(op.secuencia),
+        ct: String(op.ct || "").trim() || "SIN_CT",
+        descripcion: String(op.descripcion || "").trim(),
+        operador: String(op.operador || "").trim() || "(sin operador)",
+        minutos: Math.round(operationMinutesInRange(op, weekRange.start, weekRange.end) * 10) / 10,
+        fechaInicio: op.fechaInicio || "",
+      })),
+  }));
+  const exampleOts = {
+    startsWithCortadorInicial: buildOtsDetail(otsByFirstOp.cortadorInicial, 2),
+    startsWithOther: buildOtsDetail(otsByFirstOp.otros, 2),
+    totals: { cortadorInicial: otsByFirstOp.cortadorInicial.length, otros: otsByFirstOp.otros.length },
+  };
   return {
     weekMonday: weekStart,
     horizonDays: draftState?.horizonDays || 15,
@@ -5979,6 +6006,7 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     operatorWeekOps,
     firstOpByCt,
     firstOpsByOperator,
+    exampleOts,
   };
 }
 
