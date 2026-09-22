@@ -6012,6 +6012,57 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     startsWithOther: buildOtsDetail(otsByFirstOp.otros, 2),
     totals: { cortadorInicial: otsByFirstOp.cortadorInicial.length, otros: otsByFirstOp.otros.length },
   };
+  const corteTuboPattern = /CORTE DE TUBO|\b3OTD\b/i;
+  const corteTuboAnalysis = {
+    totalOts: Object.keys(bestSeqByOt).length,
+    otsWithCorteTubo: 0,
+    otsWhereCorteTuboIsMinSeq: 0,
+    corteTuboOpCount: 0,
+    corteTuboPendingCount: 0,
+    corteTuboMinutesWeek: 0,
+    corteTuboMinutesHorizon: 0,
+    operatorsOnCorteTuboMinSeq: {},
+    minSeqOperatorWhenOtsHasCorteTubo: {},
+    minSeqDescWhenOtsHasCorteTubo: {},
+    samplesAnomaly: [],
+  };
+  for (const [ot, info] of Object.entries(bestSeqByOt)) {
+    const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
+    const corteOps = otOps.filter((op) => corteTuboPattern.test(String(op.descripcion || "")));
+    if (!corteOps.length) continue;
+    corteTuboAnalysis.otsWithCorteTubo += 1;
+    corteTuboAnalysis.corteTuboOpCount += corteOps.length;
+    for (const cop of corteOps) {
+      const pending = !/COMPLETAD|CERRAD|HISTORIC/i.test(String(cop.planStatus || "")) && !cop.historical;
+      if (pending) corteTuboAnalysis.corteTuboPendingCount += 1;
+      corteTuboAnalysis.corteTuboMinutesWeek += operationMinutesInRange(cop, weekRange.start, weekRange.end);
+      corteTuboAnalysis.corteTuboMinutesHorizon += operationMinutesInRange(cop, weekRange.start, horizonEnd);
+    }
+    const minCorteSeq = Math.min(...corteOps.map((op) => Number(op.secuencia)));
+    const isMinSeq = minCorteSeq === info.seq;
+    if (isMinSeq) corteTuboAnalysis.otsWhereCorteTuboIsMinSeq += 1;
+    const corteAtMin = corteOps.find((op) => Number(op.secuencia) === minCorteSeq);
+    const corteOpName = String((corteAtMin && corteAtMin.operador) || "(vacio)").trim() || "(vacio)";
+    if (isMinSeq) {
+      corteTuboAnalysis.operatorsOnCorteTuboMinSeq[corteOpName] = (corteTuboAnalysis.operatorsOnCorteTuboMinSeq[corteOpName] || 0) + 1;
+    }
+    const minOp = otOps.find((op) => Number(op.secuencia) === info.seq);
+    const minOpName = minOp ? (String(minOp.operador || "(vacio)").trim() || "(vacio)") : "?";
+    const minDesc = minOp ? String(minOp.descripcion || "").trim().slice(0, 50) : "?";
+    corteTuboAnalysis.minSeqOperatorWhenOtsHasCorteTubo[minOpName] = (corteTuboAnalysis.minSeqOperatorWhenOtsHasCorteTubo[minOpName] || 0) + 1;
+    corteTuboAnalysis.minSeqDescWhenOtsHasCorteTubo[minDesc] = (corteTuboAnalysis.minSeqDescWhenOtsHasCorteTubo[minDesc] || 0) + 1;
+    if (!isMinSeq && corteTuboAnalysis.samplesAnomaly.length < 8) {
+      corteTuboAnalysis.samplesAnomaly.push({
+        ot,
+        minSeq: info.seq,
+        minSeqDesc: minDesc,
+        minSeqOperator: minOpName,
+        corteTuboSeq: minCorteSeq,
+        corteTuboOperator: corteOpName,
+        corteTuboDesc: String((corteAtMin && corteAtMin.descripcion) || "").trim().slice(0, 50),
+      });
+    }
+  }
   return {
     weekMonday: weekStart,
     horizonDays: draftState?.horizonDays || 15,
@@ -6024,6 +6075,7 @@ function buildDryRunDiagnosticLoads(draftState, planStartValue) {
     firstOpByCt,
     firstOpsByOperator,
     exampleOts,
+    corteTuboAnalysis,
   };
 }
 
