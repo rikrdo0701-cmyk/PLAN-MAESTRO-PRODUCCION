@@ -7691,6 +7691,7 @@ function releaseReportRows() {
   for (const [ot, operations] of grouped.entries()) {
     const sequenced = operations.slice().sort((a, b) => sequenceSort(a, b));
     const release = sequenced[0];
+    const releaseMatch = finalReleaseOperationMatch(release);
     const date = opStart(release) || opEnd(release);
     const workOrder = workOrderForOt(ot);
     const quantityValue = release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
@@ -7700,8 +7701,8 @@ function releaseReportRows() {
       article: release.parte || workOrder?.item || "",
       quantity,
       date,
-      ct: String(release.ct || "").trim(),
-      label: String(release.ct || "").trim() === "5504" ? "39OTD" : "16OC",
+      ct: releaseMatch?.ct || "",
+      label: releaseMatch?.label || "16OC",
     });
   }
   return rows.sort((a, b) => {
@@ -7817,8 +7818,31 @@ function isToolChangeReportOperation(op) {
 }
 
 const FINAL_RELEASE_OPERATION_CTS = new Set(["5504", "5537"]);
+const FINAL_RELEASE_OPERATION_CODE_RE = /(?:^|[\s:/])(16OC|39OTD)(?=[\s:/]|$)/i;
+
+function finalReleaseOperationMatch(op) {
+  if (!op) return null;
+  const raw = String(op.ct ?? "").trim();
+  if (FINAL_RELEASE_OPERATION_CTS.has(raw)) {
+    return { ct: raw, label: raw === "5504" ? "39OTD" : "16OC" };
+  }
+  if (raw && raw !== "SIN_CT") return null;
+  const code = String(op.descripcion || "").match(FINAL_RELEASE_OPERATION_CODE_RE);
+  if (code) {
+    const label = code[1].toUpperCase();
+    return { ct: label === "39OTD" ? "5504" : "5537", label };
+  }
+  const resolved = window.PlannerCore?.capabilityForOperation
+    ? String(window.PlannerCore.capabilityForOperation(op, state)?.ct || "").trim()
+    : "";
+  if (FINAL_RELEASE_OPERATION_CTS.has(resolved)) {
+    return { ct: resolved, label: resolved === "5504" ? "39OTD" : "16OC" };
+  }
+  return null;
+}
+
 function isFinalReleaseOperation(op) {
-  return FINAL_RELEASE_OPERATION_CTS.has(String(op?.ct ?? "").trim());
+  return Boolean(finalReleaseOperationMatch(op));
 }
 
 function reportOperationCommentCell(op) {

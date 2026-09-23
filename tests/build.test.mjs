@@ -2019,3 +2019,31 @@ test("bloquear/desbloquear OT no vuelve al render global y usa el indice operati
   assert.match(planningApp, /function scheduleJobLockBackgroundWork\(\)/);
   assert.match(planningApp, /jobLockBackgroundRefreshPending/);
 });
+
+test("liberacion final detecta 16OC/39OTD por ct o por descripcion cuando el feed trae SIN_CT", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("const FINAL_RELEASE_OPERATION_CTS");
+  const end = app.indexOf("function reportOperationCommentCell(", start);
+  assert.ok(start >= 0 && end > start, "bloque finalRelease debe existir");
+  const source = app.slice(start, end);
+  const match = Function("window", "state", `${source}; return finalReleaseOperationMatch;`)({ PlannerCore: {} }, {});
+
+  assert.deepEqual(match({ ct: "5504", descripcion: "x" }), { ct: "5504", label: "39OTD" });
+  assert.deepEqual(match({ ct: "5537", descripcion: "x" }), { ct: "5537", label: "16OC" });
+  assert.deepEqual(match({ ct: "SIN_CT", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }), { ct: "5537", label: "16OC" });
+  assert.deepEqual(match({ ct: "SIN_CT", descripcion: "39OTD : INSPECCION Y LIBERACIÓN DE PIEZAS TERMINADA" }), { ct: "5504", label: "39OTD" });
+  assert.deepEqual(match({ ct: "", descripcion: "16OC : LIBERACION DE PIEZAS" }), { ct: "5537", label: "16OC" });
+  assert.equal(match({ ct: "SIN_CT", descripcion: "23OTD : INSPECCION DE ARMADO Y PUNTEADO DE PIEZAS" }), null);
+  assert.equal(match({ ct: "SIN_CT", descripcion: "26OTD : UBICACION PARA PERFORADO" }), null);
+  assert.equal(match({ ct: "5459", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }), null);
+  assert.equal(match(null), null);
+
+  const withCatalog = Function(
+    "window", "state",
+    `${source}; return finalReleaseOperationMatch;`,
+  )(
+    { PlannerCore: { capabilityForOperation: () => ({ ct: "5537" }) } },
+    {},
+  );
+  assert.deepEqual(withCatalog({ ct: "SIN_CT", descripcion: "OTRA OPS" }), { ct: "5537", label: "16OC" });
+});
