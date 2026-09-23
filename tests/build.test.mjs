@@ -539,6 +539,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: 210mm 297mm/);
   assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 210mm; min-height: 297mm/);
+  assert.match(pagesIndex, /html\.printing-landscape body/);
   assert.match(pagesIndex, /@media print[\s\S]*\.plan-alerts,[\s\S]*\.draft-executive,[\s\S]*\.toast,[\s\S]*\.planner-grid/);
   assert.match(pagesIndex, /\.weekly-job-panel\.loads \{ display: none; \}/);
   assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-reports \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); gap: 5mm; align-items: stretch; \}/);
