@@ -267,6 +267,10 @@ assert.match(dryRunSource, /totalMs/);
   assert.match(scheduleSource, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas/);
   assert.match(scheduleSource, /persistPlanSnapshot\(\)/);
   assert.match(scheduleSource, /const preservedQueueOrder = \[\.\.\.state\.selectedOts\];[\s\S]{0,200}state = \{ \.\.\.result, selectedOts: preservedQueueOrder \}/);
+  assert.doesNotMatch(scheduleSource, /Plan parcial:/);
+  assert.match(scheduleSource, /missingAptOts/);
+  assert.match(scheduleSource, /ensurePlanningDataLoaded\(true, \{ force: true, ots: replannableOts \}\)/);
+  assert.match(scheduleSource, /No se genero el plan: falta sincronizar operaciones de OT/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {

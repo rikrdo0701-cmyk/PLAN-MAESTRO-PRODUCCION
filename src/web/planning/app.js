@@ -5476,17 +5476,26 @@ const replannableOts = state.selectedOts.filter((ot) =>
     return;
   }
   setScheduleStatus("Actualizando OTs...");
-  const planningData = await ensurePlanningDataLoaded(true, { force: false, ots: replannableOts });
-  if (!planningData.ready) return;
+  const aptKeys = new Set(replannableOts.map(normalizeStatus).filter(Boolean));
+  const missingAptOts = (data) => (data?.missingOts || [])
+    .filter((ot) => aptKeys.has(normalizeStatus(ot)));
+  let planningData = await ensurePlanningDataLoaded(true, { force: false, ots: replannableOts });
+  let missingApt = missingAptOts(planningData);
+  if (!planningData.ready || missingApt.length) {
+    setScheduleStatus("Reintentando sincronizar OTs...");
+    planningData = await ensurePlanningDataLoaded(true, { force: true, ots: replannableOts });
+    if (!planningData.ready) return;
+    missingApt = missingAptOts(planningData);
+  }
+  if (missingApt.length) {
+    showToast(`No se genero el plan: falta sincronizar operaciones de OT ${missingApt.join(", ")}. Reintenta.`, 9000);
+    return;
+  }
   const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
   const readyOts = state.selectedOts.filter((ot) =>
     availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
     isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
-  const excludedOts = (planningData.missingOts || []).filter((ot) => state.selectedOts.includes(ot));
-  if (excludedOts.length) {
-    showToast(`Plan parcial: ${excludedOts.join(", ")} quedaron fuera por no tener operaciones cargadas`, 9000);
-  }
   const closedOts = state.selectedOts.filter((ot) => !isMovablePlanningStatus(jobStatusForOt(ot)));
   if (closedOts.length) {
     state = window.PlanningWorkflowCore.removeClosedWorkOrdersFromDraft(state, closedOts, new Date().toISOString());

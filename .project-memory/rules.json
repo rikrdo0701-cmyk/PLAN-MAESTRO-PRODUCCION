@@ -1377,6 +1377,15 @@
       "source": "decision dry-run Lote 4 2026-09-23; src/web/planning/planner-core.js (DEFAULT_GAP_FILL:28, resolveGapFillConfig:2671, collectGapFillGaps:2686, runGapFill:2905, call site:514-539, commitAssignment:921-925, lastSchedule:605-611, exports:3551-3552); .openchamber/probe-lotes-a-b.mjs (AB_GAPFILL/AB_GAP_MIN/AB_GAP_MAXCAND/AB_GAP_BUDGET); tests/planner-core.test.mjs:3083-3204; salidas Temp/opencode/ab-C-control.json, ab-C-min60.json, ab-C-min45.json, ab-C-min60-c500.json",
       "domain": "Balanceo",
       "updated_at": "2026-09-23"
+    },
+    {
+      "rule_id": "RULE-OT-043",
+      "name": "Generar plan: sync retry 1x y bloqueo si falta ops; sin plan parcial",
+      "status": "implementada",
+      "rule": "DECISION 2026-09-23: al generar el plan, TODAS las OTs aptas (replannableOts) deben tener operaciones en memoria; ninguna se excluye por no haber sincronizado. scheduleCurrentPlanImpl (app.js): (1) ensurePlanningDataLoaded(force:false, ots:replannableOts) hace el sync 1x1 habitual de refreshable (missing=0 ops + stale>3d); (2) si planningData.ready es false o missingOts intersecta replannableOts, 1 RETRY con ensurePlanningDataLoaded(force:true) = sync completo syncNetSuitePlanningData; (3) si tras el retry aun falta alguna OT apta, ABORTA con toast 'No se genero el plan: falta sincronizar operaciones de OT <lista>. Reintenta.' y NO llama schedulePlan (sin plan parcial). SE ELIMINO el toast 'Plan parcial: <ots> quedaron fuera por no tener operaciones cargadas' que filtraba readyOts y generaba a medias. Alinea Generar con dry-run (MISSING_LOADED_PLANNING_DATA ya bloqueaba en dryRunCurrentPlanPerformance). Sync 1x1 solo cubre missing+stale, NO detecta huecos de secuencia (las secuencias NetSuite no son 1..N contiguas; detector de ruta incompleta generaria falsos positivos). Timings conocidos: bulk sync ~99-176s (~200 OTs), 1x1 ~3-6s/OT, solo se reintentan las que falten. ensurePlanningDataLoaded y syncPlanningDataForSelected NO cambiaron (otros callers siguen degradando con aviso).",
+      "source": "decision usuario 2026-09-23 ('si genero plan de las ot aptas se incluyan todas las op'); FIX src/web/planning/app.js scheduleCurrentPlanImpl (missingAptOts + force retry + bloqueo); tests/build.test.mjs (doesNotMatch Plan parcial, match force:true y toast de bloqueo); docs/REGLAS.md y docs/rules/RULES.md",
+      "domain": "Planificacion",
+      "updated_at": "2026-09-23"
     }
   ]
 }

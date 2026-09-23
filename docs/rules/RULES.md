@@ -101,6 +101,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-040` | Espera del cliente en `syncNetSuitePlanningData` = `NETSUITE_PLANNING_TIMEOUT_MS * 24` (360 s) alineada con `METHOD_TIMEOUT_MS` (antes `*4` = 60 s → `partial`) | IMPLEMENTADA | definición/fix 2026-09-22; `app.js:8604`; `.project-memory/rules.json` |
 | `RULE-OT-041` | 6 OTs 2027 con `lockedOts` residual (3413/3416/3529/3533/2613/3398); limpieza vía `scripts/depurar-ots-2027.gs` (dry-run por defecto, no ejecutado) | DOCUMENTADA | análisis 2026-09-22; `scripts/depurar-ots-2027.gs`; `.project-memory/rules.json` |
 | `RULE-OT-042` | Corte de anclas = COMPLETADA (no `lockedOts`); ops incompletas de OT locked se reprograman sin desbloqueo; completadas reservan capacidad | IMPLEMENTADA | decisión usuario Lote 2 2026-09-22; `planner-core.js`/`planning-workflow-core.js`; A/B `probe-lotes-a-b.mjs`; `.project-memory/rules.json` |
+| `RULE-OT-043` | Generar plan: si alguna OT apta queda sin ops tras el sync → 1× retry (`force:true`); si aún falta → **bloquea** (sin plan parcial; elimina toast “Plan parcial…”) | IMPLEMENTADA | decisión usuario 2026-09-23; `app.js` `scheduleCurrentPlanImpl`; `tests/build.test.mjs` |
 
 Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
 `cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía
