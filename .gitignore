@@ -24,3 +24,23 @@ service_account*.json
 reports/
 __pycache__/
 *.pyc
+
+# Scripts de prueba / probes locales (no se versionan)
+probe_*.mjs
+probe_*.py
+perf_probe*.py
+perf_probe*.mjs
+perf_measure.mjs
+perf_*.py
+ccheck.mjs
+fetch_deployed.py
+fetch_index.py
+run_perf_local.ps1
+test-generate-plan.mjs
+test-report-view.mjs
+test_mock_reports.py
+test_plan_reports.py
+test_webapp_legacy_completed.py
+plan-generated.png
+.playwright-cli/
+docs/performance/
