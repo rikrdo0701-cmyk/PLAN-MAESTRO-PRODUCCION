@@ -1,20 +1,18 @@
-/**
- * Depura OTs con programa fijo fuera de horizonte (abril 2027):
- * quita de lockedOts, limpia LOCKED/AUTO_FROZEN y borra fechas del programa
- * en OPERACIONES y ESTADOS_OPERACION_PLAN (ops no completadas).
- *
- * Fuentes (Project Memory data-sources):
- *  - CONFIG.KEY/VALUE -> clave lockedOts (JSON array), revision, savedAt
- *  - OPERACIONES: FECHA_INICIO/HORA_INICIO/FECHA_FIN/HORA_FIN/LOCKED/AUTO_FROZEN/ESTATUS/OT
- *  - ESTADOS_OPERACION_PLAN: OT/ESTATUS_PLAN/FECHA_*/HORA_*
- *  - AUDITORIA: FECHA/USUARIO/ACCION/REVISION/DETALLE
- *
- * Uso en el editor de Apps Script (mismo proyecto que tiene PLANNING_SPREADSHEET_ID):
- *   depurarOts2027()              // DRY-RUN: solo imprime lo que cambiaría
- *   depurarOts2027({ apply: true }) // aplica cambios
- *
- * No modifica NetSuite ni RESTlets (RULE-MAT-004).
- */
+// Depura OTs con programa fijo fuera de horizonte (abril 2027):
+// quita de lockedOts, limpia LOCKED/AUTO_FROZEN y borra fechas del programa
+// en OPERACIONES y ESTADOS_OPERACION_PLAN (ops no completadas).
+//
+// Fuentes (Project Memory data-sources):
+//  - CONFIG.KEY/VALUE -> clave lockedOts (JSON array), revision, savedAt
+//  - OPERACIONES: FECHA_INICIO/HORA_INICIO/FECHA_FIN/HORA_FIN/LOCKED/AUTO_FROZEN/ESTATUS/OT
+//  - ESTADOS_OPERACION_PLAN: OT/ESTATUS_PLAN/FECHA_*/HORA_*
+//  - AUDITORIA: FECHA/USUARIO/ACCION/REVISION/DETALLE
+//
+// Uso en el editor de Apps Script:
+//   depurarOts2027()                // DRY-RUN: solo imprime lo que cambiaria
+//   depurarOts2027({ apply: true }) // aplica cambios
+//
+// No modifica NetSuite ni RESTlets (RULE-MAT-004).
 
 var TARGET_OT_LIST = ['3413', '3416', '3529', '3533', '2613', '3398'];
 
