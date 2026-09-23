@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Reportes → Liberación: columnas Ensamblado (`builtQuantity` de la OT) y Completar (botón Completar/Reabrir de la op 16OC/39OTD, mismo patrón que Plan por operador). Título del panel solo "Liberación". RULE-REP-013 actualizada.
+
 ### Changed
 
 - skills: se eliminó la leyenda amarilla "Vista independiente"; carga más rápida (caché `sessionStorage`, `getAppStateIfChanged`, `PlannerCore` con `defer`).

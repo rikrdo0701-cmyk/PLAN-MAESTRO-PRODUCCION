@@ -7706,13 +7706,16 @@ function releaseReportRows() {
     const workOrder = workOrderForOt(ot);
     const quantityValue = release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
     const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
+    const built = Math.max(0, Number(workOrder?.builtQuantity || 0));
     rows.push({
       ot,
       article: release.parte || workOrder?.item || "",
       quantity,
+      built,
       date,
       ct: releaseMatch?.ct || "",
       label: releaseMatch?.label || "16OC",
+      releaseOp: release,
     });
   }
   return rows.sort((a, b) => {
@@ -7726,24 +7729,39 @@ function renderReleaseReport() {
   if (!els.releaseReport) return;
   const rows = releaseReportRows();
   if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
-  const headers = ["OT", "Articulo", "Cantidad", "Fecha"];
+  const statusActions = reportSourceAllowsOperationTracking();
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  if (statusActions) headers.push("Completar");
   const body = rows.map((row) => `<tr>
     <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
     <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td>${escapeHtml(formatMaterialQuantity(row.built))}</td>
     <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
+    ${statusActions ? `<td class="report-status-action-column">${planStatusActionCell(row.releaseOp)}</td>` : ""}
   </tr>`).join("");
-  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+  if (statusActions) bindPlanStatusActions(els.releaseReport);
 }
 
 function exportReleaseXlsx() {
-  const rows = releaseReportRows().map((row) => [
-    row.ot,
-    row.article,
-    row.quantity,
-    row.date ? formatReportDate(row.date) : "SIN FECHA",
-  ]);
-  const bytes = buildXlsxBytes(["OT", "Articulo", "Cantidad", "Fecha"], rows, "Liberacion final");
+  const statusActions = reportSourceAllowsOperationTracking();
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  if (statusActions) headers.push("Completar");
+  const rows = releaseReportRows().map((row) => {
+    const cells = [
+      row.ot,
+      row.article,
+      row.quantity,
+      row.built,
+      row.date ? formatReportDate(row.date) : "SIN FECHA",
+    ];
+    if (statusActions) {
+      cells.push(isPlanCompletedOperation(row.releaseOp, activePlanReportStatuses()) ? "Completada" : "Pendiente");
+    }
+    return cells;
+  });
+  const bytes = buildXlsxBytes(headers, rows, "Liberacion final");
   downloadBlob(bytes, "liberacion-final-16oc-39otd.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
@@ -7918,7 +7936,7 @@ function bindPlanStatusActions(container) {
 }
 
 function planStatusButtons(key) {
-  return [els.operatorReport, els.adjusterReport, els.subcontractReport, els.selectedJobPanel].flatMap((container) =>
+  return [els.operatorReport, els.adjusterReport, els.subcontractReport, els.releaseReport, els.selectedJobPanel].flatMap((container) =>
     Array.from(container?.querySelectorAll("[data-plan-status-key]") || [])
   ).filter((button) => button.dataset.planStatusKey === key);
 }
@@ -8015,6 +8033,7 @@ const operation = stateOperation || reportOperation;
     (op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }), renderAdjusterReport
   );
   renderSubcontractReport();
+  renderReleaseReport();
   if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
 }
 

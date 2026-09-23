@@ -555,6 +555,11 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /id="releaseTab"/);
   assert.match(pagesIndex, /id="exportReleaseXlsxBtn"/);
   assert.match(pagesIndex, /els\.exportReleaseXlsxBtn\?\.addEventListener/);
+  assert.match(pagesIndex, /headers = \["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"\]/);
+  assert.match(pagesIndex, /if \(statusActions\) headers\.push\("Completar"\)/);
+  assert.match(pagesIndex, /planStatusActionCell\(row\.releaseOp\)/);
+  assert.match(pagesIndex, /workOrder\?\.builtQuantity/);
+  assert.match(pagesIndex, /els\.releaseReport, els\.selectedJobPanel/);
   assert.equal((pagesIndex.match(/@page \{/g) || []).length, 3);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
