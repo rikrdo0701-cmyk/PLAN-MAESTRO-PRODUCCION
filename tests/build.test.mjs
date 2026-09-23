@@ -366,7 +366,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /subcontractPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
   assert.match(pagesIndex, /<td>\$\{formatReportDuration\(operationCycleMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(operationSetupMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
   assert.match(pagesIndex, /@media print[\s\S]*\.report-comment-input::placeholder\s*\{[^}]*opacity:\s*0/);
-  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*8mm/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*4%/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(15\)[\s\S]*white-space:\s*normal/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.report-page-table:not\(\.report-show-all-table\) th \{ white-space:\s*normal/);
   assert.match(pagesIndex, /formatCurrency\(window\.PlanningWorkflowCore\.effectiveFinishingAmount\(row\)\)/);
   assert.match(pagesIndex, /return window\.PlanningWorkflowCore\.weeklyFinishingRowsByType\(rows\);/);
   assert.match(pagesIndex, /const finishingRows = summary\.finishes \|\| \[\];/);
