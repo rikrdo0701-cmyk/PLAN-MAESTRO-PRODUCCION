@@ -74,6 +74,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-REP-009` | Estados de operación por origen: columna `ORIGEN` en `ESTADOS_OPERACION_PLAN` (`draft` o snapshotId), buckets separados draft/published en el servidor y cliente, mirror del último publicado al borrador | IMPLEMENTADA | `02-storage.js`, `15-performance-service.js`, `app.js`, `planning-workflow-core.js` |
 | `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir; fuente de reportes solo borrador + último publicado (consolidada 2026-09-05) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
 | `RULE-OT-027` | Mapeo de tiempos de operación NetSuite: headers reales de ruta (`Velocidad de ejecución (minutos/unidad)`, `Tiempo de configuración (minutos)`, `Cantidad de entrada`/`Cantidad completada`) y SIN topes (`setup>20→15` y `rate>10→0.67` eliminados) | IMPLEMENTADA | `08-netsuite.js` |
+| `RULE-REP-011` | Corte de fijas = COMPLETADA: completadas anclan y reservan capacidad; incompletas de locked se reprograman (supera v2 2026-09-20) | IMPLEMENTADA | decisión 2026-09-22; `tests/planner-core.test.mjs`; `.project-memory/rules.json` |
 
 ## OT
 
@@ -89,16 +90,17 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-008` | OTs cerradas conservadas (`CLOSED_KEPT`) | IMPLEMENTADA | task-2-report |
 | `RULE-OT-009` | Tipos de trabajo (PROTOTIPO/URGENTE/EXPEDITACION) | IMPLEMENTADA | `legacy/IndexPlanning.html` |
 | `RULE-OT-010` | Persistencia de `CONFIGURACION_OT` mientras OT abierta | DOCUMENTADA | definición de usuario 2026-08-12 |
-| `RULE-OT-011` | Inicio del borrador: arranque desde la hora de ejecución con semana = lunes | IMPLEMENTADA | definición de usuario 2026-08-13; cambio usuario 2026-09-04 |
-| `RULE-OT-012` | Precedencia por secuencia incluida | IMPLEMENTADA | definición de usuario 2026-08-13 |
+| `RULE-OT-011` | Inicio del borrador: arranque desde la hora de ejecución con semana = lunes; CORTE 2026-09-22: en `lockedOts` sólo COMPLETADAS/históricas anclan, incompletas se reprograman | IMPLEMENTADA | definición de usuario 2026-08-13; CORTE 2026-09-22; `.project-memory/rules.json` RULE-OT-042 |
+| `RULE-OT-012` | Precedencia por secuencia incluida; CORTE 2026-09-22: corte de fijas = COMPLETADA, incompletas de locked se reprograman | IMPLEMENTADA | definición de usuario 2026-08-13; CORTE 2026-09-22 |
 | `RULE-OT-013` | Vigencia por OT de datos de planeacion (24h) y fallback parcial | IMPLEMENTADA | definición de usuario 2026-08-13, 2026-08-27 |
 | `RULE-OT-014` | Sincronización inteligente y actualización por OT | IMPLEMENTADA | definición de usuario 2026-08-14 |
 | `RULE-OT-015` | OT u operación nueva no inicia antes de la hora actual | IMPLEMENTADA | definición de usuario 2026-08-14 |
 | `RULE-OT-016` | Dry-run de rendimiento de planeación | IMPLEMENTADA | definición de usuario 2026-08-26 |
-| `RULE-OT-017` | OT no bloqueada: borrar asignación del borrador y recalcular | IMPLEMENTADA | definición de usuario 2026-08-27 |
+| `RULE-OT-017` | `prepareDraftForReschedule` limpia incompletas seleccionadas (incluidas locked) y recalcula; completadas/históricas intactas | IMPLEMENTADA | definición de usuario 2026-08-27; CORTE 2026-09-22 |
 | `RULE-OT-039` | `applyNetSuitePlanningPayload` hace merge inline por OT de las rutas frescas de NetSuite en OTs seleccionadas (sin descartarlas); bloqueadas (`lockedOts`) conservan local; timeout `syncNetSuitePlanningData` 360 s. Dry-run 2026-09-22: CORTADOR INICIAL 24→119 ops, corte 20→139 OTs, `plannerElapsedMs` 66754→23715 | IMPLEMENTADA | `app.js` (`applyNetSuitePlanningPayload`), `apps-script-bridge-client.js`, `probe_dryrun_local_after_fix.mjs`, `.project-memory/rules.json` |
 | `RULE-OT-040` | Espera del cliente en `syncNetSuitePlanningData` = `NETSUITE_PLANNING_TIMEOUT_MS * 24` (360 s) alineada con `METHOD_TIMEOUT_MS` (antes `*4` = 60 s → `partial`) | IMPLEMENTADA | definición/fix 2026-09-22; `app.js:8604`; `.project-memory/rules.json` |
 | `RULE-OT-041` | 6 OTs 2027 con `lockedOts` residual (3413/3416/3529/3533/2613/3398); limpieza vía `scripts/depurar-ots-2027.gs` (dry-run por defecto, no ejecutado) | DOCUMENTADA | análisis 2026-09-22; `scripts/depurar-ots-2027.gs`; `.project-memory/rules.json` |
+| `RULE-OT-042` | Corte de anclas = COMPLETADA (no `lockedOts`); ops incompletas de OT locked se reprograman sin desbloqueo; completadas reservan capacidad | IMPLEMENTADA | decisión usuario Lote 2 2026-09-22; `planner-core.js`/`planning-workflow-core.js`; A/B `probe-lotes-a-b.mjs`; `.project-memory/rules.json` |
 
 Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
 `cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía
@@ -150,14 +152,16 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-BAL-003` | Agrupación por máquina/herramental/kit con trade-off controlado de setup vs entrega | DOCUMENTADA | definición de usuario 2026-08-12, 2026-08-14 y 2026-08-29 |
 | `RULE-BAL-004` | Menor tiempo de OT en producción para reducir WIP | DOCUMENTADA | definición de usuario 2026-08-12 |
 | `RULE-BAL-005` | Validación de operador en operaciones sincronizadas de NetSuite | IMPLEMENTADA | definición de usuario 2026-08-27; `08-netsuite.js` |
-| `RULE-BAL-006` | Operador programado siempre desde la matriz de habilidades (MATRIZ), nunca residual | IMPLEMENTADA | definición de usuario 2026-08-27; `planner-core.js` |
+| `RULE-BAL-006` | Operador programado siempre desde la matriz de habilidades (MATRIZ), nunca residual; CORTE 2026-09-22: `OPERADOR_REASSIGN_NO_MOVE` en `appendLog`; empates `toolAffinityTie` + menor carga | IMPLEMENTADA | definición de usuario 2026-08-27; CORTE 2026-09-22; `planner-core.js`/`app.js` |
 | `RULE-BAL-007` | Validación previa de operador en la matriz antes de generar plan | IMPLEMENTADA | definición de usuario 2026-08-27; `app.js` `planner-core.js` |
 | `RULE-BAL-008` | Arranque por orden de Planeado/No planeado; sucesoras optimizables y terminación flexible | IMPLEMENTADA | definición de usuario 2026-08-29; `planner-core.js` |
 | `RULE-BAL-009` | Modo rápido 5 min con keep-best-on-timeout y estrategias acotadas | IMPLEMENTADA | definición de usuario 2026-08-29; `app.js` `planner-core.js` |
-| `RULE-BAL-017` | Reorden de Planeado/No planeado cruza trabajos fijos; OT bloqueada no se mueve y conserva su programación | IMPLEMENTADA | definición de usuario 2026-09-06; `app.js` |
+| `RULE-BAL-017` | Reorden de Planeado/No planeado cruza trabajos fijos; OT bloqueada no se mueve como origen; incompletas de locked se reprograman (CORTE 2026-09-22) | IMPLEMENTADA | definición de usuario 2026-09-06; CORTE 2026-09-22; `app.js` |
 | `RULE-BAL-015` | El ancla de hora de ejecución solo aplica al MISMO día; los días siguientes respetan el calendario (07:00) | IMPLEMENTADA | definición de usuario 2026-09-04; `planner-core.js` `computeEarliestStart`; afina `RULE-OT-015` |
 | `RULE-BAL-016` | La escala temporal del Gantt usa el horario real por día (workSchedule/dailyBreaks/calendarExceptions), con columnas de día proporcionales a sus minutos laborables | IMPLEMENTADA | definición de usuario 2026-09-04; `app.js` `renderGantt`/`workWindowMinutes`/`workMinuteOffset`/`dateFromWorkOffset` rework multi-ventana por día; `styles.css` flex con columnas proporcionales; afina `RULE-BAL-015` (escala) |
 | `RULE-BAL-022` | Dry-run 2026-09-22: se mantiene `strategyPool` default `[balanced_goal]` y NO se cambian pesos de `evaluatePlan` (decisión de usuario); `balanced_goal` gana monto semana 1; pool doble sin ganancia; `fastQualityMode` anula ramas de estrategia en sucesoras (`planner-core.js:2128`) | DOCUMENTADA | decisión usuario 2026-09-22; `probe_strategy_compare.mjs`/`probe_monto_compare.mjs`; `.project-memory/rules.json` |
+| `RULE-BAL-023` | Empates de asignación: `windowedTieBreak` con ventana 20 min (tool-affinity no-cambio=2/kit=1/cambio=0 → menor `operatorIdleCost`) + `selectTopKAssignment` top-3; en `compareFirstOperationCandidates` va después de `end`/`fechaReq` (no pisa arranque), al frente en assign/interleaved y tras `gapFit` en flow; A/B: solo A ≡ baseline, A+B `toolChanges` 24→23 `idle` 30683→28600; pesos `evaluatePlan` intactos | IMPLEMENTADA | decisión usuario Lote 1 2026-09-22 + Lote 3 2026-09-23; `planner-core.js`; A/B `probe-lotes-a-b.mjs`; `.project-memory/rules.json` |
+| `RULE-BAL-024` | Gap-fill post-schedule (opción C): flag `gapFill {enabled, minGapMinutes=60, maxCandidates=50, budgetMs=3000}` tras el loop principal; huecos ≥ minGap por operador, mueve ops sin fixed ni tool key (no completadas/fijas/históricas), respeta precedencia/sucesores, budget propio no aborta el plan; A/B 2026-09-23: control OFF `49c3f05b` idle 28428 avoidable 5146 → C max50 `59819d93` idle 27930 (−498) avoidable **5268 (+122)** `toolChanges` 24→24 wall +1.0 s; **criterio no cumplido (avoidable sube) → default OFF** | DOCUMENTADA | dry-run Lote 4 2026-09-23; `planner-core.js:28,514,2671,2905`; `probe-lotes-a-b.mjs` `AB_GAPFILL`; `.project-memory/rules.json` |
 
 ## BOM
 

@@ -8,8 +8,10 @@ const source = await readFile(path.resolve("src/web/planning/planner-core.js"), 
 
 function loadPlannerCore() {
   const context = { globalThis: {} };
-  vm.runInNewContext(source, context, { filename: "planner-core.js" });
-  return context.globalThis.PlannerCore;
+  vm.runInNewContext(`${source}\n;globalThis.__VmDate = Date;`, context, { filename: "planner-core.js" });
+  const core = context.globalThis.PlannerCore;
+  core.VmDate = context.globalThis.__VmDate;
+  return core;
 }
 
 function loadPlannerCoreWithSinglePass() {
@@ -474,7 +476,7 @@ test("startFromExecutionTime arranca desde la hora de ejecucion aunque planStart
   assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-13", "10:30"]);
 });
 
-test("OT bloqueada antes del Gantt queda fija completa y reserva carga", async () => {
+test("OT bloqueada incompleta se reprograma y la nueva no se ancla al Gantt pasado", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
@@ -503,10 +505,9 @@ test("OT bloqueada antes del Gantt queda fija completa y reserva carga", async (
 
   const fixed = result.operations.find((item) => item.id === "fixed-before-gantt");
   const newOp = result.operations.find((item) => item.id === "new-op");
-  assert.equal(fixed.fechaInicio, "2026-08-12");
-  assert.equal(fixed.horaInicio, "15:00");
+  assert.equal(fixed.fechaInicio, "2026-08-13");
   assert.equal(fixed.fechaFin, "2026-08-13");
-  assert.equal(fixed.horaFin, "08:00");
+  assert.ok(new Date(`${fixed.fechaInicio}T${fixed.horaInicio}:00`) >= new Date("2026-08-13T07:00:00"));
   assert.equal(newOp.fechaInicio, "2026-08-13");
   assert.ok(new Date(`${newOp.fechaInicio}T${newOp.horaInicio}:00`) >= new Date("2026-08-13T10:30:00"));
 });
@@ -703,7 +704,7 @@ test("RULE-OT-017/RULE-BAL-006: una operacion movible no bloqueada sin hueco (UN
   assert.equal(operation.horaFin, "");
 });
 
-test("RULE-OT-017: una OT bloqueada conserva su asignacion intacta (control negativo)", async () => {
+test("RULE-OT-017: una OT bloqueada incompleta se reprograma (control de corte COMPLETADA)", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100"],
@@ -730,7 +731,7 @@ test("RULE-OT-017: una OT bloqueada conserva su asignacion intacta (control nega
 
   const operation = result.operations.find((item) => item.id === "locked-op");
   assert.equal(operation.operador, "OP 1");
-  assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-12", "15:00"]);
+  assert.deepEqual([operation.fechaInicio, operation.horaInicio], ["2026-08-13", "07:00"]);
 });
 
 test("RULE-OT-017: una operacion completada o historica se conserva intacta", async () => {
@@ -970,7 +971,7 @@ test("al excluir una operacion intermedia la sucesora depende de la ultima inclu
   );
 });
 
-test("una sucesora de una completada en OT desbloqueada busca el hueco mas proximo sin anclarse a su fin", async () => {
+test("una sucesora de una completada respeta el fin de su predecesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1001,13 +1002,13 @@ test("una sucesora de una completada en OT desbloqueada busca el hueco mas proxi
   assert.ok(last.fechaInicio, JSON.stringify(result.lastSchedule.diagnostics));
   assert.deepEqual(
     [last.fechaInicio, last.horaInicio],
-    ["2026-07-13", "07:00"],
-    "la sucesora toma el hueco mas proximo sin anclarse a la completada",
+    ["2026-07-13", "09:00"],
+    "la sucesora no arranca antes del fin de la completada",
   );
   assert.deepEqual([fixed.fechaInicio, fixed.horaInicio], ["2026-07-13", "07:00"], "la completada conserva su registro");
 });
 
-test("una completada que cruza tiempo no laborable ya no limita el inicio de su sucesora", async () => {
+test("una completada que cruza tiempo no laborable limita al fin de su sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1034,10 +1035,10 @@ test("una completada que cruza tiempo no laborable ya no limita el inicio de su 
   });
   const last = result.operations.find((operation) => operation.id === "last-weekend");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"], "la sucesora respeta el fin de la completada");
 });
 
-test("una completada con solapamiento parcial ya no limita el inicio de su sucesora", async () => {
+test("una completada con solapamiento parcial limita el inicio de su sucesora al hito", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1065,10 +1066,10 @@ test("una completada con solapamiento parcial ya no limita el inicio de su suces
   });
   const last = result.operations.find((operation) => operation.id === "last-partial");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "07:00"], "la sucesora respeta el hito de la completada");
 });
 
-test("una completada sin duracion productiva ya no limita el inicio de su sucesora", async () => {
+test("una completada sin duracion productiva limita al fin declarado de su sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     excludedCapabilities: ["200::INSPECCION"],
@@ -1096,10 +1097,10 @@ test("una completada sin duracion productiva ya no limita el inicio de su suceso
   });
   const last = result.operations.find((operation) => operation.id === "last-no-duration");
 
-  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-17", "07:00"], "la sucesora toma el hueco mas proximo");
+  assert.deepEqual([last.fechaInicio, last.horaInicio], ["2026-07-20", "08:00"], "la sucesora respeta el fin declarado de la completada");
 });
 
-test("una completada con hito parcial ya no retrasa a su sucesora", async () => {
+test("una completada con hito parcial retrasa a su sucesora al hito", async () => {
   const core = loadPlannerCore();
   const starts = await Promise.all([0.5, 1].map(async (overlap) => {
     const result = await core.schedulePlan({
@@ -1131,8 +1132,8 @@ test("una completada con hito parcial ya no retrasa a su sucesora", async () => 
   }));
 
   assert.deepEqual(starts, [
-    ["2026-07-13", "07:00"],
-    ["2026-07-13", "07:00"],
+    ["2026-07-13", "08:00"],
+    ["2026-07-13", "08:00"],
   ]);
 });
 
@@ -1235,7 +1236,7 @@ test("OT tipo 1325 respeta secuencia despues de subcontrato largo", async () => 
   assert.ok(new Date(`${seq14.fechaInicio}T${seq14.horaInicio}:00`) >= new Date(`${seq13.fechaFin}T${seq13.horaFin}:00`));
 });
 
-test("una movible en OT desbloqueada ignora secuencias completadas intermedias y toma el hueco mas proximo", async () => {
+test("una movible espera el fin de la completada predecesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["1325"],
@@ -1259,10 +1260,10 @@ test("una movible en OT desbloqueada ignora secuencias completadas intermedias y
   }, { planStart: "2026-08-10", horizonDays: 5, executionTime: "2026-08-10T07:00:00" });
 
   const pending = result.operations.find((item) => item.id === "pending-after-completed");
-  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-10", "07:00"], "la movible toma el hueco mas proximo sin anclarse a las completadas");
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-08-31", "07:00"], "la movible espera el fin de la completada predecesora");
 });
 
-test("una completada conserva fechas y no consume capacidad pendiente", async () => {
+test("una completada conserva fechas y sucesora pendiente espera su fin", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     operations: [
@@ -1277,8 +1278,7 @@ test("una completada conserva fechas y no consume capacidad pendiente", async ()
   const done = result.operations.find((item) => item.id === "done");
   const pending = result.operations.find((item) => item.id === "pending");
   assert.deepEqual([done.fechaInicio, done.horaInicio, done.fechaFin, done.horaFin], ["2026-07-13", "07:00", "2026-07-13", "12:00"]);
-  assert.equal(result.lastSchedule.scheduled, 1);
-  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"]);
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "12:00"], "la pendiente no arranca antes del fin de la completada");
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
@@ -1319,10 +1319,10 @@ test("un cambio antiguo pendiente desaparece y no reserva capacidad", async () =
   assert.deepEqual([selected.fechaInicio, selected.horaInicio], ["2026-07-13", "07:00"]);
 });
 
-test("un cambio antiguo completado permanece pero no reserva capacidad", async () => {
+test("un cambio antiguo completado permanece y no reserva capacidad de operador", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
-    selectedOts: ["200"],
+    selectedOts: ["100", "200"],
     operations: [
       { id: "old-completed-change", ot: "100", secuencia: 1, ct: "TOOL_CHANGE", descripcion: "CAMBIO DE HERRAMENTAL", tipoInsercion: "CAMBIO_HERRAMENTAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", generatedBy: "PLANNER_CORE_V2", operador: "AJUSTADOR", maquina: "M1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoSetup: 120 },
       { id: "pending", ot: "200", secuencia: 1, ct: "AJUSTE", descripcion: "AJUSTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "PENDIENTE", operador: "AJUSTADOR", tiempoSetup: 0, tiempoProd: 20 },
@@ -1336,11 +1336,11 @@ test("un cambio antiguo completado permanece pero no reserva capacidad", async (
   const pending = result.operations.find((item) => item.id === "pending");
   assert.ok(completed);
   assert.deepEqual([completed.fechaInicio, completed.horaInicio, completed.fechaFin, completed.horaFin], ["2026-07-13", "07:00", "2026-07-13", "09:00"]);
-  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"]);
+  assert.deepEqual([pending.fechaInicio, pending.horaInicio], ["2026-07-13", "07:00"], "el cambio completado no reserva capacidad");
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
 
-test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad", async () => {
+test("una OT seleccionada y bloqueada incompleta se reprograma sin desbloquear", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
@@ -1356,15 +1356,15 @@ test("una OT seleccionada y bloqueada conserva su asignacion y reserva capacidad
 
   const locked = result.operations.find((item) => item.id === "locked");
   const movable = result.operations.find((item) => item.id === "movable");
-  assert.deepEqual(
-    [locked.fechaInicio, locked.horaInicio, locked.fechaFin, locked.horaFin, locked.operador, locked.maquina],
-    ["2026-07-13", "08:00", "2026-07-13", "09:00", "OP 1", "M1"],
-  );
+  assert.equal(locked.fechaInicio, "2026-07-13");
+  assert.equal(locked.operador, "OP 1");
+  assert.ok(locked.fechaFin, "la incompletada reprogramada debe conservar fin");
+  assert.ok(new Date(`${locked.fechaInicio}T${locked.horaInicio}:00`) >= new Date("2026-07-13T08:00:00"));
   const lockedStart = new Date(`${locked.fechaInicio}T${locked.horaInicio}:00`);
   const lockedEnd = new Date(`${locked.fechaFin}T${locked.horaFin}:00`);
   const movableStart = new Date(`${movable.fechaInicio}T${movable.horaInicio}:00`);
   const movableEnd = new Date(`${movable.fechaFin}T${movable.horaFin}:00`);
-  assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con el bloqueo");
+  assert.ok(movableEnd <= lockedStart || movableStart >= lockedEnd, "la OT movible no debe solaparse con la reprogramada");
 });
 
 test("operaciones no finitas simultaneas no generan conflicto de operador", async () => {
@@ -1394,7 +1394,7 @@ test("registra la operacion bloqueadora que causa la espera", async () => {
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
-      { id: "locked", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "locked", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
       { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", tipoInsercion: "OPERACION", estatus: "PLAN", operador: "OP 1", tiempoSetup: 0, tiempoProd: 20 },
     ],
     workOrders: [{ ot: "100" }, { ot: "200" }],
@@ -1460,7 +1460,7 @@ test("un limite de calendario posterior al conflicto corto determina la espera",
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
-      { id: "short", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "short", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
       { id: "pending", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 20 },
     ],
     workOrders: [{ ot: "100" }, { ot: "200" }], matrix: { CORTE: ["OP 1"] }, operators: ["OP 1"], settings: { optimizationPasses: 1 }, workSchedule: {},
@@ -1478,7 +1478,7 @@ test("registra una maquina como causa de espera", async () => {
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
-      { id: "machine-lock", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "machine-lock", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
       { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H1", tiempoProd: 20 },
     ], workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP A", "OP B", "AJUSTADOR"], matrix: { "5459::DOBLEZ": ["OP A", "OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
@@ -1494,7 +1494,7 @@ test("un cambio requerido determina la espera antes de produccion", async () => 
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
-      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
+      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
       { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H2", tiempoProd: 20 },
     ], workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP B", "AJUSTADOR"], matrix: { "5459::DOBLEZ": ["OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1, toolChangeMinutes: 30 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
@@ -1509,8 +1509,8 @@ test("entre bloqueadores simultaneos elige el que determina el inicio", async ()
   const result = await core.schedulePlan({
     selectedOts: ["100", "101", "200"], lockedOts: ["100", "101"],
     operations: [
-      { id: "operator-lock", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP B", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
-      { id: "machine-lock", ot: "101", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
+      { id: "operator-lock", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP B", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "machine-lock", ot: "101", secuencia: 2, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP A", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 120 },
       { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H1", tiempoProd: 20 },
     ], workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }], operators: ["OP A", "OP B", "AJUSTADOR"], matrix: { CORTE: ["OP B"], "5459::DOBLEZ": ["OP B"], "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL": ["AJUSTADOR"] }, configuredCapabilities: ["CORTE::CORTE", "5459::DOBLEZ", "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL"], settings: { optimizationPasses: 1 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 5, executionTime: "2026-07-13T07:00:00" });
@@ -1573,14 +1573,14 @@ test("un setup de un segundo sin fallback conserva el redondeo de produccion nor
   assert.equal(operation.horaFin, "07:02");
 });
 
-test("una asignacion bloqueada conserva segundos y bloquea la recarga siguiente", async () => {
+test("una asignacion completada conserva segundos y bloquea la recarga siguiente", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
       {
         id: "fixed-fallback", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE",
-        estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 1 / 60,
+        estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", tiempoProd: 1 / 60,
         fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "07:00:01",
       },
       { id: "pending-after-fallback", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 1 },
@@ -2124,7 +2124,7 @@ test("una operacion sin hueco conserva OT, secuencia y causa diagnostica", async
   assert.match(diagnostic.cause, /operador|capacidad|horizonte/i);
 });
 
-test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fechas antiguas se agenda en el hueco mas proximo (las completadas no limitan ni como sucesora ni como predecesora)", async () => {
+test("RULE-REP-011: la pendiente espera el fin de su predecesora completada y no se ancla a la sucesora", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100"],
@@ -2154,7 +2154,7 @@ test("RULE-REP-011: una operacion pendiente encerrada entre completadas con fech
     "la pendiente encerrada por completadas no debe quedar sin hueco"
   );
   assert.equal(pending.fechaInicio, "2026-07-13");
-  assert.equal(pending.horaInicio, "07:00", "la pendiente toma el hueco mas proximo sin anclarse a las completadas");
+  assert.equal(pending.horaInicio, "07:10", "la pendiente arranca al fin de la predecesora completada");
   assert.ok(pending.horaFin > pending.horaInicio, "debe tener fin posterior al inicio");
   assert.ok(result.lastSchedule.scheduledOts.includes("100"), "la OT con pendiente agendada debe quedar en scheduledOts");
   const pred = result.operations.find((item) => item.id === "pred");
@@ -2292,9 +2292,9 @@ test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y c
     excludedCapabilities: ["999::SIN_CONFIGURAR"],
     operations: [
       { id: "sub", ot: "100", secuencia: 1, ct: "519", descripcion: "MAKA", tipoInsercion: "SUBCONTRATO", estatus: "PLAN" },
-      { id: "excluded", ot: "200", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "17:00" },
+      { id: "excluded", ot: "200", secuencia: 1, ct: "999", descripcion: "SIN CONFIGURAR", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "17:00" },
       { id: "done", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "12:00", tiempoProd: 300 },
-      { id: "locked", ot: "400", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00", tiempoProd: 60 },
+      { id: "locked", ot: "400", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "13:00", fechaFin: "2026-07-13", horaFin: "14:00", tiempoProd: 60 },
       { id: "pending", ot: "500", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 20 },
     ],
     workOrders: ["100", "200", "300", "400", "500"].map((ot) => ({ ot })),
@@ -2309,8 +2309,8 @@ test("flow balanced conserva subcontrato, exclusiones, completadas, bloqueos y c
     const result = await core.schedulePlan({ ...baseState, settings: { ...baseState.settings, flowBalancedEnabled } }, options);
     const byId = Object.fromEntries(result.operations.map((op) => [op.id, op]));
     assert.deepEqual([byId.done.fechaInicio, byId.done.horaInicio, byId.done.fechaFin, byId.done.horaFin], ["2026-07-13", "07:00", "2026-07-13", "12:00"]);
-    assert.deepEqual([byId.locked.fechaInicio, byId.locked.horaInicio, byId.locked.fechaFin, byId.locked.horaFin], ["2026-07-13", "08:00", "2026-07-13", "09:00"]);
-    assert.equal(byId.pending.horaInicio, "07:00");
+    assert.deepEqual([byId.locked.fechaInicio, byId.locked.horaInicio, byId.locked.fechaFin, byId.locked.horaFin], ["2026-07-13", "13:00", "2026-07-13", "14:00"]);
+    assert.equal(byId.pending.horaInicio, "12:00", "la pendiente espera el fin de la completada");
     assert.equal(byId.sub.fechaFin, "2026-07-14");
     assert.equal(result.lastSchedule.operatorConflicts, 0);
     assert.equal(result.lastSchedule.diagnostics.some((item) => item.operationId === "excluded"), false);
@@ -2323,7 +2323,7 @@ test("flow balanced conserva maquinas, herramentales y capacidad finita o no fin
   const finiteState = {
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
-      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
+      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
       { id: "pending-bend", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H2", tiempoProd: 20 },
     ],
     workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP B", "AJUSTADOR"],
@@ -2358,7 +2358,7 @@ test("las metricas no cuentan como evitable la espera obligatoria por cambio de 
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"], lockedOts: ["100"],
     operations: [
-      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
+      { id: "prior", ot: "100", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP B", maquina: "M1", herramental: "H1", fechaInicio: "2026-07-13", horaInicio: "06:00", fechaFin: "2026-07-13", horaFin: "07:00", tiempoProd: 60 },
       { id: "pending", ot: "200", secuencia: 1, ct: "5459", descripcion: "DOBLEZ", estatus: "PLAN", operador: "OP B", maquina: "M1", herramental: "H2", tiempoProd: 20 },
     ],
     workOrders: [{ ot: "100" }, { ot: "200" }], operators: ["OP B", "AJUSTADOR"],
@@ -2377,8 +2377,8 @@ test("las metricas cuentan trabajo diferido que cabe en un hueco disponible", as
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101"],
     operations: [
-      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
-      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
       { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "10:30" },
     ],
     workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
@@ -2394,9 +2394,9 @@ test("las metricas no reutilizan una operacion diferida entre dos huecos", async
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101", "102"],
     operations: [
-      { id: "before-first-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
-      { id: "between-gaps", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
-      { id: "after-second-gap", ot: "102", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "11:00", fechaFin: "2026-07-13", horaFin: "12:00" },
+      { id: "before-first-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "between-gaps", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "after-second-gap", ot: "102", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "11:00", fechaFin: "2026-07-13", horaFin: "12:00" },
       { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "12:00", fechaFin: "2026-07-13", horaFin: "12:30" },
     ],
     workOrders: ["100", "101", "102", "200"].map((ot) => ({ ot })),
@@ -2412,8 +2412,8 @@ test("las metricas no inflan un hueco con una operacion que tarda mas por rendim
   const metrics = core.evaluatePlan({
     lockedOts: ["100", "101"],
     operations: [
-      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
-      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+      { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
       { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00" },
     ],
     workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
@@ -2428,8 +2428,8 @@ test("las metricas no inflan un hueco con una operacion que tarda mas por rendim
 test("las metricas excluyen huecos sin capacidad elegible por calendario, maquina o ausencia de trabajo", async () => {
   const core = loadPlannerCore();
   const fixed = [
-    { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
-    { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    { id: "before-gap", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "after-gap", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
   ];
   const deferred = { id: "deferred", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", operador: "OP 1", tiempoProd: 30, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "10:30" };
   const base = (operations, extra = {}) => ({
@@ -2443,7 +2443,7 @@ test("las metricas excluyen huecos sin capacidad elegible por calendario, maquin
     calendarExceptions: [{ date: "2026-07-13", concept: "OPERADOR", resource: "OP 1", start: "08:00", end: "09:00" }],
   }));
   const machine = core.evaluatePlan(base([...fixed, { ...deferred, maquina: "M1" }, {
-    id: "machine-block", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 2", maquina: "M1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00",
+    id: "machine-block", ot: "300", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", historical: true, locked: true, operador: "OP 2", maquina: "M1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00",
   }]));
   const noWork = core.evaluatePlan(base(fixed));
 
@@ -2645,7 +2645,7 @@ test("un asueto general detiene operaciones finitas y subcontratos al buscar el 
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("una completada no limita a su sucesora en OT desbloqueada pero si conserva su registro", async () => {
+test("una completada limita a su sucesora al fin y otra OT usa el hueco previo", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["100", "200"],
@@ -2665,8 +2665,8 @@ test("una completada no limita a su sucesora en OT desbloqueada pero si conserva
   const successor = result.operations.find((op) => op.id === "successor-after-completed");
   const completed = result.operations.find((op) => op.id === "completed-predecessor");
   const other = result.operations.find((op) => op.id === "other-ot-can-use-capacity");
-  assert.deepEqual([successor.fechaInicio, successor.horaInicio], ["2026-07-13", "07:00"], "la sucesora toma el hueco mas proximo");
-  assert.deepEqual([other.fechaInicio, other.horaInicio], ["2026-07-13", "07:30"]);
+  assert.deepEqual([successor.fechaInicio, successor.horaInicio], ["2026-07-13", "12:00"], "la sucesora respeta el fin de la completada");
+  assert.deepEqual([other.fechaInicio, other.horaInicio], ["2026-07-13", "12:30"], "otra OT espera la capacidad liberada tras la completada");
   assert.deepEqual([completed.fechaInicio, completed.horaInicio], ["2026-07-13", "07:00"], "la completada conserva su registro");
   assert.equal(result.lastSchedule.operatorConflicts, 0);
 });
@@ -2677,7 +2677,7 @@ test("el motor elige el recurso factible mas rapido cuando el primero esta bloqu
     selectedOts: ["100", "200"],
     lockedOts: ["100"],
     operations: [
-      { id: "blocked-op1", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:00", tiempoProd: 180 },
+      { id: "blocked-op1", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "10:00", tiempoProd: 180 },
       { id: "fast-choice", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 30 },
     ],
     workOrders: [{ ot: "100" }, { ot: "200" }],
@@ -2696,12 +2696,12 @@ test("el motor elige el recurso factible mas rapido cuando el primero esta bloqu
 test("flow balanced no trata operation.locked como fija sin OT bloqueada", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const operations = [
-    { id: "long-open", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "long-open", ot: "100", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
     { id: "long-current", ot: "100", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
-    { id: "long-fixed", ot: "100", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-14", horaInicio: "16:00", fechaFin: "2026-07-14", horaFin: "17:00" },
-    { id: "short-open", ot: "200", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
+    { id: "long-fixed", ot: "100", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-14", horaInicio: "16:00", fechaFin: "2026-07-14", horaFin: "17:00" },
+    { id: "short-open", ot: "200", secuencia: 1, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00" },
     { id: "short-current", ot: "200", secuencia: 2, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", tiempoProd: 60 },
-    { id: "short-fixed", ot: "200", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+    { id: "short-fixed", ot: "200", secuencia: 3, ct: "SERIAL", descripcion: "SERIAL", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
   ];
   const result = await core.schedulePlanOnce(flowFixture(operations, {
     matrix: { "SERIAL::SERIAL": ["OP 1"] },
@@ -2711,7 +2711,7 @@ test("flow balanced no trata operation.locked como fija sin OT bloqueada", async
     strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 2, executionTime: "2026-07-13T07:00:00",
   });
 
-  assert.equal(result.operations.find((op) => op.id === "short-current").horaInicio, "11:00");
+  assert.equal(result.operations.find((op) => op.id === "short-current").horaInicio, "09:00");
   assert.equal(result.operations.find((op) => op.id === "long-current").horaInicio, "08:00");
 });
 
@@ -2741,7 +2741,7 @@ async function scheduleBeforeFixedSuccessor(operationRules = {}) {
     lockedOts: ["500"],
     operations: [
       { id: "movable-predecessor", ot: "500", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 180 },
-      { id: "fixed-successor", ot: "500", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+      { id: "fixed-successor", ot: "500", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
     ],
     workOrders: [{ ot: "500" }],
     matrix: { "CORTE::CORTE": ["OP 1"], "EMPAQUE::EMPAQUE": ["OP 2"] },
@@ -2755,32 +2755,32 @@ async function scheduleBeforeFixedSuccessor(operationRules = {}) {
   });
 }
 
-test("una OT bloqueada conserva predecesora sin fecha y sucesora fija", async () => {
+test("una OT con sucesora completada programa la predecesora y conserva la sucesora", async () => {
   const result = await scheduleBeforeFixedSuccessor();
   const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
   const successor = result.operations.find((op) => op.id === "fixed-successor");
 
-  assert.equal(predecessor.fechaInicio, undefined);
+  assert.ok(predecessor.fechaInicio, "la predecesora incompleta se programa");
   assert.deepEqual([successor.fechaInicio, successor.horaInicio, successor.fechaFin, successor.horaFin], ["2026-07-13", "08:00", "2026-07-13", "09:00"]);
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("una OT bloqueada conserva predecesora sin fecha aunque exista hito de solapamiento", async () => {
+test("una OT con sucesora completada programa la predecesora con hito de solapamiento", async () => {
   const result = await scheduleBeforeFixedSuccessor({ "CORTE::CORTE": { overlap: 0.5 } });
   const predecessor = result.operations.find((op) => op.id === "movable-predecessor");
 
-  assert.equal(predecessor.fechaInicio, undefined);
+  assert.ok(predecessor.fechaInicio, "la predecesora incompleta se programa");
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("el hito de solapamiento usa los segmentos productivos reales antes de una sucesora fija", async () => {
+test("el hito de solapamiento usa los segmentos productivos reales antes de una sucesora completada", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["600"],
     lockedOts: ["600"],
     operations: [
       { id: "segmented-predecessor", ot: "600", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 180 },
-      { id: "fixed-at-nine", ot: "600", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "fixed-at-nine", ot: "600", secuencia: 2, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 2", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
     ],
     workOrders: [{ ot: "600" }],
     matrix: { "CORTE::CORTE": ["OP 1"], "EMPAQUE::EMPAQUE": ["OP 2"] },
@@ -2790,11 +2790,11 @@ test("el hito de solapamiento usa los segmentos productivos reales antes de una 
     operators: ["OP 1", "OP 2"], settings: { optimizationPasses: 1 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
 
-  assert.equal(result.operations.find((op) => op.id === "segmented-predecessor").fechaInicio, undefined);
+  assert.ok(result.operations.find((op) => op.id === "segmented-predecessor").fechaInicio, "la predecesora incompleta se programa");
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movible sin hueco", async () => {
+test("la factibilidad acumula hitos hasta la proxima completada y programa lo posible", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({
     selectedOts: ["700"],
@@ -2802,7 +2802,7 @@ test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movibl
     operations: [
       { id: "chain-first", ot: "700", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 240 },
       { id: "chain-no-slot", ot: "700", secuencia: 2, ct: "PINTURA", descripcion: "PINTURA", estatus: "PLAN", tiempoProd: 120 },
-      { id: "chain-fixed", ot: "700", secuencia: 3, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00" },
+      { id: "chain-fixed", ot: "700", secuencia: 3, ct: "EMPAQUE", descripcion: "EMPAQUE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00" },
     ],
     workOrders: [{ ot: "700" }],
     matrix: { "CORTE::CORTE": ["OP 1"], "PINTURA::PINTURA": ["OP 2"], "EMPAQUE::EMPAQUE": ["OP 3"] },
@@ -2812,20 +2812,23 @@ test("la factibilidad acumula hitos hasta la proxima fija aunque haya una movibl
     operators: ["OP 1", "OP 2", "OP 3"], settings: { optimizationPasses: 1 }, workSchedule: {},
   }, { planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00" });
 
-  assert.equal(result.operations.find((op) => op.id === "chain-first").fechaInicio, undefined);
-  assert.equal(result.operations.find((op) => op.id === "chain-no-slot").fechaInicio, undefined);
+  const first = result.operations.find((op) => op.id === "chain-first");
+  const noSlot = result.operations.find((op) => op.id === "chain-no-slot");
+  assert.ok(first.fechaInicio, "la predecesora incompleta se programa");
+  assert.equal(noSlot.fechaInicio, "2026-07-13", "la movible espera el calendario de OP 2");
+  assert.ok(new Date(`${noSlot.fechaInicio}T${noSlot.horaInicio}:00`) >= new Date("2026-07-13T10:00:00"), "arranca al liberarse OP 2");
   assert.equal(result.lastSchedule.unscheduled, 0);
 });
 
-test("flow balanced busca otro recurso si el de menor carga no alcanza la sucesora fija", async () => {
+test("flow balanced busca otro recurso si el de menor carga no alcanza la sucesora completada", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const result = await core.schedulePlanOnce({
     selectedOts: ["800", "900"],
     operations: [
       { id: "chain-start", ot: "800", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
       { id: "chain-choice", ot: "800", secuencia: 2, ct: "ELECCION", descripcion: "ELECCION", estatus: "PLAN", tiempoProd: 30 },
-      { id: "chain-fixed-nine", ot: "800", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
-      { id: "op1-prior-load", ot: "900", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
+      { id: "chain-fixed-nine", ot: "800", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 3", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "op1-prior-load", ot: "900", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP 1", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
     ],
     workOrders: [{ ot: "800" }, { ot: "900" }],
     matrix: {
@@ -2856,8 +2859,8 @@ test("flow balanced no descarta la alternativa factible numero 33 por el presupu
     operations: [
       { id: "budget-start", ot: "810", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
       { id: "budget-choice", ot: "810", secuencia: 2, ct: "ELECCION", descripcion: "ELECCION", estatus: "PLAN", tiempoProd: 30 },
-      { id: "budget-fixed-nine", ot: "810", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
-      { id: "fit-prior-load", ot: "910", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", locked: true, operador: "OP FACTIBLE", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
+      { id: "budget-fixed-nine", ot: "810", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "fit-prior-load", ot: "910", secuencia: 1, ct: "CARGA", descripcion: "CARGA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP FACTIBLE", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "06:30", fechaFin: "2026-07-13", horaFin: "07:30" },
     ],
     workOrders: [{ ot: "810" }, { ot: "910" }],
     matrix: {
@@ -2880,7 +2883,7 @@ test("flow balanced no descarta la alternativa factible numero 33 por el presupu
   assert.deepEqual([choice.horaInicio, choice.horaFin], ["07:30", "08:00"]);
 });
 
-test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la sucesora fija", async () => {
+test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la sucesora completada", async () => {
   const core = loadPlannerCoreWithSinglePass();
   const pausedOperators = Array.from({ length: 33 }, (_, index) => `OP PAUSA ${index + 1}`);
   const result = await core.schedulePlanOnce({
@@ -2889,7 +2892,7 @@ test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la s
     operations: [
       { id: "paused-budget-start", ot: "815", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 30 },
       { id: "paused-budget-middle", ot: "815", secuencia: 2, ct: "INTERMEDIA", descripcion: "INTERMEDIA", estatus: "PLAN", tiempoProd: 30 },
-      { id: "paused-budget-fixed", ot: "815", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "paused-budget-fixed", ot: "815", secuencia: 3, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
     ],
     workOrders: [{ ot: "815" }],
     matrix: {
@@ -2904,7 +2907,7 @@ test("flow balanced rechaza una cadena inconclusa cuya pausa hace imposible la s
     strategy: "flow_balanced", planStart: "2026-07-13", horizonDays: 1, executionTime: "2026-07-13T07:00:00",
   });
 
-  assert.equal(result.operations.find((op) => op.id === "paused-budget-start").fechaInicio, undefined);
+  assert.ok(result.operations.find((op) => op.id === "paused-budget-start").fechaInicio, "la predecesora incompleta se programa");
   assert.equal(result.operations.find((op) => op.id === "paused-budget-fixed").horaInicio, "09:00");
 });
 
@@ -2920,7 +2923,7 @@ test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agota
     operations: [
       { id: "budget-late-predecessor", ot: "820", secuencia: 1, ct: "INICIO", descripcion: "INICIO", estatus: "PLAN", tiempoProd: 180 },
       ...intermediates,
-      { id: "budget-fixed-nine-after-chain", ot: "820", secuencia: 35, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
+      { id: "budget-fixed-nine-after-chain", ot: "820", secuencia: 35, ct: "FIJA", descripcion: "FIJA", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", locked: true, operador: "OP FIJA", tiempoProd: 60, fechaInicio: "2026-07-13", horaInicio: "09:00", fechaFin: "2026-07-13", horaFin: "10:00" },
     ],
     workOrders: [{ ot: "820" }],
     matrix: {
@@ -2933,7 +2936,7 @@ test("flow balanced no acepta una predecesora tardia cuando 33 intermedias agota
   });
 
   const predecessor = result.operations.find((op) => op.id === "budget-late-predecessor");
-  assert.equal(predecessor.fechaInicio, undefined);
+  assert.ok(predecessor.fechaInicio, "la predecesora incompleta se programa");
   assert.equal(result.operations.find((op) => op.id === "budget-fixed-nine-after-chain").horaInicio, "09:00");
 });
 
@@ -2962,4 +2965,240 @@ test("con maquina fija y dos operadores capaces reparte por menor carga de opera
     loadByOperator[op.operador] = (loadByOperator[op.operador] || 0) + (end - start) / 60000;
   }
   assert.ok(Object.keys(loadByOperator).length >= 2, `debe repartir entre ambos operadores, no acumular en el mas rapido: ${JSON.stringify(loadByOperator)}`);
+});
+
+test("RULE-BAL-023: toolAffinityTie solo decide con finales iguales y puntua no-cambio > kit > herramental", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const wrap = (end, toolChange) => ({ assignment: { end: new D(end), operator: "OP1", toolChange } });
+  const noChange = wrap("2026-09-23T10:00:00", { required: false });
+  const herrChange = wrap("2026-09-23T10:00:00", { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" });
+  const kitChange = wrap("2026-09-23T10:00:00", { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRA/KITC" });
+  assert.equal(core.toolAffinityTie(herrChange, noChange), 2, "sin cambio de herramental va primero");
+  assert.equal(core.toolAffinityTie(kitChange, noChange), 1, "solo cambio de kit va antes que cambio de herramental");
+  const otherEnd = wrap("2026-09-23T12:00:00", { required: false });
+  assert.equal(core.toolAffinityTie(herrChange, otherEnd), 0, "con finales distintos no decide");
+});
+
+test("windowedTieBreak ignora candidatas cuyos finales caen fuera de la ventana de 20 minutos", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const stats = { windowedTieWindowHits: 0, windowedTieAffinityHits: 0, windowedTieIdleHits: 0 };
+  const context = { performanceState: { stats }, antiIdleTieBreakEnabled: false };
+  const a = { assignment: { end: new D("2026-09-23T10:00:00"), operator: "OP1", toolChange: { required: false } } };
+  const far = { assignment: { end: new D("2026-09-23T12:00:00"), operator: "OP2", toolChange: { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" } } };
+  assert.equal(core.windowedTieBreak(a, far, context), 0);
+  assert.equal(stats.windowedTieWindowHits, 0, "fuera de ventana no cuenta hit");
+});
+
+test("windowedTieBreak decide por afinidad dentro de la ventana aunque el anti-idle este activo", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const stats = { windowedTieWindowHits: 0, windowedTieAffinityHits: 0, windowedTieIdleHits: 0 };
+  const context = { performanceState: { stats }, antiIdleTieBreakEnabled: true };
+  const needsHerr = { end: new D("2026-09-23T10:00:00"), operator: "OP_A", toolChange: { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" } };
+  const noChange = { end: new D("2026-09-23T10:10:00"), operator: "OP_B", toolChange: { required: false } };
+  assert.equal(core.windowedTieBreak(needsHerr, noChange, context), 2, "score 2 - 0 = 2 empuja al candidato sin cambio primero");
+  assert.equal(stats.windowedTieWindowHits, 1);
+  assert.equal(stats.windowedTieAffinityHits, 1);
+  assert.equal(stats.windowedTieIdleHits, 0, "la afinidad decide antes de consultar el idle");
+});
+
+test("windowedTieBreak con empate de herramienta y anti-idle activo prefiere al operador de menor idle", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const stats = { windowedTieWindowHits: 0, windowedTieAffinityHits: 0, windowedTieIdleHits: 0 };
+  const context = {
+    performanceState: { stats },
+    antiIdleTieBreakEnabled: true,
+    operatorBusy: new Map([
+      ["OP_A", [
+        { start: new D("2026-09-20T07:00:00"), end: new D("2026-09-20T10:00:00") },
+        { start: new D("2026-09-20T11:00:00"), end: new D("2026-09-20T14:00:00") },
+      ]],
+      ["OP_B", [{ start: new D("2026-09-20T07:00:00"), end: new D("2026-09-20T14:00:00") }]],
+    ]),
+  };
+  const a = { end: new D("2026-09-23T10:10:00"), start: new D("2026-09-23T09:00:00"), operator: "OP_A", toolChange: { required: false } };
+  const b = { end: new D("2026-09-23T10:00:00"), start: new D("2026-09-23T09:00:00"), operator: "OP_B", toolChange: { required: false } };
+  assert.equal(core.windowedTieBreak(a, b, context), 60, "OP_A tiene 60 min de idle intradia comprometido y OP_B no");
+  assert.equal(stats.windowedTieWindowHits, 1);
+  assert.equal(stats.windowedTieAffinityHits, 0);
+  assert.equal(stats.windowedTieIdleHits, 1);
+  const statsOff = { windowedTieWindowHits: 0, windowedTieAffinityHits: 0, windowedTieIdleHits: 0 };
+  assert.equal(core.windowedTieBreak(a, b, { performanceState: { stats: statsOff }, antiIdleTieBreakEnabled: false, operatorBusy: context.operatorBusy }), 0, "con anti-idle desactivado no decide por idle");
+  assert.equal(statsOff.windowedTieIdleHits, 0);
+});
+
+test("windowedTieBreak deshabilitado por options.windowedTie no cuenta ni decide", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const stats = { windowedTieWindowHits: 0, windowedTieAffinityHits: 0, windowedTieIdleHits: 0 };
+  const context = { performanceState: { stats }, windowedTieEnabled: false, antiIdleTieBreakEnabled: true };
+  const needsHerr = { end: new D("2026-09-23T10:00:00"), operator: "OP_A", toolChange: { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" } };
+  const noChange = { end: new D("2026-09-23T10:10:00"), operator: "OP_B", toolChange: { required: false } };
+  assert.equal(core.windowedTieBreak(needsHerr, noChange, context), 0);
+  assert.equal(stats.windowedTieWindowHits, 0);
+  assert.equal(stats.windowedTieAffinityHits, 0);
+  assert.equal(stats.windowedTieIdleHits, 0);
+});
+
+test("operatorIdleCost suma el idle intradia comprometido y el hueco final hasta el inicio", async () => {
+  const core = loadPlannerCore();
+  const D = core.VmDate;
+  const context = {
+    operatorBusy: new Map([["OP_X", [
+      { start: new D("2026-09-20T07:00:00"), end: new D("2026-09-20T10:00:00") },
+      { start: new D("2026-09-20T11:00:00"), end: new D("2026-09-20T14:00:00") },
+    ]]]),
+  };
+  assert.equal(core.operatorIdleCost(context, { operator: "OP_X", start: new D("2026-09-20T15:00:00") }), 120, "60 intradia + 60 de hueco 14:00-15:00");
+  assert.equal(core.operatorIdleCost(context, { operator: "SIN_OPERADOR", start: new D("2026-09-20T15:00:00") }), 0, "operador no load-bearing no tiene costo");
+  assert.equal(core.operatorIdleCost({}, { operator: "OP_X", start: new D("2026-09-20T15:00:00") }), 0, "sin busy en el contexto no tiene costo");
+  assert.equal(core.operatorIdleCost(context, { operator: "OP_X", start: new D("2026-09-23T15:00:00") }), 60, "el hueco final solo cuenta si es el mismo dia");
+});
+
+test("selectTopKAssignment promueve la mejor afinidad del top-3 y respeta el flag de desactivacion", async () => {
+  const core = loadPlannerCore();
+  const mk = (id, toolChange) => ({ id, toolChange });
+  const worst = [mk(0, { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" }), mk(1, { required: true, fromLabel: "HERRA/KITA", toLabel: "HERRB/KITB" }), mk(2, { required: false })];
+  const statsPromoted = { toolAffinityTopKPromotions: 0 };
+  const picked = core.selectTopKAssignment({ performanceState: { stats: statsPromoted }, toolAffinityTopKEnabled: true }, worst);
+  assert.equal(picked, worst[2], "el candidato sin cambio de herramental en posicion 3 debe promoverse");
+  assert.equal(statsPromoted.toolAffinityTopKPromotions, 1);
+
+  const equal = [mk("a", { required: false }), mk("b", { required: false })];
+  const statsEqual = { toolAffinityTopKPromotions: 0 };
+  assert.equal(core.selectTopKAssignment({ performanceState: { stats: statsEqual }, toolAffinityTopKEnabled: true }, equal), equal[0], "con scores iguales conserva el primero de la lista");
+  assert.equal(statsEqual.toolAffinityTopKPromotions, 0);
+
+  const statsOff = { toolAffinityTopKPromotions: 0 };
+  assert.equal(core.selectTopKAssignment({ performanceState: { stats: statsOff }, toolAffinityTopKEnabled: false }, worst), worst[0], "con topK desactivado devuelve el primero aunque otro sea mejor");
+  assert.equal(statsOff.toolAffinityTopKPromotions, 0);
+
+  assert.equal(core.selectTopKAssignment({ performanceState: { stats: statsPromoted }, toolAffinityTopKEnabled: true }, []), null);
+  assert.equal(core.selectTopKAssignment({ performanceState: { stats: statsPromoted }, toolAffinityTopKEnabled: true }, [worst[0]]), worst[0]);
+});
+
+function gapFillFixtureState() {
+  return {
+    selectedOts: ["100", "101", "102", "200"],
+    lockedOts: [],
+    operations: [
+      { id: "fix-100", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "fix-101", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00", tiempoProd: 60 },
+      { id: "fix-102", ot: "102", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "pend-200", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "102" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1", "OP 2"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false, strategyPool: ["balanced_goal"] },
+    workSchedule: {},
+  };
+}
+
+const gapFillBaseOptions = {
+  planStart: "2026-07-13",
+  horizonDays: 5,
+  executionTime: "2026-07-13T07:00:00",
+  strategyPool: ["balanced_goal"],
+};
+
+test("gap-fill detecta el hueco de operador y mueve la pendiente sin tocar las fijas", async () => {
+  const core = loadPlannerCore();
+  const control = await core.schedulePlan(gapFillFixtureState(), { ...gapFillBaseOptions, gapFill: { enabled: false } });
+  const controlPend = control.operations.find((op) => op.id === "pend-200");
+  assert.equal(controlPend.operador, "OP 2", "el anti-idle tie-break deja el hueco de OP 1 libre en el control");
+  assert.equal(control.lastSchedule.gapFill.enabled, false);
+
+  const filled = await core.schedulePlan(gapFillFixtureState(), {
+    ...gapFillBaseOptions,
+    gapFill: { enabled: true, minGapMinutes: 60, maxCandidates: 10, budgetMs: 2000 },
+  });
+  const pend = filled.operations.find((op) => op.id === "pend-200");
+  assert.equal(pend.operador, "OP 1", "gap-fill reubica la pendiente en el hueco de 120 min de OP 1");
+  assert.equal(`${pend.fechaInicio} ${pend.horaInicio}`, "2026-07-13 08:00");
+  assert.equal(`${pend.fechaFin} ${pend.horaFin}`, "2026-07-13 09:00");
+
+  const summary = filled.lastSchedule;
+  assert.equal(summary.gapFill.enabled, true);
+  assert.ok(summary.gapFill.gaps >= 1, "detecta al menos un hueco >= minGapMinutes");
+  assert.ok(summary.gapFill.fills >= 1, "registra el relleno");
+  assert.ok(summary.gapFill.moved >= 1, "el relleno fue un movimiento de op ya programada");
+  assert.equal(summary.gapFillPost, summary.gapFill.moved);
+  assert.ok(summary.gapFill.elapsedMs <= summary.gapFill.budgetMs);
+
+  for (const id of ["fix-100", "fix-101", "fix-102"]) {
+    const before = gapFillFixtureState().operations.find((op) => op.id === id);
+    const after = filled.operations.find((op) => op.id === id);
+    assert.equal(after.fechaInicio, before.fechaInicio, `${id} fechaInicio intacta`);
+    assert.equal(after.horaInicio, before.horaInicio, `${id} horaInicio intacta`);
+    assert.equal(after.fechaFin, before.fechaFin, `${id} fechaFin intacta`);
+    assert.equal(after.horaFin, before.horaFin, `${id} horaFin intacta`);
+    assert.equal(after.operador, before.operador, `${id} operador intacto`);
+    assert.equal(after.planStatus, "COMPLETADA_PLAN", `${id} sigue COMPLETADA`);
+  }
+
+  const filledMetrics = core.evaluatePlan(filled);
+  const controlMetrics = core.evaluatePlan(control);
+  assert.equal(filledMetrics.operatorConflicts, 0);
+  assert.equal(filledMetrics.unscheduled, 0);
+  assert.equal(filledMetrics.toolChanges, controlMetrics.toolChanges, "no se generan cambios de herramental nuevos");
+});
+
+test("gap-fill respeta la secuencia: la sucesora no entra en el hueco antes que su predecesora", async () => {
+  const core = loadPlannerCore();
+  const state = {
+    selectedOts: ["100", "101", "200"],
+    lockedOts: [],
+    operations: [
+      { id: "fix-100", ot: "100", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", tiempoProd: 60 },
+      { id: "fix-101", ot: "101", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 1", fechaInicio: "2026-07-13", horaInicio: "10:00", fechaFin: "2026-07-13", horaFin: "11:00", tiempoProd: 60 },
+      { id: "done-200-1", ot: "200", secuencia: 1, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", planStatus: "COMPLETADA_PLAN", operador: "OP 2", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:30", tiempoProd: 90 },
+      { id: "pend-200-2", ot: "200", secuencia: 2, ct: "CORTE", descripcion: "CORTE", estatus: "PLAN", tiempoProd: 60 },
+    ],
+    workOrders: [{ ot: "100" }, { ot: "101" }, { ot: "200" }],
+    matrix: { "CORTE::CORTE": ["OP 1", "OP 2"] },
+    configuredCapabilities: ["CORTE::CORTE"],
+    operators: ["OP 1", "OP 2"],
+    settings: { optimizationPasses: 1, flowBalancedEnabled: false, strategyPool: ["balanced_goal"] },
+    workSchedule: {},
+  };
+  const control = await core.schedulePlan(state, { ...gapFillBaseOptions, gapFill: { enabled: false } });
+  const controlPend = control.operations.find((op) => op.id === "pend-200-2");
+  assert.equal(controlPend.operador, "OP 2", "el control deja la sucesora fuera del hueco de OP 1");
+
+  const filled = await core.schedulePlan(state, {
+    ...gapFillBaseOptions,
+    gapFill: { enabled: true, minGapMinutes: 60, maxCandidates: 10, budgetMs: 2000 },
+  });
+  const pend = filled.operations.find((op) => op.id === "pend-200-2");
+  const predecessor = filled.operations.find((op) => op.id === "done-200-1");
+  assert.equal(pend.operador, "OP 1", "gap-fill aprovecha el hueco de OP 1 para la sucesora");
+  const pendStart = new Date(`${pend.fechaInicio}T${pend.horaInicio}:00`);
+  const predecessorEnd = new Date(`${predecessor.fechaFin}T${predecessor.horaFin}:00`);
+  assert.ok(pendStart >= predecessorEnd, "no programa antes del fin de la predecesora COMPLETADA");
+  assert.equal(`${pend.fechaInicio} ${pend.horaInicio}`, "2026-07-13 08:30", "el arranque mas temprano del hueco sigue siendo el fin de la predecesora");
+  assert.equal(filled.lastSchedule.operatorConflicts, 0);
+  assert.ok(filled.lastSchedule.gapFill.fills >= 1);
+});
+
+test("resolveGapFillConfig expone defaults con gap-fill desactivado y acepta override", async () => {
+  const core = loadPlannerCore();
+  assert.equal(core.gapFillDefaults.enabled, false, "por defecto OFF hasta evidencia de dry-run");
+  assert.equal(core.gapFillDefaults.minGapMinutes, 60);
+  const fromNothing = core.resolveGapFillConfig(undefined, undefined);
+  assert.equal(fromNothing.enabled, false);
+  const fromOptions = core.resolveGapFillConfig({ gapFill: { enabled: true, minGapMinutes: 45, maxCandidates: 5, budgetMs: 1000 } }, undefined);
+  assert.equal(fromOptions.enabled, true);
+  assert.equal(fromOptions.minGapMinutes, 45);
+  assert.equal(fromOptions.maxCandidates, 5);
+  assert.equal(fromOptions.budgetMs, 1000);
+  assert.equal(fromOptions.maxIterations, 1);
+  const fromSettings = core.resolveGapFillConfig(undefined, { gapFill: true });
+  assert.equal(fromSettings.enabled, true);
+  const disabled = core.resolveGapFillConfig({ gapFill: false }, { gapFill: { enabled: true } });
+  assert.equal(disabled.enabled, false, "options.gapFill false gana sobre settings");
 });

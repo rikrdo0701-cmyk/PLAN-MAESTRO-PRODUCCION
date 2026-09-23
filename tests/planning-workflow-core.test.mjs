@@ -122,7 +122,7 @@ test("markPlanningOtSynced registra el timestamp por OT sin tocar las demas", ()
   assert.equal(core.planningOtSyncedAt(stamped, "3"), 0);
 });
 
-test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y limpia fechas de completadas de OT desbloqueada", () => {
+test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no muta y preserva completadas de OT desbloqueada", () => {
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",
     fechaFin: "2026-07-01", horaFin: "10:00", operador: "OP 1", maquina: "M1",
@@ -146,21 +146,16 @@ test("prepareDraftForReschedule limpia solo el borrador movible seleccionado, no
   assert.notEqual(result.operations, state.operations);
   assert.deepEqual(structuredClone(result.operations.map((operation) => operation.id)),
     ["movable", "completed", "marked-locked-only", "other", "historical", "locked-by-ot", "programmed", "frozen"]);
-  assert.deepEqual(structuredClone(result.operations[1]), {
-    ...completed,
-    fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
-    operador: "",
-    needsReschedule: false, autoFrozen: false,
-  });
+  assert.deepEqual(structuredClone(result.operations[1]), completed);
   assert.deepEqual(structuredClone(result.operations[0]), {
     ...movable,
     fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
     operador: "",
     needsReschedule: false, autoFrozen: false, estatus: "PLAN", planStatus: "PENDIENTE",
   });
-  assert.deepEqual(structuredClone(result.operations.slice(3, 6)), original.operations.slice(3, 6));
-  assert.deepEqual(structuredClone([result.operations[2], result.operations[6], result.operations[7]]), [
-    markedLockedOnly, programmed, frozen,
+  assert.deepEqual(structuredClone([result.operations[3], result.operations[4]]), [otherOt, historical]);
+  assert.deepEqual(structuredClone([result.operations[2], result.operations[5], result.operations[6], result.operations[7]]), [
+    markedLockedOnly, lockedByOt, programmed, frozen,
   ].map((operation) => ({
     ...operation,
     fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",
@@ -191,17 +186,24 @@ test("prepareDraftForReschedule reprograma OT bloqueada SIN operaciones con prog
   assert.equal(byId.partial.fechaInicio, "");
 });
 
-test("prepareDraftForReschedule conserva OT bloqueada que SI tiene operacion con programa completo", () => {
+test("prepareDraftForReschedule limpia incompletas de OT bloqueada aunque tengan programa", () => {
   const dated = { id: "dated", ot: "200", secuencia: 1, estatus: "PLAN", planStatus: "PENDIENTE", operador: "OP 1", fechaInicio: "2026-06-28", horaInicio: "08:00", fechaFin: "2026-06-28", horaFin: "10:00" };
   const pending = { id: "pending", ot: "200", secuencia: 2, estatus: "PLAN", planStatus: "PENDIENTE" };
-  const state = { selectedOts: ["200"], lockedOts: ["200"], operations: [dated, pending] };
+  const completed = { id: "done", ot: "200", secuencia: 3, planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-06-27", horaInicio: "08:00", fechaFin: "2026-06-27", horaFin: "09:00" };
+  const state = { selectedOts: ["200"], lockedOts: ["200"], operations: [dated, pending, completed] };
+  const original = structuredClone(state);
 
   const result = core.prepareDraftForReschedule(state, ["200"]);
 
+  assert.deepEqual(state, original);
   const byId = Object.fromEntries(result.operations.map((operation) => [operation.id, operation]));
-  assert.equal(byId.dated.fechaInicio, "2026-06-28");
-  assert.equal(byId.dated.horaFin, "10:00");
-  assert.equal(byId.pending.fechaInicio, undefined);
+  assert.deepEqual(structuredClone(byId.done), completed);
+  assert.equal(byId.dated.fechaInicio, "");
+  assert.equal(byId.dated.horaInicio, "");
+  assert.equal(byId.dated.fechaFin, "");
+  assert.equal(byId.dated.horaFin, "");
+  assert.equal(byId.dated.operador, "");
+  assert.equal(byId.pending.fechaInicio, "");
   assert.equal(byId.pending.estatus, "PLAN");
 });
 

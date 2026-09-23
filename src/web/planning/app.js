@@ -3632,12 +3632,22 @@ function ensureToolCatalogEntry(op, tool, catalog) {
 function assignPlanningOperators(operations) {
   for (const op of operations) {
     if (isSubcontractAppOperation(op)) {
+      const previous = op.operador;
       op.operador = "SUBCONTRATO";
       op.maquina = "";
+      if (previous && String(previous).trim() && previous !== "SUBCONTRATO") {
+        op.log = appendLog(op.log, `OPERADOR_REASSIGN_NO_MOVE ${previous} -> SUBCONTRATO`);
+      }
       continue;
     }
     const allowed = getAllowedOperatorsForOperation(op);
-    if (!allowed.includes(op.operador)) op.operador = allowed[0] || "SIN_OPERADOR";
+    if (!allowed.includes(op.operador)) {
+      const previous = op.operador;
+      op.operador = allowed[0] || "SIN_OPERADOR";
+      if (previous && String(previous).trim() && previous !== op.operador) {
+        op.log = appendLog(op.log, `OPERADOR_REASSIGN_NO_MOVE ${previous} -> ${op.operador}`);
+      }
+    }
   }
 }
 
@@ -5454,16 +5464,15 @@ async function scheduleCurrentPlanImpl() {
   setScheduleStatus("Revisando plan...");
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   const affected = new Set(state.selectedOts.map(normalizeStatus));
-// Procesar todas las OTs en la lista de planeado/no planeado (ignorando bloqueos y advertencias)
+// Procesar todas las OTs en la lista de planeado/no planeado (incluye bloqueadas; el motor reprograma incompletas)
 const replannableOts = state.selectedOts.filter((ot) =>
     affected.has(normalizeStatus(ot)) &&
-    !isJobLocked(ot) &&
     isMovablePlanningStatus(jobStatusForOt(ot)) &&
     !hasClosedWorkOrderSyncWarning(ot)
   );
 
   if (!replannableOts.length) {
-    showToast("No hay OTs desbloqueables para programar");
+    showToast("No hay OTs para programar");
     return;
   }
   setScheduleStatus("Actualizando OTs...");
@@ -5472,7 +5481,7 @@ const replannableOts = state.selectedOts.filter((ot) =>
   const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
   const readyOts = state.selectedOts.filter((ot) =>
     availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
-    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+    isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   const excludedOts = (planningData.missingOts || []).filter((ot) => state.selectedOts.includes(ot));
   if (excludedOts.length) {
@@ -5485,7 +5494,7 @@ const replannableOts = state.selectedOts.filter((ot) =>
     showToast(`OT(s) cerrada(s) eliminadas del plan: ${closedOts.join(", ")}`, 6000);
   }
   if (!readyOts.length) {
-    showToast("No hay OTs desbloqueadas para programar");
+    showToast("No hay OTs listas para programar");
     return;
   }
   setScheduleStatus("Validando OTs...");
@@ -5731,7 +5740,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.affectedOtsCount = affected.size;
     const jobs = new Map(getPriorityJobs().map((job) => [materialOtKey(job.ot), job]));
     readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
-      !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+      isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
     );
      const dryRunMode = true;
       const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
@@ -5770,7 +5779,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.readyOtsCount = readyOts.length;
     timings.readinessMs = Math.round(dryRunNowMs() - started);
     if (!readyOts.length) {
-      if (!result.blockers.length) result.blockers.push({ code: "NO_READY_OTS", message: "No hay OTs desbloqueadas listas para programar" });
+      if (!result.blockers.length) result.blockers.push({ code: "NO_READY_OTS", message: "No hay OTs listas para programar" });
       return finish();
     }
 
