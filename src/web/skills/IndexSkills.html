@@ -1,94 +1,1028 @@
 <!doctype html>
 <html lang="es">
 <head>
-    <!-- Fuente de la matriz de habilidades. -->
+  <!-- Fuente de la matriz de habilidades. -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Matriz de habilidades</title>
   <style>
 :root {
-  color: #172026;
-  background: #f4f6f7;
-  font-family: Arial, sans-serif;
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --surface-subtle: #f6f8fa;
+  --line: #d7dde2;
+  --line-strong: #b8c3ca;
+  --text: #172126;
+  --muted: #65737c;
+  --teal: #087f7a;
+  --teal-dark: #05645f;
+  --red: #c93f3f;
+  --radius: 5px;
+  color-scheme: light;
+  font-family: "Segoe UI", Arial, sans-serif;
 }
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; }
 
 body {
   margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0;
 }
 
-.app-shell {
-  padding: 24px;
+.app-shell { width: min(1440px, calc(100% - 24px)); margin: 0 auto; padding: 16px 0 28px; }
+
+.skills-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .app-kicker {
-  color: #087f78;
-  font-size: 12px;
+  color: var(--teal);
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: .04em;
   text-transform: uppercase;
 }
 
-h1 {
-  margin: 8px 0 4px;
-  font-size: 24px;
+.skills-header h1 { margin: 4px 0 0; font-size: 22px; }
+
+.skills-actions { display: flex; align-items: center; gap: 8px; }
+
+.skills-status {
+  min-width: 160px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
 }
 
-p {
-  margin: 0;
-  color: #566873;
+.skills-status.is-saving { color: var(--teal); }
+.skills-status.is-error { color: var(--red); }
+.skills-status.is-ok { color: #2e8b57; }
+
+.button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.skills-table {
-  border-collapse: collapse;
-  margin-top: 20px;
-  width: 100%;
+.button.primary {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
 }
 
-.skills-table th,
-.skills-table td {
-  border: 1px solid #d8e0e4;
-  padding: 10px;
-  text-align: left;
+.button.primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
+.button:disabled { opacity: .55; cursor: not-allowed; }
+
+.legacy-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: #fff8e8;
+  color: #7a4e00;
+  font-size: 11px;
 }
 
-.skills-table th {
-  background: #eaf0f2;
+.matrix-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.matrix-search { display: flex; align-items: center; gap: 7px; }
+
+.matrix-search input {
+  width: min(280px, 42vw);
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  font: inherit;
   font-size: 12px;
+}
+
+.matrix-search input:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.matrix-search output {
+  min-width: 140px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.matrix-legend .swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -3px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+}
+
+.matrix-legend .swatch-no-operator {
+  background: #fdecea;
+  border-color: #d9534f;
+}
+
+.matrix-legend .swatch-excluded {
+  background: #f5f6f7;
+}
+
+.matrix-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.matrix-chip {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: #334149;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.matrix-chip.is-danger {
+  border-color: #f0b7b4;
+  background: #fdecea;
+  color: #a1332c;
+}
+
+.matrix-chip.is-ok {
+  border-color: #b9e0cc;
+  background: #f0f8f4;
+  color: #1f6b44;
+}
+
+.matrix-wrap {
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+th, td {
+  padding: 7px 8px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #edf1f3;
+  color: #405058;
+  font-size: 9px;
   text-transform: uppercase;
 }
 
-</style>
+tr:last-child td { border-bottom: 0; }
+
+.matrix-table { min-width: 1040px; table-layout: auto; }
+
+.matrix-table thead th {
+  top: 0;
+  z-index: 5;
+  height: 74px;
+  vertical-align: top;
+  background: #edf1f3;
+  box-shadow: 0 1px 0 var(--line-strong);
+}
+
+.matrix-table th:first-child,
+.matrix-table td:first-child {
+  position: sticky;
+  left: 0;
+  min-width: 300px;
+  max-width: 300px;
+  font-weight: 700;
+}
+
+.matrix-table tbody td:first-child { z-index: 2; background: #fff; }
+.matrix-table thead th:first-child { z-index: 7; background: #edf1f3; }
+
+.matrix-table th:nth-child(2),
+.matrix-table td:nth-child(2) { min-width: 112px; }
+
+.matrix-table th:nth-child(3),
+.matrix-table td:nth-child(3) { min-width: 72px; }
+
+.matrix-table th:nth-child(4),
+.matrix-table td:nth-child(4) { min-width: 96px; }
+
+.matrix-table th:nth-child(n+5),
+.matrix-table td:nth-child(n+5) {
+  width: 138px;
+  min-width: 138px;
+  max-width: 138px;
+}
+
+.matrix-sub {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.capability-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.capability-heading > div { min-width: 0; }
+
+.capability-plan-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.capability-plan-state {
+  width: 126px;
+  min-height: 26px;
+  padding: 0 5px;
+  font-size: 9px;
+}
+
+.capability-plan-state:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.matrix-excluded-badge {
+  padding: 2px 5px;
+  border-radius: 9px;
+  background: #e7ebed;
+  color: #526169;
+  font-size: 8px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.matrix-no-operator-badge {
+  padding: 2px 5px;
+  border-radius: 9px;
+  background: #fdecea;
+  color: #a1332c;
+  font-size: 8px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.capacity-mode-select { width: 100%; min-height: 28px; }
+
+.matrix-overlap-input,
+.matrix-efficiency-input {
+  width: 62px;
+  min-height: 28px;
+  padding: 0 4px;
+  text-align: center;
+}
+
+.percent-input {
+  display: grid;
+  grid-template-columns: 62px 16px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.percent-input span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.overlap-cell, .efficiency-cell { padding: 4px; text-align: center; }
+
+.skill-cell { min-width: 94px; padding: 4px 6px; text-align: center; }
+
+.matrix-skill-toggle {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.matrix-skill-toggle .matrix-operator-check {
+  position: absolute;
+  inset: 0;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.matrix-checkmark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #87969d;
+  border-radius: 3px;
+  background: #fff;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.matrix-checkmark::after {
+  width: 6px;
+  height: 11px;
+  content: "";
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  opacity: 0;
+  transform: translateY(-1px) rotate(45deg) scale(0.7);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.matrix-operator-check:checked + .matrix-checkmark {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+
+.matrix-operator-check:checked + .matrix-checkmark::after {
+  opacity: 1;
+  transform: translateY(-1px) rotate(45deg) scale(1);
+}
+
+.matrix-operator-check:focus-visible + .matrix-checkmark {
+  outline: 2px solid rgba(8, 127, 122, 0.3);
+  outline-offset: 2px;
+}
+
+.matrix-skill-toggle:hover .matrix-checkmark { border-color: var(--teal); }
+
+.operator-performance-field {
+  display: grid;
+  gap: 2px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.operator-performance-field span { font-size: 8px; font-weight: 600; }
+
+.operator-performance-input {
+  width: 64px;
+  min-height: 25px;
+  padding: 0 3px;
+  text-align: center;
+}
+
+.operator-heading { display: flex; align-items: center; gap: 7px; width: 100%; }
+.operator-heading span { min-width: 0; font-size: 10px; text-transform: none; }
+
+.matrix-row-excluded { opacity: 0.58; }
+.matrix-row-excluded:focus-within { opacity: 0.82; }
+.matrix-row-excluded td { background: #f5f6f7; }
+.matrix-row-excluded td:first-child { background: #f5f6f7; }
+.matrix-row-no-operator td { background: #fdecea; }
+.matrix-table tbody tr.matrix-row-no-operator td:first-child {
+  background: #fdecea;
+  box-shadow: inset 3px 0 0 #d9534f;
+}
+.matrix-row-excluded.matrix-row-no-operator td,
+.matrix-row-excluded.matrix-row-no-operator td:first-child { background: #fdecea; }
+
+.matrix-empty {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.matrix-loading {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: center;
+}
+  </style>
 </head>
 <body>
   <main id="app" class="app-shell" data-app="skills">
-    <span class="app-kicker">Capacidades</span>
-    <h1>Matriz de habilidades</h1>
-    <p>Cargando operadores, operaciones y habilidades...</p>
+    <header class="skills-header">
+      <div>
+        <span class="app-kicker">Capacidades</span>
+        <h1>Matriz de habilidades</h1>
+      </div>
+      <div class="skills-actions">
+        <span id="skillsStatus" class="skills-status" role="status" aria-live="polite">Conectando…</span>
+        <button id="reloadBtn" class="button" type="button">Recargar</button>
+      </div>
+    </header>
+
+    <p class="legacy-note">
+      Vista independiente: comparte el mismo almacén Google Sheets que la web principal.
+      Las altas y bajas de operadores u operaciones se hacen en la web principal.
+    </p>
+
+    <div class="matrix-toolbar">
+      <div class="matrix-search">
+        <input id="matrixSearchInput" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" autocomplete="off">
+        <output id="matrixSearchCount" aria-live="polite"></output>
+        <button id="clearMatrixSearchBtn" class="button" type="button" disabled>Limpiar</button>
+      </div>
+      <div class="matrix-legend" aria-label="Leyenda">
+        <span><span class="swatch swatch-no-operator"></span>Sin operador habilitado</span>
+        <span><span class="swatch swatch-excluded"></span>Excluida del plan</span>
+      </div>
+    </div>
+
+    <div id="matrixChips" class="matrix-chips" aria-live="polite"></div>
+
+    <div id="matrixWrap" class="matrix-wrap">
+      <div class="matrix-loading">Cargando operadores, operaciones y habilidades…</div>
+    </div>
   </main>
+
+  <script>
+{{BRIDGE_CLIENT}}
+  </script>
+
+  <script>
+{{PLANNER_CORE}}
+  </script>
+
   <script>
 "use strict";
 
 document.documentElement.dataset.app = "skills";
 
-const SKILLS_COLUMNS = [
-  "Operacion / CT",
-  "Capacidad",
-  "Solapamiento %",
-  "Eficiencia %",
-  "Operadores habilitados",
-];
+const TOOL_CHANGE_CAPABILITY = {
+  key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
+  ct: "TOOL_CHANGE",
+  label: "CAMBIO DE HERRAMENTAL",
+};
+const CAPACITY_MODES = ["FINITA", "NO_FINITA"];
+const SAVE_DEBOUNCE_MS = 700;
 
-function renderSkillsColumns() {
-  const app = document.getElementById("app");
-  if (!app) return;
-  const table = document.createElement("table");
-  table.className = "skills-table";
-  table.innerHTML = `<thead><tr>${SKILLS_COLUMNS.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody><tr><td colspan="${SKILLS_COLUMNS.length}">Sin matriz cargada</td></tr></tbody>`;
-  app.appendChild(table);
+const els = {
+  app: document.getElementById("app"),
+  matrixWrap: document.getElementById("matrixWrap"),
+  matrixSearchInput: document.getElementById("matrixSearchInput"),
+  matrixSearchCount: document.getElementById("matrixSearchCount"),
+  clearMatrixSearchBtn: document.getElementById("clearMatrixSearchBtn"),
+  matrixChips: document.getElementById("matrixChips"),
+  skillsStatus: document.getElementById("skillsStatus"),
+  reloadBtn: document.getElementById("reloadBtn"),
+};
+
+let state = null;
+let matrixSearch = "";
+let saveTimer = null;
+let saveInFlight = false;
+let saveQueued = false;
+let dirty = false;
+let loadSeq = 0;
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-renderSkillsColumns();
+function uniq(items) {
+  return [...new Set(items.filter(Boolean))];
+}
 
-</script>
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function normalizeHeader(header) {
+  return String(header || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "_");
+}
+
+function capabilityKey(ct, label) {
+  return `${String(ct || "SIN_CT").trim()}::${normalizeHeader(label || "OPERACION")}`;
+}
+
+function capabilityFromKey(key) {
+  const text = String(key || "");
+  const separator = text.indexOf("::");
+  if (separator < 0) return null;
+  return {
+    key: text,
+    ct: text.slice(0, separator),
+    label: text.slice(separator + 2).replace(/_/g, " "),
+  };
+}
+
+function normalizeCapabilityKeys(values) {
+  return uniq((Array.isArray(values) ? values : []).map((value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const separator = text.indexOf("::");
+    if (separator < 0) return text;
+    const ct = text.slice(0, separator).trim();
+    const label = normalizeHeader(text.slice(separator + 2).replace(/_/g, " "));
+    return ct && label ? `${ct}::${label}` : "";
+  }).filter(Boolean))
+    .filter((key) => normalizeHeader(key) !== normalizeHeader(TOOL_CHANGE_CAPABILITY.key));
+}
+
+function normalizeCapacityMode(value) {
+  return String(value || "").trim().toUpperCase() === "NO_FINITA" ? "NO_FINITA" : "FINITA";
+}
+
+function hasMatrixKey(key) {
+  return Object.prototype.hasOwnProperty.call(state.matrix, key);
+}
+
+function matrixAllowedForCapability(capability) {
+  if (state.hiddenCapabilities.includes(capability.key)) return [];
+  if (hasMatrixKey(capability.key)) return state.matrix[capability.key] || [];
+  if (hasMatrixKey(capability.ct)) return state.matrix[capability.ct] || [];
+  return [];
+}
+
+function baseAllowedOperatorsForCapability(capability) {
+  return [...matrixAllowedForCapability(capability)];
+}
+
+function isOperatorSkilledForCapability(capability, operator) {
+  return matrixAllowedForCapability(capability).includes(operator);
+}
+
+function capacityModeForCapability(capability) {
+  if (state.hiddenCapabilities.includes(capability.key)) return "NO_FINITA";
+  if (CAPACITY_MODES.includes(state.capacityModes[capability.key])) return state.capacityModes[capability.key];
+  if (CAPACITY_MODES.includes(state.capacityModes[capability.ct])) return state.capacityModes[capability.ct];
+  return "FINITA";
+}
+
+function operatorPerformanceForOperator(operator) {
+  const performance = Number(state.operatorPerformance?.[operator]);
+  return Number.isFinite(performance) && performance > 0 ? performance : 100;
+}
+
+function capabilityLabelForOperation(op) {
+  return String(op.descripcion || op.tipoInsercion || "OPERACION").trim() || "OPERACION";
+}
+
+function capabilityFromOperation(op) {
+  const label = capabilityLabelForOperation(op);
+  const ct = String(op.ct || "SIN_CT").trim();
+  const resolved = window.PlannerCore?.capabilityForOperation
+    ? window.PlannerCore.capabilityForOperation(op, state)
+    : null;
+  if (resolved) return resolved;
+  return { key: capabilityKey(ct, label), ct, label };
+}
+
+function getCapabilityRows() {
+  const counts = new Map();
+  const operationCapabilities = new Map();
+  for (const op of state.operations) {
+    const capability = capabilityFromOperation(op);
+    operationCapabilities.set(capability.key, capability);
+    counts.set(capability.key, (counts.get(capability.key) || 0) + 1);
+  }
+  const catalog = new Map((state.operationCatalog || []).map((item) => [item.key, item]));
+  const custom = new Map((state.customCapabilities || []).map((item) => [item.key, item]));
+  return (state.configuredCapabilities || [])
+    .map((key) => catalog.get(key) || custom.get(key) || operationCapabilities.get(key) || capabilityFromKey(key))
+    .filter(Boolean)
+    .map((capability) => ({ ...capability, count: counts.get(capability.key) || 0 }))
+    .filter((capability) => !state.hiddenCapabilities.includes(capability.key))
+    .sort((a, b) => a.ct.localeCompare(b.ct, "es", { numeric: true }) || a.label.localeCompare(b.label, "es"));
+}
+
+function filterCapabilities(capabilities) {
+  if (window.PlannerCore?.filterCapabilities) {
+    return window.PlannerCore.filterCapabilities(capabilities, matrixSearch);
+  }
+  const query = String(matrixSearch || "").trim().toLowerCase();
+  if (!query) return capabilities;
+  return capabilities.filter((capability) =>
+    normalizeHeader(capability.label).includes(normalizeHeader(query).replace(/_/g, ""))
+    || String(capability.ct || "").toLowerCase().includes(query)
+    || String(capability.key || "").toLowerCase().includes(query));
+}
+
+function toggleMatrix(key, operator, checked, capability) {
+  if (!state.matrix[key]) {
+    state.matrix[key] = capability ? [...baseAllowedOperatorsForCapability(capability)] : [];
+  }
+  if (checked && !state.matrix[key].includes(operator)) state.matrix[key].push(operator);
+  if (!checked) state.matrix[key] = state.matrix[key].filter((name) => name !== operator);
+  dirty = true;
+}
+
+function updateOperationRule(key, patch) {
+  state.operationRules[key] = { ...(state.operationRules[key] || { overlap: 1, efficiency: 100, keywords: "" }), ...patch };
+  dirty = true;
+}
+
+function matrixSavePayload() {
+  return {
+    schemaVersion: state.schemaVersion,
+    revision: Number(state.revision || 0),
+    source: "plan-app-sheet",
+    savedAt: new Date().toISOString(),
+    syncedAt: state.syncedAt || "",
+    invoicePriceWindow: state.invoicePriceWindow || null,
+    ganttView: state.ganttView,
+    ganttDayWidth: state.ganttDayWidth,
+    selectedOperationId: state.selectedOperationId || "",
+    capacityMinutes: state.capacityMinutes,
+    planStart: state.planStart,
+    horizonDays: state.horizonDays,
+    loadWeekStart: state.loadWeekStart,
+    reportWeekStart: state.reportWeekStart,
+    reportFilters: clone(state.reportFilters || {}),
+    preparedPlanningByOt: clone(state.preparedPlanningByOt || {}),
+    selectedOts: [...(state.selectedOts || [])],
+    lockedOts: [...(state.lockedOts || [])],
+    expandedOts: [...(state.expandedOts || [])],
+    plant: clone(state.plant || {}),
+    settings: clone(state.settings || {}),
+    lastSchedule: clone(state.lastSchedule || null),
+    operations: clone(state.operations || []),
+    operators: [...(state.operators || [])],
+    operatorProfiles: clone(state.operatorProfiles || {}),
+    operatorCapacity: clone(state.operatorCapacity || {}),
+    operatorPerformance: clone(state.operatorPerformance || {}),
+    configuredCapabilities: [...(state.configuredCapabilities || [])],
+    customCapabilities: clone(state.customCapabilities || []),
+    hiddenCapabilities: [...(state.hiddenCapabilities || [])],
+    capacityModes: clone(state.capacityModes || {}),
+    operationRules: clone(state.operationRules || {}),
+    operationCatalog: clone(state.operationCatalog || []),
+    matrix: clone(state.matrix || {}),
+    excludedCapabilities: normalizeCapabilityKeys(state.excludedCapabilities),
+  };
+}
+
+function setStatus(message, kind) {
+  els.skillsStatus.textContent = message;
+  els.skillsStatus.classList.remove("is-saving", "is-error", "is-ok");
+  if (kind) els.skillsStatus.classList.add(`is-${kind}`);
+}
+
+function renderChips(capabilities) {
+  if (!capabilities) {
+    els.matrixChips.innerHTML = "";
+    return;
+  }
+  const operators = state.operators || [];
+  const withOperator = capabilities.filter((capability) =>
+    operators.some((operator) => isOperatorSkilledForCapability(capability, operator)));
+  const withoutOperator = capabilities.filter((capability) =>
+    !operators.some((operator) => isOperatorSkilledForCapability(capability, operator)));
+  els.matrixChips.innerHTML = [
+    `<span class="matrix-chip">${capabilities.length} capacidades</span>`,
+    `<span class="matrix-chip is-ok">${withOperator.length} con operador</span>`,
+    `<span class="matrix-chip is-danger">${withoutOperator.length} sin operador</span>`,
+  ].join("");
+}
+
+function focusCapabilityPlanState(key) {
+  const control = [...els.matrixWrap.querySelectorAll("[data-capability-plan-state]")]
+    .find((item) => item.dataset.capabilityPlanState === key);
+  if (control) control.focus();
+}
+
+function focusSkillCheckbox(key, operator) {
+  const control = els.matrixWrap.querySelector(
+    `.matrix-operator-check[data-key="${CSS.escape(key)}"][data-operator="${CSS.escape(operator)}"]`);
+  if (control) control.focus();
+}
+
+function renderMatrix() {
+  if (!state) return;
+  const operators = state.operators || [];
+  const capabilities = getCapabilityRows();
+  const filteredCapabilities = filterCapabilities(capabilities);
+  els.matrixSearchInput.value = matrixSearch;
+  els.matrixSearchCount.textContent = `${filteredCapabilities.length} de ${capabilities.length} operaciones`;
+  els.clearMatrixSearchBtn.disabled = !matrixSearch;
+  renderChips(capabilities);
+
+  const header = `<thead><tr>
+      <th>Operacion / CT</th>
+      <th>Capacidad</th>
+      <th>Solapamiento %</th>
+      <th>Eficiencia %</th>
+      ${operators.map((operator) => `<th>
+        <div class="operator-heading">
+          <span title="${escapeHtml(operator)}">${escapeHtml(operator)}</span>
+        </div>
+        <label class="operator-performance-field"><span>Rend. %</span><input class="operator-performance-input" type="number" min="1" max="300" step="5" data-operator="${escapeHtml(operator)}" value="${escapeHtml(operatorPerformanceForOperator(operator))}" aria-label="Rendimiento general de ${escapeHtml(operator)}"></label>
+      </th>`).join("")}
+    </tr></thead>`;
+
+  const rows = [];
+  for (const capability of filteredCapabilities) {
+    const capacityMode = capacityModeForCapability(capability);
+    const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
+    const mandatory = normalizeHeader(capability.key) === normalizeHeader(TOOL_CHANGE_CAPABILITY.key);
+    const excluded = !mandatory && state.excludedCapabilities.includes(capability.key);
+    const hasAssignedOperator = operators.some((operator) => isOperatorSkilledForCapability(capability, operator));
+    const rowClasses = [];
+    if (excluded) rowClasses.push("matrix-row-excluded");
+    if (!hasAssignedOperator) rowClasses.push("matrix-row-no-operator");
+    rows.push(`<tr${rowClasses.length ? ` class="${rowClasses.join(" ")}"` : ""}>
+      <td>
+        <div class="capability-heading">
+          <div>
+            <strong>${escapeHtml(capability.label)}</strong>
+            <span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span>
+            ${hasAssignedOperator ? "" : '<span class="matrix-sub" style="color:#a1332c;font-weight:700">Sin operador habilitado</span>'}
+            <div class="capability-plan-controls">
+              <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan"${mandatory ? ' disabled aria-disabled="true"' : ""}>
+                <option value="USE"${excluded ? "" : " selected"}>Usar en el plan</option>
+                ${mandatory ? "" : `<option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>`}
+              </select>
+              ${excluded ? '<span class="matrix-excluded-badge">Excluida</span>' : ""}
+              ${hasAssignedOperator ? "" : '<span class="matrix-no-operator-badge">Sin operador</span>'}
+            </div>
+          </div>
+        </div>
+      </td>
+      <td class="capacity-mode-cell">
+        <select class="capacity-mode-select" data-capacity-key="${escapeHtml(capability.key)}" aria-label="Capacidad de ${escapeHtml(capability.label)}">
+          <option value="FINITA"${capacityMode === "FINITA" ? " selected" : ""}>Finita</option>
+          <option value="NO_FINITA"${capacityMode === "NO_FINITA" ? " selected" : ""}>No finita</option>
+        </select>
+      </td>
+      <td class="overlap-cell"><div class="percent-input"><input class="matrix-overlap-input" type="number" min="0" max="100" step="5" data-rule-key="${escapeHtml(capability.key)}" value="${escapeHtml(Math.round(Number(rule.overlap == null ? 1 : rule.overlap) * 100))}" aria-label="Solapamiento de ${escapeHtml(capability.label)} en porcentaje"><span>%</span></div></td>
+      <td class="efficiency-cell"><div class="percent-input"><input class="matrix-efficiency-input" type="number" min="1" max="100" step="1" data-rule-key="${escapeHtml(capability.key)}" value="${escapeHtml(Math.max(1, Math.min(100, Number(rule.efficiency ?? rule.eficiencia) || 100)))}" aria-label="Eficiencia de ${escapeHtml(capability.label)} en porcentaje"><span>%</span></div></td>
+      ${operators
+      .map((operator) => {
+        const enabled = isOperatorSkilledForCapability(capability, operator);
+        return `<td class="skill-cell">
+          <label class="matrix-skill-toggle" title="${enabled ? "Operador habilitado" : "Operador no habilitado"}">
+            <input class="matrix-operator-check" type="checkbox" data-key="${escapeHtml(capability.key)}" data-operator="${escapeHtml(operator)}" aria-label="Habilitar ${escapeHtml(operator)} para ${escapeHtml(capability.label)}" aria-checked="${enabled ? "true" : "false"}"${enabled ? " checked" : ""}>
+            <span class="matrix-checkmark" aria-hidden="true"></span>
+          </label>
+        </td>`;
+      })
+      .join("")}</tr>`);
+  }
+
+  if (!rows.length) {
+    els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">Sin operaciones que coincidan</div>';
+    return;
+  }
+  els.matrixWrap.innerHTML = `<table class="matrix-table">${header}<tbody>${rows.join("")}</tbody></table>`;
+}
+
+function onMatrixChange(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  const planState = target.closest("[data-capability-plan-state]");
+  if (planState && planState instanceof HTMLSelectElement) {
+    const key = planState.dataset.capabilityPlanState;
+    const excluded = planState.value === "EXCLUDE";
+    state.excludedCapabilities = excluded
+      ? uniq([...state.excludedCapabilities, key])
+      : state.excludedCapabilities.filter((item) => item !== key);
+    dirty = true;
+    renderMatrix();
+    focusCapabilityPlanState(key);
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+    return;
+  }
+
+  const checkbox = target.closest(".matrix-operator-check");
+  if (checkbox instanceof HTMLInputElement) {
+    const key = checkbox.dataset.key;
+    const operator = checkbox.dataset.operator;
+    const capability = getCapabilityRows().find((row) => row.key === key);
+    toggleMatrix(key, operator, checkbox.checked, capability);
+    renderMatrix();
+    focusSkillCheckbox(key, operator);
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+    return;
+  }
+
+  const capacitySelect = target.closest("[data-capacity-key]");
+  if (capacitySelect instanceof HTMLSelectElement) {
+    state.capacityModes[capacitySelect.dataset.capacityKey] = normalizeCapacityMode(capacitySelect.value);
+    dirty = true;
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+    return;
+  }
+
+  const overlapInput = target.closest(".matrix-overlap-input");
+  if (overlapInput instanceof HTMLInputElement) {
+    const percent = Math.max(0, Math.min(100, Number(overlapInput.value) || 0));
+    updateOperationRule(overlapInput.dataset.ruleKey, { overlap: percent / 100 });
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+    return;
+  }
+
+  const efficiencyInput = target.closest(".matrix-efficiency-input");
+  if (efficiencyInput instanceof HTMLInputElement) {
+    const percent = Math.max(1, Math.min(100, Number(efficiencyInput.value) || 100));
+    updateOperationRule(efficiencyInput.dataset.ruleKey, { efficiency: percent });
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+    return;
+  }
+
+  const performanceInput = target.closest(".operator-performance-input");
+  if (performanceInput instanceof HTMLInputElement) {
+    const operator = performanceInput.dataset.operator;
+    const percent = Math.max(1, Math.min(300, Number(performanceInput.value) || 100));
+    state.operatorPerformance[operator] = percent;
+    dirty = true;
+    setStatus("Guardando…", "saving");
+    scheduleSave();
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer) window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    void saveNow();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+async function saveNow() {
+  if (!state) return;
+  if (saveInFlight) {
+    saveQueued = true;
+    return;
+  }
+  if (!dirty && !saveQueued) return;
+  saveInFlight = true;
+  saveQueued = false;
+  dirty = false;
+  setStatus("Guardando…", "saving");
+  try {
+    const saved = await window.PPAppsScriptBridge.call("saveSkillState", [matrixSavePayload()]);
+    state.revision = Number(saved?.revision || state.revision);
+    state.savedAt = saved?.savedAt || state.savedAt;
+    if (!dirty) {
+      setStatus(`Guardado ${new Date().toLocaleTimeString()}`, "ok");
+    } else {
+      scheduleSave();
+    }
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (/CONFLICT_REVISION/i.test(message)) {
+      setStatus("El plan cambió en otra pestaña; recargando…", "error");
+      await loadState({ silent: false });
+    } else {
+      setStatus(`Error al guardar: ${message}`, "error");
+      dirty = true;
+    }
+  } finally {
+    saveInFlight = false;
+    if (saveQueued) {
+      saveQueued = false;
+      void saveNow();
+    }
+  }
+}
+
+async function loadState({ silent = false } = {}) {
+  const seq = ++loadSeq;
+  if (!silent) setStatus("Cargando…");
+  try {
+    const bridge = window.PPAppsScriptBridge;
+    await bridge.ensureReady();
+    const imported = await bridge.call("getAppState");
+    if (seq !== loadSeq) return;
+    state = imported || {};
+    state.matrix = state.matrix || {};
+    state.operators = Array.isArray(state.operators) ? state.operators : [];
+    state.excludedCapabilities = normalizeCapabilityKeys(state.excludedCapabilities);
+    state.capacityModes = state.capacityModes || {};
+    state.operationRules = state.operationRules || {};
+    state.operatorPerformance = state.operatorPerformance || {};
+    state.configuredCapabilities = Array.isArray(state.configuredCapabilities) ? state.configuredCapabilities : [];
+    state.customCapabilities = Array.isArray(state.customCapabilities) ? state.customCapabilities : [];
+    state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
+    state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
+    state.operations = Array.isArray(state.operations) ? state.operations : [];
+    dirty = false;
+    saveQueued = false;
+    renderMatrix();
+    setStatus(`rev ${state.revision || 0}`, "ok");
+  } catch (error) {
+    if (seq !== loadSeq) return;
+    setStatus(`Error: ${String(error?.message || error)}`, "error");
+    els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">No se pudo cargar la matriz. Revisa la conexión y recarga.</div>';
+  }
+}
+
+els.matrixWrap.addEventListener("change", onMatrixChange);
+
+els.matrixSearchInput.addEventListener("input", () => {
+  matrixSearch = els.matrixSearchInput.value;
+  renderMatrix();
+});
+
+els.clearMatrixSearchBtn.addEventListener("click", () => {
+  matrixSearch = "";
+  renderMatrix();
+  els.matrixSearchInput.focus();
+});
+
+els.reloadBtn.addEventListener("click", () => {
+  void loadState({ silent: false });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && !saveInFlight && !saveQueued && !dirty && !saveTimer) {
+    void loadState({ silent: true });
+  }
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (saveInFlight || saveQueued || dirty || saveTimer) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+void loadState({ silent: false });
+  </script>
 </body>
 </html>

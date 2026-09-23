@@ -393,7 +393,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
   assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
-  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0"/);
+  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0\.01" step="0\.01" required/);
   assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
   assert.match(pagesIndex, /const description = String\(job\?\.descripcion \|\| workOrderForOt\(ot\)\?\.description \|\| ""\)\.trim\(\);/);
   assert.match(pagesIndex, /const detail = \[article, description, quantity \? `\$\{formatMaterialQuantity\(quantity\)\} pzas` : ""\]\.filter\(Boolean\)\.join\(" - "\);/);
@@ -511,9 +511,10 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /function reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /statusActions: reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
-  assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType;/);
+  assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
+  assert.match(pagesIndex, /const hasRequiredGaps = requirements\.some\(\(item\) => \["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"\]\s*\.some\(\(code\) => item\.codes\.has\(code\)\)\) \|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
   assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);
-  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*Seguro que desea dejar el precio unitario en \$0\.00/);
+  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*las tres fuentes de precio estan en cero/);
   assert.match(pagesIndex, /if \(!confirmZeroManualPrice\(els\.planningDialogForm\)\) return;[\s\S]*closePlanningDialog/);
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
@@ -534,7 +535,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /grid-template-columns:\s*1fr 2fr 1fr/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table th,[\s\S]*text-align:\s*center/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.executive-summary[\s\S]*display:\s*none !important/);
-  assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType\) continue/);
+  assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType && !commercial\.needsManualPrice\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
   assert.match(pagesIndex, /@page \{ size: 210mm 297mm/);
@@ -1544,7 +1545,7 @@ test("preparacion y validacion ignoran operaciones excluidas", async () => {
   )(
     state, window, currentPlanOperations, () => [], async () => { dialogs += 1; },
     (_issues, operations) => { preparedOperations = operations; return []; },
-    () => ({ needsType: false, needsPlanningType: false }),
+    () => ({ needsType: false, needsPlanningType: false, needsManualPrice: false }),
     () => "signature", () => true, () => true,
     async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
   );
@@ -1687,7 +1688,7 @@ test("generar plan no pide datos de OTs fuera del alcance y reutiliza configurac
   )(
     state, window, (operations) => operations, (job) => job.ops,
     async () => { dialogs += 1; }, () => [],
-    () => ({ needsType: false, needsPlanningType: false }),
+    () => ({ needsType: false, needsPlanningType: false, needsManualPrice: false }),
     () => "signature", () => true, () => false,
     async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
   );
@@ -1938,6 +1939,43 @@ test("operationToRow resuelve CT por descripcion y cantidad desde la OT cuando l
   assert.deepEqual(preserved, ["5458", 12, 15]);
 });
 
+test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPriceForOt cae a precio manual si ambos son 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const priceSource = app.slice(
+    app.indexOf("function invoiceUnitPriceForOt("),
+    app.indexOf("function effectiveWorkOrderDueDate(", app.indexOf("function invoiceUnitPriceForOt(")),
+  );
+  const workOrders = {
+    "100": { lastSalePrice: 500, averageSalePrice: 784.5 },
+    "200": { lastSalePrice: 40, averageSalePrice: 700 },
+    "300": { lastSalePrice: 0, averageSalePrice: 0 },
+  };
+  const invoiceUnitPriceForOt = Function(
+    "workOrderForOt", "effectiveUnitPriceForOt", "amountForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOtRef",
+    `${priceSource}; return invoiceUnitPriceForOt;`,
+  )((ot) => workOrders[ot]);
+  const effectiveUnitPriceForOt = Function(
+    "workOrderForOt", "invoiceUnitPriceForOt", "effectiveUnitPriceForOt", "amountForOt",
+    "pendingPiecesForWorkOrder", "articleConfigurationValue", "articleForOt",
+    `${priceSource}; return effectiveUnitPriceForOt;`,
+  )(
+    (ot) => workOrders[ot],
+    (ot) => workOrders[ot] && Math.max(workOrders[ot].lastSalePrice || 0, workOrders[ot].averageSalePrice || 0),
+    () => 0,
+    () => 0,
+    () => 0,
+    () => ({ manualUnitPrice: 99 }),
+    () => "ART",
+  );
+
+  assert.equal(invoiceUnitPriceForOt("100"), 784.5);
+  assert.equal(invoiceUnitPriceForOt("200"), 700);
+  assert.equal(invoiceUnitPriceForOt("300"), 0);
+  assert.equal(effectiveUnitPriceForOt("100"), 784.5);
+  assert.equal(effectiveUnitPriceForOt("300"), 99);
+});
+
 test("importJson adopta y limpia operationCatalogWarning", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const importSource = app.slice(
@@ -2080,4 +2118,52 @@ test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae e
 
   const rawLog = comment({ log: "PLANNER_CORE_V2 SIN_ANTECEDENTE -> 5 x 6", herramental: "5 x 6" });
   assert.equal(rawLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+});
+
+test("skills.html se publica conectado al bridge con resaltado de operaciones sin operador", async () => {
+  const result = await buildProject();
+  const skills = await readFile(path.join(result.siteDir, "skills.html"), "utf8");
+  const distSkills = await readFile(path.join(result.distDir, "IndexSkills.html"), "utf8");
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
+
+  assert.match(skills, /PPAppsScriptBridge/);
+  assert.match(skills, /getAppState/);
+  assert.match(skills, /saveSkillState/);
+  assert.match(skills, /matrix-row-no-operator/);
+  assert.match(skills, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
+  assert.doesNotMatch(skills, /\{\{[A-Z0-9_]+\}\}/);
+  assert.doesNotMatch(skills, /__PP_APPS_SCRIPT_WEB_APP_URL__/);
+  assert.match(distSkills, /PPAppsScriptBridge/);
+  assert.match(distSkills, /matrix-row-no-operator/);
+  assert.doesNotMatch(distSkills, /\{\{[A-Z0-9_]+\}\}/);
+  assert.match(app, /hasAssignedOperator/);
+  assert.match(app, /matrix-row-no-operator/);
+  assert.match(styles, /\.matrix-row-no-operator td \{ background: #fdecea;/);
+  assert.match(styles, /\.matrix-table tbody tr\.matrix-row-no-operator td:first-child \{ background: #fdecea; box-shadow: inset 3px 0 0 #d9534f;/);
+});
+
+test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const payloadStart = skills.indexOf("function matrixSavePayload()");
+  const payloadEnd = skills.indexOf("function setStatus(", payloadStart);
+  const payload = skills.slice(payloadStart, payloadEnd);
+
+  assert.match(payload, /settings: clone\(state\.settings \|\| \{\}\)/);
+  assert.match(payload, /capacityMinutes: state\.capacityMinutes/);
+  assert.match(payload, /operationCatalog: clone\(state\.operationCatalog \|\| \[\]\)/);
+  assert.match(payload, /operators: \[\.\.\.\(state\.operators \|\| \[\]\)\]/);
+  assert.match(payload, /excludedCapabilities: normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.match(payload, /revision: Number\(state\.revision \|\| 0\)/);
+  assert.match(performanceClient, /function baseSavePayload\(\)[\s\S]*settings: clone\(state\.settings \|\| \{\}\)/);
+  assert.match(performanceClient, /function matrixSavePayload\(\)\s*\{[^}]*\.\.\.baseSavePayload\(\)/);
+  assert.match(skills, /CONFLICT_REVISION/);
+  assert.match(skills, /await loadState\(\{ silent: false \}\)/);
+  assert.match(skills, /matrix-row-no-operator/);
+  assert.match(skills, /Sin operador/);
+  assert.doesNotMatch(skills, /data-remove-operator=/);
+  assert.doesNotMatch(skills, /data-remove-capability=/);
+  assert.doesNotMatch(skills, /data-add-operator/);
+  assert.doesNotMatch(skills, /operator-name-input/);
 });

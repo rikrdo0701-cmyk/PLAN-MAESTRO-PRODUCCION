@@ -104,8 +104,8 @@ sincronización ligera, completa y programación (ver `docs/REGLAS.md`).
 
 | Constante | Valor | Dónde |
 |---|---|---|
-| `PP_APP_VERSION` | `2.41.0` | `src/server/01-code.js` |
-| `PP_SCHEMA_VERSION` | `29` | `src/server/01-code.js`; `APP_SCHEMA_VERSION` en frontend |
+| `PP_APP_VERSION` | `2.43.0` | `src/server/01-code.js` |
+| `PP_SCHEMA_VERSION` | `31` | `src/server/01-code.js`; `APP_SCHEMA_VERSION` en frontend |
 | Versión npm | `2.41.1` | `package.json` |
 | `__PP_FLUID_BUILD__` | `fluid-2026-07-11-03` | marcador de optimización (frontend) |
 | `LOCAL_CACHE_IDENTITY` | `plan-produccion-cache-v4` | identidad de caché local |

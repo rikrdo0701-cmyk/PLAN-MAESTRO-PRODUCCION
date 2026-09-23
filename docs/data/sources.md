@@ -97,9 +97,10 @@ Headers: `KEY, CT, OPERACION, ORIGEN, ACTIVA`.
 
 ## ORDENES_TRABAJO
 
-Headers (18): `ID, WO_INTERNAL_ID, OT, ARTICULO, DESCRIPCION, FOTO_URL, FECHA_INICIO_NS,
+Headers (19): `ID, WO_INTERNAL_ID, OT, ARTICULO, DESCRIPCION, FOTO_URL, FECHA_INICIO_NS,
 FECHA_FIN_NS, FECHA_VENCIMIENTO, FECHA_ENTREGA_AJUSTADA, CANTIDAD, ESTATUS, CLIENTE,
-CANT_ENSAMBLADA, CANT_PENDIENTE, PRECIO_PROMEDIO_VENTA, PRECIO_DESDE, PRECIO_HASTA`.
+CANT_ENSAMBLADA, CANT_PENDIENTE, PRECIO_PROMEDIO_VENTA, PRECIO_DESDE, PRECIO_HASTA,
+PRECIO_ULTIMA_VENTA`.
 
 - Readers: `PP_readState_` → `PP_mapWorkOrder_`; `syncNetSuiteWorkOrdersLite`;
   `DASH_getOrdenesRows_` (dashboard-control-prod: cuadrante 2 "Saldrán"; JOIN por OT
@@ -139,6 +140,9 @@ Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, ACTUALIZADO`.
 
 - Readers: `PP_readState_` → `PP_buildArticleConfigurations_`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `savePlanningStateOptimized`.
+- Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
+  `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0, la preparación de la OT abre el
+  modal con `ot_manual_price` obligatorio (`required`, `min="0.01"`).
 
 ## MATRIZ
 
@@ -275,7 +279,7 @@ TIEMPO_SETUP, TIEMPO_PROD, FECHA_INICIO, HORA_INICIO, FECHA_FIN, HORA_FIN, TIPO_
 ESTATUS, LOG, DIAS_SUBCONTRATO, KIT_PENDIENTE, AUTO_FROZEN, HERRAMENTAL_ORIGEN, KIT_ORIGEN,
 HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO, PRECIO, MONTO`.
 `PRECIO` = precio unitario de la OT (columna `PRECIO_UNITARIO` del snapshot, o
-`ORDENES_TRABAJO.PRECIO_PROMEDIO_VENTA` / `PRECIO_MANUAL` si no viene en la operación);
+`max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA)` / `PRECIO_MANUAL` si no viene en la operación);
 `MONTO` = `PRECIO × piezas pendientes` de la OT (monto de liberación, RULE-MON-001).
 
 - Readers: descarga externa del usuario.
@@ -441,6 +445,7 @@ Headers: `ID, Artículo, Material, Descripción, Cantidad, Emitido, Pendiente po
 | Script | Deploy | Body | Uso |
 |---|---|---|---|
 | `1764` | `1` | `{ table: 'WO_LISTA', locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | OTs (folios, internal IDs, cantidades, fechas, precios) |
+| `1766` | `1` | `{ table: 'REQ_FIFO', pageIndex, pageSize: 200 }` | Precios de venta por artículo (`_ITEM_ID`, `PRECIO BASE MNX`, `CANTIDAD ORDEN`, `FECHA DE ORDEN`): última venta + promedio ponderado 6m (`PP_fetchSalesPricesRestlet_`) |
 | `1762` | `17` | `{ locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | Operaciones programadas de la planta |
 | `1763` | `14` | `{ locationId: 1, onlyOpen: true, maxWOs: 50000, pageIndex, pageSize: 200 }` | Materiales |
 | `2080` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`) |
@@ -458,9 +463,7 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
    `NVL(routing.isinactive,'F')='F'` y `NVL(center.isinactive,'F')='F'`. Excluye operaciones
    especiales `SUBCONTRATO/CROMADO/METOKOTE/MAKA/GALVANIZADO`. Caché en `CacheService`
    (`NS_OPERATION_CATALOG_V1_{accountId}_{locationId}`, TTL 3600 s) + cooldown 1 h.
-2. **Promedios de facturación** (`PP_fetchInvoiceSalesAverages_`): ventana 6 meses
-   (mínimo `2026-02-01`), `CustInvc` no anuladas, promedio `ABS(SUM(netamount))/ABS(SUM(quantity))`.
-3. **Ruta directa de OT** (`18-planning-work-order-service.js`):
+2. **Ruta directa de OT** (`18-planning-work-order-service.js`):
    `manufacturingoperationtask WHERE workorder='...'` y lookup `transaction WHERE type='WorkOrd'
    AND tranid='...'`. Por operación se calcula `'Tiempo estimado (min)' = setuptime + runrate ×
    cantidad pendiente de la OT (`PP_pendingWorkOrderQuantity_` = Cantidad − Cantidad ensamblada)

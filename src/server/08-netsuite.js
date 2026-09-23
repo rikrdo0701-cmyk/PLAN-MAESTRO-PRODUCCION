@@ -56,14 +56,14 @@ function PP_fetchNetSuitePlantData_() {
   const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let invoiceAverages = { byItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
+  let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
   try {
-    invoiceAverages = PP_fetchInvoiceSalesAverages_(config, invoiceWindow);
+    salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
   } catch (error) {
-    invoiceAverages.warning = String(error.message || error);
+    salesPrices.warning = String(error.message || error);
   }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applyInvoiceAverages_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations), invoiceAverages
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applySalesPrices_(
+    PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations), salesPrices
   ));
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
   PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: workOrderCatalog.length });
@@ -78,7 +78,7 @@ function PP_fetchNetSuitePlantData_() {
     materials: materials,
     operationCatalog: operationCatalogResult.items,
     operationCatalogWarning: operationCatalogResult.warning,
-    invoicePriceWindow: { from: invoiceAverages.from, to: invoiceAverages.to, warning: invoiceAverages.warning || '' },
+    invoicePriceWindow: { from: salesPrices.from, to: salesPrices.to, warning: salesPrices.warning || '' },
     fetchedAt: new Date().toISOString()
   };
 }
@@ -87,19 +87,19 @@ function PP_fetchNetSuiteWorkOrdersData_() {
   const config = PP_netSuiteConfig_();
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let invoiceAverages = { byItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
+  let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
   try {
-    invoiceAverages = PP_fetchInvoiceSalesAverages_(config, invoiceWindow);
+    salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
   } catch (error) {
-    invoiceAverages.warning = String(error.message || error);
+    salesPrices.warning = String(error.message || error);
   }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applyInvoiceAverages_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, []), invoiceAverages
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applySalesPrices_(
+    PP_buildWorkOrderCatalog_(workOrders.rows, []), salesPrices
   ));
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
   return {
     workOrders: workOrderCatalog,
-    invoicePriceWindow: { from: invoiceAverages.from, to: invoiceAverages.to, warning: invoiceAverages.warning || '' },
+    invoicePriceWindow: { from: salesPrices.from, to: salesPrices.to, warning: salesPrices.warning || '' },
     fetchedAt: new Date().toISOString()
   };
 }
@@ -459,55 +459,83 @@ function PP_resolveOperationCatalog_(current, snapshot, plantOperations) {
   return PP_buildOperationCatalog_(plantOperations);
 }
 
-function PP_fetchInvoiceSalesAverages_(config, window) {
-  const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-  const query = { limit: 1000, offset: 0 };
-  const sql = [
-    "SELECT tl.item AS item_id, BUILTIN.DF(tl.item) AS item_name,",
-    "ABS(SUM(NVL(tl.quantity, 0))) AS billed_quantity,",
-    "ABS(SUM(NVL(tl.netamount, 0) * NVL(t.exchangerate, 1))) AS net_amount",
-    "FROM transaction t",
-    "INNER JOIN transactionline tl ON tl.transaction = t.id",
-    "WHERE t.type = 'CustInvc'",
-    "AND NVL(t.voided, 'F') = 'F'",
-    "AND tl.mainline = 'F' AND tl.taxline = 'F' AND tl.iscogs = 'F'",
-    "AND tl.item IS NOT NULL",
-    "AND t.trandate >= TO_DATE('" + window.from + "', 'YYYY-MM-DD')",
-    "AND t.trandate <= TO_DATE('" + window.to + "', 'YYYY-MM-DD')",
-    "GROUP BY tl.item, BUILTIN.DF(tl.item)"
-  ].join(' ');
-  const finalUrl = endpoint + '?limit=1000&offset=0';
-  const response = UrlFetchApp.fetch(finalUrl, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: PP_oauthHeader_('POST', endpoint, query, config),
-      Prefer: 'transient'
-    },
-    payload: JSON.stringify({ q: sql }),
-    muteHttpExceptions: true
+function PP_fetchSalesPricesRestlet_(config, window) {
+  const page = PP_fetchRestletPages_({ script: '1766', deploy: '1' }, { table: 'REQ_FIFO' }, config, 100);
+  const lastByItem = {};
+  const lastDateByItem = {};
+  const sumAmt = {};
+  const sumQty = {};
+  const cutoff = new Date(window.from + 'T00:00:00');
+  (page.rows || []).forEach(function(row) {
+    const itemId = String(row._ITEM_ID || '').trim();
+    const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM']) || '').trim();
+    const price = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
+    const qty = Number(PP_pick_(row, ['CANTIDAD ORDEN', 'cantidad_orden']) || 0);
+    const orderedAt = PP_parseRestletDate_(PP_pick_(row, ['FECHA DE ORDEN', 'fecha_orden']));
+    const keys = [];
+    if (itemId) keys.push(PP_normalizeKey_(itemId));
+    if (itemName) keys.push(PP_normalizeKey_(itemName));
+    if (!keys.length) return;
+    if (orderedAt && isFinite(price)) {
+      keys.forEach(function(key) {
+        if (!lastDateByItem[key] || orderedAt.getTime() > lastDateByItem[key].getTime()) {
+          lastDateByItem[key] = orderedAt;
+          lastByItem[key] = price;
+        }
+      });
+    }
+    if (orderedAt && !isNaN(orderedAt.getTime()) && orderedAt.getTime() >= cutoff.getTime() && qty > 0 && price > 0) {
+      keys.forEach(function(key) {
+        sumAmt[key] = (sumAmt[key] || 0) + (price * qty);
+        sumQty[key] = (sumQty[key] || 0) + qty;
+      });
+    }
   });
-  const status = response.getResponseCode();
-  const raw = response.getContentText();
-  if (status < 200 || status >= 300) throw new Error('SuiteQL facturacion: ' + status + ' ' + raw.slice(0, 500));
-  const json = JSON.parse(raw || '{}');
-  const byItem = {};
-  (json.items || []).forEach(function(row) {
-    const itemName = String(row.item_name || row.itemName || '').trim();
-    const quantity = Math.abs(Number(row.billed_quantity || row.billedQuantity || 0));
-    const amount = Math.abs(Number(row.net_amount || row.netAmount || 0));
-    if (!itemName || !(quantity > 0) || !(amount > 0)) return;
-    byItem[PP_normalizeKey_(itemName)] = amount / quantity;
+  const avgByItem = {};
+  Object.keys(sumAmt).forEach(function(key) {
+    if (sumQty[key] > 0) avgByItem[key] = sumAmt[key] / sumQty[key];
   });
-  return { byItem: byItem, from: window.from, to: window.to, warning: '' };
+  return { lastByItem: lastByItem, avgByItem: avgByItem, from: window.from, to: window.to, warning: '' };
 }
 
-function PP_applyInvoiceAverages_(workOrders, averages) {
+function PP_parseRestletDate_(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  let match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (match) {
+    let day = Number(match[1]);
+    let month = Number(match[2]);
+    const year = Number(match[3]);
+    let hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const meridiem = String(match[6]).toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    return new Date(year, month - 1, day, hour, minute, 0, 0);
+  }
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), 0, 0, 0, 0);
+  match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function PP_applySalesPrices_(workOrders, prices) {
   return (workOrders || []).map(function(item) {
-    const price = Number((averages.byItem || {})[PP_normalizeKey_(item.item)] || 0);
-    item.averageSalePrice = price > 0 ? price : 0;
-    item.averageSalePriceFrom = averages.from || '';
-    item.averageSalePriceTo = averages.to || '';
+    const keys = [];
+    if (item.itemId) keys.push(PP_normalizeKey_(item.itemId));
+    if (item.item) keys.push(PP_normalizeKey_(item.item));
+    let last = 0;
+    let avg = 0;
+    keys.forEach(function(key) {
+      if (!last) last = Number((prices.lastByItem || {})[key] || 0);
+      if (!avg) avg = Number((prices.avgByItem || {})[key] || 0);
+    });
+    item.lastSalePrice = last > 0 ? last : 0;
+    item.averageSalePrice = avg > 0 ? avg : 0;
+    item.averageSalePriceFrom = prices.from || '';
+    item.averageSalePriceTo = prices.to || '';
     return item;
   });
 }
@@ -641,6 +669,7 @@ function PP_buildWorkOrderCatalog_(rows, operationRows) {
       id: 'wo-' + (workOrderId || ot || (index + 1)),
       workOrderId: workOrderId,
       ot: ot,
+      itemId: String(PP_pick_(row, ['Item Internal ID', 'item_internal_id', 'itemid', 'Item ID', 'item_id', '_ITEM_ID']) || '').trim(),
       item: String(PP_pick_(row, ['Articulo', 'Item', 'item_name']) || '').trim(),
       description: String(PP_pick_(row, ['Descripcion', 'Description']) || '').trim(),
       photoUrl: String(PP_pick_(row, ['Foto URL', 'Imagen URL', 'URL de imagen', 'Image URL', 'image_url', 'item_image']) || '').trim(),

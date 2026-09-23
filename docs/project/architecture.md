@@ -90,7 +90,8 @@ book/hojas) viven en `PropertiesService` (Script Properties). Ver
 | Integración | Mecanismo | Ver |
 |---|---|---|
 | NetSuite (RESTlets propios) | `1764` OTs, `1762` operaciones, `1763` materiales, `2080` inspección; OAuth 1.0a HMAC-SHA256 | `08-netsuite.js`, `docs/data/sources.md#Parte D` |
-| NetSuite (SuiteQL) | catálogo maestro de operaciones; promedios de facturación; rutas directas de OT | `08-netsuite.js`, `18-planning-work-order-service.js` |
+| NetSuite (SuiteQL) | catálogo maestro de operaciones; rutas directas de OT | `08-netsuite.js`, `18-planning-work-order-service.js` |
+| NetSuite (RESTlet 1766) | precios de venta por artículo (REQ_FIFO: última venta + promedio 6m) | `08-netsuite.js` |
 | NetSuite (REST Record API) | solo pipeline legacy (`TRABAJOS FINAL.js`, `MATERIALES FINAL.js`) | `docs/data/sources.md#Parte C` |
 | Google Sheets | workbook principal + workbook de inspección | `02-storage.js`, `16-inspection-service.js` |
 | Google Drive | fotos de artículos | `09-photos.js` |

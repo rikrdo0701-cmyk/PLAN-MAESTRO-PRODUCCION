@@ -51,8 +51,8 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 - `OT` → `OPERACIONES.OT`, `MATERIALES.OT`, `CONFIGURACION_OT.OT`, `ESTADOS_OPERACION_PLAN.OT`.
 - `WO_INTERNAL_ID` → `MATERIALES.WO_INTERNAL_ID`.
 - `ARTICULO` → `CONFIGURACION_ARTICULO.ARTICULO`; `ARTICULO` → `Tramos.Articulo` (inspección).
-- Precios: `PRECIO_PROMEDIO_VENTA`/`PRECIO_DESDE`/`PRECIO_HASTA` provienen del promedio de
-  facturación NetSuite (ver §4.3).
+- Precios: `PRECIO_PROMEDIO_VENTA`/`PRECIO_ULTIMA_VENTA`/`PRECIO_DESDE`/`PRECIO_HASTA` provienen
+  del Restlet 1766 `REQ_FIFO` (última venta y promedio ponderado 6m; ver §4.1).
 - Estados terminales (`CERRADA, CERRADO, CLOSED, CANCELADA, CANCELADO`) no se restauran.
 
 ### 1.5 `CONFIGURACION_OT`
@@ -73,7 +73,10 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 
 - `ARTICULO` → `ORDENES_TRABAJO.ARTICULO` (1:1 por artículo).
 - `TIPO_OT` → `TIPOS_OT.ID` (`tipo-oem`, `tipo-especial`, `tipo-linea`).
-- `PRECIO_MANUAL` override del precio de venta.
+- `PRECIO_MANUAL` override del precio de venta; si `ORDENES_TRABAJO` tiene
+  `PRECIO_ULTIMA_VENTA` y `PRECIO_PROMEDIO_VENTA` en 0 y `PRECIO_MANUAL` en 0,
+  la preparación de la OT exige capturar un precio > 0 en el modal
+  (`needsManualPrice`, RULE-FIN-001).
 
 ### 1.7 `MATERIALES`
 
@@ -164,6 +167,7 @@ Operaciones Programadas → Plan Maestro.
 | RESTlet | → Hoja/entidad | Mapeo clave |
 |---|---|---|
 | `1764` `WO_LISTA` | `ORDENES_TRABAJO` | `tranid`/`WO Folio` → `OT`; internal id → `WO_INTERNAL_ID`; item → `ARTICULO`; quantities/dates/status/customer/prices → resto de columnas |
+| `1766` `REQ_FIFO` | `ORDENES_TRABAJO.PRECIO_ULTIMA_VENTA` + `PRECIO_PROMEDIO_VENTA` | `_ITEM_ID`/nombre → OT por `itemId`/`ARTICULO`; `PRECIO BASE MNX`/`FECHA DE ORDEN`/`CANTIDAD ORDEN` → última venta y promedio 6m |
 | `1762` operaciones | `OPERACIONES` | `ID (link)` → `ID`; `Orden de trabajo` → `OT`; secuencia/CT/times/resources → `SECUENCIA`, `CT`, `TIEMPO_*`, `OPERADOR`/`MAQUINA` |
 | `1763` materiales | `MATERIALES` | assembly → `ENSAMBLE`; item → `COMPONENTE_ID`/`COMPONENTE`; quantity → `REQUERIDO`/`EMITIDO`/`PENDIENTE`; OT/WO → `OT`/`WO_INTERNAL_ID` |
 | `2080` `WO_INSPECCION` | inspección | `WO Folio`/`tranid` → folio; detalle de ruta y trabajo |
@@ -176,7 +180,6 @@ La resolución de OT en NetSuite acepta los alias `WO Folio`, `Orden de trabajo`
 | Consulta | → Destino | Nota |
 |---|---|---|
 | Catálogo maestro de operaciones (`manufacturingroutingstep` JOIN ruta/centro) | `CATALOGO_OPERACIONES` (KEY = `CT::OPERACION`) y se fusiona en `CAPACIDADES` | excluye SUBCONTRATO/CROMADO/METOKOTE/MAKA/GALVANIZADO; caché `NS_OPERATION_CATALOG_V1_...` |
-| Promedios de facturación 6 meses | `ORDENES_TRABAJO.PRECIO_PROMEDIO_VENTA`, `PRECIO_DESDE`, `PRECIO_HASTA` | `CustInvc` no anuladas |
 | `manufacturingoperationtask WHERE workorder=...` + `transaction WHERE type='WorkOrd'` | ruta directa de OT (inspección/planning) | — |
 
 ### 4.3 REST Record API v1 (legacy `* FINAL.js`)

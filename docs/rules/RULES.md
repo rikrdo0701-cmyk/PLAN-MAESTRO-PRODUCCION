@@ -144,6 +144,9 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-MAT-007` | Exclusiones globales (`excludedCapabilities`) | DOCUMENTADA | spec 2026-07-26 |
 | `RULE-MAT-008` | Memorización de operaciones incluidas | IMPLEMENTADA | spec 2026-07-27 |
 | `RULE-MAT-009` | Catálogo con caché 1 h | IMPLEMENTADA | spec 2026-07-27 |
+| `RULE-MAT-010` | Edición local de capacidades sobrevive al import remoto | IMPLEMENTADA | bug 2026-09-19 |
+| `RULE-MAT-011` | Operaciones sin operador resaltadas en rojo tenue | IMPLEMENTADA | decisión 2026-09-23 |
+| `RULE-MAT-012` | Vista skills comparte el mismo almacén Google Sheets | IMPLEMENTADA | decisión 2026-09-23 |
 
 ## Balanceo
 
@@ -183,8 +186,8 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 
 | ID | Nombre | Estado | Fuente |
 |---|---|---|---|
-| `RULE-MON-001` | Monto de liberación en el export CSV del plan | DOCUMENTADA | definición de usuario 2026-08-17; `app.js`; `planning-workflow-core.js` |
-| `RULE-FIN-001` | Precios y montos en MXN: TC por factura desde SuiteQL | IMPLEMENTADA | bug usuario 2026-09-04 (D66-2896); decisión usuario 2026-09-05; `08-netsuite.js`; `02-storage.js`; `tests/netsuite-operation-catalog.test.mjs` |
+| `RULE-MON-001` | Monto de liberación en el export CSV del plan | DOCUMENTADA | definición de usuario 2026-08-17; cambio precio unitario 2026-09-23; `app.js`; `planning-workflow-core.js` |
+| `RULE-FIN-001` | Precios de venta desde Restlet 1766 REQ_FIFO (max última/promedio 6m); modal obligatorio si las 3 fuentes son 0 | IMPLEMENTADA | usuario 2026-09-23 (solo restlet 1766; refuerzo needsManualPrice); `08-netsuite.js`; `02-storage.js`; `app.js`; `tests/netsuite-operation-catalog.test.mjs`; `tests/build.test.mjs` |
 
 ## Pendientes y ambigüedades
 

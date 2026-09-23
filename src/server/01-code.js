@@ -1,5 +1,5 @@
-const PP_APP_VERSION = '2.42.0';
-const PP_SCHEMA_VERSION = 30;
+const PP_APP_VERSION = '2.43.0';
+const PP_SCHEMA_VERSION = 31;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
 function PP_dateToIso_(value) {

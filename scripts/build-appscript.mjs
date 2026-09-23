@@ -409,7 +409,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -421,8 +421,15 @@ export async function buildProject() {
     read("src/web/shared/performance-client.js"),
     read("src/web/shared/fluid-client.js"),
     read("src/web/inspection/inspection.css"),
+    read("src/web/skills/IndexSkills.html"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
+  let skillsHtml = skillsSource
+    .replace("{{BRIDGE_CLIENT}}", () => backendBridge.trimEnd())
+    .replace("{{PLANNER_CORE}}", () => plannerCore.trimEnd());
+  if (/{{[A-Z0-9_]+}}/.test(skillsHtml)) {
+    throw new Error("Quedaron marcadores sin reemplazar en IndexSkills.html");
+  }
   const app = patchPlanningApp(appSource);
   const appRuntimeClient = patchPerformanceClient(performanceClient);
   const runtimeClients = `${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
@@ -506,9 +513,9 @@ self.addEventListener("fetch", (event) => {
 });
 `, "utf8"),
     cp(path.join(projectRoot, "src/web/operator/IndexOperator.html"), path.join(distDir, "IndexOperator.html")),
-    cp(path.join(projectRoot, "src/web/skills/IndexSkills.html"), path.join(distDir, "IndexSkills.html")),
+    writeFile(path.join(distDir, "IndexSkills.html"), skillsHtml, "utf8"),
     cp(path.join(projectRoot, "src/web/operator/IndexOperator.html"), path.join(siteDir, "operator.html")),
-    cp(path.join(projectRoot, "src/web/skills/IndexSkills.html"), path.join(siteDir, "skills.html")),
+    writeFile(path.join(siteDir, "skills.html"), skillsHtml, "utf8"),
     cp(path.join(projectRoot, "src/web/bridge/Bridge.html"), path.join(distDir, "Bridge.html")),
     cp(path.join(projectRoot, "appsscript.json"), path.join(distDir, "appsscript.json")),
   ]);

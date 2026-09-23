@@ -30,7 +30,7 @@ relevante por primera vez debe añadirse aquí.
 | **Subcontrato** | Proceso externo (cromado/metokote/maka) con `DIAS_HABILES`; una OT puede tener operaciones de subcontrato. |
 | **Planta MM del Llano** | Ubicación NetSuite de la planta (`locationId = 1`, `PP_PLANT_NAME`); filtro fijo de sincronización. |
 | **RESTlet** | Script NetSuite expuesto como servicio HTTP (1764/1762/1763/2080); el backend los invoca con OAuth 1.0a. |
-| **SuiteQL** | Consulta SQL sobre NetSuite vía REST (catálogo maestro, promedios de facturación, rutas directas de OT). |
+| **SuiteQL** | Consulta SQL sobre NetSuite vía REST (catálogo maestro, rutas directas de OT). |
 | **OAuth 1.0a** | Esquema de autenticación HMAC-SHA256 para NetSuite (`PP_oauthHeader_`). |
 | **Bridge** | Página-iframe de Apps Script (`Bridge.html`) que traduce `window.postMessage` → `google.script.run`. |
 | **FRONTEND_ORIGIN** | Origen permitido del frontend (`https://rikrdo0701-cmyk.github.io`) validado por el puente. |

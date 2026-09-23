@@ -33,7 +33,7 @@
       "integration_id": "INT-NETSUITE",
       "name": "netsuite",
       "status": "active",
-      "detail": "ERP fuente de verdad: RESTlets 1764/1762/1763/2080, SuiteQL (catálogo maestro, promedios, rutas directas) y REST Record API (legacy). OAuth 1.0a HMAC-SHA256; locationId=1.",
+      "detail": "ERP fuente de verdad: RESTlets 1764/1766 (REQ_FIFO precios de venta)/1762/1763/2080, SuiteQL (catálogo maestro, rutas directas) y REST Record API (legacy). OAuth 1.0a HMAC-SHA256; locationId=1.",
       "hosts": "data"
     },
     {

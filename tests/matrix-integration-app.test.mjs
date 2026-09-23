@@ -490,4 +490,54 @@ test("la app conserva el concepto OPERADOR de CALENDARIO y mapea su recurso al n
 
   const fallbackFromBackend = call({ concept: "OPERADOR", machine: "PUNTEADOR", fechaInicio: "2026-08-22", fechaFin: "2026-08-22" });
   assert.equal(fallbackFromBackend.calendarExceptions[0].resource, "PUNTEADOR");
+  assert.equal(fallbackFromBackend.calendarExceptions[0].machine, "");
+});
+
+test("renderMatrix marca en rojo tenue la fila sin operador habilitado", () => {
+  const capability = { key: "5458::CORTE_DE_TUBO", ct: "5458", label: "CORTE DE TUBO", count: 3 };
+  const state = {
+    operators: ["CORTADOR", "DOBLADOR"],
+    matrixSearch: "",
+    excludedCapabilities: [],
+    operationRules: {},
+    matrix: { [capability.key]: [] },
+    hiddenCapabilities: [],
+    capacityModes: {},
+    operatorPerformance: {},
+  };
+  const els = {
+    matrixWrap: { innerHTML: "", querySelectorAll: () => [] },
+    matrixSearchInput: { value: "" },
+    matrixSearchCount: { textContent: "" },
+    clearMatrixSearchBtn: { disabled: false },
+  };
+  const isOperatorSkilledForCapability = (cap, operator) =>
+    (state.matrix[cap.key] || []).includes(operator);
+  const renderMatrix = Function(
+    "state", "els", "window", "renderOperationCatalogSelect", "getCapabilityRows",
+    "capacityModeForCapability", "escapeHtml", "isOperatorSkilledForCapability",
+    "TOOL_CHANGE_CAPABILITY", "normalizeHeader", "operatorPerformanceForOperator",
+    `${sourceBetween("function renderMatrix()", "function renderOperationCatalogSelect()")}; return renderMatrix;`,
+  )(
+    state,
+    els,
+    { PlannerCore },
+    () => {},
+    () => [capability],
+    () => "FINITA",
+    (value) => String(value),
+    isOperatorSkilledForCapability,
+    { key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL", ct: "TOOL_CHANGE", label: "CAMBIO DE HERRAMENTAL" },
+    (value) => normalizeStatus(value).replace(/\s+/g, "_"),
+    () => 100,
+  );
+
+  renderMatrix();
+  assert.match(els.matrixWrap.innerHTML, /matrix-row-no-operator/);
+  assert.match(els.matrixWrap.innerHTML, /Sin operador/);
+
+  state.matrix[capability.key] = ["CORTADOR"];
+  renderMatrix();
+  assert.doesNotMatch(els.matrixWrap.innerHTML, /matrix-row-no-operator/);
+  assert.doesNotMatch(els.matrixWrap.innerHTML, /Sin operador/);
 });

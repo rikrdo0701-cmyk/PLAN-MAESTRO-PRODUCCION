@@ -123,24 +123,56 @@ const catalogPage = {
   }),
 };
 
-const invoiceAveragesPage = {
+const salesPricesPage = {
   body: JSON.stringify({
-    items: [
-      { item_id: 1 === 1 ? 1001 : 0, item_name: "D66-2896", billed_quantity: 2, net_amount: 1569.1846734 },
+    ok: true,
+    headers: ["_ITEM_ID", "item_name", "PRECIO BASE MNX", "CANTIDAD ORDEN", "FECHA DE ORDEN"],
+    rows: [
+      [1001, "D66-2896", 40, 10, "10/01/2026 10:00 AM"],
+      [1001, "D66-2896", 100, 5, "10/06/2026 10:00 AM"],
+      [1001, "D66-2896", 200, 1, "10/09/2026 10:00 AM"],
     ],
+    hasMore: false,
   }),
 };
 
-test("promedios de venta convierten facturas no-MXN a MXN via exchangerate en SuiteQL", () => {
-  const { context, requests } = load([invoiceAveragesPage]);
+test("precios de venta salen del restlet 1766 REQ_FIFO (ultima venta y promedio ponderado 6m)", () => {
+  const { context, requests } = load([salesPricesPage]);
 
-  const averages = context.PP_fetchInvoiceSalesAverages_(config, { from: "2026-03-05", to: "2026-09-05" });
+  const prices = context.PP_fetchSalesPricesRestlet_(config, { from: "2026-03-05", to: "2026-09-10" });
 
-  const payload = JSON.parse(requests[0].options.payload);
-  assert.match(payload.q, /\* NVL\(t\.exchangerate, 1\)/);
-  assert.ok(Math.abs(averages.byItem["D66-2896"] - 784.5923367) < 1e-6);
-  assert.equal(averages.from, "2026-03-05");
-  assert.equal(averages.to, "2026-09-05");
+  assert.match(requests[0].url, /script=1766/);
+  assert.match(requests[0].options.payload, /"table":"REQ_FIFO"/);
+  assert.equal(prices.lastByItem["1001"], 200);
+  assert.equal(prices.lastByItem["D66-2896"], 200);
+  assert.ok(Math.abs(prices.avgByItem["1001"] - (100 * 5 + 200 * 1) / 6) < 1e-9);
+  assert.equal(prices.from, "2026-03-05");
+  assert.equal(prices.to, "2026-09-10");
+});
+
+test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", () => {
+  const { context } = load();
+  const prices = {
+    lastByItem: { "1001": 500, "D66-2896": 500, "SOLO-NOMBRE": 40 },
+    avgByItem: { "1001": 784.5, "D66-2896": 784.5, "SOLO-NOMBRE": 700 },
+    from: "2026-03-05",
+    to: "2026-09-10",
+  };
+
+  const applied = context.PP_applySalesPrices_([
+    { itemId: "1001", item: "D66-2896" },
+    { item: "SOLO-NOMBRE" },
+    { item: "SIN-PRECIO" },
+  ], prices);
+
+  assert.equal(applied[0].lastSalePrice, 500);
+  assert.equal(applied[0].averageSalePrice, 784.5);
+  assert.equal(applied[1].lastSalePrice, 40);
+  assert.equal(applied[1].averageSalePrice, 700);
+  assert.equal(applied[2].lastSalePrice, 0);
+  assert.equal(applied[2].averageSalePrice, 0);
+  assert.equal(applied[0].averageSalePriceFrom, "2026-03-05");
+  assert.equal(applied[0].averageSalePriceTo, "2026-09-10");
 });
 
 test("catálogo maestro reutiliza caché por una hora", () => {
@@ -388,9 +420,9 @@ test("sincronizaciones completa y de planeación usan el catálogo cacheado", ()
   context.PP_buildPlantFilterFromWorkOrders_ = () => ({});
   context.PP_belongsToPlant_ = () => true;
   context.PP_invoiceAverageWindow_ = () => ({ from: "2026-02-01", to: "2026-07-26" });
-  context.PP_fetchInvoiceSalesAverages_ = () => ({ byItem: {}, from: "2026-02-01", to: "2026-07-26", warning: "" });
+  context.PP_fetchSalesPricesRestlet_ = () => ({ lastByItem: {}, avgByItem: {}, from: "2026-02-01", to: "2026-07-26", warning: "" });
   context.PP_buildWorkOrderCatalog_ = () => [];
-  context.PP_applyInvoiceAverages_ = (items) => items;
+  context.PP_applySalesPrices_ = (items) => items;
   context.PP_enrichWorkOrderPhotos_ = (items) => items;
   context.PP_assertNetSuiteRows_ = () => {};
 

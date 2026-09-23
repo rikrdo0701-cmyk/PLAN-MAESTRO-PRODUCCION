@@ -18,10 +18,12 @@ for (const file of files.filter((name) => name.endsWith(".js"))) {
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/apps-script-bridge-client.js")], { stdio: "inherit" });
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/performance-client.js")], { stdio: "inherit" });
 
-const [index, bridge, pagesIndex] = await Promise.all([
+const [index, bridge, pagesIndex, distSkills, pagesSkills] = await Promise.all([
   readFile(path.join(distDir, "Index.html"), "utf8"),
   readFile(path.join(distDir, "Bridge.html"), "utf8"),
   readFile(path.join(siteDir, "index.html"), "utf8"),
+  readFile(path.join(distDir, "IndexSkills.html"), "utf8"),
+  readFile(path.join(siteDir, "skills.html"), "utf8"),
 ]);
 if (!index.includes("google.script.run")) throw new Error("Index.html no contiene compatibilidad con google.script.run");
 if (!index.includes("PPAppsScriptBridge")) throw new Error("Index.html no contiene el cliente del puente remoto");
@@ -38,6 +40,18 @@ if (!pagesIndex.includes("manifest.webmanifest") || !pagesIndex.includes("servic
 }
 if (/{{[A-Z0-9_]+}}/.test(index) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(pagesIndex)) {
   throw new Error("El build contiene marcadores sin reemplazar");
+}
+for (const skills of [distSkills, pagesSkills]) {
+  if (!skills.includes("PPAppsScriptBridge")) throw new Error("skills.html no contiene el cliente del puente remoto");
+  if (!skills.includes("getAppState")) throw new Error("skills.html no contiene carga del estado");
+  if (!skills.includes("saveSkillState")) throw new Error("skills.html no contiene guardado de la matriz");
+  if (!skills.includes("matrix-row-no-operator")) throw new Error("skills.html no resalta operaciones sin operador");
+  if (/{{[A-Z0-9_]+}}/.test(skills) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(skills)) {
+    throw new Error("skills.html contiene marcadores sin reemplazar");
+  }
+}
+if (!pagesSkills.includes("AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q")) {
+  throw new Error("skills.html de Pages no contiene la URL del backend configurada");
 }
 
 const manifest = JSON.parse(await readFile(path.join(distDir, "appsscript.json"), "utf8"));

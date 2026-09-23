@@ -10,7 +10,7 @@ const PP_SHEETS = {
   OPERADORES: ['OPERADOR', 'ACTIVO', 'MINUTOS_CAPACIDAD', 'RENDIMIENTO_PCT', 'NOMBRE', 'CATEGORIA'],
   CAPACIDADES: ['KEY', 'CT', 'OPERACION', 'ACTIVA', 'CAPACIDAD', 'SOLAPAMIENTO', 'PALABRAS_CLAVE', 'REQUIERE_HERRAMENTAL', 'REQUIERE_KIT', 'CUSTOM', 'EFICIENCIA_PCT'],
   CATALOGO_OPERACIONES: ['KEY', 'CT', 'OPERACION', 'ORIGEN', 'ACTIVA'],
-  ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA'],
+  ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA', 'PRECIO_ULTIMA_VENTA'],
   CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'],
   CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
@@ -597,7 +597,7 @@ function PP_matrixRows_(payload) {
 
 function PP_workOrderRows_(payload) {
   return (payload.workOrders || []).map(function(item) {
-    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || ''];
+    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || '', Number(item.lastSalePrice || 0)];
   });
 }
 
@@ -778,7 +778,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     return [item.key, item.ct, item.label || item.operation, item.source || 'NETSUITE', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, (payload.workOrders || []).map(function(item) {
-    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || ''];
+    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || '', Number(item.lastSalePrice || 0)];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT,
     Object.keys(payload.otConfigurations || {}).sort().map(function(ot) {
@@ -1148,7 +1148,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
     const configurationKey = Object.keys(articleConfigurations).find(function(key) { return PP_normalizeKey_(key) === PP_normalizeKey_(article); });
     const configuration = configurationKey ? articleConfigurations[configurationKey] || {} : {};
     const pendingPieces = Math.max(0, Number(workOrder.pendingQuantity != null ? workOrder.pendingQuantity : (Number(workOrder.quantity || 0) - Number(workOrder.builtQuantity || 0))));
-    const invoicePrice = Math.max(0, Number(workOrder.averageSalePrice || 0));
+    const invoicePrice = Math.max(Math.max(0, Number(workOrder.lastSalePrice || 0)), Math.max(0, Number(workOrder.averageSalePrice || 0)));
     const unitPrice = invoicePrice > 0 ? invoicePrice : Math.max(0, Number(configuration.manualUnitPrice || configuration.precioManual || 0));
     const machine = String(op.maquina || '').trim();
     const machineArea = machine && PP_normalizeKey_(machine) !== 'SIN_MAQUINA' ? machine : (op.ct ? 'CT ' + op.ct : '');
@@ -1493,7 +1493,8 @@ function PP_mapWorkOrder_(row) {
     photoUrl: row.FOTO_URL, startDate: row.FECHA_INICIO_NS, endDate: row.FECHA_FIN_NS, dueDate: row.FECHA_VENCIMIENTO,
     dueDateOverride: row.FECHA_ENTREGA_AJUSTADA, quantity: quantity, status: row.ESTATUS, customer: row.CLIENTE,
     builtQuantity: builtQuantity, pendingQuantity: pendingQuantity,
-    averageSalePrice: Number(row.PRECIO_PROMEDIO_VENTA || 0), averageSalePriceFrom: row.PRECIO_DESDE, averageSalePriceTo: row.PRECIO_HASTA
+    averageSalePrice: Number(row.PRECIO_PROMEDIO_VENTA || 0), averageSalePriceFrom: row.PRECIO_DESDE, averageSalePriceTo: row.PRECIO_HASTA,
+    lastSalePrice: Number(row.PRECIO_ULTIMA_VENTA || 0)
   };
 }
 

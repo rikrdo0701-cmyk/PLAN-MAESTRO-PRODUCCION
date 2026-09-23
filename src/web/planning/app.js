@@ -1580,6 +1580,7 @@ function normalizeWorkOrders(workOrders) {
     averageSalePrice: Math.max(0, Number(item.averageSalePrice ?? item.precioPromedioVenta ?? 0)),
     averageSalePriceFrom: normalizeOtDate(item.averageSalePriceFrom || item.precioDesde),
     averageSalePriceTo: normalizeOtDate(item.averageSalePriceTo || item.precioHasta),
+    lastSalePrice: Math.max(0, Number(item.lastSalePrice ?? item.precioUltimaVenta ?? 0)),
     status: String(item.status || item.estatus || "").trim(),
     customer: String(item.customer || item.cliente || "").trim(),
   })).filter((item) => {
@@ -2917,7 +2918,7 @@ async function prepareJobForPlanning(job, options = {}) {
   const requirements = buildPlanningRequirements(refreshedIssues, operations);
   const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
   const hasRequiredGaps = requirements.some((item) => ["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]
-    .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType;
+    .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
   if (options.reuseConfirmed === true && window.PlanningWorkflowCore.canReusePlanningPreparation(state, job.ot, hasRequiredGaps)) {
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return true;
@@ -2934,7 +2935,7 @@ async function prepareJobForPlanning(job, options = {}) {
   }
   const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
   const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
-  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType;
+  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
   if (!mustConfirmPlanning) {
     Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
@@ -3438,7 +3439,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona OEM, especial o linea</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label>Precio unitario temporal (opcional)<input name="ot_manual_price" type="number" min="0" step="0.01" value="${escapeHtml(commercial.manualPrice || "")}"><small>Puede quedar vacio o ser cero</small></label>`
+    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="0.01" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario mayor a 0</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -3674,8 +3675,11 @@ function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible,
 
 function confirmZeroManualPrice(form) {
   const input = form?.elements?.namedItem("ot_manual_price");
-  if (!input || Number(input.value || 0) > 0) return true;
-  return window.confirm("¿Seguro que desea dejar el precio unitario en $0.00?");
+  if (!input) return true;
+  if (Number(input.value || 0) > 0) return true;
+  showToast("Captura un precio unitario mayor a $0.00; las tres fuentes de precio estan en cero", 9000);
+  input.focus();
+  return false;
 }
 
 function closePlanningDialog(result) {
@@ -4792,18 +4796,24 @@ function renderMatrix() {
     const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
     const mandatory = normalizeHeader(capability.key) === normalizeHeader(TOOL_CHANGE_CAPABILITY.key);
     const excluded = !mandatory && state.excludedCapabilities.includes(capability.key);
-    rows.push(`<tr${excluded ? ' class="matrix-row-excluded"' : ""}>
+    const hasAssignedOperator = operators.some((operator) => isOperatorSkilledForCapability(capability, operator));
+    const rowClasses = [];
+    if (excluded) rowClasses.push("matrix-row-excluded");
+    if (!hasAssignedOperator) rowClasses.push("matrix-row-no-operator");
+    rows.push(`<tr${rowClasses.length ? ` class="${rowClasses.join(" ")}"` : ""}>
       <td>
         <div class="capability-heading">
           <div>
             <strong>${escapeHtml(capability.label)}</strong>
             <span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span>
+            ${hasAssignedOperator ? "" : '<span class="matrix-sub" style="color:#a1332c;font-weight:700">Sin operador habilitado</span>'}
             <div class="capability-plan-controls">
               <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan"${mandatory ? ' disabled aria-disabled="true"' : ""}>
                 <option value="USE"${excluded ? "" : " selected"}>Usar en el plan</option>
                 ${mandatory ? "" : `<option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>`}
               </select>
               ${excluded ? '<span class="matrix-excluded-badge">Excluida</span>' : ""}
+              ${hasAssignedOperator ? "" : '<span class="matrix-no-operator-badge">Sin operador</span>'}
             </div>
           </div>
           <button class="matrix-delete capability-delete" type="button" data-remove-capability="${escapeHtml(capability.key)}" aria-label="Eliminar operacion ${escapeHtml(capability.label)}" title="Eliminar de la matriz">
@@ -6200,7 +6210,7 @@ async function ensureCommercialDataForPlan(ots) {
     const job = jobs.get(ot);
     if (!job) continue;
     const commercial = commercialPlanningRequirement(job);
-    if (!commercial.needsType && !commercial.needsPlanningType) continue;
+    if (!commercial.needsType && !commercial.needsPlanningType && !commercial.needsManualPrice) continue;
     const values = await showPlanningRequirements(job, [], commercial);
     if (!values) return false;
     checkpointState();
@@ -7482,7 +7492,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const pendingPiecesValue = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
     const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
     const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
-    const unitPriceValue = [first.unitPrice, last.unitPrice, workOrder?.averageSalePrice, configuration.manualUnitPrice].find(hasValue);
+    const unitPriceValue = [first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice].find(hasValue);
     const unitPriceNumber = Number(unitPriceValue);
     const unitPrice = hasValue(unitPriceValue) ? (Number.isFinite(unitPriceNumber) ? Math.max(0, unitPriceNumber) : 0) : null;
     const amountValue = [first.amount, last.amount].find(hasValue);
@@ -9156,10 +9166,10 @@ function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
   const normalizedFields = [
     "id", "workOrderId", "ot", "item", "description", "photoUrl", "startDate", "endDate", "dueDate",
     "quantity", "builtQuantity", "pendingQuantity", "status", "customer", "averageSalePrice",
-    "averageSalePriceFrom", "averageSalePriceTo",
+    "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
   ];
   const protectedLocalFields = new Set([
-    "dueDateOverride", "photoUrl", "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo",
+    "dueDateOverride", "photoUrl", "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
   ]);
   const merged = existingWorkOrder ? { ...existingWorkOrder } : { ot: remoteWorkOrder.ot };
   for (const field of normalizedFields) {
@@ -11521,7 +11531,8 @@ function pendingPiecesForWorkOrder(workOrder) {
 }
 
 function invoiceUnitPriceForOt(ot) {
-  return Math.max(0, Number(workOrderForOt(ot)?.averageSalePrice || 0));
+  const workOrder = workOrderForOt(ot);
+  return Math.max(Math.max(0, Number(workOrder?.lastSalePrice || 0)), Math.max(0, Number(workOrder?.averageSalePrice || 0)));
 }
 
 function effectiveUnitPriceForOt(ot) {
