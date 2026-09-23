@@ -2047,3 +2047,37 @@ test("liberacion final detecta 16OC/39OTD por ct o por descripcion cuando el fee
   );
   assert.deepEqual(withCatalog({ ct: "SIN_CT", descripcion: "OTRA OPS" }), { ct: "5537", label: "16OC" });
 });
+
+test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function toolChangeReportData(");
+  const end = app.indexOf("function reportSelectionLabel(", start);
+  assert.ok(start >= 0 && end > start, "bloque toolChangeReport debe existir");
+  const source = app.slice(start, end);
+  const helpers = `
+    function cleanToolValue(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const upper = text.toUpperCase();
+      if (["NO", "N/A", "NA", "-", "VACIO", "VACÍO"].includes(upper)) return "";
+      return text;
+    }
+    function normalizeStatus(value) { return String(value || "").trim().toUpperCase(); }
+  `;
+  const comment = Function(
+    `${helpers}; ${source}; return toolChangeReportComment;`,
+  )();
+
+  const fromLog = comment({ log: "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)", herramental: "5 x 6" });
+  assert.equal(fromLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+  assert.ok(!fromLog.endsWith("))"), "no debe cerrar con doble parentesis");
+
+  const fromComentario = comment({ comentario: "Cambio de herramental de (4 x 5 --> 5 X 8)", log: "" });
+  assert.equal(fromComentario, "Cambio de herramental de (4 x 5 --> 5 X 8)");
+
+  const stored = comment({ toolChangeFromHerramental: "4 x 5", toolChangeToHerramental: "5 x 6", log: "Cambio de herramental de (X --> Y)" });
+  assert.equal(stored, "Cambio de herramental de (4 x 5 --> 5 x 6)");
+
+  const rawLog = comment({ log: "PLANNER_CORE_V2 SIN_ANTECEDENTE -> 5 x 6", herramental: "5 x 6" });
+  assert.equal(rawLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+});

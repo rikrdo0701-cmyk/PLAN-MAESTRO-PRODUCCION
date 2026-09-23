@@ -537,3 +537,31 @@ test("estados por origen: un guardado completo con bucket draft incompleto conse
   assert.equal(state.operationPlanStatuses["kDraft"].operator, "nuevo");
   assert.equal(state.operationPlanStatuses["kDraft2"].status, "PENDIENTE");
 });
+
+test("PP_snapshotOperationFromRow_ recupera toolChange* desde el comentario formateado", () => {
+  const fixture = loadStorage();
+  const row = {
+    COMPLETION_KEY: "chg-1",
+    NUM: 1,
+    OT: "3588",
+    PARTE: "AM 71 VALD",
+    OP: "CAMBIO DE HERRAMENTAL / KIT",
+    COMENTARIOS: "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)",
+    HERRAMENTAL: "5 x 6",
+    KIT_HERRAMENTAL: "",
+  };
+  const op = structuredClone(fixture.context.PP_snapshotOperationFromRow_(row, "draft", 0));
+  assert.equal(op.tipoInsercion, "CAMBIO_HERRAMENTAL");
+  assert.equal(op.comentario, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+  assert.equal(op.toolChangeFromHerramental, "");
+  assert.equal(op.toolChangeFromKit, "");
+  assert.equal(op.toolChangeToHerramental, "5 x 6");
+  assert.equal(op.toolChangeToKit, "");
+
+  const transition = structuredClone(fixture.context.PP_snapshotOperationFromRow_({
+    ...row,
+    COMENTARIOS: "Cambio de herramental de (4 x 5 --> 5 X 8)",
+  }, "draft", 1));
+  assert.equal(transition.toolChangeFromHerramental, "4 x 5");
+  assert.equal(transition.toolChangeToHerramental, "5 X 8");
+});

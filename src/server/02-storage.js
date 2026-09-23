@@ -1382,6 +1382,7 @@ function PP_snapshotOperationFromRow_(row, key, index) {
   const comments = String(row.COMENTARIOS || '');
   const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
   const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
+  const toolChangeFields = isToolChange ? PP_parseSnapshotToolChangeComment_(comments) : null;
   return {
     id: String(row.COMPLETION_KEY || '').trim() || 'snapshot-' + key + '-' + (index + 1),
     num: Number(row.NUM || index + 1),
@@ -1407,12 +1408,38 @@ function PP_snapshotOperationFromRow_(row, key, index) {
     locked: PP_bool_(row.BLOQUEADA, false),
     herramental: String(row.HERRAMENTAL || ''),
     kitHerramental: String(row.KIT_HERRAMENTAL || ''),
+    toolChangeFromHerramental: toolChangeFields ? toolChangeFields.fromHerramental : '',
+    toolChangeFromKit: toolChangeFields ? toolChangeFields.fromKit : '',
+    toolChangeToHerramental: toolChangeFields ? toolChangeFields.toHerramental : '',
+    toolChangeToKit: toolChangeFields ? toolChangeFields.toKit : '',
     subcontractType: String(row.TIPO_SUBCONTRATO || ''),
     subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
     pendingPieces: Number(row.PZAS_PENDIENTES || 0),
     jobType: String(row.TIPO_OT || ''),
     unitPrice: Number(row.PRECIO_UNITARIO || 0),
     amount: Number(row.MONTO || 0)
+  };
+}
+
+function PP_parseSnapshotToolChangeComment_(comments) {
+  const match = String(comments || '').match(/Cambio de herramental de \((.+?) --> (.+)\)\s*$/);
+  if (!match) return null;
+  const parsePair = function(value) {
+    const parts = String(value || '').trim().split('/');
+    const clean = function(item) {
+      const text = String(item || '').trim();
+      const key = PP_normalizeKey_(text);
+      return (!key || key === 'SIN_HERR' || key === 'SIN_HERRAMENTAL' || key === 'SIN_KIT' || key === 'SIN_ANTECEDENTE') ? '' : text;
+    };
+    return { herramental: clean(parts[0]), kit: clean(parts[1]) };
+  };
+  const from = parsePair(match[1]);
+  const to = parsePair(match[2]);
+  return {
+    fromHerramental: from.herramental,
+    fromKit: from.kit,
+    toHerramental: to.herramental,
+    toKit: to.kit
   };
 }
 

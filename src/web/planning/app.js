@@ -7745,9 +7745,20 @@ function toolChangeReportData(op) {
     toKit: reportToolValue(op.toolChangeToKit),
   };
   if (stored.fromHerramental || stored.fromKit || stored.toHerramental || stored.toKit) return stored;
-  const segment = String(op.log || "").split("|").map((item) => item.trim()).reverse().find((item) => item.includes("->")) || "";
+  const sources = [op.log, op.comentario].map((value) => String(value || ""));
+  for (const source of sources) {
+    const formatted = source.match(/Cambio de herramental de \((.+?) --> (.+)\)\s*$/);
+    if (formatted) {
+      const from = parseToolPair(formatted[1]);
+      const to = parseToolPair(formatted[2]);
+      if (from.herramental || from.kit || to.herramental || to.kit) {
+        return { fromHerramental: from.herramental, fromKit: from.kit, toHerramental: to.herramental, toKit: to.kit };
+      }
+    }
+  }
+  const segment = sources.map((item) => item.split("|").map((part) => part.trim())).flat().reverse().find((item) => item.includes("->")) || "";
   const parts = segment.split(/\s*->\s*/);
-  const from = parseToolPair(parts[0]?.replace(/^.*?PLANIFICADOR_HEURISTICO\s+/i, ""));
+  const from = parseToolPair(parts[0]?.replace(/^.*?(?:PLANIFICADOR_HEURISTICO|PLANNER_CORE_V\d*)\s+/i, ""));
   const to = parseToolPair(parts[1]);
   return { fromHerramental: from.herramental, fromKit: from.kit, toHerramental: to.herramental, toKit: to.kit };
 }
@@ -7760,7 +7771,7 @@ function parseToolPair(value) {
 function reportToolValue(value) {
   const text = cleanToolValue(value);
   const key = normalizeStatus(text);
-  return ["SIN_HERR", "SIN_KIT", "SIN_ANTECEDENTE"].includes(key) ? "" : text;
+  return ["SIN_HERR", "SIN_HERRAMENTAL", "SIN_KIT", "SIN_ANTECEDENTE"].includes(key) ? "" : text;
 }
 
 function formatToolPair(herramental, kit) {
@@ -7771,7 +7782,10 @@ function toolChangeReportComment(op) {
   const change = toolChangeReportData(op);
   const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
   const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-  return `Cambio de herramental de (${formatToolPair(change.fromHerramental, change.fromKit)} --> ${formatToolPair(destinationHerramental, destinationKit)})`;
+  const fromText = formatToolPair(change.fromHerramental, change.fromKit);
+  const toText = formatToolPair(destinationHerramental, destinationKit);
+  if (/^Cambio de herramental de \(/i.test(fromText)) return fromText.replace(/\)+$/, "");
+  return `Cambio de herramental de (${fromText} --> ${toText})`;
 }
 
 function reportSelectionLabel(selection) {
