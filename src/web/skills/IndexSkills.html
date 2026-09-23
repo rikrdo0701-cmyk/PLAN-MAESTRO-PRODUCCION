@@ -91,15 +91,6 @@ body {
 .button.primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 
-.legacy-note {
-  margin: 0 0 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  background: #fff8e8;
-  color: #7a4e00;
-  font-size: 11px;
-}
-
 .matrix-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -480,11 +471,6 @@ tr:last-child td { border-bottom: 0; }
       </div>
     </header>
 
-    <p class="legacy-note">
-      Vista independiente: comparte el mismo almacén Google Sheets que la web principal.
-      Las altas y bajas de operadores u operaciones se hacen en la web principal.
-    </p>
-
     <div class="matrix-toolbar">
       <div class="matrix-search">
         <input id="matrixSearchInput" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" autocomplete="off">
@@ -508,7 +494,7 @@ tr:last-child td { border-bottom: 0; }
 {{BRIDGE_CLIENT}}
   </script>
 
-  <script>
+  <script defer>
 {{PLANNER_CORE}}
   </script>
 
@@ -524,6 +510,7 @@ const TOOL_CHANGE_CAPABILITY = {
 };
 const CAPACITY_MODES = ["FINITA", "NO_FINITA"];
 const SAVE_DEBOUNCE_MS = 700;
+const SKILLS_CACHE_KEY = "pp-skills-matrix-v1";
 
 const els = {
   app: document.getElementById("app"),
@@ -543,9 +530,66 @@ let saveInFlight = false;
 let saveQueued = false;
 let dirty = false;
 let loadSeq = 0;
+let cacheHydrated = false;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeImportedState(imported) {
+  const next = imported || {};
+  next.matrix = next.matrix || {};
+  next.operators = Array.isArray(next.operators) ? next.operators : [];
+  next.excludedCapabilities = normalizeCapabilityKeys(next.excludedCapabilities);
+  next.capacityModes = next.capacityModes || {};
+  next.operationRules = next.operationRules || {};
+  next.operatorPerformance = next.operatorPerformance || {};
+  next.configuredCapabilities = Array.isArray(next.configuredCapabilities) ? next.configuredCapabilities : [];
+  next.customCapabilities = Array.isArray(next.customCapabilities) ? next.customCapabilities : [];
+  next.hiddenCapabilities = Array.isArray(next.hiddenCapabilities) ? next.hiddenCapabilities : [];
+  next.operationCatalog = Array.isArray(next.operationCatalog) ? next.operationCatalog : [];
+  next.operations = Array.isArray(next.operations) ? next.operations : [];
+  return next;
+}
+
+function skillsCachePayload(source) {
+  if (!source) return null;
+  return {
+    ...source,
+    materials: [],
+    workOrders: [],
+    machines: [],
+    toolCatalog: [],
+    calendarExceptions: [],
+    subcontracts: [],
+    otTypes: [],
+    machineToolHistory: [],
+    closedWorkOrderSummaries: {},
+  };
+}
+
+function persistSkillsCache() {
+  if (!state || dirty) return;
+  try {
+    sessionStorage.setItem(SKILLS_CACHE_KEY, JSON.stringify(skillsCachePayload(state)));
+  } catch (_) {}
+}
+
+function hydrateSkillsCache() {
+  try {
+    const raw = sessionStorage.getItem(SKILLS_CACHE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    if (!cached || !Array.isArray(cached.operators)) return false;
+    state = normalizeImportedState(cached);
+    dirty = false;
+    saveQueued = false;
+    renderMatrix();
+    setStatus(`rev ${state.revision || 0} (copia local)`);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function uniq(items) {
@@ -939,6 +983,7 @@ async function saveNow() {
     state.revision = Number(saved?.revision || state.revision);
     state.savedAt = saved?.savedAt || state.savedAt;
     if (!dirty) {
+      persistSkillsCache();
       setStatus(`Guardado ${new Date().toLocaleTimeString()}`, "ok");
     } else {
       scheduleSave();
@@ -947,7 +992,7 @@ async function saveNow() {
     const message = String(error?.message || error);
     if (/CONFLICT_REVISION/i.test(message)) {
       setStatus("El plan cambió en otra pestaña; recargando…", "error");
-      await loadState({ silent: false });
+      await loadState({ silent: false, force: true });
     } else {
       setStatus(`Error al guardar: ${message}`, "error");
       dirty = true;
@@ -961,32 +1006,37 @@ async function saveNow() {
   }
 }
 
-async function loadState({ silent = false } = {}) {
+async function loadState({ silent = false, force = false } = {}) {
   const seq = ++loadSeq;
   if (!silent) setStatus("Cargando…");
   try {
     const bridge = window.PPAppsScriptBridge;
-    await bridge.ensureReady();
-    const imported = await bridge.call("getAppState");
+    const knownRevision = Number(state?.revision || 0);
+    let imported;
+    if (!force && knownRevision > 0) {
+      imported = await bridge.call("getAppStateIfChanged", [knownRevision, { includeMaterials: false }]);
+      if (imported?.unchanged) {
+        if (seq !== loadSeq) return;
+        if (!silent) setStatus(`rev ${Number(imported.revision || knownRevision)}`, "ok");
+        return;
+      }
+    } else {
+      imported = await bridge.call("getAppState");
+    }
     if (seq !== loadSeq) return;
-    state = imported || {};
-    state.matrix = state.matrix || {};
-    state.operators = Array.isArray(state.operators) ? state.operators : [];
-    state.excludedCapabilities = normalizeCapabilityKeys(state.excludedCapabilities);
-    state.capacityModes = state.capacityModes || {};
-    state.operationRules = state.operationRules || {};
-    state.operatorPerformance = state.operatorPerformance || {};
-    state.configuredCapabilities = Array.isArray(state.configuredCapabilities) ? state.configuredCapabilities : [];
-    state.customCapabilities = Array.isArray(state.customCapabilities) ? state.customCapabilities : [];
-    state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
-    state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
-    state.operations = Array.isArray(state.operations) ? state.operations : [];
+    state = normalizeImportedState(imported);
     dirty = false;
     saveQueued = false;
+    cacheHydrated = true;
     renderMatrix();
+    persistSkillsCache();
     setStatus(`rev ${state.revision || 0}`, "ok");
   } catch (error) {
     if (seq !== loadSeq) return;
+    if (state) {
+      setStatus(`Error al actualizar: ${String(error?.message || error)}`, "error");
+      return;
+    }
     setStatus(`Error: ${String(error?.message || error)}`, "error");
     els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">No se pudo cargar la matriz. Revisa la conexión y recarga.</div>';
   }
@@ -1006,7 +1056,7 @@ els.clearMatrixSearchBtn.addEventListener("click", () => {
 });
 
 els.reloadBtn.addEventListener("click", () => {
-  void loadState({ silent: false });
+  void loadState({ silent: false, force: true });
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -1022,7 +1072,8 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 
-void loadState({ silent: false });
+cacheHydrated = hydrateSkillsCache();
+void loadState({ silent: cacheHydrated });
   </script>
 </body>
 </html>

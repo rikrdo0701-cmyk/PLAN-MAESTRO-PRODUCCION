@@ -2159,7 +2159,11 @@ test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", asyn
   assert.match(performanceClient, /function baseSavePayload\(\)[\s\S]*settings: clone\(state\.settings \|\| \{\}\)/);
   assert.match(performanceClient, /function matrixSavePayload\(\)\s*\{[^}]*\.\.\.baseSavePayload\(\)/);
   assert.match(skills, /CONFLICT_REVISION/);
-  assert.match(skills, /await loadState\(\{ silent: false \}\)/);
+  assert.match(skills, /getAppStateIfChanged/);
+  assert.match(skills, /hydrateSkillsCache|pp-skills-matrix-v1/);
+  assert.doesNotMatch(skills, /legacy-note/);
+  assert.doesNotMatch(skills, /Vista independiente/);
+  assert.match(skills, /await loadState\(\{ silent: false, force: true \}\)/);
   assert.match(skills, /matrix-row-no-operator/);
   assert.match(skills, /Sin operador/);
   assert.doesNotMatch(skills, /data-remove-operator=/);
