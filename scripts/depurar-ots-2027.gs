@@ -9,8 +9,8 @@
 //  - AUDITORIA: FECHA/USUARIO/ACCION/REVISION/DETALLE
 //
 // Uso en el editor de Apps Script:
-//   depurarOts2027()                // DRY-RUN: solo imprime lo que cambiaria
-//   depurarOts2027({ apply: true }) // aplica cambios
+//   depurarOts2027()              // DRY-RUN: solo imprime lo que cambiaria
+//   aplicarDepurarOts2027()       // aplica cambios (sin pasar argumentos)
 //
 // No modifica NetSuite ni RESTlets (RULE-MAT-004).
 
@@ -233,4 +233,8 @@ function depurarOts2027(options) {
 
   Logger.log(JSON.stringify(report, null, 2));
   return report;
+}
+
+function aplicarDepurarOts2027() {
+  return depurarOts2027({ apply: true });
 }
