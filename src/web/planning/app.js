@@ -8317,7 +8317,11 @@ function renderProductionReportRow(op, index, options = {}) {
   const machineArea = cleanResourceValue(op.maquina);
   const effectiveReportTool = isToolChangeReportOperation(op)
     ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
-    : cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]));
+    : cleanToolValue(op.herramental)
+      || cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]))
+      || (isBendingAppOperation(op)
+        ? cleanToolValue(toolCatalogForAppOperation(op)?.herramental)
+        : "");
   const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
   return `<tr data-plan-status-row-key="${escapeHtml(operationCompletionKey(op))}">
     <td>${index + 1}</td>

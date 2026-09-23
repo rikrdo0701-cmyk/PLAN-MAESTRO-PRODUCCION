@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 - Reportes → Liberación: columnas Ensamblado (`builtQuantity` de la OT) y Completar (botón Completar/Reabrir de la op 16OC/39OTD, mismo patrón que Plan por operador). Título del panel solo "Liberación". RULE-REP-013 actualizada.
 
+### Fixed
+
+- Plan por operador: columna HERRAMENTAL vacía en operaciones de doblado con `ct=SIN_CT` (feed NetSuite). `effectiveJobTool` ahora consulta la configuración de la OT antes del early-return por filtro de ct; la fila del reporte usa cascada `op.herramental` → config/OT → catálogo (solo si `isBendingAppOperation`). RULE-OT-045.
+
 ### Changed
 
 - skills: se eliminó la leyenda amarilla "Vista independiente"; carga más rápida (caché `sessionStorage`, `getAppStateIfChanged`, `PlannerCore` con `defer`).

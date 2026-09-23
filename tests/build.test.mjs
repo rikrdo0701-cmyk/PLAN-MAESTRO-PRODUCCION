@@ -714,6 +714,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /class="queue-tool-mini"/);
   assert.match(pagesIndex, /"Maq\/Area", "Herramental", "TC \(min\)"/);
   assert.match(pagesIndex, /effectiveJobTool\(state, \{ ot: op\.ot, parte: op\.parte \|\| workOrder\?\.item \|\| "", ops: \[op\] \}, \["5459", "5527"\]\)/);
+  assert.match(pagesIndex, /toolCatalogForAppOperation\(op\)\?\.herramental/);
   const detailBinding = pagesIndex.slice(pagesIndex.indexOf('const toolInput = els.selectedJobPanel.querySelector("#jobToolInput")'), pagesIndex.indexOf("function renderGantt()"));
   assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value, currentJobAdditionalTools\(\)\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
   assert.match(pagesIndex, /<details class="job-resource-section/);

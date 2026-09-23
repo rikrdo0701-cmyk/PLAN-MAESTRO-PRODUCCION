@@ -1144,13 +1144,13 @@ expandedOts: without(state?.expandedOts),
   function effectiveJobTool(state, job, bendingCts) {
     const cts = new Set((bendingCts || ["5459", "5527"]).map((value) => String(value || "").trim()));
     const operations = (job?.ops || []).filter((operation) => cts.has(String(operation?.ct || "").trim()));
-    if (!operations.length) return "";
     const configurations = state?.otConfigurations || {};
     const configurationKey = Object.keys(configurations).find((key) => normalize(configurations[key]?.ot || key) === normalize(job?.ot));
     const configured = configurationKey ? configurations[configurationKey] || {} : {};
     const configuredTool = String(configured.herramental || configured.tool || "").trim();
     const configuredTools = [configuredTool, ...additionalToolList(configured.additionalHerramentales || configured.herramentalesExtra).map((item) => additionalToolEntry(item).herramental)].filter(Boolean);
     if (configuredTools.length) return configuredTools.join(" + ");
+    if (!operations.length) return "";
     const operationTool = operations.map((operation) => String(operation?.herramental || "").trim()).find(Boolean);
     const operationExtras = additionalToolList(operations.find((operation) => Array.isArray(operation?.additionalHerramentales) && operation.additionalHerramentales.length)?.additionalHerramentales).map((item) => additionalToolEntry(item).herramental);
     if (operationTool || operationExtras.length) return [operationTool, ...operationExtras].filter(Boolean).join(" + ");

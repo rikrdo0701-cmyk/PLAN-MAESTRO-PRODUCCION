@@ -976,6 +976,10 @@ test("el detalle y la tarjeta resuelven el mismo herramental efectivo", () => {
     otConfigurations: {},
     toolCatalog: [{ part: "C 490 UND", herramental: "4 x 5" }],
   }, job, ["5459", "5527"]), "4 x 5");
+  assert.equal(core.effectiveJobTool({
+    otConfigurations: { 2159: { herramental: "4 x 5" } },
+    toolCatalog: [],
+  }, { ot: "2159", parte: "C 490 UND", ops: [{ ct: "SIN_CT", herramental: "" }] }, ["5459", "5527"]), "4 x 5");
 });
 
 test("selecciona el borrador coherente mas reciente sin mezclar colecciones", () => {

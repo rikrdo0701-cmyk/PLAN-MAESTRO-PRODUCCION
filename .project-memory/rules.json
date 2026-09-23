@@ -1413,6 +1413,15 @@
       "source": "definición de usuario 2026-09-23 (Ensamblado=builtQuantity, Completar=botón igual a Plan por operador); FIX 0 OT con Borrador (SIN_CT + descripcion); src/web/planning/index.template.html; src/web/planning/app.js (releaseReportRows/renderReleaseReport/planStatusButtons/exportReleaseXlsx); tests/build.test.mjs y npm run check OK",
       "domain": "Reportes",
       "updated_at": "2026-09-23"
+    },
+    {
+      "rule_id": "RULE-OT-045",
+      "name": "Columna HERRAMENTAL en Plan por operador para doblado con SIN_CT",
+      "status": "implementada",
+      "rule": "FIX 2026-09-23: la columna HERRAMENTAL del reporte Plan por operador mostraba vacío en filas de doblado (descripcion '100TD : DOBLEZ DE TUBERIA'). CAUSA RAIZ: el feed NetSuite trae ct='SIN_CT' con el código solo en descripcion; renderProductionReportRow llamaba effectiveJobTool(state, {ot, parte, ops:[op]}, ['5459','5527']) que filtraba job.ops por ct exacto 5459/5527 y retornaba '' ANTES de consultar otConfigurations/toolCatalog. FIX en dos frentes: (1) effectiveJobTool (planning-workflow-core.js:1144) evalúa la configuración de la OT (otConfigurations por normalize(ot)) ANTES del early-return por filtro de ct, de modo que SIN_CT herede el herramental configurado; (2) renderProductionReportRow (app.js) usa cascada cleanToolValue(op.herramental) || cleanToolValue(effectiveJobTool(...)) || (isBendingAppOperation(op) ? cleanToolValue(toolCatalogForAppOperation(op)?.herramental) : ''). isBendingAppOperation usa isBendingOperationResolved (detección resuelta por descripcion, FIX 2026-09-09), no el ct crudo. El fallback al catálogo se gatea con isBendingAppOperation para no contaminar ops de corte. Complementa el FIX 2026-09-09 documentado en rules.json sobre SIN_CT y doblez.",
+      "source": "bug usuario 2026-09-23 (columna HERRAMENTAL vacía en doblado del plan de operador); src/web/planning/app.js renderProductionReportRow; src/web/planning/planning-workflow-core.js effectiveJobTool; tests/build.test.mjs, tests/planning-workflow-core.test.mjs; suite 561/561",
+      "domain": "Reportes",
+      "updated_at": "2026-09-23"
     }
   ]
 }
