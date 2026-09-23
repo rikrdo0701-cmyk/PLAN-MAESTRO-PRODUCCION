@@ -548,6 +548,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /function formatReportTime\(date\)/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
   assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.tab-panel\.print-target[\s\S]*zoom:\s*0\.9/);
   assert.equal((pagesIndex.match(/@page \{/g) || []).length, 3);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);

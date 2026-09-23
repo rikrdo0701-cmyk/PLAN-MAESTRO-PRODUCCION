@@ -2123,7 +2123,7 @@ tr:last-child td { border-bottom: 0; }
   .tab-panel { display: none !important; }
   .tab-panel.active { display: block !important; padding: 0; width: 100%; max-width: none; overflow: visible; }
   body.printing-individual-plan .tab-panel { display: none !important; }
-  body.printing-individual-plan .tab-panel.print-target { display: block !important; padding: 0; width: 100%; max-width: none; overflow: visible; }
+  body.printing-individual-plan .tab-panel.print-target { display: block !important; padding: 0; width: 100%; max-width: none; overflow: visible; zoom: 0.9; }
   .individual-print-header {
     display: grid;
     grid-template-columns: 1fr 2fr 1fr;
