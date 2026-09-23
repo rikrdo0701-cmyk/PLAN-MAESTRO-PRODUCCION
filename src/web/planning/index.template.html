@@ -410,6 +410,7 @@
             <button data-tab="operator" type="button">Plan por operador</button>
             <button data-tab="adjuster" type="button">Ajustador</button>
             <button data-tab="subcontractReport" type="button">Subcontratos</button>
+            <button data-tab="release" type="button">Liberación final</button>
           </div>
           <section id="weekTab" class="tab-panel">
 <div class="report-toolbar">
@@ -481,6 +482,18 @@
             </div>
             <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="subcontractPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="subcontractReport" class="specialized-report-table report-page-table"></table></div>
+          </section>
+
+          <section id="releaseTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>OTs 16OC / 39OTD</h2><span>Ordenadas por fecha de plan de la operacion de liberacion (mas antiguo a mas nuevo)</span></div>
+              <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para liberacion final"><option value="draft">Borrador</option></select></label>
+                <output id="releaseReportCount" class="report-row-count"></output>
+                <button id="exportReleaseXlsxBtn" class="button small" type="button" title="Descargar listado 16OC / 39OTD en Excel (.xlsx)">Exportar</button>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="releaseReport" class="production-report-table report-page-table"></table></div>
           </section>
         </section>
 

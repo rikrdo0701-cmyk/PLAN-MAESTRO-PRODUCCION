@@ -1386,6 +1386,15 @@
       "source": "decision usuario 2026-09-23 ('si genero plan de las ot aptas se incluyan todas las op'); FIX src/web/planning/app.js scheduleCurrentPlanImpl (missingAptOts + force retry + bloqueo); tests/build.test.mjs (doesNotMatch Plan parcial, match force:true y toast de bloqueo); docs/REGLAS.md y docs/rules/RULES.md",
       "domain": "Planificacion",
       "updated_at": "2026-09-23"
+    },
+    {
+      "rule_id": "RULE-REP-013",
+      "name": "Pestaña Liberación final: listado OTs 16OC/39OTD ordenado por fecha de plan de la operación con exportación Excel",
+      "status": "implementada",
+      "rule": "Nueva pestaña Liberación final en Reportes (data-tab=release, releaseTab) que lista las OTs cuya operación de liberación final tiene ct 5504 (39OTD) o 5537 (16OC), identificadas con isFinalReleaseOperation(). Filas una por OT (primera operación de liberación por sequenceSort) con columnas en este orden: OT, Articulo (parte de la op o item del work order), Cantidad (pendingPieces/cantPendiente de la op o pendingPiecesForWorkOrder) y Fecha (opStart de la liberación, fallback opEnd). Orden de filas ascendente por fecha de plan de la operación (mas antiguo a mas nuevo) y desempate por OT numerico; ops sin fecha al final. Fuente compartida reportOperationsSource() con selector data-report-source-select (mismo plan que demas reportes). Botón exportReleaseXlsxBtn genera liberacion-final-16oc-39otd.xlsx con las mismas 4 columnas usando buildXlsxBytes (mismo escritor XLSX sin librerías de RULE-UI-011). Definición de usuario 2026-09-23: listado de OTs de 16oc y 39otd ordenado por fecha de plan de la operación (confirmada fecha de la operación, no de la OT); columnas confirmadas 'ot, articulo, cantidad, fecha'.",
+      "source": "definición de usuario 2026-09-23; src/web/planning/index.template.html (pestaña release + releaseTab); src/web/planning/app.js (releaseReportRows/renderReleaseReport/exportReleaseXlsx, isFinalReleaseOperation/FINAL_RELEASE_OPERATION_CTS, buildXlsxBytes); tests 553/553 y npm run check OK",
+      "domain": "Reportes",
+      "updated_at": "2026-09-23"
     }
   ]
 }

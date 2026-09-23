@@ -75,6 +75,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-REP-004` | TC siempre derivado = tiempo de producción ÷ piezas a producir; fuente de reportes solo borrador + último publicado (consolidada 2026-09-05) | IMPLEMENTADA | `08-netsuite.js`, `app.js` |
 | `RULE-OT-027` | Mapeo de tiempos de operación NetSuite: headers reales de ruta (`Velocidad de ejecución (minutos/unidad)`, `Tiempo de configuración (minutos)`, `Cantidad de entrada`/`Cantidad completada`) y SIN topes (`setup>20→15` y `rate>10→0.67` eliminados) | IMPLEMENTADA | `08-netsuite.js` |
 | `RULE-REP-011` | Corte de fijas = COMPLETADA: completadas anclan y reservan capacidad; incompletas de locked se reprograman (supera v2 2026-09-20) | IMPLEMENTADA | decisión 2026-09-22; `tests/planner-core.test.mjs`; `.project-memory/rules.json` |
+| `RULE-REP-013` | Pestaña "Liberación final" en Reportes: lista OTs con operación 16OC/39OTD (CT 5537/5504 vía `isFinalReleaseOperation`) una fila por OT, columnas OT, Artículo, Cantidad, Fecha (inicio de la operación de liberación); filas ordenadas ascendente por fecha de plan de la operación (más antiguo a más nuevo); exporta `liberacion-final-16oc-39otd.xlsx` con `buildXlsxBytes` | IMPLEMENTADA | definición de usuario 2026-09-23; `index.template.html` (`data-tab="release"`), `app.js` (`releaseReportRows`/`renderReleaseReport`/`exportReleaseXlsx`); tests 553/553 |
 
 ## OT
 

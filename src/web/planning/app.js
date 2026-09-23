@@ -1056,7 +1056,7 @@ function bindEvents() {
   els.exportCsvBtn.addEventListener("click", exportCsv);
   els.exportBacklogXlsxBtn.addEventListener("click", exportBacklogXlsx);
   els.exportQueueXlsxBtn.addEventListener("click", exportQueueXlsx);
-  els.exportReleaseXlsxBtn.addEventListener("click", exportReleaseXlsx);
+  els.exportReleaseXlsxBtn?.addEventListener("click", exportReleaseXlsx);
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
@@ -7715,26 +7715,24 @@ function renderReleaseReport() {
   if (!els.releaseReport) return;
   const rows = releaseReportRows();
   if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
-  const headers = ["Fecha de plan", "Operacion", "OT", "Articulo", "Cantidad"];
+  const headers = ["OT", "Articulo", "Cantidad", "Fecha"];
   const body = rows.map((row) => `<tr>
-    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
-    <td>${escapeHtml(row.label)}</td>
     <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
     <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
   </tr>`).join("");
   els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
 }
 
 function exportReleaseXlsx() {
   const rows = releaseReportRows().map((row) => [
-    row.date ? formatReportDate(row.date) : "SIN FECHA",
-    row.label,
     row.ot,
     row.article,
     row.quantity,
+    row.date ? formatReportDate(row.date) : "SIN FECHA",
   ]);
-  const bytes = buildXlsxBytes(["Fecha de plan", "Operacion", "OT", "Articulo", "Cantidad"], rows, "Liberacion final");
+  const bytes = buildXlsxBytes(["OT", "Articulo", "Cantidad", "Fecha"], rows, "Liberacion final");
   downloadBlob(bytes, "liberacion-final-16oc-39otd.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
