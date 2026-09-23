@@ -97,6 +97,8 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-016` | Dry-run de rendimiento de planeación | IMPLEMENTADA | definición de usuario 2026-08-26 |
 | `RULE-OT-017` | OT no bloqueada: borrar asignación del borrador y recalcular | IMPLEMENTADA | definición de usuario 2026-08-27 |
 | `RULE-OT-039` | `applyNetSuitePlanningPayload` hace merge inline por OT de las rutas frescas de NetSuite en OTs seleccionadas (sin descartarlas); bloqueadas (`lockedOts`) conservan local; timeout `syncNetSuitePlanningData` 360 s. Dry-run 2026-09-22: CORTADOR INICIAL 24→119 ops, corte 20→139 OTs, `plannerElapsedMs` 66754→23715 | IMPLEMENTADA | `app.js` (`applyNetSuitePlanningPayload`), `apps-script-bridge-client.js`, `probe_dryrun_local_after_fix.mjs`, `.project-memory/rules.json` |
+| `RULE-OT-040` | Espera del cliente en `syncNetSuitePlanningData` = `NETSUITE_PLANNING_TIMEOUT_MS * 24` (360 s) alineada con `METHOD_TIMEOUT_MS` (antes `*4` = 60 s → `partial`) | IMPLEMENTADA | definición/fix 2026-09-22; `app.js:8604`; `.project-memory/rules.json` |
+| `RULE-OT-041` | 6 OTs 2027 con `lockedOts` residual (3413/3416/3529/3533/2613/3398); limpieza vía `scripts/depurar-ots-2027.gs` (dry-run por defecto, no ejecutado) | DOCUMENTADA | análisis 2026-09-22; `scripts/depurar-ots-2027.gs`; `.project-memory/rules.json` |
 
 Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
 `cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía
@@ -155,6 +157,7 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 | `RULE-BAL-017` | Reorden de Planeado/No planeado cruza trabajos fijos; OT bloqueada no se mueve y conserva su programación | IMPLEMENTADA | definición de usuario 2026-09-06; `app.js` |
 | `RULE-BAL-015` | El ancla de hora de ejecución solo aplica al MISMO día; los días siguientes respetan el calendario (07:00) | IMPLEMENTADA | definición de usuario 2026-09-04; `planner-core.js` `computeEarliestStart`; afina `RULE-OT-015` |
 | `RULE-BAL-016` | La escala temporal del Gantt usa el horario real por día (workSchedule/dailyBreaks/calendarExceptions), con columnas de día proporcionales a sus minutos laborables | IMPLEMENTADA | definición de usuario 2026-09-04; `app.js` `renderGantt`/`workWindowMinutes`/`workMinuteOffset`/`dateFromWorkOffset` rework multi-ventana por día; `styles.css` flex con columnas proporcionales; afina `RULE-BAL-015` (escala) |
+| `RULE-BAL-022` | Dry-run 2026-09-22: se mantiene `strategyPool` default `[balanced_goal]` y NO se cambian pesos de `evaluatePlan` (decisión de usuario); `balanced_goal` gana monto semana 1; pool doble sin ganancia; `fastQualityMode` anula ramas de estrategia en sucesoras (`planner-core.js:2128`) | DOCUMENTADA | decisión usuario 2026-09-22; `probe_strategy_compare.mjs`/`probe_monto_compare.mjs`; `.project-memory/rules.json` |
 
 ## BOM
 

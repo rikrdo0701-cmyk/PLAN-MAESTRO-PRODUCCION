@@ -8601,7 +8601,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
   try {
     const planningPayload = await window.PlanningWorkflowCore.withTimeout(
       callAppsScript("syncNetSuitePlanningData"),
-      NETSUITE_PLANNING_TIMEOUT_MS * 4
+      NETSUITE_PLANNING_TIMEOUT_MS * 24
     );
     applyNetSuitePlanningPayload(planningPayload);
     saveState("plan");

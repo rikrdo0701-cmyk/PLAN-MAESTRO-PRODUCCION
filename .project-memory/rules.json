@@ -1323,6 +1323,33 @@
       "source": "FIX src/web/planning/app.js applyNetSuitePlanningPayload + src/web/shared/apps-script-bridge-client.js METHOD_TIMEOUT_MS; restricciones tests performance-client-calls.test.mjs:74-77/1105-1137 y build.test.mjs:1078-1095; dry-run local probe_dryrun_local_after_fix.mjs JSON %LOCALAPPDATA%/Temp/opencode/dryrun-local-after-fix.json vs baseline dryrun-diagnosis.json; decision usuario 2026-09-22 (implementar fix y dry-run antes de desplegar)",
       "domain": "Planificacion",
       "updated_at": "2026-09-22"
+    },
+    {
+      "rule_id": "RULE-OT-040",
+      "name": "Timeout de espera del cliente en syncNetSuitePlanningData: NETSUITE_PLANNING_TIMEOUT_MS * 24 (360 s) para alinear con METHOD_TIMEOUT_MS",
+      "status": "implementada",
+      "rule": "El fix de RULE-OT-039 subio METHOD_TIMEOUT_MS.syncNetSuitePlanningData a 360000 ms en apps-script-bridge-client.js, pero la espera del cliente en app.js (app.js:8604) seguia siendo NETSUITE_PLANNING_TIMEOUT_MS * 4 = 60000 ms: el promise se rechazaba a los 60 s aunque el bridge siguiera en vuelo, el catch mostraba 'sync timeout' y el payload fresco de NetSuite se descartaba (partial). FIX 2026-09-22: app.js:8604 pasa a NETSUITE_PLANNING_TIMEOUT_MS * 24 = 360000 ms, alineado con METHOD_TIMEOUT_MS del bridge. NETSUITE_PLANNING_TIMEOUT_MS se queda en 15000 (otros call sites 6822/9348/9407 sin cambio). Verificado: node --check, npm run check, npm test 543/543, npm run build. Solo cambio tracked en el working tree de esta TASK.",
+      "source": "causa raiz 'partial' del sync 2026-09-22 (timeout del cliente 60s < bridge 360s); FIX src/web/planning/app.js:8604 (*4 -> *24); alinea con RULE-OT-039 METHOD_TIMEOUT_MS.syncNetSuitePlanningData; decision usuario 2026-09-22 (adelante para documentar y commitear)",
+      "domain": "Planificacion",
+      "updated_at": "2026-09-22"
+    },
+    {
+      "rule_id": "RULE-OT-041",
+      "name": "6 OTs de 2027 bloqueadas con lock residual (3413/3416/3529/3533/2613/3398); script scripts/depurar-ots-2027.gs dry-run por defecto",
+      "status": "documentada",
+      "rule": "DIAGNOSTICO 2026-09-22: el plan selected de la semana (193 OTs, planStart 2026-09-21) deja 9 OTs sin trabajo: 3 backlog no seleccionadas (3317/3318/3295, decision de usuario: NO tocar) y 6 OTs de 2027 bloqueadas como locked residual (3413, 3416, 3529, 3533, 2613, 3398) que reservan anclas fijas fuera de la ventana y no arrancan. Limpiarlas requiere quitar lockedOts en CONFIG (bump revision/savedAt), limpiar LOCKED/AUTO_FROZEN/fechas en OPERACIONES (ops no completadas), fechas en ESTADOS_OPERACION_PLAN y BORRADOR_PLAN draft, y registrar en AUDITORIA. Script creado: scripts/depurar-ots-2027.gs (Apps Script standalone; usa Script Property PLANNING_SPREADSHEET_ID; NO toca NetSuite/RESTlets por RULE-MAT-004). Dry-run por defecto (depurarOts2027() solo reporta; {apply:true} aplica). NO ejecutado aun: correr en el editor de Apps Script con permiso del usuario.",
+      "source": "analisis dry-run 2026-09-22 (193 selected, 184 con trabajo semana 1, 9 sin = 3317/3318/3295 + 6 locked 2027); scripts/depurar-ots-2027.gs; RULE-OT-011/RULE-BAL-017 (locked conserva programa); RULE-MAT-004",
+      "domain": "Planificacion",
+      "updated_at": "2026-09-22"
+    },
+    {
+      "rule_id": "RULE-BAL-022",
+      "name": "Comparativa dry-run de estrategias y montos 2026-09-22: se MANTIENE strategyPool default [balanced_goal] y NO se cambian pesos de evaluatePlan",
+      "status": "documentada",
+      "rule": "DECISIONES DEL USUARIO 2026-09-22 (definitivas, no mover sin pedirlo): (1) strategyPool default se queda en [balanced_goal] (app.js:5530 y :5818); (2) NO se reordenan ni re-pesan los terminos de evaluatePlan (objective actual intacto, tardiness*1e7 en su lugar) porque 'no quiero mover algo que rompa lo que ya se hace'. EVIDENCIA dry-run (sin publicar, probes sobre mismo estado): strategy-compare.mjs -> tools gana en objective actual y en hueco evitable, pero pool doble [balanced_goal,idle] produce plan IDENTICO a 1 estrategia a 3.3x tiempo (145.5s) = inutil; toolChanges estructurales 27-29 entre corridas. monto-compare.mjs -> montoTotal identico 814181 en todas las estrategias; semana 1: balanced_goal gana monto inicia (290549) y termina (157753, 65 OTs); tools/finish identicos (115672 terminan, -27%); load 121835; idle 157753/59 OTs -> balanced_goal es la MEJOR para monto semanal. Mecanico (ya en RULE-BAL-019): con fastQualityMode (siempre true en Generar plan y dry-run) compareReadyCandidates retorna en compareFlowReadyCandidates (planner-core.js:2128) ANTES de las ramas tools/finish/load/idle para op>=2, y compareAssignments cae casi siempre en sameMachine (:2200) strategy-agnostic -> las estrategias divergen poco. Cualquier estrategia futura NO toca la op 1 (RULE-BAL-008 / compareFirstOperationCandidates :2090-2106).",
+      "source": "probe_strategy_compare.mjs y probe_monto_compare.mjs (salidas %LOCALAPPDATA%/Temp/opencode/strategy-compare.json y monto-compare.json, 2026-09-22); planner-core.js:2128/2200/2090; app.js:5530/5818; decisiones explicitas del usuario 2026-09-22; RULE-BAL-003/RULE-BAL-008/RULE-BAL-009/RULE-BAL-019",
+      "domain": "Balanceo",
+      "updated_at": "2026-09-22"
     }
   ]
 }
