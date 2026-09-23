@@ -821,6 +821,9 @@ function bindElements() {
     "printSubcontractBtn",
     "subcontractPrintContext",
     "subcontractReportCount",
+    "releaseReport",
+    "releaseReportCount",
+    "exportReleaseXlsxBtn",
     "planSnapshotSelect",
     "reportWeekStartInput",
     "reportWeekPrevBtn",
@@ -948,8 +951,8 @@ function prepareIndividualPrint(target, orientation = "portrait") {
   document.body.classList.add("printing-individual-plan");
   if (orientation === "landscape") document.documentElement.classList.add("printing-landscape");
   const pageSize = orientation === "landscape"
-    ? "@media print { @page { size: 297mm 210mm; margin: 7mm; } }"
-    : "@media print { @page { size: 210mm 297mm; margin: 7mm; } }";
+    ? "@media print { @page { size: 297mm 210mm; margin: 12mm; } }"
+    : "@media print { @page { size: 210mm 297mm; margin: 12mm; } }";
   const styleEl = document.createElement("style");
   styleEl.id = "planning-print-page-size";
   styleEl.textContent = pageSize;
@@ -1053,6 +1056,7 @@ function bindEvents() {
   els.exportCsvBtn.addEventListener("click", exportCsv);
   els.exportBacklogXlsxBtn.addEventListener("click", exportBacklogXlsx);
   els.exportQueueXlsxBtn.addEventListener("click", exportQueueXlsx);
+  els.exportReleaseXlsxBtn.addEventListener("click", exportReleaseXlsx);
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
@@ -7213,6 +7217,7 @@ function renderReports() {
   renderOperatorReport();
   renderAdjusterReport();
   renderSubcontractReport();
+  renderReleaseReport();
   const coverageIssues = window.PlanningWorkflowCore.reportCoverageDiagnostics(reportOperationsSource());
   els.reportSnapshotMeta.title = coverageIssues.map((issue) => issue.text).join("\n");
   if (coverageIssues.length) els.reportSnapshotMeta.textContent = `${reportSourceLabel()} · ${coverageIssues.length} diagnostico(s) de cobertura`;
@@ -7673,6 +7678,64 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
       statusCompleted: completed,
     };
   }).sort((a, b) => a.start - b.start || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }));
+}
+
+function releaseReportRows() {
+  const grouped = new Map();
+  for (const op of reportOperationsSource()) {
+    if (!isFinalReleaseOperation(op)) continue;
+    if (!grouped.has(op.ot)) grouped.set(op.ot, []);
+    grouped.get(op.ot).push(op);
+  }
+  const rows = [];
+  for (const [ot, operations] of grouped.entries()) {
+    const sequenced = operations.slice().sort((a, b) => sequenceSort(a, b));
+    const release = sequenced[0];
+    const date = opStart(release) || opEnd(release);
+    const workOrder = workOrderForOt(ot);
+    const quantityValue = release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
+    const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
+    rows.push({
+      ot,
+      article: release.parte || workOrder?.item || "",
+      quantity,
+      date,
+      ct: String(release.ct || "").trim(),
+      label: String(release.ct || "").trim() === "5504" ? "39OTD" : "16OC",
+    });
+  }
+  return rows.sort((a, b) => {
+    const aTime = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+    return aTime - bTime || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true });
+  });
+}
+
+function renderReleaseReport() {
+  if (!els.releaseReport) return;
+  const rows = releaseReportRows();
+  if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
+  const headers = ["Fecha de plan", "Operacion", "OT", "Articulo", "Cantidad"];
+  const body = rows.map((row) => `<tr>
+    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
+    <td>${escapeHtml(row.label)}</td>
+    <td>${escapeHtml(row.ot)}</td>
+    <td>${escapeHtml(row.article)}</td>
+    <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+  </tr>`).join("");
+  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+}
+
+function exportReleaseXlsx() {
+  const rows = releaseReportRows().map((row) => [
+    row.date ? formatReportDate(row.date) : "SIN FECHA",
+    row.label,
+    row.ot,
+    row.article,
+    row.quantity,
+  ]);
+  const bytes = buildXlsxBytes(["Fecha de plan", "Operacion", "OT", "Articulo", "Cantidad"], rows, "Liberacion final");
+  downloadBlob(bytes, "liberacion-final-16oc-39otd.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 function toolChangeReportData(op) {
