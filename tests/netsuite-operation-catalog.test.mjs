@@ -126,11 +126,12 @@ const catalogPage = {
 const salesPricesPage = {
   body: JSON.stringify({
     ok: true,
-    headers: ["_ITEM_ID", "item_name", "PRECIO BASE MNX", "CANTIDAD ORDEN", "FECHA DE ORDEN"],
+    headers: ["_ITEM_ID", "PARTE", "PRECIO BASE MNX", "CANTIDAD ORDEN", "FECHA DE ORDEN", "MONEDA", "TIPO CAMBIO"],
     rows: [
-      [1001, "D66-2896", 40, 10, "10/01/2026 10:00 AM"],
-      [1001, "D66-2896", 100, 5, "10/06/2026 10:00 AM"],
-      [1001, "D66-2896", 200, 1, "10/09/2026 10:00 AM"],
+      [1001, "D66-2896", 40, 10, "10/01/2026 10:00 AM", "Peso Mexicano", 1],
+      [1001, "D66-2896", 100, 5, "10/06/2026 10:00 AM", "Peso Mexicano", 1],
+      [1001, "D66-2896", 200, 1, "10/09/2026 10:00 AM", "Peso Mexicano", 1],
+      [2425, "C 490 UADE PN", 725.19, 15, "2026-09-02 10:40:08", "US Dollar", 16.9755],
     ],
     hasMore: false,
   }),
@@ -146,8 +147,36 @@ test("precios de venta salen del restlet 1766 REQ_FIFO (ultima venta y promedio 
   assert.equal(prices.lastByItem["1001"], 200);
   assert.equal(prices.lastByItem["D66-2896"], 200);
   assert.ok(Math.abs(prices.avgByItem["1001"] - (100 * 5 + 200 * 1) / 6) < 1e-9);
+  assert.equal(prices.lastByItem["C 490 UADE PN"], 725.19);
+  assert.equal(prices.lastByItem["2425"], 725.19);
   assert.equal(prices.from, "2026-03-05");
   assert.equal(prices.to, "2026-09-10");
+});
+
+test("PP_buildWorkOrderCatalog_ lee Articulo acentuado de WO_LISTA y matchea precio por nombre", () => {
+  const { context } = load([salesPricesPage]);
+  const prices = context.PP_fetchSalesPricesRestlet_(config, { from: "2026-03-05", to: "2026-09-10" });
+
+  const catalog = context.PP_buildWorkOrderCatalog_([
+    {
+      "WO Internal ID": "22983",
+      "WO Folio": "3386",
+      "Artículo": "C 490 UADE PN",
+      "Descripción": "C 490",
+      "Cantidad": "15",
+      "Fecha de vencimiento": "14/08/2026",
+      "Estatus": "En curso",
+      "Cliente": "",
+    },
+  ], []);
+
+  assert.equal(catalog[0].ot, "3386");
+  assert.equal(catalog[0].item, "C 490 UADE PN");
+  assert.equal(catalog[0].itemId, "");
+
+  const applied = context.PP_applySalesPrices_(catalog, prices);
+  assert.equal(applied[0].lastSalePrice, 725.19);
+  assert.ok(applied[0].averageSalePrice > 0);
 });
 
 test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", () => {

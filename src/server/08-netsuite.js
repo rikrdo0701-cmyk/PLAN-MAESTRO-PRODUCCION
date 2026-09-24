@@ -492,7 +492,7 @@ function PP_fetchSalesPricesRestlet_(config, window) {
   const cutoff = new Date(window.from + 'T00:00:00');
   (page.rows || []).forEach(function(row) {
     const itemId = String(row._ITEM_ID || '').trim();
-    const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM']) || '').trim();
+    const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM', 'PARTE']) || '').trim();
     const price = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
     const qty = Number(PP_pick_(row, ['CANTIDAD ORDEN', 'cantidad_orden']) || 0);
     const orderedAt = PP_parseRestletDate_(PP_pick_(row, ['FECHA DE ORDEN', 'fecha_orden']));

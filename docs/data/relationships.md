@@ -167,8 +167,8 @@ Operaciones Programadas → Plan Maestro.
 
 | RESTlet | → Hoja/entidad | Mapeo clave |
 |---|---|---|
-| `1764` `WO_LISTA` | `ORDENES_TRABAJO` | `tranid`/`WO Folio` → `OT`; internal id → `WO_INTERNAL_ID`; item → `ARTICULO`; quantities/dates/status/customer/prices → resto de columnas |
-| `1766` `REQ_FIFO` | `ORDENES_TRABAJO.PRECIO_ULTIMA_VENTA` + `PRECIO_PROMEDIO_VENTA` | `_ITEM_ID`/nombre → OT por `itemId`/`ARTICULO`; `PRECIO BASE MNX`/`FECHA DE ORDEN`/`CANTIDAD ORDEN` → última venta y promedio 6m |
+| `1764` `WO_LISTA` | `ORDENES_TRABAJO` | `WO Folio` → `OT`; internal id → `WO_INTERNAL_ID`; `Artículo` → `ARTICULO` (sin `Item Internal ID` en headers → `itemId` catálogo vacío); quantities/dates/status/customer → resto de columnas |
+| `1766` `REQ_FIFO` | `ORDENES_TRABAJO.PRECIO_ULTIMA_VENTA` + `PRECIO_PROMEDIO_VENTA` | `_ITEM_ID` **o `PARTE`** (no hay `_ITEM_NAME`) → OT por `itemId`/`Artículo`; `PRECIO BASE MNX`/`FECHA DE ORDEN`/`CANTIDAD ORDEN` → última venta y promedio 6m |
 | `1762` operaciones | `OPERACIONES` | `ID (link)` → `ID`; `Orden de trabajo` → `OT`; secuencia/CT/times/resources → `SECUENCIA`, `CT`, `TIEMPO_*`, `OPERADOR`/`MAQUINA` |
 | `1763` materiales | `MATERIALES` | assembly → `ENSAMBLE`; item → `COMPONENTE_ID`/`COMPONENTE`; quantity → `REQUERIDO`/`EMITIDO`/`PENDIENTE`; OT/WO → `OT`/`WO_INTERNAL_ID` |
 | `2080` `WO_INSPECCION` | inspección | `WO Folio`/`tranid` → folio; detalle de ruta y trabajo |

@@ -450,8 +450,8 @@ Headers: `ID, Artículo, Material, Descripción, Cantidad, Emitido, Pendiente po
 
 | Script | Deploy | Body | Uso |
 |---|---|---|---|
-| `1764` | `1` | `{ table: 'WO_LISTA', locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | OTs (folios, internal IDs, cantidades, fechas, precios) |
-| `1766` | `1` | `{ table: 'REQ_FIFO', pageIndex, pageSize: 200 }` | Precios de venta por artículo (`_ITEM_ID`, `PRECIO BASE MNX`, `CANTIDAD ORDEN`, `FECHA DE ORDEN`): última venta + promedio ponderado 6m (`PP_fetchSalesPricesRestlet_`) |
+| `1764` | `1` | `{ table: 'WO_LISTA', locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | OTs abiertas. Headers reales (2026-09-24): `WO Internal ID, WO Folio, Artículo, Descripción, Cantidad, Fecha de vencimiento, Estatus, BOM Revision, Revisión, Cliente` — **sin `Item Internal ID`** → `PP_buildWorkOrderCatalog_.itemId` va vacío; match de precios solo por `Artículo` |
+| `1766` | `1` | `{ table: 'REQ_FIFO', pageIndex, pageSize: 200 }` | Precios de venta por artículo: headers reales incluyen `PARTE` (nombre), `_ITEM_ID`, `PRECIO BASE MNX`, `CANTIDAD ORDEN`, `FECHA DE ORDEN`, `MONEDA`, `TIPO CAMBIO` — **sin `_ITEM_NAME`**; `PP_fetchSalesPricesRestlet_` indexa por `_ITEM_ID` y `PARTE` (FIX 2026-09-24) |
 | `1762` | `17` | `{ locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | Operaciones programadas de la planta |
 | `1763` | `14` | `{ locationId: 1, onlyOpen: true, maxWOs: 50000, pageIndex, pageSize: 200 }` | Materiales |
 | `2080` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`) |
