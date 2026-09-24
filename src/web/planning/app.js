@@ -9047,6 +9047,34 @@ function mergeWorkOrderLocalOverrides(local, item) {
   return merged;
 }
 
+function preserveImportedOperationPrices(localOperations, importedOperations) {
+  const byId = new Map();
+  const bySequence = new Map();
+  const byOt = new Map();
+  for (const operation of localOperations || []) {
+    const unitPrice = Number(operation?.unitPrice);
+    const amount = Number(operation?.amount);
+    if (!(unitPrice > 0) && !(amount > 0)) continue;
+    const record = { unitPrice, amount };
+    if (operation.id) byId.set(String(operation.id), record);
+    const sequenceKey = `${materialOtKey(operation.ot)}|${operation.secuencia}|${operation.ct}`;
+    if (!bySequence.has(sequenceKey)) bySequence.set(sequenceKey, record);
+    const otKey = materialOtKey(operation.ot);
+    if (otKey && !byOt.has(otKey)) byOt.set(otKey, record);
+  }
+  if (!byId.size && !bySequence.size && !byOt.size) return importedOperations || [];
+  return (importedOperations || []).map((operation) => {
+    const source = byId.get(String(operation?.id || ""))
+      || bySequence.get(`${materialOtKey(operation?.ot)}|${operation?.secuencia}|${operation?.ct}`)
+      || byOt.get(materialOtKey(operation?.ot));
+    if (!source) return operation;
+    const merged = { ...operation };
+    if (!(Number(merged.unitPrice) > 0) && source.unitPrice > 0) merged.unitPrice = source.unitPrice;
+    if (!(Number(merged.amount) > 0) && source.amount > 0) merged.amount = source.amount;
+    return merged;
+  });
+}
+
 function applyNetSuiteWorkOrdersPayload(payload) {
   if (Array.isArray(payload?.workOrders)) {
     const localByOt = new Map((state.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
@@ -9286,6 +9314,8 @@ function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
     merged.id = existingOperation.id;
   }
   if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+  if (!(Number(merged.unitPrice) > 0) && Number(existingOperation.unitPrice) > 0) merged.unitPrice = Number(existingOperation.unitPrice);
+  if (!(Number(merged.amount) > 0) && Number(existingOperation.amount) > 0) merged.amount = Number(existingOperation.amount);
   return merged;
 }
 
@@ -9387,11 +9417,12 @@ function mergeIndividualPlanningData(payload, ot) {
       || existingByCt.get(individualPlanningOperationCtKey(operation));
     return mergeIndividualPlanningOperation(operation, existing);
   });
+  const mergedWithPrices = preserveImportedOperationPrices(existingOperations, mergedOperations);
   state.operations = [
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
-    ...mergedOperations,
+    ...mergedWithPrices,
   ];
-  mergeIndividualPlanningOperationCatalog(mergedOperations);
+  mergeIndividualPlanningOperationCatalog(mergedWithPrices);
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
@@ -9470,12 +9501,13 @@ function applyForcedOtPlanningData(payload, ot) {
 
   const existingOperations = (state.operations || []).filter((operation) => materialOtKey(operation?.ot) === key);
   const { preserved, merged: mergedOperations } = mergeIndividualPlanningOperationsPreserving(operations, existingOperations);
+  const mergedWithPrices = preserveImportedOperationPrices(existingOperations, mergedOperations);
   state.operations = [
     ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
     ...preserved,
-    ...mergedOperations,
+    ...mergedWithPrices,
   ];
-  mergeIndividualPlanningOperationCatalog(mergedOperations);
+  mergeIndividualPlanningOperationCatalog(mergedWithPrices);
   state.materials = [
     ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
     ...materials,
@@ -9865,10 +9897,13 @@ async function applyImported(imported, options = {}) {
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
   const localCapabilityConfigEdited = state._locallyEditedCapabilityConfig === true;
   const preservedLocalCapabilityConfig = localCapabilityConfigEdited ? captureLocalCapabilityConfig() : null;
+  const localOperationsBeforeImport = state.operations;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
     ? detectNetSuiteOtChanges(state, imported, { detectedAt: new Date().toISOString() })
     : null;
-  if (Array.isArray(imported.operations) && !importedIsStaleSchedule) state.operations = imported.operations;
+  if (Array.isArray(imported.operations) && !importedIsStaleSchedule) {
+    state.operations = preserveImportedOperationPrices(localOperationsBeforeImport, imported.operations);
+  }
   const importedSyncedMap = imported.operationsSyncedAt && typeof imported.operationsSyncedAt === "object" &&
     Object.keys(imported.operationsSyncedAt).length ? imported.operationsSyncedAt : null;
   state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), ...(importedSyncedMap || {}) };
@@ -9953,6 +9988,7 @@ async function applyImported(imported, options = {}) {
       chosen = newest || preservedLocalPlanning;
     }
     restoreLocalPlanningState(chosen || preservedLocalPlanning);
+    state.operations = preserveImportedOperationPrices(preservedLocalPlanning.operations, state.operations);
   }
   if (Array.isArray(imported.workOrders)) {
     const localWorkOrdersByOt = new Map(

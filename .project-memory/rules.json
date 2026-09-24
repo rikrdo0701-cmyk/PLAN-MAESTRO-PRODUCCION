@@ -469,7 +469,17 @@
       "status": "documentada",
       "rule": "El export CSV del plan (Exportar) incluye las columnas PRECIO y MONTO por fila de operacion. PRECIO = precio unitario de la OT (si la operacion trae PRECIO_UNITARIO del snapshot lo conserva; si no, usa max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA) de ORDENES_TRABAJO y si es 0 el PRECIO_MANUAL de la configuracion de articulo; effectiveUnitPriceForOt/invoiceUnitPriceForOt, app.js). MONTO = PRECIO x piezas pendientes de la OT (amountForOt); coincide con el monto de liberacion que reporta el resumen semanal (weeklyFinishingCost, planning-workflow-core.js). Es valor de venta estimado, no costo real.",
       "source": "definicion de usuario 2026-08-17 (solo interesa el monto de liberacion); cambio 2026-09-23 (precio unitario = max ultima venta / promedio 6m desde Restlet 1766); src/web/planning/app.js (PLAN_HEADERS, operationToRow, effectiveUnitPriceForOt/amountForOt); src/web/planning/planning-workflow-core.js; docs/data/sources.md",
-      "domain": "Montos"
+      "domain": "Montos",
+      "updated_at": "2026-09-23"
+    },
+    {
+      "rule_id": "RULE-MON-002",
+      "name": "Preserva unitPrice/amount de operaciones al importar o fusionar (merge positivo)",
+      "status": "implementada",
+      "rule": "La hoja OPERACIONES del servidor NO tiene columnas PRECIO_UNITARIO/MONTO (PP_SHEETS.OPERACIONES / PP_OPERATION_FIELDS en 02-storage.js), por lo que todo round-trip de state.operations a traves de getAppState/applyImported o de getPlanningWorkOrderData/mergeIndividualPlanningData pierde unitPrice/amount. Si el reporte Plan de la semana cae a $0.00 tras un tiempo (correcto tras recargar, cero despues), la causa es que un path de reemplazo de operations descarto los precios locales positivos y el fallback invoiceUnitPriceForOt tambien esta en 0 para esas OTs. FIX (patron preserve-positive igual que mergeWorkOrderLocalOverrides): preserveImportedOperationPrices(localOperations, importedOperations) en app.js indexa los precios locales positivos por id, por ot|secuencia|ct y por OT (fallback) y solo rellena unitPrice/amount cuando el incoming no trae valor > 0. Se aplica en: (1) applyImported al hacer state.operations = imported.operations (captura localOperationsBeforeImport antes del replace); (2) applyImported despues de restoreLocalPlanningState cuando preserveLocalPlanning elige el borrador remoto (preservedLocalPlanning.operations como fuente); (3) mergeIndividualPlanningData y applyForcedOtPlanningData tras el merge por secuencia/ct (existingOperations como fuente); (4) mergeIndividualPlanningOperation re-aplica unitPrice/amount del existing cuando el merged queda sin valor positivo. Las OTs nuevas o sin precio local quedan en 0/null y el reporte sigue el fallback invoice/manual de RULE-MON-001/RULE-FIN-001.",
+      "source": "bug usuario 2026-09-24 (Plan de la semana montos en $0.00 tras tiempo; correcto tras reload; OT 3607 conserva 1935); diagnostico: OPERACIONES sin columnas de precio + applyImported preserveLocalPlanning:false (performance-client reloadStateAfterConflict/loadInitialStateConditionally) + mergeIndividualPlanningData sin match de secuencia/ct; FIX app.js preserveImportedOperationPrices + applyImported + mergeIndividualPlanningData + applyForcedOtPlanningData + mergeIndividualPlanningOperation; tests performance-client-calls.test.mjs (preserve + fusion individual) y build.test.mjs (anclas de source)",
+      "domain": "Montos",
+      "updated_at": "2026-09-24"
     },
     {
       "rule_id": "RULE-OT-016",

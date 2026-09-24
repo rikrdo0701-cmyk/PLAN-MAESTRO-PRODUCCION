@@ -1392,12 +1392,16 @@ test("la config de capacidades editada localmente sobrevive a un import remoto",
   assert.match(importFlow, /if \(Array\.isArray\(imported\.workOrders\)\)/);
   assert.match(importFlow, /state\.workOrders = normalizeWorkOrders\(imported\.workOrders\)/);
   assert.match(importFlow, /mergeWorkOrderLocalOverrides\(localWorkOrdersByOt\.get\(materialOtKey\(item\.ot\)\), item\)/);
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(localOperationsBeforeImport, imported\.operations\)/);
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(preservedLocalPlanning\.operations, state\.operations\)/);
   const priceMerge = app.slice(
     app.indexOf("function mergeWorkOrderLocalOverrides("),
     app.indexOf("function applyNetSuiteWorkOrdersPayload(", app.indexOf("function mergeWorkOrderLocalOverrides(")),
   );
   assert.match(priceMerge, /if \(!merged\.dueDateOverride && local\.dueDateOverride\) merged\.dueDateOverride = local\.dueDateOverride;/);
   assert.match(priceMerge, /if \(!\(merged\.lastSalePrice > 0\) && Number\(local\.lastSalePrice\) > 0\)/);
+  assert.match(priceMerge, /function preserveImportedOperationPrices\(localOperations, importedOperations\)/);
+  assert.match(priceMerge, /if \(!\(Number\(merged\.unitPrice\) > 0\) && source\.unitPrice > 0\) merged\.unitPrice = source\.unitPrice;/);
 
   const state = {
     _locallyEditedCapabilityConfig: true,
@@ -2017,6 +2021,49 @@ test("mergeIndividualWorkOrder no bloquea precio remoto positivo por local en 0 
   );
   assert.equal(localPositive.lastSalePrice, 500);
   assert.equal(localPositive.averageSalePrice, 784.5);
+});
+
+test("mergeIndividualPlanningOperation y mergeIndividualPlanningData conservan unitPrice/amount locales positivos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const mergeOpSource = app.slice(
+    app.indexOf("function mergeIndividualPlanningOperation("),
+    app.indexOf("function mergeIndividualPlanningOperationsPreserving(", app.indexOf("function mergeIndividualPlanningOperation(")),
+  );
+  const mergeIndividualPlanningOperation = Function(`${mergeOpSource}; return mergeIndividualPlanningOperation;`)();
+
+  const matched = mergeIndividualPlanningOperation(
+    { id: "remote", ot: "3424", secuencia: 1, ct: "5458", tiempoProd: 20 },
+    { id: "local", ot: "3424", secuencia: 1, ct: "5458", tiempoProd: 8, unitPrice: 320, amount: 11200 },
+  );
+  assert.equal(matched.unitPrice, 320);
+  assert.equal(matched.amount, 11200);
+  assert.equal(matched.tiempoProd, 20);
+
+  const preserveSource = app.slice(
+    app.indexOf("function preserveImportedOperationPrices("),
+    app.indexOf("function applyNetSuiteWorkOrdersPayload(", app.indexOf("function preserveImportedOperationPrices(")),
+  );
+  const preserveImportedOperationPrices = Function(
+    "materialOtKey",
+    `${preserveSource}; return preserveImportedOperationPrices;`,
+  )((value) => String(value || "").trim().toUpperCase());
+
+  const dataMerge = app.slice(
+    app.indexOf("function mergeIndividualPlanningData("),
+    app.indexOf("function ensureWorkOrderPlanningData(", app.indexOf("function mergeIndividualPlanningData(")),
+  );
+  assert.match(dataMerge, /preserveImportedOperationPrices\(existingOperations, mergedOperations\)/);
+  assert.match(app.slice(
+    app.indexOf("function applyForcedOtPlanningData("),
+    app.indexOf("async function updateSelectedOtFromNetSuite(", app.indexOf("function applyForcedOtPlanningData(")),
+  ), /preserveImportedOperationPrices\(existingOperations, mergedOperations\)/);
+
+  const fallback = preserveImportedOperationPrices(
+    [{ id: "local", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 1935, amount: 967500 }],
+    [{ id: "remote", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 0, amount: 0 }],
+  );
+  assert.equal(fallback[0].unitPrice, 1935);
+  assert.equal(fallback[0].amount, 967500);
 });
 
 test("importJson adopta y limpia operationCatalogWarning", async () => {

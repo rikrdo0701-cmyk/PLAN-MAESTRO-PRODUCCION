@@ -31,10 +31,16 @@ const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
   appSource.indexOf("async function fetchNetSuiteExercise("),
 );
-const individualPlanningSource = appSource.slice(
-  appSource.indexOf("const individualPlanningRequests"),
-  appSource.indexOf("async function ensurePlanningDataLoaded("),
-);
+const individualPlanningSource = [
+  appSource.slice(
+    appSource.indexOf("function preserveImportedOperationPrices("),
+    appSource.indexOf("function applyNetSuiteWorkOrdersPayload(", appSource.indexOf("function preserveImportedOperationPrices(")),
+  ),
+  appSource.slice(
+    appSource.indexOf("const individualPlanningRequests"),
+    appSource.indexOf("async function ensurePlanningDataLoaded("),
+  ),
+].join("\n");
 const individualSelectionSource = appSource.slice(
   appSource.indexOf("function jobPlanningOperations("),
   appSource.indexOf("async function prepareJobForPlanning("),
@@ -67,10 +73,16 @@ const undoSource = appSource.slice(
   appSource.indexOf("function checkpointState("),
   appSource.indexOf("function addToolCatalogItem("),
 );
-const detailOperationsSource = appSource.slice(
-  appSource.indexOf("const individualPlanningRequests"),
-  appSource.indexOf("async function ensurePlanningDataLoaded("),
-);
+const detailOperationsSource = [
+  appSource.slice(
+    appSource.indexOf("function preserveImportedOperationPrices("),
+    appSource.indexOf("function applyNetSuiteWorkOrdersPayload(", appSource.indexOf("function preserveImportedOperationPrices(")),
+  ),
+  appSource.slice(
+    appSource.indexOf("const individualPlanningRequests"),
+    appSource.indexOf("async function ensurePlanningDataLoaded("),
+  ),
+].join("\n");
 const applyPlanningPayloadSource = appSource.slice(
   appSource.indexOf("function applyNetSuitePlanningPayload("),
   appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
@@ -1190,6 +1202,66 @@ test("la sincronizacion de OTs preserva precios locales positivos cuando el payl
   assert.equal(state.workOrders[0].dueDateOverride, "2026-08-01");
   assert.equal(state.workOrders[0].photoUrl, "local.jpg");
   assert.equal(state.workOrders[0].item, "NEW");
+});
+
+test("preserveImportedOperationPrices conserva unitPrice/amount locales positivos ante import sin precios", () => {
+  const preserveImportedOperationPrices = Function(
+    "materialOtKey",
+    `${appSource.slice(
+      appSource.indexOf("function preserveImportedOperationPrices("),
+      appSource.indexOf("function applyNetSuiteWorkOrdersPayload(", appSource.indexOf("function preserveImportedOperationPrices(")),
+    )}; return preserveImportedOperationPrices;`,
+  )((value) => String(value || "").trim().toUpperCase());
+
+  const local = [
+    { id: "op-1", ot: "3424", secuencia: 1, ct: "5458", unitPrice: 320, amount: 11200 },
+    { id: "op-2", ot: "3424", secuencia: 2, ct: "5504", unitPrice: 0, amount: 0 },
+    { id: "op-3", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 1935, amount: 967500 },
+  ];
+  const imported = [
+    { id: "remote-1", ot: "3424", secuencia: 1, ct: "5458", unitPrice: 0, amount: 0 },
+    { id: "remote-2", ot: "3424", secuencia: 2, ct: "5504", unitPrice: 0, amount: 0 },
+    { id: "remote-3", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 0, amount: 0 },
+    { id: "remote-4", ot: "9999", secuencia: 1, ct: "5458", unitPrice: 0, amount: 0 },
+  ];
+
+  const merged = preserveImportedOperationPrices(local, imported);
+
+  assert.equal(merged[0].unitPrice, 320);
+  assert.equal(merged[0].amount, 11200);
+  assert.equal(merged[1].unitPrice, 320);
+  assert.equal(merged[1].amount, 11200);
+  assert.equal(merged[2].unitPrice, 1935);
+  assert.equal(merged[2].amount, 967500);
+  assert.equal(merged[3].unitPrice, 0);
+  assert.equal(merged[3].amount, 0);
+});
+
+test("la fusion individual conserva unitPrice/amount locales cuando el remoto no trae precios", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773" }],
+      operations: [{
+        id: "local-2773-10", ot: "2773", secuencia: 10, ct: "5458",
+        unitPrice: 320, amount: 2240, tiempoProd: 8, cantPendiente: 7,
+      }],
+    },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773" },
+      operations: [{ id: "remote-2773-10", ot: "2773", secuencia: 10, ct: "5458", tiempoProd: 15, cantPendiente: 7 }],
+      materials: [],
+    },
+  }, "2773");
+
+  assert.equal(merged, true);
+  const operation = fixture.state.operations.find((item) => item.ot === "2773");
+  assert.equal(operation.unitPrice, 320);
+  assert.equal(operation.amount, 2240);
+  assert.equal(operation.tiempoProd, 15);
 });
 
 test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a backlog", () => {
