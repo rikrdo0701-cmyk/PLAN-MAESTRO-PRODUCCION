@@ -325,7 +325,7 @@
       "references": [
         "src/server/02-storage.js",
         "src/server/15-performance-service.js",
-        "src/web/planning/app.js (commercialPlanningRequirement.needsManualPrice: si lastSalePrice, averageSalePrice y PRECIO_MANUAL estan en 0, el modal de preparacion exige precio > 0)"
+        "src/web/planning/app.js (commercialPlanningRequirement.needsManualPrice: si lastSalePrice, averageSalePrice, PRECIO_MANUAL y operationPrice de la ops (unitPrice/amount) estan en 0 o < $1, el modal de preparacion exige precio >= $1; si la ops ya trae >= $1 no se pide)"
       ]
     },
     {

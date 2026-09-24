@@ -74,9 +74,10 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
 - `ARTICULO` → `ORDENES_TRABAJO.ARTICULO` (1:1 por artículo).
 - `TIPO_OT` → `TIPOS_OT.ID` (`tipo-oem`, `tipo-especial`, `tipo-linea`).
 - `PRECIO_MANUAL` override del precio de venta; si `ORDENES_TRABAJO` tiene
-  `PRECIO_ULTIMA_VENTA` y `PRECIO_PROMEDIO_VENTA` en 0 y `PRECIO_MANUAL` en 0,
-  la preparación de la OT exige capturar un precio > 0 en el modal
-  (`needsManualPrice`, RULE-FIN-001).
+  `PRECIO_ULTIMA_VENTA` y `PRECIO_PROMEDIO_VENTA` en 0, `PRECIO_MANUAL` en 0
+  y la operación de la OT no tiene `unitPrice`/`amount` ≥ $1, la preparación
+  de la OT exige capturar un precio ≥ $1 en el modal
+  (`needsManualPrice`, RULE-FIN-001); si la ops ya trae precio/monto ≥ $1 no se pide.
 
 ### 1.7 `MATERIALES`
 

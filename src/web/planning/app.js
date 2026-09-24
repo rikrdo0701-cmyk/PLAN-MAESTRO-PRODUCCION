@@ -3017,20 +3017,35 @@ function planningPreparationSignature(job, operations, commercial) {
   });
 }
 
+function maxOperationPriceSignalForOt(ot) {
+  const key = materialOtKey(ot);
+  let best = 0;
+  for (const op of state.operations || []) {
+    if (materialOtKey(op.ot) !== key) continue;
+    for (const value of [op.unitPrice, op.amount]) {
+      const number = Number(value);
+      if (Number.isFinite(number) && number > best) best = number;
+    }
+  }
+  return best;
+}
+
 function commercialPlanningRequirement(job, options = {}) {
   const configuration = articleConfigurationValue(job.parte);
   const invoicePrice = invoiceUnitPriceForOt(job.ot);
   const manualPrice = Math.max(0, Number(configuration.manualUnitPrice || 0));
+  const operationPrice = maxOperationPriceSignalForOt(job.ot);
   const planningType = String(configuration.planningType || configuration.tipoTrabajo || "").trim().toUpperCase();
   return {
     currentType: String(configuration.jobType || "").trim().toUpperCase(),
     currentPlanningType: planningType,
     invoicePrice,
     manualPrice,
+    operationPrice,
     pendingPieces: pendingPiecesForWorkOrder(workOrderForOt(job.ot)),
     needsType: !String(configuration.jobType || "").trim(),
     needsPlanningType: options.alwaysPlanningType === true || !planningType,
-    needsManualPrice: !(invoicePrice > 0) && !(manualPrice > 0),
+    needsManualPrice: !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1),
   };
 }
 

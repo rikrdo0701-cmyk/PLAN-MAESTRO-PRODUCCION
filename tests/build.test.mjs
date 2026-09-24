@@ -519,6 +519,8 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /if \(!confirmZeroManualPrice\(els\.planningDialogForm\)\) return;[\s\S]*closePlanningDialog/);
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
+  assert.match(pagesIndex, /function maxOperationPriceSignalForOt\(ot\)/);
+  assert.match(pagesIndex, /needsManualPrice: !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
   assert.match(pagesIndex, /class="article-temporary-price-input"/);
   assert.match(pagesIndex, /function updateTemporaryArticlePrice\(article, value\)/);
   assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--prototype td/);
@@ -2019,6 +2021,35 @@ test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPrice
   assert.equal(invoiceUnitPriceForOt("300"), 0);
   assert.equal(effectiveUnitPriceForOt("100"), 784.5);
   assert.equal(effectiveUnitPriceForOt("300"), 99);
+});
+
+test("commercialPlanningRequirement no pide precio si la operacion ya tiene unitPrice/amount >= 1", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function maxOperationPriceSignalForOt(");
+  const end = app.indexOf("function applyCommercialPlanningRequirement(", start);
+  assert.ok(start >= 0 && end > start, "bloque commercialPlanningRequirement debe existir");
+  const source = app.slice(start, end);
+  assert.match(source, /needsManualPrice: !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
+
+  const make = (operations, invoice = 0, manual = 0) => Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: manual, jobType: "", planningType: "NORMAL" }),
+    () => invoice,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" });
+
+  assert.equal(make([{ ot: "3537", unitPrice: 12.5, amount: 25 }]).needsManualPrice, false);
+  assert.equal(make([{ ot: "3537", unitPrice: 0, amount: 500 }]).needsManualPrice, false);
+  assert.equal(make([{ ot: "3537", unitPrice: 0.01, amount: 0.02 }]).needsManualPrice, true);
+  assert.equal(make([]).needsManualPrice, true);
+  assert.equal(make([], 80).needsManualPrice, false);
+  assert.equal(make([], 0, 45).needsManualPrice, false);
 });
 
 test("mergeIndividualWorkOrder no bloquea precio remoto positivo por local en 0 y conserva dueDateOverride/foto locales", async () => {

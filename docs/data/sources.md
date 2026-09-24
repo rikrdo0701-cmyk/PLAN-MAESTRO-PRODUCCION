@@ -141,8 +141,10 @@ Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, ACTUALIZADO`.
 - Readers: `PP_readState_` → `PP_buildArticleConfigurations_`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `savePlanningStateOptimized`.
 - Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
-  `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0, la preparación de la OT abre el
-  modal con `ot_manual_price` obligatorio (`required`, `min="1"`; piso $1 MXN, RULE-MON-001).
+  `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0 y la operación de la OT no tiene
+  `unitPrice`/`amount` ≥ $1, la preparación de la OT abre el
+  modal con `ot_manual_price` obligatorio (`required`, `min="1"`; piso $1 MXN, RULE-MON-001);
+  si la ops ya trae precio/monto ≥ $1 no se pide precio.
 
 ## MATRIZ
 
