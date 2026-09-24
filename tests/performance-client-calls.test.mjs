@@ -1297,6 +1297,67 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
   assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
 });
 
+test("la sincronizacion persiste el mayor precio de venta como precio de referencia del articulo", () => {
+  const persistSource = appSource.slice(
+    appSource.indexOf("function persistReferencePricesFromSync("),
+    appSource.indexOf("function setNetSuiteSyncPhaseLabel("),
+  );
+  const saves = [];
+  const state = {
+    workOrders: [
+      { ot: "3386", item: "C 490 UADE PN", lastSalePrice: 725.19, averageSalePrice: 742.09 },
+      { ot: "3607", item: "TRA 500", lastSalePrice: 1935, averageSalePrice: 0 },
+      { ot: "3608", item: "SIN PRECIO", lastSalePrice: 0, averageSalePrice: 0 },
+      { ot: "3609", item: "RESIDUAL", lastSalePrice: 0.05, averageSalePrice: 0 },
+      { ot: "3610", item: "MANUAL MAYOR", lastSalePrice: 100, averageSalePrice: 0 },
+    ],
+    operations: [],
+    articleConfigurations: {
+      "MANUAL MAYOR": { article: "MANUAL MAYOR", manualUnitPrice: 500, jobType: "", planningType: "", updatedAt: "" },
+    },
+  };
+  const articleKeyForPart = (part) => String(part || "").trim().toUpperCase();
+  const articleConfigurationFor = (part) => {
+    const article = articleKeyForPart(part);
+    if (!state.articleConfigurations[article]) {
+      state.articleConfigurations[article] = { article, jobType: "", planningType: "", manualUnitPrice: 0, updatedAt: "" };
+    }
+    return state.articleConfigurations[article];
+  };
+  const persistReferencePricesFromSync = Function(
+    "state", "articleKeyForPart", "articleConfigurationFor", "articleForOt", "queueAppSheetSave",
+    `${persistSource}; return persistReferencePricesFromSync;`,
+  )(
+    state,
+    articleKeyForPart,
+    articleConfigurationFor,
+    (ot) => state.workOrders.find((item) => item.ot === ot)?.item || "",
+    (scope) => saves.push(scope),
+  );
+
+  assert.equal(persistReferencePricesFromSync(), true);
+
+  assert.equal(state.articleConfigurations["C 490 UADE PN"].manualUnitPrice, 742.09);
+  assert.equal(state.articleConfigurations["TRA 500"].manualUnitPrice, 1935);
+  assert.equal(state.articleConfigurations["MANUAL MAYOR"].manualUnitPrice, 500);
+  assert.equal(state.articleConfigurations["SIN PRECIO"], undefined);
+  assert.equal(state.articleConfigurations["RESIDUAL"], undefined);
+  assert.ok(state.articleConfigurations["C 490 UADE PN"].updatedAt);
+  assert.deepEqual(saves, ["catalogs"]);
+
+  assert.equal(persistReferencePricesFromSync(), false);
+  assert.deepEqual(saves, ["catalogs"]);
+});
+
+test("syncNetSuiteData persiste precios de referencia tras aplicar el payload de NetSuite", async () => {
+  const syncSource = appSource.slice(
+    appSource.indexOf("async function syncNetSuiteData("),
+    appSource.indexOf("function validateNetSuiteImportedData("),
+  );
+  assert.match(syncSource, /persistReferencePricesFromSync\(\);\s*\n\s*clearNetSuiteSyncAlert\(\);/);
+});
+
+
 test("la navegacion manual desplaza el espacio de trabajo al inicio", () => {
   const scrolls = [];
   const workspace = { dataset: {} };

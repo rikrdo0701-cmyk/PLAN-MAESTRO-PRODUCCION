@@ -9107,6 +9107,30 @@ function applyNetSuiteWorkOrdersPayload(payload) {
   resetBacklogWindow();
 }
 
+function persistReferencePricesFromSync() {
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  let changed = false;
+  const updatedAt = new Date().toISOString();
+  const bump = (part, price) => {
+    const article = articleKeyForPart(part);
+    if (!article) return;
+    const configuration = articleConfigurationFor(article);
+    if (Number(configuration.manualUnitPrice || 0) >= price) return;
+    configuration.manualUnitPrice = price;
+    configuration.updatedAt = updatedAt;
+    changed = true;
+  };
+  for (const workOrder of workOrders) {
+    const price = Math.max(0, Number(workOrder?.lastSalePrice) || 0, Math.max(0, Number(workOrder?.averageSalePrice) || 0));
+    if (!(price >= 1)) continue;
+    bump(workOrder.item, price);
+    const otArticle = articleForOt(workOrder?.ot);
+    if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) bump(otArticle, price);
+  }
+  if (changed) queueAppSheetSave("catalogs");
+  return changed;
+}
+
 function setNetSuiteSyncPhaseLabel(message) {
   const label = els.loadNsExerciseBtn?.querySelector("[data-sync-label]");
   if (label) label.textContent = message || "Sincronizar";
@@ -9150,6 +9174,7 @@ async function syncNetSuiteData(showMessage, options = {}) {
       validateNetSuiteImportedData(imported, mode);
       await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
     }
+    persistReferencePricesFromSync();
     clearNetSuiteSyncAlert();
     if (showMessage) {
       const message = mode === "full"
