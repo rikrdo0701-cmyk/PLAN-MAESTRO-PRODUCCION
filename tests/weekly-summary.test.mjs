@@ -158,3 +158,38 @@ test("weeklyJobSummary con ceros de snapshot y sin precio deja monto nulo (no am
   assert.equal(summary.starts[0].unitPrice, null);
   assert.equal(summary.starts[0].amount, null);
 });
+
+test("weeklyJobSummary ignora precios residuales (< $1 MXN) cuando no hay otra fuente de precio", () => {
+  const weeklyJobSummary = createWeeklyJobSummary();
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 20, unitPrice: 0.01, amount: 0.02 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, null);
+  assert.equal(summary.starts[0].amount, null);
+  assert.equal(summary.finishes[0].amount, null);
+});
+
+test("weeklyJobSummary ignora unitPrice/amount residuales (< $1 MXN) y deriva monto desde invoice real", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    invoicePrices: { "4501": 12.5 },
+  });
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 20, unitPrice: 0.1, amount: 0.3 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, 12.5);
+  assert.equal(summary.starts[0].amount, 250);
+});
+
+test("weeklyJobSummary ignora manualUnitPrice residual (< $1 MXN) sin precio invoice", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    configurations: { "PARTE-A": { manualUnitPrice: 0.5 } },
+  });
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 20 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, null);
+  assert.equal(summary.starts[0].amount, null);
+});

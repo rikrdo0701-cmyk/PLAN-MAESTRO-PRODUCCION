@@ -142,7 +142,7 @@ Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, ACTUALIZADO`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `savePlanningStateOptimized`.
 - Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
   `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0, la preparación de la OT abre el
-  modal con `ot_manual_price` obligatorio (`required`, `min="0.01"`).
+  modal con `ot_manual_price` obligatorio (`required`, `min="1"`; piso $1 MXN, RULE-MON-001).
 
 ## MATRIZ
 
@@ -281,6 +281,10 @@ HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO, PRECIO, MONTO`.
 `PRECIO` = precio unitario de la OT: `max(unitPrice` de la operación,
 `max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA)`, `PRECIO_MANUAL`)`;
 `MONTO` = `PRECIO × piezas pendientes` de la OT (monto de liberación, RULE-MON-001).
+Valores almacenados `< $1 MXN` (cero o polvo residual 0.01/0.1) **no cuentan**: en el CSV
+`PRECIO`/`MONTO` caen al fallback (`effectiveUnitPriceForOt`/`amountForOt`) y en
+`weeklyJobSummary` (Plan de la semana) la fila queda sin precio (`null` → `$0.00`);
+el piso $1 MXN evita publicar el polvo `$0.01`/`$0.02` de COMPONENTE.
 
 - Readers: descarga externa del usuario.
 - Writer: `exportCsv` (`src/web/planning/app.js`) via `PlanningWorkflowCore.draftExportOperations`.

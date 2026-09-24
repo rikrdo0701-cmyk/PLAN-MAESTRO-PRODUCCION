@@ -374,7 +374,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /const finishingRows = summary\.finishes \|\| \[\];/);
   assert.doesNotMatch(pagesIndex, /const startingRows = summary\.starts \|\| \[\];/);
   assert.doesNotMatch(pagesIndex, /Number\(row\.amount \|\| 0\)/);
-  assert.match(pagesIndex, /Number\.isFinite\(number\) && number > 0/);
+  assert.match(pagesIndex, /Number\.isFinite\(number\) && number >= 1/);
   assert.match(pagesIndex, /const unitPrices = positiveValues\(\[first\.unitPrice, last\.unitPrice, invoiceUnitPriceForOt\(ot\) \|\| null, configuration\.manualUnitPrice\]\)/);
   assert.match(pagesIndex, /const amount = amounts\.length \? Math\.max\(\.\.\.amounts\) : null/);
   assert.match(pagesIndex, /Number\.isFinite\(pendingPiecesValue\)/);
@@ -394,7 +394,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
   assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
-  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0\.01" step="0\.01" required/);
+  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="1" step="0\.01" required/);
   assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
   assert.match(pagesIndex, /const description = String\(job\?\.descripcion \|\| workOrderForOt\(ot\)\?\.description \|\| ""\)\.trim\(\);/);
   assert.match(pagesIndex, /const detail = \[article, description, quantity \? `\$\{formatMaterialQuantity\(quantity\)\} pzas` : ""\]\.filter\(Boolean\)\.join\(" - "\);/);
@@ -1927,6 +1927,31 @@ test("operationToRow calcula PRECIO y MONTO desde la OT cuando la operacion no l
 
   const computed = operationToRow({ ot: "200" });
   assert.deepEqual(computed, [12.5, 250]);
+});
+
+test("operationToRow ignora PRECIO/MONTO residuales (< $1 MXN) o en cero y cae al precio de la OT", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PRECIO", "MONTO"],
+    { PRECIO: "unitPrice", MONTO: "amount" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+  );
+
+  const residual = operationToRow({ ot: "300", unitPrice: 0.01, amount: 0.02 });
+  assert.deepEqual(residual, [12.5, 250]);
+
+  const zeroed = operationToRow({ ot: "400", unitPrice: 0, amount: 0 });
+  assert.deepEqual(zeroed, [12.5, 250]);
 });
 
 test("operationToRow resuelve CT por descripcion y cantidad desde la OT cuando la operacion trae SIN_CT o 0", async () => {

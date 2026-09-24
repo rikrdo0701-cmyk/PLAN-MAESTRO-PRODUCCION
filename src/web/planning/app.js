@@ -3446,7 +3446,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona OEM, especial o linea</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="0.01" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario mayor a 0</small></label>`
+    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="1" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario de al menos $1.00</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -3683,8 +3683,8 @@ function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible,
 function confirmZeroManualPrice(form) {
   const input = form?.elements?.namedItem("ot_manual_price");
   if (!input) return true;
-  if (Number(input.value || 0) > 0) return true;
-  showToast("Captura un precio unitario mayor a $0.00; las tres fuentes de precio estan en cero", 9000);
+  if (Number(input.value || 0) >= 1) return true;
+  showToast("Captura un precio unitario de al menos $1.00; las tres fuentes de precio estan en cero", 9000);
   input.focus();
   return false;
 }
@@ -7505,7 +7505,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const positiveNumber = (value) => {
       if (value === null || value === undefined || String(value).trim() === "") return false;
       const number = Number(value);
-      return Number.isFinite(number) && number > 0;
+      return Number.isFinite(number) && number >= 1;
     };
     const positiveValues = (values) => values.filter(positiveNumber).map(Number);
     const unitPrices = positiveValues([first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice]);
@@ -10402,8 +10402,8 @@ function operationToRow(op, generatedAt) {
     if (header === "GENERADO_EL") return generatedAt ?? "";
     if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
     if (header === "LOG") return scheduledLogForExport(op);
-    if (header === "PRECIO") return Number.isFinite(Number(op.unitPrice)) ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
-    if (header === "MONTO") return Number.isFinite(Number(op.amount)) ? op.amount : amountForOt(op.ot);
+    if (header === "PRECIO") return Number(op.unitPrice) >= 1 ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
+    if (header === "MONTO") return Number(op.amount) >= 1 ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
     const value = op[field];
     if (header === "CT") return exportCtForOperation(op, value);
@@ -11747,7 +11747,9 @@ function invoiceUnitPriceForOt(ot) {
 
 function effectiveUnitPriceForOt(ot) {
   const invoicePrice = invoiceUnitPriceForOt(ot);
-  return invoicePrice > 0 ? invoicePrice : Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
+  if (invoicePrice >= 1) return invoicePrice;
+  const manualPrice = Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
+  return manualPrice >= 1 ? manualPrice : 0;
 }
 
 function amountForOt(ot) {
