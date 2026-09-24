@@ -7496,7 +7496,9 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const finish = opEnd(release);
     const workOrder = workOrderForOt(ot);
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
-    const pendingPiecesValue = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
+    const opPieces = [first.pendingPieces, first.cantPendiente, last.pendingPieces, last.cantPendiente]
+      .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
+    const pendingPiecesValue = Number(opPieces ?? pendingPiecesForWorkOrder(workOrder));
     const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
     const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
     const unitPriceValue = [first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice].find(hasValue);
@@ -7504,6 +7506,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const unitPrice = hasValue(unitPriceValue) ? (Number.isFinite(unitPriceNumber) ? Math.max(0, unitPriceNumber) : 0) : null;
     const amountValue = [first.amount, last.amount].find(hasValue);
     const amountNumber = Number(amountValue);
+    const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",
@@ -7511,7 +7514,9 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
       planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
       unitPrice,
-      amount: amountValue == null ? null : (Number.isFinite(amountNumber) ? Math.max(0, amountNumber) : 0),
+      amount: amountValue != null
+        ? (Number.isFinite(amountNumber) ? Math.max(0, amountNumber) : 0)
+        : derivedAmount,
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
@@ -7546,12 +7551,28 @@ function renderWeeklyJobDays(rows, finishing) {
   }).join("");
 }
 
+function cleanDrawingInput(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const hyperlink = text.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
+  let raw = String(hyperlink ? hyperlink[1] : text).trim();
+  raw = raw.replace(/^['"]+|['"]+$/g, "").trim();
+  return raw;
+}
+
 function normalizeDrawingUrl(value) {
-  const raw = String(value || "").trim().replace(/^['"]+|['"]+$/g, "");
+  const raw = cleanDrawingInput(value);
   if (!raw) return "";
-  if (/^maldonado:\/\//i.test(raw)) return raw;
+  if (/^maldonado:\/\/abrir\?archivo=/i.test(raw)) return raw;
+  const withoutFilePrefix = raw.replace(/^file:\/*/i, "");
+  let networkPath = withoutFilePrefix.replace(/\//g, "\\").trim();
+  if (/^(SERVER2008|192\.168\.1\.101)\\Produccion2\\/i.test(networkPath)) networkPath = `\\\\${networkPath}`;
+  networkPath = networkPath.replace(/^\\\\SERVER2008\\Produccion2\\/i, "\\\\192.168.1.101\\Produccion2\\");
+  if (/^\\\\192\.168\.1\.101\\Produccion2\\/i.test(networkPath) && /\.pdf$/i.test(networkPath)) return `maldonado://abrir?archivo=${encodeURIComponent(networkPath)}`;
   if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^[A-Za-z]:\\\\|^\//.test(raw)) return `file://${raw.replace(/\\/g, "/")}`;
+  if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return `https://${raw}`;
+  if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return `https://drive.google.com/file/d/${encodeURIComponent(raw)}/view`;
+  if (/^[A-Za-z]:\\|^\//.test(raw)) return `file://${raw.replace(/\\/g, "/")}`;
   return "";
 }
 
@@ -7579,25 +7600,53 @@ function openDrawingUrl(url) {
   return true;
 }
 
+function drawingFromBundle(bundle) {
+  const detail = bundle?.detail || {};
+  return String(detail.workOrder?.drawing || detail.materials?.find((material) => material?.drawing)?.drawing || "").trim();
+}
+
+function drawingFromRouteRows(rows, part) {
+  const articleKey = String(part || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const list = Array.isArray(rows) ? rows : [];
+  const preferred = list.find((row) => String(row?.MATERIAL || row?.material || "").trim() === "" && String(row?.DIBUJO || row?.drawing || "").trim());
+  const byArticle = list.find((row) => String(row?.ARTICULO || row?.article || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === articleKey && String(row?.DIBUJO || row?.drawing || "").trim());
+  const withDrawing = list.find((row) => String(row?.DIBUJO || row?.drawing || "").trim());
+  return String(preferred?.DIBUJO || preferred?.drawing || byArticle?.DIBUJO || byArticle?.drawing || withDrawing?.DIBUJO || withDrawing?.drawing || "").trim();
+}
+
 async function openOtDrawing(ot, part) {
   const key = String(ot || "").trim();
   if (!key) return;
+  const partLabel = String(part || "").trim();
+  const missingMessage = `No hay dibujo registrado para la OT ${key}${partLabel ? ` (parte ${partLabel})` : ""}`;
 
   if (otDrawingCache[key] !== undefined) {
     const drawing = otDrawingCache[key];
-    if (drawing) openDrawingUrl(drawing);
-    else showToast(`No hay dibujo registrado para la OT ${key}`, 9000);
+    if (drawing) {
+      if (!openDrawingUrl(drawing)) showToast(`El dibujo de la OT ${key} no tiene una URL válida: ${drawing}`, 9000);
+    } else showToast(missingMessage, 9000);
     return;
   }
 
   try {
     const result = await callAppsScript("getInspectionWorkOrderBundle", key);
-    const drawing = String(result?.detail?.workOrder?.drawing || "").trim();
+    if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la OT");
+    let drawing = drawingFromBundle(result.data);
+    if (!drawing && partLabel) {
+      try {
+        const routes = await callAppsScript("getInspectionDrawingRoutes", partLabel);
+        if (routes?.ok) drawing = drawingFromRouteRows(routes.data, partLabel);
+      } catch (routeError) {
+        // El bundle sigue siendo la fuente principal; el fallback es opcional.
+      }
+    }
     otDrawingCache[key] = drawing;
-    if (drawing) openDrawingUrl(drawing);
-    else showToast(`No hay dibujo registrado para la OT ${key}`, 9000);
+    if (!drawing) {
+      showToast(missingMessage, 9000);
+      return;
+    }
+    if (!openDrawingUrl(drawing)) showToast(`El dibujo de la OT ${key} no tiene una URL válida: ${drawing}`, 9000);
   } catch (error) {
-    otDrawingCache[key] = "";
     showToast(`No se pudo obtener el dibujo de la OT ${key}: ${error.message || String(error)}`, 9000);
   }
 }
