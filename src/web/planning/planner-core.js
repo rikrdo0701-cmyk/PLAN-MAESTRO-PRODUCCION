@@ -485,7 +485,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
             const candidates = findAssignments(context, op, previous)
               .filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
             candidates.sort((a, b) => compareAssignments(a, b, context.strategy, context));
-            assignment = selectTopKAssignment(context, candidates);
+            assignment = selectOperationAssignment(context, op, candidates);
             if (assignment) {
               job.__planAssignment = { op, assignment, unique: candidates.length === 1 };
             }
@@ -577,7 +577,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     state.horizonDays = horizonDays;
     const activeOperations = [...fixed.filter(isSelected), ...context.generatedChanges, ...scheduled]
       .filter((op) => operationStart(op) && operationEnd(op));
-    const operatorConflicts = operatorOverlapConflicts(activeOperations, state);
+    const capacityCheckOperations = activeOperations.filter((op) => !isPlanCompletedOperation(state, op));
+    const operatorConflicts = operatorOverlapConflicts(capacityCheckOperations, state);
     for (const conflict of operatorConflicts) {
       diagnostics.push({
         level: "ERROR",
@@ -694,7 +695,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     const assignments = findAssignments(context, op, previous)
       .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
     assignments.sort((a, b) => compareAssignments(a, b, context.strategy, context));
-    return selectTopKAssignment(context, assignments);
+    return selectOperationAssignment(context, op, assignments);
   }
 
   function findAssignments(context, op, previous) {
@@ -912,6 +913,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     next.fechaFin = formatDate(assignment.end);
     next.horaFin = formatTime(assignment.end);
     next.needsReschedule = false;
+    next.autoFrozen = false;
     next.planStatus = "PENDIENTE";
     if (assignment.setupMinutes > 0 && !(Number(next.tiempoSetup) > 0)) next.tiempoSetup = assignment.setupMinutes;
     Object.assign(next, waitDiagnostic(context, assignment));
@@ -1024,7 +1026,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     op.secuenciaBloqueadora = "";
     const start = operationStart(op);
     const end = operationEnd(op);
-    if (start && end) {
+    const reservesCapacity = !isPlanCompletedOperation(context.state, op);
+    if (start && end && reservesCapacity) {
       const segments = [{ start, end }];
       const tracksOperator = isFiniteOperation(context.state, op) && isLoadBearingOperator(op.operador);
       const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia, performanceState: context.performanceState };
@@ -2075,6 +2078,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         .sort(compareOperationSequence),
       index: 0,
       last: null,
+      hasAnchor: items.some((op) => hasOperationAnchor(op)),
       orderIndex: selectedOrder.has(normalizeKey(items[0]?.ot)) ? selectedOrder.get(normalizeKey(items[0]?.ot)) : Number.MAX_SAFE_INTEGER,
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
   }
@@ -2293,6 +2297,33 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     return Number.isFinite(Number(job?.orderIndex)) ? Number(job.orderIndex) : Number.MAX_SAFE_INTEGER;
   }
 
+  function hasOperationAnchor(operation) {
+    return Boolean(String(operation?.fechaInicio || "").trim()) && Boolean(String(operation?.horaInicio || "").trim());
+  }
+
+  function anchorPreferredOperator(operation) {
+    if (!hasOperationAnchor(operation)) return "";
+    const operator = String(operation?.operador || "").trim();
+    if (!operator || normalizeKey(operator) === "SIN_OPERADOR") return "";
+    return operator;
+  }
+
+  function selectOperationAssignment(context, op, candidates) {
+    if (!candidates || !candidates.length) return null;
+    const preferred = anchorPreferredOperator(op);
+    if (preferred) {
+      const minStart = candidates.reduce((min, candidate) => Math.min(min, candidate.start.getTime()), Number.POSITIVE_INFINITY);
+      const atMin = candidates.filter((candidate) => candidate.start.getTime() === minStart);
+      const preferredAtMin = atMin.find((candidate) => String(candidate.operator) === preferred);
+      if (preferredAtMin) {
+        countPlanningStat(context.performanceState, "anchoredOperatorPreferenceHits");
+        return preferredAtMin;
+      }
+      return selectTopKAssignment(context, atMin);
+    }
+    return selectTopKAssignment(context, candidates);
+  }
+
   function compareFirstAndSuccessorCandidates(firstCandidate, successorCandidate) {
     const firstOrder = jobOrderIndex(firstCandidate.job);
     const successorOrder = jobOrderIndex(successorCandidate.job);
@@ -2310,6 +2341,9 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
   }
 
   function compareReadyCandidates(a, b, firstOperation, strategy, context) {
+    const anchorTierA = a.job?.hasAnchor ? 0 : 1;
+    const anchorTierB = b.job?.hasAnchor ? 0 : 1;
+    if (anchorTierA !== anchorTierB) return anchorTierA - anchorTierB;
     const isFirstA = Boolean(a.job.operations[0]) && a.op === a.job.operations[0];
     const isFirstB = Boolean(b.job.operations[0]) && b.op === b.job.operations[0];
     if (isFirstA && !isFirstB) return usesOrderedStartFlow(strategy, context) ? compareFirstAndSuccessorCandidates(a, b) : -1;

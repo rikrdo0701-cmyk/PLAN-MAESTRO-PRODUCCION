@@ -134,6 +134,16 @@
             normalize(operation?.operationState) === "COMPLETADA";
           const preserved = !selected.has(ot) || isHistorical(operation) || completed;
           if (preserved) return { ...operation };
+          // Ancla: operaciones incompletas seleccionadas con inicio completo
+          // (fecha + hora) conservan fechas y operador; el motor las adelanta
+          // si hay hueco antes o las mantiene en su fecha si no lo hay.
+          if (String(operation?.fechaInicio || "").trim() && String(operation?.horaInicio || "").trim()) {
+            return {
+              ...operation,
+              needsReschedule: false,
+              autoFrozen: false,
+            };
+          }
           return {
             ...operation,
             fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "",

@@ -1720,6 +1720,9 @@ tr:last-child td { border-bottom: 0; }
 .weekly-day-table .weekly-row--expedited td { background: #fff0dd; border-color: #f28c28; }
 .article-temporary-price-input { width: 100%; min-width: 88px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 3px; }
 .weekly-day-table th:nth-child(3), .weekly-day-table td:nth-child(3) { width: 36%; text-align: left; }
+.weekly-ot-cell { text-align: center; white-space: nowrap; }
+.weekly-ot-link { background: none; border: 0; color: var(--teal); cursor: pointer; font: inherit; padding: 2px 4px; text-decoration: underline; }
+.weekly-ot-link:hover { background: rgba(8, 127, 122, 0.1); }
 .weekly-day-table tfoot td { background: #eef2f4; font-weight: 700; }
 .weekly-job-empty { min-height: 170px; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
 .weekly-job-panel.loads { display: none; }

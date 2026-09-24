@@ -554,6 +554,7 @@ let inspectionRouteCatalogRows = [];
 let inspectionRouteCatalogReady = false;
 let inspectionRouteCatalogLoading = false;
 let inspectionRouteCatalogLoadError = "";
+let otDrawingCache = {};
 let currentPlanOperationsCache = null;
 let priorityJobsCache = null;
 let planningStateIndexesCache = null;
@@ -1085,6 +1086,12 @@ function bindEvents() {
   });
   els.subcontractReportFutureDays.addEventListener("change", () => updateReportFilter("subcontract", { futureDays: Number(els.subcontractReportFutureDays.value) }));
   els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
+  els.weekReport.addEventListener("click", (event) => {
+    const button = event.target.closest(".weekly-ot-link");
+    if (!button) return;
+    event.preventDefault();
+    openOtDrawing(button.dataset.ot, button.dataset.part);
+  });
   els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); prepareIndividualPrint(els.subcontractReport.closest(".tab-panel"), "landscape"); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
   els.planSnapshotSelect.addEventListener("change", () => loadSelectedPlanSnapshot(els.planSnapshotSelect.value));
@@ -7527,7 +7534,7 @@ function renderWeeklyJobDays(rows, finishing) {
       ? ["No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"]
       : ["No.", "ORD", "PARTE", "PZAS"];
     const body = dayRows.map((row, index) => `<tr class="${window.PlanningWorkflowCore.weeklyPlanningTypeClass(row.planningType)}">
-      <td>${index + 1}</td><td>${escapeHtml(row.ot)}</td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
+      <td>${index + 1}</td><td class="weekly-ot-cell"><button type="button" class="weekly-ot-link" data-ot="${escapeHtml(row.ot)}" data-part="${escapeHtml(row.part)}" title="Abrir dibujo de ${escapeHtml(row.part)}">${escapeHtml(row.ot)}</button></td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
       ${finishing ? `<td>${escapeHtml(formatCurrency(window.PlanningWorkflowCore.effectiveFinishingAmount(row)))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
     </tr>`).join("");
     const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
@@ -7537,6 +7544,62 @@ function renderWeeklyJobDays(rows, finishing) {
       <div class="weekly-day-table"><table><thead><tr>${columns.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="2">Total ${dayRows.length}</td><td></td><td>${escapeHtml(formatMaterialQuantity(pieces))}</td>${finishing ? `<td>${escapeHtml(formatCurrency(amount))}</td><td></td>` : ""}</tr></tfoot></table></div>
     </article>`;
   }).join("");
+}
+
+function normalizeDrawingUrl(value) {
+  const raw = String(value || "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (!raw) return "";
+  if (/^maldonado:\/\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^[A-Za-z]:\\\\|^\//.test(raw)) return `file://${raw.replace(/\\/g, "/")}`;
+  return "";
+}
+
+function openDrawingUrl(url) {
+  const drawing = normalizeDrawingUrl(url);
+  if (!drawing) return false;
+  if (/^maldonado:\/\//i.test(drawing)) {
+    const link = document.createElement("a");
+    link.href = drawing;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return true;
+  }
+  const opened = window.open(drawing, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    const link = document.createElement("a");
+    link.href = drawing;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  return true;
+}
+
+async function openOtDrawing(ot, part) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+
+  if (otDrawingCache[key] !== undefined) {
+    const drawing = otDrawingCache[key];
+    if (drawing) openDrawingUrl(drawing);
+    else showToast(`No hay dibujo registrado para la OT ${key}`, 9000);
+    return;
+  }
+
+  try {
+    const result = await callAppsScript("getInspectionWorkOrderBundle", key);
+    const drawing = String(result?.detail?.workOrder?.drawing || "").trim();
+    otDrawingCache[key] = drawing;
+    if (drawing) openDrawingUrl(drawing);
+    else showToast(`No hay dibujo registrado para la OT ${key}`, 9000);
+  } catch (error) {
+    otDrawingCache[key] = "";
+    showToast(`No se pudo obtener el dibujo de la OT ${key}: ${error.message || String(error)}`, 9000);
+  }
 }
 
 function renderOperatorSelect() {
