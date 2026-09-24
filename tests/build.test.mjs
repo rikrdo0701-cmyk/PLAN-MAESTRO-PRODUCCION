@@ -1391,8 +1391,13 @@ test("la config de capacidades editada localmente sobrevive a un import remoto",
   assert.match(payload, /delete payload\._locallyEditedCapabilityConfig;/);
   assert.match(importFlow, /if \(Array\.isArray\(imported\.workOrders\)\)/);
   assert.match(importFlow, /state\.workOrders = normalizeWorkOrders\(imported\.workOrders\)/);
-  assert.match(importFlow, /if \(!merged\.dueDateOverride && local\.dueDateOverride\) merged\.dueDateOverride = local\.dueDateOverride;/);
-  assert.match(importFlow, /if \(!\(merged\.lastSalePrice > 0\) && Number\(local\.lastSalePrice\) > 0\)/);
+  assert.match(importFlow, /mergeWorkOrderLocalOverrides\(localWorkOrdersByOt\.get\(materialOtKey\(item\.ot\)\), item\)/);
+  const priceMerge = app.slice(
+    app.indexOf("function mergeWorkOrderLocalOverrides("),
+    app.indexOf("function applyNetSuiteWorkOrdersPayload(", app.indexOf("function mergeWorkOrderLocalOverrides(")),
+  );
+  assert.match(priceMerge, /if \(!merged\.dueDateOverride && local\.dueDateOverride\) merged\.dueDateOverride = local\.dueDateOverride;/);
+  assert.match(priceMerge, /if \(!\(merged\.lastSalePrice > 0\) && Number\(local\.lastSalePrice\) > 0\)/);
 
   const state = {
     _locallyEditedCapabilityConfig: true,

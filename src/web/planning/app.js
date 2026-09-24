@@ -6890,9 +6890,11 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
         if (!continueWithLoaded) return;
       }
       if (outcome?.payload) {
+        const localByOt = new Map((previewState.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
         previewState = {
           ...previewState,
-          workOrders: outcome.payload.workOrders,
+          workOrders: (outcome.payload.workOrders || []).map((item) =>
+            mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item)),
           invoicePriceWindow: outcome.payload.invoicePriceWindow || previewState.invoicePriceWindow,
           plant: outcome.payload.plant || previewState.plant,
           syncedAt: outcome.payload.syncedAt || previewState.syncedAt,
@@ -9033,8 +9035,24 @@ function applyNetSuitePlanningPayload(payload) {
   if (backlogDatasetChanged) resetBacklogWindow();
 }
 
+function mergeWorkOrderLocalOverrides(local, item) {
+  if (!local) return item;
+  const merged = { ...item };
+  if (!merged.dueDateOverride && local.dueDateOverride) merged.dueDateOverride = local.dueDateOverride;
+  if (!merged.photoUrl && local.photoUrl) merged.photoUrl = local.photoUrl;
+  if (!(merged.lastSalePrice > 0) && Number(local.lastSalePrice) > 0) merged.lastSalePrice = Number(local.lastSalePrice);
+  if (!(merged.averageSalePrice > 0) && Number(local.averageSalePrice) > 0) merged.averageSalePrice = Number(local.averageSalePrice);
+  if (!merged.averageSalePriceFrom && local.averageSalePriceFrom) merged.averageSalePriceFrom = local.averageSalePriceFrom;
+  if (!merged.averageSalePriceTo && local.averageSalePriceTo) merged.averageSalePriceTo = local.averageSalePriceTo;
+  return merged;
+}
+
 function applyNetSuiteWorkOrdersPayload(payload) {
-  state.workOrders = Array.isArray(payload?.workOrders) ? payload.workOrders : state.workOrders;
+  if (Array.isArray(payload?.workOrders)) {
+    const localByOt = new Map((state.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
+    state.workOrders = payload.workOrders.map((item) =>
+      mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item));
+  }
   Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
   if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
   if (payload?.plant) state.plant = payload.plant;
@@ -9940,18 +9958,8 @@ async function applyImported(imported, options = {}) {
     const localWorkOrdersByOt = new Map(
       (state.workOrders || []).map((item) => [materialOtKey(item?.ot), item]),
     );
-    state.workOrders = normalizeWorkOrders(imported.workOrders).map((item) => {
-      const local = localWorkOrdersByOt.get(materialOtKey(item.ot));
-      if (!local) return item;
-      const merged = { ...item };
-      if (!merged.dueDateOverride && local.dueDateOverride) merged.dueDateOverride = local.dueDateOverride;
-      if (!merged.photoUrl && local.photoUrl) merged.photoUrl = local.photoUrl;
-      if (!(merged.lastSalePrice > 0) && Number(local.lastSalePrice) > 0) merged.lastSalePrice = Number(local.lastSalePrice);
-      if (!(merged.averageSalePrice > 0) && Number(local.averageSalePrice) > 0) merged.averageSalePrice = Number(local.averageSalePrice);
-      if (!merged.averageSalePriceFrom && local.averageSalePriceFrom) merged.averageSalePriceFrom = local.averageSalePriceFrom;
-      if (!merged.averageSalePriceTo && local.averageSalePriceTo) merged.averageSalePriceTo = local.averageSalePriceTo;
-      return merged;
-    });
+    state.workOrders = normalizeWorkOrders(imported.workOrders).map((item) =>
+      mergeWorkOrderLocalOverrides(localWorkOrdersByOt.get(materialOtKey(item.ot)), item));
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();

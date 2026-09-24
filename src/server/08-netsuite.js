@@ -57,14 +57,17 @@ function PP_fetchNetSuitePlantData_() {
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
   let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
+  let salesPricesOk = false;
   try {
     salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+    salesPricesOk = true;
   } catch (error) {
     salesPrices.warning = String(error.message || error);
   }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applySalesPrices_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations), salesPrices
-  ));
+  const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations);
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(
+    salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
+  );
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
   PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: workOrderCatalog.length });
   const materialsResponse = PP_fetchRestletPages_({ script: '1763', deploy: '14' }, { locationId: config.locationId, onlyOpen: true, maxWOs: 50000 }, config, 20);
@@ -88,14 +91,17 @@ function PP_fetchNetSuiteWorkOrdersData_() {
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
   let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
+  let salesPricesOk = false;
   try {
     salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+    salesPricesOk = true;
   } catch (error) {
     salesPrices.warning = String(error.message || error);
   }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applySalesPrices_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, []), salesPrices
-  ));
+  const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, []);
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(
+    salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
+  );
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
   return {
     workOrders: workOrderCatalog,
@@ -144,6 +150,26 @@ function PP_preservedToolChanges_(current, operations) {
   });
 }
 
+function PP_preserveWorkOrderLocalFields_(item, previous) {
+  item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+  if (!(Number(item.lastSalePrice) > 0) && Number(previous.lastSalePrice) > 0) {
+    item.lastSalePrice = Number(previous.lastSalePrice);
+  }
+  if (!(Number(item.averageSalePrice) > 0) && Number(previous.averageSalePrice) > 0) {
+    item.averageSalePrice = Number(previous.averageSalePrice);
+  }
+  if (!String(item.averageSalePriceFrom || '').trim() && previous.averageSalePriceFrom) {
+    item.averageSalePriceFrom = previous.averageSalePriceFrom;
+  }
+  if (!String(item.averageSalePriceTo || '').trim() && previous.averageSalePriceTo) {
+    item.averageSalePriceTo = previous.averageSalePriceTo;
+  }
+  if (!String(item.photoUrl || '').trim() && previous.photoUrl) {
+    item.photoUrl = previous.photoUrl;
+  }
+  return item;
+}
+
 function PP_applyNetSuitePlantData_(current, snapshot) {
   const workOrderCatalog = JSON.parse(JSON.stringify(snapshot.workOrders || []));
   const previousWorkOrders = {};
@@ -151,8 +177,7 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
     previousWorkOrders[PP_normalizeKey_(item.ot)] = item;
   });
   workOrderCatalog.forEach(function(item) {
-    const previous = previousWorkOrders[PP_normalizeKey_(item.ot)] || {};
-    item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+    PP_preserveWorkOrderLocalFields_(item, previousWorkOrders[PP_normalizeKey_(item.ot)] || {});
   });
   const plantOperations = snapshot.plantOperations || [];
   const catalogFilter = PP_buildPlantFilterFromWorkOrders_(workOrderCatalog);
@@ -208,8 +233,7 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
     previousWorkOrders[PP_normalizeKey_(item.ot)] = item;
   });
   workOrderCatalog.forEach(function(item) {
-    const previous = previousWorkOrders[PP_normalizeKey_(item.ot)] || {};
-    item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+    PP_preserveWorkOrderLocalFields_(item, previousWorkOrders[PP_normalizeKey_(item.ot)] || {});
   });
 
   const merged = JSON.parse(JSON.stringify(current || {}));

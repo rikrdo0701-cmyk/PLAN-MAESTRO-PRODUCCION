@@ -76,7 +76,7 @@ const applyPlanningPayloadSource = appSource.slice(
   appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
 );
 const applyWorkOrdersPayloadSource = appSource.slice(
-  appSource.indexOf("function applyNetSuiteWorkOrdersPayload("),
+  appSource.indexOf("function mergeWorkOrderLocalOverrides("),
   appSource.indexOf("function setNetSuiteSyncPhaseLabel("),
 );
 const loadSourceSelectionSource = appSource.slice(
@@ -1143,7 +1143,7 @@ test("la sincronizacion de OTs no rehidrata selectedOts desde metadata remota ob
     workOrders: [{ ot: "100" }, { ot: "200" }],
   };
   const applyNetSuiteWorkOrdersPayload = Function(
-    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
     `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
   )(state, {
     PlanningWorkflowCore: {
@@ -1159,12 +1159,37 @@ test("la sincronizacion de OTs no rehidrata selectedOts desde metadata remota ob
         };
       },
     },
-  }, () => {}, () => {});
+  }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
   applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200"], workOrders: [{ ot: "100" }, { ot: "200" }] });
 
   assert.deepEqual(state.selectedOts, ["200"]);
   assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+});
+
+test("la sincronizacion de OTs preserva precios locales positivos cuando el payload trae 0", () => {
+  const state = {
+    selectedOts: ["100"],
+    workOrders: [{ ot: "100", lastSalePrice: 320, averageSalePrice: 410, dueDateOverride: "2026-08-01", photoUrl: "local.jpg" }],
+  };
+  const applyNetSuiteWorkOrdersPayload = Function(
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
+    `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
+  )(state, {
+    PlanningWorkflowCore: {
+      pruneDraftToOpenWorkOrders: (draft, workOrders) => ({ ...draft, workOrders }),
+    },
+  }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
+
+  applyNetSuiteWorkOrdersPayload({
+    workOrders: [{ ot: "100", item: "NEW", lastSalePrice: 0, averageSalePrice: 0 }],
+  });
+
+  assert.equal(state.workOrders[0].lastSalePrice, 320);
+  assert.equal(state.workOrders[0].averageSalePrice, 410);
+  assert.equal(state.workOrders[0].dueDateOverride, "2026-08-01");
+  assert.equal(state.workOrders[0].photoUrl, "local.jpg");
+  assert.equal(state.workOrders[0].item, "NEW");
 });
 
 test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a backlog", () => {
@@ -1174,7 +1199,7 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
     workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
   };
   const applyNetSuiteWorkOrdersPayload = Function(
-    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow",
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
     `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
   )(state, {
     PlanningWorkflowCore: {
@@ -1190,7 +1215,7 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
         };
       },
     },
-  }, () => {}, () => {});
+  }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
   applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200", "300"], workOrders: [{ ot: "100" }, { ot: "200" }] });
 

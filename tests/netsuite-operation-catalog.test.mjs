@@ -175,6 +175,35 @@ test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", ()
   assert.equal(applied[0].averageSalePriceTo, "2026-09-10");
 });
 
+test("PP_applyNetSuiteWorkOrdersData_ conserva precios y foto locales cuando el snapshot llega en 0", () => {
+  const { context } = load();
+  const current = {
+    workOrders: [
+      { ot: "3424", lastSalePrice: 320, averageSalePrice: 410, averageSalePriceFrom: "2026-03-05", averageSalePriceTo: "2026-09-10", photoUrl: "local.jpg", dueDateOverride: "2026-08-01" },
+    ],
+    operationPlanStatuses: {},
+    plant: {},
+  };
+  const snapshot = {
+    workOrders: [
+      { ot: "3424", item: "TR 350", lastSalePrice: 0, averageSalePrice: 0, photoUrl: "" },
+      { ot: "3607", item: "TRA 500", lastSalePrice: 1935, averageSalePrice: 1800 },
+    ],
+    invoicePriceWindow: null,
+  };
+  const merged = context.PP_applyNetSuiteWorkOrdersData_(current, snapshot);
+  const ot3424 = merged.workOrders.find((item) => item.ot === "3424");
+  const ot3607 = merged.workOrders.find((item) => item.ot === "3607");
+
+  assert.equal(ot3424.lastSalePrice, 320);
+  assert.equal(ot3424.averageSalePrice, 410);
+  assert.equal(ot3424.averageSalePriceFrom, "2026-03-05");
+  assert.equal(ot3424.averageSalePriceTo, "2026-09-10");
+  assert.equal(ot3424.photoUrl, "local.jpg");
+  assert.equal(ot3424.dueDateOverride, "2026-08-01");
+  assert.equal(ot3607.lastSalePrice, 1935);
+});
+
 test("catálogo maestro reutiliza caché por una hora", () => {
   const { context, requests, cachePuts } = load([catalogPage]);
 
