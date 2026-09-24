@@ -467,10 +467,10 @@
       "rule_id": "RULE-MON-001",
       "name": "Monto de liberacion en el export CSV del plan",
       "status": "documentada",
-      "rule": "El export CSV del plan (Exportar) incluye las columnas PRECIO y MONTO por fila de operacion. PRECIO = precio unitario de la OT (si la operacion trae PRECIO_UNITARIO del snapshot lo conserva; si no, usa max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA) de ORDENES_TRABAJO y si es 0 el PRECIO_MANUAL de la configuracion de articulo; effectiveUnitPriceForOt/invoiceUnitPriceForOt, app.js). MONTO = PRECIO x piezas pendientes de la OT (amountForOt); coincide con el monto de liberacion que reporta el resumen semanal (weeklyFinishingCost, planning-workflow-core.js). Es valor de venta estimado, no costo real.",
-      "source": "definicion de usuario 2026-08-17 (solo interesa el monto de liberacion); cambio 2026-09-23 (precio unitario = max ultima venta / promedio 6m desde Restlet 1766); src/web/planning/app.js (PLAN_HEADERS, operationToRow, effectiveUnitPriceForOt/amountForOt); src/web/planning/planning-workflow-core.js; docs/data/sources.md",
+      "rule": "El export CSV del plan (Exportar) incluye las columnas PRECIO y MONTO por fila de operacion. PRECIO = precio unitario de la OT: max entre unitPrice de la operacion (snapshot), max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA) de ORDENES_TRABAJO y PRECIO_MANUAL de la configuracion de articulo (effectiveUnitPriceForOt/invoiceUnitPriceForOt, app.js). MONTO = PRECIO x piezas pendientes de la OT (amountForOt). En weeklyJobSummary (Plan de la semana): unitPrice = max(ops first/last, invoice, manual) — no el primer positivo; amount de fila = max(amount de ops, unitPrice x piezas), para que un amount/unitPrice minuculo de la operacion no contamine el reporte (COMPONENTE $0.01). Es valor de venta estimado, no costo real.",
+      "source": "definicion de usuario 2026-08-17 (solo interesa el monto de liberacion); cambio 2026-09-23 (precio unitario = max ultima venta / promedio 6m desde Restlet 1766); 2026-09-24 (max entre fuentes, no primer positivo; weekly amount max); src/web/planning/app.js (PLAN_HEADERS, operationToRow, weeklyJobSummary, effectiveUnitPriceForOt/amountForOt); src/web/planning/planning-workflow-core.js; docs/data/sources.md; tests/weekly-summary.test.mjs",
       "domain": "Montos",
-      "updated_at": "2026-09-23"
+      "updated_at": "2026-09-24"
     },
     {
       "rule_id": "RULE-MON-002",

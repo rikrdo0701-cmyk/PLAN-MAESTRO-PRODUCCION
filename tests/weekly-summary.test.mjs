@@ -120,6 +120,35 @@ test("weeklyJobSummary ignora unitPrice/amount en cero del snapshot y deriva des
   assert.equal(summary.finishes[0].amount, 875);
 });
 
+test("weeklyJobSummary usa el mayor unitPrice entre ops, invoice y manual", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    invoicePrices: { "4501": 12.5 },
+    configurations: { "PARTE-A": { manualUnitPrice: 9 } },
+  });
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 70, unitPrice: 0.01 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, 12.5);
+  assert.equal(summary.starts[0].amount, 875);
+});
+
+test("weeklyJobSummary amount usa el mayor entre amount de ops y unitPrice * piezas", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    invoicePrices: { "4501": 12.5 },
+  });
+  const tiny = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 70, amount: 0.02, unitPrice: 0.01 }],
+  });
+  assert.equal(tiny.starts[0].amount, 875);
+
+  const largerOpAmount = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 70, amount: 999, unitPrice: 0.01 }],
+  });
+  assert.equal(largerOpAmount.starts[0].amount, 999);
+  assert.equal(largerOpAmount.starts[0].unitPrice, 12.5);
+});
+
 test("weeklyJobSummary con ceros de snapshot y sin precio deja monto nulo (no amount 0 bloqueante)", () => {
   const weeklyJobSummary = createWeeklyJobSummary();
   const summary = weeklyJobSummary("2026-07-20", {

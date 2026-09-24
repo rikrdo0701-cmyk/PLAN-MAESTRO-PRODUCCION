@@ -7507,10 +7507,13 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       const number = Number(value);
       return Number.isFinite(number) && number > 0;
     };
-    const unitPriceValue = [first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice].find(positiveNumber);
-    const unitPrice = unitPriceValue != null ? Number(unitPriceValue) : null;
-    const amountValue = [first.amount, last.amount].find(positiveNumber);
+    const positiveValues = (values) => values.filter(positiveNumber).map(Number);
+    const unitPrices = positiveValues([first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice]);
+    const unitPrice = unitPrices.length ? Math.max(...unitPrices) : null;
+    const opAmounts = positiveValues([first.amount, last.amount]);
     const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
+    const amounts = derivedAmount != null && derivedAmount > 0 ? [...opAmounts, derivedAmount] : opAmounts;
+    const amount = amounts.length ? Math.max(...amounts) : null;
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",
@@ -7518,7 +7521,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
       planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
       unitPrice,
-      amount: amountValue != null ? Number(amountValue) : derivedAmount,
+      amount,
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });

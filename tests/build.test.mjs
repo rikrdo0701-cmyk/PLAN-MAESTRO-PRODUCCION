@@ -375,7 +375,8 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.doesNotMatch(pagesIndex, /const startingRows = summary\.starts \|\| \[\];/);
   assert.doesNotMatch(pagesIndex, /Number\(row\.amount \|\| 0\)/);
   assert.match(pagesIndex, /Number\.isFinite\(number\) && number > 0/);
-  assert.match(pagesIndex, /amountValue != null \? Number\(amountValue\) : derivedAmount/);
+  assert.match(pagesIndex, /const unitPrices = positiveValues\(\[first\.unitPrice, last\.unitPrice, invoiceUnitPriceForOt\(ot\) \|\| null, configuration\.manualUnitPrice\]\)/);
+  assert.match(pagesIndex, /const amount = amounts\.length \? Math\.max\(\.\.\.amounts\) : null/);
   assert.match(pagesIndex, /Number\.isFinite\(pendingPiecesValue\)/);
   assert.match(pagesIndex, /window\.PlanningWorkflowCore = api/);
   assert.doesNotMatch(pagesIndex, /const window = getPlanWindow\(\);[\s\S]{0,1800}window\.PlanningWorkflowCore\.isActiveGanttView/);
