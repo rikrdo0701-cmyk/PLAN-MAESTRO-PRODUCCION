@@ -1389,6 +1389,10 @@ test("la config de capacidades editada localmente sobrevive a un import remoto",
   assert.match(importFlow, /const preservedLocalCapabilityConfig = localCapabilityConfigEdited \? captureLocalCapabilityConfig\(\) : null;/);
   assert.match(importFlow, /if \(preservedLocalCapabilityConfig\) restoreLocalCapabilityConfig\(preservedLocalCapabilityConfig\);/);
   assert.match(payload, /delete payload\._locallyEditedCapabilityConfig;/);
+  assert.match(importFlow, /if \(Array\.isArray\(imported\.workOrders\)\)/);
+  assert.match(importFlow, /state\.workOrders = normalizeWorkOrders\(imported\.workOrders\)/);
+  assert.match(importFlow, /if \(!merged\.dueDateOverride && local\.dueDateOverride\) merged\.dueDateOverride = local\.dueDateOverride;/);
+  assert.match(importFlow, /if \(!\(merged\.lastSalePrice > 0\) && Number\(local\.lastSalePrice\) > 0\)/);
 
   const state = {
     _locallyEditedCapabilityConfig: true,
@@ -1980,6 +1984,34 @@ test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPrice
   assert.equal(invoiceUnitPriceForOt("300"), 0);
   assert.equal(effectiveUnitPriceForOt("100"), 784.5);
   assert.equal(effectiveUnitPriceForOt("300"), 99);
+});
+
+test("mergeIndividualWorkOrder no bloquea precio remoto positivo por local en 0 y conserva dueDateOverride/foto locales", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const mergeSource = app.slice(
+    app.indexOf("function mergeIndividualWorkOrder("),
+    app.indexOf("function mergeIndividualPlanningOperationCatalog(", app.indexOf("function mergeIndividualWorkOrder(")),
+  );
+  const mergeIndividualWorkOrder = Function(`${mergeSource}; return mergeIndividualWorkOrder;`)();
+
+  const localZero = mergeIndividualWorkOrder(
+    { ot: "100", lastSalePrice: 320, averageSalePrice: 410, averageSalePriceFrom: "2026-03-05" },
+    { ot: "100", lastSalePrice: 0, averageSalePrice: 0, dueDateOverride: "2026-08-01", photoUrl: "local.jpg" },
+    "100",
+  );
+  assert.equal(localZero.lastSalePrice, 320);
+  assert.equal(localZero.averageSalePrice, 410);
+  assert.equal(localZero.averageSalePriceFrom, "2026-03-05");
+  assert.equal(localZero.dueDateOverride, "2026-08-01");
+  assert.equal(localZero.photoUrl, "local.jpg");
+
+  const localPositive = mergeIndividualWorkOrder(
+    { ot: "200", lastSalePrice: 0, averageSalePrice: 0 },
+    { ot: "200", lastSalePrice: 500, averageSalePrice: 784.5 },
+    "200",
+  );
+  assert.equal(localPositive.lastSalePrice, 500);
+  assert.equal(localPositive.averageSalePrice, 784.5);
 });
 
 test("importJson adopta y limpia operationCatalogWarning", async () => {

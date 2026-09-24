@@ -704,6 +704,41 @@ test("reconcileActiveWorkOrders conserva la marca de cierre inicial", () => {
   assert.equal(next.closedWorkOrderSummaries[200].closedDetectedAt, "2026-07-20T10:00:00Z");
 });
 
+test("mergeLiteWorkOrder/compareWorkOrderLite preservan precios entrantes positivos y no dejan 0 local eterno", () => {
+  const state = {
+    workOrders: [
+      { ot: "100", item: "A", quantity: 10, lastSalePrice: 0, averageSalePrice: 0 },
+      { ot: "200", item: "B", quantity: 5, lastSalePrice: 500, averageSalePrice: 784.5 },
+      { ot: "300", item: "C", quantity: 3, lastSalePrice: 40 },
+    ],
+  };
+  const incoming = [
+    { ot: "100", item: "A", quantity: 10, lastSalePrice: 320, averageSalePrice: 410 },
+    { ot: "200", item: "B", quantity: 5, lastSalePrice: 0, averageSalePrice: 0 },
+    { ot: "300", item: "C", quantity: 3, lastSalePrice: 0, averageSalePrice: 900 },
+  ];
+
+  const next = core.reconcileActiveWorkOrders(state, incoming, "2026-07-22T10:00:00Z");
+  const ot100 = next.workOrders.find((item) => item.ot === "100");
+  const ot200 = next.workOrders.find((item) => item.ot === "200");
+  const ot300 = next.workOrders.find((item) => item.ot === "300");
+
+  assert.equal(ot100.lastSalePrice, 320);
+  assert.equal(ot100.averageSalePrice, 410);
+  assert.equal(ot200.lastSalePrice, 500);
+  assert.equal(ot200.averageSalePrice, 784.5);
+  assert.equal(ot300.lastSalePrice, 40);
+  assert.equal(ot300.averageSalePrice, 900);
+
+  const comparison = core.compareWorkOrderLite(state, incoming);
+  const merged100 = comparison.nextWorkOrders.find((item) => item.ot === "100");
+  const merged200 = comparison.nextWorkOrders.find((item) => item.ot === "200");
+  assert.equal(merged100.lastSalePrice, 320);
+  assert.equal(merged100.averageSalePrice, 410);
+  assert.equal(merged200.lastSalePrice, 500);
+  assert.equal(merged200.averageSalePrice, 784.5);
+});
+
 test("purgeClosedWorkOrderRetention conserva antes de cinco dias y elimina exactamente al quinto", () => {
   const state = {
     operations: [{ id: "closed", ot: "200", planStatus: "COMPLETADA_PLAN" }, { id: "active", ot: "100", planStatus: "PENDIENTE" }],

@@ -9304,13 +9304,24 @@ function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
     "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
   ];
   const protectedLocalFields = new Set([
-    "dueDateOverride", "photoUrl", "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
+    "dueDateOverride", "photoUrl",
+  ]);
+  const priceFields = new Set([
+    "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
   ]);
   const merged = existingWorkOrder ? { ...existingWorkOrder } : { ot: remoteWorkOrder.ot };
   for (const field of normalizedFields) {
     const value = remoteWorkOrder?.[field];
     const useful = typeof value === "number" ? Number.isFinite(value) : Boolean(String(value ?? "").trim());
-    if (!useful || (existingWorkOrder && protectedLocalFields.has(field) && existingWorkOrder[field] != null)) continue;
+    if (!useful) continue;
+    if (existingWorkOrder && protectedLocalFields.has(field) && existingWorkOrder[field] != null) continue;
+    if (existingWorkOrder && priceFields.has(field)) {
+      const localValue = existingWorkOrder[field];
+      const localPositive = typeof localValue === "number" ? localValue > 0 : Boolean(String(localValue ?? "").trim());
+      const remotePositive = typeof value === "number" ? value > 0 : Boolean(String(value ?? "").trim());
+      if (localPositive && !remotePositive) continue;
+      if (!remotePositive && localValue != null) continue;
+    }
     merged[field] = value;
   }
   merged.ot = remoteWorkOrder.ot || existingWorkOrder?.ot || key;
@@ -9924,6 +9935,23 @@ async function applyImported(imported, options = {}) {
       chosen = newest || preservedLocalPlanning;
     }
     restoreLocalPlanningState(chosen || preservedLocalPlanning);
+  }
+  if (Array.isArray(imported.workOrders)) {
+    const localWorkOrdersByOt = new Map(
+      (state.workOrders || []).map((item) => [materialOtKey(item?.ot), item]),
+    );
+    state.workOrders = normalizeWorkOrders(imported.workOrders).map((item) => {
+      const local = localWorkOrdersByOt.get(materialOtKey(item.ot));
+      if (!local) return item;
+      const merged = { ...item };
+      if (!merged.dueDateOverride && local.dueDateOverride) merged.dueDateOverride = local.dueDateOverride;
+      if (!merged.photoUrl && local.photoUrl) merged.photoUrl = local.photoUrl;
+      if (!(merged.lastSalePrice > 0) && Number(local.lastSalePrice) > 0) merged.lastSalePrice = Number(local.lastSalePrice);
+      if (!(merged.averageSalePrice > 0) && Number(local.averageSalePrice) > 0) merged.averageSalePrice = Number(local.averageSalePrice);
+      if (!merged.averageSalePriceFrom && local.averageSalePriceFrom) merged.averageSalePriceFrom = local.averageSalePriceFrom;
+      if (!merged.averageSalePriceTo && local.averageSalePriceTo) merged.averageSalePriceTo = local.averageSalePriceTo;
+      return merged;
+    });
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();

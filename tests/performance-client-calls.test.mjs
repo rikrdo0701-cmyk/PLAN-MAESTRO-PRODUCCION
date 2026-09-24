@@ -1886,6 +1886,30 @@ test("una fusion agrega un work order normalizado cuando no existe localmente", 
   ]);
 });
 
+test("la fusion individual adopta precio remoto positivo cuando el local esta en 0", () => {
+  const fixture = loadClient({
+    installIndividualPlanning: true,
+    state: {
+      workOrders: [{ ot: "2773", item: "OLD", lastSalePrice: 0, averageSalePrice: 0, dueDateOverride: "2026-08-01" }],
+      operations: [],
+    },
+  });
+
+  const merged = fixture.context.mergeIndividualPlanningData({
+    data: {
+      workOrder: { ot: "2773", item: "NEW", lastSalePrice: 320, averageSalePrice: 410 },
+      operations: [{ id: "valid", ot: "2773", ct: "CORTE", tiempoProd: 10 }],
+      materials: [],
+    },
+  }, "2773");
+
+  assert.equal(merged, true);
+  const workOrder = fixture.state.workOrders.find((item) => item.ot === "2773");
+  assert.equal(workOrder.lastSalePrice, 320);
+  assert.equal(workOrder.averageSalePrice, 410);
+  assert.equal(workOrder.dueDateOverride, "2026-08-01");
+});
+
 test("una respuesta tardia no pisa una ruta valida agregada durante la espera", async () => {
   const gate = deferredPromise();
   const fixture = loadClient({

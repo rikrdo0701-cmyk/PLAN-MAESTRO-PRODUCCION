@@ -328,6 +328,12 @@
   }
 
   const WORK_ORDER_LITE_FIELDS = ["item", "quantity", "builtQuantity", "pendingQuantity", "status", "exists"];
+  const WORK_ORDER_PRICE_FIELDS = ["lastSalePrice", "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo"];
+
+  function normalizeSalePrice(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
 
   function normalizedLiteWorkOrder(workOrder) {
     const source = workOrder || {};
@@ -341,13 +347,24 @@
         Number(source.quantity ?? source.cantidad ?? 0) - Number(source.builtQuantity ?? source.quantityBuilt ?? source.cantidadEnsamblada ?? 0)))),
       status: String(source.status || source.estatus || "").trim(),
       exists: source.exists ?? source.existence ?? source.existe ?? true,
+      lastSalePrice: normalizeSalePrice(source.lastSalePrice ?? source.precioUltimaVenta),
+      averageSalePrice: normalizeSalePrice(source.averageSalePrice ?? source.precioPromedioVenta),
+      averageSalePriceFrom: String(source.averageSalePriceFrom || source.precioDesde || "").trim(),
+      averageSalePriceTo: String(source.averageSalePriceTo || source.precioHasta || "").trim(),
     };
   }
 
   function mergeLiteWorkOrder(current, incoming) {
     const normalizedIncoming = normalizedLiteWorkOrder(incoming);
+    const normalizedCurrent = normalizedLiteWorkOrder(current);
     const merged = { ...(current || {}), ot: normalizedIncoming.ot };
     for (const field of WORK_ORDER_LITE_FIELDS) merged[field] = normalizedIncoming[field];
+    for (const field of WORK_ORDER_PRICE_FIELDS) {
+      const incomingValue = normalizedIncoming[field];
+      const currentValue = normalizedCurrent[field];
+      const incomingPositive = typeof incomingValue === "number" ? incomingValue > 0 : Boolean(String(incomingValue || "").trim());
+      merged[field] = incomingPositive ? incomingValue : (currentValue ?? incomingValue);
+    }
     return merged;
   }
 

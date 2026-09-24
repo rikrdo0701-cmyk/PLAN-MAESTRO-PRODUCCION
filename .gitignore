@@ -44,3 +44,5 @@ test_webapp_legacy_completed.py
 plan-generated.png
 .playwright-cli/
 docs/performance/
+
+tests/artifacts/
