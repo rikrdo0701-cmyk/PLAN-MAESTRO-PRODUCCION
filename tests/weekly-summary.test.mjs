@@ -106,3 +106,26 @@ test("weeklyJobSummary respeta amount explicito de la operacion sin sobreescribi
 
   assert.equal(summary.starts[0].amount, 999);
 });
+
+test("weeklyJobSummary ignora unitPrice/amount en cero del snapshot y deriva desde invoice", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    invoicePrices: { "4501": 12.5 },
+  });
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 70, unitPrice: 0, amount: 0 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, 12.5);
+  assert.equal(summary.starts[0].amount, 875);
+  assert.equal(summary.finishes[0].amount, 875);
+});
+
+test("weeklyJobSummary con ceros de snapshot y sin precio deja monto nulo (no amount 0 bloqueante)", () => {
+  const weeklyJobSummary = createWeeklyJobSummary();
+  const summary = weeklyJobSummary("2026-07-20", {
+    operations: [{ ...baseOp, cantPendiente: 70, unitPrice: 0, amount: 0 }],
+  });
+
+  assert.equal(summary.starts[0].unitPrice, null);
+  assert.equal(summary.starts[0].amount, null);
+});

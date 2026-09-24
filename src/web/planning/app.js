@@ -7500,12 +7500,14 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
     const pendingPiecesValue = Number(opPieces ?? pendingPiecesForWorkOrder(workOrder));
     const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
-    const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
-    const unitPriceValue = [first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice].find(hasValue);
-    const unitPriceNumber = Number(unitPriceValue);
-    const unitPrice = hasValue(unitPriceValue) ? (Number.isFinite(unitPriceNumber) ? Math.max(0, unitPriceNumber) : 0) : null;
-    const amountValue = [first.amount, last.amount].find(hasValue);
-    const amountNumber = Number(amountValue);
+    const positiveNumber = (value) => {
+      if (value === null || value === undefined || String(value).trim() === "") return false;
+      const number = Number(value);
+      return Number.isFinite(number) && number > 0;
+    };
+    const unitPriceValue = [first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice].find(positiveNumber);
+    const unitPrice = unitPriceValue != null ? Number(unitPriceValue) : null;
+    const amountValue = [first.amount, last.amount].find(positiveNumber);
     const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
     const row = {
       ot,
@@ -7514,9 +7516,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
       planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
       unitPrice,
-      amount: amountValue != null
-        ? (Number.isFinite(amountNumber) ? Math.max(0, amountNumber) : 0)
-        : derivedAmount,
+      amount: amountValue != null ? Number(amountValue) : derivedAmount,
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
