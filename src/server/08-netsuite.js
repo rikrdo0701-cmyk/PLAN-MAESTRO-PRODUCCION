@@ -245,6 +245,17 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
     if (openOts[PP_normalizeKey_(item.ot)]) out[key] = item;
     return out;
   }, {});
+  // Una OT que NetSuite ya no lista como abierta no puede seguir en la cola del plan.
+  // Sin esto CONFIG.selectedOts la conservaba para siempre: el cliente la podaba solo en
+  // memoria (pruneDraftToOpenWorkOrders) y la vuelta a cargar la resucitaba.
+  merged.selectedOts = (merged.selectedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
+  merged.lockedOts = (merged.lockedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
+  merged.expandedOts = (merged.expandedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
+  if (merged.lastSchedule && Array.isArray(merged.lastSchedule.scheduledOts)) {
+    merged.lastSchedule = Object.assign({}, merged.lastSchedule, {
+      scheduledOts: merged.lastSchedule.scheduledOts.filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; })
+    });
+  }
   merged.plant = Object.assign({}, merged.plant || {}, {
     name: PP_PLANT_NAME,
     locationId: PP_PLANT_LOCATION_ID,

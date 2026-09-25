@@ -206,6 +206,42 @@ test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", ()
   assert.equal(applied[0].averageSalePriceTo, "2026-09-10");
 });
 
+test("PP_applyNetSuiteWorkOrdersData_ retira de la cola del plan las OTs que NetSuite ya no lista abiertas", () => {
+  const { context } = load();
+  const current = {
+    workOrders: [{ ot: "3483" }, { ot: "1905" }],
+    selectedOts: ["3483", "1905", " 3483 "],
+    lockedOts: ["3483", "1905"],
+    expandedOts: ["1905", "2999"],
+    operationPlanStatuses: { a: { ot: "3483" }, b: { ot: "1905" } },
+    lastSchedule: { scheduledOts: ["3483", "1905"], generatedAt: "2026-09-25T10:00:00.000Z" },
+    plant: {},
+  };
+  const snapshot = { workOrders: [{ ot: "1905" }], invoicePriceWindow: null };
+
+  const merged = context.PP_applyNetSuiteWorkOrdersData_(current, snapshot);
+
+  // 3483 esta cerrada en NetSuite: no puede seguir en la cola ni en el ultimo plan.
+  assert.deepEqual(merged.selectedOts, ["1905"]);
+  assert.deepEqual(merged.lockedOts, ["1905"]);
+  assert.deepEqual(merged.expandedOts, ["1905"]);
+  assert.deepEqual(merged.lastSchedule.scheduledOts, ["1905"]);
+  assert.equal(merged.lastSchedule.generatedAt, "2026-09-25T10:00:00.000Z");
+  assert.deepEqual(Object.keys(merged.operationPlanStatuses), ["b"]);
+  assert.deepEqual(merged.workOrders.map((item) => item.ot), ["1905"]);
+});
+
+test("PP_applyNetSuiteWorkOrdersData_ no inventa la cola cuando el estado venia vacio", () => {
+  const { context } = load();
+  const snapshot = { workOrders: [{ ot: "1905" }], invoicePriceWindow: null };
+
+  const merged = context.PP_applyNetSuiteWorkOrdersData_({ workOrders: [] }, snapshot);
+
+  assert.deepEqual([...merged.selectedOts], []);
+  assert.deepEqual([...merged.lockedOts], []);
+  assert.deepEqual([...merged.expandedOts], []);
+});
+
 test("PP_applyNetSuiteWorkOrdersData_ conserva precios y foto locales cuando el snapshot llega en 0", () => {
   const { context } = load();
   const current = {

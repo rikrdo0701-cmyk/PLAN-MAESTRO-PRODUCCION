@@ -76,7 +76,7 @@ function patchPlanningApp(app) {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
   void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
@@ -108,7 +108,7 @@ function patchPlanningApp(app) {
   applyInitialWorkspaceView({ scrollToTop: false });
   if (restoredDraft) showToast("Se cargo el plan guardado desde Google Sheets");
   const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
   void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
     void Promise.resolve(bootResult);

@@ -184,6 +184,20 @@ Operaciones Programadas → Plan Maestro.
 La resolución de OT en NetSuite acepta los alias `WO Folio`, `Orden de trabajo`,
 `workorder_tranid`, `tranid` (helpers `PP_pick_` en `08-netsuite.js`).
 
+La lista de OTs es la que NetSuite devuelve con `onlyOpen: true`, y es la **única**
+autoridad para saber si una OT sigue abierta. `PP_applyNetSuiteWorkOrdersData_`
+reescribe `ORDENES_TRABAJO` con esa lista y, desde RULE-OT-048, poda contra ella
+`CONFIG.selectedOts`, `CONFIG.lockedOts`, `CONFIG.expandedOts` y
+`CONFIG.lastSchedule.scheduledOts` (igual que antes solo podaba
+`ESTADOS_OPERACION_PLAN`). Antes esa poda existía únicamente en el cliente
+(`pruneDraftToOpenWorkOrders`) y el servidor devolvía el `selectedOts` leído antes de
+sincronizar, así que una OT cerrada reaparecía en cada carga.
+
+| Ruta de sincronización | Quién la dispara | Qué persiste |
+|---|---|---|
+| `syncNetSuiteWorkOrdersLite` | sincronización de fondo en cada carga (`loadAppStateInBackground` → `syncNetSuiteInBackground`, remapeada en `performance-client.js:88`) | `ORDENES_TRABAJO` + cola podada, vía `PP_writeNetSuiteWorkOrdersState_` |
+| `fetchNetSuiteWorkOrdersLite` | botón "Sincronizar OTs" y gate previo a generar/publicar el plan | el cliente reconcilia y persiste con `saveWorkOrderSyncState` → `PP_writeWorkOrderSyncState_` |
+
 ### 4.2 SuiteQL
 
 | Consulta | → Destino | Nota |

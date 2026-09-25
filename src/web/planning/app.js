@@ -624,7 +624,7 @@ async function loadAppStateInBackground() {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 })
+    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
   void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
@@ -9499,7 +9499,7 @@ function setNetSuiteSyncPhaseLabel(message) {
 }
 
 function syncWorkOrdersOnce(options = {}) {
-  return syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
+  return syncNetSuiteData(options.showMessage === true, { mode: "workOrders", background: options.background === true }).then((loaded) => {
     if (loaded && options.deferPresentation !== true) {
       saveState("ui");
       render();
@@ -9550,7 +9550,10 @@ async function syncNetSuiteData(showMessage, options = {}) {
   } catch (error) {
     setNetSuiteSyncAlert(error.message);
     render({ saveScope: "ui" });
-    if (showMessage) showToast(`No se pudo cargar NetSuite: ${error.message}`, 9000);
+    // La sincronizacion de carga deja los datos del servidor como estaban: sin este aviso
+    // una carga fallida se confondia con "NetSuite todavia lista la OT" y las OTs ya
+    // cerradas seguian apareciendo en Backlog y en Planeado/No planeado.
+    if (showMessage || options.background === true) showToast(`No se pudo cargar NetSuite: ${error.message}`, 9000);
     return false;
   } finally {
     netSuiteSyncInFlight = false;

@@ -274,7 +274,12 @@ function syncNetSuiteWorkOrdersLite() {
     );
     return Object.assign({}, saved, {
       schemaVersion: PP_SCHEMA_VERSION,
-      selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
+      // La cola del plan que se devuelve es la YA sincronizada (podada contra las OTs
+      // abiertas), no la que se leyo de CONFIG antes de sincronizar: mandar la vieja
+      // resucitaba en el cliente a la OT que NetSuite ya cerro.
+      selectedOts: Array.isArray(synced.selectedOts) ? synced.selectedOts : [],
+      lockedOts: Array.isArray(synced.lockedOts) ? synced.lockedOts : [],
+      expandedOts: Array.isArray(synced.expandedOts) ? synced.expandedOts : [],
       workOrders: synced.workOrders || [],
       operationPlanStatuses: synced.operationPlanStatuses || {},
       plant: synced.plant || {},

@@ -367,6 +367,12 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
     savedAt: savedAt,
     source: payload.source || 'NetSuite RESTlets / Apps Script (OTs)',
     syncedAt: payload.syncedAt || savedAt,
+    // La cola del plan se poda aqui, no solo en el cliente: PP_applyNetSuiteWorkOrdersData_
+    // ya la dejo filtrada contra las OTs abiertas de NetSuite, y sin persistirla
+    // CONFIG.selectedOts resucitaba en cada carga a la OT cerrada.
+    selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
+    lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
+    expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
     plant: payload.plant || {},
     invoicePriceWindow: payload.invoicePriceWindow || null
   });
