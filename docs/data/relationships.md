@@ -14,6 +14,13 @@ pipeline legacy). Cada relación lista las columnas/keys exactas verificadas con
 - `workSchedule` y `dailyBreaks` son entradas JSON que definen las ventanas de trabajo diarias y
   las pausas intradía; las consume `PlannerCore.effectiveWindows` (`planner-core.js:1267-1279`).
   Ver RULE-CAL-001.
+- `selectedOts` (y `lockedOts`) son la relación de pertenencia OT → borrador Planeado/Por planear
+  y funcionan como lista materializada: cada OT de `selectedOts` debe existir en `ORDENES_TRABAJO`
+  (y tener filas en `OPERACIONES`) y se escribe desde el cliente con
+  `savePlanningStateOptimized`. No hay join en la hoja: la integridad la aplica
+  `reconcileActiveWorkOrders` / `purgeClosedWorkOrderRetention` en el cliente y
+  `PP_buildState_` al releer. Ver RULE-OT-005 y RULE-OT-047 (persistencia inmediata y única
+  autoridad del servidor en cada recarga).
 
 ### 1.2 `OPERACIONES` — entidad central
 
@@ -64,7 +71,8 @@ Claves: `ID` (local), `WO_INTERNAL_ID` (NetSuite internal id), `OT` (folio).
   máquina, CT y tiempos del primer doblado; se agenda por capacidad normal de matriz.
 - Edición en cliente: `applyMachineToJob`, `applyToolToJob`, `applyKitToJob`, `applySubcontractToJob`
   mutan la fila y marcan la clave en `state._locallyEditedOtConfigurations`; tras una recarga por
-  conflicto esos campos locales se re-fusionan sobre la fila remota (RULE-GOV-013). El motor lee la
+  conflicto (y también tras cualquier otra carga remota) esos campos locales se re-fusionan sobre
+  la fila remota (RULE-GOV-013, RULE-OT-047). El motor lee la
   configuración efectiva persistida por OT antes de validar (`applyOtConfiguration`).
 - `TIPO_SUBCONTRATO` + `DIAS_SUBCONTRATO` → `SUBCONTRATOS` (aplica a operaciones de doblado,
   CTs 5459/5527).

@@ -104,27 +104,27 @@ const planStatusSource = appSource.slice(
   appSource.indexOf("function renderProductionReportRow("),
 );
 
-function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {}, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true } }) {
+function loadIndividualSelection({ jobs, loaded, card, state, toasts, prepare = async () => true, checkpoint = () => {}, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true }, flushPlanSave = async () => true }) {
   return new Function(
     "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
     "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
-    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
+    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "flushPlanSave",
     "materialOtKey", "hasIndividualPlanningOperations", "showPlanningPreparationLoading", "closePlanningDialog",
     `${individualSelectionSource}; return selectJob;`,
   )(
     { priorityList: { querySelectorAll: () => [card] }, planningDialog }, () => jobs.value, (message) => toasts.push(message), state,
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
     (operations) => operations, loaded, prepare, checkpoint, () => {}, () => {}, () => {},
-    (callback) => callback(), () => {}, () => {}, () => {},
+    (callback) => callback(), () => {}, () => {}, flushPlanSave,
     (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0), showLoading, closeDialog,
   );
 }
 
-function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prepare = async () => true, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true } }) {
+function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prepare = async () => true, showLoading = () => {}, closeDialog = () => {}, planningDialog = { open: true }, flushPlanSave = async () => true }) {
   return new Function(
     "els", "getPriorityJobs", "showToast", "state", "window", "currentPlanOperations",
     "ensureWorkOrderPlanningData", "prepareJobForPlanning", "checkpointState", "applyQueuePriorities",
-    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "saveState",
+    "renderPriorityList", "renderPriorityQueue", "requestAnimationFrame", "renderTop", "renderPlanAlerts", "flushPlanSave",
     "materialOtKey", "hasIndividualPlanningOperations", "showPlanningPreparationLoading", "closePlanningDialog",
     `${individualSelectionSource}; return {
       selectJob,
@@ -134,9 +134,60 @@ function loadIndividualActionInternals({ jobs, loaded, card, state, toasts, prep
     { priorityList: { querySelectorAll: () => [card] }, planningDialog }, () => jobs.value, (message) => toasts.push(message), state,
     { PlanningWorkflowCore: { commitPreparedOtSelection: (draft, ot) => ({ ...draft, selectedOts: [...draft.selectedOts, ot] }) } },
     (operations) => operations, loaded, prepare, () => {}, () => {}, () => {}, () => {},
-    (callback) => callback(), () => {}, () => {}, () => {},
+    (callback) => callback(), () => {}, () => {}, flushPlanSave,
     (value) => String(value || ""), (ot) => jobs.value.some((job) => String(job.ot) === String(ot) && job.ops.length > 0), showLoading, closeDialog,
   );
+}
+
+function loadAppSheetSaveFlow(options = {}) {
+  const timers = new Map();
+  let nextTimer = 1;
+  const calls = [];
+  const gate = deferredPromise();
+  const state = { revision: 1, selectedOts: [], workOrders: [], operations: [], materials: [], ...(options.state || {}) };
+  const flow = Function(
+    "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
+    "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
+    "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
+    "resolveSaveGate",
+    `${appSheetSaveFlowSource}\nreturn {
+      flushPlanSave,
+      saveState,
+      set inFlight(value) { appSheetSaveInFlight = value; },
+      get inFlight() { return appSheetSaveInFlight; },
+      get pending() { return appSheetSavePending; },
+      get dirtyScopes() { return [...appSheetDirtyScopes]; },
+      releaseInFlight(consumeScopes = true) {
+        appSheetSaveInFlight = false;
+        if (consumeScopes) appSheetDirtyScopes.clear();
+        resolveSaveGate();
+      },
+    };`,
+  )(
+    {
+      setTimeout(callback) { const id = nextTimer += 1; timers.set(id, callback); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    },
+    state, { setItem: () => {} }, "test",
+    true, false, false, null, new Set(), false, gate.promise, null, null, 0, () => true,
+    async (method, payload) => {
+      calls.push({ method, payload });
+      if (options.failSave) throw new Error(options.failSave);
+      return { revision: 2 };
+    },
+    () => ({ revision: state.revision, selectedOts: state.selectedOts, operations: state.operations }), () => {}, 60000,
+    () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
+    () => gate.resolve(),
+  );
+  return {
+    flow,
+    state,
+    calls,
+    runTimers: async () => {
+      for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+      await settleMicrotasks();
+    },
+  };
 }
 
 function deferredPromise() {
@@ -320,6 +371,74 @@ test("la accion individual conserva Guardado para el siguiente render de su tarj
   await fixture.selectJob("100", true);
   assert.equal(statusNode.textContent, "Guardado");
   assert.equal(fixture.actionStatus("100"), "saved");
+});
+
+test("el traslado al plan conserva la OT y marca Error cuando el guardado no se pudo confirmar", async () => {
+  const statusNode = { textContent: "" };
+  const addButton = { disabled: false };
+  const card = {
+    dataset: { ot: "100" },
+    setAttribute: () => {}, removeAttribute: () => {},
+    querySelector: (selector) => selector === ".job-add" ? addButton : statusNode,
+  };
+  const toasts = [];
+  const state = { selectedOts: [], operations: [{ ot: "100", ct: "CORTE" }], preparedPlanningByOt: {} };
+  const fixture = loadIndividualActionInternals({
+    jobs: { value: [{ ot: "100", movable: true, ops: [{ ot: "100", ct: "CORTE" }] }] },
+    loaded: async () => ({ ready: true }), card, state, toasts,
+    flushPlanSave: async () => false,
+  });
+
+  const completed = await fixture.selectJob("100", true);
+
+  assert.equal(completed, false);
+  assert.equal(statusNode.textContent, "Error");
+  assert.equal(fixture.actionStatus("100"), "error");
+  // La OT sigue en la cola local: el reintento en segundo plano la puede persistir.
+  assert.deepEqual(state.selectedOts, ["100"]);
+  assert.deepEqual(toasts, ["OT 100 quedo en el plan solo en esta sesion; el guardado se reintentara"]);
+});
+
+test("el traslado al plan se persiste de inmediato sin esperar el debounce", async () => {
+  const fixture = loadAppSheetSaveFlow({ state: { selectedOts: ["100"], lockedOts: ["100"] } });
+  fixture.flow.saveState("plan");
+
+  const saved = await fixture.flow.flushPlanSave("plan");
+
+  assert.equal(saved, true);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["saveAppState"]);
+  assert.deepEqual(fixture.calls[0].payload.selectedOts, ["100"]);
+  // El debounce anterior quedo cancelado: no hay un segundo guardado programado.
+  assert.deepEqual(fixture.flow.dirtyScopes, []);
+  assert.equal(fixture.flow.inFlight, false);
+});
+
+test("el traslado al plan espera el guardado en curso y reintenta con la OT incluida", async () => {
+  const fixture = loadAppSheetSaveFlow({ state: { selectedOts: ["100"] } });
+  fixture.flow.inFlight = true;
+
+  const flushed = fixture.flow.flushPlanSave("plan");
+  await settleMicrotasks();
+  assert.deepEqual(fixture.calls, []);
+  assert.equal(fixture.flow.pending, true);
+
+  // El guardado en curso consumio el ambito sucio antes de terminar.
+  fixture.flow.releaseInFlight();
+  const saved = await flushed;
+
+  assert.equal(saved, true);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["saveAppState"]);
+  assert.deepEqual(fixture.calls[0].payload.selectedOts, ["100"]);
+});
+
+test("el traslado al plan reporta el fallo del guardado sin confirmarlo como Guardado", async () => {
+  const fixture = loadAppSheetSaveFlow({ state: { selectedOts: ["100"] }, failSave: "timeout al guardar" });
+
+  const saved = await fixture.flow.flushPlanSave("plan");
+
+  assert.equal(saved, false);
+  assert.equal(fixture.flow.inFlight, false);
+  assert.deepEqual(fixture.flow.dirtyScopes, ["plan"]);
 });
 
 test("cancelar el dialogo de planeacion libera la tarjeta sin mostrar Error", async () => {
@@ -1850,7 +1969,7 @@ test("una consulta individual agrega la OT aunque el folio remoto llegue numeric
   await selectJob("2773", true);
 
   assert.deepEqual(state.selectedOts, ["2773"]);
-  assert.deepEqual(toasts, ["OT 2773 agregada al plan"]);
+  assert.deepEqual(toasts, ["OT 2773 agregada al plan y guardada"]);
 });
 
 test("la fusion individual reemplaza solo la OT solicitada y conserva las demas", () => {

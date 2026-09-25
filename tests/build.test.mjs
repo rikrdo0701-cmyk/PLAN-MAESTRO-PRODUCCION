@@ -823,7 +823,9 @@ test("un import o cache stale no pisa un borrador mas reciente; el restore de bo
   assert.match(importFlow, /imported\.planStart && !importedIsStaleSchedule/);
 
   const perfClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
-  assert.match(perfClient, /const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
+  // El cache local conserva selectedOts/lockedOts: son la autoridad del borrador y
+  // son lo unico que sobrevive si el guardado remoto no llega antes de recargar.
+  assert.match(perfClient, /const \{ matrixSearch, operations, lastSchedule, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
   assert.match(perfClient, /plan-produccion-cache-v5/);
 });
 
@@ -984,7 +986,7 @@ test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusione
   assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
   assert.match(persistence, /delete persisted\.machineToolHistory;/);
   assert.match(persistence, /key\.indexOf\("__"\) === 0/);
-  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
+  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
   assert.match(performanceClient, /const LOCAL_CACHE_QUOTA_GUARD_BYTES = 4 \* 1024 \* 1024;/);
   assert.match(performanceClient, /const serialized = trimLocalCachePayload\(compacted\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\)/);
   assert.match(persistence, /const payload = persistableState\(source\);/);
@@ -1050,6 +1052,91 @@ test("el cache local descarta tombstones de UI cuando supera 4MB y nunca pierde 
   assert.deepEqual(trimmed.materials, [{ ot: "WO-1" }]);
   assert.deepEqual(trimmed.otConfigurations, { k: { ot: "WO-1" } });
   assert.ok(trimmed.filler);
+});
+
+test("el cache local excluye machineToolHistory igual que el payload persistido", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const compactStart = performanceClient.indexOf("function compactLocalState()");
+  const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
+  const compactSource = performanceClient.slice(compactStart, compactEnd);
+  assert.match(compactSource, /delete persisted\.machineToolHistory;/);
+
+  const compactLocalState = Function("state", "LOCAL_CACHE_IDENTITY", `${compactSource}; return compactLocalState;`)({
+    revision: 11,
+    operations: [{ id: "op-1", log: "NETSUITE_APPS_SCRIPT" }],
+    materials: [{ ot: "WO-1" }],
+    machineToolHistory: [{ id: "m1", machine: "MAQUINA", herramental: "HERR-1" }],
+    workOrders: [{ ot: "WO-1" }],
+    otConfigurations: { "WO-1": { ot: "WO-1" } },
+    selectedOts: ["WO-1"],
+    lockedOts: ["WO-1"],
+  }, "plan-produccion-cache-v5");
+
+  const persisted = compactLocalState();
+  assert.equal("machineToolHistory" in persisted, false);
+  assert.deepEqual(persisted.workOrders, [{ ot: "WO-1" }]);
+  assert.deepEqual(persisted.otConfigurations, { "WO-1": { ot: "WO-1" } });
+  assert.deepEqual(persisted.operations, []);
+  // La cola Planeado/Por planear si sobrevive al cache local: es la autoridad del
+  // borrador mientras el guardado remoto no responde.
+  assert.deepEqual(persisted.selectedOts, ["WO-1"]);
+  assert.deepEqual(persisted.lockedOts, ["WO-1"]);
+  assert.deepEqual(persisted.materials, []);
+});
+
+test("el log de operacion no repite la misma entrada consecutiva y se compacta al importar", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const plannerCore = await readFile(path.join(process.cwd(), "src", "web", "planning", "planner-core.js"), "utf8");
+  const logStart = app.indexOf("const OP_LOG_SEPARATOR =");
+  const logEnd = app.indexOf("function normalizeHeader(", logStart);
+  const logSource = app.slice(logStart, logEnd);
+  const { appendLog, compactOperationLog, compactOperationLogs } = Function(
+    `${logSource}; return { appendLog, compactOperationLog, compactOperationLogs };`,
+  )();
+
+  assert.equal(appendLog("", "PRIORIDAD_COLA_APP"), "PRIORIDAD_COLA_APP");
+  assert.equal(appendLog("NETSUITE_APPS_SCRIPT", "PRIORIDAD_COLA_APP"), "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP");
+  assert.equal(
+    appendLog("NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP", "PRIORIDAD_COLA_APP"),
+    "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP",
+  );
+  assert.equal(
+    appendLog("NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP", "COMPLETADA_PLAN_APP"),
+    "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP | COMPLETADA_PLAN_APP",
+  );
+  assert.equal(appendLog("A", ""), "A");
+  assert.equal(appendLog(null, null), "");
+
+  assert.equal(
+    compactOperationLog("A | PRIORIDAD_COLA_APP | PRIORIDAD_COLA_APP | PRIORIDAD_COLA_APP | B"),
+    "A | PRIORIDAD_COLA_APP | B",
+  );
+  assert.equal(compactOperationLog("A | A | A"), "A");
+  assert.equal(compactOperationLog("A | B | A"), "A | B | A");
+  assert.equal(compactOperationLog(""), "");
+  assert.equal(compactOperationLog(undefined), "");
+
+  const operations = [
+    { log: "X | Y | Y" },
+    { log: "Z" },
+    { log: "" },
+    { log: "P | P | P" },
+  ];
+  compactOperationLogs(operations);
+  assert.deepEqual(operations.map((op) => op.log), ["X | Y", "Z", "", "P"]);
+
+  const importStart = app.indexOf("function applyImported(");
+  const importFlow = app.slice(importStart, app.indexOf("function importCsv(", importStart));
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\([^;]+\);[\s\S]*compactOperationLogs\(state\.operations\);/);
+  const normalizeStart = app.indexOf("function normalizeOperation(");
+  const normalizeOperation = app.slice(normalizeStart, app.indexOf("function normalizeMaterials(", normalizeStart));
+  assert.match(normalizeOperation, /next\.log = compactOperationLog\(next\.log\);/);
+
+  const coreAppendStart = plannerCore.indexOf("function appendLog(current, message)");
+  const coreAppend = plannerCore.slice(coreAppendStart, plannerCore.indexOf("function roundUp(", coreAppendStart));
+  assert.match(coreAppend, /if \(text\.endsWith\(" \| " \+ entry\)\) return text;/);
+  assert.match(coreAppend, /return text \+ " \| " \+ entry;/);
+  assert.doesNotMatch(coreAppend, /\[current, message\]\.filter\(Boolean\)\.join/);
 });
 
 test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {

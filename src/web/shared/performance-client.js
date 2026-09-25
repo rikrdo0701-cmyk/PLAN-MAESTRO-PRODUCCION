@@ -97,10 +97,14 @@
   document.addEventListener("DOMContentLoaded", installPerformanceAdapters, { once: true });
 
   function compactLocalState() {
-    const { matrixSearch, operations, lastSchedule, selectedOts, lockedOts, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, ...persisted } = state;
+    // selectedOts/lockedOts SI se conservan: son la autoridad del borrador y, si el
+    // guardado remoto no llega, son lo unico que evita que la OT vuelva al Backlog.
+    const { matrixSearch, operations, lastSchedule, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, ...persisted } = state;
+    delete persisted.machineToolHistory;
     const revision = Number(state.revision || 0);
     return {
       ...persisted,
+      operations: [],
       materials: [],
       performanceCache: {
         identity: LOCAL_CACHE_IDENTITY,
@@ -583,23 +587,44 @@
       return true;
     } catch (error) {
       const conflict = /CONFLICT_REVISION/i.test(String(error?.message || error));
+      const pendingAdds = (Array.isArray(state._locallyAddedDraftOts) ? state._locallyAddedDraftOts : [])
+        .map((ot) => String(ot || "").trim())
+        .filter(Boolean);
       if (conflict) {
         const reloadResult = await reloadStateAfterConflict();
         const reloaded = reloadResult.reloaded;
-        appSheetSavePending = reloadResult.reappliedDraftRemovals > 0;
-        if (appSheetSavePending) appSheetMarkDirtyScope("plan");
-        document.body.dataset.saveStatus = reloaded ? (appSheetSavePending ? "pending" : "conflict") : "pending";
+        // Si la recarga no pudo aplicarse, el estado local sigue intacto: hay que
+        // conservar los ambitos que consumia este guardado y reintentar, nunca
+        // descartar el cambio en silencio.
+        if (!reloaded) scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
+        const keepDirty = !reloaded
+          || reloadResult.reappliedDraftRemovals > 0
+          || reloadResult.reappliedDraftAdditions > 0
+          || reloadResult.reappliedConfigurations > 0;
+        appSheetSavePending = keepDirty;
+        if (keepDirty) appSheetMarkDirtyScope("plan");
+        if (!reloaded) scheduleRetry();
+        scheduleLocalStorageFlush();
+        document.body.dataset.saveStatus = reloaded ? (keepDirty ? "pending" : "conflict") : "pending";
         if (showMessage) showToast(reloaded
           ? "Otro usuario guardo cambios; se recargo el estado vigente"
-          : "Conflicto de guardado; recarga antes de continuar", 4200);
+          : "Conflicto de guardado; se reintentara en segundo plano", 4200);
+        else if (pendingAdds.length) {
+          showToast(`No se pudo guardar el plan (OT ${pendingAdds.join(", ")}); se reintentara en segundo plano`, 6000);
+        }
         return false;
       }
       scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
       if (isTransientSaveLockError(error)) console.info("Guardado en segundo plano esperando lock; se reintentara.");
       else console.warn("Guardado en segundo plano pendiente; se reintentara:", error);
       document.body.dataset.saveStatus = "pending";
+      // El cache local conserva la cola para que una recarga no borre lo no guardado.
+      scheduleLocalStorageFlush();
       scheduleRetry();
       if (showMessage) showToast("Guardado pendiente; se reintentara en segundo plano", 4200);
+      else if (pendingAdds.length) {
+        showToast(`No se pudo guardar el plan (OT ${pendingAdds.join(", ")}); se reintentara en segundo plano`, 6000);
+      }
       return false;
     } finally {
       appSheetReleaseSaveGate(saveGate);
@@ -647,6 +672,12 @@
 
   async function loadInitialStateConditionally(localCache) {
     const revision = localCache?.usable ? Number(localCache.revision || 0) : 0;
+    // Se capturan antes de importar: applyImported reemplaza state.selectedOts con el
+    // estado remoto y una OT agregada a Planeado todavia no guardada se perderia.
+    const localAddedDraftOts = [...(state._locallyAddedDraftOts || [])];
+    const localEditedOtConfigurations = (state._locallyEditedOtConfigurations || []).map(materialOtKey).filter(Boolean);
+    const localOtConfigurations = state.otConfigurations && typeof state.otConfigurations === "object" ? clone(state.otConfigurations) : null;
+    const localPrepared = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? clone(state.preparedPlanningByOt) : null;
     const imported = revision > 0
       ? await callAppsScript("getAppStateIfChanged", revision, { includeMaterials: false })
       : await callAppsScript("getAppState");
@@ -677,6 +708,9 @@
       }
     }
     applyImported(imported, { preserveLocalPlanning: false });
+    const reappliedAdditions = reapplyLocalAddedDraftOts(localAddedDraftOts, localPrepared);
+    const reappliedConfigurations = reapplyLocalOtConfigurations(localOtConfigurations, localEditedOtConfigurations);
+    if (reappliedAdditions > 0 || reappliedConfigurations > 0) appSheetMarkDirtyScope("plan");
     deferredRevision = Number(imported?.revision || state.revision || 0);
     state.savedAt = imported?.savedAt || state.savedAt;
     state.syncedAt = imported?.syncedAt || state.syncedAt;
@@ -686,7 +720,7 @@
       savedAt: state.savedAt || "",
       syncedAt: state.syncedAt || "",
     });
-    return { loaded: true, unchanged: false };
+    return { loaded: true, unchanged: false, reappliedAdditions, reappliedConfigurations };
   }
 
   loadAppStateInBackground = function optimizedLoadAppStateInBackground() {
@@ -891,6 +925,27 @@
       navigator.serviceWorker.register("./sw.js").catch((error) => console.warn("Service worker no disponible:", error));
     }, { once: true });
   }
+
+  // Un traslado Backlog -> Planeado armado con debounce se perdia si el usuario
+  // recargaba la pagina antes del acuse. Al ocultar la pestana se adelanta el
+  // guardado pendiente en vez de esperar al temporizador; al descargar la pagina
+  // el intento es best-effort porque el navegador puede cancelar la peticion.
+  function flushPendingSaveOnUnload() {
+    if (!appSheetDirtyScopes.size || appSheetSaveInFlight) return;
+    try {
+      saveAppSheet(false);
+    } catch (error) {
+      console.warn("No se pudo forzar el guardado al salir:", error);
+    }
+  }
+
+  if (typeof root.addEventListener === "function") {
+    root.addEventListener("pagehide", flushPendingSaveOnUnload);
+    root.addEventListener("beforeunload", flushPendingSaveOnUnload);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingSaveOnUnload();
+  });
 
   writeMeta({
     revision: Number(state.revision || initialPerformanceMeta.revision || 0),

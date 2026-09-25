@@ -47,6 +47,25 @@ Tabla de pares clave→valor (JSON). Headers: `KEY, VALUE`.
   (`app.js:28-31`). Ambos los lee el frontend (`app.js:1018-1027`) y el motor
   (`planner-core.js:1267-1279`), y los persiste el backend como JSON en `CONFIG`
   (`02-storage.js:130-131, 567-568`).
+- `selectedOts` es la clave que materializa la cola **Planeado / Por planear**
+  (RULE-OT-005). Restricciones (RULE-OT-047):
+  - Escritor del traslado: `performSelectJob` → `flushPlanSave("plan")` →
+    `savePlanningStateOptimized` (`15-performance-service.js`), que escribe
+    `CONFIG.selectedOts` como arreglo de OTs normalizadas. No existe debounce tolerado para
+    esta acción: se persiste de inmediato y se espera el acuse.
+  - En cada recarga el backend es la única autoridad de la lista: `loadState()` (`app.js`)
+    devuelve `deepClone(sampleState)` y nunca lee `localStorage`; la cola efectiva llega por
+    `getAppState`/`getAppStateIfChanged` → `PP_buildState_` (`selectedOts`).
+  - El cache local (`compactLocalState`, `performance-client.js`) **conserva** `selectedOts`
+    y `lockedOts` (sí descarta `operations`, `lastSchedule` y las vistas efímeras) porque es la
+    única red mientras el servidor no responde; su identidad es
+    `performanceCache.identity = plan-produccion-cache-v5` y la validez se comprueba contra
+    `revision` + `cacheRevision` de la metadata `plan-produccion-performance-v2`.
+  - Una importación remota (`applyImported` con `preserveLocalPlanning:false`) no debe borrar
+    un alta local no guardada: `reloadStateAfterConflict` (conflicto) y
+    `loadInitialStateConditionally` (carga de arranque) reaplican
+    `state._locallyAddedDraftOts` y `state._locallyEditedOtConfigurations` antes/después de
+    importar (RULE-GOV-013 + RULE-OT-047).
 
 ## OPERACIONES
 
@@ -127,9 +146,10 @@ ACTUALIZADO, HERRAMENTAL, HERRAMENTALES_EXTRA_JSON`.
   volver a pedir máquina, herramental, kit o tipo/días de subcontrato si el dato requerido ya
   existe aquí. Si el dato ya guardado no se encontró, confirmar que las claves de OT coinciden
   (mismo formato) entre donde se edita y donde se valida.
-- Restricción: tras una recarga por conflicto (`CONFLICT_REVISION`), las ediciones locales marcadas
-  en `state._locallyEditedOtConfigurations` se re-fusionan sobre la fila remota y los tombstones
-  se limpian solo con el acuse durable del guardado (RULE-GOV-013).
+- Restricción: tras una recarga por conflicto (`CONFLICT_REVISION`) **o tras cualquier otra
+  carga remota** (`loadInitialStateConditionally`), las ediciones locales marcadas en
+  `state._locallyEditedOtConfigurations` se re-fusionan sobre la fila remota y los tombstones
+  se limpian solo con el acuse durable del guardado (RULE-GOV-013, RULE-OT-047).
 - `HERRAMENTAL` guarda el herramental principal; `HERRAMENTALES_EXTRA_JSON` guarda un arreglo JSON
   de herramentales adicionales de la OT. El motor expande cada adicional como operación artificial
   de doblado con la misma capacidad y tiempos del primer doblado.

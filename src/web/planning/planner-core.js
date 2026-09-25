@@ -3545,7 +3545,12 @@ function operationToolKey(op, state) {
   }
 
   function appendLog(current, message) {
-    return [current, message].filter(Boolean).join(" | ");
+    const text = String(current == null ? "" : current);
+    const entry = String(message == null ? "" : message);
+    if (!entry) return text;
+    if (!text) return entry;
+    if (text.endsWith(" | " + entry)) return text;
+    return text + " | " + entry;
   }
 
   function roundUp(value, increment) {

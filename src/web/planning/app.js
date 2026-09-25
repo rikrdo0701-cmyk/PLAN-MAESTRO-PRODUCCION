@@ -1488,6 +1488,7 @@ function dedupeOperationsById(operations) {
 
 function normalizeOperation(op, index) {
   const next = { ...op };
+  next.log = compactOperationLog(next.log);
   next.id = next.id || `op-${Date.now()}-${index}`;
   next.num = Number(next.num || index + 1);
   next.ot = String(next.ot || "").trim() || `OT-${index + 1}`;
@@ -2882,20 +2883,31 @@ async function performSelectJob(ot, selected, outcome = {}) {
   if (!selected && alreadySelected) {
     renderPriorityList();
     renderPriorityQueue();
+    const saved = await flushPlanSave();
+    if (!saved) {
+      showToast(`OT ${ot} salio de la cola solo en esta sesion; el guardado se reintentara`, 7000);
+      return false;
+    }
     showToast(`OT ${ot} devuelta al backlog`);
-    saveState("plan");
     return true;
   }
   requestAnimationFrame(() => {
     renderPriorityQueue();
-    showToast(`OT ${ot} ${selected ? "agregada al plan" : "devuelta al backlog"}`);
     requestAnimationFrame(() => {
       renderTop();
       renderPlanAlerts();
       renderPriorityList();
     });
   });
-  saveState("plan");
+  const saved = await flushPlanSave();
+  if (!saved) {
+    outcome.errorMessage = `OT ${ot} quedo en el plan solo en esta sesion; el guardado se reintentara`;
+    showToast(outcome.errorMessage, 7000);
+    return false;
+  }
+  // Si selected es false y la OT no estaba en la cola, no hay nada que acusar:
+  // el guardado se lanza igual para no dejar el ambito sucio pendiente.
+  showToast(selected ? `OT ${ot} agregada al plan y guardada` : `OT ${ot} devuelta al backlog`);
   return true;
 }
 
@@ -10229,6 +10241,7 @@ async function applyImported(imported, options = {}) {
     : null;
   if (Array.isArray(imported.operations) && !importedIsStaleSchedule) {
     state.operations = preserveImportedOperationPrices(localOperationsBeforeImport, imported.operations);
+    compactOperationLogs(state.operations);
   }
   const importedSyncedMap = imported.operationsSyncedAt && typeof imported.operationsSyncedAt === "object" &&
     Object.keys(imported.operationsSyncedAt).length ? imported.operationsSyncedAt : null;
@@ -12720,6 +12733,30 @@ function queueAppSheetSave(saveScope = "plan") {
   }, 900);
 }
 
+/**
+ * El traslado Backlog -> Planeado / Por planear es la unica accion que fija la
+ * autoridad del borrador (state.selectedOts), asi que no puede depender del
+ * debounce en segundo plano: se persiste de inmediato y se espera el acuse.
+ * Si ya hay un guardado en curso se espera a que termine y se reintenta con el
+ * cambio incluido, de modo que el resultado booleano sea el estado real en el
+ * servidor y no una simple intencion de guardar.
+ */
+async function flushPlanSave(saveScope = "plan") {
+  const scope = String(saveScope || "plan").trim().toLowerCase();
+  if (scope === "local" || scope === "ui") return false;
+  appSheetMarkDirtyScope(scope);
+  if (!appSheetAvailable) return false;
+  if (appSheetSaveInFlight) {
+    appSheetSavePending = true;
+    await appSheetWaitForIdle();
+  }
+  window.clearTimeout(appSheetSaveTimer);
+  appSheetSaveTimer = null;
+  // El reintento del guardado en curso pudo consumir el ambito sucio; se rearma.
+  if (!appSheetDirtyScopes.size) appSheetMarkDirtyScope(scope);
+  return saveAppSheet(false);
+}
+
 function appSheetTryAcquireSaveGate() {
   if (appSheetSaveOwner) return null;
   const owner = {};
@@ -12893,8 +12930,36 @@ function showToast(message, duration = 2200) {
   showToast.timer = window.setTimeout(() => els.toast.classList.remove("show"), duration);
 }
 
+const OP_LOG_SEPARATOR = " | ";
+
+function compactOperationLog(log) {
+  const text = String(log == null ? "" : log);
+  if (!text) return text;
+  const parts = text.split(OP_LOG_SEPARATOR);
+  if (parts.length < 2) return text;
+  const compacted = [];
+  for (const part of parts) {
+    if (compacted.length && compacted[compacted.length - 1] === part) continue;
+    compacted.push(part);
+  }
+  return compacted.length === parts.length ? text : compacted.join(OP_LOG_SEPARATOR);
+}
+
+function compactOperationLogs(operations) {
+  for (const op of operations || []) {
+    if (!op || typeof op !== "object") continue;
+    if (typeof op.log !== "string") continue;
+    op.log = compactOperationLog(op.log);
+  }
+}
+
 function appendLog(log, message) {
-  return [log, message].filter(Boolean).join(" | ");
+  const text = String(log == null ? "" : log);
+  const entry = String(message == null ? "" : message);
+  if (!entry) return text;
+  if (!text) return entry;
+  if (text.endsWith(OP_LOG_SEPARATOR + entry)) return text;
+  return text + OP_LOG_SEPARATOR + entry;
 }
 
 function normalizeHeader(header) {

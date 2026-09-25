@@ -43,6 +43,9 @@ async function settleMicrotasks() {
 function loadClient(options = {}) {
   const calls = [];
   const timers = [];
+  const toasts = [];
+  const rootListeners = new Map();
+  const documentListeners = new Map();
   const applyImportedCalls = [];
   const metadataWrites = [];
   const loadPlanSnapshotsCalls = [];
@@ -76,6 +79,7 @@ function loadClient(options = {}) {
     location: { hostname: "localhost" },
     setTimeout: (callback) => { timers.push(callback); return timers.length; },
     clearTimeout: () => {},
+    addEventListener: (type, listener) => { rootListeners.set(type, listener); },
     requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
     cancelIdleCallback: () => {},
     requestAnimationFrame: (callback) => { callback(); return 1; },
@@ -97,7 +101,8 @@ function loadClient(options = {}) {
     window: root,
     navigator: {},
     document: {
-      addEventListener: () => {},
+      visibilityState: "visible",
+      addEventListener: (type, listener) => { documentListeners.set(type, listener); },
       createElement: () => ({ textContent: "" }),
       head: { appendChild: () => {} },
       body: { dataset: {} },
@@ -157,7 +162,7 @@ function loadClient(options = {}) {
     netSuitePlanningSyncInFlight: options.netSuitePlanningSyncInFlight === true,
     planningActionsBusy: options.planningActionsBusy || "",
     planSnapshots: structuredClone(options.planSnapshots || []),
-    showToast: () => {},
+    showToast: (message) => { toasts.push(String(message || "")); },
     loadAppStateInBackground: async () => {},
     loadPlanSnapshots: async (...args) => {
       loadPlanSnapshotsCalls.push(args);
@@ -197,7 +202,7 @@ function loadClient(options = {}) {
     getSelectedPriorityJob: () => options.selectedJob || null,
     selectedJobOt: () => options.selectedJob?.ot || "",
     ensurePlanningDataLoaded: async () => ({ ready: false }),
-    console: { warn: () => {} },
+    console: { warn: () => {}, info: () => {} },
     structuredClone,
     Date,
     Set,
@@ -212,6 +217,9 @@ function loadClient(options = {}) {
     state,
     calls,
     timers,
+    toasts,
+    rootListeners,
+    documentListeners,
     applyImportedCalls,
     metadataWrites,
     loadPlanSnapshotsCalls,
@@ -883,4 +891,133 @@ test("el arranque con borrador local vacio no pregunta y aplica lo remoto", asyn
   assert.equal(fixture.applyImportedCalls.length, 1);
   assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
   assert.equal(fixture.state.revision, 13);
+});
+
+test("un conflicto que no puede recargar conserva el ambito sucio, avisa la OT y reintenta", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      lockedOts: ["200", "300"],
+    },
+    bridgeResults: {
+      savePlanningStateOptimized: new Error("CONFLICT_REVISION: revision 5"),
+      getAppState: new Error("red caida"),
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  // La OT sigue en la cola local y el ambito "plan" no se descarta en silencio.
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["matrix", "plan"]);
+  // Un temporizador es el reintento con espera creciente y otro el rearmado del debounce.
+  assert.equal(fixture.timers.length, 2);
+  assert.deepEqual(fixture.toasts, ["No se pudo guardar el plan (OT 300); se reintentara en segundo plano"]);
+  assert.equal(fixture.context.document.body.dataset.saveStatus, "pending");
+});
+
+test("un fallo de red en el guardado avisa la OT y conserva el cache local con la cola", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+    bridgeResults: {
+      savePlanningStateOptimized: new Error("Otro proceso esta actualizando el plan"),
+    },
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  // Reintento con espera creciente mas el rearmado del debounce del finally.
+  assert.equal(fixture.timers.length, 2);
+  assert.deepEqual(fixture.toasts, ["No se pudo guardar el plan (OT 300); se reintentara en segundo plano"]);
+  const cached = JSON.parse(fixture.storage.get("test"));
+  assert.deepEqual(cached.selectedOts, ["200", "300"]);
+  assert.deepEqual(cached.operations, []);
+});
+
+test("ocultar la pestana fuerza el guardado pendiente antes del debounce", async () => {
+  const fixture = loadClient({
+    state: { revision: 1, selectedOts: ["300"], workOrders: [{ ot: "300" }] },
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+
+  fixture.rootListeners.get("pagehide")();
+  await settleMicrotasks();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["savePlanningStateOptimized"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.calls[0].args[0].selectedOts)), ["300"]);
+});
+
+test("el cierre de pagina no duplica el guardado mientras hay uno en curso", async () => {
+  const fixture = loadClient({
+    state: { revision: 1, selectedOts: ["300"], workOrders: [{ ot: "300" }] },
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+  fixture.context.appSheetTryAcquireSaveGate();
+
+  fixture.rootListeners.get("beforeunload")();
+  fixture.context.document.visibilityState = "hidden";
+  fixture.documentListeners.get("visibilitychange")();
+  await settleMicrotasks();
+
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("la carga remota reaplica una OT agregada localmente y la deja sucia para reintentar", async () => {
+  const fixture = loadClient({
+    revision: 1,
+    state: {
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      preparedPlanningByOt: { 200: "firma-200", 300: "firma-300" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200" },
+      operations: [{ ot: "200", id: "op-200" }],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.equal(fixture.state.preparedPlanningByOt[300], "firma-300");
+  assert.ok([...fixture.context.appSheetDirtyScopes].includes("plan"));
+});
+
+test("la carga remota conserva la maquina editada de una OT todavia no guardada", async () => {
+  const fixture = loadClient({
+    revision: 1,
+    state: {
+      _locallyEditedOtConfigurations: ["300"],
+      otConfigurations: { 300: { ot: "300", machine: "DOBLADORA 2", herramental: "H1" } },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: { 300: { ot: "300", machine: "", herramental: "" } },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "300" }],
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(fixture.state.otConfigurations["300"].machine, "DOBLADORA 2");
+  assert.equal(fixture.state.otConfigurations["300"].herramental, "H1");
+  assert.ok([...fixture.context.appSheetDirtyScopes].includes("plan"));
 });
