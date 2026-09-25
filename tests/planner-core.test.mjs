@@ -274,6 +274,89 @@ test("completeAll no corta la colocacion por presupuesto de tiempo y completa to
   assert.equal(result.lastSchedule.performance.stats.strategiesStarted, 1, "debe detenerse en la primera estrategia completa");
 });
 
+test("completeAll no aborta por presupuesto aunque el reloj real se dispare", async () => {
+  const core = loadPlannerCore();
+  const operations = Array.from({ length: 40 }, (_, index) => ({
+    id: `op-${index + 1}`,
+    ot: String(index + 1),
+    secuencia: 1,
+    ct: "100",
+    descripcion: "CORTE",
+    estatus: "PLAN",
+    tiempoProd: 1,
+  }));
+  // El presupuesto se mide con max(reloj falso, reloj real), asi que en una maquina lenta el
+  // reloj real basta para rebasarlo. completeAll no debe abortar nunca por eso.
+  const realNow = core.VmDate.now;
+  let wall = 1_000_000;
+  core.VmDate.now = () => { wall += 5000; return wall; };
+  try {
+    const result = await core.schedulePlan({
+      selectedOts: operations.map((op) => op.ot),
+      operations,
+      workOrders: operations.map((op) => ({ ot: op.ot })),
+      matrix: { "100::CORTE": ["OP 1"] },
+      configuredCapabilities: ["100::CORTE"],
+      operators: ["OP 1"],
+      settings: { optimizationPasses: 4, flowBalancedEnabled: false },
+      workSchedule: {},
+    }, {
+      planStart: "2026-07-13",
+      horizonDays: 5,
+      executionTime: "2026-07-13T07:00:00",
+      collectStats: true,
+      completeAll: true,
+      timeBudgetMs: 1,
+    });
+
+    assert.equal(result.lastSchedule.scheduled, 40, "debe programar todas");
+    assert.equal(result.lastSchedule.unscheduled, 0);
+    assert.equal(result.lastSchedule.performance.aborted, false, "completeAll no aborta por tiempo, real o simulado");
+    assert.notEqual(result.lastSchedule.performance.reason, "TIME_BUDGET_EXCEEDED");
+  } finally {
+    core.VmDate.now = realNow;
+  }
+});
+
+test("sin completeAll el presupuesto de tiempo si puede abortar y lo dice", async () => {
+  const core = loadPlannerCore();
+  const operations = Array.from({ length: 40 }, (_, index) => ({
+    id: `op-${index + 1}`,
+    ot: String(index + 1),
+    secuencia: 1,
+    ct: "100",
+    descripcion: "CORTE",
+    estatus: "PLAN",
+    tiempoProd: 1,
+  }));
+  const realNow = core.VmDate.now;
+  let wall = 2_000_000;
+  core.VmDate.now = () => { wall += 5000; return wall; };
+  try {
+    const result = await core.schedulePlan({
+      selectedOts: operations.map((op) => op.ot),
+      operations,
+      workOrders: operations.map((op) => ({ ot: op.ot })),
+      matrix: { "100::CORTE": ["OP 1"] },
+      configuredCapabilities: ["100::CORTE"],
+      operators: ["OP 1"],
+      settings: { optimizationPasses: 4, flowBalancedEnabled: false },
+      workSchedule: {},
+    }, {
+      planStart: "2026-07-13",
+      horizonDays: 5,
+      executionTime: "2026-07-13T07:00:00",
+      collectStats: true,
+      timeBudgetMs: 1,
+    });
+
+    assert.equal(result.lastSchedule.performance.aborted, true, "sin completeAll el presupuesto sigue mandando");
+    assert.equal(result.lastSchedule.performance.reason, "TIME_BUDGET_EXCEEDED");
+  } finally {
+    core.VmDate.now = realNow;
+  }
+});
+
 test("la primera operacion respeta el orden de selectedOts sobre la prioridad calculada", async () => {
   const core = loadPlannerCore();
   const result = await core.schedulePlan({

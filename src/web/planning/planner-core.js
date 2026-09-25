@@ -43,6 +43,12 @@
       startedAtMs,
       startedAtWallMs,
       startedAt: new Date().toISOString(),
+      // completeAll se registra aqui y no solo en schedulePlanOnce: el guard de presupuesto
+      // de schedulePlan corre sobre este estado compartido ANTES de la primera estrategia
+      // (planner-core.js:232), cuando completeAll aun no estaba puesto, asi que una corrida
+      // completeAll podia abortar por tiempo real. Eso es justo lo que completeAll promete
+      // no hacer, y es el camino de "Generar plan" (app.js:5602).
+      completeAll: options?.completeAll === true,
       timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
       budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 500) : 0,
       budgetCheckCount: 0,

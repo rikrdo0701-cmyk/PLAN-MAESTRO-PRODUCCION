@@ -1497,6 +1497,15 @@
       "updated_at": "2026-09-25"
     },
     {
+      "rule_id": "RULE-OT-049",
+      "name": "completeAll nunca aborta por presupuesto de tiempo, ni con reloj real disparado",
+      "status": "implementada",
+      "rule": "BUG 2026-09-25 (encontrado al publicar RULE-OT-048: el workflow de Pages fallo en CI con 'completeAll no corta la colocacion por presupuesto de tiempo y completa todas' -> performance.aborted=true, 640/641, mientras en local pasaba 641/641). ORIGEN: PlannerCore.schedulePlan (src/web/planning/planner-core.js) crea un unico performanceState compartido (createPlanningPerformanceState) y lo consulta en el guard de presupuesto ANTES de la primera estrategia (planner-core.js:232, checkPlanningBudget(performanceState, 'strategy:<nombre>:start')). El flag completeAll solo se registraba dentro de schedulePlanOnce (planner-core.js:308), es decir DESPUES de ese guard, y la unica rama que lo respeta es planner-core.js:105 (if performanceState.completeAll !== true). Consecuencia: en la primera vuelta del ciclo de estrategias el estado aun no tenia completeAll, asi que el presupuesto se evaluaba con effectiveElapsedMs = max(reloj simulado, reloj real) (planner-core.js:106-108). Con timeBudgetMs chico, o simplemente en una maquina lenta, wallElapsedMs >= 1 basta para que timerExceeded disparara, se lanzara TIME_BUDGET_EXCEEDED (assertPlanningBudget, planner-core.js:143-148) y el flujo tomara la rama de budget: con una estrategia ya evaluada devuelve el plan de esa estrategia pero con abortReason='TIME_BUDGET_EXCEEDED' (planner-core.js:239-243), de modo que el plan quedaba completo pero marcado como abortado. Es el camino de 'Generar plan' (app.js:5595-5606 pasa completeAll:true y timeBudgetMs: planningPlanTimeBudgetMs). FIX: createPlanningPerformanceState registra completeAll desde options al construir el estado, de modo que el guard de la linea 232 ya lo respeta; se conserva la linea 308 por redundancia inocua. El presupuesto de tiempo sigue mandando cuando NO es completeAll. Tests: tests/planner-core.test.mjs (2 nuevos: 'completeAll no aborta por presupuesto aunque el reloj real se dispare' advancing core.VmDate.now 5000 ms por llamada, y 'sin completeAll el presupuesto de tiempo si puede abortar y lo dice'). Suite 643/643 y npm run check OK.",
+      "source": "bug encontrado por el workflow 'Desplegar frontend en GitHub Pages' (run 36198074303, 2026-09-25, pass 640 fail 1) al publicar RULE-OT-048; src/web/planning/planner-core.js (createPlanningPerformanceState, checkPlanningBudget, assertPlanningBudget, schedulePlan, schedulePlanOnce), src/web/planning/app.js (scheduleCurrentPlanImpl con completeAll:true); tests/planner-core.test.mjs; suite 643/643, npm run check OK; continua RULE-OT-048",
+      "domain": "planificacion",
+      "updated_at": "2026-09-25"
+    },
+    {
       "rule_id": "RULE-OT-047",
       "name": "El traslado Backlog -> Planeado/Por planear se persiste de inmediato y se acusa; ningun guardado pendiente se descarta en silencio",
       "status": "implementada",
