@@ -855,10 +855,19 @@ expandedOts: without(state?.expandedOts),
     ]).filter(Boolean).sort();
     const scheduledStart = scheduled[0] || String(workOrder?.scheduledStart || workOrder?.fechaInicio || "");
     const scheduledEnd = scheduled[scheduled.length - 1] || String(workOrder?.scheduledEnd || workOrder?.fechaFin || "");
+    const quantityValue = Number(workOrder?.quantity ?? workOrder?.cantidad ?? 0);
+    const builtValue = Number(workOrder?.builtQuantity ?? workOrder?.quantityBuilt ?? 0);
+    const builtQuantity = Number.isFinite(builtValue) ? Math.max(0, builtValue) : 0;
+    const pendingValue = Number(workOrder?.pendingQuantity);
+    const pendingQuantity = Number.isFinite(pendingValue)
+      ? Math.max(0, pendingValue)
+      : (Number.isFinite(quantityValue) && quantityValue > 0 ? Math.max(0, quantityValue - builtQuantity) : 0);
     return {
       ot: String(workOrder?.ot || "").trim(),
       item: String(workOrder?.item || workOrder?.article || workOrder?.parte || "").trim(),
-      quantity: Number(workOrder?.quantity ?? workOrder?.cantidad ?? 0),
+      quantity: quantityValue,
+      builtQuantity,
+      pendingQuantity,
       scheduledStart,
       scheduledEnd,
       weekStart: scheduledStart ? mondayIso(scheduledStart) : "",

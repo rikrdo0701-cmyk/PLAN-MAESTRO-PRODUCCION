@@ -146,10 +146,17 @@ function getInspectionWorkOrder(wo) {
       const sequence = Number(PP_Inspection_value_(row, ['secuencia', 'sequence']) || index + 1);
       return { id: folio + '-' + sequence + '-' + index, code: operation.split(':')[0].trim() || operation, operation: operation, sequence: sequence, workCenter: '' };
     }).filter(function(item) { return item.operation; }).sort(function(a, b) { return a.sequence - b.sequence; });
+    const quantityTotal = Number(PP_Inspection_value_(workOrder, ['cantidad', 'quantity', 'qty']) || 0);
+    const builtRaw = PP_Inspection_value_(workOrder, ['cantidadEnsamblada', 'Cantidad ensamblada', 'builtQuantity', 'built']);
+    const pendingRaw = PP_Inspection_value_(workOrder, ['cantidadPendiente', 'Cantidad pendiente', 'pendingQuantity']);
+    const builtQuantity = builtRaw === '' ? 0 : Math.max(0, PP_Inspection_number_(builtRaw));
+    const pendingQuantity = pendingRaw === '' ? Math.max(0, quantityTotal - builtQuantity) : Math.max(0, PP_Inspection_number_(pendingRaw));
     return {
       workOrder: { wo: folio, article: article,
         description: PP_Inspection_text_(PP_Inspection_value_(workOrder, ['Descripcion', 'description'])),
-        quantity: Number(PP_Inspection_value_(workOrder, ['cantidad', 'quantity', 'qty']) || 0),
+        quantity: quantityTotal,
+        builtQuantity: builtQuantity,
+        pendingQuantity: pendingQuantity,
         dueDate: PP_Inspection_longDate_(PP_Inspection_value_(workOrder, ['fechaEntrega', 'duedate', 'enddate'])),
         status: PP_Inspection_text_(PP_Inspection_value_(workOrder, ['estatus', 'status', 'Estado'])),
         revision: PP_Inspection_text_(PP_Inspection_value_(workOrder, ['Revision', 'revision', 'bomRevision'])) || 'A',

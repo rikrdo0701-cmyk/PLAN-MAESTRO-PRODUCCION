@@ -45,7 +45,7 @@ Archivos raíz legacy (pipeline "Plan Maestro" fuera de `src/server`): `PRINCIPA
 | `NS_TOKEN_SECRET` | Token secret OAuth |
 | `NS_LOCATION_ID` | `'1'` (Planta MM del Llano; fija, `configureNetSuiteCredentials_` rechaza otros) |
 | `INSPECTION_SPREADSHEET_ID` | Workbook de inspección (default hardcodeado en `16-inspection-service.js`) |
-| `NS_WO_INSPECTION_SCRIPT` | Script RESTlet de inspección (default `'2080'`) |
+| `NS_WO_INSPECTION_SCRIPT` | Script RESTlet de inspección (default `'2244'`, que expone `cantidadEnsamblada`/`cantidadPendiente`; `2080` es la copia anterior sin ensamblado) |
 | `NS_WO_INSPECTION_DEPLOY` | Deploy del RESTlet (default `'1'`) |
 
 ### 2.2 Comandos de configuración (ejecutar una vez en Apps Script)

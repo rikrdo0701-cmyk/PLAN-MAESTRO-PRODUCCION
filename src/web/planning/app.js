@@ -221,6 +221,7 @@ const sampleState = {
   toolCatalog: [],
   machineToolHistory: [],
   workOrders: [],
+  closedWorkOrderSummaries: {},
   otConfigurations: {},
   articleConfigurations: {},
   materials: [],
@@ -7263,6 +7264,8 @@ function renderWeekReport() {
   if (els.reportWeekStartInput) els.reportWeekStartInput.value = state.reportWeekStart;
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
+  backfillClosedPendingPiecesFromHistory([...summary.starts, ...summary.finishes]);
+  ensureInspectionWorkOrders([...summary.starts, ...summary.finishes].map((row) => row.ot));
   els.weekExecutiveSummary.innerHTML = reportOps.length
     ? renderWeeklyExecutiveSummary(weeklyExecutiveSummary(summary, state.reportWeekStart, {
       operations: reportOps,
@@ -7277,6 +7280,227 @@ function renderWeekReport() {
     <section class="weekly-job-panel"><header><h3>OT que inician</h3><span>Fecha de la primera operacion</span></header>${renderWeeklyJobDays(summary.starts, false)}</section>
     <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion de liberacion final (39OTD/16OC)</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
   `;
+}
+
+function closedSummaryPieces(summary) {
+  if (!summary || typeof summary !== "object") return 0;
+  for (const value of [summary.pendingQuantity, summary.pendingPieces]) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  const quantity = Number(summary.quantity);
+  if (Number.isFinite(quantity) && quantity > 0) {
+    const built = Number(summary.builtQuantity);
+    return Number.isFinite(built) ? Math.max(0, quantity - built) : quantity;
+  }
+  return 0;
+}
+
+function closedSummaryKeyForOt(ot, summaries = state.closedWorkOrderSummaries) {
+  const key = materialOtKey(ot);
+  if (!key) return "";
+  return Object.keys(summaries || {}).find((candidate) => materialOtKey(candidate) === key) || "";
+}
+
+function closedPendingPiecesForOt(ot) {
+  const key = closedSummaryKeyForOt(ot);
+  if (!key) return 0;
+  const pieces = closedSummaryPieces((state.closedWorkOrderSummaries || {})[key]);
+  return Number.isFinite(pieces) ? Math.max(0, pieces) : 0;
+}
+
+const inspectionWorkOrderCache = new Map();
+const inspectionWorkOrderFillAttempted = new Set();
+let inspectionReRenderTimer = null;
+
+function inspectionWorkOrderEntry(ot) {
+  return inspectionWorkOrderCache.get(materialOtKey(ot)) || null;
+}
+
+function inspectionPendingPiecesForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const quantity = Number(entry.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  const built = Number(entry.builtQuantity);
+  return Math.max(0, quantity - (Number.isFinite(built) ? built : 0));
+}
+
+function inspectionBuiltPiecesForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const built = Number(entry.builtQuantity);
+  return Number.isFinite(built) ? Math.max(0, built) : null;
+}
+
+function scheduleInspectionReRender() {
+  if (inspectionReRenderTimer) return;
+  inspectionReRenderTimer = window.setTimeout(() => {
+    inspectionReRenderTimer = null;
+    renderReports();
+  }, 300);
+}
+
+async function ensureInspectionWorkOrders(ots) {
+  if (!isAppsScriptRuntime()) return;
+  const candidates = (Array.isArray(ots) ? ots : [])
+    .map((ot) => ({ ot: String(ot || "").trim(), key: materialOtKey(ot) }))
+    .filter((item) => item.ot && item.key && !inspectionWorkOrderCache.has(item.key) && !inspectionWorkOrderFillAttempted.has(item.key));
+  if (!candidates.length) return;
+  candidates.forEach((item) => inspectionWorkOrderFillAttempted.add(item.key));
+  const queue = [...candidates];
+  let filled = 0;
+  const worker = async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      if (!item) continue;
+      try {
+        const result = await withTimeout(callAppsScript("getInspectionWorkOrder", item.ot), 60000);
+        const workOrder = result?.ok ? result.data?.workOrder : null;
+        if (!workOrder) continue;
+        const quantity = Number(workOrder.quantity);
+        if (!Number.isFinite(quantity) || quantity <= 0) continue;
+        inspectionWorkOrderCache.set(item.key, {
+          quantity,
+          builtQuantity: Math.max(0, Number(workOrder.builtQuantity) || 0),
+          pendingQuantity: Math.max(0, Number(workOrder.pendingQuantity) || 0),
+          status: String(workOrder.status || ""),
+        });
+        filled += 1;
+      } catch (error) {
+        // La OT queda marcada para no reintentar en esta carga; el dato sigue ausente.
+        appendLog(`No se pudo leer la OT ${item.ot} desde inspeccion: ${error.message || String(error)}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (filled) scheduleInspectionReRender();
+}
+
+function mergeClosedWorkOrderSummaries(local, remote) {
+  const merged = { ...(local && typeof local === "object" ? local : {}) };
+  for (const [key, value] of Object.entries(remote && typeof remote === "object" ? remote : {})) {
+    if (!value || typeof value !== "object") continue;
+    const existingKey = closedSummaryKeyForOt(key, merged) || key;
+    const existing = merged[existingKey];
+    if (!existing) {
+      merged[existingKey] = { ...value };
+      continue;
+    }
+    if (closedSummaryPieces(value) > closedSummaryPieces(existing)) {
+      merged[existingKey] = { ...existing, ...value };
+      continue;
+    }
+    merged[existingKey] = { ...existing };
+    if (value.closedDetectedAt) merged[existingKey].closedDetectedAt = value.closedDetectedAt;
+    if (value.item && !existing.item) merged[existingKey].item = value.item;
+    if (value.quantity && !Number(existing.quantity)) merged[existingKey].quantity = value.quantity;
+  }
+  return merged;
+}
+
+function rememberClosedPendingPieces(ot, pieces, source) {
+  const key = String(ot || "").trim();
+  const amount = Number(pieces);
+  if (!key || !Number.isFinite(amount) || amount <= 0) return false;
+  const summaries = state.closedWorkOrderSummaries || {};
+  const existingKey = closedSummaryKeyForOt(key, summaries) || key;
+  const existing = summaries[existingKey] || {};
+  if (closedSummaryPieces(existing) > 0) return false;
+  summaries[existingKey] = {
+    ...existing,
+    ot: key,
+    quantity: Number(existing.quantity) > 0 ? Number(existing.quantity) : amount,
+    pendingQuantity: amount,
+    pendingPiecesSource: source,
+    finalStatus: existing.finalStatus || "CERRADA",
+    weekStart: existing.weekStart || state.reportWeekStart || "",
+    closedDetectedAt: existing.closedDetectedAt || new Date().toISOString(),
+  };
+  state.closedWorkOrderSummaries = summaries;
+  return true;
+}
+
+function sortSnapshotsForClosedPiecesBackfill(snapshots, week) {
+  const weekKey = String(week || "");
+  const stampOf = (item) => String(item?.publishedAt || item?.generatedAt || "");
+  return [...(Array.isArray(snapshots) ? snapshots : [])]
+    .filter((item) => item?.snapshotId && item.snapshotId !== "draft")
+    .sort((a, b) => {
+      const aWeek = String(a?.weekStart || a?.planStart || "") === weekKey ? 1 : 0;
+      const bWeek = String(b?.weekStart || b?.planStart || "") === weekKey ? 1 : 0;
+      if (aWeek !== bWeek) return bWeek - aWeek;
+      const aStamp = stampOf(a);
+      const bStamp = stampOf(b);
+      if (aStamp !== bStamp) return bStamp.localeCompare(aStamp);
+      return String(a?.snapshotId || "").localeCompare(String(b?.snapshotId || ""));
+    });
+}
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+const closedPiecesBackfillAttempted = new Set();
+let closedPiecesBackfillRunning = false;
+
+async function backfillClosedPendingPiecesFromHistory(rows) {
+  if (closedPiecesBackfillRunning || !isAppsScriptRuntime()) return;
+  const openOts = new Set((state.workOrders || []).map((workOrder) => materialOtKey(workOrder?.ot)));
+  const candidatesByKey = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const ot = String(row?.ot || "").trim();
+    const key = materialOtKey(ot);
+    if (!ot || !key || closedPiecesBackfillAttempted.has(key) || openOts.has(key)) continue;
+    if (Number(row?.pendingPieces) > 0) continue;
+    if (!(Number(row?.unitPrice) >= 1) || closedPendingPiecesForOt(ot) > 0) {
+      closedPiecesBackfillAttempted.add(key);
+      continue;
+    }
+    if (!candidatesByKey.has(key)) candidatesByKey.set(key, { ot, key });
+  }
+  const candidates = [...candidatesByKey.values()];
+  if (!candidates.length) return;
+  const source = planSnapshots.length ? planSnapshots : loadPlanSnapshotsCache();
+  if (!Array.isArray(source) || !source.length) return;
+  candidates.forEach((candidate) => closedPiecesBackfillAttempted.add(candidate.key));
+  closedPiecesBackfillRunning = true;
+  try {
+    const snapshots = sortSnapshotsForClosedPiecesBackfill(source, state.reportWeekStart).slice(0, 3);
+    for (const meta of snapshots) {
+      const remaining = candidates.filter((candidate) => !(closedPendingPiecesForOt(candidate.ot) > 0));
+      if (!remaining.length) break;
+      let snapshot = null;
+      try {
+        snapshot = await withTimeout(fetchPlanSnapshot(meta.snapshotId), 90000);
+      } catch {
+        continue;
+      }
+      const piecesByOt = new Map();
+      for (const operation of snapshot?.operations || []) {
+        const key = materialOtKey(operation?.ot);
+        if (!remaining.some((item) => item.key === key) || piecesByOt.has(key)) continue;
+        const pieces = Math.max(0, Number(operation?.pendingPieces ?? operation?.cantPendiente ?? 0));
+        if (pieces > 0) piecesByOt.set(key, pieces);
+      }
+      let snapshotUpdated = 0;
+      for (const candidate of remaining) {
+        const pieces = piecesByOt.get(candidate.key);
+        if (pieces > 0 && rememberClosedPendingPieces(candidate.ot, pieces, `plan:${meta.snapshotId}`)) snapshotUpdated += 1;
+      }
+      if (snapshotUpdated) renderReports();
+    }
+  } catch {
+    return;
+  } finally {
+    closedPiecesBackfillRunning = false;
+  }
 }
 
 function renderReportOperatorLoads(reportOps, weekDate = state.reportWeekStart) {
@@ -7515,7 +7739,15 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
     const opPieces = [first.pendingPieces, first.cantPendiente, last.pendingPieces, last.cantPendiente]
       .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
-    const pendingPiecesValue = Number(opPieces ?? pendingPiecesForWorkOrder(workOrder));
+    const workOrderPieces = Number(pendingPiecesForWorkOrder(workOrder));
+    const closedPieces = Number(closedPendingPiecesForOt(ot));
+    const inspectionPieces = inspectionPendingPiecesForOt(ot);
+    const pendingPiecesValue = Number([
+      inspectionPieces !== null && inspectionPieces !== undefined ? inspectionPieces : null,
+      opPieces,
+      Number.isFinite(workOrderPieces) && workOrderPieces > 0 ? workOrderPieces : null,
+      Number.isFinite(closedPieces) && closedPieces > 0 ? closedPieces : null,
+    ].find((value) => value !== null && value !== undefined) ?? pendingPiecesForWorkOrder(workOrder));
     const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
     const positiveNumber = (value) => {
       if (value === null || value === undefined || String(value).trim() === "") return false;
@@ -7525,7 +7757,7 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const positiveValues = (values) => values.filter(positiveNumber).map(Number);
     const unitPrices = positiveValues([first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice]);
     const unitPrice = unitPrices.length ? Math.max(...unitPrices) : null;
-    const opAmounts = positiveValues([first.amount, last.amount]);
+    const opAmounts = pendingPieces > 0 ? positiveValues([first.amount, last.amount]) : [];
     const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
     const amounts = derivedAmount != null && derivedAmount > 0 ? [...opAmounts, derivedAmount] : opAmounts;
     const amount = amounts.length ? Math.max(...amounts) : null;
@@ -7838,7 +8070,8 @@ function releaseReportRows() {
     const workOrder = workOrderForOt(ot);
     const quantityValue = release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
     const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
-    const built = Math.max(0, Number(workOrder?.builtQuantity || 0));
+    const inspectionBuilt = inspectionBuiltPiecesForOt(ot);
+    const built = Math.max(0, Number(inspectionBuilt ?? workOrder?.builtQuantity ?? 0));
     rows.push({
       ot,
       article: release.parte || workOrder?.item || "",
@@ -7860,6 +8093,7 @@ function releaseReportRows() {
 function renderReleaseReport() {
   if (!els.releaseReport) return;
   const rows = releaseReportRows();
+  ensureInspectionWorkOrders(rows.map((row) => row.ot));
   if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
   const statusActions = reportSourceAllowsOperationTracking();
   const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
@@ -10039,6 +10273,9 @@ async function applyImported(imported, options = {}) {
     );
     state.workOrders = normalizeWorkOrders(imported.workOrders).map((item) =>
       mergeWorkOrderLocalOverrides(localWorkOrdersByOt.get(materialOtKey(item.ot)), item));
+  }
+  if (imported.closedWorkOrderSummaries && typeof imported.closedWorkOrderSummaries === "object") {
+    state.closedWorkOrderSummaries = mergeClosedWorkOrderSummaries(state.closedWorkOrderSummaries, imported.closedWorkOrderSummaries);
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();

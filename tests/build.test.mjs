@@ -2233,6 +2233,40 @@ test("liberacion final detecta 16OC/39OTD por ct o por descripcion cuando el fee
   assert.deepEqual(withCatalog({ ct: "SIN_CT", descripcion: "OTRA OPS" }), { ct: "5537", label: "16OC" });
 });
 
+test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no esta en workOrders", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function releaseReportRows(");
+  const end = app.indexOf("function renderReleaseReport(", start);
+  assert.ok(start >= 0 && end > start, "releaseReportRows debe existir");
+  const source = app.slice(start, end);
+  const buildRows = ({ workOrder, built, pendingPieces = 1 }) => Function(
+    "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
+    "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
+    "inspectionBuiltPiecesForOt",
+    `${source}; return releaseReportRows;`,
+  )(
+    () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
+    () => true,
+    (op) => ({ ct: op.ct, label: "16OC" }),
+    (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
+    (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
+    (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
+    () => workOrder,
+    (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
+    () => built,
+  );
+
+  const rowsClosed = buildRows({ workOrder: null, built: 1 })();
+  assert.equal(rowsClosed.length, 1);
+  assert.equal(rowsClosed[0].built, 1);
+
+  const rowsOpen = buildRows({ workOrder: { builtQuantity: 0, quantity: 15 }, built: 15 })();
+  assert.equal(rowsOpen[0].built, 15);
+
+  const rowsWithoutInspection = buildRows({ workOrder: { builtQuantity: 4, quantity: 15 }, built: null })();
+  assert.equal(rowsWithoutInspection[0].built, 4);
+});
+
 test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const start = app.indexOf("function toolChangeReportData(");

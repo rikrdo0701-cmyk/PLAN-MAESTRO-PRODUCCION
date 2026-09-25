@@ -454,7 +454,7 @@ Headers: `ID, Artículo, Material, Descripción, Cantidad, Emitido, Pendiente po
 | `1766` | `1` | `{ table: 'REQ_FIFO', pageIndex, pageSize: 200 }` | Precios de venta por artículo: headers reales incluyen `PARTE` (nombre), `_ITEM_ID`, `PRECIO BASE MNX`, `CANTIDAD ORDEN`, `FECHA DE ORDEN`, `MONEDA`, `TIPO CAMBIO` — **sin `_ITEM_NAME`**; `PP_fetchSalesPricesRestlet_` indexa por `_ITEM_ID` y `PARTE` (FIX 2026-09-24) |
 | `1762` | `17` | `{ locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | Operaciones programadas de la planta |
 | `1763` | `14` | `{ locationId: 1, onlyOpen: true, maxWOs: 50000, pageIndex, pageSize: 200 }` | Materiales |
-| `2080` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`) |
+| `2244` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`; default `2244`) |
 
 - Endpoint: `https://{accountId}.restlets.api.netsuite.com/app/site/hosting/restlet.nl`.
 - OAuth 1.0a HMAC-SHA256 (`PP_oauthHeader_`). Credenciales en Script Properties (`NS_*`).

@@ -171,7 +171,7 @@ Operaciones Programadas → Plan Maestro.
 | `1766` `REQ_FIFO` | `ORDENES_TRABAJO.PRECIO_ULTIMA_VENTA` + `PRECIO_PROMEDIO_VENTA` | `_ITEM_ID` **o `PARTE`** (no hay `_ITEM_NAME`) → OT por `itemId`/`Artículo`; `PRECIO BASE MNX`/`FECHA DE ORDEN`/`CANTIDAD ORDEN` → última venta y promedio 6m |
 | `1762` operaciones | `OPERACIONES` | `ID (link)` → `ID`; `Orden de trabajo` → `OT`; secuencia/CT/times/resources → `SECUENCIA`, `CT`, `TIEMPO_*`, `OPERADOR`/`MAQUINA` |
 | `1763` materiales | `MATERIALES` | assembly → `ENSAMBLE`; item → `COMPONENTE_ID`/`COMPONENTE`; quantity → `REQUERIDO`/`EMITIDO`/`PENDIENTE`; OT/WO → `OT`/`WO_INTERNAL_ID` |
-| `2080` `WO_INSPECCION` | inspección | `WO Folio`/`tranid` → folio; detalle de ruta y trabajo |
+| `2244` `WO_INSPECCION` (antes `2080`) | inspección | `WO Folio`/`tranid` → folio; `cantidad`/`cantidadEnsamblada`/`cantidadPendiente` → detalle de inspección |
 
 La resolución de OT en NetSuite acepta los alias `WO Folio`, `Orden de trabajo`,
 `workorder_tranid`, `tranid` (helpers `PP_pick_` en `08-netsuite.js`).

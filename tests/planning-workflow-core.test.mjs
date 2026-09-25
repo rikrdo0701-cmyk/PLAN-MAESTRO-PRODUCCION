@@ -687,7 +687,7 @@ test("reconcileActiveWorkOrders retira una OT ausente y elimina todas sus operac
   assert.equal(next.selectedDetailOt, "");
   assert.equal(next.selectedOperationId, "");
   assert.deepEqual(structuredClone(next.closedWorkOrderSummaries[200]), {
-    ot: "200", item: "CERRADA", quantity: 7,
+    ot: "200", item: "CERRADA", quantity: 7, builtQuantity: 0, pendingQuantity: 7,
     scheduledStart: "2026-07-20T07:00:00Z", scheduledEnd: "2026-07-20T12:00:00Z",
     weekStart: "2026-07-20", finalStatus: "CERRADA", closedDetectedAt: "2026-07-22T10:00:00Z",
   });
@@ -804,7 +804,7 @@ test("removeClosedWorkOrdersFromDraft elimina totalmente la OT cerrada y quita s
   assert.equal(next.selectedDetailOt, "");
   assert.equal(next.selectedOperationId, "");
   assert.deepEqual(structuredClone(next.closedWorkOrderSummaries[200]), {
-    ot: "200", item: "CERRADA", quantity: 7,
+    ot: "200", item: "CERRADA", quantity: 7, builtQuantity: 0, pendingQuantity: 7,
     scheduledStart: "2026-07-20T10:00:00Z", scheduledEnd: "2026-07-20T12:00:00Z",
     weekStart: "2026-07-20", finalStatus: "CERRADA", closedDetectedAt: "2026-07-22T10:00:00Z",
   });

@@ -1222,14 +1222,15 @@
     {
       "source_id": "NS-RESTLETS",
       "type": "netsuite_restlet",
-      "name": "RESTlets propios (1764/1766/1762/1763/2080)",
+      "name": "RESTlets propios (1764/1766/1762/1763/2244; 2080 legado)",
       "location/origin": "https://{accountId}.restlets.api.netsuite.com/app/site/hosting/restlet.nl",
       "columns": [
         "1766 REQ_FIFO: precios de venta por articulo (headers reales: PARTE = nombre, _ITEM_ID, PRECIO BASE MNX, CANTIDAD ORDEN, FECHA DE ORDEN, MONEDA, TIPO CAMBIO; SIN _ITEM_NAME) -> lastSalePrice + averageSalePrice 6m indexados por _ITEM_ID y PARTE (PP_fetchSalesPricesRestlet_)",
         "1764 WO_LISTA: headers reales WO Internal ID, WO Folio, Articulo, Descripcion, Cantidad, Fecha de vencimiento, Estatus, BOM Revision, Revision, Cliente (SIN Item Internal ID; itemId catalogo vacio; match precios por Articulo/PARTE)",
         "1762 (RESTlet exclusivo de esta instancia; config PP_OPERATIONS_RESTLET_): operaciones programadas de la planta. Devuelve id = manufacturingoperationtask.id para ids estables ns-<id>; claves de fila en minusculas (workorder_id, workorder_tranid, item_name, operation, sequence, workcenter, start/end_planned, status_op, setup/est/real/remaining_min, production_rate, human_resource, machine_resource, qty_completed)",
         "1763: materiales",
-        "2080 WO_INSPECCION: inspección"
+        "2244 WO_INSPECCION (default de NS_WO_INSPECTION_SCRIPT; fuente netsuite-restlet-wo-inspeccion.js): copia de 2080 con action:list|detail y, en 'trabajo', cantidadTotal, cantidadEnsamblada (fuente record:built, campo 'built' del registro workorder), cantidadEnsambladaFuente/Campo, cantidadPendiente y cantidadRealizada por operacion (mot.completedquantity); action:detail entrega OTs cerradas (sin filtro onlyOpen). Accion diagnostico = 5 consultas fijas para auditar columnas de SuiteQL/registro.",
+        "2080 WO_INSPECCION (legado): copia anterior sin cantidadEnsamblada; en action:detail filtra OTs cerradas cuando payload.onlyOpen != false"
       ],
       "readers": [
         "PP_fetchRestletPages_",
