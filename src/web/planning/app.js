@@ -6,7 +6,9 @@ const STORAGE_KEY = "plan-produccion-app-v1";
 const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
-const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
+// Un fetch completo tarda 43-73 s en produccion (1764 paginado + 1766 REQ_FIFO) y el
+// reintento ante limite de solicitudes agrega ~5 s; el puente corta a 120 s.
+const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 110000;
 const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const NETSUITE_WORKORDER_FRESH_MS = 15 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
@@ -7339,7 +7341,28 @@ function closedPendingPiecesForOt(ot) {
 
 const inspectionWorkOrderCache = new Map();
 const inspectionWorkOrderFillAttempted = new Set();
+// Fallos de lectura de inspeccion. El puente resuelve con { ok: false, error } sin
+// rechazar, asi que sin este registro una OT sin dato de NetSuite (por ejemplo un
+// 400 del RESTlet) dejaba el reporte sin PZAS y sin ninguna huella visible.
+const inspectionWorkOrderFailures = new Map();
 let inspectionReRenderTimer = null;
+
+function recordInspectionWorkOrderFailure(ot, method, error) {
+  const folio = String(ot || "").trim();
+  const detail = String((error && error.message) || error || "respuesta invalida").trim();
+  if (!folio) return;
+  inspectionWorkOrderFailures.set(folio, { ot: folio, method, error: detail, at: new Date().toISOString() });
+  if (typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(`[inspeccion] ${method} fallo para la OT ${folio}: ${detail}`);
+  }
+}
+
+function inspectionWorkOrderFailureLines() {
+  return Array.from(inspectionWorkOrderFailures.values())
+    .sort((a, b) => String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }))
+    .map((failure) => `${failure.method} fallo para la OT ${failure.ot}: ${failure.error}`)
+    .join("; ");
+}
 
 function inspectionWorkOrderEntry(ot) {
   return inspectionWorkOrderCache.get(materialOtKey(ot)) || null;
@@ -7376,8 +7399,15 @@ function scheduleInspectionReRender() {
   }, 300);
 }
 
+function inspectionFillOnHold() {
+  // Mientras corre una sincronizacion de OTs la recarga de inspeccion cede el paso para
+  // no saturar el limite de solicitudes de NetSuite (400 SSS_REQUEST_LIMIT_EXCEEDED).
+  return backlogSyncInFlight || netSuiteSyncInFlight;
+}
+
 async function ensureInspectionWorkOrders(ots) {
   if (!isAppsScriptRuntime()) return;
+  if (inspectionFillOnHold()) return;
   const candidates = (Array.isArray(ots) ? ots : [])
     .map((ot) => ({ ot: String(ot || "").trim(), key: materialOtKey(ot) }))
     .filter((item) => item.ot && item.key && !inspectionWorkOrderCache.has(item.key) && !inspectionWorkOrderFillAttempted.has(item.key));
@@ -7385,14 +7415,31 @@ async function ensureInspectionWorkOrders(ots) {
   candidates.forEach((item) => inspectionWorkOrderFillAttempted.add(item.key));
   const queue = [...candidates];
   let filled = 0;
+  let failed = 0;
   const worker = async () => {
     while (queue.length) {
+      if (inspectionFillOnHold()) {
+        // Cede el paso a la sincronizacion de OTs: las que queden en cola vuelven a
+        // estar disponibles para el siguiente render.
+        queue.forEach((pending) => inspectionWorkOrderFillAttempted.delete(pending.key));
+        queue.length = 0;
+        break;
+      }
       const item = queue.shift();
       if (!item) continue;
       try {
         const result = await withTimeout(callAppsScript("getInspectionWorkOrder", item.ot), 60000);
-        const workOrder = result?.ok ? result.data?.workOrder : null;
-        if (!workOrder) continue;
+        if (!result?.ok) {
+          failed += 1;
+          recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", result?.error || "respuesta invalida");
+          continue;
+        }
+        const workOrder = result?.data?.workOrder;
+        if (!workOrder) {
+          failed += 1;
+          recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", "la OT no devolvio datos de inspeccion");
+          continue;
+        }
         const quantity = Number(workOrder.quantity);
         if (!Number.isFinite(quantity) || quantity <= 0) continue;
         inspectionWorkOrderCache.set(item.key, {
@@ -7404,12 +7451,16 @@ async function ensureInspectionWorkOrders(ots) {
         filled += 1;
       } catch (error) {
         // La OT queda marcada para no reintentar en esta carga; el dato sigue ausente.
-        appendLog(`No se pudo leer la OT ${item.ot} desde inspeccion: ${error.message || String(error)}`);
+        failed += 1;
+        recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", error);
       }
     }
   };
-  await Promise.all(Array.from({ length: 4 }, worker));
+  await Promise.all(Array.from({ length: 2 }, worker));
   if (filled) scheduleInspectionReRender();
+  if (failed && typeof showToast === "function") {
+    showToast(`Inspeccion: ${failed} OT(s) sin dato de NetSuite (${inspectionWorkOrderFailureLines().slice(0, 160)})`, 7000);
+  }
 }
 
 function mergeClosedWorkOrderSummaries(local, remote) {
@@ -9005,10 +9056,23 @@ async function syncBacklogWorkOrders() {
   setBacklogSyncInFlight(true);
   let syncSaveGate = null;
   try {
-    const payload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("fetchNetSuiteWorkOrdersLite"),
-      NETSUITE_BACKLOG_SYNC_TIMEOUT_MS
-    );
+    // NetSuite rechaza puntas con 400 SSS_REQUEST_LIMIT_EXCEEDED (limite de solicitudes):
+    // es transitorio, se reintenta una vez a los 5 s antes de rendirse.
+    let payload = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        payload = await window.PlanningWorkflowCore.withTimeout(
+          callAppsScript("fetchNetSuiteWorkOrdersLite"),
+          NETSUITE_BACKLOG_SYNC_TIMEOUT_MS,
+        );
+        break;
+      } catch (error) {
+        const rateLimited = String(error?.message || error || "").includes("SSS_REQUEST_LIMIT_EXCEEDED");
+        if (!rateLimited || attempt === 2) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+      }
+    }
+    if (!payload) throw new Error("NetSuite no devolvio OTs tras el reintento");
     validateNetSuiteImportedData(payload, "workOrders");
     const planningCore = window.PlanningWorkflowCore;
     const smartSync = planningCore?.classifySmartSyncChange
@@ -9088,7 +9152,10 @@ async function ensureNetSuiteWorkOrdersFresh(options = {}) {
   const selectedBefore = (state.selectedOts || []).map((ot) => ({ ot, key: materialOtKey(ot) }));
   const result = await syncBacklogWorkOrders();
   if (result?.ok !== true) {
-    showToast(`No se pudo verificar NetSuite antes de ${contextLabel}: datos de OTs sin sincronizar. Pulsa Sincronizar OTs y vuelve a intentar`, 9000);
+    const detail = result?.error
+      ? String(result.error.message || result.error)
+      : "datos de OTs sin sincronizar";
+    showToast(`No se pudo verificar NetSuite antes de ${contextLabel}: ${detail}. Pulsa Sincronizar OTs y vuelve a intentar`, 9000);
     return { ok: false, refreshed: false, removedOts: [], reason: "sync-failed" };
   }
   const remaining = new Set((state.selectedOts || []).map((ot) => materialOtKey(ot)));

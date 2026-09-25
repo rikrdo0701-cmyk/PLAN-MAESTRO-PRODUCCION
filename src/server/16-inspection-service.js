@@ -120,7 +120,18 @@ function PP_Inspection_restlet_(body) {
   const response = PP_netSuiteRestletRequest_(query, Object.assign({
     table: 'WO_INSPECCION', locationId: config.locationId, onlyOpen: true
   }, body || {}), config);
-  if (!response.ok) throw new Error('NetSuite inspeccion: ' + response.status + ' ' + response.raw.slice(0, 300));
+  if (!response.ok) {
+    // PP_Inspection_result_ devuelve { ok: false } en vez de lanzar, asi que la ejecucion
+    // termina sin error y el status/cuerpo de NetSuite solo existia como texto en el
+    // cliente. Este console.error deja el detalle (script, deploy, body y respuesta) en
+    // el registro de ejecuciones de Apps Script, que es donde se diagnostica NetSuite.
+    const detail = 'NetSuite inspeccion ' + response.status
+      + ' script=' + query.script + ' deploy=' + query.deploy
+      + ' body=' + JSON.stringify(body || {})
+      + ' raw=' + response.raw.slice(0, 300);
+    try { console.error(detail); } catch (error) { /* registrar un fallo nunca debe romper la llamada */ }
+    throw new Error('NetSuite inspeccion: ' + response.status + ' ' + response.raw.slice(0, 300));
+  }
   if (response.json && response.json.ok === false) throw new Error(response.json.error || 'Respuesta invalida de NetSuite');
   return response.json || {};
 }

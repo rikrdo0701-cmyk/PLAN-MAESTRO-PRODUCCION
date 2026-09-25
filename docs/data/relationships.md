@@ -201,6 +201,7 @@ La resolución de OT en NetSuite acepta los alias `WO Folio`, `Orden de trabajo`
 - `PP_buildPlantFilter_`/`PP_belongsToPlant_` filtran siempre por planta (`PP_PLANT_LOCATION_ID = 1`).
 - `PP_assertNetSuiteRows_` aborta si NetSuite devuelve 0 filas (evita borrar catálogo).
 - El catálogo nunca se reemplaza por una lista vacía (fallback defensivo).
+- `400 SSS_REQUEST_LIMIT_EXCEEDED` es transitorio y se reintenta 3 veces (2/5/10 s) en `PP_netSuiteRestletRequest_`; agotados los reintentos el error viaja como `{ ok: false, error }` (nunca lanzado) y desde RULE-REP-015-A queda registrado en ambos extremos: `console.error` en `PP_Inspection_restlet_` (registro de ejecuciones) y `inspectionWorkOrderFailures`/`console.warn`/`showToast` en `ensureInspectionWorkOrders` (cliente). La caché `inspectionWorkOrderCache` solo se llena con `quantity > 0`; una OT con cantidad total `0` no se cachea y no se cuenta como fallo.
 
 ---
 

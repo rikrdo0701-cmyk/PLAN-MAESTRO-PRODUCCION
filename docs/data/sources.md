@@ -474,10 +474,12 @@ Headers: `ID, Artículo, Material, Descripción, Cantidad, Emitido, Pendiente po
 | `1766` | `1` | `{ table: 'REQ_FIFO', pageIndex, pageSize: 200 }` | Precios de venta por artículo: headers reales incluyen `PARTE` (nombre), `_ITEM_ID`, `PRECIO BASE MNX`, `CANTIDAD ORDEN`, `FECHA DE ORDEN`, `MONEDA`, `TIPO CAMBIO` — **sin `_ITEM_NAME`**; `PP_fetchSalesPricesRestlet_` indexa por `_ITEM_ID` y `PARTE` (FIX 2026-09-24) |
 | `1762` | `17` | `{ locationId: 1, onlyOpen: true, pageIndex, pageSize: 200 }` | Operaciones programadas de la planta |
 | `1763` | `14` | `{ locationId: 1, onlyOpen: true, maxWOs: 50000, pageIndex, pageSize: 200 }` | Materiales |
-| `2244` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`; default `2244`) |
+| `2244` | `1` | `{ table: 'WO_INSPECCION', locationId: 1, onlyOpen: true, action: 'list'\|'detail', ... }` | Inspección (props `NS_WO_INSPECTION_SCRIPT/DEPLOY`; default `2244`). `list` con `pageSize: 500` (`getInspectionWorkOrders`); `detail` con `woFolio` (`getInspectionWorkOrder`, `getInspectionWorkOrderBundle`, `getPlanningWorkOrderData`) |
 
 - Endpoint: `https://{accountId}.restlets.api.netsuite.com/app/site/hosting/restlet.nl`.
 - OAuth 1.0a HMAC-SHA256 (`PP_oauthHeader_`). Credenciales en Script Properties (`NS_*`).
+- Errores: `PP_netSuiteRestletRequest_` reintenta 3 veces (2/5/10 s) **solo** ante `400 SSS_REQUEST_LIMIT_EXCEEDED`; cualquier otro 400 se devuelve de inmediato. Un 200 con `{"ok":false,...}` (p. ej. folio inexistente o body sin `table`) NO es un error de NetSuite: es el RESTlet validando sus parámetros, y el folio **no** se interpola en el SuiteQL (verificado 2026-09-25 con folios `3483'`, `3483 OR 1=1`, `3483%` y uno de 90 caracteres → `200 {"ok":false,"WO no encontrada: …"}`).
+- El fallo de `PP_Inspection_restlet_` llega al cliente como `{ ok: false, error: 'NetSuite inspeccion: <status> <raw 300 chars>' }` (`PP_Inspection_result_` no lanza) y el puente lo **resuelve** sin rechazar. Desde 2026-09-25 (RULE-REP-015-A) `PP_Inspection_restlet_` escribe `console.error` con status/script/deploy/body/raw antes de lanzar, así que el detalle sí queda en el registro de ejecuciones de Apps Script, y el cliente lo registra en `inspectionWorkOrderFailures` + `console.warn` + un `showToast` agregado.
 
 ## SuiteQL
 

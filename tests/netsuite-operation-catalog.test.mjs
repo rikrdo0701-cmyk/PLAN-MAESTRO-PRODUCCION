@@ -19,6 +19,7 @@ test("el filtro conserva variantes activas y excluye solo estados terminales", (
 
 function load(responses = [], cacheOptions = {}) {
   const requests = [];
+  const sleeps = [];
   const cacheEntries = new Map(Object.entries(cacheOptions.entries || {}));
   const propertyEntries = new Map(Object.entries(cacheOptions.propertyEntries || {}));
   const cachePuts = [];
@@ -39,6 +40,7 @@ function load(responses = [], cacheOptions = {}) {
       computeHmacSha256Signature: () => [1, 2, 3],
       base64Encode: () => "signature",
       formatDate: () => "2026-07-26",
+      sleep: (ms) => sleeps.push(ms),
     },
     UrlFetchApp: {
       fetch(url, options) {
@@ -104,7 +106,7 @@ function load(responses = [], cacheOptions = {}) {
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "08-netsuite.js" });
   context.PP_normalizeKey_ = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
-  return { context, requests, cachePuts, propertyEntries, getLockAttempts: () => lockAttempts };
+  return { context, requests, sleeps, cachePuts, propertyEntries, getLockAttempts: () => lockAttempts };
 }
 
 const config = {
@@ -958,4 +960,39 @@ test("RESTlet 2240: PP_fetchRestletPages_ no altera filas objeto y respeta pagin
   assert.match(requests[0].options.payload, /"pageIndex":0/);
   assert.match(requests[1].options.payload, /"pageIndex":1/);
   assert.equal(results.rows[0].operation, "FORMADO");
+});
+
+test("PP_netSuiteRestletRequest_ reintenta con espera cuando NetSuite responde 400 SSS_REQUEST_LIMIT_EXCEEDED", () => {
+  const { context, requests, sleeps } = load([
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+    { status: 200, body: JSON.stringify({ ok: true, headers: ["ID"], rows: [{ id: "1" }], hasMore: false }) },
+  ]);
+
+  const result = context.PP_netSuiteRestletRequest_({ script: "1764", deploy: "1" }, { table: "WO_LISTA" }, config);
+
+  assert.equal(result.ok, true, "el tercer intento debe salir bien");
+  assert.equal(requests.length, 3, "dos reintentos sobre el intento inicial");
+  assert.deepEqual(sleeps, [2000, 5000], "esperas crecientes: 2 s y 5 s");
+});
+
+test("PP_netSuiteRestletRequest_ no reintenta otros errores 400 ni un limite que no se recupera", () => {
+  const distinto = load([
+    { status: 400, body: JSON.stringify({ error: { code: "SS4K_INVALID_KEY_OR_VALUE", message: "Clave invalida" } }) },
+  ]);
+  const first = distinto.context.PP_netSuiteRestletRequest_({ script: "1764", deploy: "1" }, {}, config);
+  assert.equal(first.ok, false);
+  assert.equal(distinto.requests.length, 1, "un error distinto al limite no se reintenta");
+  assert.deepEqual(distinto.sleeps, []);
+
+  const persistente = load([
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+    { status: 400, body: JSON.stringify({ error: { code: "SSS_REQUEST_LIMIT_EXCEEDED", message: "Se excedió el límite de solicitudes." } }) },
+  ]);
+  const last = persistente.context.PP_netSuiteRestletRequest_({ script: "1764", deploy: "1" }, {}, config);
+  assert.equal(last.ok, false, "tras agotar los reintentos sigue devolviendo el error");
+  assert.equal(persistente.requests.length, 4, "intento inicial + 3 reintentos como maximo");
+  assert.deepEqual(persistente.sleeps, [2000, 5000, 10000]);
 });

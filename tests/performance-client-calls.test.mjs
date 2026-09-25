@@ -562,7 +562,7 @@ function loadClient(options = {}) {
     },
     STORAGE_KEY: "test",
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
-    NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 60000,
+    NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 110000,
     NETSUITE_WORKORDER_FRESH_MS: 15 * 60 * 1000,
     state,
     stateHistory: [],
@@ -2535,7 +2535,7 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
 
   await fixture.context.syncBacklogWorkOrders();
 
-  assert.deepEqual(timeouts, [60000]);
+  assert.deepEqual(timeouts, [110000]);
   assert.equal(reconciliations, 2);
   assert.equal(purges, 2);
   assert.equal(dialogs, 0);
@@ -3129,6 +3129,62 @@ test("generar o publicar aborta si la verificacion de frescura falla", async () 
   assert.equal(result.ok, false);
   assert.equal(result.reason, "sync-failed");
   assert.ok(fixture.toasts.some((message) => message.includes("No se pudo verificar NetSuite antes de publicar el plan")));
+  // El motivo real viaja en el toast: sin el, la falla queda como "sin sincronizar".
+  assert.ok(fixture.toasts.some((message) => message.includes("INVALID_LOGIN_ATTEMPT")));
+});
+
+test("el limite de solicitudes de NetSuite se reintenta una vez y la sync ligera termina bien", async () => {
+  const calls = [];
+  const rateLimitBody = 'NetSuite RESTlet: 400 {"error" : {"code" : "SSS_REQUEST_LIMIT_EXCEEDED", "message" : "Se excedió el límite de solicitudes."}}';
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z", selectedOts: ["WO-1"] },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "fetchNetSuiteWorkOrdersLite" && calls.length === 1) throw new Error(rateLimitBody);
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-1" }], syncedAt: "2026-09-25T12:00:00.000Z" };
+      return { revision: 2 };
+    },
+  });
+  // La espera del reintento se resuelve en el acto para no alargar el test.
+  fixture.context.window.setTimeout = (callback) => { callback(); return 1; };
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
+
+  assert.equal(result.ok, true, "el reintento debe recuperarse del limite transitorio");
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  assert.ok(!fixture.toasts.some((message) => message.includes("No se pudo verificar NetSuite antes de generar el plan")));
+});
+
+test("un limite de solicitudes que no se recupera aborta el plan y el toast explica el motivo", async () => {
+  const calls = [];
+  const rateLimitBody = 'NetSuite RESTlet: 400 {"error" : {"code" : "SSS_REQUEST_LIMIT_EXCEEDED", "message" : "Se excedió el límite de solicitudes."}}';
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z", selectedOts: ["WO-1"] },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "fetchNetSuiteWorkOrdersLite") throw new Error(rateLimitBody);
+      return { revision: 2 };
+    },
+  });
+  fixture.context.window.setTimeout = (callback) => { callback(); return 1; };
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "sync-failed");
+  assert.equal(calls.length, 2, "intento inicial + un unico reintento");
+  const failureToast = fixture.toasts.find((message) => message.includes("No se pudo verificar NetSuite antes de generar el plan"));
+  assert.ok(failureToast, "el aviso de aborto sigue presente");
+  assert.ok(failureToast.includes("SSS_REQUEST_LIMIT_EXCEEDED"), "el motivo real debe verse en el toast");
+  assert.ok(fixture.toasts.some((message) => message.includes("No se pudieron sincronizar las OTs")));
 });
 
 test("la verificacion de frescura no se entrelaza con una sincronizacion en curso", async () => {

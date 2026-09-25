@@ -428,7 +428,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
   assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
   assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
-  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;/);
+  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 110000;/);
+  // El limite de solicitudes de NetSuite es transitorio: la sync ligera reintenta una vez.
+  assert.match(pagesIndex, /SSS_REQUEST_LIMIT_EXCEEDED[\s\S]{0,600}window\.setTimeout\(resolve, 5000\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.purgeClosedWorkOrderRetention\(/);
   assert.match(pagesIndex, /setBacklogSyncInFlight\(true\)/);

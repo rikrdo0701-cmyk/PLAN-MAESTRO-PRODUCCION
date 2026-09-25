@@ -578,21 +578,39 @@ function PP_fetchRestletPages_(query, baseBody, config, maxPages) {
   return { rows: rows, headers: headers };
 }
 
+const PP_NS_RATE_LIMIT_WAITS_MS_ = [2000, 5000, 10000];
+
+function PP_isNetSuiteRateLimit_(result) {
+  return result && result.status === 400 && String(result.raw || '').indexOf('SSS_REQUEST_LIMIT_EXCEEDED') >= 0;
+}
+
 function PP_netSuiteRestletRequest_(query, body, config) {
   const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
   const finalUrl = endpoint + '?' + Object.keys(query).map(function(key) { return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]); }).join('&');
-  const response = UrlFetchApp.fetch(finalUrl, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { Authorization: PP_oauthHeader_('POST', endpoint, query, config) },
-    payload: JSON.stringify(body || {}),
-    muteHttpExceptions: true
-  });
-  const status = response.getResponseCode();
-  const raw = response.getContentText();
-  let json;
-  try { json = JSON.parse(raw); } catch (error) { json = null; }
-  return { ok: status >= 200 && status < 300 && json && json.ok === true, status: status, json: json || {}, raw: raw };
+  const payload = JSON.stringify(body || {});
+  const fetchOnce = function() {
+    // OAuth 1.0a: cada reintento firma con nonce/timestamp nuevos.
+    const response = UrlFetchApp.fetch(finalUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: PP_oauthHeader_('POST', endpoint, query, config) },
+      payload: payload,
+      muteHttpExceptions: true
+    });
+    const status = response.getResponseCode();
+    const raw = response.getContentText();
+    let json;
+    try { json = JSON.parse(raw); } catch (error) { json = null; }
+    return { ok: status >= 200 && status < 300 && json && json.ok === true, status: status, json: json || {}, raw: raw };
+  };
+  let result = fetchOnce();
+  // NetSuite devuelve 400 SSS_REQUEST_LIMIT_EXCEEDED cuando se satura el limite de
+  // solicitudes: es transitorio, se reintenta con espera antes de rendirse.
+  for (let attempt = 0; PP_isNetSuiteRateLimit_(result) && attempt < PP_NS_RATE_LIMIT_WAITS_MS_.length; attempt++) {
+    Utilities.sleep(PP_NS_RATE_LIMIT_WAITS_MS_[attempt]);
+    result = fetchOnce();
+  }
+  return result;
 }
 
 function PP_oauthHeader_(method, endpoint, query, config) {

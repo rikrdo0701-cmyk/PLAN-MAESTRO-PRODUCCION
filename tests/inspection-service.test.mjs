@@ -385,6 +385,42 @@ test("getInspectionWorkOrder reutiliza el indice de tramos cacheado entre OTs", 
   assert.equal(secondDetail.data.materials[0].route, "650 mm");
 });
 
+test("el fallo del RESTlet de inspeccion queda en el registro de ejecuciones y conserva el contrato de error", () => {
+  const logged = [];
+  const raw = '{"error" : {"code" : "SSS_REQUEST_LIMIT_EXCEEDED","message" : "Se excedio el limite de solicitudes."}}';
+  const properties = { NS_WO_INSPECTION_SCRIPT: "2244", NS_WO_INSPECTION_DEPLOY: "1" };
+  const context = loadService({
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (key) => properties[key] || "" }) },
+    console: { error: (message) => logged.push(String(message)) },
+    PP_netSuiteConfig_: () => ({ accountId: "11103874", locationId: 1 }),
+    PP_netSuiteRestletRequest_: () => ({ ok: false, status: 400, json: {}, raw }),
+  });
+
+  const result = context.getInspectionWorkOrders();
+
+  assert.deepEqual(structuredClone(result), { ok: false, error: "NetSuite inspeccion: 400 " + raw.slice(0, 300) });
+  assert.equal(logged.length, 1);
+  assert.ok(logged[0].includes("NetSuite inspeccion 400"), logged[0]);
+  assert.ok(logged[0].includes("script=2244"), logged[0]);
+  assert.ok(logged[0].includes("deploy=1"), logged[0]);
+  assert.ok(logged[0].includes("SSS_REQUEST_LIMIT_EXCEEDED"), logged[0]);
+  assert.ok(logged[0].includes('"action":"list"'), logged[0]);
+});
+
+test("un console.error que falla no impide propagar el error de inspeccion", () => {
+  const context = loadService({
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => "" }) },
+    console: { error: () => { throw new Error("consola no disponible"); } },
+    PP_netSuiteConfig_: () => ({ accountId: "11103874", locationId: 1 }),
+    PP_netSuiteRestletRequest_: () => ({ ok: false, status: 400, json: {}, raw: '{"error":"limite"}' }),
+  });
+
+  const result = context.getInspectionWorkOrder("3483");
+
+  assert.equal(result.ok, false);
+  assert.ok(String(result.error).startsWith("NetSuite inspeccion: 400 "), result.error);
+});
+
 test("registra historial con todos los campos del contrato original", () => {
   let appended;
   const context = loadService();
