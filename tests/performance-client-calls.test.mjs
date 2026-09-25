@@ -422,6 +422,7 @@ function loadClient(options = {}) {
       pruneDraftToOpenWorkOrders: () => ({}),
       reconcileActiveWorkOrders: (...args) => options.reconcileActiveWorkOrders?.(...args),
       purgeClosedWorkOrderRetention: (...args) => options.purgeClosedWorkOrderRetention?.(...args),
+      needsWorkOrderSyncBeforeSchedule: (...args) => (options.needsWorkOrderSyncBeforeSchedule ? options.needsWorkOrderSyncBeforeSchedule(...args) : false),
     },
     PlannerCore: {
       isSpecialSubcontractCapability: (capability) => String(capability?.ct) === "6462" || /SUBCONTRATO/i.test(String(capability?.label || "")),
@@ -443,6 +444,7 @@ function loadClient(options = {}) {
     STORAGE_KEY: "test",
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
     NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 60000,
+    NETSUITE_WORKORDER_FRESH_MS: 15 * 60 * 1000,
     state,
     stateHistory: [],
     materialOtKey: (value) => String(value || ""),
@@ -2940,6 +2942,89 @@ test("un rechazo del guardado dedicado no modifica el estado local", async () =>
   await fixture.context.syncBacklogWorkOrders();
 
   assert.deepEqual(plain(fixture.context.state), before);
+});
+
+test("la verificacion de frescura omite la red cuando syncedAt esta dentro del umbral", async () => {
+  const calls = [];
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-25T11:55:00.000Z", selectedOts: ["WO-1"] },
+    needsWorkOrderSyncBeforeSchedule: () => false,
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => { calls.push(method); return { revision: 2 }; },
+  });
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.refreshed, false);
+  assert.deepEqual([...result.removedOts], []);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(fixture.toasts, []);
+});
+
+test("generar plan con datos viejos dispara la sync ligera y reporta las OTs cerradas retiradas", async () => {
+  const calls = [];
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z", selectedOts: ["WO-1", "WO-CERRADA"] },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+    reconcileActiveWorkOrders: (current, workOrders) => ({
+      ...current,
+      workOrders,
+      selectedOts: (current.selectedOts || []).filter((ot) => ot !== "WO-CERRADA"),
+    }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      calls.push(method);
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-1" }], syncedAt: "2026-09-25T12:00:00.000Z" };
+      return { revision: 2 };
+    },
+  });
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
+
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  assert.equal(result.ok, true);
+  assert.equal(result.refreshed, true);
+  assert.deepEqual(result.removedOts, ["WO-CERRADA"]);
+  assert.deepEqual(fixture.context.state.selectedOts, ["WO-1"]);
+});
+
+test("generar o publicar aborta si la verificacion de frescura falla", async () => {
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z", selectedOts: ["WO-1"] },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") throw new Error("INVALID_LOGIN_ATTEMPT");
+      return { revision: 2 };
+    },
+  });
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "publish" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "sync-failed");
+  assert.ok(fixture.toasts.some((message) => message.includes("No se pudo verificar NetSuite antes de publicar el plan")));
+});
+
+test("la verificacion de frescura no se entrelaza con una sincronizacion en curso", async () => {
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z" },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+  });
+  fixture.context.backlogSyncInFlight = true;
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "busy");
+  assert.ok(fixture.toasts.some((message) => message.includes("Sincronizacion de NetSuite en curso")));
 });
 
 test("el boton manual y el fondo comparten la llamada backend de OTs", async () => {

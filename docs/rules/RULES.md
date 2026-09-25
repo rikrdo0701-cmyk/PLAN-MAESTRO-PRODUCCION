@@ -89,7 +89,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-004` | Agrupación por secuencia | DOCUMENTADA | `OT_RULES.md` |
 | `RULE-OT-005` | Coherencia del borrador (`selectedOts`) | DOCUMENTADA | spec 2026-07-12 |
 | `RULE-OT-006` | Sincronización ligera del backlog | IMPLEMENTADA | `planning/app.js` |
-| `RULE-OT-007` | Exclusión mutua de sync/programación | IMPLEMENTADA | task-2-report |
+| `RULE-OT-007` | Exclusión mutua de sync/programación (2026-09-25: Generar/Publicar plan dispara sync ligera interna si `syncedAt` ≥15 min y aborta si hay sync en curso — RULE-OT-046) | IMPLEMENTADA | task-2-report |
 | `RULE-OT-008` | OTs cerradas conservadas (`CLOSED_KEPT`) | IMPLEMENTADA | task-2-report |
 | `RULE-OT-009` | Tipos de trabajo (PROTOTIPO/URGENTE/EXPEDITACION) | IMPLEMENTADA | `legacy/IndexPlanning.html` |
 | `RULE-OT-010` | Persistencia de `CONFIGURACION_OT` mientras OT abierta | DOCUMENTADA | definición de usuario 2026-08-12 |
@@ -105,6 +105,7 @@ Patrón: `.workspace[data-view="VISTA"] > :not(.topbar):not(PANEL):not(.toast):n
 | `RULE-OT-041` | 6 OTs 2027 con `lockedOts` residual (3413/3416/3529/3533/2613/3398); limpieza vía `scripts/depurar-ots-2027.gs` (dry-run por defecto, no ejecutado) | DOCUMENTADA | análisis 2026-09-22; `scripts/depurar-ots-2027.gs`; `.project-memory/rules.json` |
 | `RULE-OT-042` | Corte de anclas = COMPLETADA (no `lockedOts`); ops incompletas de OT locked se reprograman sin desbloqueo (conservan ancla de fecha+hora, RULE-BAL-025); completadas NO reservan capacidad (CORTE 2026-09-23) | IMPLEMENTADA | decisión usuario Lote 2 2026-09-22 + 2026-09-23; `planner-core.js`/`planning-workflow-core.js`; A/B `probe-lotes-a-b.mjs`; `.project-memory/rules.json` |
 | `RULE-OT-043` | Generar plan: si alguna OT apta queda sin ops tras el sync → 1× retry (`force:true`); si aún falta → **bloquea** (sin plan parcial; elimina toast “Plan parcial…”) | IMPLEMENTADA | decisión usuario 2026-09-23; `app.js` `scheduleCurrentPlanImpl`; `tests/build.test.mjs` |
+| `RULE-OT-046` | Gate de frescura antes de generar/publicar: si `state.syncedAt` tiene ≥15 min (`NETSUITE_WORKORDER_FRESH_MS`) se dispara la sync ligera de OTs (`onlyOpen:true`) y se retiran las OTs cerradas de NetSuite; si falla o hay sync en curso → aborta. Sin red si ya sincronizaste hace <15 min | IMPLEMENTADA | problema usuario 2026-09-24; `app.js` (`ensureNetSuiteWorkOrdersFresh`, `scheduleCurrentPlanImpl`, `publishCurrentPlan`), `planning-workflow-core.js` (`needsWorkOrderSyncBeforeSchedule`); tests workflow-core/build/performance-client-calls; `.project-memory/rules.json` RULE-OT-046 |
 
 Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega cada operación con
 `cantTotal`/`cantPendiente` = cantidad pendiente real (`Cantidad` − `Cantidad ensamblada`) vía

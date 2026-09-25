@@ -117,6 +117,20 @@
     return { ...(state || {}), operationsSyncedAt: { ...incoming, [key]: stamp } };
   }
 
+  function workOrderSyncAgeMs(state, nowIso) {
+    const parsed = Date.parse(String(state?.syncedAt || ""));
+    if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+    const now = Date.parse(String(nowIso || ""));
+    const base = Number.isFinite(now) ? now : Date.now();
+    return Math.max(0, base - parsed);
+  }
+
+  function needsWorkOrderSyncBeforeSchedule(state, nowIso, maxAgeMs) {
+    const ageWindow = Number(maxAgeMs);
+    if (!Number.isFinite(ageWindow) || ageWindow <= 0) return true;
+    return workOrderSyncAgeMs(state, nowIso) >= ageWindow;
+  }
+
   function isHistorical(operation) {
     const status = normalize(operation?.planStatus || operation?.estatus);
     return operation?.historical === true || operation?.isHistorical === true ||
@@ -1552,6 +1566,7 @@ expandedOts: without(state?.expandedOts),
   }
 
   return { withTimeout, hasPlanningData, planningOtSyncedAt, planningOtsWithData, planningDataAvailability, markPlanningOtSynced,
+    workOrderSyncAgeMs, needsWorkOrderSyncBeforeSchedule,
     prepareDraftForReschedule, filterOperationsByPlanStatus,
     normalizeGanttView, isActiveGanttView, isMachineGanttOperation, isOtEligibleForDraft, canRemoveSelectedOt, ganttOperationTiming,
     ganttPlanWindow, ganttDayIndex, ganttCumulativeWorkBefore, ganttTotalWidth,

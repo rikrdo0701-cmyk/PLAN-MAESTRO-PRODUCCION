@@ -8,6 +8,7 @@ const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 60000;
 const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
+const NETSUITE_WORKORDER_FRESH_MS = 15 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLANNING_PLAN_TIME_BUDGET_MS = 300000;
 const PLANNING_PLAN_BUDGET_BASE_MS = 45000;
@@ -5499,6 +5500,11 @@ async function scheduleCurrentPlanImpl() {
   const chosenWeek = await askGeneratingPlanWeek();
   if (!chosenWeek) return;
   setScheduleStatus("Revisando plan...");
+  const scheduleFreshness = await ensureNetSuiteWorkOrdersFresh({ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "schedule" });
+  if (!scheduleFreshness.ok) return;
+  if (scheduleFreshness.removedOts.length) {
+    showToast(`OT(s) cerrada(s) en NetSuite retiradas del plan: ${scheduleFreshness.removedOts.join(", ")}`, 7000);
+  }
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   const affected = new Set(state.selectedOts.map(normalizeStatus));
 // Procesar todas las OTs en la lista de planeado/no planeado (incluye bloqueadas; el motor reprograma incompletas)
@@ -6314,7 +6320,17 @@ async function publishCurrentPlan() {
   els.publishPlanBtn.disabled = true;
   els.publishPlanBtn.classList.add("is-running");
   try {
-    setPublishStatus("Preparando publicacion...", 5);
+    setPublishStatus("Verificando OTs en NetSuite...", 5);
+    const publishFreshness = await ensureNetSuiteWorkOrdersFresh({ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" });
+    if (!publishFreshness.ok) return;
+    if (publishFreshness.removedOts.length) {
+      showToast(`OT(s) cerrada(s) en NetSuite retiradas antes de publicar: ${publishFreshness.removedOts.join(", ")}`, 7000);
+    }
+    const scheduledAfterFreshness = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    if (!scheduledAfterFreshness.length) {
+      showToast("No se pudo publicar: el plan quedo vacio tras retirar OTs cerradas en NetSuite", 9000);
+      return;
+    }
     const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
     const counterBase = readPlanVersionCounter(weekStart);
     const versionBase = [
@@ -9043,6 +9059,29 @@ async function syncBacklogWorkOrders() {
     }
     setBacklogSyncInFlight(false);
   }
+}
+
+async function ensureNetSuiteWorkOrdersFresh(options = {}) {
+  const maxAgeMs = Number(options.maxAgeMs);
+  const contextLabel = options.context === "publish" ? "publicar el plan" : "generar el plan";
+  const core = window.PlanningWorkflowCore;
+  const needs = typeof core?.needsWorkOrderSyncBeforeSchedule === "function"
+    ? core.needsWorkOrderSyncBeforeSchedule(state, new Date().toISOString(), maxAgeMs)
+    : false;
+  if (!needs) return { ok: true, refreshed: false, removedOts: [] };
+  if (backlogSyncInFlight || netSuiteSyncInFlight) {
+    showToast("Sincronizacion de NetSuite en curso; espera a que termine para continuar", 8000);
+    return { ok: false, refreshed: false, removedOts: [], reason: "busy" };
+  }
+  const selectedBefore = (state.selectedOts || []).map((ot) => ({ ot, key: materialOtKey(ot) }));
+  const result = await syncBacklogWorkOrders();
+  if (result?.ok !== true) {
+    showToast(`No se pudo verificar NetSuite antes de ${contextLabel}: datos de OTs sin sincronizar. Pulsa Sincronizar OTs y vuelve a intentar`, 9000);
+    return { ok: false, refreshed: false, removedOts: [], reason: "sync-failed" };
+  }
+  const remaining = new Set((state.selectedOts || []).map((ot) => materialOtKey(ot)));
+  const removedOts = selectedBefore.filter((entry) => !remaining.has(entry.key)).map((entry) => entry.ot);
+  return { ok: true, refreshed: true, removedOts };
 }
 
 function smartSyncReviewWarnings(state, smartSync) {

@@ -271,6 +271,15 @@ assert.match(dryRunSource, /totalMs/);
   assert.match(scheduleSource, /missingAptOts/);
   assert.match(scheduleSource, /ensurePlanningDataLoaded\(true, \{ force: true, ots: replannableOts \}\)/);
   assert.match(scheduleSource, /No se genero el plan: falta sincronizar operaciones de OT/);
+  assert.match(planningApp, /const NETSUITE_WORKORDER_FRESH_MS = 15 \* 60 \* 1000/);
+  assert.match(scheduleSource, /Verificando OTs en NetSuite\.\.\./);
+  assert.match(scheduleSource, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "schedule" \}\)[\s\S]*if \(!scheduleFreshness\.ok\) return;[\s\S]*removeClosedWorkOrdersFromDraft[\s\S]*PlannerCore\.schedulePlan/);
+  const publishImpl = planningApp.slice(
+    planningApp.indexOf("async function publishCurrentPlan("),
+    planningApp.indexOf("async function generatePlanPdf("),
+  );
+  assert.match(publishImpl, /Verificando OTs en NetSuite\.\.\./);
+  assert.match(publishImpl, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" \}\)[\s\S]*if \(!publishFreshness\.ok\) return;[\s\S]*callAppsScript\("publishDraftPlan"/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {

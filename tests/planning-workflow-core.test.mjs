@@ -122,6 +122,26 @@ test("markPlanningOtSynced registra el timestamp por OT sin tocar las demas", ()
   assert.equal(core.planningOtSyncedAt(stamped, "3"), 0);
 });
 
+test("la frescura de OTs se mide contra syncedAt y expira con el umbral", () => {
+  const now = "2026-09-25T12:00:00.000Z";
+  const fresh = { syncedAt: "2026-09-25T11:55:00.000Z" };
+  const stale = { syncedAt: "2026-09-25T11:00:00.000Z" };
+  const threshold = 15 * 60 * 1000;
+  assert.equal(core.workOrderSyncAgeMs(fresh, now), 5 * 60 * 1000);
+  assert.equal(core.workOrderSyncAgeMs(stale, now), 60 * 60 * 1000);
+  assert.equal(Number.isFinite(core.workOrderSyncAgeMs({}, now)), false);
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule(fresh, now, threshold), false);
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule(stale, now, threshold), true);
+});
+
+test("sin syncedAt o con umbral invalido la verificacion antes de generar exige sincronizar", () => {
+  const now = "2026-09-25T12:00:00.000Z";
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule({}, now, 15 * 60 * 1000), true);
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule({ syncedAt: "no-es-fecha" }, now, 15 * 60 * 1000), true);
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule({ syncedAt: "2026-09-25T11:59:00.000Z" }, now, 0), true);
+  assert.equal(core.needsWorkOrderSyncBeforeSchedule({ syncedAt: "2026-09-25T11:59:00.000Z" }, now, "abc"), true);
+});
+
 test("prepareDraftForReschedule conserva ancla (fechas+operador) de incompletas seleccionadas con inicio completo, limpia las sin inicio y preserva completadas/historicas/no seleccionadas", () => {
   const movable = {
     id: "movable", ot: "1325", fechaInicio: "2026-07-01", horaInicio: "08:00",
