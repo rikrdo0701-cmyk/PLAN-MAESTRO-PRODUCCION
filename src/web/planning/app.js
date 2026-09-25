@@ -7333,6 +7333,13 @@ function inspectionBuiltPiecesForOt(ot) {
   return Number.isFinite(built) ? Math.max(0, built) : null;
 }
 
+function inspectionQuantityForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const quantity = Number(entry.quantity);
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
+}
+
 function scheduleInspectionReRender() {
   if (inspectionReRenderTimer) return;
   inspectionReRenderTimer = window.setTimeout(() => {
@@ -8068,7 +8075,10 @@ function releaseReportRows() {
     const releaseMatch = finalReleaseOperationMatch(release);
     const date = opStart(release) || opEnd(release);
     const workOrder = workOrderForOt(ot);
-    const quantityValue = release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
+    const inspectionTotal = inspectionQuantityForOt(ot);
+    const workOrderTotal = Number(workOrder?.quantity);
+    const totalValue = inspectionTotal ?? (Number.isFinite(workOrderTotal) && workOrderTotal > 0 ? workOrderTotal : null);
+    const quantityValue = totalValue ?? release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
     const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
     const inspectionBuilt = inspectionBuiltPiecesForOt(ot);
     const built = Math.max(0, Number(inspectionBuilt ?? workOrder?.builtQuantity ?? 0));

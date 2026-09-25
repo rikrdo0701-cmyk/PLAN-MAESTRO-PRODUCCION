@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 - Restlet NetSuite `2244` (`netsuite-restlet-wo-inspeccion.js`): copia de `2080` que además devuelve en `trabajo` `cantidadTotal`, `cantidadEnsamblada` (fuente `record:built`), `cantidadPendiente` y `cantidadRealizada` por operación, y entrega OTs cerradas en `action: detail`. Apps Script: `getInspectionWorkOrder` (16/17) expone `builtQuantity`/`pendingQuantity`; `NS_WO_INSPECTION_SCRIPT` pasó de default `2080` a `2244`. Desplegado como versión 409 de la app web (`clasp deploy` reanudado).
 - Plan de la semana / Liberación final: solo lo pendiente de ensamblar. Nueva caché `inspectionWorkOrderCache` alimentada en segundo plano por `getInspectionWorkOrder`; `PZAS = cantidad − built` con prioridad sobre ops/ruta/OT cerrada, y `Ensamblado` toma el `built` de inspección antes que `workOrders`. Monto del renglón en 0 cuando no quedan piezas pendientes.
 - Tests: `weeklyJobSummary` con pendiente de inspección (completo/parcial/sin caché) y `releaseReportRows` con `Ensamblado` desde inspección. 602/602.
+- Liberación final: la columna **Cantidad** ahora muestra el **total de la OT** (`inspectionQuantityForOt` → `workOrders[].quantity` → pendiente de la op como último recurso) en lugar del pendiente, para que la fila lea total / ensamblado. 602/602.
 
 - Reportes → Liberación: columnas Ensamblado (`builtQuantity` de la OT) y Completar (botón Completar/Reabrir de la op 16OC/39OTD, mismo patrón que Plan por operador). Título del panel solo "Liberación". RULE-REP-013 actualizada.
 

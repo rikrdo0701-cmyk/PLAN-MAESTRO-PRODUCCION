@@ -2239,10 +2239,10 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
   const end = app.indexOf("function renderReleaseReport(", start);
   assert.ok(start >= 0 && end > start, "releaseReportRows debe existir");
   const source = app.slice(start, end);
-  const buildRows = ({ workOrder, built, pendingPieces = 1 }) => Function(
+  const buildRows = ({ workOrder, built, total = null, pendingPieces = 1 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
     "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
-    "inspectionBuiltPiecesForOt",
+    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
@@ -2254,17 +2254,24 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     () => workOrder,
     (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
     () => built,
+    () => total,
   );
 
-  const rowsClosed = buildRows({ workOrder: null, built: 1 })();
+  const rowsClosed = buildRows({ workOrder: null, built: 1, total: 1 })();
   assert.equal(rowsClosed.length, 1);
   assert.equal(rowsClosed[0].built, 1);
+  assert.equal(rowsClosed[0].quantity, 1);
 
-  const rowsOpen = buildRows({ workOrder: { builtQuantity: 0, quantity: 15 }, built: 15 })();
+  const rowsOpen = buildRows({ workOrder: { builtQuantity: 0, quantity: 15 }, built: 15, total: 15 })();
   assert.equal(rowsOpen[0].built, 15);
+  assert.equal(rowsOpen[0].quantity, 15);
 
   const rowsWithoutInspection = buildRows({ workOrder: { builtQuantity: 4, quantity: 15 }, built: null })();
   assert.equal(rowsWithoutInspection[0].built, 4);
+  assert.equal(rowsWithoutInspection[0].quantity, 15);
+
+  const rowsWithoutTotal = buildRows({ workOrder: null, built: null, pendingPieces: 7 })();
+  assert.equal(rowsWithoutTotal[0].quantity, 7);
 });
 
 test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
