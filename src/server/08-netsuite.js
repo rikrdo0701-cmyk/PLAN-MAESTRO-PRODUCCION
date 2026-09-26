@@ -606,18 +606,30 @@ function PP_fetchSalesPricesRestlet_(config, window) {
   (page.rows || []).forEach(function(row) {
     const itemId = String(row._ITEM_ID || '').trim();
     const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM', 'PARTE']) || '').trim();
-    // 'PRECIO BASE MNX' miente el nombre: viene en la MONEDA de la transaccion, no en pesos.
-    // Verificado con datos reales de REQ_FIFO (2026-09-26): la linea
-    //   PRECIO BASE MNX 3204.25 | MONEDA 'US Dollar' | TIPO CAMBIO 18.31 | CANTIDAD ORDEN 22
-    //   TAX AMOUNT 11278.96 | GROSS AMT 81772.46
-    // cierra exacto con el precio CRUDO (3204.25 x 22 = 70 493.50; x 0.16 = 11 278.96), o sea
-    // que ni el impuesto ni el total del restlet aplican el tipo de cambio. Tomarlo como pesos
-    // subestima el precio ~18x en las ventas en dolar y con ello los montos de los reportes.
-    // TIPO CAMBIO viene como MXN por unidad de la moneda extranjera, asi que multiplicar es lo
-    // correcto y en pesos es un factor 1 (no cambia nada).
-    const rawPrice = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
-    const exchangeRate = Number(PP_pick_(row, ['TIPO CAMBIO', 'tipo_cambio']) || 0);
-    const price = exchangeRate > 0 ? rawPrice * exchangeRate : rawPrice;
+    // 'PRECIO BASE MNX' SI esta en pesos, aunque la venta sea en dolares. No hay que
+    // multiplicar por TIPO CAMBIO. La columna se llama asi porque es el precio base en la
+    // moneda de la compania, y MONEDA dice en que moneda se transactio, que es otra cosa.
+    //
+    // MEDIDO contra facturas reales (2026-09-26, DIAG_PRECIOS_MONEDA, dos articulos):
+    //   M66-8602  MONEDA 'US Dollar' | TIPO CAMBIO 16.9237 | PRECIO BASE MNX 1375.90
+    //             factura INV2244: 13 pzas por $17 923.23 = $1 378.71 por pieza.
+    //             El CRUDO (1375.90) es el precio real (error 0%); el CRUDO x TIPO CAMBIO
+    //             (23 285.26) es 17x el precio real (error 1589%).
+    //   TR 350    MONEDA 'Peso Mexicano' | TIPO CAMBIO 1 | promedio 280.65
+    //             facturas a $273 y $304: error 3%. Sin cambio, porque el factor ya es 1.
+    //
+    // QUE SE HABIA MEDIDO MAL, y por que: la evidencia anterior (2026-09-26) era una linea
+    // con TIPO CAMBIO 18.31 cuyo TAX AMOUNT cerraba exacto contra el CRUDO, y de ahi se
+    // concluyo que el crudo venia en dolares. Ese cierre solo demuestra que las tres
+    // columnas vienen en la MISMA moneda entre si; no dice cual. Ahora se tiene la factura
+    // real, que si dice cual, y es la unica referencia externa valida.
+    //
+    // OJO: por que las dos columnas cierran entre si y aun asi el crudo es pesos. MONEDA
+    // dice 'US Dollar', pero PRECIO BASE MNX, TAX AMOUNT y GROSS AMT estan los tres en
+    // pesos: en M66-8602, 1375.90 x 3 = 4127.69, x 1.16 = 4788.12 = GROSS AMT. Si el crudo
+    // fuera dolares, el GROSS AMT habria salido en dolares y la factura en pesos habria
+    // dado 23 285 por pieza, no 1378.71.
+    const price = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
     const qty = Number(PP_pick_(row, ['CANTIDAD ORDEN', 'cantidad_orden']) || 0);
     const orderedAt = PP_parseRestletDate_(PP_pick_(row, ['FECHA DE ORDEN', 'fecha_orden']));
     const keys = [];

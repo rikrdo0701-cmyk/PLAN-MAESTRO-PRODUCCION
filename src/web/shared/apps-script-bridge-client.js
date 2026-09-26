@@ -52,7 +52,7 @@
     // Solo cache-busting del iframe: el servidor NO lee este parametro (PP_isBridgeRequest_
     // solo mira app=bridge). Debe coincidir con PP_APP_VERSION de src/server/01-code.js y
     // con la version de package.json, que son el mismo numero en tres lugares (RULE-WEB-003).
-    url.searchParams.set("v", "2.43.0");
+    url.searchParams.set("v", "2.44.0");
     return url.toString();
   }
 
