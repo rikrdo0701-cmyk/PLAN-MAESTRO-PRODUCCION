@@ -5637,11 +5637,28 @@ const replannableOts = state.selectedOts.filter((ot) =>
     availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
     isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
-  const closedOts = state.selectedOts.filter((ot) => !isMovablePlanningStatus(jobStatusForOt(ot)));
+  // QUE CUENTA COMO "CERRADA" AQUI (RULE-OT-051). Antes usaba isMovablePlanningStatus(
+  // jobStatusForOt(ot)), y jobStatusForOt cae al estatus de las OPERACIONES cuando la ficha de
+  // la OT no dice nada. O sea que una sola operacion con estatus CERRADO quitaba la OT entera
+  // del plan, sin confirmacion y sin pasar por la sincronizacion. Es el mismo error de fondo
+  // que ya se corrigio en el sync: "no dice cerrada" no es "esta cerrada".
+  // Ahora solo se retira la OT si SU FICHA dice cerrada, o si ya estaba confirmada como cerrada
+  // por NetSuite. Si el cierre solo viene de una operacion, la OT se conserva y se avisa, para
+  // que se pueda revisar a mano en vez de perderla en silencio.
+  const closedOts = state.selectedOts.filter((ot) => isConfirmedClosedWorkOrder(ot));
+  const soloOperacionDiceCerrada = state.selectedOts.filter((ot) => (
+    !closedOts.includes(ot) && !isMovablePlanningStatus(jobStatusForOt(ot))
+  ));
   if (closedOts.length) {
     state = window.PlanningWorkflowCore.removeClosedWorkOrdersFromDraft(state, closedOts, new Date().toISOString());
     invalidateCurrentPlanOperationsCache();
     showToast(`OT(s) cerrada(s) eliminadas del plan: ${closedOts.join(", ")}`, 6000);
+  }
+  if (soloOperacionDiceCerrada.length) {
+    showToast(
+      `Se conserva(n) ${soloOperacionDiceCerrada.length} OT(s) porque solo una operacion dice cerrada, no la OT: ${soloOperacionDiceCerrada.slice(0, 8).join(", ")}`,
+      9000,
+    );
   }
   if (!readyOts.length) {
     showToast("No hay OTs listas para programar");
@@ -9643,6 +9660,64 @@ function syncNetSuiteInBackground(options = {}) {
   return syncWorkOrdersOnce(options);
 }
 
+// CONFIRMA CONTRA NETSUITE EL CIERRE DE LAS OTs QUE NO VINIERON EN EL LISTADO (RULE-OT-051).
+//
+// QUE RESUELVE. El catalogo de OTs llega con onlyOpen:true, o sea que una OT cerrada no
+// aparece: desaparece. Antes eso se leia como cierre y la OT se perdia de la cola; despues se
+// hizo que exigiera dos ausencias, que tampoco era confirmacion. La unica fuente que puede dar
+// una confirmacion POSITIVA es preguntar: el 2244 tiene un action 'detail' que ignora onlyOpen
+// y, desde la version que hay que subir, devuelve el estatus real de la OT.
+//
+// CUANDO SE PREGUNTA. Solo hay OTs por confirmar cuando el listado vino incompleto, que es lo
+// raro. Si no hay ninguna, no se gasta ni una llamada. El servidor ademas tiene un tope de 20
+// folios por pasada: si de pronto hay cientos, eso no es una confirmacion que valga la pena
+// gastar, es una senal de que algo anda mal, y la respuesta es conservarlas todas y avisar.
+//
+// QUE PASA CON CADA RESPUESTA. found:false (NetSuite no la conoce) NO es lo mismo que cerrada:
+// puede estar borrada o en otra planta, asi que se conserva. estatus con CERRAD/CLOSED/COMPLET/
+// CANCELAD es cierre confirmado y la OT sale. estatus vacio significa que el 2244 aun no trae
+// el campo, o sea que el archivo nuevo no se ha subido: se conservan TODAS y se avisa, que es
+// un estado degradado seguro. Nunca se poda de mas.
+async function confirmUnconfirmedWorkOrderClosures() {
+  const pendientes = Object.values(state.unconfirmedWorkOrders || {});
+  if (!pendientes.length) return { asked: 0 };
+  let respuesta = null;
+  try {
+    respuesta = await callAppsScript("confirmWorkOrderClosures", [pendientes.map((item) => item.ot || "").filter(Boolean)]);
+  } catch (error) {
+    // Un fallo al preguntar NUNCA cierra una OT. Se deja todo como esta.
+    state.lastWorkOrderClosureCheck = {
+      at: new Date().toISOString(),
+      asked: 0,
+      confirmedClosed: [],
+      error: String(error?.message || error).slice(0, 200),
+    };
+    return { asked: 0, error: state.lastWorkOrderClosureCheck.error };
+  }
+  const results = respuesta?.results || {};
+  const confirmed = new Set();
+  for (const [clave, item] of Object.entries(results)) {
+    if (item?.closed) confirmed.add(String(item.ot || clave).trim().toUpperCase());
+  }
+  state.lastWorkOrderClosureCheck = {
+    at: new Date().toISOString(),
+    asked: Number(respuesta?.asked || 0),
+    omitted: Number(respuesta?.omitted || 0),
+    truncated: Boolean(respuesta?.truncated),
+    confirmedClosed: [...confirmed],
+    // Lo que NetSuite sigue reportando abierto: la evidencia de que NO se podan.
+    stillOpen: Object.entries(results).filter(([, item]) => item?.found && !item?.closed).map(([, item]) => item.ot),
+    unknown: Object.entries(results).filter(([, item]) => !item?.found && !item?.error).map(([, item]) => item.ot),
+  };
+  if (confirmed.size) {
+    // Se re-reconcilia pasandole los folios que NetSuite confirmo como cerrados. Sin esto, el
+    // unico podador seria la segunda ausencia, que ya no existe.
+    state = window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, state.workOrders, new Date().toISOString(), { confirmedBySource: confirmed });
+    queueAppSheetSave("plan");
+  }
+  return { asked: state.lastWorkOrderClosureCheck.asked, confirmed: confirmed.size };
+}
+
 async function syncNetSuiteData(showMessage, options = {}) {
   if (netSuiteSyncInFlight) {
     if (showMessage) showToast("La sincronizacion de NetSuite ya esta en curso");
@@ -9659,6 +9734,11 @@ async function syncNetSuiteData(showMessage, options = {}) {
       validateNetSuiteImportedData(imported, mode);
       await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
       if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
+      // Pregunta a NetSuite, folio por folio, si las OTs que NO vinieron en el listado estan
+      // cerradas de verdad (RULE-OT-051). El listado del 1764 va con onlyOpen:true, asi que
+      // una OT cerrada no aparece: solo desaparece. Sin esta pregunta, "no vino" y "esta
+      // cerrada" serian lo mismo. Con ella, la OT se queda hasta que NetSuite lo diga.
+      await confirmUnconfirmedWorkOrderClosures();
     } else {
       const response = await fetchNetSuiteExercise();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -12593,6 +12673,21 @@ function isPlannedJobStatus(status) {
 
 function isMovablePlanningStatus(status) {
   return PlannerCore.isMovablePlanningStatus(status);
+}
+
+// UNA OT ESTA CERRADA SOLO SI SU FICHA LO DICE, O SI NETSUITE YA LO CONFIRMO (RULE-OT-051).
+// Se separa de isMovablePlanningStatus a proposito: aquella pregunta por el estatus de la
+// OT PERO CAE AL ESTATUS DE SUS OPERACIONES cuando la ficha no dice nada (jobStatusFromOperations
+// arma [workOrderStatus, ...estatus de operaciones] y se queda con el primero que parezca
+// cerrada). Para PROGRAMAR eso esta bien, porque una operacion completada de verdad implica
+// trabajo terminado. Para BORRAR LA OT de la cola no: una sola operacion mal puestaquitaba el
+// trabajo entero del plan sin confirmacion.
+function isConfirmedClosedWorkOrder(ot) {
+  const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+  if (ficha && isClosedJobStatus(ficha.status)) return true;
+  // Si NetSuite ya lo confirmo en una sincronizacion anterior, sigue siendo cierto.
+  if (String(state.closedWorkOrderSummaries?.[ot]?.ot || "").trim()) return true;
+  return false;
 }
 
 function jobStatusFromOperations(ot, operations, workOrders = []) {

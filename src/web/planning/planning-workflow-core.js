@@ -971,7 +971,7 @@ expandedOts: without(state?.expandedOts),
     return out;
   }
 
-  function reconcileActiveWorkOrders(state, incomingWorkOrders, nowIso) {
+  function reconcileActiveWorkOrders(state, incomingWorkOrders, nowIso, options) {
     const source = state || {};
     const incoming = (incomingWorkOrders || []).map(normalizedLiteWorkOrder).filter((item) => normalize(item.ot));
     const active = new Set(incoming.map((item) => normalize(item.ot)));
@@ -1021,13 +1021,19 @@ expandedOts: without(state?.expandedOts),
       for (const ot of active) delete unconfirmed[ot];
     }
 
-    // Solo se podan las que ya estaban marcadas y vuelven a faltar (segunda ausencia), mas
-    // las que traen evidencia positiva.
+    // SOLO SE PODA CON EVIDENCIA POSITIVA. Antes, una OT que faltaba dos veces seguidas se
+    // daba por cerrada. Eso NO era confirmacion: era la ausencia persistiendo, y el 2026-09-26
+    // se cambio porque el usuarioovskia exactamente que no: la OT tiene que quedarse hasta que
+    // NetSuite DIGA que esta cerrada. Por eso la segunda ausencia ya no poda: ahora la
+    // confirma confirmWorkOrderClosures, que pregunta folio por folio al 2244 y lee el estatus
+    // real. Ver confirmWorkOrderClosures en src/server/16-inspection-service.js.
+    // SE VUELVE A PODER POR SEGUNDA AUSENCIA solo si el llamador lo pide explicitamente, que es
+    // lo que hace applyNetSuiteClosingConfirmation del lado del cliente. Por omision, no.
     const confirmed = new Set();
     for (const ot of explicitlyGone) confirmed.add(ot);
-    if (!massDrop) {
-      for (const [ot, entry] of Object.entries(unconfirmed)) {
-        if (entry.misses >= 2) confirmed.add(ot);
+    if (options && options.confirmedBySource instanceof Set) {
+      for (const ot of options.confirmedBySource) {
+        if (unconfirmed[normalize(ot)]) confirmed.add(normalize(ot));
       }
     }
     for (const ot of confirmed) delete unconfirmed[ot];

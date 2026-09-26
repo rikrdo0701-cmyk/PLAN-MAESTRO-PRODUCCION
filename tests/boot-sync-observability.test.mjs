@@ -36,7 +36,7 @@ function createNetSuiteSync({ runtime = true, failWith = null, workOrders = [{ o
     "state", "netSuiteSyncInFlight", "isAppsScriptRuntime", "callAppsScript", "validateNetSuiteImportedData",
     "applyImported", "applyNetSuiteWorkOrdersPayload", "fetchNetSuiteExercise", "importJson",
     "persistReferencePricesFromSync", "clearNetSuiteSyncAlert", "setNetSuiteSyncAlert",
-    "setNetSuiteSyncState", "render", "showToast", "STATE_BOX",
+    "setNetSuiteSyncState", "render", "showToast", "STATE_BOX", "confirmUnconfirmedWorkOrderClosures",
     `${syncNetSuiteDataSource}\nreturn { syncNetSuiteData, get inFlight() { return netSuiteSyncInFlight; } };`,
   );
 
@@ -60,6 +60,10 @@ function createNetSuiteSync({ runtime = true, failWith = null, workOrders = [{ o
     (...args) => { rendered.push(args); },
     (message, duration) => { toasts.push({ message: String(message), duration }); },
     context,
+    // La confirmacion de cierres se pide al final de la sincronizacion (RULE-OT-051). En el
+    // harness se registra la llamada y se deja que no haga nada, que es lo que pasa cuando no
+    // hay OTs por confirmar, que es el caso normal.
+    async () => { context.closureChecks = (context.closureChecks || 0) + 1; return { asked: 0 }; },
   );
 
   return { ...api, context, toasts, alerts, applied, rendered };
@@ -110,6 +114,10 @@ test("una carga correcta aplica la lista abierta, limpia la alerta y no avisa", 
   assert.equal(harness.context.state.netSuiteSyncAlert, null, "una carga correcta limpia la alerta previa");
   assert.deepEqual(harness.toasts, []);
   assert.equal(harness.inFlight, false);
+  // La sincronizacion termina preguntando a NetSuite si las OTs que no vinieron estan cerradas
+  // (RULE-OT-051). Se verifica que se pregunta, porque omitirlo seria volver a dejar que la
+  // ausencia decida.
+  assert.equal(harness.context.closureChecks, 1, "se pide la confirmacion de cierres al final del sync");
 });
 
 test("sin runtime de Apps Script la carga no marca error de NetSuite", async () => {

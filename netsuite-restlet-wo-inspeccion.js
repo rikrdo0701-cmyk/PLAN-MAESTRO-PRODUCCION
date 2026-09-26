@@ -11,6 +11,9 @@
  *
  * Diferencias frente a 2080:
  * - action "detail" ignora onlyOpen: regresa OTs cerradas/canceladas.
+ * - action "detail" ademas devuelve "estatus" con BUILTIN.DF(transaction.status), que es la
+ *   confirmacion POSITIVA de que una OT esta cerrada que el listado del 1764 no puede dar
+ *   (va con onlyOpen:true, asi que una OT cerrada simplemente no aparece). RULE-OT-051.
  * - action "detail" agrega a "trabajo": cantidadTotal, cantidadEnsamblada,
  *   cantidadEnsambladaFuente, cantidadEnsambladaCampo, cantidadPendiente,
  *   cantidadRealizadaMax, cantidadRealizadaUltimaOp, operacionesTotal y operacionesCompletas.
@@ -44,13 +47,29 @@ define(['N/query', 'N/record'], (query, record) => {
     let workOrderId = found ? found.workorder_id : null;
     if (!workOrderId) {
       try {
-        const lookup = runSuiteQL("SELECT id, tranid FROM transaction WHERE type = 'WorkOrd' AND tranid = ?", [woFolio]);
+        const lookup = runSuiteQL("SELECT id, tranid, BUILTIN.DF(status) AS estatus FROM transaction WHERE type = 'WorkOrd' AND tranid = ?", [woFolio]);
         workOrderId = lookup.length ? lookup[0].id : null;
+        if (lookup.length) resultados.estatus = String(lookup[0].estatus || '');
       } catch (error) {
         resultados.lookupError = String(error && error.message || error).slice(0, 200);
       }
     }
     resultados.workOrderId = workOrderId;
+    // ESTATUS PARA CONFIRMAR QUE UNA OT ESTA CERRADA (RULE-OT-051). El listado del 1764 va con
+    // onlyOpen:true, asi que una OT cerrada NO aparece en el: desaparecio, y el codigo no puede
+    // distinguir "cerrada" de "no vino". Este action SI la ve, porque ignora onlyOpen, y ahora
+    // ademas devuelve su estatus real. Es la unica fuente que puede dar una confirmacion
+    // POSITIVA de cierre, en vez de una simple ausencia.
+    // OJO: BUILTIN.DF sobre t.status (transaction) SI funciona en esta cuenta; lo que no
+    // funciona es sobre mot.status (manufacturingoperationtask), que es otro campo.
+    if (workOrderId) {
+      try {
+        const est = runSuiteQL('SELECT BUILTIN.DF(status) AS estatus FROM transaction WHERE id = ?', [workOrderId]);
+        if (est.length) resultados.estatus = String(est[0].estatus || resultados.estatus || '');
+      } catch (error) {
+        resultados.estatusError = String(error && error.message || error).slice(0, 200);
+      }
+    }
     if (!workOrderId) return { ok: true, action: 'diagnostico', resultados: resultados };
 
     const pruebas = [

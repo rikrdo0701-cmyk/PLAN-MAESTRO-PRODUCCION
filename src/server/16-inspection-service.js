@@ -172,6 +172,86 @@ function PP_Inspection_routeIndex_() {
   return index;
 }
 
+// CONFIRMAR EL CIERRE DE UNA OT CONTRA NETSUITE (RULE-OT-051).
+//
+// POR QUE HACE FALTA. El catalogo de OTs del 1764 va con onlyOpen:true, asi que una OT cerrada
+// no aparece: solo desaparece. El codigo no puede distinguir "cerrada" de "no vino en el
+// payload", y por eso antes la ausencia se tomaba por cierre. Este metodo consulta a NetSuite
+// POR OT y lee su estatus real, que es la unica confirmacion POSITIVA disponible sin cambiar el
+// listado del 1764.
+//
+// POR QUE EL 2244 Y NO EL LISTADO. El 2244 tiene dos modos: list (que conserva onlyOpen) y
+// detail (que lo ignora y por lo tanto SI ve las cerradas). Pedir el listado completo con
+// onlyOpen:false traeria TODAS las OTs de la historia con todas sus lineas, paginadas, contra
+// la cuota de 20 000 UrlFetch/dia que ya se agoto una vez (RULE-REP-017). Preguntar folio por
+// folio cuesta una llamada por OT pendiente, y normalmente no hay ninguna.
+//
+// QUE DEVUELVE, Y POR QUE CADA CASO ES DISTINTO. found + estatus. found false significa que
+// NetSuite no la conoce: eso NO es lo mismo que cerrada (puede estar borrada, o en otra
+// planta), asi que el cliente la tiene que CONSERVAR. estatus con CERRAD/CLOSED/COMPLET/
+// CANCELAD es cierre confirmado. estatus vacio significa que el 2244 todavia no trae el campo
+// (no se ha subido la version nueva), y tambien se conserva: es un estado degradado seguro, no
+// se poda nada. Solo se cierra con evidencia positiva.
+function confirmWorkOrderClosures(ots) {
+  var lista = [];
+  var vistas = {};
+  (Array.isArray(ots) ? ots : []).forEach(function(item) {
+    var folio = PP_Inspection_text_(item, 80);
+    var clave = PP_normalizeKey_(folio);
+    if (!folio || !clave || vistas[clave]) return;
+    vistas[clave] = true;
+    lista.push(folio);
+  });
+  if (!lista.length) return { asked: 0, results: {}, note: 'no habia OTs por confirmar' };
+
+  // Tope duro. Si de pronto hay cientos de OTs por confirmar, eso NO es una confirmacion que
+  // valga la pena gastar: es una señal de que algo anda mal, y la respuesta correcta es
+  // conservarlas todas y avisar, no pedir hundreds de llamadas.
+  var TOPE = 20;
+  var recortada = lista.length > TOPE;
+  var consultadas = recortada ? lista.slice(0, TOPE) : lista;
+  var resultados = {};
+
+  consultadas.forEach(function(folio) {
+    var clave = PP_normalizeKey_(folio);
+    try {
+      var response = PP_Inspection_restlet_({ action: 'detail', woFolio: folio });
+      var diag = response.diagnostico || {};
+      var res = diag.resultados || {};
+      var estatus = PP_Inspection_text_(PP_Inspection_value_(res, ['estatus', 'status', 'Estado']));
+      var trabajo = response.trabajo || response.workOrder || {};
+      if (!estatus) {
+        estatus = PP_Inspection_text_(PP_Inspection_value_(trabajo, ['estatus', 'status', 'Estado']));
+      }
+      var encontrado = Boolean(res.workOrderId || trabajo.woFolio || trabajo.wo || trabajo.WOFolio);
+      resultados[clave] = {
+        ot: folio,
+        found: encontrado,
+        status: estatus,
+        closed: encontrado && PP_confirmedClosedStatus_(estatus)
+      };
+    } catch (error) {
+      // Un fallo aqui NUNCA puede cerrar una OT. Se registra como desconocido.
+      resultados[clave] = { ot: folio, found: false, status: '', closed: false, error: String(error && error.message || error).slice(0, 160) };
+    }
+  });
+
+  return {
+    asked: consultadas.length,
+    omitted: recortada ? lista.length - TOPE : 0,
+    truncated: recortada,
+    results: resultados
+  };
+}
+
+var PP_CONFIRMED_CLOSED_WORDS_ = ['CERRAD', 'CLOSED', 'COMPLET', 'CANCELAD', 'CANCELED', 'CANCELLED'];
+
+function PP_confirmedClosedStatus_(status) {
+  var normalizado = String(status || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (!normalizado) return false;
+  return PP_CONFIRMED_CLOSED_WORDS_.some(function(palabra) { return normalizado.indexOf(palabra) >= 0; });
+}
+
 function getInspectionWorkOrder(wo) {
   return PP_Inspection_result_(function() {
     const folio = PP_Inspection_text_(wo, 80);

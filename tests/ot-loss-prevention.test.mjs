@@ -73,21 +73,32 @@ test("una OT que no viene en el payload NO se pierde en la primera pasada", () =
   assert.equal(r.lastWorkOrderReconcile.confirmedClosed, 0);
 });
 
-test("la segunda ausencia consecutively SÍ confirma el cierre", () => {
+test("la segunda ausencia YA NO poda: hace falta que NetSuite lo confirme (RULE-OT-051)", () => {
+  // ANTES este test afirmaba que la segunda ausencia cerraba la OT. El usuario lo cambio el
+  // 2026-09-26: la OT tiene que quedarse hasta que NetSuite DIGA que esta cerrada, y dos
+  // ausencias no son un "digo". La regla que se cumple ahora esta dos tests mas abajo.
   let estado = estadoConOts(["3000", "3001", "3002", "3003"]);
   const payload = [{ ot: "3000", item: "ART-0", status: "EN PROCESO" }];
 
-  // Pasada 1: por confirmar, no se pierde nada.
   estado = reconcileActiveWorkOrders(estado, payload, T);
   assert.deepEqual(estado.selectedOts, ["3000", "3001", "3002", "3003"]);
 
-  // Pasada 2, con OTRO payload igual: ahora si es cierre.
   const r = reconcileActiveWorkOrders(estado, payload, "2026-09-26T21:00:00.000Z");
-  assert.deepEqual(r.selectedOts, ["3000"], "la que falta dos veces sale de la cola");
-  assert.equal(r.workOrders.length, 1);
-  assert.deepEqual(Object.keys(r.unconfirmedWorkOrders), [], "ya no queda por confirmar");
-  assert.ok(r.closedWorkOrderSummaries["3001"], "y queda con su resumen de cerrada");
-  assert.equal(r.lastWorkOrderReconcile.confirmedClosed, 3);
+  assert.deepEqual(r.selectedOts, ["3000", "3001", "3002", "3003"],
+    "la que falta dos veces SIGUE en la cola: nadie confirmo que este cerrada");
+  assert.equal(r.workOrders.length, 4);
+  assert.deepEqual(Object.keys(r.unconfirmedWorkOrders).sort(), ["3001", "3002", "3003"],
+    "siguen por confirmar, con misses = 2");
+  assert.equal(r.unconfirmedWorkOrders["3001"].misses, 2, "se lleva la cuenta, pero la cuenta no poda");
+  assert.deepEqual(Object.keys(r.closedWorkOrderSummaries), []);
+  assert.equal(r.lastWorkOrderReconcile.confirmedClosed, 0);
+
+  // Cuando NetSuite confirma, ahi si sale.
+  const confirmada = reconcileActiveWorkOrders(r, payload, "2026-09-26T22:00:00.000Z", {
+    confirmedBySource: new Set(["3001", "3002", "3003"]),
+  });
+  assert.deepEqual(confirmada.selectedOts, ["3000"], "confirmadas, si salen");
+  assert.ok(confirmada.closedWorkOrderSummaries["3001"]);
 });
 
 test("si la OT vuelve a aparecer, la marca se borra sola (payload truncado se autocura)", () => {
@@ -245,4 +256,107 @@ test("el servidor tampoco persiste la poda por inferencia, y avisa de la caida m
   // Y ya no puede quedar la poda cruda por openOts, que es la que perdia OTs.
   assert.doesNotMatch(bloque, /filter\(function\(ot\) \{ return openOts\[PP_normalizeKey_\(ot\)\]; \}\)/,
     "no debe quedar la poda por openOts: eso es 'ausente = cerrada'");
+});
+
+test("RULE-OT-051: la segunda ausencia YA NO poda; solo la confirmacion de NetSuite", () => {
+  // Este es el cambio de fondo que pidio el usuario: la OT se queda hasta que NetSuite DIGA que
+  // esta cerrada. Dos ausencias no son confirmacion.
+  const estado = {
+    selectedOts: ["100", "200"],
+    lockedOts: [], expandedOts: [],
+    workOrders: [
+      { ot: "100", item: "A", status: "EN PROCESO", quantity: 1 },
+      { ot: "200", item: "B", status: "EN PROCESO", quantity: 2 },
+    ],
+    operations: [{ id: "200-1", ot: "200", planStatus: "PENDIENTE" }],
+    operationPlanStatuses: {}, materials: [], otConfigurations: {},
+    planningConfigByOt: {}, preparedPlanningByOt: {},
+    lastSchedule: { scheduledOts: ["100", "200"] },
+    selectedDetailOt: "", selectedOperationId: "", closedWorkOrderSummaries: {},
+  };
+  const payload = [{ ot: "100", item: "A", status: "EN PROCESO" }];
+
+  // Diez syncs seguidos, siempre con el mismo payload incompleto.
+  let s = estado;
+  for (let i = 0; i < 10; i += 1) {
+    s = reconcileActiveWorkOrders(s, payload, `2026-09-26T1${i}:00:00Z`);
+  }
+  assert.deepEqual(structuredClone(s.selectedOts), ["100", "200"],
+    "diez ausencias y la OT sigue en la cola: no hay confirmacion de que este cerrada");
+  assert.equal(s.workOrders.length, 2, "y con su ficha");
+  assert.equal(s.operations.length, 1, "y con sus operaciones");
+  assert.deepEqual(Object.keys(structuredClone(s.closedWorkOrderSummaries)), [],
+    "no se marca como cerrada: nadie lo dijo");
+
+  // Ahora NetSuite CONFIRMA que esta cerrada, y ahi si sale.
+  const confirmada = reconcileActiveWorkOrders(s, payload, "2026-09-26T20:00:00Z", {
+    confirmedBySource: new Set(["200"]),
+  });
+  assert.deepEqual(structuredClone(confirmada.selectedOts), ["100"], "confirmada, si sale");
+  assert.equal(confirmada.workOrders.length, 1);
+  assert.ok(confirmada.closedWorkOrderSummaries["200"], "y queda con su resumen de cerrada");
+});
+
+test("RULE-OT-051: confirmWorkOrderClosures solo confirma con estatus cerrado y real", async () => {
+  const src = await readFile(new URL("../src/server/16-inspection-service.js", import.meta.url), "utf8");
+  const i = src.indexOf("function confirmWorkOrderClosures(");
+  assert.ok(i > 0, "no se encontro confirmWorkOrderClosures");
+  const cuerpo = src.slice(i, i + 2600);
+
+  // found:false NO es cierre: NetSuite puede no conocer la OT (borrada, otra planta).
+  assert.match(cuerpo, /found: encontrado/, "hay que distinguir encontrada de no encontrada");
+  assert.match(cuerpo, /closed: encontrado && PP_confirmedClosedStatus_\(estatus\)/,
+    "cerrada exige QUE SE HAYA ENCONTRADO y que el estatus lo diga");
+  // Un error de red jamas puede cerrar.
+  assert.match(cuerpo, /closed: false, error:/, "un fallo de la llamada no cierra nada");
+  // Tope de gasto: la cuota de UrlFetch es de 20 000/dia y ya se agoto una vez.
+  assert.match(cuerpo, /var TOPE = 20;/, "debe haber un tope de folios por pasada");
+  assert.match(cuerpo, /truncated: recortada/, "y avisar cuando se recorta");
+  // Y el sin-nombre de NetSuite tiene que ser una palabra de verdad.
+  assert.match(src, /var PP_CONFIRMED_CLOSED_WORDS_ = \['CERRAD', 'CLOSED', 'COMPLET', 'CANCELAD'/);
+});
+
+test("RULE-OT-051: confirmUnconfirmedWorkOrderClosures no pregunta si no hay pendientes", async () => {
+  const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const i = app.indexOf("async function confirmUnconfirmedWorkOrderClosures(");
+  assert.ok(i > 0, "no se encontro confirmUnconfirmedWorkOrderClosures");
+  const cuerpo = app.slice(i, i + 2200);
+  // El caso normal es que no haya nada pendiente, y ahi no se debe gastar una sola llamada.
+  assert.match(cuerpo, /if \(!pendientes\.length\) return \{ asked: 0 \};/,
+    "sin OTs por confirmar no se pregunta nada");
+  // Un fallo al preguntar deja todo como esta.
+  assert.match(cuerpo, /catch \(error\) \{[\s\S]{0,320}Un fallo al preguntar NUNCA cierra una OT/);
+  // Y solo se re-reconcilia si hay confirmadas de verdad.
+  assert.match(cuerpo, /if \(confirmed\.size\) \{/);
+  assert.match(cuerpo, /\{ confirmedBySource: confirmed \}/,
+    "la confirmacion se pasa al reconciliador, que es el unico que puede podar");
+});
+
+test("RULE-OT-051: 'Generar plan' no quita una OT porque una operacion diga cerrada", async () => {
+  const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  // La puerta que se uso antes y que se cambio.
+  assert.doesNotMatch(app, /const closedOts = state\.selectedOts\.filter\(\(ot\) => !isMovablePlanningStatus\(jobStatusForOt\(ot\)\)\);/,
+    "ya no se puede decidir el cierre con el estatus agregado de la OT");
+  assert.match(app, /const closedOts = state\.selectedOts\.filter\(\(ot\) => isConfirmedClosedWorkOrder\(ot\)\);/,
+    "el cierre se decide con la FICHA de la OT o con lo que NetSuite confirmo");
+  assert.match(app, /soloOperacionDiceCerrada/, "y el caso 'solo dice cerrada la operacion' se avisa, no se borra");
+  // El helper tiene que usar la ficha, no las operaciones.
+  const i = app.indexOf("function isConfirmedClosedWorkOrder(");
+  const cuerpo = app.slice(i, i + 600);
+  assert.match(cuerpo, /state\.workOrders\.find\(/, "busca la ficha de la OT");
+  assert.match(cuerpo, /isClosedJobStatus\(ficha\.status\)/, "y mira su estatus");
+  assert.doesNotMatch(cuerpo, /jobStatusForOt/, "NO debe usar el estatus agregado, que cae a las operaciones");
+});
+
+test("RULE-OT-051: el 2244 expone el estatus que hace posible la confirmacion", async () => {
+  const restlet = await readFile(new URL("../netsuite-restlet-wo-inspeccion.js", import.meta.url), "utf8");
+  // El action detail es el que ignora onlyOpen, o sea el unico que ve las OTs cerradas.
+  assert.match(restlet, /SELECT id, tranid, BUILTIN\.DF\(status\) AS estatus FROM transaction/,
+    "detail tiene que traer el estatus real de la OT");
+  assert.match(restlet, /resultados\.estatus =/);
+  assert.match(restlet, /SELECT BUILTIN\.DF\(status\) AS estatus FROM transaction WHERE id = \?/,
+    "y confirmarlo con una segunda consulta por id, que es la que no depende del lookup");
+  // Y la lista debe seguir filtrando las cerradas: no vamos a traer toda la historia.
+  assert.match(restlet, /if \(payload\.onlyOpen !== false\) \{[\s\S]{0,400}NOT LIKE '%CLOSED%'/,
+    "list sigue con onlyOpen: traer todas las cerradas seria un masturbation de cuota");
 });

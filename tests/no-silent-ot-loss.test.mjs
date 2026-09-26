@@ -144,15 +144,51 @@ test("el mecanismo de evidencia sigue existiendo en el cliente y en el servidor"
   // evidencia siga ahi.
   const CORE = soloCodigo(await readFile(path.join(RAIZ, "src/web/planning/planning-workflow-core.js"), "utf8"));
   const SERVIDOR = soloCodigo(await readFile(path.join(RAIZ, "src/server/08-netsuite.js"), "utf8"));
+  // La confirmacion folio por folio vive en el servicio de inspeccion, que es el que habla con
+  // el 2244. El 08-netsuite.js es el que reconcilia y persiste lo que el cliente ya confirms.
+  const INSPECCION = soloCodigo(await readFile(path.join(RAIZ, "src/server/16-inspection-service.js"), "utf8"));
 
   for (const [nombre, fuente] of [["cliente", CORE], ["servidor", SERVIDOR]]) {
     assert.match(fuente, /unconfirmedWorkOrders/, `${nombre}: debe existir la lista de OTs por confirmar`);
-    assert.match(fuente, /misses\s*>=\s*2/, `${nombre}: la segunda ausencia es la que confirma el cierre`);
     assert.match(fuente, /exists\s*===\s*false/, `${nombre}: exists === false es evidencia positiva`);
     assert.match(fuente, /caidaMasiva|massDrop/, `${nombre}: debe existir el guardia de caida masiva`);
     // Y hay que dejar rastro, para que se pueda auditar que paso en cada sincronizacion.
     assert.match(fuente, /lastWorkOrderReconcile/, `${nombre}: debe dejar auditoria de la reconciliacion`);
   }
+
+  // Y el podador tiene que ser la CONFIRMACION, no la cuenta de ausencias. El 2026-09-26 el
+  // usuario cambio esto: la OT se queda hasta que NetSuite DIGA que esta cerrada. Dos
+  // ausencias son la ausencia persistiendo, no un "digo", asi que misses >= 2 NO puede volver
+  // a ser lo que poda.
+  assert.doesNotMatch(CORE, /misses\s*>=\s*2[\s\S]{0,80}confirm/,
+    "la segunda ausencia no puede ser lo que confirma el cierre");
+  assert.match(CORE, /confirmedBySource/,
+    "el cliente tiene que aceptar los folios que NetSuite confirmo como cerrados");
+  assert.match(INSPECCION, /function confirmWorkOrderClosures\(/,
+    "el servidor tiene que poder preguntar folio por folio");
+  assert.match(INSPECCION, /closed: encontrado && PP_confirmedClosedStatus_\(/,
+    "y solo declara cerrada una OT que se encontro Y cuyo estatus lo dice");
+  assert.match(INSPECCION, /PP_CONFIRMED_CLOSED_WORDS_/,
+    "las palabras de cierre confirmado tienen que estar en un solo sitio, no repetidas");
+  // Y el reconciliador del servidor tiene que aceptar lo que el cliente ya confirmo, porque es
+  // lo que se persiste en CONFIG y no se puede deshacer con otro sync.
+  assert.match(SERVIDOR, /confirmadas\[PP_normalizeKey_\(ot\)\]/,
+    "el servidor decide por la tabla de confirmadas, no por openOts");
+});
+
+test("la sincronizacion SIEMPRE pide la confirmacion de cierres (RULE-OT-051)", async () => {
+  const app = soloCodigo(await readFile(path.join(RAIZ, "src/web/planning/app.js"), "utf8"));
+  // Si alguien quita la llamada, la ausencia vuelve a decidir el cierre y nada lo detecta.
+  assert.match(app, /await confirmUnconfirmedWorkOrderClosures\(\);/,
+    "syncNetSuiteData tiene que pedir la confirmacion de cierres");
+  const i = app.indexOf("await confirmUnconfirmedWorkOrderClosures();");
+  const antes = app.slice(Math.max(0, i - 700), i);
+  assert.match(antes, /applyNetSuiteWorkOrdersPayload\(imported\)/,
+    "y se pide DESPUES de aplicar el payload, que es cuando ya se sabe que OTs faltaron");
+  // Y el 2244 tiene que poder dar el estatus, que es lo que hace posible la confirmacion.
+  const restlet = soloCodigo(await readFile(path.join(RAIZ, "netsuite-restlet-wo-inspeccion.js"), "utf8"));
+  assert.match(restlet, /resultados\.estatus =/,
+    "el 2244 detail tiene que devolver el estatus de la OT; sin eso no hay confirmacion posible");
 });
 
 test("reconcileActiveWorkOrders no reemplaza workOrders con el payload crudo", async () => {
