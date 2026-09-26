@@ -43,7 +43,10 @@ test_plan_reports.py
 test_webapp_legacy_completed.py
 plan-generated.png
 .playwright-cli/
-docs/performance/
+# docs/performance/ NO se excluye a proposito: docs/rules/RULES.md, docs/REGLAS.md y
+# .project-memory/rules.json lo enlazan como fuente de evidencia, asi que dejarlo fuera
+# mantenia la medicion solo en la maquina que la hizo. Si hay que excluir algo de ahi, que
+# sea archivo por archivo y no la carpeta entera.
 
 tests/artifacts/
 artifacts/
