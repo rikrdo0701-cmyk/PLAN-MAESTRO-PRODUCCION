@@ -102,14 +102,25 @@ function VERIFICA_CIERRE_OT() {
   log('   OTs abiertas que se van a comprobar como control negativo: ' + (abiertas.length ? abiertas.join(', ') : '(ninguna)'));
 
   // ------------------------------------------------------------------- 4. la consulta
-  var folios = cerradas.slice(0, 5).concat(abiertas.slice(0, 3));
+  // SE PREGUNTAN TODAS LAS DEL RESUMEN, no solo las primeras 5. La primera version preguntaba
+  // 5 y despues juzgaba las 17, y reportaba "NetSuite NO las encuentra" para las 12 que NUNCA
+  // habia preguntado. Eso es el mismo error de fondo de RULE-OT-051, dado la vuelta: tomar la ausencia de
+  // una consulta como evidencia. Si no se pregunto, no se sabe nada, y hay que decirlo asi.
+  var TOPE_RESUMEN = 20;   // el servidor tiene su propio tope de 20 por pasada
+  var foliosResumen = cerradas.slice(0, TOPE_RESUMEN);
+  var folios = foliosResumen.concat(abiertas.slice(0, 3));
   if (!folios.length) {
     log('');
     log('   FALLA: no hay ningun folio para comprobar. No se puede verificar nada.');
     return;
   }
   log('');
-  log('3) PREGUNTANDO A NETSUITE, ' + folios.length + ' folios de uno en uno:');
+  log('3) PREGUNTANDO A NETSUITE, ' + folios.length + ' folios de uno en uno ('
+    + foliosResumen.length + ' del resumen' + (cerradas.length > TOPE_RESUMEN
+      ? ', quedan ' + (cerradas.length - TOPE_RESUMEN) + ' SIN preguntar y por lo tanto SIN juicio'
+      : '') + '):');
+  // Esta es la lista REAL de lo preguntado. El veredicto solo puede juzgar estos.
+  var consultadas = folios.map(function (v) { return norm(v); });
   var respuesta = null;
   try {
     respuesta = confirmWorkOrderClosures(folios);
@@ -129,7 +140,6 @@ function VERIFICA_CIERRE_OT() {
   log('');
   log('   folio        encontrada  estatus de NetSuite              closed');
   var conEstatus = 0;
-  var cerradasConfirmadas = 0;
   var abiertasConfirmadas = 0;
   var sinEstatus = 0;
   for (var i = 0; i < claves.length; i += 1) {
@@ -137,7 +147,6 @@ function VERIFICA_CIERRE_OT() {
     var item = results[clave] || {};
     var est = String(item.status || '').trim();
     if (est) conEstatus += 1; else sinEstatus += 1;
-    if (item.closed) cerradasConfirmadas += 1;
     if (item.found && !item.closed) abiertasConfirmadas += 1;
     log('   ' + String(item.ot || clave).padEnd(13) + '  ' + String(Boolean(item.found)).padEnd(11)
       + (est || '(vacio)').padEnd(31) + '  ' + String(Boolean(item.closed))
@@ -169,39 +178,47 @@ function VERIFICA_CIERRE_OT() {
   }
 
   if (cerradas.length) {
-    // Cada OT del resumen se juzga por separado. Antes se daba el caso por bueno con una sola
-    // confirmada, y las que NetSuite NO conocia quedaban sin reportar, que es justo lo que hay
-    // que saber: una OT que el resumen da por cerrada y NetSuite no encuentra, o fue borrada o
-    // esta en otra planta o el folio no es el que creiamos.
+    // Cada OT del resumen SE PREGUNTADA se juzga por separado. Las que no se preguntaron se
+    // reportan como "sin juicio", nunca como fallo: no saber no es fallar.
     var noEncontradas = [];
     var noCerradas = [];
+    var sinJuzgar = [];
+    var confirmadasDeResumen = 0;
     cerradas.forEach(function (ot) {
+      if (consultadas.indexOf(norm(ot)) < 0) { sinJuzgar.push(ot); return; }
       var item = resultadosPorFolio(ot);
-      if (!item) { noEncontradas.push(ot + ' (no vino en la respuesta)'); return; }
+      if (!item) { sinJuzgar.push(ot + ' (vino en el pedido pero no en la respuesta)'); return; }
       if (!item.found) { noEncontradas.push(ot); return; }
-      if (!item.closed) noCerradas.push(ot + ' (NetSuite dice "' + String(item.status || '?') + '")');
+      if (!item.closed) { noCerradas.push(ot + ' (NetSuite dice "' + String(item.status || '?') + '")'); return; }
+      confirmadasDeResumen += 1;
     });
-    if (cerradasConfirmadas > 0) {
-      log('   bien: ' + cerradasConfirmadas + ' de las ' + cerradas.length + ' OTs del resumen');
+    var juzgadas = foliosResumen.length - sinJuzgar.length;
+    if (confirmadasDeResumen > 0) {
+      log('   bien: ' + confirmadasDeResumen + ' de ' + juzgadas + ' OTs preguntadas del resumen');
       log('         quedaron CONFIRMADAS como cerradas por NetSuite. La fuente funciona, y esas');
       log('         si estaban cerradas: no hay que resucitarlas.');
     }
     if (noEncontradas.length) {
-      log('   FALLA: ' + noEncontradas.length + ' OT(s) del resumen de cerradas NetSuite NO las');
-      log('   encuentra: ' + noEncontradas.join(', '));
+      log('   FALLA: ' + noEncontradas.length + ' OT(s) del resumen NetSuite NO las encuentra:');
+      log('   ' + noEncontradas.join(', '));
       log('   found:false NO es cierre. Puede estar borrada, estar en otra planta, o el folio');
       log('   guardado no ser el de NetSuite. Hay que revisarlas a mano; la app NO las podaria.');
       fallos += 1;
     }
     if (noCerradas.length) {
       log('   ATENCION: ' + noCerradas.length + ' OT(s) del resumen NetSuite las encuentra pero NO');
-      log('   las da por cerradas: ' + noCerradas.join(', '));
+      log('   las da por cerradas:');
+      log('   ' + noCerradas.join(', '));
       log('   O el resumen se equivoco, o el estatus no es CERRAD/CLOSED/COMPLET/CANCELAD.');
       fallos += 1;
     }
-    if (!cerradasConfirmadas && !noEncontradas.length && !noCerradas.length) {
-      log('   ATENCION: de las ' + cerradas.length + ' OTs del resumen no volvio ninguna. No se');
-      log('   puede afirmar nada de ellas.');
+    if (sinJuzgar.length) {
+      log('   nota: ' + sinJuzgar.length + ' OT(s) del resumen NO se preguntaron, y por lo tanto');
+      log('         no se afirman nada de ellas. No es un fallo, es un limite de la corrida:');
+      log('         ' + sinJuzgar.join(', '));
+    }
+    if (juzgadas === 0) {
+      log('   ATENCION: no se pudo juzgar ninguna OT del resumen. No se puede afirmar nada.');
       fallos += 1;
     }
   }
