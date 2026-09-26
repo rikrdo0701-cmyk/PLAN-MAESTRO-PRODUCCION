@@ -154,8 +154,11 @@ test("precios de venta salen del restlet 1766 REQ_FIFO (ultima venta y promedio 
   assert.equal(prices.lastByItem["1001"], 200);
   assert.equal(prices.lastByItem["D66-2896"], 200);
   assert.ok(Math.abs(prices.avgByItem["1001"] - (100 * 5 + 200 * 1) / 6) < 1e-9);
-  assert.equal(prices.lastByItem["C 490 UADE PN"], 725.19);
-  assert.equal(prices.lastByItem["2425"], 725.19);
+  // La fila 2425 esta en US Dollar con TIPO CAMBIO 16.9755, asi que el precio se convierte a
+  // pesos. Antes se tomaba el valor crudo (725.19 USD) como si fueran pesos.
+  assert.equal(prices.lastByItem["C 490 UADE PN"], 725.19 * 16.9755);
+  assert.equal(prices.lastByItem["2425"], 725.19 * 16.9755);
+  assert.equal(prices.avgByItem["2425"], 725.19 * 16.9755, "el promedio de 6 meses tambien convierte");
   assert.equal(prices.from, "2026-03-05");
   assert.equal(prices.to, "2026-09-10");
 });
@@ -182,7 +185,7 @@ test("PP_buildWorkOrderCatalog_ lee Articulo acentuado de WO_LISTA y matchea pre
   assert.equal(catalog[0].itemId, "");
 
   const applied = context.PP_applySalesPrices_(catalog, prices);
-  assert.equal(applied[0].lastSalePrice, 725.19);
+  assert.equal(applied[0].lastSalePrice, 725.19 * 16.9755, "el precio de la OT llega ya en pesos");
   assert.ok(applied[0].averageSalePrice > 0);
 });
 
@@ -197,8 +200,11 @@ const pricePage = (rows, hasMore = false) => ({
   }),
   status: 200,
 });
-const priceRow = (id, price, qty, date) => ({
+// Formato de fecha tal cual lo devuelve REQ_FIFO: "2025-12-24 01:28:28", confirmado con las
+// 5 filas del volcado de la sonda del 2026-09-26.
+const priceRow = (id, price, qty, date, extra = {}) => ({
   _ITEM_ID: id, PARTE: `ART-${id}`, "PRECIO BASE MNX": String(price), "CANTIDAD ORDEN": String(qty), "FECHA DE ORDEN": date,
+  MONEDA: "Peso Mexicano", "TIPO CAMBIO": 1, ...extra,
 });
 const invoiceWindow = { from: "2026-03-26", to: "2026-09-26" };
 // PP_netSuiteConfig_ lee las credenciales de Script Properties; el harness las trae vacias.
@@ -308,6 +314,77 @@ test("fetchNetSuiteWorkOrdersData_ usa el precio cacheado pero la lista de OTs s
   const llamadasPrecios = requests.filter((request) => /REQ_FIFO/.test(request.options.payload));
   assert.equal(llamadasPrecios.length, 1, "el 1766 solo se golpea una vez: ese es el ahorro de cuota");
   assert.ok(primero.fetchedAt, "fetchedAt sigue reflejando la lectura viva, no la del cache");
+});
+
+test("el precio de una venta en otra moneda se convierte con TIPO CAMBIO", () => {
+  // Fila real de REQ_FIFO (sonda 2026-09-26): la columna dice MNX pero el valor viene en la
+  // moneda de la transaccion. El 18.31 es MXN por USD.
+  // Fila real de REQ_FIFO (sonda 2026-09-26): la columna dice MNX pero el valor viene en la
+  // moneda de la transaccion. El 18.31 es MXN por USD.
+  const { context } = load([pricePage([priceRow("5111", 3204.25, 22, "2025-12-24 01:28:52", {
+    MONEDA: "US Dollar", "TIPO CAMBIO": 18.31,
+  })], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  assert.equal(result.lastByItem["5111"], 3204.25 * 18.31, "el precio queda en pesos, no en dolares");
+  assert.equal(result.lastByItem["5111"], 58669.8175);
+});
+
+test("una venta en pesos no cambia con TIPO CAMBIO igual a 1", () => {
+  const { context } = load([pricePage([priceRow("2431", 378, 30, "2025-12-24 01:28:58")], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  assert.equal(result.lastByItem["2431"], 378, "el precio en pesos se toma tal cual");
+});
+
+test("una venta sin tipo de cambio se queda en el valor crudo en vez de volverse 0", () => {
+  const { context } = load([pricePage([{
+    _ITEM_ID: "9999", PARTE: "ART-9999", "PRECIO BASE MNX": "500", "CANTIDAD ORDEN": "10", "FECHA DE ORDEN": "2025-12-24 01:28:52",
+  }], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  assert.equal(result.lastByItem["9999"], 500, "sin TIPO CAMBIO no se inventa una conversion");
+});
+
+test("el promedio ponderado de 6 meses tambien convierte la moneda", () => {
+  const { context } = load([pricePage([
+    priceRow("4483", 100, 10, "2026-04-01 10:00:00", { MONEDA: "US Dollar", "TIPO CAMBIO": 20 }),
+    priceRow("4483", 200, 10, "2026-05-01 10:00:00", { MONEDA: "US Dollar", "TIPO CAMBIO": 20 }),
+  ], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  // 100 USD x 20 = 2000 y 200 USD x 20 = 4000; promedio ponderado por 10 y 10 = 3000 MXN.
+  assert.equal(result.avgByItem["4483"], 3000);
+});
+
+test("la fecha de REQ_FIFO con formato AAAA-MM-DD hh:mm:ss entra al precio y al promedio", () => {
+  // El parser solo aceptaba el formato con AM/PM; sin este patron la fecha caia en
+  // new Date(texto) -> invalido y la fila se descartaba en silencio.
+  const { context } = load([pricePage([
+    priceRow("4483", 100, 10, "2026-04-01 10:00:00"),
+    priceRow("4483", 300, 10, "2026-05-01 10:00:00"),
+  ], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  assert.equal(result.lastByItem["4483"], 300, "la mas reciente manda");
+  assert.equal(result.avgByItem["4483"], 200, "y las dos filas promedian");
+});
+
+test("la fecha en DD/MM/AAAA hh:mm:ss tambien se interpreta", () => {
+  const { context } = load([pricePage([
+    priceRow("4483", 100, 10, "01/04/2026 10:00:00"),
+    priceRow("4483", 300, 10, "01/05/2026 10:00:00"),
+  ], false)]);
+
+  const result = context.PP_fetchSalesPricesRestlet_(config, invoiceWindow);
+
+  assert.equal(result.lastByItem["4483"], 300);
+  assert.equal(result.avgByItem["4483"], 200);
 });
 
 test("PP_fetchRestletPages_ pide 1000 filas al 1766 y 200 al resto", () => {

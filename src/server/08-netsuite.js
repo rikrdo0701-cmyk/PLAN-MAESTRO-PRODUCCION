@@ -606,7 +606,18 @@ function PP_fetchSalesPricesRestlet_(config, window) {
   (page.rows || []).forEach(function(row) {
     const itemId = String(row._ITEM_ID || '').trim();
     const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM', 'PARTE']) || '').trim();
-    const price = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
+    // 'PRECIO BASE MNX' miente el nombre: viene en la MONEDA de la transaccion, no en pesos.
+    // Verificado con datos reales de REQ_FIFO (2026-09-26): la linea
+    //   PRECIO BASE MNX 3204.25 | MONEDA 'US Dollar' | TIPO CAMBIO 18.31 | CANTIDAD ORDEN 22
+    //   TAX AMOUNT 11278.96 | GROSS AMT 81772.46
+    // cierra exacto con el precio CRUDO (3204.25 x 22 = 70 493.50; x 0.16 = 11 278.96), o sea
+    // que ni el impuesto ni el total del restlet aplican el tipo de cambio. Tomarlo como pesos
+    // subestima el precio ~18x en las ventas en dolar y con ello los montos de los reportes.
+    // TIPO CAMBIO viene como MXN por unidad de la moneda extranjera, asi que multiplicar es lo
+    // correcto y en pesos es un factor 1 (no cambia nada).
+    const rawPrice = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
+    const exchangeRate = Number(PP_pick_(row, ['TIPO CAMBIO', 'tipo_cambio']) || 0);
+    const price = exchangeRate > 0 ? rawPrice * exchangeRate : rawPrice;
     const qty = Number(PP_pick_(row, ['CANTIDAD ORDEN', 'cantidad_orden']) || 0);
     const orderedAt = PP_parseRestletDate_(PP_pick_(row, ['FECHA DE ORDEN', 'fecha_orden']));
     const keys = [];
@@ -654,6 +665,16 @@ function PP_parseRestletDate_(value) {
   if (match) return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), 0, 0, 0, 0);
   match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+  // DD/MM/AAAA hh:mm:ss y DD/MM/AAAA hh:mm: el de arriba solo acepta el formato con AM/PM, asi
+  // que sin este patron la fecha cae en `new Date(texto)`, que en es-MX devuelve invalido y la
+  // fila se descarta silenciosamente del precio (no entra ni a la ultima venta ni al promedio).
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (match) {
+    return new Date(
+      Number(match[3]), Number(match[2]) - 1, Number(match[1]),
+      Number(match[4]), Number(match[5]), Number(match[6] || 0), 0
+    );
+  }
   const parsed = new Date(text);
   return isNaN(parsed.getTime()) ? null : parsed;
 }
