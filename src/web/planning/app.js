@@ -1401,8 +1401,20 @@ function normalizeState() {
   const jobOts = uniq([...operationOts, ...workOrderOts].filter(Boolean));
   const visibleOts = new Set(jobOts.filter((ot) => !isClosedJobStatus(jobStatusForOt(ot))));
   const movableOts = new Set(jobOts.filter((ot) => isMovablePlanningStatus(jobStatusForOt(ot))));
+  // Una OT que esta POR CONFIRMAR no vino en el ultimo payload pero tampoco hay evidencia de
+  // que este cerrada (RULE-OT-049). Antes se caia de la cola aqui, en cada normalize, porque
+  // visibleOts se armaba solo con operaciones y workOrders: si su ficha faltaba, la OT
+  // desaparecia. Ahora una OT por confirmar no se poda por falta de datos; solo se poda si su
+  // estatus dice cerrada, que es lo unico que sí es evidencia.
+  const porConfirmar = new Set(Object.keys(state.unconfirmedWorkOrders || {}).map(materialOtKey).filter(Boolean));
+  const sigueViva = (ot) => {
+    if (visibleOts.has(ot) && movableOts.has(ot)) return true;
+    if (!porConfirmar.has(materialOtKey(ot))) return false;
+    return !isClosedJobStatus(jobStatusForOt(ot));
+  };
   const configuredSelectedOts = Array.isArray(state.selectedOts)
     ? state.selectedOts.filter((ot) => visibleOts.has(ot) && movableOts.has(ot))
+      .concat((state.selectedOts || []).filter((ot) => !visibleOts.has(ot) && sigueViva(ot)))
     : [];
   state.selectedOts = uniq(configuredSelectedOts);
   if (state.lastSchedule && typeof state.lastSchedule === "object") {
@@ -2392,8 +2404,20 @@ function queueItemSignature(job) {
 function renderPriorityQueue() {
   const query = els.queueSearchInput.value.trim().toLowerCase();
   const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
-  const ordered = state.selectedOts.map((ot) => jobsByOt.get(ot)).filter(Boolean);
-  state.selectedOts = ordered.map((job) => job.ot);
+  // ANTES: state.selectedOts = ordered.map((job) => job.ot), o sea el RENDER reescribia el
+  // estado y toda OT que no estuviera en jobsByOt se caia de la cola en cada repintado, sin
+  // aviso y sin que nadie hubiera pedido nada (RULE-OT-049). Un render no puede borrar datos.
+  // Ahora solo se ORDENA, y las OTs sin job se conservan en la cola y se avisa de ellas, para
+  // que se vean en vez de desaparecer.
+  const unconfirmed = state.unconfirmedWorkOrders || {};
+  const ordered = [];
+  const sinJob = [];
+  for (const ot of state.selectedOts) {
+    const job = jobsByOt.get(ot);
+    if (job) ordered.push(job);
+    else sinJob.push(ot);
+  }
+  const ordenadas = [...ordered, ...sinJob.map((ot) => String(ot))];
   if (state.queueMoveOt && !state.selectedOts.includes(state.queueMoveOt)) state.queueMoveOt = "";
   const activeMoveOt = state.queueMoveOt || "";
   const visibleJobs = ordered.filter((job) => jobMatchesSearch(job, query));

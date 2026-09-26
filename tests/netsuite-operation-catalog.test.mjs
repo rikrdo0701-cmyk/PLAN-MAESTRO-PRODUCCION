@@ -502,10 +502,10 @@ test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", ()
   assert.equal(applied[0].averageSalePriceTo, "2026-09-10");
 });
 
-test("PP_applyNetSuiteWorkOrdersData_ retira de la cola del plan las OTs que NetSuite ya no lista abiertas", () => {
+test("PP_applyNetSuiteWorkOrdersData_ retira de la cola las OTs con evidencia de cierre y NO las que solo faltan", () => {
   const { context } = load();
   const current = {
-    workOrders: [{ ot: "3483" }, { ot: "1905" }],
+    workOrders: [{ ot: "3483" }, { ot: "1905" }, { ot: "7777" }],
     selectedOts: ["3483", "1905", " 3483 "],
     lockedOts: ["3483", "1905"],
     expandedOts: ["1905", "2999"],
@@ -513,18 +513,92 @@ test("PP_applyNetSuiteWorkOrdersData_ retira de la cola del plan las OTs que Net
     lastSchedule: { scheduledOts: ["3483", "1905"], generatedAt: "2026-09-25T10:00:00.000Z" },
     plant: {},
   };
-  const snapshot = { workOrders: [{ ot: "1905" }], invoicePriceWindow: null };
+  // 3483 viene con exists:false, que es evidencia POSITIVA de que NetSuite ya no la tiene.
+  // 7777 no viene y no trae nada: solo falta, y una OT que solo falta NO se poda (RULE-OT-049).
+  // Antes este test afirmaba que 3483 "esta cerrada en NetSuite" sin que el fixture trajera
+  // ninguna evidencia, y legitimaba la inferencia ausente = cerrada.
+  const snapshot = { workOrders: [{ ot: "1905" }, { ot: "3483", exists: false }], invoicePriceWindow: null };
 
   const merged = context.PP_applyNetSuiteWorkOrdersData_(current, snapshot);
 
-  // 3483 esta cerrada en NetSuite: no puede seguir en la cola ni en el ultimo plan.
-  assert.deepEqual(merged.selectedOts, ["1905"]);
+  assert.deepEqual(merged.selectedOts, ["1905"], "3483 sale por exists:false; 7777 no estaba en la cola");
   assert.deepEqual(merged.lockedOts, ["1905"]);
-  assert.deepEqual(merged.expandedOts, ["1905"]);
+  // 2999 solo estaba en expandedOts (que es una bandera de "tarjeta desplegada", no una OT
+  // del plan) y no hay ninguna evidencia de que este cerrada, asi que se conserva. Antes se
+  // podaba por inferencia. Es cosmético y se limpia solo cuando la OT vuelva o se cierre.
+  assert.deepEqual(merged.expandedOts, ["1905", "2999"]);
   assert.deepEqual(merged.lastSchedule.scheduledOts, ["1905"]);
   assert.equal(merged.lastSchedule.generatedAt, "2026-09-25T10:00:00.000Z");
   assert.deepEqual(Object.keys(merged.operationPlanStatuses), ["b"]);
-  assert.deepEqual(merged.workOrders.map((item) => item.ot), ["1905"]);
+  // 3483 sale porque trae exists:false. 7777 se CONSERVA con su ficha: solo faltaba.
+  assert.deepEqual(merged.workOrders.map((item) => item.ot).sort(), ["1905", "7777"],
+    "la que dice exists:false se va; la que solo faltaba conserva su ficha");
+  // Y la que solo faltaba queda marcada para confirmar, no perdida.
+  assert.ok(merged.unconfirmedWorkOrders && merged.unconfirmedWorkOrders["7777"],
+    "7777 solo faltaba: queda por confirmar, no podada");
+  assert.equal(merged.unconfirmedWorkOrders["7777"].misses, 1);
+  assert.equal(merged.unconfirmedWorkOrders["3483"], undefined, "3483 no queda por confirmar: se quebo cerrada");
+});
+
+test("PP_applyNetSuiteWorkOrdersData_ no pierde una OT que solo falta del payload", () => {
+  const { context } = load();
+  const ots = Array.from({ length: 30 }, (_, i) => String(4000 + i));
+  const current = {
+    workOrders: ots.map((ot) => ({ ot })),
+    selectedOts: [...ots],
+    lockedOts: [...ots],
+    expandedOts: [],
+    operationPlanStatuses: {},
+    lastSchedule: { scheduledOts: [...ots] },
+    plant: {},
+  };
+  // Solo vuelven 20 de 30. No hay ninguna evidencia de cierre: es una lectura incompleta.
+  const snapshot = { workOrders: ots.slice(0, 20).map((ot) => ({ ot })), invoicePriceWindow: null };
+
+  const merged = context.PP_applyNetSuiteWorkOrdersData_(current, snapshot);
+
+  assert.equal(merged.selectedOts.length, 30, "la cola conserva las 30, no se perdio ninguna");
+  assert.equal(merged.lockedOts.length, 30);
+  assert.equal(merged.lastSchedule.scheduledOts.length, 30);
+  assert.equal(merged.workOrders.length, 30, "y las 30 fichas siguen ahi");
+  // 10 de 30 es 33%, por encima del 20%: es una lectura incompleta, no un cierre. En ese caso
+  // no se marca NINGUNA, para no ensuciar la lista de por confirmar con un payload malo.
+  assert.equal(merged.lastWorkOrderReconcile.massDrop, true, "10 de 30 es caída masiva");
+  assert.equal(merged.lastWorkOrderReconcile.missing, 10);
+  assert.equal(merged.unconfirmedWorkOrders ? Object.keys(merged.unconfirmedWorkOrders).length : 0, 0,
+    "y no se marca ninguna");
+  assert.equal(merged.lastWorkOrderReconcile.confirmedClosed, 0, "ni se confirma ninguna por cierre");
+});
+
+test("PP_applyNetSuiteWorkOrdersData_ marca para confirmar una caida que NO es masiva", () => {
+  const { context } = load();
+  // 3 de 10 ausentes = 30%... no: 3 de 10 es 30%, arriba del umbral. Se usa 1 de 10.
+  const ots = Array.from({ length: 10 }, (_, i) => String(5000 + i));
+  const current = {
+    workOrders: ots.map((ot) => ({ ot })),
+    selectedOts: [...ots],
+    lockedOts: [],
+    expandedOts: [],
+    operationPlanStatuses: {},
+    lastSchedule: { scheduledOts: [...ots] },
+    plant: {},
+  };
+  const snapshot = { workOrders: ots.slice(1).map((ot) => ({ ot })), invoicePriceWindow: null };
+
+  const merged = context.PP_applyNetSuiteWorkOrdersData_(current, snapshot);
+
+  assert.equal(merged.lastWorkOrderReconcile.massDrop, false, "1 de 10 no es caída masiva");
+  assert.equal(merged.workOrders.length, 10, "y la OT que falta conserva su ficha");
+  assert.equal(merged.selectedOts.length, 10, "y sigue en la cola");
+  assert.ok(merged.unconfirmedWorkOrders[ots[0]], "pero queda marcada por confirmar");
+  assert.equal(merged.unconfirmedWorkOrders[ots[0]].misses, 1);
+  assert.equal(merged.lastWorkOrderReconcile.confirmedClosed, 0);
+
+  // La segunda pasada, con la OT siguen sin venir, SI confirma el cierre.
+  const segunda = context.PP_applyNetSuiteWorkOrdersData_(merged, snapshot);
+  assert.equal(segunda.workOrders.length, 9, "la segunda ausencia ya si poda");
+  assert.equal(segunda.selectedOts.length, 9);
+  assert.deepEqual(Object.keys(segunda.unconfirmedWorkOrders), []);
 });
 
 test("PP_applyNetSuiteWorkOrdersData_ no inventa la cola cuando el estado venia vacio", () => {

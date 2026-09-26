@@ -663,13 +663,18 @@ test("la sincronizacion conserva en el borrador solo OTs que NetSuite sigue repo
   assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["200"]);
 });
 
-test("reconcileActiveWorkOrders retira una OT ausente y elimina todas sus operaciones con resumen compacto", () => {
+test("reconcileActiveWorkOrders retira una OT con evidencia de cierre y elimina todas sus operaciones con resumen compacto", () => {
   const state = {
     selectedOts: ["100", "200"], lockedOts: ["100", "200"], expandedOts: ["200"],
     lastSchedule: { scheduledOts: ["100", "200"] },
     workOrders: [
-      { ot: "100", item: "ACTIVA", quantity: 4 },
-      { ot: "200", item: "CERRADA", quantity: 7 },
+      { ot: "100", item: "ACTIVA", status: "ABIERTA", quantity: 4 },
+      // El estatus en `status`, no en `item`: `item` es la parte, no el estado. Antes este
+      // fixture tenia item:"CERRADA" y nada mas, o sea que su comentario decia "cerrada"
+      // mientras el fixture no contenia ninguna evidencia, y el test acababa LEGITIMANDO la
+      // inferencia "ausente del payload = cerrada" (RULE-OT-049). Ahora hay evidencia de
+      // verdad, asi que la limpieza se prueba por lo que dice que se prueba.
+      { ot: "200", item: "CERRADA", status: "CERRADA", quantity: 7 },
     ],
     operations: [
       { id: "100-p", ot: "100", planStatus: "PENDIENTE" },
@@ -1634,4 +1639,43 @@ test("reconcileOperationPlanStatuses conserva la clave legible por app.js (Plann
   const reconciled = core.reconcileOperationPlanStatuses(state);
   assert.equal(reconciled[appKey]?.status, "COMPLETADA_PLAN",
     "la clave que app.js relee tras el reconcile (draftViewStatuses()[operationCompletionKey(op)]) debe seguir existiendo");
+});
+
+test("reconcileActiveWorkOrders NO pierde una OT que solo falta del payload (RULE-OT-049)", () => {
+  // El caso que el test de arriba daba por hecho: la OT se va porque no vino. Eso es
+  // exactamente lo que hay que impedir. Aqui no hay ninguna evidencia de cierre, asi que la
+  // OT se tiene que quedar en todas las listas y quedar marcada para confirmar.
+  const state = {
+    selectedOts: ["100", "200", "300"], lockedOts: ["100"], expandedOts: [],
+    lastSchedule: { scheduledOts: ["100", "200", "300"] },
+    workOrders: [
+      { ot: "100", item: "A", status: "ABIERTA", quantity: 4 },
+      { ot: "200", item: "B", status: "ABIERTA", quantity: 5 },
+      { ot: "300", item: "C", status: "ABIERTA", quantity: 6 },
+    ],
+    operations: [
+      { id: "100-p", ot: "100", planStatus: "PENDIENTE" },
+      { id: "200-p", ot: "200", planStatus: "PENDIENTE" },
+      { id: "300-p", ot: "300", planStatus: "PENDIENTE" },
+    ],
+    materials: [{ ot: "200" }],
+    otConfigurations: { 200: { machine: "B" }, 300: { machine: "C" } },
+    operationPlanStatuses: { "200-p": { ot: "200", status: "PENDIENTE" } },
+  };
+
+  // Solo vuelve la 100. Las otras dos SOLO faltan.
+  const next = core.reconcileActiveWorkOrders(state, [{ ot: "100", item: "A", status: "ABIERTA", quantity: 4 }], "2026-07-22T10:00:00Z");
+
+  assert.deepEqual(structuredClone(next.selectedOts), ["100", "200", "300"], "la cola no pierde ninguna");
+  assert.deepEqual(structuredClone(next.workOrders.map((row) => row.ot)).sort(), ["100", "200", "300"],
+    "las tres fichas siguen ahi");
+  assert.deepEqual(structuredClone(next.operations.map((row) => row.id)), ["100-p", "200-p", "300-p"],
+    "y sus operaciones tambien");
+  assert.deepEqual(structuredClone(next.materials.map((row) => row.ot)), ["200"]);
+  assert.deepEqual(structuredClone(next.lastSchedule.scheduledOts), ["100", "200", "300"]);
+  assert.deepEqual(Object.keys(structuredClone(next.closedWorkOrderSummaries)), [],
+    "no se marcan como cerradas: no hay evidencia");
+  assert.deepEqual(Object.keys(structuredClone(next.unconfirmedWorkOrders)).sort(), ["200", "300"],
+    "las dos ausentes quedan POR CONFIRMAR");
+  assert.equal(structuredClone(next.unconfirmedWorkOrders["200"]).misses, 1);
 });

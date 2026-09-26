@@ -1416,7 +1416,10 @@ test("la carga reconcilia tambien el borrador: la OT cerrada sale de operaciones
     otConfigurations: { "300": { machine: "M1" } },
     materials: [{ ot: "300", component: "TUBO" }],
     lastSchedule: { scheduledOts: ["200", "300"], generatedAt: "2026-09-25T10:00:00.000Z" },
-    workOrders: [{ ot: "200", quantity: 10 }, { ot: "300", quantity: 5 }],
+    // El estatus va en `status`. Antes este fixture no traia ninguno y el comentario decia
+    // "300 se cerro en NetSuite": el test legitimaba la inferencia "ausente del payload =
+    // cerrada" (RULE-OT-049) en vez de un cierre comprobado.
+    workOrders: [{ ot: "200", quantity: 10, status: "ABIERTA" }, { ot: "300", quantity: 5, status: "CERRADA" }],
     closedWorkOrderSummaries: {},
   };
   const applyNetSuiteWorkOrdersPayload = Function(
@@ -1426,8 +1429,8 @@ test("la carga reconcilia tambien el borrador: la OT cerrada sale de operaciones
     PlanningWorkflowCore: loadWorkflowCore(),
   }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
-  // 300 se cerro en NetSuite: solo viene la 200.
-  applyNetSuiteWorkOrdersPayload({ workOrders: [{ ot: "200", quantity: 10 }] });
+  // 300 se cerro en NetSuite y su ficha lo dice: solo viene la 200.
+  applyNetSuiteWorkOrdersPayload({ workOrders: [{ ot: "200", quantity: 10, status: "ABIERTA" }] });
 
   // Sin operaciones y sin work order, getPriorityJobs() deja de crear un trabajo para la
   // OT (app.js:11676-11683), asi que tampoco reaparece en "trabajos en espera".

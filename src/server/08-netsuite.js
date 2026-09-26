@@ -236,20 +236,119 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
   merged.workOrders = workOrderCatalog;
   const openOts = {};
   workOrderCatalog.forEach(function(item) { openOts[PP_normalizeKey_(item.ot)] = true; });
-  merged.operationPlanStatuses = Object.keys(merged.operationPlanStatuses || {}).reduce(function(out, key) {
-    const item = merged.operationPlanStatuses[key] || {};
-    if (openOts[PP_normalizeKey_(item.ot)]) out[key] = item;
-    return out;
-  }, {});
   // Una OT que NetSuite ya no lista como abierta no puede seguir en la cola del plan.
   // Sin esto CONFIG.selectedOts la conservaba para siempre: el cliente la podaba solo en
   // memoria (pruneDraftToOpenWorkOrders) y la vuelta a cargar la resucitaba.
-  merged.selectedOts = (merged.selectedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
-  merged.lockedOts = (merged.lockedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
-  merged.expandedOts = (merged.expandedOts || []).filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; });
+  //
+  // PERO "no listada" no es lo mismo que "cerrada" (RULE-OT-049). El catalogo viene de un
+  // RESTlet con onlyOpen:true y con filtros que descartan filas, asi que una OT abierta puede
+  // no aparecer sin estar cerrada. Y aqui es donde la perdida se vuelve irreversible, porque
+  // lo que se poda en esta funcion SE PERSISTE en CONFIG: un segundo sync ya no la
+  // resucita. Por eso hay tres capas, igual que en el cliente
+  // (reconcileActiveWorkOrders en planning-workflow-core.js):
+  //  1. Evidencia positiva: el catalogo trae la OT con exists === false, o su estatus dice
+  //     cerrada o cancelada. Eso si poda, en una pasada.
+  //  2. Ausencia sin evidencia: no se poda. La OT sigue en CONFIG y se anota en
+  //     unconfirmedWorkOrders. Hace falta que falte otra vez para darla por cerrada, y si
+  //     vuelve a aparecer la marca se borra sola.
+  //  3. Caida masiva: si falta mas de MASA_OT_RATIO de las OTs conocidas de una sola vez, el
+  //     catalogo se toma por lectura incompleta y NO se poda nada. Perder 200 OTs por un
+  //     catalogo a medias es peor que tener OTs de mas en la cola.
+  const CERRADOS_EXPLICITOS = ['CERRADA', 'CERRADO', 'CLOSED', 'COMPLETE', 'COMPLETAD', 'CANCELADA', 'CANCELADO', 'CANCELED', 'CANCELLED'];
+  const MASA_OT_RATIO = 0.2;
+  const MASA_OT_MINIMO = 20;
+  // La hora de ESTA pasada. No se usa merged.syncedAt porque mas abajo, en el return, se
+  // asigna; si se usara aqui marcaria con la hora del guardado anterior y las marcas de
+  // "cuantas veces ha fallado" quedarían descolocadas.
+  const ahora = snapshot.fetchedAt || new Date().toISOString();
+  function estatusCerrado(item) {
+    var estatus = PP_normalizeKey_(item && (item.status || item.estatus) || '');
+    if (!estatus) return false;
+    return CERRADOS_EXPLICITOS.some(function(palabra) { return estatus.indexOf(PP_normalizeKey_(palabra)) >= 0; });
+  }
+  var confirmadas = {};
+  workOrderCatalog.forEach(function(item) {
+    if (item && (item.exists === false || item.existe === false)) confirmadas[PP_normalizeKey_(item.ot)] = true;
+  });
+  var previasPorOt = {};
+  ((current && current.workOrders) || []).forEach(function(item) {
+    var clave = PP_normalizeKey_(item && item.ot);
+    if (!clave) return;
+    previasPorOt[clave] = item;
+    if (estatusCerrado(item)) confirmadas[clave] = true;
+  });
+  var conocidas = Object.keys(previousWorkOrders).concat(Object.keys(previasPorOt));
+  var unicasConocidas = [];
+  var vistas = {};
+  conocidas.forEach(function(clave) { if (clave && !vistas[clave]) { vistas[clave] = true; unicasConocidas.push(clave); } });
+  var faltantes = unicasConocidas.filter(function(clave) { return !openOts[clave] && !confirmadas[clave]; });
+  var caidaMasiva = faltantes.length > 0
+    && unicasConocidas.length >= MASA_OT_MINIMO
+    && (faltantes.length / unicasConocidas.length) > MASA_OT_RATIO;
+
+  var previasPorConfirmar = merged.unconfirmedWorkOrders || {};
+  var porConfirmar = {};
+  Object.keys(previasPorConfirmar).forEach(function(clave) {
+    var previa = previasPorConfirmar[clave] || {};
+    if (confirmadas[clave]) return;
+    porConfirmar[clave] = {
+      ot: previa.ot || clave,
+      firstSeenAt: previa.firstSeenAt || ahora || '',
+      lastSeenAt: previa.lastSeenAt || ahora || '',
+      misses: Number(previa.misses) > 0 ? Number(previa.misses) : 1
+    };
+  });
+  if (!caidaMasiva) {
+    faltantes.forEach(function(clave) {
+      var previa = porConfirmar[clave];
+      porConfirmar[clave] = {
+        ot: (previa && previa.ot) || (previasPorOt[clave] && previasPorOt[clave].ot) || clave,
+        firstSeenAt: (previa && previa.firstSeenAt) || ahora || '',
+        lastSeenAt: ahora || '',
+        misses: ((previa && previa.misses) || 0) + 1
+      };
+    });
+  }
+  Object.keys(openOts).forEach(function(clave) { delete porConfirmar[clave]; });
+  // Segunda ausencia: ya si es cierre confirmado.
+  Object.keys(porConfirmar).forEach(function(clave) {
+    if (porConfirmar[clave].misses >= 2) confirmadas[clave] = true;
+  });
+  Object.keys(confirmadas).forEach(function(clave) { delete porConfirmar[clave]; });
+  merged.unconfirmedWorkOrders = porConfirmar;
+  merged.lastWorkOrderReconcile = {
+    at: ahora || '',
+    incoming: workOrderCatalog.length,
+    live: unicasConocidas.length,
+    missing: faltantes.length,
+    confirmedClosed: Object.keys(confirmadas).length,
+    massDrop: Boolean(caidaMasiva),
+    unconfirmedOts: Object.keys(porConfirmar)
+  };
+
+  var sigueViva = function(ot) { return !confirmadas[PP_normalizeKey_(ot)]; };
+  // IMPORTANTE: workOrders no se reemplaza en crudo. Si se hiciera, las OTs que solo faltan
+  // se quedarian en selectedOts SIN ficha, que es justo el estado roto que se midio el
+  // 2026-09-26 (14 de las 17 OTs rotadas seguian con operaciones vivas pero sin work order).
+  // Se conserva lo anterior de toda OT que no vino y no esta confirmada como cerrada.
+  merged.workOrders = workOrderCatalog
+    .filter(function(item) { return !confirmadas[PP_normalizeKey_(item && item.ot)]; })
+    .concat(Object.keys(previasPorOt)
+      .filter(function(clave) { return !openOts[clave] && !confirmadas[clave]; }
+      )
+      .map(function(clave) { return previasPorOt[clave]; })
+    );
+  merged.operationPlanStatuses = Object.keys(merged.operationPlanStatuses || {}).reduce(function(out, key) {
+    const item = merged.operationPlanStatuses[key] || {};
+    if (sigueViva(item.ot)) out[key] = item;
+    return out;
+  }, {});
+  merged.selectedOts = (merged.selectedOts || []).filter(sigueViva);
+  merged.lockedOts = (merged.lockedOts || []).filter(sigueViva);
+  merged.expandedOts = (merged.expandedOts || []).filter(sigueViva);
   if (merged.lastSchedule && Array.isArray(merged.lastSchedule.scheduledOts)) {
     merged.lastSchedule = Object.assign({}, merged.lastSchedule, {
-      scheduledOts: merged.lastSchedule.scheduledOts.filter(function(ot) { return openOts[PP_normalizeKey_(ot)]; })
+      scheduledOts: merged.lastSchedule.scheduledOts.filter(sigueViva)
     });
   }
   merged.plant = Object.assign({}, merged.plant || {}, {

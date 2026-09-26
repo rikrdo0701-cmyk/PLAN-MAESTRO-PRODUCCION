@@ -915,14 +915,124 @@ expandedOts: without(state?.expandedOts),
       .filter(([, rows]) => Object.keys(rows).length > 0));
   }
 
+  // ESTADOS DE UNA OT QUE NO VINO EN EL PAYLOAD (RULE-OT-049).
+  //
+  // QUE PASABA. reconcileActiveWorkOrders Armaba el conjunto de "cerradas" como
+  // `candidates.filter(ot => !active.has(ot))`, o sea: toda OT que no venía en el payload se
+  // declaraba CERRADA, sin más evidencia, y se podaba de workOrders, selectedOts, lockedOts,
+  // expandedOts, operations, operationPlanStatuses, otConfigurations, preparedPlanningByOt y
+  // lastSchedule, en silencio y sin reversión (después se persiste en CONFIG). Eso es
+  // exactamente lo que el usuario pidió evitar: perder OTs por lo que sea que no sea un
+  // cierre.
+  //
+  // POR QUE LA AUSENCIA NO ES EVIDENCIA. El payload es un RESTlet con onlyOpen:true y encima
+  // con filtros que descartan filas (folio vacío en PP_buildWorkOrderCatalog_, operaciones
+  // placeholder, PP_belongsToPlant_ por folio que no mapea). Cualquiera de esos puede hacer
+  // que una OT abierta no aparezca, y el código lo leía como cierre. Medido el 2026-09-26: 17
+  // OTs salieron de las listas el 23-sep a las 15:32:40, las 17 EN EL MISMO SEGUNDO, que es
+  // la firma de un solo sync y no de 17 cierres; 14 de las 17 seguían con operaciones vivas.
+  //
+  // QUE SE HACE AHORA. Tres capas, de la evidencia mas fuerte a la mas debil:
+  //  1. EVIDENCIA POSITIVA -> cierre inmediato. O el payload trae la OT con exists === false
+  //     (el campo ya lo normalizaba normalizedLiteWorkOrder y NUNCA se leia), o su estatus
+  //     dice explícitamente cerrada/cancelada. Un cierre real de NetSuite entra por aquí y se
+  //     comporta igual que antes.
+  //  2. AUSENCIA SIN EVIDENCIA -> NO SE PODA. La OT se queda en todas las listas y se anota
+  //     en unconfirmedWorkOrders. Hace falta que falle OTRAS VEZ en una sincronización
+  //     posterior para darla por cerrada. Un payload truncado se autocura: la siguiente
+  //     sincronización la trae y la marca se borra.
+  //  3. CAÍDA MASIVA -> el payload se toma por lectura incompleta y no se marca NADA. Si en
+  //     una sincronización desaparece más de UNCONFIRMED_MASS_RATIO de las OTs vivas, no es
+  //     que se cerraron casi todas: es que el payload vino incompleto. Se conserva todo y se
+  //     avisa, para que nadie pierda 200 OTs por una lectura a medias.
+  const UNCONFIRMED_MASS_RATIO = 0.2;   // 20% de las OTs vivas en una sola sincronizacion
+  const UNCONFIRMED_MIN_RELEVANT = 20;   // por debajo de este numero el ratio no significa nada
+  const CLOSED_STATUS_WORDS = ["CERRAD", "CLOSED", "COMPLET", "COMPLETAD", "CANCELAD", "CANCELED", "CANCELLED"];
+
+  function hasExplicitClosedStatus(status) {
+    const normalized = String(status || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (!normalized) return false;
+    return CLOSED_STATUS_WORDS.some((word) => normalized.includes(word));
+  }
+
+  function normalizeUnconfirmedMap(source) {
+    const out = {};
+    for (const [key, value] of Object.entries(source || {})) {
+      const ot = normalize(key);
+      if (!ot) continue;
+      const previous = value || {};
+      out[ot] = {
+        ot: String(previous.ot || key).trim(),
+        firstSeenAt: String(previous.firstSeenAt || ""),
+        lastSeenAt: String(previous.lastSeenAt || ""),
+        misses: Number(previous.misses) > 0 ? Number(previous.misses) : 1,
+      };
+    }
+    return out;
+  }
+
   function reconcileActiveWorkOrders(state, incomingWorkOrders, nowIso) {
     const source = state || {};
     const incoming = (incomingWorkOrders || []).map(normalizedLiteWorkOrder).filter((item) => normalize(item.ot));
     const active = new Set(incoming.map((item) => normalize(item.ot)));
     const currentByOt = new Map((source.workOrders || []).map((item) => [normalize(item?.ot), item]));
     const candidates = new Set([...(source.workOrders || []).map((item) => normalize(item?.ot)), ...(source.selectedOts || []).map(normalize)].filter(Boolean));
-    const closed = new Set([...candidates].filter((ot) => !active.has(ot)));
     const summaries = { ...(source.closedWorkOrderSummaries || {}) };
+    const previousUnconfirmed = normalizeUnconfirmedMap(source.unconfirmedWorkOrders);
+
+    // (1) Evidencia positiva: el payload dice que ya no existe, o el estatus dice cerrada.
+    // Solo esto puede cerrar en una sola pasada. Se mira TANTO lo que viene como lo que ya
+    // teniamos: si NetSuite devuelve una OT con estatus CERRADA, es evidencia aunque venga
+    // listada, y si su ficha previa decia CERRADA, tampoco hay nada que revalidar.
+    const explicitlyGone = new Set();
+    for (const item of incoming) {
+      const ot = normalize(item.ot);
+      if (item.exists === false || hasExplicitClosedStatus(item.status)) explicitlyGone.add(ot);
+    }
+    for (const [ot, current] of currentByOt) {
+      if (explicitlyGone.has(ot)) continue;
+      if (hasExplicitClosedStatus(normalizedLiteWorkOrder(current).status)) explicitlyGone.add(ot);
+    }
+
+    // (2) Ausencia sin evidencia: a la lista de por confirmar, NO a la de cerradas.
+    const missing = [...candidates].filter((ot) => !active.has(ot) && !explicitlyGone.has(ot));
+
+    // (3) Guardia de caída masiva. Si esto se dispara, el payload vino incompleto y no se
+    // marca ninguna OT: contaminar la lista de por confirmar sería tan malo como podar.
+    const liveCount = candidates.size;
+    const massDrop = missing.length > 0
+      && liveCount >= UNCONFIRMED_MIN_RELEVANT
+      && missing.length / liveCount > UNCONFIRMED_MASS_RATIO;
+
+    const unconfirmed = { ...previousUnconfirmed };
+    if (massDrop) {
+      // Se limpia lo visto en ESTA pasada (vuelve a estar activa) y se deja el resto igual.
+      for (const ot of active) delete unconfirmed[ot];
+    } else {
+      for (const ot of missing) {
+        const previous = previousUnconfirmed[ot];
+        unconfirmed[ot] = {
+          ot: previous?.ot || String(currentByOt.get(ot)?.ot || ot).trim(),
+          firstSeenAt: previous?.firstSeenAt || String(nowIso || ""),
+          lastSeenAt: String(nowIso || ""),
+          misses: (previous?.misses || 0) + 1,
+        };
+      }
+      for (const ot of active) delete unconfirmed[ot];
+    }
+
+    // Solo se podan las que ya estaban marcadas y vuelven a faltar (segunda ausencia), mas
+    // las que traen evidencia positiva.
+    const confirmed = new Set();
+    for (const ot of explicitlyGone) confirmed.add(ot);
+    if (!massDrop) {
+      for (const [ot, entry] of Object.entries(unconfirmed)) {
+        if (entry.misses >= 2) confirmed.add(ot);
+      }
+    }
+    for (const ot of confirmed) delete unconfirmed[ot];
+
+    const closed = new Set(confirmed);
     Object.keys(summaries).forEach((key) => {
       if (active.has(normalize(key))) delete summaries[key];
     });
@@ -946,7 +1056,17 @@ expandedOts: without(state?.expandedOts),
     const selectedOperationRemoved = Boolean(source.selectedOperationId) && !currentOperations
       .some((operation) => String(operation?.id) === String(source.selectedOperationId));
     const selectedOperationId = closed.has(normalize(selectedOperation?.ot)) || selectedOperationRemoved ? "" : source.selectedOperationId;
-    const nextWorkOrders = incoming.map((item) => ({ ...mergeLiteWorkOrder(currentByOt.get(normalize(item.ot)), item) }));
+    // Lo que vino en el payload entra, EXCEPTO lo que tiene evidencia de cierre. Y lo que
+    // sigue vivo pero no vino, SE CONSERVA con su ficha anterior: antes se descartaba sin
+    // dejar rastro, y esa ficha es lo unico que prueba que la OT existia.
+    const nextWorkOrders = [
+      ...incoming
+        .filter((item) => !explicitlyGone.has(normalize(item.ot)))
+        .map((item) => ({ ...mergeLiteWorkOrder(currentByOt.get(normalize(item.ot)), item) })),
+      ...[...candidates]
+        .filter((ot) => !active.has(ot) && !closed.has(ot) && currentByOt.has(ot))
+        .map((ot) => ({ ...currentByOt.get(ot) })),
+    ];
     return {
       ...source,
       selectedOts: (source.selectedOts || []).filter(keepOt),
@@ -967,6 +1087,16 @@ expandedOts: without(state?.expandedOts),
       selectedDetailOt: closed.has(normalize(source.selectedDetailOt)) ? "" : source.selectedDetailOt,
       selectedOperationId,
       closedWorkOrderSummaries: summaries,
+      unconfirmedWorkOrders: unconfirmed,
+      lastWorkOrderReconcile: {
+        at: String(nowIso || ""),
+        incoming: incoming.length,
+        live: liveCount,
+        missing: missing.length,
+        confirmedClosed: closed.size,
+        massDrop: Boolean(massDrop),
+        unconfirmedOts: Object.keys(unconfirmed),
+      },
     };
   }
 
