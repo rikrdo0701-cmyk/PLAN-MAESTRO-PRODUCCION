@@ -229,6 +229,10 @@ function PP_buildState_(spreadsheet) {
     reportFilters: config.reportFilters || null,
     preparedPlanningByOt: config.preparedPlanningByOt || {},
     closedWorkOrderSummaries: config.closedWorkOrderSummaries || {},
+    // Las marcas de "por confirmar" de RULE-OT-051 capa 2. Se guardan y se devuelven por la
+    // MISMA razon que closedWorkOrderSummaries: si no viajan, la red que evita podar una OT sin
+    // evidencia de cierre dura solo hasta la primera recarga.
+    unconfirmedWorkOrders: PP_parseUnconfirmedWorkOrderMarks_(config.UNCONFIRMED_WORK_ORDERS),
     excludedCapabilities: PP_normalizeExcludedCapabilities_(config.EXCLUDED_CAPABILITIES),
     selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : null,
     lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : null,
@@ -463,6 +467,7 @@ function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
     expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
     preparedPlanningByOt: payload.preparedPlanningByOt || {},
     closedWorkOrderSummaries: payload.closedWorkOrderSummaries || {},
+    UNCONFIRMED_WORK_ORDERS: PP_serializeUnconfirmedWorkOrderMarks_(payload.unconfirmedWorkOrders, spreadsheet),
     lastSchedule: payload.lastSchedule || null
   });
   PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
@@ -517,6 +522,59 @@ function PP_writeConfigPatch_(spreadsheet, patch) {
   const preferred = ['schemaVersion', 'appVersion', 'revision', 'savedAt', 'source', 'syncedAt'];
   const keys = preferred.concat(Object.keys(config).filter(function(key) { return preferred.indexOf(key) < 0; }).sort());
   PP_writeTable_(sheet, PP_SHEETS.CONFIG, keys.map(function(key) { return [key, JSON.stringify(config[key])]; }));
+}
+
+// Las marcas de "por confirmar" de RULE-OT-051 capa 2: que OTs no vinieron en el ultimo payload
+// de NetSuite sin que haya evidencia de que esten cerradas. Mientras dure la marca, la app NO las
+// poda, y con esto la marca sobrevive a una recarga.
+//
+// El formato de cada marca es {ot, firstSeenAt, lastSeenAt, misses}, la misma que produce
+// normalizeUnconfirmedMap en planning-workflow-core.js. Se acepta objeto o texto JSON porque
+// PP_readConfig_ intenta JSON.parse y, si el valor estaba corrupto, deja el texto tal cual:
+// un valor ilegible se devuelve como {} y no revienta la carga, que es lo que debe pasar con
+// una fila de CONFIG dañada.
+function PP_parseUnconfirmedWorkOrderMarks_(source) {
+  let raw = source;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) return {};
+    try { raw = JSON.parse(text); } catch (error) { return {}; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  Object.keys(raw).forEach(function(key) {
+    const value = raw[key];
+    if (!value || typeof value !== 'object') return;
+    const ot = String(value.ot || key || '').trim();
+    if (!ot) return;
+    const misses = Number(value.misses);
+    out[ot] = {
+      ot: ot,
+      firstSeenAt: String(value.firstSeenAt || ''),
+      lastSeenAt: String(value.lastSeenAt || ''),
+      misses: misses > 0 ? misses : 1
+    };
+  });
+  return out;
+}
+
+// Que se escribe en CONFIG. REGLA: si el cliente NO mando el campo, NO se toca lo que hay.
+// Un cliente viejo (o cualquier guardado que no conozca la fila) no puede borrar las marcas que
+// otro cliente si guardo: seria la ausencia de un campo tratada como "ya no hay nada por
+// confirmar", que es exactamente el error de RULE-OT-051 en su forma mas breve. Se distingue
+// "no vino el campo" de "vino vacio" con Object.prototype.hasOwnProperty, no con truthiness:
+// un {} explicito SI es una orden de borrar marcas, y el siguiente sync lo decide con
+// evidencia de NetSuite, no con una omision.
+function PP_serializeUnconfirmedWorkOrderMarks_(value, spreadsheet) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    try {
+      const current = PP_readConfig_(spreadsheet.getSheetByName('CONFIG')).UNCONFIRMED_WORK_ORDERS;
+      return JSON.stringify(PP_parseUnconfirmedWorkOrderMarks_(current));
+    } catch (error) {
+      return JSON.stringify({});
+    }
+  }
+  return JSON.stringify(PP_parseUnconfirmedWorkOrderMarks_(value));
 }
 
 function PP_writeStateAck_(revision, savedAt, extra) {
@@ -762,6 +820,9 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['reportFilters', JSON.stringify(payload.reportFilters || {})],
     ['preparedPlanningByOt', JSON.stringify(payload.preparedPlanningByOt || {})],
     ['closedWorkOrderSummaries', JSON.stringify(payload.closedWorkOrderSummaries || {})],
+    // Una fila mas en CONFIG. Antes las marcas vivian solo en el navegador: un sync las
+    // escribia, un reload las borraba, y la OT se caia de la cola en el siguiente normalizeState.
+    ['UNCONFIRMED_WORK_ORDERS', PP_serializeUnconfirmedWorkOrderMarks_(payload.unconfirmedWorkOrders, spreadsheet)],
     ['operationCatalogWarning', JSON.stringify(String(payload.operationCatalogWarning || ''))],
     ['EXCLUDED_CAPABILITIES', JSON.stringify(PP_normalizeExcludedCapabilities_(payload.excludedCapabilities))],
     ['selectedOts', JSON.stringify(Array.isArray(payload.selectedOts) ? payload.selectedOts : [])],

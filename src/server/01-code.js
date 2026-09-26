@@ -164,6 +164,9 @@ function resetPlanningEphemeralState() {
     reportWeekStart: '',
     preparedPlanningByOt: {},
     closedWorkOrderSummaries: {},
+    // Las marcas de por-confirmar de RULE-OT-051. En un arranque en frio la hoja no las tiene y
+    // por lo tanto no hay ninguna OT sin evidencia de cierre: {} es el valor honesto, no falta.
+    UNCONFIRMED_WORK_ORDERS: {},
     lastSchedule: null,
     PP_STATE_CACHE_REVISION: 0
   };

@@ -232,6 +232,14 @@ const sampleState = {
   machineToolHistory: [],
   workOrders: [],
   closedWorkOrderSummaries: {},
+  // Las marcas de "esta OT no vino en el payload y no hay evidencia de que este cerrada"
+  // (RULE-OT-051, capa 2). Antes este campo existia SOLO en memoria: lo escribia el
+  // reconciliador durante un sync y lo leian normalizeState, la cola y la confirmacion, pero
+  // NINGUN escritor lo guardaba en la hoja y applyImported no lo restauraba. O sea que la red
+  // de seguridad duraba hasta la primera recarga: al recargar, la marca se perdia,
+  // normalizeState veia la OT sin ficha ni operaciones y la sacaba de la cola. Ahora se
+  // persiste igual que closedWorkOrderSummaries y se restaura al cargar.
+  unconfirmedWorkOrders: {},
   otConfigurations: {},
   articleConfigurations: {},
   materials: [],
@@ -7586,6 +7594,63 @@ function mergeClosedWorkOrderSummaries(local, remote) {
   return merged;
 }
 
+// Union de las marcas de "por confirmar" (RULE-OT-051 capa 2) entre la sesion local y la que
+// viene de la hoja. Se llama desde applyImported, o sea en cada recarga, y por eso es el punto
+// donde antes se perdia la red de seguridad.
+//
+// QUE GANA SI UNA OT ESTA MARCADA EN LOS DOS LADOS: la marca con MAS misses, y a igualdad de
+// misses la MAS VIEJA (firstSeenAt menor). El razonamiento: misses es el numero de
+// sincronizaciones en las que la OT no vino, o sea cuantos intentos lleva el sistema de
+// confirmar que no es un fallo de lectura. Perder la marca con mas misses hace que el proximo
+// sync empiece de cero y tarde MAS sincronizaciones en resolver, o que directamente la pierda si
+// el siguiente payload vuelve a traer solo las abiertas. firstSeenAt es la mas antigua de las
+// dos porque es el primer momento en que se vio la ausencia; conservarla mantiene el reloj.
+//
+// Lo que NO hace esta funcion, a proposito: no borra marcas, no decide cierres y no inventa
+// ninguna. La ausencia de evidencia sigue sin ser evidencia (RULE-OT-051). Resolver la marca es
+// trabajo del reconciliador del proximo sync, que ya tiene las tres capas de evidencia.
+function mergeUnconfirmedWorkOrderMarks(local, remote) {
+  const merged = {};
+  const add = (key, value) => {
+    if (!value || typeof value !== "object") return;
+    const ot = materialOtKey(value.ot || key);
+    if (!ot) return;
+    const incoming = {
+      ot: String(value.ot || key).trim(),
+      firstSeenAt: String(value.firstSeenAt || ""),
+      lastSeenAt: String(value.lastSeenAt || ""),
+      misses: Number(value.misses) > 0 ? Number(value.misses) : 1,
+    };
+    const existing = merged[ot];
+    if (!existing) {
+      merged[ot] = incoming;
+      return;
+    }
+    const incomingMasVieja = incoming.firstSeenAt && existing.firstSeenAt
+      ? incoming.firstSeenAt < existing.firstSeenAt
+      : Boolean(incoming.firstSeenAt) && !existing.firstSeenAt;
+    if (incoming.misses > existing.misses || (incoming.misses === existing.misses && incomingMasVieja)) {
+      // Gana la marca mas probada, pero se le queda la primera vez que se vio la ausencia:
+      // el reloj de la OT no se reinicia porque el estado venga de la hoja.
+      merged[ot] = {
+        ...existing,
+        ...incoming,
+        firstSeenAt: existing.firstSeenAt && incoming.firstSeenAt
+          ? (existing.firstSeenAt < incoming.firstSeenAt ? existing.firstSeenAt : incoming.firstSeenAt)
+          : (existing.firstSeenAt || incoming.firstSeenAt),
+        lastSeenAt: existing.lastSeenAt > incoming.lastSeenAt ? existing.lastSeenAt : incoming.lastSeenAt,
+      };
+      return;
+    }
+    if (incoming.lastSeenAt > existing.lastSeenAt) {
+      merged[ot] = { ...incoming, misses: existing.misses, firstSeenAt: existing.firstSeenAt || incoming.firstSeenAt };
+    }
+  };
+  Object.entries(local && typeof local === "object" ? local : {}).forEach(([key, value]) => add(key, value));
+  Object.entries(remote && typeof remote === "object" ? remote : {}).forEach(([key, value]) => add(key, value));
+  return merged;
+}
+
 function rememberClosedPendingPieces(ot, pieces, source) {
   const key = String(ot || "").trim();
   const amount = Number(pieces);
@@ -9227,6 +9292,11 @@ async function syncBacklogWorkOrders() {
       expandedOts: nextState.expandedOts || [],
       selectedOperationId: nextState.selectedOperationId || "",
       closedWorkOrderSummaries: nextState.closedWorkOrderSummaries || {},
+      // Las marcas de por-confirmar viajan a la hoja. nextState ya paso por
+      // reconcileActiveWorkOrders (linea 9209), o sea que estas son las marcas FRESCAS de este
+      // sync, no las del anterior. Sin esto, la marca vivia solo en memoria y se perdia al
+      // recargar: la OT sin ficha se caia de la cola en el siguiente normalizeState.
+      unconfirmedWorkOrders: nextState.unconfirmedWorkOrders || {},
       lastSchedule: nextState.lastSchedule || null,
       syncedAt: nextState.syncedAt,
       removedWorkOrderOts: Object.keys(nextState.closedWorkOrderSummaries || {}),
@@ -10618,6 +10688,18 @@ async function applyImported(imported, options = {}) {
   }
   if (imported.closedWorkOrderSummaries && typeof imported.closedWorkOrderSummaries === "object") {
     state.closedWorkOrderSummaries = mergeClosedWorkOrderSummaries(state.closedWorkOrderSummaries, imported.closedWorkOrderSummaries);
+  }
+  if (imported.unconfirmedWorkOrders && typeof imported.unconfirmedWorkOrders === "object") {
+    // Union por folio, y si una OT esta en los dos lados gana la marca MAS VIEJA: la mas vieja
+    // es la que lleva mas sincronizaciones fallidas encima, y un misses mas alto significa que
+    // el proximo sync tiene mas pruebas de que esa OT no vino por casualidad. Ante empate de
+    // fecha gana la local, que es la de la sesion viva. La marca no se "descarta" nunca aqui:
+    // la resuelve el reconciliador del proximo sync, con evidencia de NetSuite, no con una
+    // carga de estado.
+    state.unconfirmedWorkOrders = mergeUnconfirmedWorkOrderMarks(
+      state.unconfirmedWorkOrders,
+      imported.unconfirmedWorkOrders,
+    );
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();

@@ -2590,6 +2590,10 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
         ...current,
         retentionPurged: true,
         closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
+        // Una OT que no vino en el payload y no tiene evidencia de cierre. Viaja en el mismo
+        // payload que las de closedWorkOrderSummaries, y por la misma razon: si no llega a la
+        // hoja, al recargar se pierde y la OT se cae de la cola (RULE-OT-051).
+        unconfirmedWorkOrders: { "WO-SIN-FICHA": { ot: "WO-SIN-FICHA", firstSeenAt: "2026-08-01T00:00:00.000Z", lastSeenAt: "2026-08-01T00:00:00.000Z", misses: 2 } },
       };
     },
     callAppsScript: async (method, payload) => {
@@ -2622,6 +2626,7 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
     expandedOts: [],
     selectedOperationId: "",
     closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
+    unconfirmedWorkOrders: { "WO-SIN-FICHA": { ot: "WO-SIN-FICHA", firstSeenAt: "2026-08-01T00:00:00.000Z", lastSeenAt: "2026-08-01T00:00:00.000Z", misses: 2 } },
     lastSchedule: null,
     syncedAt: "2026-08-01T00:00:00.000Z",
     removedWorkOrderOts: ["WO-CERRADA"],

@@ -29,9 +29,19 @@ Tabla de pares clave→valor (JSON). Headers: `KEY, VALUE`.
   `source`, `syncedAt`, `ganttView`, `ganttDayWidth`, `selectedOperationId`,
   `capacityMinutes`, `planStart`, `horizonDays`, `loadWeekStart`, `reportWeekStart`,
   `reportFilters`, `preparedPlanningByOt`, `closedWorkOrderSummaries`,
+  `UNCONFIRMED_WORK_ORDERS`,
   `EXCLUDED_CAPABILITIES`, `selectedOts`, `lockedOts`, `expandedOts`, `workSchedule`,
   `dailyBreaks`, `plant`, `settings`, `lastSchedule`, `operationCatalogWarning`,
   `invoicePriceWindow`, `operationsSyncedAt`.
+- `UNCONFIRMED_WORK_ORDERS` (añadido 2026-09-26) es el mapa folio -> `{ot, firstSeenAt,
+  lastSeenAt, misses}` con las OTs que **no** vinieron en el último payload de NetSuite y para
+  las que no hay evidencia de cierre (`RULE-OT-051`, capa 2). **Origen**: lo produce
+  `reconcileActiveWorkOrders` en `planning-workflow-core.js`; **lo envía** el sync ligero
+  (`app.js`, `syncPayload`); **lo guarda** `PP_writeWorkOrderSyncState_`; **lo devuelve**
+  `PP_buildAppState_`; **lo restaura** `applyImported` con `mergeUnconfirmedWorkOrderMarks`.
+  Existía en memoria pero no se persistía, así que la OT sin ficha se caía de la cola al
+  recargar. Si el payload **no trae** el campo, `PP_serializeUnconfirmedWorkOrderMarks_`
+  conserva lo que hay en `CONFIG`: la ausencia de un campo no es una orden de borrar.
 - `syncedAt` global indica la última sincronización NetSuite completa. La frescura de la
   generación de plan se evalúa por OT con `operationsSyncedAt` (mapa OT normalizada -> ISO,
   clave CONFIG adicional): una OT se considera fresca si tiene operaciones en `state.operations`
