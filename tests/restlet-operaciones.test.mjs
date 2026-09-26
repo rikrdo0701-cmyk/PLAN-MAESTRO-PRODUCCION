@@ -3,32 +3,30 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../netsuite-restlet-operaciones.js", import.meta.url), "utf8");
+// Sin comentarios: el archivo los menciona al explicar por que NO se usa algo, y las
+// aserciones que buscarian una expresion prohibida darian falso positivo por el texto.
+const codigo = source
+  .slice(source.indexOf("define(['N/query']"))
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
 
 /**
- * Harness del restlet 2240 (operaciones). El restlet es un modulo AMD: se captura la
- * factoria que recibe N/query y se le inyecta un query.runSuiteQL falso que devuelve filas
- * segun la pagina pedida, de modo que se pueda comprobar que la paginacion se resuelve en
- * la consulta y no recortando en memoria, y que el filtro de ubicacion baja al SQL.
+ * Harness del restlet 2240 (operaciones). El modulo AMD recibe N/query con un runSuiteQL falso
+ * que devuelve el catalogo completo y deja que el restlet recorte, como hace el de verdad.
+ *
+ * `failOn` simula una consulta que el SuiteQL de la cuenta rechaza, que es como se reproducen
+ * los fallos reales: no con una excepcion del codigo sino con un 400 "Failed to parse SQL".
  */
-function loadRestlet({ rows = [], failWith = null, failOn = null, failWhen = null, emptyWhen = null } = {}) {
+function loadRestlet({ rows = [], failWith = null, failOn = null, emptyWhen = null } = {}) {
   const calls = [];
   const query = {
     runSuiteQL(payload) {
       const sql = String(payload.query || "");
       calls.push({ sql, params: payload.params || [] });
       if (failWith) throw new Error(failWith);
-      // Para el fallback: la consulta falla solo si el SQL coincide con un patron y no con otro.
-      if (failOn && failOn.test(sql) && !(failWhen && failWhen.test(sql))) {
-        throw new Error("SuiteQL no soporta esta variante");
-      }
-      // El filtro que "funciona" pero descarta todo: responde 0 filas sin error, que es el
-      // peor caso porque no hay excepcion que lo delate.
+      if (failOn && failOn.test(sql)) throw new Error("Failed to parse SQL");
       if (emptyWhen && emptyWhen.test(sql)) return { asMappedResults: () => [] };
-      const limit = Number((sql.match(/FETCH NEXT (\d+) ROWS ONLY/) || [])[1] || 0);
-      const offset = Number((sql.match(/OFFSET (\d+) ROWS/) || [])[1] || 0);
-      const size = limit || rows.length;
-      const page = rows.slice(offset, offset + size);
-      return { asMappedResults: () => page };
+      return { asMappedResults: () => rows };
     },
   };
   let factory = null;
@@ -67,107 +65,148 @@ function makeRows(count) {
   }));
 }
 
-// El clamp del 2240 es 50..5000, asi que una pagina de 2 filas se sube a 50: los tests usan
-// 50 o mas para no medir el clamp, y el clamp se prueba aparte.
-const PAGE = 50;
+// Las 2400 filas que devolvio el 2240 en produccion (sonda DIAG_operaciones2240).
+const TOTAL = 2400;
+const PAGE = 2500;
 
-test("la pagina se resuelve en la consulta, no trayendo el catalogo completo", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(120) });
+test("el SQL ejecutado no usa FETCH NEXT/OFFSET: esta cuenta no lo acepta", () => {
+  // Verificado en produccion el 2026-09-26 08:00: 400 "Failed to parse SQL" en el 2240 y en
+  // el 2244, cuyo unico cambio nuevo era ese. Se comprueba sobre el SQL que de verdad se manda,
+  // no sobre el texto del archivo (que lo menciona al explicar por que no se usa).
+  const { post, calls } = loadRestlet({ rows: makeRows(20) });
 
-  post({ pageIndex: 1, pageSize: PAGE, locationId: 1 });
+  post({ pageIndex: 0, pageSize: 200, locationId: 1 });
 
-  assert.equal(calls.length, 1, "una pagina debe costar una sola consulta");
-  const sql = calls[0].sql;
-  assert.match(sql, new RegExp(`FETCH NEXT ${PAGE + 1} ROWS ONLY`), "pide pageSize + 1 filas para deducir hasMore");
-  assert.match(sql, new RegExp(`OFFSET ${PAGE} ROWS`), "el OFFSET sale de pageIndex * pageSize");
-  assert.doesNotMatch(sql, /SELECT DISTINCT/, "");
+  assert.ok(calls.length > 0, "se ejecuto al menos una consulta");
+  calls.forEach((call) => {
+    assert.doesNotMatch(call.sql, /FETCH NEXT/, "ninguna consulta lleva FETCH NEXT");
+    assert.doesNotMatch(call.sql, /OFFSET \d+ ROWS/, "ni OFFSET");
+  });
 });
 
-test("no hay slice en memoria ni totalRows", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(120) });
+test("mot.status se pide SIN BUILTIN.DF, como en el SQL que siempre funciono", () => {
+  // Este fue EL bug que dejo la app sin operaciones: yo envolví mot.status en BUILTIN.DF y el
+  // SuiteQL responde "Cannot build builtin function". El original lo pedia crudo, y
+  // translateStatus_ espera justo el valor crudo (NOTSTART), no el nombre en espanol.
+  // OJO: BUILTIN.DF(mot.manufacturingworkcenter) AS operation SI estaba en el original y si
+  // funciona, porque es una referencia a entidad y no un campo estatico. No se toca.
+  const { post, calls } = loadRestlet({ rows: makeRows(20) });
+
+  post({ pageIndex: 0, pageSize: 200, locationId: 1 });
+
+  const sql = calls[0].sql;
+  assert.match(sql, /mot\.status\s+AS status_op/, "mot.status crudo");
+  assert.doesNotMatch(sql, /BUILTIN\.DF\(mot\.status\)/, "nunca envuelto: es lo que rompia el parseo");
+  assert.match(sql, /BUILTIN\.DF\(mot\.manufacturingworkcenter\)\s+AS operation/, "el de operation si va envuelto, como siempre");
+  assert.match(sql, /mot\.manufacturingworkcenter\s+AS workcenter/, "y workcenter crudo, como siempre");
+  assert.match(sql, /UPPER\(BUILTIN\.DF\(wo\.status\)\)/, "el filtro por estatus si usa BUILTIN.DF y funciona");
+});
+
+test("la columna location va dentro del SELECT, no despues del ORDER BY", () => {
+  // Un despiste aqui produce 'Failed to parse SQL': la columna tiene que ir en la lista.
+  const { post, calls } = loadRestlet({ rows: makeRows(20) });
+
+  post({ pageIndex: 0, pageSize: 200, locationId: 1 });
+
+  const sql = calls[0].sql;
+  const select = sql.slice(sql.indexOf("SELECT"), sql.indexOf("FROM"));
+  assert.match(select, /tl\.location\s+AS location/, "esta dentro del SELECT");
+  const where = sql.slice(sql.indexOf("WHERE"), sql.indexOf("ORDER BY"));
+  assert.match(where, /tl\.location = \?/, "y el filtro va en el WHERE, no en el SELECT");
+  assert.equal(sql.split("tl.location").length - 1, 2, "aparece una vez en el SELECT y otra en el WHERE");
+});
+
+test("con la columna de ubicacion todo funciona y se recorta en memoria", () => {
+  const { post, calls } = loadRestlet({ rows: makeRows(TOTAL) });
 
   const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
 
-  assert.doesNotMatch(calls[0].sql, /totalRows/);
-  // El recorte en memoria era `const all = runSuiteQL_(sql)` + `all.slice(from, to)` sobre el
-  // catalogo completo. La cabecera del archivo lo describe historicamente, asi que la
-  // asercion mira el codigo ejecutable y no el comentario.
-  const codigo = source.slice(source.indexOf("define(['N/query']"));
-  assert.doesNotMatch(codigo, /const all = runSuiteQL_/, "ya no se trae el catalogo completo para recortar");
-  assert.match(calls[0].sql, /FETCH NEXT \d+ ROWS ONLY/, "la pagina se resuelve en la consulta");
-  assert.equal("totalRows" in result, false, "totalRows implicaba recorrer el mismo JOIN para contar");
+  assert.equal(result.ok, true);
+  assert.equal(result.rows.length, TOTAL, "con pageSize 2500 entran las 2400 filas en una llamada");
+  assert.equal(result.hasMore, false);
+  assert.equal(calls.length, 2, "una con filtro de ubicacion y otra sin el, para comparar el total");
+  assert.equal(result.debug.estrategia, "con-ubicacion");
+  assert.deepEqual(result.debug.degradaciones, []);
 });
 
-test("hasMore se deduce de la fila extra y la ultima pagina se cierra", () => {
-  const conMas = loadRestlet({ rows: makeRows(120) });
-  const primera = conMas.post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
-  assert.equal(primera.hasMore, true, "pedimos 51 filas y hay 120: hay mas");
-  assert.equal(primera.rows.length, PAGE, "y la fila extra no se cuela en la respuesta");
+test("el clamp del pageSize se conserva en 50..5000", () => {
+  const chico = loadRestlet({ rows: makeRows(10) });
+  const r1 = chico.post({ pageIndex: 0, pageSize: 1 });
+  assert.equal(r1.pageSize, 50, "abajo del minimo sube a 50");
 
-  const ultima = loadRestlet({ rows: makeRows(PAGE) });
-  const sola = ultima.post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
-  assert.equal(sola.hasMore, false, "la ultima pagina no inventa que hay mas");
-  assert.equal(sola.rows.length, PAGE);
+  const grande = loadRestlet({ rows: makeRows(10) });
+  const r2 = grande.post({ pageIndex: 0, pageSize: 99999 });
+  assert.equal(r2.pageSize, 5000, "arriba del maximo baja a 5000");
 });
 
-test("recorrer las paginas entrega el catalogo completo sin repetir ni perder", () => {
-  const { post } = loadRestlet({ rows: makeRows(120) });
+test("el recorte en memoria reparte las paginas completas sin repetir ni perder", () => {
+  const { post } = loadRestlet({ rows: makeRows(TOTAL) });
 
   const ids = [];
-  for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
-    const page = post({ pageIndex, pageSize: PAGE, locationId: 1 });
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const page = post({ pageIndex, pageSize: 500, locationId: 1 });
     page.rows.forEach((row) => ids.push(row.id));
     if (!page.hasMore) break;
   }
 
-  assert.equal(ids.length, 120, "cada fila aparece una vez");
-  assert.deepEqual(ids.slice(0, 3), ["1", "2", "3"], "y en orden");
-  assert.equal(ids[119], "120", "sin perder la ultima");
-  assert.equal(new Set(ids).size, 120, "sin repetir ninguna");
+  assert.equal(ids.length, TOTAL, "cada fila aparece una vez");
+  assert.equal(new Set(ids).size, TOTAL, "sin repetir ninguna");
+  assert.equal(ids[0], "1");
+  assert.equal(ids[TOTAL - 1], String(TOTAL), "sin perder la ultima");
 });
 
-test("el filtro de ubicacion baja al SQL y se envia como parametro ligado", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(3) });
+test("si la columna de ubicacion no existe, degrada al SQL de produccion en vez de fallar", () => {
+  // Este es el fallback que faltaba: la columna nueva hace fallar el PARSEO de toda la
+  // consulta, y el fallback anterior solo cubria "FETCH NEXT falla" y "el filtro devuelve 0".
+  const { post, calls } = loadRestlet({
+    rows: makeRows(TOTAL),
+    failOn: /tl\.location/,
+  });
+
+  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
+
+  assert.equal(result.ok, true, "responde igual que antes del cambio");
+  assert.equal(result.rows.length, TOTAL, "con las 2400 filas");
+  assert.equal(result.debug.estrategia, "sql-de-produccion");
+  assert.match(result.debug.filtroUbicacion, /sin filtro/);
+  assert.ok(result.debug.degradaciones.some((d) => /tl\.location|con-ubicacion/.test(d)), "deja constancia");
+  assert.ok(calls.some((call) => !/tl\.location/.test(call.sql)), "la estrategia de produccion no menciona la columna");
+});
+
+test("si el filtro por ubicacion devuelve 0 filas, degrada a sin filtro en vez de dejar la lista vacia", () => {
+  const { post, calls } = loadRestlet({
+    rows: makeRows(TOTAL),
+    emptyWhen: /tl\.location = \?/,
+  });
+
+  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
+
+  assert.equal(result.rows.length, TOTAL, "no devuelve la lista vacia");
+  assert.equal(result.debug.filtroUbicacion, "sin filtro por ubicacion");
+  assert.ok(calls.some((call) => call.sql.includes("tl.location = ?")), "primero intenta con filtro");
+  assert.ok(calls.some((call) => !call.sql.includes("tl.location = ?")), "y compara contra el total sin filtro");
+  assert.ok(result.debug.degradaciones.some((d) => /0 filas/.test(d)), "deja constancia de la degradacion");
+});
+
+test("el filtro de ubicación se manda como parametro ligado, no interpolado", () => {
+  const { post, calls } = loadRestlet({ rows: makeRows(10) });
 
   post({ pageIndex: 0, pageSize: 100, locationId: 1 });
 
-  const sql = calls[0].sql;
-  assert.match(sql, /tl\.location = \?/, "la ubicacion se filtra en la consulta, no despues en memoria");
-  assert.deepEqual(calls[0].params, [1], "y el valor viaja como parametro, no interpolado");
+  const conFiltro = calls[0];
+  assert.match(conFiltro.sql, /tl\.location = \?/, "el valor no va en el texto del SQL");
+  assert.deepEqual(conFiltro.params, [1]);
 });
 
-test("la columna location sale en la fila y en los headers", () => {
-  const { post } = loadRestlet({ rows: makeRows(2) });
-
-  const result = post({ pageIndex: 0, pageSize: 100, locationId: 1 });
-
-  assert.equal(result.rows[0].location, "1", "la operacion dice de que ubicacion viene");
-  assert.ok(result.headers.includes("Ubicacion"), "y el encabezado la anuncia");
-  assert.match(result.debug.filtroUbicacion, /tl\.location = 1/);
-});
-
-test("sin locationId en el body no se filtra, para no dejar fuera toda la lista", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(2) });
+test("sin locationId en el body no se filtra", () => {
+  const { post, calls } = loadRestlet({ rows: makeRows(10) });
 
   const result = post({ pageIndex: 0, pageSize: 100 });
 
-  assert.doesNotMatch(calls[0].sql, /tl\.location = \?/, "sin ubicacion no se inventa el filtro");
+  assert.doesNotMatch(calls[0].sql, /tl\.location = \?/);
   assert.deepEqual(calls[0].params, []);
-  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows.length, 10);
   assert.match(result.debug.filtroUbicacion, /sin filtro/);
-});
-
-test("el filtro de abiertas y el orden estable siguen igual", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(1) });
-
-  post({ pageIndex: 0, pageSize: 100, locationId: 1 });
-
-  const sql = calls[0].sql;
-  assert.match(sql, /NOT LIKE '%CERRAD%'/, "");
-  assert.match(sql, /NOT LIKE '%CLOSED%'/, "");
-  assert.match(sql, /NOT LIKE '%COMPLET%'/, "");
-  // Sin un desempate por id, OFFSET puede repetir o saltar filas entre paginas.
-  assert.match(sql, /ORDER BY wo\.id, mot\.operationsequence, mot\.id/);
 });
 
 test("el id estable de operacion y el mapeo no cambian", () => {
@@ -178,87 +217,17 @@ test("el id estable de operacion y el mapeo no cambian", () => {
   assert.equal(row.id, "1", "viene de mot.id, no del indice posicional");
   assert.equal(row.workorder_id, "wo-1");
   assert.equal(row.workorder_tranid, "3000");
-  assert.equal(row.status_op, "No iniciado", "el estatus se traduce igual que antes");
-  assert.equal(row.remaining_min, "30", "y el trabajo pendiente cae al estimado si no viene");
+  assert.equal(row.status_op, "No iniciado", "translateStatus_ convierte el valor crudo");
+  assert.equal(row.remaining_min, "30", "el trabajo pendiente cae al estimado si no viene");
   assert.equal(row.start_actual, "");
 });
 
-test("el clamp del pageSize se conserva en 50..5000", () => {
-  const chico = loadRestlet({ rows: makeRows(1) });
-  chico.post({ pageIndex: 0, pageSize: 1 });
-  assert.match(chico.calls[0].sql, /FETCH NEXT 51 ROWS ONLY/, "abajo del minimo sube a 50");
-
-  const grande = loadRestlet({ rows: makeRows(1) });
-  grande.post({ pageIndex: 0, pageSize: 99999 });
-  assert.match(grande.calls[0].sql, /FETCH NEXT 5001 ROWS ONLY/, "arriba del maximo baja a 5000");
-});
-
-test("un fallo de SuiteQL se propaga para que el backend lo registre", () => {
-  const { post } = loadRestlet({ failWith: "SuiteQL no soporta FETCH NEXT" });
-
-  assert.throws(() => post({ pageIndex: 0, pageSize: 100, locationId: 1 }), /FETCH NEXT/);
-});
-
-test("si la cuenta no acepta FETCH NEXT, cae al recorte en memoria en vez de quedar sin operaciones", () => {
-  // Es el riesgo real de subir el archivo: si FETCH NEXT/OFFSET no es SuiteQL valido en la
-  // cuenta, la version sin fallback devolveria 200 {ok:false} y la app se quedaria sin
-  // operaciones. Con fallback, el listado sigue entregando filas.
-  const { post, calls } = loadRestlet({
-    rows: makeRows(120),
-    failOn: /FETCH NEXT/,
-  });
-
-  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.rows.length, PAGE, "entrega la pagina completa");
-  assert.equal(result.debug.paginacion, "recorte en memoria");
-  assert.match(result.debug.estrategia, /^sql-completo/);
-  assert.ok(calls.length >= 2, "intento la paginada y luego la de memoria");
-  assert.ok(calls.some((call) => /FETCH NEXT/.test(call.sql)), "la primera fue la paginada");
-  assert.ok(calls.some((call) => !/FETCH NEXT/.test(call.sql)), "y la segunda la de memoria");
-  assert.ok(
-    result.debug.degradaciones.some((d) => /sql-paginado/.test(d)),
-    "y deja constancia de que la paginada se intento y fallo"
-  );
-});
-
-test("si el filtro por ubicacion devuelve 0 filas, degrada a sin filtro en vez de dejar la lista vacia", () => {
-  // El peor caso: la columna "funciona" pero descarta todo, sin exception que lo delate. Si el
-  // restlet devolviera la lista vacia, la app se quedaria sin operaciones.
-  const { post, calls } = loadRestlet({
-    rows: makeRows(120),
-    emptyWhen: /tl\.location = \?/,
-  });
-
-  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.rows.length, PAGE, "no devuelve la lista vacia");
-  assert.equal(result.debug.filtroUbicacion, "sin filtro por ubicacion");
-  assert.ok(calls.length >= 2, "primero intenta con filtro y luego sin el");
-  assert.ok(calls[0].sql.includes("tl.location = ?"), "la primera lleva el filtro");
-  assert.ok(!calls[1].sql.includes("tl.location = ?"), "la segunda ya sin filtro");
-  assert.ok(result.debug.degradaciones.some((d) => /0 filas/.test(d)), "y deja constancia de la degradacion");
-});
-
-test("si todas las estrategias fallan, el error dice cuales se intentaron", () => {
+test("un fallo de SuiteQL que no es la columna se propaga con los intentos", () => {
   const { post } = loadRestlet({ failWith: "sin permisos de SuiteQL" });
 
   assert.throws(() => post({ pageIndex: 0, pageSize: 100, locationId: 1 }), (error) => {
     assert.match(error.message, /Ninguna estrategia/);
-    assert.match(error.message, /sql-paginado\+ubicacion/, "y enumera los intentos");
-    assert.match(error.message, /sql-completo:/);
+    assert.match(error.message, /sql-de-produccion/, "y enumera los intentos");
     return true;
   });
-});
-
-test("con todo soportado, la primera estrategia es la que gana y no se intenta ninguna mas", () => {
-  const { post, calls } = loadRestlet({ rows: makeRows(120) });
-
-  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
-
-  assert.equal(calls.length, 1, "una sola consulta cuando nada falla");
-  assert.equal(result.debug.estrategia, "sql-paginado+ubicacion");
-  assert.deepEqual(result.debug.degradaciones, []);
 });

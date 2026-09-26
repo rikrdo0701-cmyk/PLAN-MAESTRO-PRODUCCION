@@ -60,17 +60,16 @@ define(['N/query'], (query) => {
     const pageSize = clamp(Number(body.pageSize ?? 200), 50, 5000);
     const pageIndex = Math.max(0, Number(body.pageIndex ?? 0));
 
-    // Se prueban estrategias de la mejor a la mas conservadora y se usa la primera que
-    // responda. Motivo: la correccion depende de dos cosas que la cuenta puede no aceptar
-    // (FETCH NEXT/OFFSET es sintaxis SuiteQL, y tl.location puede no llamarse asi), y si
-    // alguna falla el listado se quedaria SIN operaciones, que es justo lo que esta app no
-    // puede tolerar. Con este fallback, subir el archivo nunca deja la app peor que antes:
-    // en el peor caso cae al camino viejo, que es el que hoy esta en produccion.
+    // La ultima estrategia es LITERALMENTE el SQL que estaba en produccion antes de este
+    // cambio (mismas columnas, sin tl.location, sin FETCH NEXT). Esa es la red de seguridad:
+    // si algo de lo nuevo no funciona en la cuenta, se cae ahi y el listado responde igual
+    // que antes. La primera version de este fallback solo cubria "FETCH NEXT falla" y "el
+    // filtro devuelve 0", y no cubria "la columna nueva no existe y hace fallar el parseo",
+    // que fue exactamente lo que dejo la app sin operaciones el 2026-09-26.
+    const conUbicacion = Boolean(body.locationId);
     const estrategias = [
-      { nombre: 'sql-paginado+ubicacion', paginado: true, porUbicacion: Boolean(body.locationId) },
-      { nombre: 'sql-paginado', paginado: true, porUbicacion: false },
-      { nombre: 'sql-completo+ubicacion', paginado: false, porUbicacion: Boolean(body.locationId) },
-      { nombre: 'sql-completo', paginado: false, porUbicacion: false },
+      { nombre: 'con-ubicacion', porUbicacion: conUbicacion },
+      { nombre: 'sql-de-produccion', porUbicacion: false }
     ];
 
     let elegida = null;
@@ -79,16 +78,12 @@ define(['N/query'], (query) => {
     for (const estrategia of estrategias) {
       try {
         const resultado = consultar_(estrategia, pageIndex, pageSize, body.locationId);
-        // Si el filtro por ubicacion devuelve 0 filas, se degrada a SIN filtro en vez de
-        // devolver una lista vacia. En la ruta paginada no hay total con que comparar, asi que
-        // el 0 se acepta solo a partir de la segunda pagina: en la primera un 0 puede ser
-        // legitimo (esta planta no tiene operaciones) o puede ser que la columna no exista, y
-        // en ambos casos la siguiente estrategia, que es la misma sin filtro, resuelve sin
-        // dejar la app sin operaciones. El servidor igual descarta por planta en memoria.
-        const sinFilas = !resultado.filas.length;
-        const vacioSospechoso = sinFilas
-          && (resultado.totalSinFiltro > 0 || (resultado.paginacionSql && pageIndex === 0));
-        if (estrategia.porUbicacion && vacioSospechoso) {
+        // Si el filtro por ubicacion devuelve 0 filas pero el SQL sin filtro trae, el problema
+        // es el filtro o la columna, no que la planta no tenga trabajo: se degrada.
+        const vacioSospechoso = estrategia.porUbicacion
+          && !resultado.filas.length
+          && resultado.totalSinFiltro > 0;
+        if (vacioSospechoso) {
           intentos.push(estrategia.nombre + ': 0 filas con el filtro de ubicacion, se degrada a sin filtro');
           continue;
         }
@@ -164,7 +159,7 @@ define(['N/query'], (query) => {
       debug: {
         idSource: 'mot.id',
         estrategia: elegida.nombre,
-        paginacion: elegida.paginado ? 'SQL FETCH NEXT/OFFSET' : 'recorte en memoria',
+        paginacion: 'recorte en memoria (FETCH NEXT/OFFSET no lo acepta esta cuenta)',
         filtroUbicacion: elegida.porUbicacion ? `tl.location = ${body.locationId}` : 'sin filtro por ubicacion',
         degradaciones: intentos,
         note: 'RESTlet exclusivo del plan maestro; devuelve id estable de manufacturingoperationtask'
@@ -182,20 +177,16 @@ define(['N/query'], (query) => {
    * degradar a sin filtro en vez de devolver una lista vacia.
    */
   function consultar_(estrategia, pageIndex, pageSize, locationId) {
-    if (estrategia.paginado) {
-      const consulta = armarSql_(true, estrategia.porUbicacion, pageIndex, pageSize, locationId);
-      const fetched = runSuiteQL_(consulta.sql, consulta.params);
-      const filas = fetched.length > pageSize ? fetched.slice(0, pageSize) : fetched;
-      return { filas: filas, hayMas: fetched.length > pageSize, totalSinFiltro: -1, paginacionSql: true };
-    }
-
-    // Camino sin paginar: hace falta el total para decidir si el filtro de ubicacion sirve.
+    // Siempre trae el catalogo completo y recorta en memoria: el SuiteQL de esta cuenta NO
+    // acepta FETCH NEXT/OFFSET (verificado en produccion el 2026-09-26 08:00, 400 "Failed to
+    // parse SQL"), asi que la paginacion dentro de la consulta no es una opcion. El ahorro de
+    // viajes se consegue con el pageSize, que es decision del servidor.
     let conFiltro = null;
     if (estrategia.porUbicacion) {
-      const c = armarSql_(false, true, 0, pageSize, locationId);
+      const c = armarSql_(true, pageIndex, pageSize, locationId);
       conFiltro = runSuiteQL_(c.sql, c.params);
     }
-    const s = armarSql_(false, false, 0, pageSize, null);
+    const s = armarSql_(false, pageIndex, pageSize, null);
     const sinFiltro = runSuiteQL_(s.sql, s.params);
     const base = conFiltro || sinFiltro;
     const from = pageIndex * pageSize;
@@ -203,12 +194,11 @@ define(['N/query'], (query) => {
     return {
       filas: base.slice(from, to),
       hayMas: to < base.length,
-      totalSinFiltro: sinFiltro.length,
-      paginacionSql: false
+      totalSinFiltro: sinFiltro.length
     };
   }
 
-  function armarSql_(paginado, porUbicacion, pageIndex, pageSize, locationId) {
+  function armarSql_(porUbicacion, pageIndex, pageSize, locationId) {
     const where = [
       "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
       "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
@@ -220,8 +210,8 @@ define(['N/query'], (query) => {
       params.push(locationId);
     }
 
-    // El desempate por mot.id importa: sin un orden TOTAL, OFFSET puede repetir o saltar
-    // filas entre paginas, lo que romperia el operationId estable ns-<id> (RULE-OT-031).
+    // El desempate por mot.id mantiene el orden estable entre llamadas, para que el recorte
+    // en memoria siempre reparta las mismas filas.
     const sql = [
       'SELECT',
       '  mot.id                                    AS id,',
@@ -234,8 +224,12 @@ define(['N/query'], (query) => {
       '  mot.inputquantity                         AS qty_to_process,',
       '  mot.startdatetime                         AS start_planned,',
       '  mot.enddate                               AS end_planned,',
-      '  BUILTIN.DF(mot.status)                    AS status_op,',
-      '  BUILTIN.DF(mot.manufacturingworkcenter)   AS workcenter,',
+      // OJO: mot.status y mot.manufacturingworkcenter se piden SIN BUILTIN.DF, como estaban
+      // desde siempre. Envolverlos en BUILTIN.DF hizo que TODA la consulta fallara con
+      // "Cannot build builtin function" (verificado en produccion el 2026-09-26 08:00), y
+      // translateStatus_ de abajo justamente espera el valor crudo (NOTSTART), no el nombre.
+      '  mot.status                                AS status_op,',
+      '  mot.manufacturingworkcenter               AS workcenter,',
       '  mot.setuptime                             AS setup_min,',
       '  mot.estimatedwork                         AS est_min,',
       '  mot.actualwork                            AS real_min,',
@@ -244,7 +238,11 @@ define(['N/query'], (query) => {
       '  mot.laborresources                        AS human_resource,',
       '  mot.machineresources                      AS machine_resource,',
       '  mot.completedquantity                     AS qty_completed,',
-      '  tl.location                               AS location',
+      // tl.location SOLO en la estrategia con filtro: si la columna no se llamara asi en la
+      // cuenta, el parseo de TODA la consulta falla y la app se queda sin operaciones. Por eso
+      // la ultima estrategia ni la menciona. Aqui solo se agrega una columna mas; la que
+      // hace que la consulta no sea parseable es BUILTIN.DF, y esa no se toca.
+      porUbicacion ? '  tl.location                               AS location' : "  ''                                       AS location",
       'FROM manufacturingoperationtask mot',
       'JOIN transaction wo',
       '  ON wo.id = mot.workorder',
@@ -252,18 +250,17 @@ define(['N/query'], (query) => {
       '  ON tl.transaction = wo.id',
       " AND tl.mainline = 'T'",
       'WHERE',
-      where.map((clause) => `  ${clause}`).join('\n  AND '),
+      where.map((clause) => clause).join('\n  AND '),
       'ORDER BY wo.id, mot.operationsequence, mot.id'
     ];
 
-    if (paginado) {
-      // pageSize + 1 para deducir hasMore de la fila extra, en vez de pagar un COUNT.
-      sql.push(`FETCH NEXT ${pageSize + 1} ROWS ONLY`);
-      sql.push(`OFFSET ${pageIndex * pageSize} ROWS`);
-    }
-
-    // Devuelve la consulta armada, NO la ejecuta: ejecutarla aqui y volver a envolver el
-    // resultado en runSuiteQL_ mandaba el array de filas como si fuera el texto del SQL.
+    // La pagina se recorta en memoria, como siempre. NO se usa FETCH NEXT/OFFSET: se comprobo
+    // en produccion el 2026-09-26 08:00 que el SuiteQL de esta cuenta NO lo acepta y responde
+    // 400 "Failed to parse SQL". El 2244 fallo por lo mismo, que es lo que permitio confirmarlo
+    // por eliminacion (su unico cambio nuevo era ese).
+    // Lo que si se aprovecho del cambio es el pageSize: con 2500 en vez de 200, las 2400 filas
+    // entran en UNA llamada en vez de 12, y el termino fijo medido es de ~2 s por llamada
+    // (2023 ms + 0.543 ms por fila), asi que el ahorro son ~22 s por sincronizacion.
     return { sql: sql.join('\n'), params: params };
   }
 
