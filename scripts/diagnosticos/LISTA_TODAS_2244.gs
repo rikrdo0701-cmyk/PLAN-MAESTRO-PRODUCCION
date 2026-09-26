@@ -88,13 +88,39 @@ function LISTA_TODAS_2244() {
     return;
   }
 
+  // ---------------------------------------------------------------------------------- 2. TODAS
+  // PAGINADO HASTA EL FINAL, Y NO UNA SOLA PAGINA. La primera version de esta sonda pedia una
+  // sola pagina de 2000 y despues comparaba esa pagina truncada contra la lista COMPLETA de
+  // abiertas. Dio "216 abiertas que no salen" y lo reporto como filtro roto, siendo que la
+  // corrida misma lo desmentia: en la pagina 1 habia 6 no cerradas, y 216 + 6 = 222, que es
+  // exactamente el total de abiertas. Las 216 restantes estaban en la pagina 2 porque el SQL
+  // ordena por t.tranid. Es la TERCERA vez que aparece este error en una sonda de OTs (la
+  // primera fue VERIFICA_CIERRE_OT juzgando folios que no habia preguntado): tomar la ausencia
+  // de una consulta incompleta como si fuera evidencia. Ahora se pagina hasta que hasMore sea
+  // falso, y el control negativo compara contra el total, no contra una pagina.
+  var todasFilas = [];
+  var totalRows = 0;
+  var paginas = 0;
   try {
-    todas = PP_Inspection_restlet_({ action: 'list', onlyOpen: false, pageIndex: 0, pageSize: 2000 });
-    llamadas += 1;
+    for (var pag = 0; pag < 20; pag += 1) {
+      var r = PP_Inspection_restlet_({ action: 'list', onlyOpen: false, pageIndex: pag, pageSize: 2000 });
+      llamadas += 1;
+      paginas += 1;
+      var filasPagina = r.wos || r.rows || [];
+      totalRows = Number(r.totalRows || 0);
+      todasFilas = todasFilas.concat(filasPagina);
+      if (!r.hasMore) break;
+    }
     log('');
-    log('2) LISTA CON onlyOpen:false (la que se quiere para el estado):');
-    log('   ok=' + todas.ok + '  filas en esta pagina=' + ((todas.wos || todas.rows || []).length)
-      + '  totalRows=' + todas.totalRows + '  hasMore=' + todas.hasMore);
+    log('2) LISTA CON onlyOpen:false (la que se quiere para el estado), PAGINADA:');
+    log('   paginas=' + paginas + '  filas traidas=' + todasFilas.length + '  totalRows=' + totalRows);
+    if (todasFilas.length < totalRows) {
+      log('');
+      log('   FALLA: se pidieron hasta 20 paginas y solo se trajeron ' + todasFilas.length + ' de');
+      log('   ' + totalRows + '. El recorrido esta truncado y NINGUN numero de abajo es de');
+      log('   fiar. No se puede decidir nada con una lista incompleta.');
+      fallos += 1;
+    }
   } catch (e2) {
     log('   EXCEPCION: ' + String(e2 && e2.message || e2));
     log('');
@@ -108,7 +134,7 @@ function LISTA_TODAS_2244() {
     return;
   }
 
-  var filasTodas = todas.wos || todas.rows || [];
+  var filasTodas = todasFilas;
   var filasAbiertas = soloAbiertas.wos || soloAbiertas.rows || [];
 
   // --------------------------------------------------------------------- 3. cuantas OTs son
@@ -124,9 +150,16 @@ function LISTA_TODAS_2244() {
   log('   solo abiertas (onlyOpen:true)  : ' + nAbiertas);
   log('   todas (onlyOpen:false)          : ' + nTodas);
   log('   la diferencia son CERRADAS O CANCELADAS: ' + (nTodas - nAbiertas));
-  if (todas.hasMore) {
-    log('   AVISO: hay mas paginas (hasMore=true). Este numero es un MINIMO, no el total.');
-    log('   Para el codigo habria que paginar hasta el final y medir cuantas paginas son.');
+  // El SQL del 2244 hace SELECT DISTINCT con t.id (el id interno, único por OT), así que cada
+  // OT es exactamente una fila. Por eso filas y OTs tienen que dar el MISMO numero: si no, hay
+  // folios repetidos o filas sin folio, y el total deja de ser el numero de OTs.
+  if (todasFilas.length !== nTodas) {
+    log('');
+    log('   ATENCION: ' + todasFilas.length + ' filas pero ' + nTodas + ' folios distintos.');
+    log('   El total de OTs no es el total de filas, y la resta de arriba no significa nada.');
+    fallos += 1;
+  } else {
+    log('   (filas = folios distintos: ' + nTodas + ', una fila por OT, como debe ser)');
   }
 
   // ------------------------------------------------------------- 4. los estatus que trae cada una
@@ -156,10 +189,12 @@ function LISTA_TODAS_2244() {
   // ------------------------------------------- 5. el control negativo: las abiertas siguen ahi
   log('');
   log('5) CONTROL NEGATIVO: LAS ABIERTAS DE HOY SIGUEN ESTANDO?');
+  log('   (contra el TOTAL recorrido, no contra una pagina: es la correccion de la corrida');
+  log('    anterior, que comparaba 2000 filas truncadas contra 222 abiertas completas)');
   var perdidas = [];
   Object.keys(foliosAbiertas).forEach(function (k) { if (!foliosTodas[k]) perdidas.push(k); });
   if (!nAbiertas) {
-    log('   no hay OTs abiertas en la pagina 1 del 2244, asi que no hay control que hacer.');
+    log('   no hay OTs abiertas en la lista del 2244, asi que no hay control que hacer.');
     log('   Si la hoja tampoco las tiene, la planta puede estar en Cierre y no hay nada abierto.');
   } else if (perdidas.length) {
     log('   FALLA: ' + perdidas.length + ' OTs que salian con onlyOpen:true NO salen con');
@@ -169,6 +204,50 @@ function LISTA_TODAS_2244() {
     fallos += 1;
   } else {
     log('   bien: las ' + nAbiertas + ' OTs abiertas de onlyOpen:true estan TODAS en onlyOpen:false.');
+  }
+
+  // ---------------------------------------- 5b. la identidad que no depende de las paginas
+  // Cuenta cuantas OTs CERRADAS trae la lista completa y comprueba la suma contra el total. A
+  // diferencia del control de arriba, esto no depende de en que pagina cayo cada folio, asi que
+  // la paginacion no lo puede falsear.
+  //
+  // OJO CON LO QUE ESTA IDENTIDAD PRUEBA Y LO QUE NO. Prueba COMPLETITUD: que no falte ninguna
+  // OT en ninguna pagina. NO prueba que el filtro este apagado. Con el filtro puesto y cero
+  // cerradas, la suma da el total exacto igual, y decir "el filtro se apago de verdad" seria un
+  // falso positivo. La version anterior de esta sonda hacia justo eso, y el caso de validacion
+  // "el filtro NO se apaga" lo destapo: 222 + 0 = 222 daba bien mientras el filtro seguia
+  // puesto. Por eso aqui solo se afirma la completitud, y que el filtro este apagado lo dice el
+  // punto 6, mirando si hayFilas cerradas de verdad.
+  var cerradasVistas = {};
+  filasTodas.forEach(function (r) {
+    var e = norm(r.estatus || r.status || r.estado);
+    if (/CERRAD|CLOSED|COMPLET|CANCELAD/.test(e)) {
+      var k = texto(r.wo || r.tranid || r['WO Folio']);
+      if (k) cerradasVistas[k] = true;
+    }
+  });
+  var nCerradas = Object.keys(cerradasVistas).length;
+  log('');
+  log('5b) IDENTIDAD: abiertas + cerradas = total?  (prueba que NO FALTA NINGUNA OT)');
+  log('   abiertas (onlyOpen:true)  = ' + nAbiertas);
+  log('   cerradas  (contadas aqui) = ' + nCerradas);
+  log('   suma                      = ' + (nAbiertas + nCerradas));
+  log('   total recorrido           = ' + nTodas);
+  if (nAbiertas + nCerradas === nTodas) {
+    log('   bien: LA SUMA DA EL TOTAL EXACTO. No falta ninguna OT en ninguna pagina, y ninguna');
+    log('   OT esta en las dos listas a la vez.');
+  } else {
+    log('   ATENCION: la suma no da el total. Faltan o sobran ' + Math.abs(nTodas - nAbiertas - nCerradas) + '.');
+    log('   Puede haber OTs que no aparecen en ninguna de las dos listas, que seria justo el');
+    log('   fallo que se busca. Con esto NO se puede decidir nada.');
+    fallos += 1;
+  }
+  if (!nCerradas) {
+    log('');
+    log('   OJO, Y ESTO ES LO IMPORTANTE: la identidad dio bien porque NO HABIA CERRADAS, no');
+    log('   porque este bien. Con cero cerradas, la suma da el total aunque el filtro siga');
+    log('   puesto. O sea que ESTA IDENTIDAD NO DICE NADA sobre si el filtro se apago.');
+    log('   De eso responde el punto 6.');
   }
 
   // ------------------------------------- 6. una cerrada conocida, con su estatus real
@@ -182,14 +261,19 @@ function LISTA_TODAS_2244() {
   });
   if (estadoCerrado) {
     log('   ' + estadoCerrado.folio + ' -> "' + estadoCerrado.estatus + '"');
-    log('   bien: hay filas cerradas CON estatus. El filtro se apaga y el estatus es real.');
+    log('   bien: hay filas cerradas CON estatus. ESTE es el punto que prueba que el filtro se');
+    log('   apago, y no la identidad del 5b: con cero cerradas la identidad tambien daba bien.');
   } else {
-    log('   ninguna fila cerrada en esta pagina. Puede ser que solo haya abiertas, o que el');
-    log('   filtro siga puesto. No se puede distinguir con una pagina: mira el punto 3 y el 4.');
+    log('   ninguna fila cerrada en la lista completa. O no hay OTs cerradas en la planta, o el');
+    log('   filtro sigue puesto. Son dos cosas distintas y hay que decirlo.');
     if (nTodas === nAbiertas) {
-      log('   Y ojo: onlyOpen:false trae EXACTAMENTE las mismas que onlyOpen:true. Eso');
-      log('   significa que el filtro sigue activo y la version de NetSuite es la vieja.');
+      log('   Y ademas onlyOpen:false trae EXACTAMENTE las mismas que onlyOpen:true, con el');
+      log('   mismo total. Eso no tiene otra explicacion: el filtro sigue activo y la version de');
+      log('   NetSuite del 2244 es la vieja, sin el camino de onlyOpen:false.');
       fallos += 1;
+    } else {
+      log('   Ojo: el total SI es mayor que las abiertas, pero ninguna fila sale como cerrada.');
+      log('   Eso tambien es raro: habria OTs con un estatus que no es CERRAD ni CANCELAD.');
     }
   }
 
