@@ -24,3 +24,13 @@ proyecto; si se pega en otro script, hay que quitar esa dependencia o usar las c
 directamente. El `pageSize` por defecto es `1766/deploy 1`, que es el documentado; si el
 RESTlet se movió, se overridea con las Script Properties `NS_SALES_PRICES_SCRIPT` y
 `NS_SALES_PRICES_DEPLOY`.
+
+Dos avisos prácticos al ejecutarla:
+
+- **Puede tardar uno o dos minutos.** `PP_netSuiteRestletRequest_` reintenta con esperas de
+  2/5/10 s cuando NetSuite responde `400 SSS_REQUEST_LIMIT_EXCEEDED`, y la sonda hace 9
+  llamadas. El límite de 6 min de Apps Script aguanta de sobra, pero no es instantáneo.
+- **`log()` es un helper local** de la sonda, no una función de Apps Script. La primera versión
+  la usaba sin definirla y falló con `ReferenceError: log is not defined`; ahora el archivo
+  declara `function log(message) { Logger.log(String(message)); }` al inicio. Si pegas las
+  llamadas en otro archivo, esa declaración tiene que ir con ellas.

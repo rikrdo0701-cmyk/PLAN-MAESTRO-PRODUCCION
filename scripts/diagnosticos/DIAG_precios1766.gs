@@ -14,6 +14,10 @@
  * NO OLVIDES: la propiedad se llama NS_SALES_PRICES_SCRIPT si el 1766 esta movido; aqui se
  * usa el valor por omision 1766/deploy 1, que es el documentado.
  */
+function log(message) {
+  Logger.log(String(message));
+}
+
 function DIAG_precios1766() {
   var props = PropertiesService.getScriptProperties();
   var scriptId = String(props.getProperty('NS_SALES_PRICES_SCRIPT') || '1766').trim();
@@ -77,9 +81,4 @@ function DIAG_precios1766() {
   });
 
   log('DIAG_precios1766 terminado. Pega el registro de ejecucion completo.');
-}
-
-/** no-op para que el archivo tenga una funcion principal reconocible si lo pegas suelto */
-function DIAG_precios1766_ayuda() {
-  log('Este archivo ejecuta DIAG_precios1766(). No requiere cambios.');
 }
