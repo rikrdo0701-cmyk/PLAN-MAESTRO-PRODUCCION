@@ -3053,22 +3053,44 @@ function maxOperationPriceSignalForOt(ot) {
   return best;
 }
 
+// Un COMPONENTE es una pieza que se compra, no un articulo que la planta vende: no tiene
+// precio de venta y no debe valorarse. Antes el dialogo de "preparar trabajo" le exigia un
+// precio unitario de al menos $1.00 para poder continuar, y como no habia de donde sacarlo
+// se terminaba capturando 1.00 a mano, que es un numero inventado que despues entra al
+// maximo del reporte (RULE-REP-022).
+const COMPONENT_COMMERCIAL_TYPE = "COMPONENTE";
+
+function isComponentCommercialType(value) {
+  // No se usa normalizeStatus porque con un valor falso devuelve "PLAN", y comparar contra
+  // "PLAN" para decidir si algo es COMPONENTE es una trampa silenciosa.
+  const text = String(value === undefined || value === null ? "" : value)
+    .trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return text === COMPONENT_COMMERCIAL_TYPE;
+}
+
 function commercialPlanningRequirement(job, options = {}) {
   const configuration = articleConfigurationValue(job.parte);
   const invoicePrice = invoiceUnitPriceForOt(job.ot);
   const manualPrice = Math.max(0, Number(configuration.manualUnitPrice || 0));
   const operationPrice = maxOperationPriceSignalForOt(job.ot);
   const planningType = String(configuration.planningType || configuration.tipoTrabajo || "").trim().toUpperCase();
+  // El tipo comercial que manda es el guardado o el que el usuario acaba de elegir en este
+  // mismo dialogo (options.commercialType), para que elegir COMPONENTE esconda el precio de
+  // entrada y no despues de confirmar.
+  const commercialType = String(options.commercialType || configuration.jobType || "").trim().toUpperCase();
   return {
-    currentType: String(configuration.jobType || "").trim().toUpperCase(),
+    currentType: commercialType,
+    isComponent: isComponentCommercialType(commercialType),
     currentPlanningType: planningType,
     invoicePrice,
     manualPrice,
     operationPrice,
     pendingPieces: pendingPiecesForWorkOrder(workOrderForOt(job.ot)),
-    needsType: !String(configuration.jobType || "").trim(),
+    needsType: !commercialType,
     needsPlanningType: options.alwaysPlanningType === true || !planningType,
-    needsManualPrice: !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1),
+    // Un COMPONENTE nunca pide precio, tenga o no precio de venta: no se valora.
+    needsManualPrice: !isComponentCommercialType(commercialType)
+      && !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1),
   };
 }
 
@@ -3078,7 +3100,15 @@ function applyCommercialPlanningRequirement(job, values, commercial) {
   const selectedPlanningType = String(values.ot_planning_type || commercial.currentPlanningType || configuration.planningType || suggestedPlanningTypeForJob(job) || "NORMAL").trim().toUpperCase();
   if (selectedType) configuration.jobType = selectedType;
   if (selectedPlanningType) configuration.planningType = selectedPlanningType;
-  if (!(commercial.invoicePrice > 0)) {
+  // Un COMPONENTE no se valora: no se escribe precio unitario, ni siquiera el que ya estaba
+  // (RULE-REP-022). No se borra el valor previo porque borrar datos es decision de la
+  // persona, no un efecto secundario de preparar una OT; lo que no debe pasar es que el
+  // dialogo lo vuelva a escribir. MEDIDO el 2026-09-26: de los 9 COMPONENTE con
+  // PRECIO_MANUAL, 4 eran el piso de $1.00 forzado y 5 coincidian EXACTAMENTE con
+  // max(ultima venta, promedio) del sync, o sea que tambien los habia dejado el ratchet
+  // viejo de RULE-REP-021. Ninguno lo escribio una persona. La lista, con el origen de cada
+  // numero, la da scripts/diagnosticos/LISTA_PRECIOS_COMPONENTE.gs; la limpieza es a mano.
+  if (!(commercial.invoicePrice > 0) && !isComponentCommercialType(selectedType)) {
     const manualPrice = Number(values.ot_manual_price || commercial.manualPrice || 0);
     if (manualPrice >= 0) configuration.manualUnitPrice = manualPrice;
   }
@@ -3481,10 +3511,10 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     ? `<label>Tipo de trabajo<select name="ot_planning_type" required><option value="">Selecciona normal, prototipo o expeditado</option>${planningTypeOptions}</select></label>`
     : `<label>Tipo de trabajo<input type="text" value="${escapeHtml(commercial.currentPlanningType || currentPlanningType || "")}" readonly></label>`;
   const jobTypeField = commercial.needsType
-    ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona OEM, especial o linea</option>${typeOptions}</select></label>`
+    ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona el tipo comercial</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="1" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario de al menos $1.00</small></label>`
+    ? `<label class="planning-price-field">Precio unitario temporal<input name="ot_manual_price" type="number" min="1" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario de al menos $1.00</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -3548,6 +3578,24 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
         confirmLabel: "Agregar al plan",
         cancelVisible: true,
         setup: () => {
+          const typeSelect = els.planningDialogBody.querySelector('select[name="ot_job_type"]');
+          const priceLabel = els.planningDialogBody.querySelector(".planning-price-field");
+          if (typeSelect && priceLabel) {
+            // Elegir COMPONENTE esconde el precio en el acto, no despues de confirmar. Sin
+            // esto el campo sigue ahi, el required lo deja vacio y el formulario no envia.
+            // Volver a otro tipo lo vuelve a mostrar (RULE-REP-022).
+            const syncPriceField = () => {
+              const componente = isComponentCommercialType(typeSelect.value);
+              priceLabel.hidden = componente;
+              const input = priceLabel.querySelector('input[name="ot_manual_price"]');
+              if (input) {
+                input.required = !componente;
+                input.min = componente ? "" : "1";
+              }
+            };
+            typeSelect.addEventListener("change", syncPriceField);
+            syncPriceField();
+          }
           els.planningDialogBody.querySelectorAll("[data-catalog-select]").forEach((select) => {
             select.addEventListener("change", () => updatePlanningCatalogSelect(select));
             updatePlanningCatalogSelect(select);
@@ -3722,6 +3770,10 @@ function confirmZeroManualPrice(form) {
   const input = form?.elements?.namedItem("ot_manual_price");
   if (!input) return true;
   if (Number(input.value || 0) >= 1) return true;
+  // Si el articulo quedo como COMPONENTE no se captura precio: no se valora. El campo se
+  // ocultaria, pero si el usuario lo cambio a COMPONENTE con el dialogo abierto puede seguir
+  // ahi, y en ese caso el piso de $1.00 no debe bloquear (RULE-REP-022).
+  if (isComponentCommercialType(form?.elements?.namedItem("ot_job_type")?.value)) return true;
   showToast("Captura un precio unitario de al menos $1.00; las tres fuentes de precio estan en cero", 9000);
   input.focus();
   return false;

@@ -551,7 +551,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
   assert.match(pagesIndex, /function maxOperationPriceSignalForOt\(ot\)/);
-  assert.match(pagesIndex, /needsManualPrice: !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
+  assert.match(pagesIndex, /needsManualPrice: !isComponentCommercialType\(commercialType\)\s*&& !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
   assert.match(pagesIndex, /class="article-temporary-price-input"/);
   assert.match(pagesIndex, /function updateTemporaryArticlePrice\(article, value\)/);
   assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--prototype td/);
@@ -2147,16 +2147,16 @@ test("commercialPlanningRequirement no pide precio si la operacion ya tiene unit
   const end = app.indexOf("function applyCommercialPlanningRequirement(", start);
   assert.ok(start >= 0 && end > start, "bloque commercialPlanningRequirement debe existir");
   const source = app.slice(start, end);
-  assert.match(source, /needsManualPrice: !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
+  assert.match(source, /needsManualPrice: !isComponentCommercialType\(commercialType\)\s*&& !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
 
-  const make = (operations, invoice = 0, manual = 0) => Function(
+  const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
     "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
     "pendingPiecesForWorkOrder", "workOrderForOt",
     `${source}; return commercialPlanningRequirement;`,
   )(
     { operations },
     (value) => String(value || "").trim().toUpperCase(),
-    () => ({ manualUnitPrice: manual, jobType: "", planningType: "NORMAL" }),
+    () => ({ manualUnitPrice: manual, jobType, planningType: "NORMAL" }),
     () => invoice,
     () => 10,
     () => null,
@@ -2168,6 +2168,143 @@ test("commercialPlanningRequirement no pide precio si la operacion ya tiene unit
   assert.equal(make([]).needsManualPrice, true);
   assert.equal(make([], 80).needsManualPrice, false);
   assert.equal(make([], 0, 45).needsManualPrice, false);
+});
+
+test("RULE-REP-022: un COMPONENTE no pide precio en \"preparar trabajo\" y se queda en 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function maxOperationPriceSignalForOt(");
+  const end = app.indexOf("function applyCommercialPlanningRequirement(", start);
+  assert.ok(start >= 0 && end > start, "el bloque de COMPONENTE debe existir");
+  assert.ok(app.indexOf('const COMPONENT_COMMERCIAL_TYPE = "COMPONENTE"') > start, "COMPONENT_COMMERCIAL_TYPE va antes de commercialPlanningRequirement");
+  const source = app.slice(start, end);
+
+  // El helper no puede apoyarse en normalizeStatus: con un valor falso devuelve "PLAN", y
+  // comparar contra "PLAN" para decidir si algo es COMPONENTE es una trampa silenciosa.
+  const helper = Function(`${source}; return isComponentCommercialType;`)();
+  assert.equal(helper("COMPONENTE"), true);
+  assert.equal(helper("  componente "), true);
+  assert.equal(helper("Componente"), true);
+  assert.equal(helper("LINEA"), false);
+  assert.equal(helper("ESPECIAL"), false);
+  assert.equal(helper(""), false);
+  assert.equal(helper(undefined), false);
+  assert.equal(helper(null), false);
+  assert.equal(helper(0), false);
+
+  // needsManualPrice tiene que quedar en false para COMPONENTE aunque no haya ninguna de las
+  // tres fuentes de precio: ese es exactamente el caso que antes obligaba a escribir $1.00.
+  const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: manual, jobType, planningType: "NORMAL" }),
+    () => invoice,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" });
+
+  assert.equal(make([]).needsManualPrice, true, "sin tipo sigue pidiendo precio");
+  assert.equal(make([], 0, 0, "COMPONENTE").needsManualPrice, false, "COMPONENTE sin ningun precio");
+  assert.equal(make([], 0, 0, "COMPONENTE").isComponent, true);
+  assert.equal(make([{ ot: "3537", unitPrice: 0.01, amount: 0.02 }], 0, 0, "COMPONENTE").needsManualPrice, false);
+  assert.equal(make([], 0, 0, "LINEA").needsManualPrice, true, "LINEA si sigue pidiendo precio");
+  assert.equal(make([], 0, 0, "linea").needsManualPrice, true, "el tipo se compara sin distinguir mayusculas");
+
+  // El tipo elegido en el dialogo manda sobre el guardado, para que elegir COMPONENTE esconda
+  // el campo de entrada y no despues de confirmar.
+  const override = Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations: [] },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: 0, jobType: "LINEA", planningType: "NORMAL" }),
+    () => 0,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" }, { commercialType: "COMPONENTE" });
+  assert.equal(override.needsManualPrice, false, "elegir COMPONENTE en el dialogo quita el precio");
+  assert.equal(override.currentType, "COMPONENTE");
+});
+
+test("RULE-REP-022: applyCommercialPlanningRequirement no escribe precio en un COMPONENTE", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function applyCommercialPlanningRequirement(");
+  const end = app.indexOf("function buildPlanningRequirements(", start);
+  assert.ok(start >= 0 && end > start, "applyCommercialPlanningRequirement debe existir");
+  const source = app.slice(start, end);
+  assert.match(source, /if \(!\(commercial\.invoicePrice > 0\) && !isComponentCommercialType\(selectedType\)\)/);
+
+  const apply = Function(
+    "articleConfigurationFor", "isComponentCommercialType", "suggestedPlanningTypeForJob",
+    `${source}; return applyCommercialPlanningRequirement;`,
+  );
+
+  const base = { invoicePrice: 0, manualPrice: 0, currentType: "", currentPlanningType: "" };
+  const job = { ot: "3537", parte: "COMP-1000" };
+
+  // COMPONENTE: ni escribe el precio capturado ni el que ya estaba. Se queda como estaba.
+  const configA = { manualUnitPrice: 0, jobType: "", planningType: "" };
+  apply(() => configA, () => true, () => "NORMAL")(
+    job, { ot_job_type: "COMPONENTE", ot_manual_price: "1250" }, base);
+  assert.equal(configA.jobType, "COMPONENTE");
+  assert.equal(configA.manualUnitPrice, 0, "un COMPONENTE no se valora con el precio capturado");
+
+  const configB = { manualUnitPrice: 1, jobType: "", planningType: "" };
+  apply(() => configB, () => true, () => "NORMAL")(
+    job, { ot_job_type: "COMPONENTE", ot_manual_price: "1" }, base);
+  assert.equal(configB.manualUnitPrice, 1, "no borra el valor previo: ese dato lo puso una persona");
+
+  // Los demas tipos siguen escribiendo como antes.
+  const configC = { manualUnitPrice: 0, jobType: "", planningType: "" };
+  apply(() => configC, () => false, () => "NORMAL")(
+    job, { ot_job_type: "LINEA", ot_manual_price: "840.5" }, base);
+  assert.equal(configC.manualUnitPrice, 840.5, "una linea si se valora");
+});
+
+test("RULE-REP-022: el piso de $1 no bloquea cuando el tipo es COMPONENTE", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function confirmZeroManualPrice(");
+  const end = app.indexOf("function closePlanningDialog(", start) > start
+    ? app.indexOf("function closePlanningDialog(", start)
+    : start + 1200;
+  const source = app.slice(start, end);
+  assert.match(source, /isComponentCommercialType\(form\?\.elements\?\.namedItem\("ot_job_type"\)\?\.value\)/);
+
+  const confirm = Function("showToast", "isComponentCommercialType", `${source}; return confirmZeroManualPrice;`)(
+    () => {}, (value) => String(value || "").trim().toUpperCase() === "COMPONENTE",
+  );
+  const form = (price, type) => ({
+    elements: {
+      namedItem: (name) => (name === "ot_manual_price"
+        ? { value: price, focus() {} }
+        : { value: type }),
+    },
+  });
+
+  assert.equal(confirm(form("0", "COMPONENTE")), true, "COMPONENTE con el campo en 0 no bloquea");
+  assert.equal(confirm(form("", "COMPONENTE")), true, "tambien con el campo vacio");
+  assert.equal(confirm(form("0", "LINEA")), false, "una linea en 0 si bloquea");
+  assert.equal(confirm(form("1", "LINEA")), true);
+  assert.equal(confirm({}), true, "sin campo de precio no hay nada que confirmar");
+});
+
+test("RULE-REP-022: el dialogo esconde el precio en el acto al elegir COMPONENTE", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  // El campo de precio lleva una clase propia para poder esconderlo, y el setup escucha el
+  // select de tipo comercial. Sin esto el required del input dejaria el formulario sin enviar.
+  assert.match(app, /<label class="planning-price-field">Precio unitario temporal/);
+  assert.match(app, /const typeSelect = els\.planningDialogBody\.querySelector\('select\[name="ot_job_type"\]'\);/);
+  assert.match(app, /const priceLabel = els\.planningDialogBody\.querySelector\("\.planning-price-field"\);/);
+  assert.match(app, /typeSelect\.addEventListener\("change", syncPriceField\);/);
+  assert.match(app, /input\.required = !componente;/);
+  assert.match(app, /input\.min = componente \? "" : "1";/);
+  // El marcador de abajo ya no lista solo tres tipos: COMPONENTE tambien es opcion valida.
+  assert.match(app, /<option value="">Selecciona el tipo comercial<\/option>/);
 });
 
 test("mergeIndividualWorkOrder no bloquea precio remoto positivo por local en 0 y conserva dueDateOverride/foto locales", async () => {

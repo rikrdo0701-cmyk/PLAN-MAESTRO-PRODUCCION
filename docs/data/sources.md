@@ -156,15 +156,29 @@ ACTUALIZADO, HERRAMENTAL, HERRAMENTALES_EXTRA_JSON`.
 
 ## CONFIGURACION_ARTICULO
 
-Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, ACTUALIZADO`.
+Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, PRECIO_REF_VENTA, ACTUALIZADO`.
 
 - Readers: `PP_readState_` → `PP_buildArticleConfigurations_`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `savePlanningStateOptimized`.
+- `PRECIO_MANUAL` lo escribe **una persona**; `PRECIO_REF_VENTA` lo escribe **el sync** con el
+  precio de venta de NetSuite y sube y baja (RULE-REP-021). Antes los dos trabajos compartían
+  `PRECIO_MANUAL` con un `Math.max` que solo subía. `PP_writeTable_` hace `clearContents` y
+  reescribe el encabezado, así que `PRECIO_REF_VENTA` aparece sola en el próximo guardado.
 - Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
   `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0 y la operación de la OT no tiene
   `unitPrice`/`amount` ≥ $1, la preparación de la OT abre el
   modal con `ot_manual_price` obligatorio (`required`, `min="1"`; piso $1 MXN, RULE-MON-001);
   si la ops ya trae precio/monto ≥ $1 no se pide precio.
+- Excepción (RULE-REP-022): si `TIPO_OT` es `COMPONENTE` **no se pide precio y no se escribe
+  ninguno**, aunque las tres fuentes estén en 0. Es una pieza que se compra, no un artículo que
+  la planta vende, así que no hay precio de venta del cual sacarlo y el piso de $1 solo servía
+  para que alguien escribiera 1.00. El `TIPO_OT` que manda es el guardado **o el que se elige en
+  el propio diálogo** (`options.commercialType`), para que el campo se esconda al elegirlo. El
+  diálogo quita `required` y `min` del campo cuando el tipo es `COMPONENTE`, y `confirmZeroManualPrice`
+  no bloquea el envío. Valores atrapados medidos el 2026-09-26: 4 de exactamente $1.00 (el piso) y
+  5 que coinciden al 0.00% con `max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA)` (el ratchet viejo);
+  ninguno lo escribió una persona. No se borran solos: `scripts/diagnosticos/LISTA_PRECIOS_COMPONENTE.gs`
+  los lista clasificados y no escribe nada.
 
 ## MATRIZ
 
@@ -306,7 +320,10 @@ HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO, PRECIO, MONTO`.
 Valores almacenados `< $1 MXN` (cero o polvo residual 0.01/0.1) **no cuentan**: en el CSV
 `PRECIO`/`MONTO` caen al fallback (`effectiveUnitPriceForOt`/`amountForOt`) y en
 `weeklyJobSummary` (Plan de la semana) la fila queda sin precio (`null` → `$0.00`);
-el piso $1 MXN evita publicar el polvo `$0.01`/`$0.02` de COMPONENTE.
+el piso $1 MXN evita publicar el polvo `$0.01`/`$0.02` de COMPONENTE. Ese polvo ya **no** puede
+venir del precio manual: desde `RULE-REP-022` un `COMPONENTE` no escribe `PRECIO_MANUAL`, así que
+si aparece un `$0.01` en un componente sale del `unitPrice` de la propia operación, no del
+diálogo.
 
 - Readers: descarga externa del usuario.
 - Writer: `exportCsv` (`src/web/planning/app.js`) via `PlanningWorkflowCore.draftExportOperations`.
