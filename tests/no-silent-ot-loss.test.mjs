@@ -20,9 +20,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile, readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const RAIZ = new URL("..", import.meta.url).pathname.replace(/^\//, "").replace(/\\/g, "/");
+// OJO CON ESTA RUTA. La primera version hacia
+//   new URL("..", import.meta.url).pathname.replace(/^\//, "")
+// que en Windows da una ruta usable (C:/...), pero en Linux QUITAR LA BARRA INICIAL la
+// convierte en RELATIVA y todo falla con ENOENT. En local nunca se ve, porque el CI corre en
+// Linux. fileURLToPath es la forma canonica y funciona en los dos. Este lazo existe para
+// revisar el arbol entero, asi que necesita una ruta de verdad, no un URL.
+const RAIZ = fileURLToPath(new URL("..", import.meta.url));
+
+// Este guardia existe porque el bug anterior SOLO se manifestaba en Linux, y asi que en local
+// no se veia. Medido con path.isAbsolute:
+//   Windows, "C:\...\plangit\" -> quitarle el primer caracter deja ":\...\plangit\", que
+//     path.win32.isAbsolute sigue aceptando como absoluta. O sea que EN LOCAL ESTE GUARDIA NO
+//     SE DISPARA, y el bug pasaria inadvertido otra vez.
+//   Linux, "/home/runner/..." -> quitarle la barra inicial deja "home/runner/...", que ya NO es
+//     absoluta, y todo el archivo falla con ENOENT.
+// O sea que el guardia sirve en el CI, que es donde corrio el fallo, y no en local. Es lo unico
+// que se puede hacer sin un segundo runner: el mensaje al menos dice cual es la causa, en vez
+// de cinco ENOENTs que parecen un problema de archivos faltantes.
+if (!path.isAbsolute(RAIZ)) {
+  throw new Error(
+    `La raiz del repo tiene que ser ABSOLUTA y es "${RAIZ}". Si quitaste la barra inicial con `
+    + "replace(/^\\//, '') rompiste Linux: en Windows no se nota y en el CI todo da ENOENT. "
+    + "Usar fileURLToPath(new URL('..', import.meta.url)), que es la forma canonica.",
+  );
+}
 
 // LUGARES AUTORIZADOS A ASIGNAR selectedOts / lockedOts / workOrders. Son 21, y cada uno es
 // un lugar donde una OT puede salir de las listas. La lista blanca es deliberada: si
