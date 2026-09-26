@@ -56,14 +56,10 @@ function PP_fetchNetSuitePlantData_() {
   const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
-  let salesPricesOk = false;
-  try {
-    salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
-    salesPricesOk = true;
-  } catch (error) {
-    salesPrices.warning = String(error.message || error);
-  }
+  // Ver PP_fetchNetSuiteWorkOrdersData_: el precio va cacheado y la lista de OTs no.
+  const cachedPrices = PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const salesPrices = cachedPrices.prices;
+  const salesPricesOk = cachedPrices.ok;
   const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations);
   const workOrderCatalog = PP_enrichWorkOrderPhotos_(
     salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
@@ -90,14 +86,14 @@ function PP_fetchNetSuiteWorkOrdersData_() {
   const config = PP_netSuiteConfig_();
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let salesPrices = { lastByItem: {}, avgByItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
-  let salesPricesOk = false;
-  try {
-    salesPrices = PP_fetchSalesPricesRestlet_(config, invoiceWindow);
-    salesPricesOk = true;
-  } catch (error) {
-    salesPrices.warning = String(error.message || error);
-  }
+  // Los precios SIENTEN cache: son el unico fetch caro (el 1766 pagina REQ_FIFO, hasta 100
+  // paginas) y no participan en la frescura del plan, que depende de la lista de OTs (1764),
+  // que se sigue leyendo viva en cada sincronizacion. Cachear el snapshot entero habria
+  // falseado syncedAt y con el la deteccion de OTs cerradas (RULE-OT-046), asi que el cache va
+  // solo sobre el precio.
+  const cachedPrices = PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const salesPrices = cachedPrices.prices;
+  const salesPricesOk = cachedPrices.ok;
   const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, []);
   const workOrderCatalog = PP_enrichWorkOrderPhotos_(
     salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
@@ -492,6 +488,112 @@ function PP_resolveOperationCatalog_(current, snapshot, plantOperations) {
   if (Array.isArray(snapshot.operationCatalog) && snapshot.operationCatalog.length) return snapshot.operationCatalog;
   if (current && Array.isArray(current.operationCatalog) && current.operationCatalog.length) return current.operationCatalog;
   return PP_buildOperationCatalog_(plantOperations);
+}
+
+const PP_SALES_PRICES_CACHE_TTL_S_ = 3600;
+const PP_SALES_PRICES_COOLDOWN_MS_ = 3600000;
+
+/**
+ * Cache de los precios de venta del 1766 (REQ_FIFO).
+ *
+ * Por que existe: el 1766 pagina REQ_FIFO (hasta 100 paginas) y es, con diferencia, el fetch
+ * mas caro del arranque: la app sincroniza en cada carga, y la cuota diaria de UrlFetch de
+ * Apps Script es por consumidor (20 000/dia en cuentas de consumidor). Agotada, TODA llamada
+ * falla con "Service invoked too many times for one day: urlfetch" y la app deja de poder
+ * sincronizar nada.
+ *
+ * Por que NO se cachea el snapshot entero: la frescura del plan depende de la lista de OTs
+ * (1764), que es lo que detecta las OTs cerradas (RULE-OT-046). Cachear el snapshot
+ * falsearia syncedAt y las OTs cerradas volverian a colarse. El precio no participa en esa
+ * decision, asi que es justo lo que se puede cachear.
+ *
+ * El costo es hasta una hora de retraso en el precio de venta; la foto, la cantidad y el
+ * estatus de la OT siempre se leen vivos.
+ */
+function PP_fetchSalesPricesRestletCached_(config, window) {
+  const scope = PP_normalizeKey_(
+    config.accountId + '_' + config.locationId + '_' + window.from + '_' + window.to
+  );
+  const cacheKey = 'NS_SALES_PRICES_V1_' + scope;
+  const attemptKey = 'NS_SALES_PRICES_ATTEMPT_V1_' + scope;
+  const empty = { lastByItem: {}, avgByItem: {}, from: window.from, to: window.to, warning: '' };
+  let cache = PP_getSalesPricesCache_();
+  const cached = PP_readSalesPricesCache_(cache, cacheKey, window);
+  if (cached) return { prices: cached, ok: true };
+
+  let lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: actualizacion en curso' }), ok: false };
+    }
+  } catch (_) {
+    return { prices: Object.assign({}, empty, { warning: 'precios: bloqueo no disponible' }), ok: false };
+  }
+
+  try {
+    // Doble lectura dentro del lock: otra ejecucion pudo llenarlo mientrasEsperabamos.
+    if (!cache) cache = PP_getSalesPricesCache_();
+    const afterLock = PP_readSalesPricesCache_(cache, cacheKey, window);
+    if (afterLock) return { prices: afterLock, ok: true };
+
+    let properties = null;
+    let lastAttemptRaw = '';
+    try {
+      properties = PropertiesService.getScriptProperties();
+      lastAttemptRaw = properties.getProperty(attemptKey) || '';
+    } catch (_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: cooldown ilegible' }), ok: false };
+    }
+    const lastAttempt = Number(lastAttemptRaw || 0);
+    if (lastAttemptRaw && (!Number.isFinite(lastAttempt) || lastAttempt <= 0)) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: marcador de cooldown invalido' }), ok: false };
+    }
+    if (lastAttempt > 0 && Date.now() - lastAttempt < PP_SALES_PRICES_COOLDOWN_MS_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: omitido durante cooldown' }), ok: false };
+    }
+    const marker = String(Date.now());
+    try {
+      properties.setProperty(attemptKey, marker);
+      if (properties.getProperty(attemptKey) !== marker) throw new Error('cooldown no persistido');
+    } catch (_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: cooldown no escribible' }), ok: false };
+    }
+
+    const prices = PP_fetchSalesPricesRestlet_(config, window);
+    if (cache && prices.lastByItem && Object.keys(prices.lastByItem).length) {
+      const payload = { source: 'NETSUITE_1766', from: window.from, to: window.to, lastByItem: prices.lastByItem, avgByItem: prices.avgByItem };
+      try { cache.put(cacheKey, JSON.stringify(payload), PP_SALES_PRICES_CACHE_TTL_S_); } catch (_) {}
+    }
+    return { prices: prices, ok: true };
+  } catch (error) {
+    // Un fallo NO se cachea: el cooldown de arriba evita la tormenta de reintentos y el
+    // siguiente intento real vuelve a intentarlo.
+    return { prices: Object.assign({}, empty, { warning: String(error && error.message || error) }), ok: false };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+function PP_getSalesPricesCache_() {
+  try { return CacheService.getScriptCache(); } catch (_) { return null; }
+}
+
+function PP_readSalesPricesCache_(cache, key, window) {
+  if (!cache) return null;
+  let raw = '';
+  try { raw = cache.get(key); } catch (_) { return null; }
+  if (!raw) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_) { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.source !== 'NETSUITE_1766') return null;
+  // La ventana va en la clave, pero se revalida: un cambio de periodo debe invalidar el
+  // promedio de 6 meses, no servirlo mezclado con otro.
+  if (String(parsed.from) !== String(window.from) || String(parsed.to) !== String(window.to)) return null;
+  if (!parsed.lastByItem || typeof parsed.lastByItem !== 'object' || Array.isArray(parsed.lastByItem)) return null;
+  if (!parsed.avgByItem || typeof parsed.avgByItem !== 'object' || Array.isArray(parsed.avgByItem)) return null;
+  return { lastByItem: parsed.lastByItem, avgByItem: parsed.avgByItem, from: parsed.from, to: parsed.to, warning: '' };
 }
 
 function PP_fetchSalesPricesRestlet_(config, window) {

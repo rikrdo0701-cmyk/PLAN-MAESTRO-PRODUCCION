@@ -17,8 +17,10 @@
 ```text
 1. Contexto    → leer indexes.json + registros relevantes (nunca explorar el repo en frío)
 2. Alcance     → solo los archivos/modulos/hojas de la TASK
-3. Tests       → ejecutar la suite (npm test, 347 pruebas) y/o pruebas dirigidas
-4. Build       → npm run build / npm run check en verde
+3. Tests       → npm test (o pruebas dirigidas). El numero de pruebas se lee de la salida:
+                 no se escribe a mano ni en las reglas ni aquí
+4. Build       → npm run check en verde (RULE-REP-017: check ya corre la suite completa y
+                 aborta con "La suite fallo: X de Y pruebas" si algo falla)
 5. Documentation Gate → si se descubrió conocimiento, actualizar memoria + docs en la misma TASK
 6. Secret scan → verificar que no se versionan credenciales (.clasp.json, NS_*, IDs de libros)
 7. Commit      → commit scoped a la TASK, mensaje descriptivo en el idioma del repo

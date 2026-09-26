@@ -39,8 +39,8 @@ dist/                         # Generado para clasp; no se versiona
 
 ```powershell
 npm install
-npm run check
-npm test
+npm run check   # valida el build Y corre la suite completa; si algo falla, clasp push/deploy no corren
+npm test        # solo la suite, para iterar rápido
 ```
 
 ## Actualizar Apps Script

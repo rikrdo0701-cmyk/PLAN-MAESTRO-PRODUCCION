@@ -42,6 +42,8 @@ function load(responses = [], cacheOptions = {}) {
       formatDate: () => "2026-07-26",
       sleep: (ms) => sleeps.push(ms),
     },
+    // PP_invoiceAverageWindow_ formatea la ventana de 6 meses con la zona del script.
+    Session: { getScriptTimeZone: () => "America/Mexico_City" },
     UrlFetchApp: {
       fetch(url, options) {
         requests.push({ url, options });
@@ -106,6 +108,9 @@ function load(responses = [], cacheOptions = {}) {
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "08-netsuite.js" });
   context.PP_normalizeKey_ = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
+  // PP_enrichWorkOrderPhotos_ vive en otro archivo de servidor y solo agrega la foto; este
+  // contexto corre 08-netsuite.js solo, asi que se sustituye por la identidad.
+  context.PP_enrichWorkOrderPhotos_ = (items) => items;
   return { context, requests, sleeps, cachePuts, propertyEntries, getLockAttempts: () => lockAttempts };
 }
 
@@ -179,6 +184,130 @@ test("PP_buildWorkOrderCatalog_ lee Articulo acentuado de WO_LISTA y matchea pre
   const applied = context.PP_applySalesPrices_(catalog, prices);
   assert.equal(applied[0].lastSalePrice, 725.19);
   assert.ok(applied[0].averageSalePrice > 0);
+});
+
+const pricePage = (rows, hasMore = false) => ({
+  // ok: true es obligatorio: PP_netSuiteRestletRequest_ solo acepta un 2xx cuyo cuerpo trae
+  // ok === true, y sin eso la pagina se toma por fallo y PP_fetchRestletPages_ lanza.
+  body: JSON.stringify({
+    ok: true,
+    headers: ["_ITEM_ID", "PARTE", "PRECIO BASE MNX", "CANTIDAD ORDEN", "FECHA DE ORDEN"],
+    rows,
+    hasMore,
+  }),
+  status: 200,
+});
+const priceRow = (id, price, qty, date) => ({
+  _ITEM_ID: id, PARTE: `ART-${id}`, "PRECIO BASE MNX": String(price), "CANTIDAD ORDEN": String(qty), "FECHA DE ORDEN": date,
+});
+const invoiceWindow = { from: "2026-03-26", to: "2026-09-26" };
+// PP_netSuiteConfig_ lee las credenciales de Script Properties; el harness las trae vacias.
+const nsCredentials = {
+  NS_ACCOUNT_ID: config.accountId,
+  NS_CONSUMER_KEY: config.consumerKey,
+  NS_CONSUMER_SECRET: config.consumerSecret,
+  NS_TOKEN: config.token,
+  NS_TOKEN_SECRET: config.tokenSecret,
+};
+
+test("los precios de venta se cachean una hora y no vuelven a pedir el 1766", () => {
+  const pages = [pricePage([priceRow("1001", 500, 10, "26/03/2026")], false)];
+  const { context, requests, cachePuts } = load(pages);
+
+  const first = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const second = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+
+  assert.equal(first.ok, true);
+  assert.equal(first.prices.lastByItem["1001"], 500);
+  assert.equal(second.ok, true, "la segunda llamada se resuelve desde el cache");
+  assert.equal(second.prices.lastByItem["1001"], 500, "y entrega el mismo precio");
+  assert.equal(requests.length, 1, "el 1766 solo se consulta una vez");
+  assert.equal(cachePuts.length, 1);
+  assert.equal(cachePuts[0].ttl, 3600, "una hora: el precio no manda en la frescura del plan");
+  assert.match(cachePuts[0].key, /^NS_SALES_PRICES_V1_/);
+  assert.match(cachePuts[0].key, /2026-03-26_2026-09-26$/, "la ventana de 6 meses va en la clave");
+});
+
+test("un cambio de ventana de precios invalida el promedio cacheado", () => {
+  const { context, requests } = load([
+    pricePage([priceRow("1001", 500, 10, "26/03/2026")], false),
+    pricePage([priceRow("1001", 800, 10, "26/04/2026")], false),
+  ]);
+
+  const primera = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const otraVentana = context.PP_fetchSalesPricesRestletCached_(config, { from: "2026-04-26", to: "2026-10-26" });
+
+  assert.equal(primera.prices.lastByItem["1001"], 500);
+  assert.equal(otraVentana.ok, true, "una ventana distinta no puede servirse desde el cache viejo");
+  assert.equal(otraVentana.prices.lastByItem["1001"], 800);
+  assert.equal(requests.length, 2, "y se vuelve a consultar el 1766");
+});
+
+test("un cache corrupto o de otra forma se descarta y se vuelve a consultar", () => {
+  const entradas = {
+    NS_SALES_PRICES_V1_ACME_SB1_1_2026_03_26_2026_09_26: JSON.stringify({ source: "OTRO", from: "2026-03-26", to: "2026-09-26", lastByItem: { 1001: 1 }, avgByItem: {} }),
+  };
+  const { context, requests } = load([pricePage([priceRow("1001", 777, 10, "26/03/2026")], false)], { entries: entradas });
+
+  const result = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+
+  assert.equal(result.prices.lastByItem["1001"], 777, "el precio viene de NetSuite, no del cache invalido");
+  assert.equal(requests.length, 1);
+});
+
+test("si el lock no se puede tomar se degrada sin error y sin golpear el 1766", () => {
+  const { context, requests } = load([pricePage([], false)], { lockUnavailable: true });
+
+  const result = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+
+  assert.equal(result.ok, false);
+  assert.match(result.prices.warning, /actualizacion en curso/);
+  assert.equal(requests.length, 0, "sin lock no se consulta: asi no se gastan llamadas en paralelo");
+});
+
+test("un fallo del 1766 no se cachea y el cooldown evita la tormenta de reintentos", () => {
+  const { context, requests, propertyEntries } = load([pricePage([], false)], {
+    onFetch: () => { throw new Error("NetSuite no respondio"); },
+  });
+
+  const fallido = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const duranteCooldown = load([], { propertyEntries: Object.fromEntries(propertyEntries) }).context
+    .PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+
+  assert.equal(fallido.ok, false);
+  assert.match(fallido.prices.warning, /NetSuite no respondio/);
+  assert.equal(duranteCooldown.ok, false);
+  assert.match(duranteCooldown.prices.warning, /cooldown/);
+  assert.ok([...propertyEntries.keys()].some((key) => key.includes("NS_SALES_PRICES_ATTEMPT_V1_")));
+  assert.equal(requests.length, 1, "el cooldown evita volver a gastar la llamada");
+});
+
+test("un fallo al guardar el cache no rompe la respuesta", () => {
+  const { context } = load([pricePage([priceRow("1001", 500, 10, "26/03/2026")], false)], { putError: new Error("cache.put fallo") });
+
+  const result = context.PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+
+  assert.equal(result.ok, true, "el precio se entrega aunque no se pueda cachear");
+  assert.equal(result.prices.lastByItem["1001"], 500);
+});
+
+test("fetchNetSuiteWorkOrdersData_ usa el precio cacheado pero la lista de OTs se lee viva", () => {
+  const { context, requests } = load([
+    { body: JSON.stringify({ ok: true, headers: ["WO Folio", "Artículo", "Cantidad"], rows: [{ "WO Folio": "3483", "Artículo": "ART-1", "Cantidad": "10" }], hasMore: false }), status: 200 },
+    pricePage([priceRow("ART-1", 900, 10, "26/03/2026")], false),
+    { body: JSON.stringify({ ok: true, headers: ["WO Folio", "Artículo", "Cantidad"], rows: [{ "WO Folio": "3483", "Artículo": "ART-1", "Cantidad": "10" }], hasMore: false }), status: 200 },
+  ], { propertyEntries: nsCredentials });
+
+  const primero = context.PP_fetchNetSuiteWorkOrdersData_();
+  const segundo = context.PP_fetchNetSuiteWorkOrdersData_();
+
+  assert.equal(primero.workOrders[0].lastSalePrice, 900);
+  assert.equal(segundo.workOrders[0].lastSalePrice, 900, "el precio sale del cache");
+  const llamadasOTs = requests.filter((request) => /WO_LISTA/.test(request.options.payload));
+  assert.equal(llamadasOTs.length, 2, "pero la lista de OTs se vuelve a leer en cada sincronizacion");
+  const llamadasPrecios = requests.filter((request) => /REQ_FIFO/.test(request.options.payload));
+  assert.equal(llamadasPrecios.length, 1, "el 1766 solo se golpea una vez: ese es el ahorro de cuota");
+  assert.ok(primero.fetchedAt, "fetchedAt sigue reflejando la lectura viva, no la del cache");
 });
 
 test("PP_fetchRestletPages_ pide 1000 filas al 1766 y 200 al resto", () => {

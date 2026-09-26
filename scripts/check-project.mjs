@@ -5,6 +5,13 @@ import { fileURLToPath } from "node:url";
 import { buildProject } from "./build-appscript.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// La cuenta de pruebas vive aqui, no en las reglas, y `check` corre la suite completa a
+// proposito: `npm run push` y `npm run deploy` hacen `check && clasp ...`, asi que un cambio de
+// servidor sin sus pruebas no puede llegar a NetSuite. Con solo el `npm test` separado, un
+// `clasp push` a mano se lleva un fetch que rompio la sincronizacion.
+const TEST_COUNT_GLOB = path.join(root, "tests", "*.test.mjs");
+
 const { distDir, siteDir } = await buildProject();
 const files = await readdir(distDir);
 const required = ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html", "appsscript.json"];
@@ -17,6 +24,8 @@ for (const file of files.filter((name) => name.endsWith(".js"))) {
 }
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/apps-script-bridge-client.js")], { stdio: "inherit" });
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/performance-client.js")], { stdio: "inherit" });
+
+const suite = runTestSuite();
 
 const [index, bridge, pagesIndex, distSkills, pagesSkills] = await Promise.all([
   readFile(path.join(distDir, "Index.html"), "utf8"),
@@ -64,8 +73,59 @@ const rules = await readRules();
 const ruleWarnings = await verifyRuleOverlaps(rules);
 
 const size = (await stat(path.join(distDir, "Index.html"))).size;
-console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo.`);
+console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo. Suite ${suite.passed}/${suite.total}.`);
 for (const warning of ruleWarnings) console.log(`aviso: ${warning}`);
+
+function runTestSuite() {
+  // --test-reporter=tap es explicito: el reporter por defecto (spec) cambia entre versiones de
+  // Node y su resumen no es parseable de forma estable.
+  let output = "";
+  let failed = 0;
+  try {
+    output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", TEST_COUNT_GLOB], { encoding: "utf8" });
+  } catch (error) {
+    output = String(error?.stdout || "") + String(error?.stderr || "");
+    failed = readCount(output, /^#\s*fail\s+(\d+)$/m);
+  }
+  const total = readCount(output, /^#\s*tests\s+(\d+)$/m);
+  const passed = readCount(output, /^#\s*pass\s+(\d+)$/m);
+  if (failed) {
+    process.stdout.write(reportFailures(output, failed, total));
+    throw new Error(`La suite fallo: ${failed} de ${total} pruebas`);
+  }
+  if (!total) {
+    process.stdout.write(output);
+    throw new Error("No se pudo leer el conteo de pruebas de la salida de node --test");
+  }
+  return { total, passed };
+}
+
+/**
+ * Volcar la salida TAP entera no sirve de nada (son cientos de `ok N`), asi que se conserva
+ * solo el bloque de cada prueba que fallo mas el resumen. Cada bloque empieza en `not ok` y
+ * termina en la siguiente linea de caso (`ok N`/`not ok N`) o de comentario (`# `).
+ */
+function reportFailures(output, failed, total) {
+  const lines = String(output || "").split(/\r?\n/);
+  const blocks = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^not ok \d+ - /.test(lines[i])) continue;
+    const block = [lines[i]];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (/^(not )?ok \d+ - /.test(lines[j]) || /^# \S/.test(lines[j])) break;
+      block.push(lines[j]);
+    }
+    blocks.push(block.join("\n"));
+    i += block.length;
+  }
+  const resumen = lines.filter((line) => /^#\s*(tests|pass|fail|duration_ms)\b/.test(line)).join("\n");
+  return `${blocks.join("\n\n")}\n\n${resumen}\n`;
+}
+
+function readCount(output, pattern) {
+  const match = String(output || "").match(pattern);
+  return match ? Number(match[1]) : 0;
+}
 
 async function readRules() {
   let content;
