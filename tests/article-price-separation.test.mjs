@@ -120,9 +120,17 @@ test("la hoja CONFIGURACION_ARTICULO tiene columnas separadas para los dos preci
 test("el servidor lee y escribe los dos precios por separado", () => {
   // Lectura: la fila de la hoja alimenta los dos campos.
   assert.match(storage, /manualUnitPrice: Number\(row\.PRECIO_MANUAL \|\| 0\)/);
-  assert.match(storage, /referenceSalePrice: Number\(row\.PRECIO_REF_VENTA \|\| 0\)/);
+  // El precio de referencia YA NO se lee directo. Desde RULE-REP-023 pasa por
+  // PP_articlePriceCells_, que ademas distingue un precio de un ACTUALIZADO que quedo en la
+  // columna equivocada: Number("2026-09-07T03:11:36.013Z") es NaN y con || 0 daba 0, que es
+  // como PRECIO_REF_VENTA aparecio en 0 de 230 filas sin que nadie viera por que.
+  assert.match(storage, /function PP_articlePriceCells_\(row\)/);
+  assert.match(storage, /referenceSalePrice: precio\.referenceSalePrice/);
+  assert.match(storage, /updatedAt: precio\.updatedAt/);
+  assert.doesNotMatch(storage, /referenceSalePrice: Number\(row\.PRECIO_REF_VENTA \|\| 0\)/,
+    "una celda corrida debe pasar por PP_articlePriceCells_, no por Number() a secas");
   // Escritura: las dos columnas viajan en su orden.
-  assert.match(storage, /Number\(item\.manualUnitPrice \|\| item\.precioManual \|\| 0\),\s*\n\s*Number\(item\.referenceSalePrice \|\| item\.precioRefVenta \|\| 0\)/);
+  assert.match(storage, /Number\(item\.manualUnitPrice \|\| item\.precioManual \|\| 0\),\s*\r?\n\s*Number\(item\.referenceSalePrice \|\| item\.precioRefVenta \|\| 0\)/);
 });
 
 test("el max del reporte usa el precio de venta del sync solo cuando no hay uno vivo", () => {

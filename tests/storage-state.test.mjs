@@ -20,8 +20,19 @@ function createSheet(headers = ["KEY"], body = []) {
   return {
     rows: () => rows.map((row) => [...row]),
     getLastRow: () => rows.length,
+    getLastColumn: () => Math.max(1, ...rows.map((row) => row.length)),
     getDataRange: () => ({ getDisplayValues: () => rows.map((row) => row.map(String)) }),
     clearContents: () => { rows = []; },
+    // insertColumnsAfter(afterColumns, howMany) con afterColumns en base 1: afterColumns = 0
+    // significa "antes de la primera columna", que es lo que usa PP_ensureWorkbook_.
+    insertColumnsAfter(afterColumns, howMany = 1) {
+      rows = rows.map((row) => {
+        const copy = [...row];
+        for (let k = 0; k < howMany; k += 1) copy.splice(afterColumns, 0, "");
+        return copy;
+      });
+      return this;
+    },
     getRange: (row, column, rowCount, columnCount) => ({
       setValues(values) {
         write(row, column, values);
@@ -29,6 +40,17 @@ function createSheet(headers = ["KEY"], body = []) {
       },
       setFontWeight() { return this; },
       setBackground() { return this; },
+      getDisplayValues() {
+        const out = [];
+        for (let r = row - 1; r < row - 1 + rowCount; r += 1) {
+          const line = [];
+          for (let c = column - 1; c < column - 1 + columnCount; c += 1) {
+            line.push(rows[r] && rows[r][c] !== undefined ? String(rows[r][c]) : "");
+          }
+          out.push(line);
+        }
+        return out;
+      },
       clearContent() {
         rows.splice(row - 1, rowCount == null ? 1 : rowCount);
         return this;
@@ -564,4 +586,164 @@ test("PP_snapshotOperationFromRow_ recupera toolChange* desde el comentario form
   }, "draft", 1));
   assert.equal(transition.toolChangeFromHerramental, "4 x 5");
   assert.equal(transition.toolChangeToHerramental, "5 X 8");
+});
+
+// ---------------------------------------------------------------------------------------------
+// RULE-REP-023: agregar una columna EN MEDIO de PP_SHEETS descuadraba la hoja, porque
+// PP_ensureWorkbook_ reescribia solo la fila 1 del encabezado y dejaba los datos donde
+// estaban. Al meter PRECIO_REF_VENTA antes de ACTUALIZADO en CONFIGURACION_ARTICULO
+// (2.45.0), el ACTUALIZADO viejo paso a leerse como PRECIO_REF_VENTA. Medido con
+// DESALINEA_ARTICULO el 2026-09-26: 230 de 230 filas con fecha en la columna E, 0 de 230
+// con fecha en la F.
+// ---------------------------------------------------------------------------------------------
+
+test("PP_headerInserts_ dice donde insertar cuando PP_SHEETS gana una columna en medio", () => {
+  const { context } = loadStorage();
+  const calcula = (current, headers) =>
+    JSON.parse(vm.runInContext(
+      `JSON.stringify(PP_headerInserts_(${JSON.stringify(current)}, ${JSON.stringify(headers)}))`,
+      context,
+    ));
+
+  // El caso que rompió produccion: PRECIO_REF_VENTA entra antes de ACTUALIZADO.
+  assert.deepEqual(
+    calcula(
+      ["ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "ACTUALIZADO"],
+      ["ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "PRECIO_REF_VENTA", "ACTUALIZADO"],
+    ),
+    [4],
+    "hay 4 columnas viejas antes de la nueva",
+  );
+
+  // Columna nueva al final: no hace falta mover nada.
+  assert.deepEqual(calcula(["A", "B"], ["A", "B", "C"]), [2]);
+
+  // Dos columnas nuevas, una en medio y otra al final.
+  assert.deepEqual(calcula(["A", "B", "C"], ["A", "NUEVA1", "B", "C", "NUEVA2"]), [1, 3]);
+
+  // Columna nueva al principio: insertColumnsAfter(0, 1), o sea antes de la primera.
+  assert.deepEqual(calcula(["A", "B"], ["NUEVA", "A", "B"]), [0]);
+
+  // Sin cambios.
+  assert.deepEqual(calcula(["A", "B"], ["A", "B"]), []);
+
+  // UNA COLUMNA VIEJA DESAPARECE: no se opera. Una poda equivocada en este codigo, que corre
+  // en cada request, destruye datos de forma irreversible.
+  assert.equal(calcula(["A", "B", "VIEJA"], ["A", "B"]), null);
+  assert.equal(calcula(["A", "B", "C"], ["A", "C", "B"]), null, "orden distinto: no se opera");
+
+  // Mas de tres columnas nuevas no es un alta simple: no se opera.
+  assert.equal(calcula(["A"], ["A", "N1", "N2", "N3", "N4"]), null);
+});
+
+test("PP_ensureWorkbook_ inserta la columna y el dato conserva su encabezado", () => {
+  const { context, sheets } = loadStorage();
+  // Se simula la hoja como quedo con el bug: el encabezado nuevo ya esta puesto (fila 1
+  // reescrita) pero las filas de datos siguen con el ACTUALIZADO viejo en la columna E.
+  const datos = [
+    ["M66-8602", "OEM", "NORMAL", 1414.3, "2026-09-25T17:45:00.000Z"],
+    ["COMP-4434", "COMPONENTE", "NORMAL", 1, "2026-09-18T12:00:00.000Z"],
+  ];
+  const hoja = createSheet(
+    ["ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "PRECIO_REF_VENTA", "ACTUALIZADO"],
+    datos,
+  );
+  const libro = { getSheetByName: (name) => (name === "CONFIGURACION_ARTICULO" ? hoja : sheets[name]) };
+  // El encabezado ya coincide con PP_SHEETS, asi que no se toca nada: la hoja se arregla con
+  // el shim de lectura y con el proximo PP_writeTable_, no con una poda en caliente.
+  context.PP_ensureWorkbook_(libro);
+  assert.deepEqual(hoja.rows()[0], [
+    "ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "PRECIO_REF_VENTA", "ACTUALIZADO",
+  ]);
+  assert.equal(hoja.rows()[1][4], "2026-09-25T17:45:00.000Z", "no se toco el dato");
+
+  // Ahora el caso de una hoja con el encabezado VIEJO de 5 columnas: ahi si hay que insertar,
+  // y el dato tiene que quedar debajo de su propio encabezado.
+  const vieja = createSheet(
+    ["ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "ACTUALIZADO"],
+    [["M66-8602", "OEM", "NORMAL", 1414.3, "2026-09-25T17:45:00.000Z"]],
+  );
+  const libro2 = { getSheetByName: (name) => (name === "CONFIGURACION_ARTICULO" ? vieja : sheets[name]) };
+  context.PP_ensureWorkbook_(libro2);
+  const despues = vieja.rows();
+  assert.deepEqual(despues[0], [
+    "ARTICULO", "TIPO_OT", "TIPO_TRABAJO", "PRECIO_MANUAL", "PRECIO_REF_VENTA", "ACTUALIZADO",
+  ]);
+  assert.equal(despues[1][4], "", "la columna nueva queda vacia");
+  assert.equal(despues[1][5], "2026-09-25T17:45:00.000Z", "el ACTUALIZADO viejo quedo en SU columna");
+  assert.equal(despues[1][3], 1414.3, "PRECIO_MANUAL no se movio");
+});
+
+test("PP_articlePriceCells_ recupera la fecha corrida y no toca una hoja bien alineada", () => {
+  const { context } = loadStorage();
+  const lee = (row) => structuredClone(context.PP_articlePriceCells_(row));
+
+  // El mundo roto: la celda de PRECIO_REF_VENTA es en realidad el ACTUALIZADO viejo.
+  const corrida = lee({ PRECIO_REF_VENTA: "2026-09-07T03:11:36.013Z", ACTUALIZADO: "" });
+  assert.equal(corrida.referenceSalePrice, 0, "una fecha no es un precio");
+  assert.equal(corrida.updatedAt, "2026-09-07T03:11:36.013Z", "la fecha se recupera");
+
+  // El mundo bien: PRECIO_REF_VENTA es un numero y ACTUALIZADO trae su fecha.
+  const buena = lee({ PRECIO_REF_VENTA: 1414.3, ACTUALIZADO: "2026-09-25T17:45:00.000Z" });
+  assert.equal(buena.referenceSalePrice, 1414.3);
+  assert.equal(buena.updatedAt, "2026-09-25T17:45:00.000Z");
+
+  // El shim NO puede robar una fecha cuando ACTUALIZADO ya tiene una: manda el ACTUALIZADO.
+  const conAmbas = lee({ PRECIO_REF_VENTA: "2026-09-07T03:11:36.013Z", ACTUALIZADO: "2026-09-25T17:45:00.000Z" });
+  assert.equal(conAmbas.updatedAt, "2026-09-25T17:45:00.000Z");
+  assert.equal(conAmbas.referenceSalePrice, 0, "una fecha nunca es un precio");
+
+  // Casos borde: vacio, no numerico y numeros como texto.
+  assert.equal(lee({ PRECIO_REF_VENTA: "", ACTUALIZADO: "" }).updatedAt, "");
+  assert.equal(lee({ PRECIO_REF_VENTA: "", ACTUALIZADO: "" }).referenceSalePrice, 0);
+  assert.equal(lee({ PRECIO_REF_VENTA: "no es numero", ACTUALIZADO: "" }).referenceSalePrice, 0,
+    "texto que no es fecha no se vuelve NaN");
+  assert.equal(lee({ PRECIO_REF_VENTA: "1414.30", ACTUALIZADO: "" }).referenceSalePrice, 1414.3,
+    "un numero escrito como texto SI es precio");
+  assert.equal(lee({}).referenceSalePrice, 0);
+  assert.equal(lee({}).updatedAt, "");
+});
+
+test("PP_buildArticleConfigurations_ lee la fila corrida sin perder el precio manual", () => {
+  const { context } = loadStorage();
+  // Las filas tal como quedaron en la hoja: PRECIO_REF_VENTA con la fecha corrida y
+  // ACTUALIZADO vacio. Este es el caso que hacia que la app mostrara 0 de 153.
+  const filas = [
+    { ARTICULO: "M66-8602", TIPO_OT: "OEM", TIPO_TRABAJO: "NORMAL", PRECIO_MANUAL: "1414.3", PRECIO_REF_VENTA: "2026-09-25T17:45:00.000Z", ACTUALIZADO: "" },
+    { ARTICULO: "COMP-4434", TIPO_OT: "COMPONENTE", TIPO_TRABAJO: "NORMAL", PRECIO_MANUAL: "1", PRECIO_REF_VENTA: "2026-09-18T12:00:00.000Z", ACTUALIZADO: "" },
+  ];
+  const configs = structuredClone(context.PP_buildArticleConfigurations_(filas, [], [], []));
+  assert.equal(Object.keys(configs).length, 2);
+  assert.equal(configs["M66-8602"].manualUnitPrice, 1414.3, "el precio manual NO se pierde");
+  assert.equal(configs["M66-8602"].referenceSalePrice, 0);
+  assert.equal(configs["M66-8602"].updatedAt, "2026-09-25T17:45:00.000Z", "la fecha se recupera");
+  assert.equal(configs["COMP-4434"].manualUnitPrice, 1);
+  assert.equal(configs["COMP-4434"].updatedAt, "2026-09-18T12:00:00.000Z");
+
+  // Y con la hoja ya bien alineada, el shim no se activa.
+  const alineadas = [
+    { ARTICULO: "TR 350", TIPO_OT: "LINEA", TIPO_TRABAJO: "NORMAL", PRECIO_MANUAL: "369", PRECIO_REF_VENTA: "369", ACTUALIZADO: "2026-09-25T17:45:00.000Z" },
+  ];
+  const ok = structuredClone(context.PP_buildArticleConfigurations_(alineadas, [], [], []));
+  assert.equal(ok["TR 350"].referenceSalePrice, 369, "una hoja bien alineada lee su precio");
+  assert.equal(ok["TR 350"].updatedAt, "2026-09-25T17:45:00.000Z");
+});
+
+test("el shim y la hoja convergen: lo que se lee se vuelve a escribir alineado", () => {
+  const { context } = loadStorage();
+  // El ciclo completo: leer la fila corrida, y escribirla de vuelta con
+  // PP_articleConfigurationRows_. La fila que sale tiene que tener PRECIO_REF_VENTA numerico
+  // y ACTUALIZADO con la fecha, o sea alineada de verdad. Asi el proximo guardado no vuelve
+  // a descuadrar nada.
+  const corrida = { ARTICULO: "M66-8602", TIPO_OT: "OEM", TIPO_TRABAJO: "NORMAL", PRECIO_MANUAL: "1414.3", PRECIO_REF_VENTA: "2026-09-25T17:45:00.000Z", ACTUALIZADO: "" };
+  const configs = structuredClone(context.PP_buildArticleConfigurations_([corrida], [], [], []));
+  const written = context.PP_articleConfigurationRows_({ articleConfigurations: configs });
+  assert.ok(Array.isArray(written), "PP_articleConfigurationRows_ devuelve filas");
+  assert.equal(written.length, 1);
+  const fila = JSON.parse(JSON.stringify(written[0]));
+  assert.equal(fila[0], "M66-8602");
+  assert.equal(fila[3], 1414.3, "PRECIO_MANUAL intacto");
+  assert.equal(fila[4], 0, "PRECIO_REF_VENTA es un numero, no una fecha");
+  assert.equal(fila[5], "2026-09-25T17:45:00.000Z", "ACTUALIZADO quedo con la fecha recuperada");
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(String(fila[4])), "la fecha no puede quedar en la columna del precio");
 });

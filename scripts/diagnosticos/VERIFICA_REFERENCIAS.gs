@@ -187,8 +187,17 @@ function VERIFICA_REFERENCIAS() {
         log('      ' + d.art + ': guardado ' + Math.round(d.guardado) + ' vs hoy ' + Math.round(d.hoy) + '  (' + d.x + 'x)');
       });
     }
+    // NO COMPARAR NO ES PASAR. Una version anterior de esta sonda/reportaba "AVISO: no se
+    // pudo comparar" y despues cerraba con "sin problemas / RULE-REP-021 verificado". Eso
+    // es un verde falso: si la columna esta vacia o corrida, la comparacion da 0 y la sonda
+    // se daba por buena sin haber comprobado nada. Ahora no comparar es FALLA.
     if (comparados === 0) {
-      log('   AVISO: ningun articulo tiene las dos cifras, asi que no se pudo comparar.');
+      log('   FALLA: no se pudo comparar NADA. La columna PRECIO_REF_VENTA esta vacia, o su');
+      log('          contenido no es un precio, o no hay articulos con precio de venta vivo.');
+      log('          Esto NO es un "sin problemas": es RULE-REP-021 sin verificar.');
+      log('          Si la columna tiene fechas en vez de numeros, corre DESALINEA_ARTICULO:');
+      log('          es el corrimiento de columnas de RULE-REP-023.');
+      fallos += 1;
     } else if (coinciden === comparados) {
       log('   bien: PRECIO_REF_VENTA es el espejo del precio de venta actual. La columna');
       log('         se esta actualizando, y no arrastra ningun maximo historico.');
@@ -197,6 +206,7 @@ function VERIFICA_REFERENCIAS() {
       log('   coincide con el precio de hoy. Puede ser que el sync todavia no haya corrido');
       log('   desde el deploy (la columna nace en el primer guardado), o que queden valores');
       log('   viejos. Sincroniza NetSuite y vuelve a correr esta sonda.');
+      fallos += 1;
     }
   }
 
@@ -206,5 +216,7 @@ function VERIFICA_REFERENCIAS() {
     : 'VERIFICA_REFERENCIAS: sin problemas. La columna existe, los dos campos son');
   if (!fallos) {
     log('   independientes y el del sync refleja el precio actual. RULE-REP-021 verificado.');
+  } else {
+    log('   RULE-REP-021 sigue SIN VERIFICAR. No tomes este corrida como evidencia de nada.');
   }
 }

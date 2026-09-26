@@ -57,6 +57,37 @@ function PP_getWorkbook_() {
   return SpreadsheetApp.openById(spreadsheetId);
 }
 
+// Calcula dónde hay que INSERTAR columnas para pasar de un encabezado a otro sin perder de
+// vista ningún dato. Devuelve un array con un índice por columna nueva: el número de
+// columnas viejas que quedan ANTES de cada inserción. O null si la transición no es
+// puramente de altas, en cuyo caso el llamador no toca la data.
+//
+// POR QUÉ EXISTE. Reescribir solo la fila 1 del encabezado cuando PP_SHEETS gana columnas
+// descuadra la hoja: los datos se quedan donde estaban. Al meter PRECIO_REF_VENTA en medio
+// de CONFIGURACION_ARTICULO (2.45.0), el ACTUALIZADO viejo pasó a leerse como
+// PRECIO_REF_VENTA y el ACTUALIZADO nuevo quedó vacío: 230 de 230 filas, medido con
+// DESALINEA_ARTICULO el 2026-09-26.
+//
+// QUÉ NO ACEPTA, a propósito, porque este código corre en cada request y una poda de columna
+// equivocada destruye datos de forma irreversible:
+//   - que desaparezca alguna columna vieja (una baja es otra migración, con otra decisión),
+//   - que no se emparejen todas las columnas viejas con la secuencia nueva.
+// Acepta de una a tres columnas nuevas, en cualquier posición, incluso en medio.
+function PP_headerInserts_(current, headers) {
+  const nuevos = new Set(headers);
+  for (const nombre of current) {
+    if (nombre && !nuevos.has(nombre)) return null;   // una columna vieja desaparece
+  }
+  const inserts = [];
+  let i = 0;
+  for (let j = 0; j < headers.length; j += 1) {
+    if (i < current.length && current[i] === headers[j]) { i += 1; continue; }
+    inserts.push(i);                                   // columna nueva antes de la vieja i
+  }
+  if (i !== current.length) return null;               // quedaron columnas viejas sin pares
+  return inserts.length <= 3 ? inserts : null;        // más de tres: no es una alta simple
+}
+
 function PP_ensureWorkbook_(spreadsheet) {
   Object.keys(PP_SHEETS).forEach(function(name) {
     let sheet = spreadsheet.getSheetByName(name);
@@ -68,12 +99,23 @@ function PP_ensureWorkbook_(spreadsheet) {
       sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
       return;
     }
-    const current = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
-    if (current.join('|') !== headers.join('|')) {
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-      sheet.setFrozenRows(1);
-      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
+    // Se lee el encabezado REAL de toda la hoja, no solo las primeras N celdas: si la hoja
+    // tiene menos columnas de las que el codigo espera, hay que insertar las que faltan
+    // para que los datos sigan debajo de su propio encabezado.
+    const current = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getDisplayValues()[0]
+      .map(function(value) { return String(value || '').trim(); });
+    if (current.length === headers.length && current.join('|') === headers.join('|')) return;
+    const inserts = PP_headerInserts_(current, headers);
+    if (inserts) {
+      // De derecha a izquierda, para que los indices de la izquierda sigan siendo validos.
+      // insertColumnsAfter(0, 1) mete la columna antes de la primera.
+      for (let k = inserts.length - 1; k >= 0; k -= 1) {
+        sheet.insertColumnsAfter(inserts[k], 1);
+      }
     }
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
   });
 
   const config = spreadsheet.getSheetByName('CONFIG');
@@ -1581,18 +1623,56 @@ function PP_buildOtConfigurations_(rows, operations) {
   return configurations;
 }
 
+// CORRIMIENTO DE COLUMNAS en CONFIGURACION_ARTICULO, introducido por RULE-REP-021.
+//
+// QUE PASÓ. PP_SHEETS.CONFIGURACION_ARTICULO pasó de 5 a 6 columnas en 2.45.0 al meter
+// PRECIO_REF_VENTA ANTES de ACTUALIZADO, o sea en medio de la lista. PP_ensureWorkbook_
+// (más abajo en este archivo) compara el encabezado existente con PP_SHEETS y, cuando no
+// cuadra, reescribe SOLO la fila 1: no hace clearContents y no mueve las filas de datos. Las
+// filas siguieron teniendo su ACTUALIZADO viejo en la columna E, que pasó a llamarse
+// PRECIO_REF_VENTA, y la columna F, ahora ACTUALIZADO, quedó vacía.
+//
+// POR QUE HACE FALTA ESTE SHIM Y NO SOLO REESCRIBIR LA HOJA. PP_readRows_ mapea por índice
+// de encabezado, así que el corrimiento se propaga solo: PRECIO_REF_VENTA lee una fecha y
+// Number("2026-09-07T03:11:36.013Z") es NaN, que con || 0 queda 0; ACTUALIZADO lee vacío.
+// Medido el 2026-09-26 con DESALINEA_ARTICULO: 230 de 230 filas con fecha en la columna E y
+// 0 de 230 con fecha en la F.
+//
+// QUE HACE ESTE SHIM. Si ACTUALIZADO está vacío y la celda de PRECIO_REF_VENTA parece una
+// fecha, esa celda ES el ACTUALIZADO viejo: se recupera como updatedAt y el precio de venta
+// queda en 0, que es su valor real hasta que el sync escriba. Con el shim, el siguiente
+// guardado (PP_writeTable_ hace clearContents y reescribe desde el payload) deja la hoja
+// alineada de verdad, y las fechas sobreviven en vez de perderse.
+//
+// POR QUE ES INOFENSIVO. Solo dispara cuando ACTUALIZADO está vacío Y la celda de
+// PRECIO_REF_VENTA tiene forma de fecha ISO. En una hoja bien alineada PRECIO_REF_VENTA es
+// un número y la condición nunca se cumple.
+var PP_ISO_DATE_LIKE_ = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?/;
+
+function PP_articlePriceCells_(row) {
+  var raw = String(row.PRECIO_REF_VENTA === undefined || row.PRECIO_REF_VENTA === null ? '' : row.PRECIO_REF_VENTA).trim();
+  var updatedAt = String(row.ACTUALIZADO || '').trim();
+  if (!updatedAt && raw && PP_ISO_DATE_LIKE_.test(raw)) {
+    // Celda desplazada: es la fecha, no un precio.
+    return { referenceSalePrice: 0, updatedAt: raw };
+  }
+  var price = Number(raw || 0);
+  return { referenceSalePrice: isFinite(price) ? price : 0, updatedAt: updatedAt };
+}
+
 function PP_buildArticleConfigurations_(articleRows, legacyOtRows, workOrders, operations) {
   const configurations = {};
   (articleRows || []).forEach(function(row) {
     const article = String(row.ARTICULO || '').trim().toUpperCase();
     if (!article) return;
+    const precio = PP_articlePriceCells_(row);
     configurations[article] = {
       article: article,
       jobType: String(row.TIPO_OT || '').trim().toUpperCase(),
       planningType: String(row.TIPO_TRABAJO || '').trim().toUpperCase(),
       manualUnitPrice: Number(row.PRECIO_MANUAL || 0),
-      referenceSalePrice: Number(row.PRECIO_REF_VENTA || 0),
-      updatedAt: String(row.ACTUALIZADO || '').trim()
+      referenceSalePrice: precio.referenceSalePrice,
+      updatedAt: precio.updatedAt
     };
   });
 

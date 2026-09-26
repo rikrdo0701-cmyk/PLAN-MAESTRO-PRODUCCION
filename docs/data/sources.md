@@ -158,12 +158,24 @@ ACTUALIZADO, HERRAMENTAL, HERRAMENTALES_EXTRA_JSON`.
 
 Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, PRECIO_REF_VENTA, ACTUALIZADO`.
 
-- Readers: `PP_readState_` → `PP_buildArticleConfigurations_`.
+- Readers: `PP_readState_` → `PP_buildArticleConfigurations_` → `PP_articlePriceCells_`.
 - Writers: `PP_writeState_`, `PP_writeCatalogState_`, `savePlanningStateOptimized`.
 - `PRECIO_MANUAL` lo escribe **una persona**; `PRECIO_REF_VENTA` lo escribe **el sync** con el
   precio de venta de NetSuite y sube y baja (RULE-REP-021). Antes los dos trabajos compartían
   `PRECIO_MANUAL` con un `Math.max` que solo subía. `PP_writeTable_` hace `clearContents` y
   reescribe el encabezado, así que `PRECIO_REF_VENTA` aparece sola en el próximo guardado.
+- **Alta de columna (RULE-REP-023)**: `PP_ensureWorkbook_` **inserta** las columnas nuevas en
+  la posición que le corresponde, no solo las nombra. Antes alineaba el encabezado reescribiendo
+  la fila 1, lo cual solo es seguro si la columna nueva va **al final**; **en medio** dejaba las
+  filas de datos debajo de otro encabezado. Medido el 2026-09-26: 230 de 230 filas con el
+  `ACTUALIZADO` viejo donde debía leerse `PRECIO_REF_VENTA`, y `ACTUALIZADO` vacío en toda la
+  hoja. `PP_readRows_` mapea por índice, así que el corrimiento se propaga al estado.
+  `PP_articlePriceCells_` es el shim que hace recuperables los datos: si `ACTUALIZADO` está vacío
+  y la celda de `PRECIO_REF_VENTA` tiene forma de fecha ISO, esa celda es el `ACTUALIZADO` viejo
+  y se recupera como `updatedAt` (el precio queda en 0, que es su valor real hasta que el sync
+  escriba). Con el shim, el próximo `PP_writeTable_` deja la hoja alineada de verdad.
+  **Regla para quien agregue una columna:** añadirla al final es siempre seguro; añadirla en
+  medio desplaza los datos de las columnas posteriores y hay que insertarla.
 - Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
   `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0 y la operación de la OT no tiene
   `unitPrice`/`amount` ≥ $1, la preparación de la OT abre el
