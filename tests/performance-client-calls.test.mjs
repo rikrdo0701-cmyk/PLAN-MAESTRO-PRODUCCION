@@ -5,6 +5,19 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+const workflowCoreSource = await readFile(new URL("../src/web/planning/planning-workflow-core.js", import.meta.url), "utf8");
+
+/**
+ * PlanningWorkflowCore real en su propio contexto. Los harnesses de
+ * applyNetSuiteWorkOrdersPayload lo usan sin stubs porque la carga ahora depende de
+ * reconcileActiveWorkOrders: contra un stub no se probaria el podado real.
+ */
+function loadWorkflowCore() {
+  const context = { globalThis: {}, console };
+  vm.createContext(context);
+  vm.runInContext(workflowCoreSource, context, { filename: "planning-workflow-core.js" });
+  return context.globalThis.PlanningWorkflowCore;
+}
 const manualFlowSource = [
   appSource.slice(
     appSource.indexOf("async function loadNetSuiteExercise()"),
@@ -1279,19 +1292,7 @@ test("la sincronizacion de OTs no rehidrata selectedOts desde metadata remota ob
     "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
     `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
   )(state, {
-    PlanningWorkflowCore: {
-      pruneDraftToOpenWorkOrders: (draft, workOrders) => {
-        const open = new Set(workOrders.map((item) => item.ot));
-        const keep = (ot) => open.has(ot);
-        return {
-          ...draft,
-          selectedOts: draft.selectedOts.filter(keep),
-          lockedOts: draft.lockedOts.filter(keep),
-          expandedOts: draft.expandedOts.filter(keep),
-          lastSchedule: { ...draft.lastSchedule, scheduledOts: draft.lastSchedule.scheduledOts.filter(keep) },
-        };
-      },
-    },
+    PlanningWorkflowCore: loadWorkflowCore(),
   }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
   applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200"], workOrders: [{ ot: "100" }, { ot: "200" }] });
@@ -1309,9 +1310,7 @@ test("la sincronizacion de OTs preserva precios locales positivos cuando el payl
     "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
     `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
   )(state, {
-    PlanningWorkflowCore: {
-      pruneDraftToOpenWorkOrders: (draft, workOrders) => ({ ...draft, workOrders }),
-    },
+    PlanningWorkflowCore: loadWorkflowCore(),
   }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
   applyNetSuiteWorkOrdersPayload({
@@ -1395,19 +1394,7 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
     "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
     `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
   )(state, {
-    PlanningWorkflowCore: {
-      pruneDraftToOpenWorkOrders: (draft, workOrders) => {
-        const open = new Set(workOrders.map((item) => item.ot));
-        const keep = (ot) => open.has(ot);
-        return {
-          ...draft,
-          selectedOts: draft.selectedOts.filter(keep),
-          lockedOts: draft.lockedOts.filter(keep),
-          expandedOts: draft.expandedOts.filter(keep),
-          lastSchedule: { ...draft.lastSchedule, scheduledOts: draft.lastSchedule.scheduledOts.filter(keep) },
-        };
-      },
-    },
+    PlanningWorkflowCore: loadWorkflowCore(),
   }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
 
   applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200", "300"], workOrders: [{ ot: "100" }, { ot: "200" }] });
@@ -1416,6 +1403,74 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
   assert.deepEqual(state.lockedOts, ["200"]);
   assert.deepEqual(state.expandedOts, ["200"]);
   assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+});
+
+test("la carga reconcilia tambien el borrador: la OT cerrada sale de operaciones, cola y resumen", () => {
+  const state = {
+    selectedOts: ["200", "300"], lockedOts: ["300"], expandedOts: ["300"],
+    operations: [
+      { id: "op-200", ot: "200", estatus: "PLAN" },
+      { id: "op-300", ot: "300", estatus: "PLAN" },
+    ],
+    operationPlanStatuses: { a: { ot: "300" }, b: { ot: "200" } },
+    otConfigurations: { "300": { machine: "M1" } },
+    materials: [{ ot: "300", component: "TUBO" }],
+    lastSchedule: { scheduledOts: ["200", "300"], generatedAt: "2026-09-25T10:00:00.000Z" },
+    workOrders: [{ ot: "200", quantity: 10 }, { ot: "300", quantity: 5 }],
+    closedWorkOrderSummaries: {},
+  };
+  const applyNetSuiteWorkOrdersPayload = Function(
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
+    `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
+  )(state, {
+    PlanningWorkflowCore: loadWorkflowCore(),
+  }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
+
+  // 300 se cerro en NetSuite: solo viene la 200.
+  applyNetSuiteWorkOrdersPayload({ workOrders: [{ ot: "200", quantity: 10 }] });
+
+  // Sin operaciones y sin work order, getPriorityJobs() deja de crear un trabajo para la
+  // OT (app.js:11676-11683), asi que tampoco reaparece en "trabajos en espera".
+  assert.deepEqual(state.operations.map((op) => op.id), ["op-200"]);
+  assert.deepEqual(state.workOrders.map((wo) => wo.ot), ["200"]);
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, []);
+  assert.deepEqual(state.expandedOts, []);
+  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+  assert.equal(state.lastSchedule.generatedAt, "2026-09-25T10:00:00.000Z");
+  assert.deepEqual(Object.keys(state.operationPlanStatuses), ["b"]);
+  assert.deepEqual(plain(state.otConfigurations), {});
+  assert.deepEqual(plain(state.materials), []);
+  // El historial no se pierde: queda el resumen compacto de la cerrada.
+  assert.equal(state.closedWorkOrderSummaries["300"].finalStatus, "CERRADA");
+  assert.equal(state.closedWorkOrderSummaries["300"].quantity, 5);
+  assert.equal(state.closedWorkOrderSummaries["300"].closedDetectedAt, state.syncedAt);
+});
+
+test("la carga no toca el borrador de una OT que NetSuite sigue reportando abierta", () => {
+  const state = {
+    selectedOts: ["200"],
+    operations: [
+      { id: "op-200", ot: "200", estatus: "PLAN" },
+      { id: "op-300", ot: "300", estatus: "PLAN" },
+    ],
+    otConfigurations: { "300": { machine: "M1" } },
+    workOrders: [{ ot: "200", quantity: 10 }],
+  };
+  const applyNetSuiteWorkOrdersPayload = Function(
+    "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
+    `${applyWorkOrdersPayloadSource}; return applyNetSuiteWorkOrdersPayload;`,
+  )(state, {
+    PlanningWorkflowCore: loadWorkflowCore(),
+  }, () => {}, () => {}, (value) => String(value || "").trim().toUpperCase());
+
+  // 300 no estaba en la lista anterior (llego despues), asi que no es una cerrada.
+  applyNetSuiteWorkOrdersPayload({ workOrders: [{ ot: "200", quantity: 10 }, { ot: "300", quantity: 7 }] });
+
+  assert.deepEqual(state.operations.map((op) => op.id), ["op-200", "op-300"]);
+  assert.deepEqual(plain(state.otConfigurations), { "300": { machine: "M1" } });
+  assert.deepEqual(plain(state.closedWorkOrderSummaries), {});
+  assert.deepEqual(state.workOrders.map((wo) => wo.ot), ["200", "300"]);
 });
 
 test("la sincronizacion persiste el mayor precio de venta como precio de referencia del articulo", () => {

@@ -9456,7 +9456,22 @@ function preserveImportedOperationPrices(localOperations, importedOperations) {
 }
 
 function applyNetSuiteWorkOrdersPayload(payload) {
+  // Una sola marca de tiempo para el reconcile y para syncedAt: si se calcularan por
+  // separado, el closedDetectedAt del resumen de una OT cerrada no coincidiria con
+  // syncedAt de la misma carga.
+  const nowIso = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
   if (Array.isArray(payload?.workOrders)) {
+    const core = window.PlanningWorkflowCore;
+    // reconcileActiveWorkOrders se corre ANTES de sustituir la lista porque necesita la
+    // anterior para saber que OTs cerro NetSuite. Podar solo la cola no basta: las
+    // operaciones de la OT cerrada sobreviven en el borrador, getPriorityJobs() sigue
+    // creando un trabajo para ella (app.js:11676-11683) y reaparece en "trabajos en
+    // espera" aunque ya no este en el plan. Es la misma rutina que usa la sync ligera.
+    if (typeof core?.reconcileActiveWorkOrders === "function") {
+      // Object.assign y no `state = ...`: el resto de la funcion muta el mismo objeto y
+      // quien lo llama debe ver el resultado sin cambiar de referencia.
+      Object.assign(state, core.reconcileActiveWorkOrders(state, payload.workOrders, nowIso));
+    }
     const localByOt = new Map((state.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
     state.workOrders = payload.workOrders.map((item) =>
       mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item));
@@ -9464,7 +9479,7 @@ function applyNetSuiteWorkOrdersPayload(payload) {
   Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
   if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
   if (payload?.plant) state.plant = payload.plant;
-  state.syncedAt = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
+  state.syncedAt = nowIso;
   invalidateCurrentPlanOperationsCache();
   resetBacklogWindow();
 }

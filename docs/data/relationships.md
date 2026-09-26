@@ -195,8 +195,18 @@ sincronizar, así que una OT cerrada reaparecía en cada carga.
 
 | Ruta de sincronización | Quién la dispara | Qué persiste |
 |---|---|---|
-| `syncNetSuiteWorkOrdersLite` | sincronización de fondo en cada carga (`loadAppStateInBackground` → `syncNetSuiteInBackground`, remapeada en `performance-client.js:88`) | `ORDENES_TRABAJO` + cola podada, vía `PP_writeNetSuiteWorkOrdersState_` |
-| `fetchNetSuiteWorkOrdersLite` | botón "Sincronizar OTs" y gate previo a generar/publicar el plan | el cliente reconcilia y persiste con `saveWorkOrderSyncState` → `PP_writeWorkOrderSyncState_` |
+| `syncNetSuiteWorkOrdersLite` | sincronización de fondo en cada carga (`loadAppStateInBackground` → `syncNetSuiteInBackground`, remapeada en `performance-client.js:88`) | `ORDENES_TRABAJO` + cola podada, vía `PP_writeNetSuiteWorkOrdersState_`; **no** escribe `OPERACIONES` |
+| `fetchNetSuiteWorkOrdersLite` | botón "Sincronizar OTs" y gate previo a generar/publicar el plan | el cliente reconcilia y persiste con `saveWorkOrderSyncState` → `PP_writeWorkOrderSyncState_` (sí escribe `OPERACIONES`) |
+
+Como la carga de fondo no escribe `OPERACIONES`, el podado del borrador en esa ruta lo
+hace el cliente: `applyNetSuiteWorkOrdersPayload` aplica
+`PlanningWorkflowCore.reconcileActiveWorkOrders` (RULE-OT-050) antes de sustituir
+`workOrders`, que quita `operations`, estados, materiales y configuraciones de la OT
+cerrada y deja su resumen en `CONFIG.closedWorkOrderSummaries`. Sin ese paso la OT
+cerrada seguía teniendo operaciones y `getPriorityJobs()` (`app.js:11676-11683`) le
+creaba un trabajo, con `job.closed` en `false` porque `jobStatusFromOperations` cae al
+estatus de las operaciones; reaparecía en "trabajos en espera" con el botón `+`. La
+hoja `OPERACIONES` en sí se limpia en el siguiente guardado del plan o en la sync ligera.
 
 ### 4.2 SuiteQL
 
