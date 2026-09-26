@@ -332,33 +332,33 @@
   function planningSavePayload() {
     return {
       ...baseSavePayload(),
-      operations: clone(state.operations || []),
-      workOrders: clone(state.workOrders || []),
-      otConfigurations: clone(state.otConfigurations || {}),
-      articleConfigurations: clone(state.articleConfigurations || {}),
-      operationPlanStatuses: clone(state.operationPlanStatuses || {}),
+      operations: state.operations || [],
+      workOrders: state.workOrders || [],
+      otConfigurations: state.otConfigurations || {},
+      articleConfigurations: state.articleConfigurations || {},
+      operationPlanStatuses: state.operationPlanStatuses || {},
     };
   }
 
   function catalogSavePayload() {
     return {
       ...baseSavePayload(),
-      machines: clone(state.machines || []),
-      toolCatalog: clone(state.toolCatalog || []),
-      calendarExceptions: clone(state.calendarExceptions || []),
-      subcontracts: clone(state.subcontracts || []),
-      otTypes: clone(state.otTypes || []),
-      otConfigurations: clone(state.otConfigurations || {}),
-      articleConfigurations: clone(state.articleConfigurations || {}),
-      workSchedule: clone(state.workSchedule || {}),
-      dailyBreaks: clone(state.dailyBreaks || {}),
+      machines: state.machines || [],
+      toolCatalog: state.toolCatalog || [],
+      calendarExceptions: state.calendarExceptions || [],
+      subcontracts: state.subcontracts || [],
+      otTypes: state.otTypes || [],
+      otConfigurations: state.otConfigurations || {},
+      articleConfigurations: state.articleConfigurations || {},
+      workSchedule: state.workSchedule || {},
+      dailyBreaks: state.dailyBreaks || {},
     };
   }
 
   function matrixSavePayload() {
     return {
       ...baseSavePayload(),
-      operations: clone(state.operations || []),
+      operations: state.operations || [],
       operators: [...(state.operators || [])],
       operatorProfiles: clone(state.operatorProfiles || {}),
       operatorCapacity: clone(state.operatorCapacity || {}),

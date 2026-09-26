@@ -421,7 +421,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(performanceService, /preparedPlanningByOt:\s*payload\.preparedPlanningByOt \|\| \{\}/);
   assert.match(performanceService, /CONFIGURACION_ARTICULO[\s\S]{0,180}PP_articleConfigurationRows_\(payload\)/);
   assert.match(pagesIndex, /preparedPlanningByOt:\s*clone\(state\.preparedPlanningByOt \|\| \{\}\)/);
-  assert.match(pagesIndex, /articleConfigurations:\s*clone\(state\.articleConfigurations \|\| \{\}\)/);
+  assert.match(pagesIndex, /articleConfigurations:\s*state\.articleConfigurations \|\| \{\}/);
   assert.match(pagesIndex, /if \(imported\.preparedPlanningByOt\) state\.preparedPlanningByOt = imported\.preparedPlanningByOt;/);
   assert.match(pagesIndex, /function setPlanningActionsBusy/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
@@ -2470,4 +2470,78 @@ test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", asyn
   assert.doesNotMatch(skills, /data-remove-capability=/);
   assert.doesNotMatch(skills, /data-add-operator/);
   assert.doesNotMatch(skills, /operator-name-input/);
+});
+
+test("el payload de guardado por puente no deep-clona el estado: el postMessage ya lo copia", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const bridgeClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "apps-script-bridge-client.js"), "utf8");
+  const payloadStart = performanceClient.indexOf("function baseSavePayload()");
+  const payloadEnd = performanceClient.indexOf("function saveJobsForScopes(", payloadStart);
+  const payloads = performanceClient.slice(payloadStart, payloadEnd);
+
+  assert.doesNotMatch(payloads, /operations: clone\(/);
+  assert.doesNotMatch(payloads, /workOrders: clone\(/);
+  assert.doesNotMatch(payloads, /otConfigurations: clone\(/);
+  assert.doesNotMatch(payloads, /articleConfigurations: clone\(/);
+  assert.doesNotMatch(payloads, /operationPlanStatuses: clone\(/);
+  assert.match(payloads, /operations: state\.operations \|\| \[\]/);
+  assert.match(payloads, /operationPlanStatuses: state\.operationPlanStatuses \|\| \{\}/);
+  assert.match(bridgeClient, /bridgeWindow\.postMessage\(\{[\s\S]*?args: Array\.isArray\(args\) \? args : \[\],/);
+
+  const state = {
+    operations: [{ id: "op-1", ot: "100", log: "PLAN" }],
+    workOrders: [{ ot: "100", quantity: 5 }],
+    otConfigurations: { 100: { machine: "M1" } },
+    articleConfigurations: { P1: { manualUnitPrice: 3 } },
+    operationPlanStatuses: { "100|1": { status: "HECHA", origin: "draft" } },
+    machines: [{ id: "M1" }],
+    toolCatalog: [],
+    calendarExceptions: [],
+    subcontracts: [],
+    otTypes: [],
+    workSchedule: {},
+    dailyBreaks: {},
+    operators: ["ANA"],
+    operatorProfiles: {},
+    operatorCapacity: {},
+    operatorPerformance: {},
+    configuredCapabilities: [],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    capacityModes: {},
+    operationRules: {},
+    operationCatalog: [],
+    matrix: {},
+    excludedCapabilities: [],
+    selectedOts: [],
+    lockedOts: [],
+    expandedOts: [],
+  };
+  const api = Function(
+    "state",
+    "clone",
+    "normalizeCapabilityKeys",
+    `${payloads}; return { planningSavePayload, catalogSavePayload, matrixSavePayload };`,
+  )(
+    state,
+    (value) => JSON.parse(JSON.stringify(value)),
+    (value) => value,
+  );
+
+  const planning = api.planningSavePayload();
+  assert.equal(planning.operations, state.operations);
+  assert.equal(planning.workOrders, state.workOrders);
+  assert.equal(planning.operationPlanStatuses, state.operationPlanStatuses);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.operations)), state.operations);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.operationPlanStatuses)), state.operationPlanStatuses);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.otConfigurations)), state.otConfigurations);
+
+  const catalog = api.catalogSavePayload();
+  assert.equal(catalog.otConfigurations, state.otConfigurations);
+  assert.equal(catalog.articleConfigurations, state.articleConfigurations);
+  assert.deepEqual(JSON.parse(JSON.stringify(catalog.machines)), state.machines);
+
+  const matrix = api.matrixSavePayload();
+  assert.equal(matrix.operations, state.operations);
+  assert.deepEqual(JSON.parse(JSON.stringify(matrix.operators)), state.operators);
 });
