@@ -7,7 +7,7 @@ en la hoja ni en la configuración.
 
 | Archivo | Función que se ejecuta | Para qué sirve |
 |---|---|---|
-| `DIAG_precios1766.gs` | `DIAG_precios1766` | Descubre de dónde sale el precio de venta y cuánto cuesta traerlo. Hace 9 llamadas de lectura al RESTlet 1766 (`REQ_FIFO`): (1) prueba `pageSize` 200, 500, 1000 y 2000 para ver el máximo real y cuántos `rows` devuelve cada uno; (2) vuelca `headers` y las primeras filas literales, donde puede aparecer el id o tipo de registro que revela la fuente física; (3) prueba si el 1766 acepta una ventana de fechas en el body (`from/to`, `fechaDesde/fechaHasta`, `dateFrom/dateTo`, `startDate/endDate`). Con eso se decide si el precio puede entrar al RESTlet 2244 con una consulta agregada, o si hay que cachearlo. |
+| `DIAG_precios1766.gs` | `DIAG_precios1766` | Descubre de dónde sale el precio de venta y cuánto cuesta traerlo. Hace una **llamada de guardia** (si la cuota diaria de `urlfetch` está agotada, para ahí) y luego 8 llamadas de lectura al RESTlet 1766 (`REQ_FIFO`): (1) prueba `pageSize` 200, 500, 1000 y 2000 para ver el máximo real y cuántos `rows` devuelve cada uno; (2) vuelca `headers` y las primeras filas literales, donde puede aparecer el id o tipo de registro que revela la fuente física; (3) prueba si el 1766 acepta una ventana de fechas en el body (`from/to`, `fechaDesde/fechaHasta`, `dateFrom/dateTo`, `startDate/endDate`). Con eso se decide si el precio puede entrar al RESTlet 2244 con una consulta agregada, o si hay que cachearlo. |
 | `DIAG_inspeccion400.gs` | `DIAG_inspeccion400` | Primera ronda del diagnóstico del `NetSuite inspeccion: 400`. Confirma script/deploy reales, `locationId`, y si el RESTlet responde con `ok:false` en 200 (validación de payload) en vez de un HTTP 400. |
 | `DIAG_inspeccion400b.gs` | `DIAG_inspeccion400b` | Segunda ronda: barre 40 folios reales con `action:detail`, dispara 8 `detail` concurrentes y prueba folios malformados (apóstrofo, `OR 1=1`, `%`, 90 caracteres, vacío). Sirvió para descartar folio sucio, concurrencia e interpolación en el SuiteQL del RESTlet. |
 
@@ -30,6 +30,12 @@ Dos avisos prácticos al ejecutarla:
 - **Puede tardar uno o dos minutos.** `PP_netSuiteRestletRequest_` reintenta con esperas de
   2/5/10 s cuando NetSuite responde `400 SSS_REQUEST_LIMIT_EXCEEDED`, y la sonda hace 9
   llamadas. El límite de 6 min de Apps Script aguanta de sobra, pero no es instantáneo.
+- **La cuota diaria de `urlfetch` puede estar agotada.** Apps Script la impone por consumidor
+  (20 000/día en cuentas de consumidor) y, cuando se agota, *toda* llamada falla con
+  `Service invoked too many times for one day: urlfetch` **sin llegar a NetSuite**. Por eso la
+  sonda hace una llamada de guardia y, si detecta eso, se detiene y dice cuándo reintentar en
+  lugar de gastar 8 llamadas más en guaranteed failures. El límite se reinicia a medianoche
+  hora del Pacífico.
 - **`log()` es un helper local** de la sonda, no una función de Apps Script. La primera versión
   la usaba sin definirla y falló con `ReferenceError: log is not defined`; ahora el archivo
   declara `function log(message) { Logger.log(String(message)); }` al inicio. Si pegas las
