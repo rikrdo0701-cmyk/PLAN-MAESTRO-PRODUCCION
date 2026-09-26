@@ -10,7 +10,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // proposito: `npm run push` y `npm run deploy` hacen `check && clasp ...`, asi que un cambio de
 // servidor sin sus pruebas no puede llegar a NetSuite. Con solo el `npm test` separado, un
 // `clasp push` a mano se lleva un fetch que rompio la sincronizacion.
-const TEST_COUNT_GLOB = path.join(root, "tests", "*.test.mjs");
+//
+// Los archivos se ENUMERAN en vez de pasar el glob tests/*.test.mjs: execFileSync no pasa por
+// shell, asi que el glob llega literal a node --test. En Windows el propio Node lo expande y
+// en Linux no, que es exactamente lo que rompio CI el 2026-09-26: el runner (Node 20) reporto
+// "Could not find .../tests/*.test.mjs", la suite dio 0 pruebas y `check` aborto, dejando sin
+// desplegar tres commits. Enumerar funciona igual en cualquier sistema y version de Node.
+const testFiles = (await readdir(path.join(root, "tests")))
+  .filter((name) => name.endsWith(".test.mjs"))
+  .sort()
+  .map((name) => path.join(root, "tests", name));
+if (!testFiles.length) throw new Error("No hay pruebas en tests/ (*.test.mjs)");
 
 const { distDir, siteDir } = await buildProject();
 const files = await readdir(distDir);
@@ -82,7 +92,7 @@ function runTestSuite() {
   let output = "";
   let failed = 0;
   try {
-    output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", TEST_COUNT_GLOB], { encoding: "utf8" });
+    output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", ...testFiles], { encoding: "utf8" });
   } catch (error) {
     output = String(error?.stdout || "") + String(error?.stderr || "");
     failed = readCount(output, /^#\s*fail\s+(\d+)$/m);
