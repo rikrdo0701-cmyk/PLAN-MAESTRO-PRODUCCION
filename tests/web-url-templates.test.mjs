@@ -5,20 +5,33 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 /**
- * RULE-WEB-002: el HTML service de Apps Script mutila las lineas que tienen "://" seguido
- * de una interpolacion dentro de una plantilla. Al entregar la pagina, esas lineas llegan
- * cortadas justo despues de "://" y el bundle entero deja de parsear con
- * "Unexpected identifier 'https'", dejando la app sin estado.
+ * RULE-WEB-002: el HTML service de Apps Script recorta la linea en cada "//" que encuentra
+ * DENTRO de una plantilla (backtick). Al entregar la pagina, esas lineas llegan cortadas y
+ * el bundle deja de parsear, dejando la app con la interfaz visible pero sin datos.
  *
- * Se verifico que el archivo almacenado en Apps Script es identico a este build, que
- * servido como estatico carga sin errores, y que el mismo archivo por /exec no carga.
- * El patron "//${" es el unico que distingue a los scripts que fallan de los que pasan.
+ * Evidencia (2026-09-26, comprobacion de humo con Playwright contra /exec):
+ *  - El archivo almacenado en el proyecto de Apps Script es IDENTICO a este build: clasp
+ *    pull bajo 24 archivos y los 24 coinciden byte a byte con dist/, mismo sha256 en
+ *    Index.html. Servido ese mismo archivo como estatico carga sin un solo error de
+ *    sintaxis, y GitHub Pages, que sirve el mismo archivo, funciona.
+ *  - NO es cache: se reproduce con la cache desactivada por CDP (Network.setCacheDisabled)
+ *    y con un parametro de ruptura en la URL.
+ *  - Lo que llega recortado se midio con un oraculo: cada linea de JavaScript del build que
+ *    no aparece en la entrega fue cortada por la entrega. Asi se descubrieron dos tandas:
+ *    primero las URL construidas con "`https://${raw}`", despues dos textos de aviso que
+ *    decian "maldonado://" en una plantilla. Los dos casos quedaron en cero.
  *
- * En JS valido "${" solo puede ser una interpolacion, asi que el patron no tiene falsos
- * positivos: no puede aparecer fuera de una plantilla.
+ * Las cadenas con comillas simples o dobles NO se recortan: por eso la mitigacion es
+ * concatenar con comillas (o sacar el esquema a una constante) en vez de interpolar.
+ *
+ * La comprobacion es por linea y No lleva estado entre lineas a proposito: un lexer con
+ * expresiones regulares se desincroniza y produce falsos positivos. El patron /`[^`]*\/\//
+ * solo puede coincidir si hay un backtick antes del "//" en la misma linea, y un regex
+ * de JavaScript no contiene backticks, asi que no hay falsos positivos en este codigo.
  */
 
 const RAIZ = fileURLToPath(new URL("../", import.meta.url));
+const PLANTILLA_CON_BARRAS = /`[^`]*\/\//;
 
 async function archivosJs(dir) {
   const entradas = await readdir(dir, { withFileTypes: true });
@@ -31,47 +44,52 @@ async function archivosJs(dir) {
   return salida;
 }
 
-function ofensas(texto) {
-  const encontradas = [];
-  const lineas = texto.split("\n");
-  lineas.forEach((linea, i) => {
-    if (linea.includes("//${")) encontradas.push(`linea ${i + 1}: ${linea.trim().slice(0, 120)}`);
+function offenses(texto) {
+  const salida = [];
+  texto.replace(/\r\n/g, "\n").split("\n").forEach((linea, i) => {
+    if (PLANTILLA_CON_BARRAS.test(linea)) salida.push(`linea ${i + 1}: ${linea.trim().slice(0, 120)}`);
   });
-  return encontradas;
+  return salida;
 }
 
-test("ningun archivo de src/web usa //${ dentro de una plantilla", async () => {
+test("ningun archivo de src/web tiene // dentro de una plantilla", async () => {
   const archivos = await archivosJs(path.join(RAIZ, "src", "web"));
   const infractiones = [];
   for (const archivo of archivos) {
-    const texto = await readFile(archivo, "utf8");
-    for (const linea of ofensas(texto)) {
+    for (const linea of offenses(await readFile(archivo, "utf8"))) {
       infractiones.push(`${path.relative(RAIZ, archivo)} ${linea}`);
     }
   }
   assert.deepEqual(
     infractiones,
     [],
-    "Usa concatenacion con comillas en vez de una plantilla: \"https://\" + valor. "
-      + "El HTML service de Apps Script corta la linea en \"//\" y el bundle deja de parsear.",
+    'Usa concatenacion con comillas o una constante: "https://" + valor. El HTML service de '
+      + "Apps Script recorta la linea en el // de una plantilla y el bundle deja de parsear.",
   );
 });
 
-test("las paginas construidas no contienen el patron que mutila el HTML service", async () => {
+test("las paginas construidas tampoco lo tienen", async () => {
   for (const nombre of ["dist/Index.html", "site/index.html"]) {
-    const url = path.join(RAIZ, ...nombre.split("/"));
     let texto;
     try {
-      texto = await readFile(url, "utf8");
+      texto = await readFile(path.join(RAIZ, ...nombre.split("/")), "utf8");
     } catch {
       continue; // La pagina aun no esta construida; la prueba anterior cubre el fuente.
     }
-    assert.deepEqual(
-      ofensas(texto.replace(/\r\n/g, "\n")),
-      [],
-      `${nombre} entrego el patron "//\${": el HTML service lo mutila al servir la pagina.`,
-    );
+    assert.deepEqual(offenses(texto), [], `${nombre} tiene "//" dentro de una plantilla.`);
   }
+});
+
+test("el detector no marca las expresiones regulares ni los comentarios", () => {
+  // Si estas lineas se marcaran, el detector daria falsos positivos en todo el codigo.
+  const sanas = [
+    '  if (/^https?:\\/\\//i.test(raw)) return raw;',
+    "  // un comentario con http://schemas.openxmlformats.org no debe marcar",
+    '  const x = "https://ejemplo.com/a";',
+    '  return "https://" + raw;',
+    "  return `${a}/${b}`;",
+  ];
+  assert.deepEqual(offenses(sanas.join("\n")), []);
 });
 
 test("normalizeDrawingUrl sigue resolviendo los mismos valores sin plantillas", async () => {
@@ -95,4 +113,18 @@ test("normalizeDrawingUrl sigue resolviendo los mismos valores sin plantillas", 
   assert.equal(contexto.normalizeDrawingUrl("C:\\dibujos\\plano.pdf"), "file://C:/dibujos/plano.pdf");
   assert.equal(contexto.normalizeDrawingUrl("https://example.com/a.pdf"), "https://example.com/a.pdf");
   assert.equal(contexto.normalizeDrawingUrl(""), "");
+});
+
+test("el XLSX sigue declarando los espacios de nombres XML fuera de las plantillas", async () => {
+  const source = await readFile(path.join(RAIZ, "src", "web", "planning", "app.js"), "utf8");
+  for (const nombre of ["XLSX_NS_PACKAGE", "XLSX_NS_PACKAGE_RELS", "XLSX_NS_OFFICE", "XLSX_NS_MAIN"]) {
+    assert.ok(source.includes(`const ${nombre} = "http`), `falta la constante ${nombre}`);
+  }
+  // buildSheetXml usa XLSX_NS_MAIN y esta declarada despues de buildXlsxBytes: si estuviera
+  // dentro de la funcion, buildSheetXml no la encontraria al construirse el XLSX.
+  const iConst = source.indexOf("const XLSX_NS_PACKAGE ");
+  const iBuild = source.indexOf("function buildXlsxBytes(");
+  const iSheet = source.indexOf("function buildSheetXml(");
+  assert.ok(iConst >= 0 && iConst < iBuild && iConst < iSheet, "las constantes deben estar en ambito de modulo");
+  assert.ok(source.includes("<worksheet xmlns=\"${XLSX_NS_MAIN}\">"), "buildSheetXml debe usar la constante");
 });

@@ -19,12 +19,13 @@ https://script.google.com/macros/s/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T
 El backend no expone credenciales. El navegador se comunica con un iframe oculto de Apps Script mediante `postMessage`; dentro de ese iframe se utiliza `google.script.run`.
 
 > **Usa el frontend de GitHub Pages, no la URL `/exec` de Apps Script** (RULE-WEB-002).
-> Servida por `/exec`, la página llega corrupta: el HTML service de Apps Script corta las
-> líneas que tienen `://` seguido de una interpolación, dos de los scripts inline dejan de
+> Servida por `/exec`, la página llega corrupta: el HTML service de Apps Script recorta la
+> línea en cada `//` que está dentro de una plantilla, los scripts del bundle dejan de
 > parsear (`Unexpected identifier 'https'`) y la app arranca con la interfaz visible pero
 > **0 OTs**, porque el estado nunca carga. El archivo en el proyecto de Apps Script sí es
 > correcto, y servido como estático (que es lo que hace GitHub Pages) carga sin errores.
 > Verificado 2026-09-26: 27 OTs en el plan, 180 operaciones, 0 errores de consola.
+> Por eso en `src/web` no hay ni un `//` dentro de una plantilla; `npm run check` lo verifica.
 
 ## Estructura
 

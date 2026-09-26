@@ -10667,14 +10667,21 @@ function jobExportTipo(job) {
   return jobDisplayType(job) || "";
 }
 
+// RULE-WEB-002: los espacios de nombres XML viven aqui y no dentro de una plantilla,
+// porque el HTML service de Apps Script recorta la linea en el "//" de una plantilla.
+const XLSX_NS_PACKAGE = "http://schemas.openxmlformats.org/package/2006/content-types";
+const XLSX_NS_PACKAGE_RELS = "http://schemas.openxmlformats.org/package/2006/relationships";
+const XLSX_NS_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const XLSX_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
 function buildXlsxBytes(headers, rows, sheetName) {
   const encoder = new TextEncoder();
   const sheetXml = buildSheetXml(headers, rows);
   const entries = [
-    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`],
-    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
-    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
-    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
     ["xl/worksheets/sheet1.xml", sheetXml],
   ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
   return buildZipBytes(entries);
@@ -10689,7 +10696,7 @@ function buildSheetXml(headers, rows) {
     const rowNumber = rowIndex + 1;
     return `<row r="${rowNumber}">${writeRow(row, rowNumber)}</row>`;
   }).join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${XLSX_NS_MAIN}"><sheetData>${body}</sheetData></worksheet>`;
 }
 
 function xlsxColumnLetter(index) {

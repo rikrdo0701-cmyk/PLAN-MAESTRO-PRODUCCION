@@ -2,6 +2,7 @@
   "use strict";
   const state = { list: [], detail: null, selection: {} };
   const INSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+  const DRAWING_SOURCE_HINT = "maldonado://";
   const INSPECTION_PREFETCH_COUNT = 8;
   const INSPECTION_MAX_ACTIVE_BUNDLE_REQUESTS = 3;
   const bundleCache = new Map();
@@ -285,7 +286,7 @@
   function openDrawing() {
     const raw = drawingCandidate();
     const drawing = normalizeDrawingUrl(raw);
-    if (!drawing) { root.alert(`No hay una liga de dibujo válida. Revisa que sea PDF dentro de \\192.168.1.101\\Produccion2\\, maldonado://, URL o ID de Drive. Valor actual: ${raw || "vacía"}`); return; }
+    if (!drawing) { root.alert("No hay una liga de dibujo válida. Revisa que sea PDF dentro de \\192.168.1.101\\Produccion2\\, " + DRAWING_SOURCE_HINT + ", URL o ID de Drive. Valor actual: " + (raw || "vacía")); return; }
     if (/^maldonado:\/\//i.test(drawing)) { clickDrawingLink(drawing); return; }
     const opened = root.open(drawing, "_blank", "noopener,noreferrer");
     if (opened) return;
@@ -373,7 +374,7 @@
         <section class="inspection-link-section">
           <header><strong>Dibujo del artículo</strong><span>${escape(job.article || "")}</span></header>
           <label><span>DIBUJO</span><input id="inspectionDrawingInput" type="text" value="${escape(drawing)}" placeholder="\\\\192.168.1.101\\Produccion2\\...\\archivo.pdf"></label>
-          <small>Para ruta de red completa pega la ruta en Dibujo. También acepta maldonado://, URL o ID de Drive.</small>
+          <small>Para ruta de red completa pega la ruta en Dibujo. También acepta ${DRAWING_SOURCE_HINT}, URL o ID de Drive.</small>
         </section>
         <section class="inspection-link-materials" role="table" aria-label="Tramos por material">
           <p class="inspection-link-material-note">El tramo se guarda por articulo + material.</p>
