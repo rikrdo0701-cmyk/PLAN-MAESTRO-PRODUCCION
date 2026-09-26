@@ -79,12 +79,17 @@ function DIAG_restlets() {
       '  filtroUbicacion=' + String(cuerpo.debug && cuerpo.debug.filtroUbicacion));
     log('debug.degradaciones=' + JSON.stringify((cuerpo.debug && cuerpo.debug.degradaciones) || []));
 
-    if (cuerpo.debug && cuerpo.debug.estrategia === 'sql-paginado+ubicacion') {
-      log('-> la cuenta ACEPTA FETCH NEXT/OFFSET y tl.location: el 2240 esta Fully optimizado');
+    if (cuerpo.debug && cuerpo.debug.estrategia === 'con-ubicacion') {
+      log('-> la columna tl.location funciona: el 2240 filtra por planta y no trae las demas');
+    } else if (cuerpo.debug && cuerpo.debug.estrategia === 'sql-de-produccion') {
+      avisos += 1;
+      log('AVISO: respondio la estrategia de produccion, osea que el filtro por ubicacion no');
+      log('       sirvio. No es un fallo: el servidor descarta por planta en memoria con');
+      log('       PP_belongsToPlant_, pero si se quiere el ahorro de no traerlas, hay que');
+      log('       revisar si tl.location existe como columna en esta cuenta.');
     } else {
       avisos += 1;
-      log('AVISO: no se uso la estrategia optima. Funciona igual (hay fallback), pero la cuenta');
-      log('       no acepto alguna de las dos cosas nuevas. Con esto se sabe cual.');
+      log('AVISO: estrategia desconocida: ' + String(cuerpo.debug && cuerpo.debug.estrategia));
     }
     if (cuerpo.error) {
       fallos += 1;
