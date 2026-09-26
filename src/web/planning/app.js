@@ -10679,16 +10679,12 @@ async function applyImported(imported, options = {}) {
     restoreLocalPlanningState(chosen || preservedLocalPlanning);
     state.operations = preserveImportedOperationPrices(preservedLocalPlanning.operations, state.operations);
   }
-  if (Array.isArray(imported.workOrders)) {
-    const localWorkOrdersByOt = new Map(
-      (state.workOrders || []).map((item) => [materialOtKey(item?.ot), item]),
-    );
-    state.workOrders = normalizeWorkOrders(imported.workOrders).map((item) =>
-      mergeWorkOrderLocalOverrides(localWorkOrdersByOt.get(materialOtKey(item.ot)), item));
-  }
-  if (imported.closedWorkOrderSummaries && typeof imported.closedWorkOrderSummaries === "object") {
-    state.closedWorkOrderSummaries = mergeClosedWorkOrderSummaries(state.closedWorkOrderSummaries, imported.closedWorkOrderSummaries);
-  }
+  // EL ORDEN IMPORTA, Y ES LO UNICO QUE CAMBIA RESPECTO AL ORDEN ANTERIOR. Las marcas se
+  // restauran ANTES de reemplazar la lista de OTs, porque el reemplazo necesita saber cuales
+  // estan marcadas para conservarles la ficha. Con el orden viejo (OTs primero, marcas despues)
+  // el efecto medido fue que la OT sobrevivia a la recarga SIN FICHA: selectedOts la
+  // conservaba por la marca, workOrders no, y una OT sin ficha no tiene cantidad, ni estatus, ni
+  // fecha.
   if (imported.unconfirmedWorkOrders && typeof imported.unconfirmedWorkOrders === "object") {
     // Union por folio, y si una OT esta en los dos lados gana la marca MAS VIEJA: la mas vieja
     // es la que lleva mas sincronizaciones fallidas encima, y un misses mas alto significa que
@@ -10700,6 +10696,34 @@ async function applyImported(imported, options = {}) {
       state.unconfirmedWorkOrders,
       imported.unconfirmedWorkOrders,
     );
+  }
+  if (imported.closedWorkOrderSummaries && typeof imported.closedWorkOrderSummaries === "object") {
+    state.closedWorkOrderSummaries = mergeClosedWorkOrderSummaries(state.closedWorkOrderSummaries, imported.closedWorkOrderSummaries);
+  }
+  if (Array.isArray(imported.workOrders)) {
+    const localWorkOrdersByOt = new Map(
+      (state.workOrders || []).map((item) => [materialOtKey(item?.ot), item]),
+    );
+    const importadas = normalizeWorkOrders(imported.workOrders).map((item) =>
+      mergeWorkOrderLocalOverrides(localWorkOrdersByOt.get(materialOtKey(item.ot)), item));
+    // LA FICHA DE UNA OT MARCADA TAMBIEN SE CONSERVA. Es el mismo estandar que la marca y con la
+    // misma justificacion: si la ausencia de la OT no tiene evidencia de cierre, no hay motivo
+    // para tirarle tambien la ficha. Medido el 2026-09-26 el efecto de no hacerlo: la OT
+    // sobrevivia a la recarga en la cola (por la marca) pero SIN FICHA, o sea sin cantidad, sin
+    // estatus y sin fecha; y jobStatusForOt sobre una OT sin ficha devuelve "PLAN", o sea
+    // ABIERTA por defecto. La app la presenta como abierta una OT de la que no sabe nada, que
+    // es peor que no tenerla: la persona la ve en la cola y no tiene forma de saber que le falta
+    // el dato. Y reconcileActiveWorkOrders no la puede recuperar despues, porque arma
+    // currentByOt desde state.workOrders, que ya no la tiene.
+    const porOt = new Set(importadas.map((item) => materialOtKey(item?.ot)));
+    const fichasDeMarcadas = [];
+    for (const [key, item] of localWorkOrdersByOt) {
+      if (!key || porOt.has(key)) continue;
+      if (!state.unconfirmedWorkOrders || !state.unconfirmedWorkOrders[key]) continue;
+      if (!item || !item.ot) continue;
+      fichasDeMarcadas.push({ ...item });
+    }
+    state.workOrders = importadas.concat(fichasDeMarcadas);
   }
   invalidateGanttCache();
   invalidateCurrentPlanOperationsCache();

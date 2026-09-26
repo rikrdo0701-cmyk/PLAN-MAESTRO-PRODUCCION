@@ -125,6 +125,43 @@ test("applyImported restaura las marcas que vienen de la hoja", () => {
     "el estado por defecto tiene que declarar el campo");
 });
 
+test("EL ORDEN: las marcas se restauran ANTES de reemplazar la lista de OTs", () => {
+  // Si se reemplazan las OTs primero, el reemplazo no sabe cuales estan marcadas y no puede
+  // conservarles la ficha. El orden no es cosmetico: es lo que hace que la prueba de abajo
+  // tenga sentido. Se afirma por POSICION, no por presencia, porque las dos ramas existen en
+  // cualquier orden y un assert de presencia pasaria con el orden equivocado.
+  const iMarcas = app.indexOf("state.unconfirmedWorkOrders = mergeUnconfirmedWorkOrderMarks(");
+  const iOts = app.indexOf("if (Array.isArray(imported.workOrders)) {");
+  assert.ok(iMarcas >= 0 && iOts >= 0, "las dos ramas existen");
+  assert.ok(iMarcas < iOts,
+    "las marcas tienen que restaurarse ANTES: el reemplazo de la lista las necesita para saber a quien conservar la ficha");
+});
+
+test("una OT marcada conserva su FICHA al recargar, no solo su lugar en la cola", () => {
+  // El escenario medido el 2026-09-26: con la marca pero sin este arreglo, la OT sobrevivia a
+  // la recarga en la cola y perdia la ficha. Sin ficha, jobStatusForOt devuelve "PLAN", o sea
+  // ABIERTA por defecto: la app presenta como abierta una OT de la que no sabe nada. Y
+  // reconcileActiveWorkOrders no la puede recuperar, porque arma currentByOt desde la lista que
+  // ya no la tiene. O sea que la ficha es lo unico que hay que preservar.
+  assert.match(app,
+    /const fichasDeMarcadas = \[\];[\s\S]{0,700}state\.unconfirmedWorkOrders\[key\][\s\S]{0,700}fichasDeMarcadas\.push\(\{ \.\.\.item \}\);[\s\S]{0,200}state\.workOrders = importadas\.concat\(fichasDeMarcadas\);/,
+    "la ficha de una OT marcada y ausente de la lista importada tiene que conservarse");
+  // Y tiene que ser SOLO para las marcadas: una OT no marcada que no viene en la lista se
+  // comporta como antes, que es lo que hace que esto no sea una puerta trasera para resucitar OTs.
+  assert.match(app, /if \(!state\.unconfirmedWorkOrders \|\| !state\.unconfirmedWorkOrders\[key\]\) continue;/,
+    "sin marca, la ficha no se conserva: la marca es la unica que abre esa puerta");
+});
+
+test("la ficha conservada no duplica la OT que si vino en la lista", () => {
+  // Si una OT marcada viene TAMBIEN en la lista importada, su ficha es la que trae la lista
+  // (mas reciente) y solo se le fusionan los overrides locales. Agregarla otra vez seria un
+  // duplicado, y normalizeWorkOrders deduplica por folio as que el resultado seria el mismo
+  // pero con trabajo de mas; peor, si la lista trajera OTs duplicadas por folio, el conteo de
+  // fichas de la hoja dejaria de coincidir con el numero de filas.
+  assert.match(app, /const porOt = new Set\(importadas\.map\(\(item\) => materialOtKey\(item\?\.ot\)\)\);[\s\S]{0,300}if \(!key \|\| porOt\.has\(key\)\) continue;/,
+    "una OT que ya vino en la lista no se agrega de nuevo");
+});
+
 test("el bloque REAL de normalizeState: con la marca la OT sobrevive, sin la marca se cae", () => {
   // El bloque de app.js tal cual, desde operationOts hasta despues de asignar selectedOts. Si
   // se cortara antes de la asignacion, el test no probaria nada.

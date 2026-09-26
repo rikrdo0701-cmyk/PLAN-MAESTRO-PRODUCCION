@@ -1511,7 +1511,13 @@ test("la config de capacidades editada localmente sobrevive a un import remoto",
   assert.match(importFlow, /if \(preservedLocalCapabilityConfig\) restoreLocalCapabilityConfig\(preservedLocalCapabilityConfig\);/);
   assert.match(payload, /delete payload\._locallyEditedCapabilityConfig;/);
   assert.match(importFlow, /if \(Array\.isArray\(imported\.workOrders\)\)/);
-  assert.match(importFlow, /state\.workOrders = normalizeWorkOrders\(imported\.workOrders\)/);
+  // La linea que faltaba: desde RULE-OT-051 (2.49.0) la lista importada NO se asigna tal cual.
+  // Se le anexan las fichas de las OTs marcadas que no vinieron, porque si la ausencia de una OT
+  // no tiene evidencia de cierre, tampoco hay motivo para tirarle su ficha. La asignacion es
+  // ahora `importadas.concat(fichasDeMarcadas)`, y este assert existed para fijar la forma
+  // anterior, que es exactamente la que producia el zombie: la OT en la cola sin ficha.
+  assert.match(importFlow, /const importadas = normalizeWorkOrders\(imported\.workOrders\)\.map/);
+  assert.match(importFlow, /state\.workOrders = importadas\.concat\(fichasDeMarcadas\)/);
   assert.match(importFlow, /mergeWorkOrderLocalOverrides\(localWorkOrdersByOt\.get\(materialOtKey\(item\.ot\)\), item\)/);
   assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(localOperationsBeforeImport, imported\.operations\)/);
   assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(preservedLocalPlanning\.operations, state\.operations\)/);
