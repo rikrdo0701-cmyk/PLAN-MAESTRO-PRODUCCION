@@ -1,8 +1,8 @@
 {
   "name": "plan-maestro-produccion-appscript",
-  "version": "2.44.0",
+  "version": "2.45.0",
   "private": true,
-  "description": "Plan maestro de producción con frontend en GitHub Pages y backend en Google Apps Script.",
+  "description": "Plan maestro de producciÃ³n con frontend en GitHub Pages y backend en Google Apps Script.",
   "type": "module",
   "engines": {
     "node": ">=20"

@@ -12,7 +12,13 @@ const PP_SHEETS = {
   CATALOGO_OPERACIONES: ['KEY', 'CT', 'OPERACION', 'ORIGEN', 'ACTIVA'],
   ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA', 'PRECIO_ULTIMA_VENTA'],
   CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'],
-  CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'ACTUALIZADO'],
+  // PRECIO_MANUAL lo escribe una persona (dialogo de preparar trabajo o la tabla de
+  // Catalogos). PRECIO_REF_VENTA lo escribe el sync con el precio de venta de NetSuite y SI
+  // baja cuando el precio baja. Antes los dosAMIN compartian columna, con un max que solo
+  // subia, y por eso un precio equivocado se quedaba pegado para siempre (RULE-REP-021).
+  // PP_writeTable_ hace clearContents y reescribe el encabezado, asi que la columna nueva
+  // aparece sola en la hoja, sin migracion.
+  CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'PRECIO_REF_VENTA', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
   MAQUINAS: ['ID', 'ACTIVA'],
   HERRAMENTALES: ['ID', 'PARTE', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIEMPO_AJUSTE_HERR', 'TIEMPO_AJUSTE_KIT', 'ACTIVO'],
@@ -632,6 +638,7 @@ function PP_articleConfigurationRows_(payload) {
       String(item.jobType || item.tipoOt || '').trim().toUpperCase(),
       String(item.planningType || item.tipoTrabajo || '').trim().toUpperCase(),
       Number(item.manualUnitPrice || item.precioManual || 0),
+      Number(item.referenceSalePrice || item.precioRefVenta || 0),
       item.updatedAt || item.actualizado || new Date().toISOString()
     ];
   });
@@ -1584,6 +1591,7 @@ function PP_buildArticleConfigurations_(articleRows, legacyOtRows, workOrders, o
       jobType: String(row.TIPO_OT || '').trim().toUpperCase(),
       planningType: String(row.TIPO_TRABAJO || '').trim().toUpperCase(),
       manualUnitPrice: Number(row.PRECIO_MANUAL || 0),
+      referenceSalePrice: Number(row.PRECIO_REF_VENTA || 0),
       updatedAt: String(row.ACTUALIZADO || '').trim()
     };
   });
@@ -1608,6 +1616,7 @@ function PP_buildArticleConfigurations_(articleRows, legacyOtRows, workOrders, o
       jobType: '',
       planningType: '',
       manualUnitPrice: 0,
+      referenceSalePrice: 0,
       updatedAt: ''
     };
     if (!current.jobType) current.jobType = String(row.TIPO_OT || '').trim().toUpperCase();

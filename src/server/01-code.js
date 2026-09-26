@@ -1,4 +1,4 @@
-const PP_APP_VERSION = '2.44.0';
+const PP_APP_VERSION = '2.45.0';
 const PP_SCHEMA_VERSION = 31;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 

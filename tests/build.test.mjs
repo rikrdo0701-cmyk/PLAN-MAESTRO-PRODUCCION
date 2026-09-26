@@ -384,7 +384,13 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.doesNotMatch(pagesIndex, /const startingRows = summary\.starts \|\| \[\];/);
   assert.doesNotMatch(pagesIndex, /Number\(row\.amount \|\| 0\)/);
   assert.match(pagesIndex, /Number\.isFinite\(number\) && number >= 1/);
-  assert.match(pagesIndex, /const unitPrices = positiveValues\(\[first\.unitPrice, last\.unitPrice, invoiceUnitPriceForOt\(ot\) \|\| null, configuration\.manualUnitPrice\]\)/);
+  // El max del reporte semanal se mantiene (decisión de negocio) pero el precio de venta del
+  // sync entra por su propio campo y SOLO como respaldo cuando no hay un precio vivo
+  // (RULE-REP-021). Antes ese precio se metía en manualUnitPrice con un max que solo subía.
+  assert.match(pagesIndex, /const livePrice = invoiceUnitPriceForOt\(ot\) \|\| null/);
+  assert.match(pagesIndex, /livePrice \? null : configuration\.referenceSalePrice/);
+  assert.doesNotMatch(pagesIndex, /configuration\.manualUnitPrice = price;/,
+    "el sync no debe escribir el precio de venta en manualUnitPrice");
   assert.match(pagesIndex, /const amount = amounts\.length \? Math\.max\(\.\.\.amounts\) : null/);
   assert.match(pagesIndex, /Number\.isFinite\(pendingPiecesValue\)/);
   assert.match(pagesIndex, /window\.PlanningWorkflowCore = api/);

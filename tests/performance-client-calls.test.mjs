@@ -1473,7 +1473,10 @@ test("la carga no toca el borrador de una OT que NetSuite sigue reportando abier
   assert.deepEqual(state.workOrders.map((wo) => wo.ot), ["200", "300"]);
 });
 
-test("la sincronizacion persiste el mayor precio de venta como precio de referencia del articulo", () => {
+test("la sincronizacion persiste el precio de venta en referenceSalePrice, separado del manual (RULE-REP-021)", () => {
+  // Antes este test afirmaba que el sync escribia el precio de venta en manualUnitPrice con un
+  // max que solo subia. Eso hacia que un precio de venta equivocado quedara pegado en CONFIG
+  // y el reporte lo tomara por un precio escrito por una persona. Ver RULE-REP-021.
   const persistSource = appSource.slice(
     appSource.indexOf("function persistReferencePricesFromSync("),
     appSource.indexOf("function setNetSuiteSyncPhaseLabel("),
@@ -1489,14 +1492,14 @@ test("la sincronizacion persiste el mayor precio de venta como precio de referen
     ],
     operations: [],
     articleConfigurations: {
-      "MANUAL MAYOR": { article: "MANUAL MAYOR", manualUnitPrice: 500, jobType: "", planningType: "", updatedAt: "" },
+      "MANUAL MAYOR": { article: "MANUAL MAYOR", manualUnitPrice: 500, referenceSalePrice: 0, jobType: "", planningType: "", updatedAt: "" },
     },
   };
   const articleKeyForPart = (part) => String(part || "").trim().toUpperCase();
   const articleConfigurationFor = (part) => {
     const article = articleKeyForPart(part);
     if (!state.articleConfigurations[article]) {
-      state.articleConfigurations[article] = { article, jobType: "", planningType: "", manualUnitPrice: 0, updatedAt: "" };
+      state.articleConfigurations[article] = { article, jobType: "", planningType: "", manualUnitPrice: 0, referenceSalePrice: 0, updatedAt: "" };
     }
     return state.articleConfigurations[article];
   };
@@ -1513,14 +1516,22 @@ test("la sincronizacion persiste el mayor precio de venta como precio de referen
 
   assert.equal(persistReferencePricesFromSync(), true);
 
-  assert.equal(state.articleConfigurations["C 490 UADE PN"].manualUnitPrice, 742.09);
-  assert.equal(state.articleConfigurations["TRA 500"].manualUnitPrice, 1935);
+  // El precio de venta va a SU campo, tomando el mayor entre ultima venta y promedio.
+  assert.equal(state.articleConfigurations["C 490 UADE PN"].referenceSalePrice, 742.09);
+  assert.equal(state.articleConfigurations["TRA 500"].referenceSalePrice, 1935);
+  // Y NO pisa el precio que escribio una persona, ni para bajarlo ni para subirlo.
   assert.equal(state.articleConfigurations["MANUAL MAYOR"].manualUnitPrice, 500);
+  assert.equal(state.articleConfigurations["MANUAL MAYOR"].referenceSalePrice, 100);
+  // Articulos sin precio de venta no crean configuracion.
   assert.equal(state.articleConfigurations["SIN PRECIO"], undefined);
   assert.equal(state.articleConfigurations["RESIDUAL"], undefined);
+  // manualUnitPrice sigue en 0 en los que solo tienen precio de venta: el sync no lo escribe.
+  assert.equal(state.articleConfigurations["C 490 UADE PN"].manualUnitPrice, 0);
+  assert.equal(state.articleConfigurations["TRA 500"].manualUnitPrice, 0);
   assert.ok(state.articleConfigurations["C 490 UADE PN"].updatedAt);
   assert.deepEqual(saves, ["catalogs"]);
 
+  // Sin cambios la segunda vez, no se vuelve a guardar la hoja.
   assert.equal(persistReferencePricesFromSync(), false);
   assert.deepEqual(saves, ["catalogs"]);
 });

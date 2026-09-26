@@ -5398,9 +5398,10 @@ function renderArticleConfigurations() {
       <td>${escapeHtml(item.jobType || "")}</td>
       <td>${escapeHtml(item.planningType || "")}</td>
       <td><input class="article-temporary-price-input" data-article-price="${escapeHtml(item.article)}" type="number" min="0" step="0.01" value="${item.manualUnitPrice > 0 ? escapeHtml(item.manualUnitPrice) : ""}" aria-label="Precio temporal ${escapeHtml(item.article)}"></td>
+      <td class="article-reference-price">${item.referenceSalePrice > 0 ? escapeHtml(formatCurrency(item.referenceSalePrice)) : '<span class="status-note">sin precio de venta</span>'}</td>
       <td>${escapeHtml(item.updatedAt ? formatDateTime(new Date(item.updatedAt)) : "")}</td>
     </tr>`).join("");
-  els.articleConfigTable.innerHTML = `<thead><tr><th>Articulo</th><th>Tipo comercial</th><th>Tipo trabajo</th><th>Precio temporal</th><th>Actualizado</th></tr></thead><tbody>${rows || emptyTableRow(5, "Sin configuracion de articulos")}</tbody>`;
+  els.articleConfigTable.innerHTML = `<thead><tr><th>Articulo</th><th>Tipo comercial</th><th>Tipo trabajo</th><th>Precio temporal (manual)</th><th>Ultimo precio de venta (sync)</th><th>Actualizado</th></tr></thead><tbody>${rows || emptyTableRow(6, "Sin configuracion de articulos")}</tbody>`;
   els.articleConfigTable.querySelectorAll("[data-article-price]").forEach((input) => {
     input.addEventListener("change", () => updateTemporaryArticlePrice(input.dataset.articlePrice, input.value));
   });
@@ -7848,7 +7849,26 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       return Number.isFinite(number) && number >= 1;
     };
     const positiveValues = (values) => values.filter(positiveNumber).map(Number);
-    const unitPrices = positiveValues([first.unitPrice, last.unitPrice, invoiceUnitPriceForOt(ot) || null, configuration.manualUnitPrice]);
+    // El max se mantiene (decisión de negocio: para valorar una liberación manda el precio más
+    // alto que se conoce), pero las fuentes son de TRES tipos distintos y cada una significa
+    // algo (RULE-REP-021):
+    //   - first/last.unitPrice: precio guardado en la fila del snapshot (PRECIO_UNITARIO).
+    //     Solo existe en operaciones que vienen de un snapshot; en el borrador vivo va vacío.
+    //   - invoiceUnitPriceForOt: precio de venta VIVO del 1766 (última venta y promedio).
+    //   - configuration.referenceSalePrice: el último precio de venta que dejó el sync. Es un
+    //     precio real, pero de un sync anterior, así que solo se usa si no hay uno vivo.
+    //   - configuration.manualUnitPrice: precio escrito por una persona, que manda sobre todo.
+    // Lo que NO entra aquí es un máximo histórico acumulado: antes el sync escribía el precio
+    // de venta en manualUnitPrice con un max que solo subía, así que un precio inflado quedó
+    // pegado en CONFIG y se reportaba para siempre.
+    const livePrice = invoiceUnitPriceForOt(ot) || null;
+    const unitPrices = positiveValues([
+      first.unitPrice,
+      last.unitPrice,
+      livePrice,
+      livePrice ? null : configuration.referenceSalePrice,
+      configuration.manualUnitPrice,
+    ]);
     const unitPrice = unitPrices.length ? Math.max(...unitPrices) : null;
     const opAmounts = pendingPieces > 0 ? positiveValues([first.amount, last.amount]) : [];
     const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
@@ -9497,21 +9517,31 @@ function persistReferencePricesFromSync() {
   const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
   let changed = false;
   const updatedAt = new Date().toISOString();
-  const bump = (part, price) => {
+  // El precio de venta de NetSuite va a SU PROPIO campo, referenceSalePrice, y no a
+  // manualUnitPrice. Antes se escribia en manualUnitPrice con un max que solo subia, de modo
+  // que un precio de venta equivocado (el de la conversion por tipo de cambio, RULE-REP-018)
+  // quedaba pegado en CONFIG para siempre, y el reporte lo tomaba como si fuera un precio
+  // escrito por una persona. Ahora este campo se actualiza en AMBOS sentidos: si el precio de
+  // venta baja, baja. manualUnitPrice queda solo para lo que escriba una persona.
+  // Se escribe solo cuando el valor cambia de verdad, para no guardar la hoja en cada sync.
+  const recordSalePrice = (part, price) => {
     const article = articleKeyForPart(part);
     if (!article) return;
     const configuration = articleConfigurationFor(article);
-    if (Number(configuration.manualUnitPrice || 0) >= price) return;
-    configuration.manualUnitPrice = price;
+    const next = Math.max(0, Number(price) || 0);
+    const current = Math.max(0, Number(configuration.referenceSalePrice || 0));
+    if (!(next >= 1)) return;
+    if (Math.abs(current - next) < 0.005) return;
+    configuration.referenceSalePrice = next;
     configuration.updatedAt = updatedAt;
     changed = true;
   };
   for (const workOrder of workOrders) {
     const price = Math.max(0, Number(workOrder?.lastSalePrice) || 0, Math.max(0, Number(workOrder?.averageSalePrice) || 0));
     if (!(price >= 1)) continue;
-    bump(workOrder.item, price);
+    recordSalePrice(workOrder.item, price);
     const otArticle = articleForOt(workOrder?.ot);
-    if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) bump(otArticle, price);
+    if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) recordSalePrice(otArticle, price);
   }
   if (changed) queueAppSheetSave("catalogs");
   return changed;
@@ -11982,6 +12012,9 @@ function normalizeArticleConfigurations(source) {
       jobType: String(item.jobType || item.tipoOt || "").trim().toUpperCase(),
       planningType: String(item.planningType || item.tipoTrabajo || "").trim().toUpperCase(),
       manualUnitPrice: Math.max(0, Number(item.manualUnitPrice || item.precioManual || 0)),
+      // Precio de venta que dejo el ultimo sync. No es un precio escrito por una persona y
+      // se actualiza tambien cuando baja (RULE-REP-021).
+      referenceSalePrice: Math.max(0, Number(item.referenceSalePrice || item.precioRefVenta || 0)),
       updatedAt: String(item.updatedAt || item.actualizado || ""),
     };
   }
