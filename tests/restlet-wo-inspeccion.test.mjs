@@ -48,23 +48,34 @@ function makeRows(count) {
   }));
 }
 
-test("el listado pagina en la consulta, no trayendo el catalogo completo", () => {
+test("el listado NO usa FETCH NEXT/OFFSET: el SuiteQL de la cuenta no lo acepta", () => {
+  // Verificado en produccion el 2026-09-26 08:00: al subir la version con paginacion en la
+  // consulta, el 2244 devolvio 400 "Failed to parse SQL" y la inspeccion se quedo vacia. El
+  // diagnostico inicial ("Cannot build builtin function") apuntaba a otra causa, pero el 2244
+  // solo habia cambiado en esto, asi que por eliminacion quedo claro que FETCH NEXT/OFFSET no
+  // existe en el SuiteQL de la cuenta. Se prueba sobre el SQL que de verdad se manda.
+  const { post, calls } = loadRestlet({ rows: makeRows(5) });
+
+  post({ table: "WO_INSPECCION", action: "list", pageIndex: 1, pageSize: 2 });
+
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].sql, /FETCH NEXT/, "agregarlo otra vez deja la inspeccion sin datos");
+  assert.doesNotMatch(calls[0].sql, /OFFSET \d+ ROWS/);
+});
+
+test("la pagina se recorta en memoria con SELECT DISTINCT, como siempre", () => {
   const { post, calls } = loadRestlet({ rows: makeRows(5) });
 
   const result = post({ table: "WO_INSPECCION", action: "list", pageIndex: 1, pageSize: 2 });
 
-  assert.equal(calls.length, 1, "una pagina debe costar una sola consulta");
-  const sql = calls[0].sql;
-  assert.match(sql, /FETCH NEXT 3 ROWS ONLY/, "pide pageSize + 1 filas para deducir hasMore");
-  assert.match(sql, /OFFSET 2 ROWS/, "el OFFSET sale de pageIndex * pageSize");
-  assert.doesNotMatch(sql, /SELECT DISTINCT/, "el DISTINCT sobra: la linea mainline ya es una por OT y costaba un sort extra");
-  assert.equal(result.rows.length, 2, "devuelve la pagina, no la fila extra");
-  assert.equal(result.hasMore, true);
+  assert.equal(calls.length, 1, "una sola consulta trae el catalogo");
+  assert.match(calls[0].sql, /SELECT DISTINCT/);
+  assert.equal(result.rows.length, 2, "devuelve la pagina pedida");
   assert.equal(result.pageIndex, 1);
   assert.equal(result.pageSize, 2);
 });
 
-test("hasMore se deduce de la fila extra y la ultima pagina se cierra", () => {
+test("hasMore sale de si hay mas filas y la ultima pagina se cierra", () => {
   const rows = makeRows(5);
   const primera = loadRestlet({ rows });
   const segunda = loadRestlet({ rows });
@@ -81,12 +92,12 @@ test("hasMore se deduce de la fila extra y la ultima pagina se cierra", () => {
   assert.deepEqual(folios, rows.map((row) => row.wo), "recorrer las paginas entrega el catalogo completo sin repetir ni perder");
 });
 
-test("el listado ya no expone totalRows porque implicaba contar sobre el mismo JOIN", () => {
+test("el listado expone totalRows", () => {
   const { post } = loadRestlet({ rows: makeRows(4) });
 
   const result = post({ table: "WO_INSPECCION", action: "list", pageIndex: 0, pageSize: 10 });
 
-  assert.equal("totalRows" in result, false);
+  assert.equal(result.totalRows, 4);
   assert.equal(result.hasMore, false);
 });
 
