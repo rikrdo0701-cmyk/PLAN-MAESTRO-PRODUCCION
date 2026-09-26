@@ -575,11 +575,26 @@ function PP_applySalesPrices_(workOrders, prices) {
   });
 }
 
+// pageSize por RESTlet. 200 es el valor historical para todos; el 1766 (REQ_FIFO) admite
+// 1000 y ya se usa asi en produccion en el script de inventario INV_PLANTAS_WIP, que es la
+// prueba de que el restlet aguanta ese tamano. Con 200, la lectura de precios Pagina cinco
+// veces mas veces que con 1000 sobre las mismas filas, y cada pagina es una peticion que puede
+// chocar con el limite de solicitudes de NetSuite. Los demas restlets se quedan en 200
+// porque su maximo no esta verificado.
+const PP_RESTLET_PAGE_SIZE_ = { '1766': 1000 };
+
+function PP_restletPageSize_(query) {
+  var scriptId = String((query || {}).script || '');
+  var configured = PP_RESTLET_PAGE_SIZE_[scriptId];
+  return configured > 0 ? configured : 200;
+}
+
 function PP_fetchRestletPages_(query, baseBody, config, maxPages) {
   const rows = [];
   let headers = [];
+  const pageSize = PP_restletPageSize_(query);
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
-    const body = Object.assign({}, baseBody, { pageIndex: pageIndex, pageSize: 200 });
+    const body = Object.assign({}, baseBody, { pageIndex: pageIndex, pageSize: pageSize });
     const response = PP_netSuiteRestletRequest_(query, body, config);
     if (!response.ok) throw new Error('NetSuite RESTlet: ' + response.status + ' ' + response.raw.slice(0, 500));
     headers = response.json.headers || headers;

@@ -181,6 +181,28 @@ test("PP_buildWorkOrderCatalog_ lee Articulo acentuado de WO_LISTA y matchea pre
   assert.ok(applied[0].averageSalePrice > 0);
 });
 
+test("PP_fetchRestletPages_ pide 1000 filas al 1766 y 200 al resto", () => {
+  const page1 = {
+    ok: true,
+    headers: ["_ITEM_ID", "PRECIO BASE MNX"],
+    rows: [{ _ITEM_ID: "1001", "PRECIO BASE MNX": "500" }],
+    hasMore: true,
+  };
+  const page2 = { ok: true, headers: ["_ITEM_ID"], rows: [], hasMore: false };
+  const precios = load([{ status: 200, body: JSON.stringify(page1) }, { status: 200, body: JSON.stringify(page2) }]);
+  const config = { accountId: "ACME_SB1", consumerKey: "c", consumerSecret: "cs", token: "t", tokenSecret: "ts", locationId: 1 };
+
+  precios.context.PP_fetchRestletPages_({ script: "1766", deploy: "1" }, { table: "REQ_FIFO" }, config, 5);
+
+  const pedidos = precios.requests.map((request) => JSON.parse(request.options.payload).pageSize);
+  assert.deepEqual(pedidos, [1000, 1000], "el 1766 admite 1000 y se usa en produccion con ese tamano");
+
+  const otros = load([{ status: 200, body: JSON.stringify(page1) }, { status: 200, body: JSON.stringify(page2) }]);
+  otros.context.PP_fetchRestletPages_({ script: "1764", deploy: "1" }, { table: "WO_LISTA" }, config, 5);
+  const pedidosOtros = otros.requests.map((request) => JSON.parse(request.options.payload).pageSize);
+  assert.deepEqual(pedidosOtros, [200, 200], "los demas restlets se quedan en el valor historico");
+});
+
 test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", () => {
   const { context } = load();
   const prices = {
