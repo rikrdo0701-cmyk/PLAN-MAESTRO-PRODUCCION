@@ -575,7 +575,7 @@ function loadClient(options = {}) {
     },
     STORAGE_KEY: "test",
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
-    NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 110000,
+    NETSUITE_BACKLOG_SYNC_TIMEOUT_MS: 180000,
     NETSUITE_WORKORDER_FRESH_MS: 15 * 60 * 1000,
     state,
     stateHistory: [],
@@ -2590,7 +2590,7 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
 
   await fixture.context.syncBacklogWorkOrders();
 
-  assert.deepEqual(timeouts, [110000]);
+  assert.deepEqual(timeouts, [180000]);
   assert.equal(reconciliations, 2);
   assert.equal(purges, 2);
   assert.equal(dialogs, 0);

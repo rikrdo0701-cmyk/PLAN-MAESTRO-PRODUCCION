@@ -8,7 +8,14 @@ const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
 const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 // Un fetch completo tarda 43-73 s en produccion (1764 paginado + 1766 REQ_FIFO) y el
 // reintento ante limite de solicitudes agrega ~5 s; el puente corta a 120 s.
-const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 110000;
+// Presupuesto por intento de la sincronizacion ligera de OTs. El fetch real mide 43-73 s en
+// produccion (decenas de paginas del RESTlet 1766 REQ_FIFO) y cada peticion que sufra el
+// limite de solicitudes de NetSuite anade hasta 17 s de espera en el servidor (2+5+10). Con
+// 110 s bastaba para que un dia con dos peticiones limitadas se pasara de 124 s y el corte
+// dejara el plan sin generar. 180 s deja holgura sobre el peor caso medido sin dejar el
+// prompt colgado de forma indefinida. El reloj del puente va por encima (420 s) porque el
+// cliente reintenta una vez: 2 x 180 + 5 s de espera.
+const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;
 const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const NETSUITE_WORKORDER_FRESH_MS = 15 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;

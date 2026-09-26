@@ -13,6 +13,15 @@
     savePlanningStateOptimized: 180000,
     saveAppState: 180000,
     syncNetSuitePlanningData: 360000,
+    // La sincronizacion de OTs pagina el RESTlet 1766 REQ_FIFO y mide 43-73 s en produccion,
+    // mas hasta 17 s por peticion que sufra el limite de solicitudes (2+5+10 s de espera).
+    // Con el generico de 120 s el PUENTE cortaba antes que el cliente
+    // (NETSUITE_BACKLOG_SYNC_TIMEOUT_MS) y el mensaje que veia el usuario era el del puente en
+    // lugar del util. Estos dos metodos comparten el mismo fetch: 420 s cubren dos intentos del
+    // cliente (2 x 180 + 5 s) y el puente sigue siendo el reloj mas externo, de modo que el
+    // corte con mensaje accionable sea siempre el del cliente.
+    fetchNetSuiteWorkOrdersLite: 420000,
+    syncNetSuiteWorkOrdersLite: 420000,
   };
 
   let iframe = null;

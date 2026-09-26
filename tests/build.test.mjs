@@ -428,7 +428,21 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
   assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
   assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
-  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 110000;/);
+  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;/);
+  // El reloj del puente debe quedar POR ENCIMA del presupuesto del cliente, porque el cliente
+  // reintenta una vez (2 intentos + 5 s). Si el puente cortara primero, el usuario veria el
+  // error del puente en lugar de "NetSuite no respondio en N segundos", que es el que dice
+  // cuantos milisegundos se espero.
+  const backlogBudget = Number((pagesIndex.match(/NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = (\d+);/) || [])[1]);
+  const bridgeClient = await readFile(new URL("../src/web/shared/apps-script-bridge-client.js", import.meta.url), "utf8");
+  for (const method of ["fetchNetSuiteWorkOrdersLite", "syncNetSuiteWorkOrdersLite"]) {
+    const bridgeBudget = Number((bridgeClient.match(new RegExp(`${method}: (\\d+)`)) || [])[1]);
+    assert.ok(bridgeBudget > 0, `el puente debe tener presupuesto propio para ${method}`);
+    assert.ok(
+      bridgeBudget >= backlogBudget * 2 + 5000,
+      `el puente (${bridgeBudget} ms) debe cubrir dos intentos del cliente (${backlogBudget * 2} ms) mas la espera de 5 s`,
+    );
+  }
   // El limite de solicitudes de NetSuite es transitorio: la sync ligera reintenta una vez.
   assert.match(pagesIndex, /SSS_REQUEST_LIMIT_EXCEEDED[\s\S]{0,600}window\.setTimeout\(resolve, 5000\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);

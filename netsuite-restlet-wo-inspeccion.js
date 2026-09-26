@@ -91,7 +91,6 @@ define(['N/query', 'N/record'], (query, record) => {
   function listWorkOrders(payload) {
     const pageIndex = toInt(payload.pageIndex, 0);
     const pageSize = clamp(toInt(payload.pageSize, DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
-    const offset = pageIndex * pageSize;
     const params = [];
 
     let where = "t.type = 'WorkOrd'";
@@ -103,8 +102,14 @@ define(['N/query', 'N/record'], (query, record) => {
       params.push(payload.locationId);
     }
 
+    // La pagina se resuelve en la consulta (FETCH NEXT/OFFSET) y no despues en memoria. Antes
+    // se traia el catalogo completo en cada pagina y se recortaba con slice(), de modo que
+    // cada pagina pagaba el escaneo entero y pagaba el cable por filas que nadie leia, y el
+    // DISTINCT obligaba a un sort de mas. hasMore se decide con una fila de mas
+    // (pageSize + 1) en vez de con totalRows, para no pagar un COUNT sobre el mismo JOIN.
+    const limit = pageSize + 1;
     const sql = `
-      SELECT DISTINCT
+      SELECT
         t.id AS workorder_id,
         t.tranid AS wo,
         BUILTIN.DF(tl.item) AS articulo,
@@ -120,10 +125,13 @@ define(['N/query', 'N/record'], (query, record) => {
       WHERE ${where}
         AND NVL(tl.mainline, 'F') = 'T'
       ORDER BY t.tranid
+      FETCH NEXT ${limit} ROWS ONLY
+      OFFSET ${pageIndex * pageSize} ROWS
     `;
 
-    const all = runSuiteQL(sql, params);
-    const rows = all.slice(offset, offset + pageSize).map(normalizeWorkOrder);
+    const fetched = runSuiteQL(sql, params);
+    const hasMore = fetched.length > pageSize;
+    const rows = fetched.slice(0, pageSize).map(normalizeWorkOrder);
     return {
       ok: true,
       action: 'list',
@@ -131,8 +139,7 @@ define(['N/query', 'N/record'], (query, record) => {
       rows,
       pageIndex,
       pageSize,
-      totalRows: all.length,
-      hasMore: offset + pageSize < all.length
+      hasMore: hasMore
     };
   }
 
