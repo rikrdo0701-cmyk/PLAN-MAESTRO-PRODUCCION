@@ -10,14 +10,22 @@ const source = await readFile(new URL("../netsuite-restlet-operaciones.js", impo
  * segun la pagina pedida, de modo que se pueda comprobar que la paginacion se resuelve en
  * la consulta y no recortando en memoria, y que el filtro de ubicacion baja al SQL.
  */
-function loadRestlet({ rows = [], failWith = null } = {}) {
+function loadRestlet({ rows = [], failWith = null, failOn = null, failWhen = null, emptyWhen = null } = {}) {
   const calls = [];
   const query = {
     runSuiteQL(payload) {
-      calls.push({ sql: String(payload.query || ""), params: payload.params || [] });
+      const sql = String(payload.query || "");
+      calls.push({ sql, params: payload.params || [] });
       if (failWith) throw new Error(failWith);
-      const limit = Number((String(payload.query).match(/FETCH NEXT (\d+) ROWS ONLY/) || [])[1] || 0);
-      const offset = Number((String(payload.query).match(/OFFSET (\d+) ROWS/) || [])[1] || 0);
+      // Para el fallback: la consulta falla solo si el SQL coincide con un patron y no con otro.
+      if (failOn && failOn.test(sql) && !(failWhen && failWhen.test(sql))) {
+        throw new Error("SuiteQL no soporta esta variante");
+      }
+      // El filtro que "funciona" pero descarta todo: responde 0 filas sin error, que es el
+      // peor caso porque no hay excepcion que lo delate.
+      if (emptyWhen && emptyWhen.test(sql)) return { asMappedResults: () => [] };
+      const limit = Number((sql.match(/FETCH NEXT (\d+) ROWS ONLY/) || [])[1] || 0);
+      const offset = Number((sql.match(/OFFSET (\d+) ROWS/) || [])[1] || 0);
       const size = limit || rows.length;
       const page = rows.slice(offset, offset + size);
       return { asMappedResults: () => page };
@@ -135,7 +143,7 @@ test("la columna location sale en la fila y en los headers", () => {
 
   assert.equal(result.rows[0].location, "1", "la operacion dice de que ubicacion viene");
   assert.ok(result.headers.includes("Ubicacion"), "y el encabezado la anuncia");
-  assert.match(result.debug.locationFilter, /tl\.location = 1/);
+  assert.match(result.debug.filtroUbicacion, /tl\.location = 1/);
 });
 
 test("sin locationId en el body no se filtra, para no dejar fuera toda la lista", () => {
@@ -146,7 +154,7 @@ test("sin locationId en el body no se filtra, para no dejar fuera toda la lista"
   assert.doesNotMatch(calls[0].sql, /tl\.location = \?/, "sin ubicacion no se inventa el filtro");
   assert.deepEqual(calls[0].params, []);
   assert.equal(result.rows.length, 2);
-  assert.match(result.debug.locationFilter, /sin filtro/);
+  assert.match(result.debug.filtroUbicacion, /sin filtro/);
 });
 
 test("el filtro de abiertas y el orden estable siguen igual", () => {
@@ -189,4 +197,68 @@ test("un fallo de SuiteQL se propaga para que el backend lo registre", () => {
   const { post } = loadRestlet({ failWith: "SuiteQL no soporta FETCH NEXT" });
 
   assert.throws(() => post({ pageIndex: 0, pageSize: 100, locationId: 1 }), /FETCH NEXT/);
+});
+
+test("si la cuenta no acepta FETCH NEXT, cae al recorte en memoria en vez de quedar sin operaciones", () => {
+  // Es el riesgo real de subir el archivo: si FETCH NEXT/OFFSET no es SuiteQL valido en la
+  // cuenta, la version sin fallback devolveria 200 {ok:false} y la app se quedaria sin
+  // operaciones. Con fallback, el listado sigue entregando filas.
+  const { post, calls } = loadRestlet({
+    rows: makeRows(120),
+    failOn: /FETCH NEXT/,
+  });
+
+  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.rows.length, PAGE, "entrega la pagina completa");
+  assert.equal(result.debug.paginacion, "recorte en memoria");
+  assert.match(result.debug.estrategia, /^sql-completo/);
+  assert.ok(calls.length >= 2, "intento la paginada y luego la de memoria");
+  assert.ok(calls.some((call) => /FETCH NEXT/.test(call.sql)), "la primera fue la paginada");
+  assert.ok(calls.some((call) => !/FETCH NEXT/.test(call.sql)), "y la segunda la de memoria");
+  assert.ok(
+    result.debug.degradaciones.some((d) => /sql-paginado/.test(d)),
+    "y deja constancia de que la paginada se intento y fallo"
+  );
+});
+
+test("si el filtro por ubicacion devuelve 0 filas, degrada a sin filtro en vez de dejar la lista vacia", () => {
+  // El peor caso: la columna "funciona" pero descarta todo, sin exception que lo delate. Si el
+  // restlet devolviera la lista vacia, la app se quedaria sin operaciones.
+  const { post, calls } = loadRestlet({
+    rows: makeRows(120),
+    emptyWhen: /tl\.location = \?/,
+  });
+
+  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.rows.length, PAGE, "no devuelve la lista vacia");
+  assert.equal(result.debug.filtroUbicacion, "sin filtro por ubicacion");
+  assert.ok(calls.length >= 2, "primero intenta con filtro y luego sin el");
+  assert.ok(calls[0].sql.includes("tl.location = ?"), "la primera lleva el filtro");
+  assert.ok(!calls[1].sql.includes("tl.location = ?"), "la segunda ya sin filtro");
+  assert.ok(result.debug.degradaciones.some((d) => /0 filas/.test(d)), "y deja constancia de la degradacion");
+});
+
+test("si todas las estrategias fallan, el error dice cuales se intentaron", () => {
+  const { post } = loadRestlet({ failWith: "sin permisos de SuiteQL" });
+
+  assert.throws(() => post({ pageIndex: 0, pageSize: 100, locationId: 1 }), (error) => {
+    assert.match(error.message, /Ninguna estrategia/);
+    assert.match(error.message, /sql-paginado\+ubicacion/, "y enumera los intentos");
+    assert.match(error.message, /sql-completo:/);
+    return true;
+  });
+});
+
+test("con todo soportado, la primera estrategia es la que gana y no se intenta ninguna mas", () => {
+  const { post, calls } = loadRestlet({ rows: makeRows(120) });
+
+  const result = post({ pageIndex: 0, pageSize: PAGE, locationId: 1 });
+
+  assert.equal(calls.length, 1, "una sola consulta cuando nada falla");
+  assert.equal(result.debug.estrategia, "sql-paginado+ubicacion");
+  assert.deepEqual(result.debug.degradaciones, []);
 });

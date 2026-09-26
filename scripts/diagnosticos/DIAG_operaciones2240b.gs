@@ -10,9 +10,21 @@
  *   - `tl.location = ?` con parametro ligado; si la cuenta no acepta parametros, o si la
  *     columna no se llama asi, el filtro puede dejar la lista vacia.
  * Este archivo NO depende del 2240: arma el mismo SQL a mano y lo manda por la API REST de
- * SuiteQL, que es EXACTAMENTE el camino que ya usa en produccion el catalogo maestro
- * (PP_fetchNetSuiteOperationCatalog_, 08-netsuite.js:408). Asi lo que se verifica aqui es la
- * misma consulta sobre la misma cuenta y con los mismos permisos que usara el restlet.
+ * SuiteQL, que es el mismo camino que ya usa en produccion el catalogo maestro
+ * (PP_fetchNetSuiteOperationCatalog_, 08-netsuite.js:408).
+ *
+ * AVISO IMPORTANTE SOBRE EL ALCANCE (corrida del 2026-09-26 07:31): esta sonda dio
+ * `HTTP 400 ... Cannot build builtin function, validation failed. Static field is not ...`
+ * sobre el SQL SIN paginar, o sea un SQL casi identico al que el 2240 de produccion ejecuta
+ * HOY con exito (2400 filas). La conclusion es que el endpoint REST de SuiteQL y el
+ * `query.runSuiteQL` que corre DENTRO de NetSuite no aceptan exactamente lo mismo: la sonda
+ * NO reproduce el entorno del restlet y su veredicto no es concluyente. Por eso el 2240
+ * corregido se subio con un FALLBACK de estrategias (ver la cabecera del restlet): si la
+ * cuenta no acepta FETCH NEXT/OFFSET o el filtro por ubicacion devuelve 0 filas, cae al
+ * camino viejo en vez de dejar la app sin operaciones. Esta sonda ahora sirve para DIAGNOSTICAR
+ * que se degrado, no para autorizar el cambio: se puede correr despues de subir el archivo y
+ * revisar en el registro de ejecuciones de NetSuite que estrategia respondio (el restlet lo
+ * deja en `debug.estrategia`).
  *
  * NOTA SOBRE LOS PARAMETROS LIGADOS: por REST el endpoint de SuiteQL no acepta `params`, asi
  * que la sonda INTERPOLA el valor de la ubicacion en el texto del SQL (1, un entero que
@@ -24,10 +36,11 @@
  *
  * QUE HACE:
  *   0) Guardia de cuota de urlfetch (una llamada) y, si esta agotada, para ahi.
- *   1) El SQL tal cual lo lleva el 2240, sin paginar: debe devolver filas.
- *   2) El mismo SQL con FETCH NEXT / OFFSET: la cuenta lo acepta y el OFFSET avanza.
- *   3) El mismo SQL con `tl.location = 1` y, si devuelve 0 filas, avisa antes de que se suba.
- *   4) El desglose por ubicacion, que confirma que la columna existe y cuantas plantas hay.
+ *   1) El SQL completo de PRODUCCION (las 21 columnas, sin paginar): es el que el 2240 de hoy
+ *      ejecuta bien, asi que si falla aqui el problema es del endpoint REST y no del SQL.
+ *   2) Una columna `BUILTIN.DF` por consulta, para aislar cual es la que el endpoint REST
+ *      rechaza, y el texto COMPLETO del error (la corrida anterior lo cuto a 300 chars).
+ *   3) Con `tl.location = 1`, y el desglose por ubicacion, que confirma si la columna existe.
  */
 
 function PP_DIAG_QUOTA_EXHAUSTED_(error) {
@@ -59,12 +72,38 @@ function PP_DIAG_SUITEQL_(config, sql) {
   var status = response.getResponseCode();
   var raw = response.getContentText();
   if (status < 200 || status >= 300) {
-    throw new Error('HTTP ' + status + ' ' + String(raw).slice(0, 300));
+    // El texto COMPLETO del error, no recortado: la corrida del 07:31 cortó a 300 caracteres
+    // y se perdió la parte que dice que campo es el que no se puede construir.
+    var detalle = '';
+    try {
+      var errorJson = JSON.parse(raw || '{}');
+      var detalles = (errorJson['o:errorDetails'] || []);
+      detalle = detalles.map(function (item) { return String(item.detail || item); }).join(' || ');
+    } catch (parseError) {
+      detalle = String(raw);
+    }
+    throw new Error('HTTP ' + status + ' :: ' + detalle.slice(0, 1200));
   }
   var json;
-  try { json = JSON.parse(raw || '{}'); } catch (e) { throw new Error('JSON invalido: ' + String(raw).slice(0, 200)); }
-  if (!Array.isArray(json.items)) throw new Error('respuesta sin items: ' + String(raw).slice(0, 200));
+  try { json = JSON.parse(raw || '{}'); } catch (e) { throw new Error('JSON invalido: ' + String(raw).slice(0, 300)); }
+  if (!Array.isArray(json.items)) throw new Error('respuesta sin items: ' + String(raw).slice(0, 300));
   return json.items;
+}
+
+/** Una sola columna por consulta, para aislar cual rechaza el endpoint. */
+function PP_DIAG_UNA_COLUMNA_(config, columna, alias) {
+  return PP_DIAG_SUITEQL_(config, [
+    'SELECT ' + columna + ' AS ' + alias,
+    'FROM manufacturingoperationtask mot',
+    'JOIN transaction wo ON wo.id = mot.workorder',
+    'JOIN transactionline tl ON tl.transaction = wo.id',
+    " AND tl.mainline = 'T'",
+    'WHERE',
+    "  UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
+    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
+    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
+    'ORDER BY mot.id'
+  ].join('\n'));
 }
 
 function DIAG_operaciones2240b() {
@@ -99,7 +138,6 @@ function DIAG_operaciones2240b() {
   function conPaginacion(suffix) {
     return BASELINE.join('\n') + '\n' + suffix;
   }
-
   // 0) Guardia: una llamada minima para saber si hay cuota antes de gastar las de verdad.
   try {
     PP_DIAG_SUITEQL_(config, 'SELECT 1 AS ok FROM dual');
@@ -113,74 +151,82 @@ function DIAG_operaciones2240b() {
     log('la guardia fallo: ' + (guardError && guardError.message ? guardError.message : guardError));
   }
 
-  // 1) ¿La cuenta acepta FETCH NEXT / OFFSET? Este es el riesgo grande del cambio.
-  var BASELINE_SIN_PAGINAR = BASELINE.join('\n');
-  var filasSinPaginar = -1;
-  var started = Date.now();
-  try {
-    var todas = PP_DIAG_SUITEQL_(config, BASELINE_SIN_PAGINAR);
-    filasSinPaginar = todas.length;
-    log('SQL SIN paginar: OK, ' + filasSinPaginar + ' filas en ' + (Date.now() - started) + ' ms');
-  } catch (error1) {
-    log('SQL SIN paginar -> EXCEPCION ' + (error1 && error1.message ? error1.message : error1));
-    log('si esto falla, el 2240 viejo tampoco funcionaba con este SQL; revisa los permisos del token');
-    return;
-  }
+  // 1) AISLAR LA COLUMNA QUE EL ENDPOINT REST RECHAZA.
+  //    La corrida del 07:31 dio HTTP 400 "Cannot build builtin function" sobre el SQL sin
+  //    paginar, que es casi el que el 2240 de produccion ejecuta bien. O sea que el endpoint
+  //    REST de SuiteQL y el query.runSuiteQL de DENTRO de NetSuite no aceptan lo mismo. En vez
+  //    de repetir la misma consulta y volver a concluir lo mismo, se prueba una columna por
+  //    vez para decir cual es, y con el texto COMPLETO del error.
+  var COLUMNAS = [
+    ['mot.id', 'id'],
+    ['wo.id', 'workorder_id'],
+    ['wo.tranid', 'workorder_tranid'],
+    ['tl.item', 'item_id'],
+    ['BUILTIN.DF(tl.item)', 'item_name'],
+    ['BUILTIN.DF(mot.manufacturingworkcenter)', 'operation'],
+    ['mot.operationsequence', 'sequence'],
+    ['mot.inputquantity', 'qty_to_process'],
+    ['mot.startdatetime', 'start_planned'],
+    ['mot.enddate', 'end_planned'],
+    ['BUILTIN.DF(mot.status)', 'status_op'],
+    ['mot.setuptime', 'setup_min'],
+    ['mot.estimatedwork', 'est_min'],
+    ['mot.actualwork', 'real_min'],
+    ['mot.remainingwork', 'remaining_min'],
+    ['mot.runrate', 'production_rate'],
+    ['mot.laborresources', 'human_resource'],
+    ['mot.machineresources', 'machine_resource'],
+    ['mot.completedquantity', 'qty_completed'],
+    ['tl.location', 'location'],
+    ["BUILTIN.DF(wo.status)", 'status_ot']
+  ];
 
-  try {
-    var conFetch = conPaginacion('FETCH NEXT 51 ROWS ONLY\nOFFSET 0 ROWS');
-    var pagina = PP_DIAG_SUITEQL_(config, conFetch);
-    log('SQL CON FETCH NEXT 51 / OFFSET 0: OK, ' + pagina.length + ' filas');
-    log('  -> la cuenta ACEPTA FETCH NEXT/OFFSET: se puede subir el 2240 paginado en SQL');
-    if (pagina.length > 51) log('  AVISO: devolvio ' + pagina.length + ' de 51 pedidos; el limite no se respeta');
-  } catch (error2) {
-    log('SQL CON FETCH NEXT/OFFSET -> EXCEPCION ' + (error2 && error2.message ? error2.message : error2));
-    log('  -> la cuenta NO ACEPTA FETCH NEXT/OFFSET. NO subas la version paginada del 2240;');
-    log('     dejalo paginando en memoria (que es el archivo viejo) o cambia la paginacion.');
-    return;
-  }
-
-  // El OFFSET tiene que avanzar de verdad, si no siempre devuelve la misma pagina.
-  try {
-    var segunda = PP_DIAG_SUITEQL_(config, conPaginacion('FETCH NEXT 51 ROWS ONLY\nOFFSET 51 ROWS'));
-    var primera = PP_DIAG_SUITEQL_(config, conPaginacion('FETCH NEXT 51 ROWS ONLY\nOFFSET 0 ROWS'));
-    var idPrimera = primera.length ? String(primera[0].id) : '';
-    var idSegunda = segunda.length ? String(segunda[0].id) : '';
-    log('OFFSET avanza: pagina 0 empieza en id=' + idPrimera + ', pagina 1 empieza en id=' + idSegunda);
-    if (idPrimera && idSegunda && idPrimera === idSegunda) {
-      log('  AVISO: OFFSET devolvio la misma fila; la paginacion por OFFSET no serviria');
-    } else {
-      log('  -> OFFSET funciona: se puede pedir pagina por pagina');
+  var malas = [];
+  COLUMNAS.forEach(function (columna) {
+    try {
+      var filas = PP_DIAG_UNA_COLUMNA_(config, columna[0], columna[1]);
+      log('OK   ' + columna[0] + ' -> ' + filas.length + ' filas');
+    } catch (errorColumna) {
+      malas.push(columna[0]);
+      log('FALLA ' + columna[0] + ' -> ' + String(errorColumna && errorColumna.message || errorColumna).slice(0, 400));
     }
-  } catch (error3) {
-    log('prueba de OFFSET -> EXCEPCION ' + (error3 && error3.message ? error3.message : error3));
+  });
+  log('columnas que el endpoint REST rechaza: ' + (malas.length ? malas.join(', ') : 'ninguna'));
+
+  // 2) El SQL completo de PRODUCCION (las 21 columnas del 2240 de hoy). Si este falla aqui y
+  //    el 2240 funciona en produccion, el problema es del endpoint REST, no del SQL.
+  try {
+    var completo = PP_DIAG_SUITEQL_(config, BASELINE.join('\n'));
+    log('SQL COMPLETO de produccion por REST: OK, ' + completo.length + ' filas');
+  } catch (errorCompleto) {
+    log('SQL COMPLETO por REST -> EXCEPCION ' + String(errorCompleto && errorCompleto.message || errorCompleto).slice(0, 600));
+    log('  -> si el 2240 de produccion funciona con este mismo SQL, el problema es que el');
+    log('     endpoint REST de SuiteQL no acepta lo que el query.runSuiteQL de NetSuite si.');
+    log('     Por eso la sonda NO puede autorizar la subida: el 2240 lleva fallback.');
   }
 
-  // 2) ¿El filtro por ubicación deja pasar filas? Si devuelve 0, la app se quedaria sin operaciones.
-  //    Por REST el `?` no se sustituye (el endpoint no acepta params), asi que aqui va el valor
-  //    literal; el restlet si usa `?` con parametro ligado porque corre dentro de NetSuite.
+  // 3) ¿El filtro por ubicacion deja pasar filas? Aqui si el valor va literal, porque por REST
+  //    el endpoint no acepta params ligados (el restlet si los usa, corre dentro de NetSuite).
   try {
-    var sqlFiltro = BASELINE.join('\n') + '\nFETCH NEXT 51 ROWS ONLY\nOFFSET 0 ROWS';
-    sqlFiltro = sqlFiltro.replace(
+    var sqlFiltro = BASELINE.join('\n').replace(
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'\n  AND tl.location = 1"
     );
     var conLoc = PP_DIAG_SUITEQL_(config, sqlFiltro);
     log('CON tl.location = 1: ' + conLoc.length + ' filas');
     if (!conLoc.length) {
-      log('  AVISO: el filtro con location 1 devuelve 0 filas. Puede que la columna no se llame');
-      log('         tl.location en esta cuenta. NO subas el filtro hasta aclararlo; el 2240 sin');
-      log('         filtro es el estado seguro y el servidor ya descarta en memoria.');
+      log('  AVISO: el filtro con location 1 devuelve 0 filas aunque la columna exista.');
+      log('         El 2240 lo detecta y degrada a sin filtro, asi que no rompe la app.');
     } else {
-      log('  -> el filtro por ubicacion funciona con la cuenta');
+      log('  -> el filtro por ubicacion devuelve filas');
       log('  ejemplo: ' + JSON.stringify(conLoc[0]));
     }
   } catch (error4) {
-    log('CON tl.location = 1 -> EXCEPCION ' + (error4 && error4.message ? error4.message : error4));
-    log('  -> la columna tl.location no es aceptada en esta consulta. NO subas el filtro todavia.');
+    log('CON tl.location = 1 -> EXCEPCION ' + String(error4 && error4.message || error4).slice(0, 600));
+    log('  -> el 2240 lo detecta y degrada a sin filtro, asi que no rompe la app.');
   }
 
-  // 3) Desglose por ubicacion, para confirmar que la columna existe y cuantas plantas hay.
+  // 4) Desglose por ubicacion, que confirma si la columna existe y cuantas plantas hay.
   try {
     var desglose = PP_DIAG_SUITEQL_(config, [
       'SELECT tl.location AS ubicacion, COUNT(*) AS operaciones',
@@ -199,11 +245,18 @@ function DIAG_operaciones2240b() {
     desglose.forEach(function (row) {
       log('  ubicacion=' + row.ubicacion + ' operaciones=' + row.operaciones);
     });
-    if (!desglose.length) {
-      log('  AVISO: el GROUP BY por ubicacion no devolvio nada; la columna podria no existir');
-    }
   } catch (error5) {
-    log('desglose por ubicacion -> EXCEPCION ' + (error5 && error5.message ? error5.message : error5));
+    log('desglose por ubicacion -> EXCEPCION ' + String(error5 && error5.message || error5).slice(0, 600));
+  }
+
+  // 5) Y una de FETCH NEXT/OFFSET, por si el endpoint REST si lo acepta aunque el resto no.
+  try {
+    var conFetch = BASELINE.join('\n') + '\nFETCH NEXT 51 ROWS ONLY\nOFFSET 0 ROWS';
+    var pagina = PP_DIAG_SUITEQL_(config, conFetch);
+    log('SQL CON FETCH NEXT 51 / OFFSET 0: OK, ' + pagina.length + ' filas');
+  } catch (error2) {
+    log('SQL CON FETCH NEXT/OFFSET -> EXCEPCION ' + String(error2 && error2.message || error2).slice(0, 600));
+    log('  -> si esto falla, el 2240 degrada al recorte en memoria y sigue funcionando.');
   }
 
   log('DIAG_operaciones2240b terminado. Pega el registro de ejecucion completo.');

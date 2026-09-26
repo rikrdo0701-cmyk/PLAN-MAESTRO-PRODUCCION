@@ -59,61 +59,53 @@ define(['N/query'], (query) => {
 
     const pageSize = clamp(Number(body.pageSize ?? 200), 50, 5000);
     const pageIndex = Math.max(0, Number(body.pageIndex ?? 0));
-    const params = [];
 
-    let where = [
-      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
-      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
-      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
+    // Se prueban estrategias de la mejor a la mas conservadora y se usa la primera que
+    // responda. Motivo: la correccion depende de dos cosas que la cuenta puede no aceptar
+    // (FETCH NEXT/OFFSET es sintaxis SuiteQL, y tl.location puede no llamarse asi), y si
+    // alguna falla el listado se quedaria SIN operaciones, que es justo lo que esta app no
+    // puede tolerar. Con este fallback, subir el archivo nunca deja la app peor que antes:
+    // en el peor caso cae al camino viejo, que es el que hoy esta en produccion.
+    const estrategias = [
+      { nombre: 'sql-paginado+ubicacion', paginado: true, porUbicacion: Boolean(body.locationId) },
+      { nombre: 'sql-paginado', paginado: true, porUbicacion: false },
+      { nombre: 'sql-completo+ubicacion', paginado: false, porUbicacion: Boolean(body.locationId) },
+      { nombre: 'sql-completo', paginado: false, porUbicacion: false },
     ];
-    if (body.locationId) {
-      where.push('tl.location = ?');
-      params.push(body.locationId);
+
+    let elegida = null;
+    let consultada = null;
+    const intentos = [];
+    for (const estrategia of estrategias) {
+      try {
+        const resultado = consultar_(estrategia, pageIndex, pageSize, body.locationId);
+        // Si el filtro por ubicacion devuelve 0 filas, se degrada a SIN filtro en vez de
+        // devolver una lista vacia. En la ruta paginada no hay total con que comparar, asi que
+        // el 0 se acepta solo a partir de la segunda pagina: en la primera un 0 puede ser
+        // legitimo (esta planta no tiene operaciones) o puede ser que la columna no exista, y
+        // en ambos casos la siguiente estrategia, que es la misma sin filtro, resuelve sin
+        // dejar la app sin operaciones. El servidor igual descarta por planta en memoria.
+        const sinFilas = !resultado.filas.length;
+        const vacioSospechoso = sinFilas
+          && (resultado.totalSinFiltro > 0 || (resultado.paginacionSql && pageIndex === 0));
+        if (estrategia.porUbicacion && vacioSospechoso) {
+          intentos.push(estrategia.nombre + ': 0 filas con el filtro de ubicacion, se degrada a sin filtro');
+          continue;
+        }
+        elegida = estrategia;
+        consultada = resultado;
+        break;
+      } catch (error) {
+        intentos.push(estrategia.nombre + ': ' + String(error && error.message || error).slice(0, 200));
+      }
     }
 
-    // La pagina se resuelve en la consulta (FETCH NEXT/OFFSET) y no despues en memoria.
-    // hasMore se deduce de la fila extra en lugar de exponer totalRows, que obligaba a
-    // recorrer el mismo JOIN para contar.
-    const limit = pageSize + 1;
-    const sql = [
-      'SELECT',
-      '  mot.id                                    AS id,',
-      '  wo.id                                     AS workorder_id,',
-      '  wo.tranid                                 AS workorder_tranid,',
-      '  tl.item                                   AS item_id,',
-      '  BUILTIN.DF(tl.item)                       AS item_name,',
-      '  BUILTIN.DF(mot.manufacturingworkcenter)   AS operation,',
-      '  mot.operationsequence                     AS sequence,',
-      '  mot.inputquantity                         AS qty_to_process,',
-      '  mot.startdatetime                         AS start_planned,',
-      '  mot.enddate                               AS end_planned,',
-      '  BUILTIN.DF(mot.status)                    AS status_op,',
-      '  BUILTIN.DF(mot.manufacturingworkcenter)   AS workcenter,',
-      '  mot.setuptime                             AS setup_min,',
-      '  mot.estimatedwork                         AS est_min,',
-      '  mot.actualwork                            AS real_min,',
-      '  mot.remainingwork                         AS remaining_min,',
-      '  mot.runrate                               AS production_rate,',
-      '  mot.laborresources                        AS human_resource,',
-      '  mot.machineresources                      AS machine_resource,',
-      '  mot.completedquantity                     AS qty_completed,',
-      '  tl.location                               AS location',
-      'FROM manufacturingoperationtask mot',
-      'JOIN transaction wo',
-      '  ON wo.id = mot.workorder',
-      'JOIN transactionline tl',
-      '  ON tl.transaction = wo.id',
-      " AND tl.mainline = 'T'",
-      'WHERE',
-      where.map((clause) => `  ${clause}`).join('\n  AND '),
-      'ORDER BY wo.id, mot.operationsequence, mot.id',
-      `FETCH NEXT ${limit} ROWS ONLY`,
-      `OFFSET ${pageIndex * pageSize} ROWS`
-    ].join('\n');
+    if (!elegida) {
+      throw new Error('Ninguna estrategia de consulta funciono. Intentos: ' + intentos.join(' | '));
+    }
 
-    const fetched = runSuiteQL_(sql, params);
-    const hasMore = fetched.length > pageSize;
-    const page = hasMore ? fetched.slice(0, pageSize) : fetched;
+    const hasMore = consultada.hayMas;
+    const page = consultada.filas;
 
     const rows = page.map((r) => ({
       id: String(r.id ?? ''),
@@ -171,11 +163,108 @@ define(['N/query'], (query) => {
       rows,
       debug: {
         idSource: 'mot.id',
-        locationFilter: body.locationId ? `tl.location = ${body.locationId}` : 'sin filtro (body sin locationId)',
-        pagination: 'SQL FETCH NEXT/OFFSET, no slice en memoria',
+        estrategia: elegida.nombre,
+        paginacion: elegida.paginado ? 'SQL FETCH NEXT/OFFSET' : 'recorte en memoria',
+        filtroUbicacion: elegida.porUbicacion ? `tl.location = ${body.locationId}` : 'sin filtro por ubicacion',
+        degradaciones: intentos,
         note: 'RESTlet exclusivo del plan maestro; devuelve id estable de manufacturingoperationtask'
       }
     };
+  }
+
+  /**
+   * Corre el SQL del 2240 segun la estrategia. Sin `paginado` trae el catalogo completo y
+   * recorta en memoria (el comportamiento viejo, que ya se sabe que funciona en esta cuenta);
+   * con `paginado` resuelve la pagina en la consulta con FETCH NEXT/OFFSET.
+   *
+   * `totalSinFiltro` se calcula solo cuando hay filtro por ubicacion, para poder distinguir
+   * "esta planta no tiene operaciones" de "el filtro no funciona": en el segundo caso hay que
+   * degradar a sin filtro en vez de devolver una lista vacia.
+   */
+  function consultar_(estrategia, pageIndex, pageSize, locationId) {
+    if (estrategia.paginado) {
+      const consulta = armarSql_(true, estrategia.porUbicacion, pageIndex, pageSize, locationId);
+      const fetched = runSuiteQL_(consulta.sql, consulta.params);
+      const filas = fetched.length > pageSize ? fetched.slice(0, pageSize) : fetched;
+      return { filas: filas, hayMas: fetched.length > pageSize, totalSinFiltro: -1, paginacionSql: true };
+    }
+
+    // Camino sin paginar: hace falta el total para decidir si el filtro de ubicacion sirve.
+    let conFiltro = null;
+    if (estrategia.porUbicacion) {
+      const c = armarSql_(false, true, 0, pageSize, locationId);
+      conFiltro = runSuiteQL_(c.sql, c.params);
+    }
+    const s = armarSql_(false, false, 0, pageSize, null);
+    const sinFiltro = runSuiteQL_(s.sql, s.params);
+    const base = conFiltro || sinFiltro;
+    const from = pageIndex * pageSize;
+    const to = from + pageSize;
+    return {
+      filas: base.slice(from, to),
+      hayMas: to < base.length,
+      totalSinFiltro: sinFiltro.length,
+      paginacionSql: false
+    };
+  }
+
+  function armarSql_(paginado, porUbicacion, pageIndex, pageSize, locationId) {
+    const where = [
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
+    ];
+    const params = [];
+    if (porUbicacion && locationId) {
+      where.push('tl.location = ?');
+      params.push(locationId);
+    }
+
+    // El desempate por mot.id importa: sin un orden TOTAL, OFFSET puede repetir o saltar
+    // filas entre paginas, lo que romperia el operationId estable ns-<id> (RULE-OT-031).
+    const sql = [
+      'SELECT',
+      '  mot.id                                    AS id,',
+      '  wo.id                                     AS workorder_id,',
+      '  wo.tranid                                 AS workorder_tranid,',
+      '  tl.item                                   AS item_id,',
+      '  BUILTIN.DF(tl.item)                       AS item_name,',
+      '  BUILTIN.DF(mot.manufacturingworkcenter)   AS operation,',
+      '  mot.operationsequence                     AS sequence,',
+      '  mot.inputquantity                         AS qty_to_process,',
+      '  mot.startdatetime                         AS start_planned,',
+      '  mot.enddate                               AS end_planned,',
+      '  BUILTIN.DF(mot.status)                    AS status_op,',
+      '  BUILTIN.DF(mot.manufacturingworkcenter)   AS workcenter,',
+      '  mot.setuptime                             AS setup_min,',
+      '  mot.estimatedwork                         AS est_min,',
+      '  mot.actualwork                            AS real_min,',
+      '  mot.remainingwork                         AS remaining_min,',
+      '  mot.runrate                               AS production_rate,',
+      '  mot.laborresources                        AS human_resource,',
+      '  mot.machineresources                      AS machine_resource,',
+      '  mot.completedquantity                     AS qty_completed,',
+      '  tl.location                               AS location',
+      'FROM manufacturingoperationtask mot',
+      'JOIN transaction wo',
+      '  ON wo.id = mot.workorder',
+      'JOIN transactionline tl',
+      '  ON tl.transaction = wo.id',
+      " AND tl.mainline = 'T'",
+      'WHERE',
+      where.map((clause) => `  ${clause}`).join('\n  AND '),
+      'ORDER BY wo.id, mot.operationsequence, mot.id'
+    ];
+
+    if (paginado) {
+      // pageSize + 1 para deducir hasMore de la fila extra, en vez de pagar un COUNT.
+      sql.push(`FETCH NEXT ${pageSize + 1} ROWS ONLY`);
+      sql.push(`OFFSET ${pageIndex * pageSize} ROWS`);
+    }
+
+    // Devuelve la consulta armada, NO la ejecuta: ejecutarla aqui y volver a envolver el
+    // resultado en runSuiteQL_ mandaba el array de filas como si fuera el texto del SQL.
+    return { sql: sql.join('\n'), params: params };
   }
 
   function runSuiteQL_(sql, params) {
