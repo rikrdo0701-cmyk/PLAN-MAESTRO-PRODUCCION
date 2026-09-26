@@ -106,7 +106,7 @@ sincronización ligera, completa y programación (ver `docs/REGLAS.md`).
 |---|---|---|
 | `PP_APP_VERSION` | `2.43.0` | `src/server/01-code.js` |
 | `PP_SCHEMA_VERSION` | `31` | `src/server/01-code.js`; `APP_SCHEMA_VERSION` en frontend |
-| Versión npm | `2.41.1` | `package.json` |
+| Versión npm | `2.43.0` | `package.json` (debe coincidir con `PP_APP_VERSION` y con el `v=` del iframe puente; lo vigila `tests/app-version.test.mjs`, RULE-WEB-003) |
 | `__PP_FLUID_BUILD__` | `fluid-2026-07-11-03` | marcador de optimización (frontend) |
 | `LOCAL_CACHE_IDENTITY` | `plan-produccion-cache-v4` | identidad de caché local |
 | `STORAGE_KEY` | `plan-produccion-app-v1` | clave de localStorage |
