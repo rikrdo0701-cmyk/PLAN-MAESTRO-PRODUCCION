@@ -7913,11 +7913,13 @@ function normalizeDrawingUrl(value) {
   let networkPath = withoutFilePrefix.replace(/\//g, "\\").trim();
   if (/^(SERVER2008|192\.168\.1\.101)\\Produccion2\\/i.test(networkPath)) networkPath = `\\\\${networkPath}`;
   networkPath = networkPath.replace(/^\\\\SERVER2008\\Produccion2\\/i, "\\\\192.168.1.101\\Produccion2\\");
-  if (/^\\\\192\.168\.1\.101\\Produccion2\\/i.test(networkPath) && /\.pdf$/i.test(networkPath)) return `maldonado://abrir?archivo=${encodeURIComponent(networkPath)}`;
+  // Sin plantillas con "://" seguido de interpolacion: el HTML service de Apps Script
+  // mutila esas lineas al entregar la pagina y el bundle deja de parsear (RULE-WEB-002).
+  if (/^\\\\192\.168\.1\.101\\Produccion2\\/i.test(networkPath) && /\.pdf$/i.test(networkPath)) return "maldonado://abrir?archivo=" + encodeURIComponent(networkPath);
   if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return `https://${raw}`;
-  if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return `https://drive.google.com/file/d/${encodeURIComponent(raw)}/view`;
-  if (/^[A-Za-z]:\\|^\//.test(raw)) return `file://${raw.replace(/\\/g, "/")}`;
+  if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return "https://" + raw;
+  if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return "https://drive.google.com/file/d/" + encodeURIComponent(raw) + "/view";
+  if (/^[A-Za-z]:\\|^\//.test(raw)) return "file://" + raw.replace(/\\/g, "/");
   return "";
 }
 
