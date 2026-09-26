@@ -189,6 +189,8 @@ test("PP_buildWorkOrderCatalog_ lee Articulo acentuado de WO_LISTA y matchea pre
   assert.ok(applied[0].averageSalePrice > 0);
 });
 
+const config2240 = { accountId: "ACME_SB1", consumerKey: "c", consumerSecret: "cs", token: "t", tokenSecret: "ts", locationId: 1 };
+
 const pricePage = (rows, hasMore = false) => ({
   // ok: true es obligatorio: PP_netSuiteRestletRequest_ solo acepta un 2xx cuyo cuerpo trae
   // ok === true, y sin eso la pagina se toma por fallo y PP_fetchRestletPages_ lanza.
@@ -387,7 +389,7 @@ test("la fecha en DD/MM/AAAA hh:mm:ss tambien se interpreta", () => {
   assert.equal(result.avgByItem["4483"], 200);
 });
 
-test("PP_fetchRestletPages_ pide 1000 filas al 1766 y 200 al resto", () => {
+test("PP_fetchRestletPages_ pide 1000 al 1766, 2500 al 2240 y 200 al resto", () => {
   const page1 = {
     ok: true,
     headers: ["_ITEM_ID", "PRECIO BASE MNX"],
@@ -395,18 +397,51 @@ test("PP_fetchRestletPages_ pide 1000 filas al 1766 y 200 al resto", () => {
     hasMore: true,
   };
   const page2 = { ok: true, headers: ["_ITEM_ID"], rows: [], hasMore: false };
-  const precios = load([{ status: 200, body: JSON.stringify(page1) }, { status: 200, body: JSON.stringify(page2) }]);
   const config = { accountId: "ACME_SB1", consumerKey: "c", consumerSecret: "cs", token: "t", tokenSecret: "ts", locationId: 1 };
+  const pageSizesFor = (script) => {
+    const { context, requests } = load([
+      { status: 200, body: JSON.stringify(page1) },
+      { status: 200, body: JSON.stringify(page2) },
+    ]);
+    context.PP_fetchRestletPages_({ script, deploy: "1" }, { onlyOpen: true }, config, 5);
+    return requests.map((request) => JSON.parse(request.options.payload).pageSize);
+  };
 
-  precios.context.PP_fetchRestletPages_({ script: "1766", deploy: "1" }, { table: "REQ_FIFO" }, config, 5);
+  assert.deepEqual(pageSizesFor("1766"), [1000, 1000], "el 1766 admite 1000 (su tope real) y se usa en produccion con ese tamano");
+  assert.deepEqual(pageSizesFor("2240"), [2500, 2500], "el clamp del 2240 es 50..5000 y trae 2400 filas: cabe en una llamada");
+  assert.deepEqual(pageSizesFor("1764"), [200, 200], "los demas se quedan en 200 porque su maximo no esta verificado");
+  assert.deepEqual(pageSizesFor("1763"), [200, 200], "idem: materiales sigue sin medir");
+});
 
-  const pedidos = precios.requests.map((request) => JSON.parse(request.options.payload).pageSize);
-  assert.deepEqual(pedidos, [1000, 1000], "el 1766 admite 1000 y se usa en produccion con ese tamano");
+test("el 2240 con pageSize 2500 trae las 2400 filas en una sola llamada", () => {
+  // 2400 filas abiertas medidas por DIAG_operaciones2240 (2026-09-26). Con 200 eran 12
+  // llamadas; como el 2240 pagina en memoria, cada llamada re-ejecutaba el JOIN completo.
+  const rows = Array.from({ length: 2400 }, (_, i) => ({ id: String(i + 1), workorder_tranid: "1052" }));
+  const { context, requests } = load([
+    { status: 200, body: JSON.stringify({ ok: true, headers: ["id", "workorder_tranid"], rows, hasMore: false, totalRows: 2400 }) },
+  ]);
 
-  const otros = load([{ status: 200, body: JSON.stringify(page1) }, { status: 200, body: JSON.stringify(page2) }]);
-  otros.context.PP_fetchRestletPages_({ script: "1764", deploy: "1" }, { table: "WO_LISTA" }, config, 5);
-  const pedidosOtros = otros.requests.map((request) => JSON.parse(request.options.payload).pageSize);
-  assert.deepEqual(pedidosOtros, [200, 200], "los demas restlets se quedan en el valor historico");
+  const page = context.PP_fetchRestletPages_({ script: "2240", deploy: "1" }, { locationId: 1, onlyOpen: true }, config2240, 20);
+
+  assert.equal(requests.length, 1, "una sola llamada en vez de 12");
+  assert.equal(JSON.parse(requests[0].options.payload).pageSize, 2500);
+  assert.equal(page.rows.length, 2400, "y entrega las 2400 filas completas");
+  assert.equal(page.rows[2399].id, "2400", "sin perder la ultima");
+});
+
+test("el 2240 no se trunca: 2400 filas caben en el techo de maxPages", () => {
+  // Con pageSize 200 el techo eran 20 x 200 = 4000 filas. Con 2500 son 20 x 2500 = 50 000, o
+  // sea que el margen contra truncamiento CRECE. La sonda midio totalRows=2400, muy por debajo
+  // de ambos techos, asi que hoy la lista llega completa.
+  const rows = Array.from({ length: 2400 }, (_, i) => ({ id: String(i + 1) }));
+  const { context } = load([
+    { status: 200, body: JSON.stringify({ ok: true, headers: ["id"], rows, hasMore: false, totalRows: 2400 }) },
+  ]);
+
+  const page = context.PP_fetchRestletPages_({ script: "2240", deploy: "1" }, {}, config2240, 20);
+
+  assert.equal(page.rows.length, 2400);
+  assert.ok(20 * 2500 > 2400, "y el techo de maxPages sigue por encima del volumen real");
 });
 
 test("PP_applySalesPrices_ matchea por id o nombre y expone last/avg por OT", () => {

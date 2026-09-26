@@ -698,13 +698,25 @@ function PP_applySalesPrices_(workOrders, prices) {
   });
 }
 
-// pageSize por RESTlet. 200 es el valor historical para todos; el 1766 (REQ_FIFO) admite
-// 1000 y ya se usa asi en produccion en el script de inventario INV_PLANTAS_WIP, que es la
-// prueba de que el restlet aguanta ese tamano. Con 200, la lectura de precios Pagina cinco
-// veces mas veces que con 1000 sobre las mismas filas, y cada pagina es una peticion que puede
-// chocar con el limite de solicitudes de NetSuite. Los demas restlets se quedan en 200
-// porque su maximo no esta verificado.
-const PP_RESTLET_PAGE_SIZE_ = { '1766': 1000 };
+// pageSize por RESTlet. El valor no es "cuantas filas caben" sino "cuantas llamadas se
+// ahorran", y el costo de una llamada es fijo: medido en el 1766 (sonda DIAG_precios1766 del
+// 2026-09-26) el tiempo es 2023 ms fijos + 0.543 ms por fila, o sea que pedir 5x mas filas
+// cuesta 0.34 s mas, mientras que repetir la llamada cuesta 2 s. Por eso el tamano se sube
+// mientras el restlet lo aguante.
+//
+// 1766 REQ_FIFO = 1000: su tope real es 1000 (pedir 2000 devuelve 1000) y ya se usa asi en
+// produccion en el script de inventario INV_PLANTAS_WIP. Son 6671 filas, o sea 7 llamadas.
+//
+// 2240 operaciones = 2500: el clamp del restlet es 50..5000 (netsuite-restlet-operaciones.js:26)
+// y trae 2400 filas abiertas (sonda DIAG_operaciones2240 del 2026-09-26), o sea que entra en
+// UNA llamada en vez de 12. Aqui el ahorro es mayor porque el 2240 pagina en memoria
+// (all = runSuiteQL_(sql) y despues slice), de modo que cada llamada RE-EJECUTA el JOIN
+// completo de todas las plantas: 12 llamadas son 12 escaneos completos, 1 llamada es 1.
+//
+// Los demas (1764 WO_LISTA, 1763 materiales) se quedan en 200 porque su maximo NO esta
+// verificado: medirlos exige otra sonda y cambiarlos a ciegas seria repetir el error del
+// precio en TIPO CAMBIO.
+const PP_RESTLET_PAGE_SIZE_ = { '1766': 1000, '2240': 2500 };
 
 function PP_restletPageSize_(query) {
   var scriptId = String((query || {}).script || '');
