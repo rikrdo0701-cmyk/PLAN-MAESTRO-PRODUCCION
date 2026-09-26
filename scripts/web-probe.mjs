@@ -261,7 +261,9 @@ function bridgeStub() {
 
   window.PPAppsScriptBridge = {
     isConfigured: () => true,
-    ensureReady: async () => {},
+    ensureReady: async () => {
+      window.__PROBE_CALLS__ = (window.__PROBE_CALLS__ || []).concat("ensureReady");
+    },
     call: async (method, callArgs) => {
       // Traza de llamadas: sin esto no se puede saber si un flujo llego a pedirle algo al
       // backend o se quedo antes, en el cliente.
@@ -278,13 +280,42 @@ function bridgeStub() {
  * El cliente real del puente (inyectado en el bundle) hace
  * root.PPAppsScriptBridge = {...} al arrancar y se adueñaria del stub. Con un setter trap
  * la asignacion se ignora y el stub sobrevive intacto.
+ *
+ * Lo mismo hay que hacerlo con `callAppsScript` e `isAppsScriptRuntime`: en el bundle de Pages
+ * son declaraciones globales (app.js:13004-13015, la version nativa con google.script.run) y hay
+ * TRES escritores: performance-client.js (bridgeCall, que va al puente), apps-script-bridge-client.js
+ * (su propio call por postMessage al iframe) y el app. Con solo fijar el puente, el app puede
+ * terminar llamando a la version que usa el iframe: en localhost el iframe no carga (la sonda
+ * corta las peticiones externas), esa promesa no se resuelve nunca y la carga inicial del estado
+ * se queda colgada en silencio. Se fijan las tres puertas y ademas se deja constancia de quien
+ * intento pisarlas, para que el informe diga quien gano si esto vuelve a pasar.
  */
 function installStubTrap() {
   const stub = window.PPAppsScriptBridge;
+  const pin = {
+    callAppsScript: (method, ...args) => stub.call(method, args),
+    isAppsScriptRuntime: () => true,
+  };
+  window.__PROBE_PINNED__ = Object.keys(pin);
+  for (const name of Object.keys(pin)) {
+    Object.defineProperty(window, name, {
+      configurable: true,
+      get: () => pin[name],
+      set: (value) => {
+        window.__PROBE_STOLEN__ = (window.__PROBE_STOLEN__ || []).concat(
+          `${name} <- ${String(value).replace(/\s+/g, " ").slice(0, 90)}`
+        );
+      },
+    });
+  }
   Object.defineProperty(window, "PPAppsScriptBridge", {
     configurable: true,
     get: () => stub,
-    set: () => {},
+    set: (value) => {
+      window.__PROBE_STOLEN__ = (window.__PROBE_STOLEN__ || []).concat(
+        `PPAppsScriptBridge <- ${String(value).replace(/\s+/g, " ").slice(0, 90)}`
+      );
+    },
   });
 }
 
@@ -383,7 +414,26 @@ async function confirmPlanningDialogIfOpen(page, timeout = 2500) {
   return title;
 }
 
-async function main() {
+/**
+ * Verificacion de aislamiento: nada de lo que hizo la corrida pudo salir del origen local.
+ * Se puede pedir en cualquier momento porque tambien es lo primero que hay que dejar asentado
+ * cuando la corrida se interrumpe temprano.
+ */
+async function verifyIsolation(page, context, blockedExternal, leakedExternal, onStep) {
+  return onStep(page, "AISLAMIENTO: la corrida no toco produccion", async () => {
+    const leakedProbe = await page.evaluate(() => Boolean(window.PPAppsScriptBridge?.isConfigured?.()) && typeof window.__PROBE__ === "undefined");
+    const blocked = Array.from(new Set(blockedExternal));
+    check("ninguna respuesta vino de un origen externo", leakedExternal.length === 0, leakedExternal.slice(0, 4).join(" | "));
+    check("el puente que respondio es el stub de la sonda", !leakedProbe, leakedProbe ? "el cliente real sustituyo al stub" : "stub intacto");
+    summary.isolation = { blockedExternal: blocked, leakedExternal, stubIntact: !leakedProbe };
+    record(leakedExternal.length === 0 && !leakedProbe ? "ok" : "fail", "aislamiento", `${blocked.length} peticiones externas cortadas, ${leakedExternal.length} que llegaron a salir, stub ${leakedProbe ? "pisado" : "intacto"}`);
+  });
+}
+
+/** Interrupcion deliberada por precondicion rota: no es un error de la sonda, es su hallazgo. */
+const PROBE_INTERRUMPIDA = /precondicion de arranque/;
+
+async function runProbe() {
   if (!existsSync(path.join(siteDir, "index.html"))) {
     throw new Error("Falta site/index.html. Ejecuta npm run build:pages primero.");
   }
@@ -461,6 +511,37 @@ async function main() {
       check("el plan dibuja la cola", queue > 0, `${queue} OTs en la cola`);
       record("ok", "arranque", `${cards} tarjetas, ${queue} en la cola, ${Date.now() - started} ms`);
     });
+
+    // PRECONDICION del resto de la corrida. Sin esto la sonda puede seguir y producir una
+    // caterva de fallos que no son defectos de la app: si el arranque no carga el estado desde
+    // el backend, la app queda solo con el cache local, que NO trae los catalogos (maquinas,
+    // herramental, subcontratos, tipos de OT), y entonces la preparacion de una OT de doblado
+    // no tiene con que llenarse y ninguna sincronizacion corre. Se comprobó el 2026-09-26: la
+    // app entra a loadInitialStateConditionally, nunca emite la llamada al backend, no lanza
+    // error ni rechazo, y los pasos siguientes fallan por eso y no por otra cosa.
+    const arranque = await step(page, "el arranque carga el estado desde el backend", async () => {
+      await page.waitForTimeout(2500);
+      const observed = await page.evaluate(() => ({
+        calls: window.__PROBE_CALLS__ || [],
+        fijados: window.__PROBE_PINNED__ || [],
+        pisados: window.__PROBE_STOLEN__ || [],
+        maquinas: document.querySelectorAll("#machineTable [data-delete-machine]").length,
+      }));
+      summary.bridgeCalls = observed.calls;
+      summary.bridgePinned = observed.fijados;
+      summary.bridgeStolen = observed.pisados;
+      const pidioEstado = observed.calls.includes("getAppState") || observed.calls.includes("getAppStateIfChanged");
+      check("el arranque pide el estado al backend", pidioEstado, `llamadas: ${JSON.stringify(observed.calls.slice(0, 12))}${observed.pisados.length ? ` · pisaron: ${observed.pisados.join(" | ")}` : ""}`);
+      check("el catalogo de maquinas queda disponible", observed.maquinas > 0, `${observed.maquinas} maquinas en Catalogos`);
+      record(pidioEstado ? "ok" : "fail", "carga de estado inicial", `${observed.calls.length} llamadas al puente, ${observed.maquinas} maquinas`);
+      if (!pidioEstado) throw new Error("SIN ESTADO INICIAL: el resto de los pasos mediria una app degradada, no la app real");
+      return observed;
+    });
+    if (!arranque) {
+      record("fail", "sonda interrumpida", "El arranque no cargo el estado desde el backend; los pasos siguientes no son validos. Revisar el stub del puente y el orden de instalacion de callAppsScript (apps-script-bridge-client.js lo reinstala en DOMContentLoaded y pisa el bridgeCall de performance-client.js).");
+      await verifyIsolation(page, context, blockedExternal, leakedExternal, step);
+      throw new Error("sonda interrumpida por precondicion de arranque");
+    }
 
     await step(page, "el estado no se duplica al sincronizar (revisiones estables)", async () => {
       // Con un backend que cambia de revision en cada llamada, el estado crecia sin control.
@@ -741,15 +822,7 @@ async function main() {
       record("ok", "llamadas al backend", JSON.stringify(counts));
     });
 
-    await step(page, "AISLAMIENTO: la corrida no toco produccion", async () => {
-      // Se comprueba al final, no al principio: si algo se escapo, se ve aqui.
-      const leakedProbe = await page.evaluate(() => Boolean(window.PPAppsScriptBridge?.isConfigured?.()) && typeof window.__PROBE__ === "undefined");
-      const blocked = Array.from(new Set(blockedExternal));
-      check("ninguna respuesta vino de un origen externo", leakedExternal.length === 0, leakedExternal.slice(0, 4).join(" | "));
-      check("el puente que respondio es el stub de la sonda", !leakedProbe, leakedProbe ? "el cliente real sustituyo al stub" : "stub intacto");
-      summary.isolation = { blockedExternal: blocked, leakedExternal, stubIntact: !leakedProbe };
-      record(leakedExternal.length === 0 && !leakedProbe ? "ok" : "fail", "aislamiento", `${blocked.length} peticiones externas cortadas, ${leakedExternal.length} que llegaron a salir, stub ${leakedProbe ? "pisado" : "intacto"}`);
-    });
+    await verifyIsolation(page, context, blockedExternal, leakedExternal, step);
 
     await step(page, "escala de arranque con el doble de volumen", async () => {
       const measure = async (count) => {
@@ -784,6 +857,20 @@ async function main() {
       await browser.close().catch(() => {});
     }
     server.close();
+  }
+}
+
+/**
+ * El informe se escribe SIEMPRE, incluso cuando la corrida se interrumpe por una precondicion
+ * rota: un informe a medias con el motivo de la interrupcion es justo lo que hace falta para
+ * diagnosticar. Por eso el cuerpo va en runProbe() y el informe en main().
+ */
+async function main() {
+  try {
+    await runProbe();
+  } catch (error) {
+    if (!PROBE_INTERRUMPIDA.test(String(error?.message || error))) throw error;
+    console.log(`\nCorrida interrumpida: ${String(error.message)}`);
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
