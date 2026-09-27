@@ -42,11 +42,33 @@ function extraer(nombre) {
 const FN = extraer("PP_listPlanSnapshots_");
 const ROWS = extraer("PP_readRows_");
 
+// RULE-PERF-013: la rama de PLANES_HISTORICOS ya no recorre las filas aqui; llama a
+// PP_planHistorySnapshotCounts_, que cuenta la columna apoyandose en un conteo guardado en el
+// script cache y leyendo solo la cola nueva. Estas son las piezas que hacen falta para correr eso
+// fuera de Apps Script, con un CacheService de mentira.
+const COUNTS_FNS = [
+  "PP_planHistoryCountsCache_",
+  "PP_planHistorySheetId_",
+  "PP_readPlanHistoryCountsCache_",
+  "PP_writePlanHistoryCountsCache_",
+  "PP_planHistorySnapshotCounts_",
+].map(extraer).join("\n");
+const COUNTS_CONSTS = [
+  "PP_PLAN_HISTORY_COUNTS_KEY_",
+  "PP_PLAN_HISTORY_COUNTS_TTL_",
+  "PP_PLAN_HISTORY_COUNTS_MAX_CHARS_",
+].map((name) => {
+  const found = src.match(new RegExp(`^const ${name} = .*$`, "m"));
+  assert.ok(found, `no encontre la constante ${name}`);
+  return found[0];
+}).join("\n");
+
 /** propertyValues: lo que devuelve PP_readManifestIndex_. */
 function correr({ filas, propertyValues }) {
   const props = { getProperty: (k) => (k === "idx" ? propertyValues : null), setProperty: () => {} };
   const propsService = { getScriptProperties: () => props };
   const hoja = (filas) => ({
+    getSheetId: () => 7,
     getLastRow: () => filas.length + 1,
     getLastColumn: () => 3,
     getRange(f, c, nf, nc) {
@@ -64,11 +86,12 @@ function correr({ filas, propertyValues }) {
     },
   });
   const vacia = hoja([]);
-  const ctx = { console, JSON, Math, String, Number, Object, Array, isFinite, isNaN, PropertiesService: propsService, MANIFIESTO: propertyValues };
+  const cache = { get: () => null, put: () => {}, remove: () => {} };
+  const ctx = { console, JSON, Math, String, Number, Object, Array, isFinite, isNaN, CacheService: { getScriptCache: () => cache }, PropertiesService: propsService, MANIFIESTO: propertyValues };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${ROWS}\n${FN}\nthis.PP_ensureManifestIndex_=function(){return JSON.parse(MANIFIESTO||'[]');};this.run=PP_listPlanSnapshots_;`,
+    `${ROWS}\n${COUNTS_CONSTS}\n${COUNTS_FNS}\n${FN}\nthis.PP_ensureManifestIndex_=function(){return JSON.parse(MANIFIESTO||'[]');};this.run=PP_listPlanSnapshots_;`,
     ctx,
   );
   // BORRADOR_PLAN va vacia a proposito: el borrador tiene su propia rama en la funcion y aqui se

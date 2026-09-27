@@ -673,12 +673,14 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
   assert.match(optimizedStartupSource, /loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
-  const initialCacheCaptureIndex = pagesIndex.indexOf("const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta)");
-  assert.ok(
-    initialCacheCaptureIndex >= 0 &&
-      initialCacheCaptureIndex < pagesIndex.indexOf("await root.PPAppsScriptBridge.ensureReady()"),
-    "la cache inicial debe capturarse antes de esperar al bridge",
-  );
+  // La lectura de caché se difiere con requestIdleCallback para no bloquear el primer paint.
+  // Las variables se inicializan con valores por defecto y se actualizan cuando la lectura termine.
+  assert.match(pagesIndex, /let initialLocalCache = \{ usable: false, revision: 0, deferredMaterials: false \}/,
+    "la caché inicial se inicializa con valores por defecto");
+  assert.match(pagesIndex, /requestIdleCallback\(read, \{ timeout: 2000 \}\)/,
+    "la lectura de caché se difiere con requestIdleCallback");
+  assert.match(pagesIndex, /initialLocalCache = readUsableLocalStateCache\(initialPerformanceMeta\)/,
+    "la caché se lee cuando el navegador está libre");
   assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
   assert.match(optimizedStartupSource, /applyInitialWorkspaceView\(\{ scrollToTop: false \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /state\.selectedDetailOt = ""|state\.selectedOperationId = ""/);
@@ -799,7 +801,39 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
   assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\.[\s\S]*Guardando plan\.\.\./);
   assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
-  assert.match(pagesIndex, /async function persistPlanSnapshot\(\)[\s\S]*await loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\);[\s\S]*return saved/);
+  // 1.2 / 3.1 (RULE-PERF-013): despues de guardar NO se relee la lista completa. Antes era
+  // `await loadPlanSnapshots(false, { deferPublishedLoad: true })`, que son 31 s medidos de
+  // PP_listPlanSnapshots_ en cada guardado. Ahora el servidor ya devuelve el registro que guardo y
+  // se incorpora a la lista local. Este test fija AMBAS mitades: que se hace el upsert, y que la
+  // lectura completa NO volvio a estos dos caminos (si alguien la devuelve, el guardado se vuelve a
+  // congelar sin que nadie se entere de por que).
+  assert.match(pagesIndex, /async function persistPlanSnapshot\(\)[\s\S]*upsertPlanSnapshotRecord\(saved, "BORRADOR"\);[\s\S]*return saved/);
+  assert.match(pagesIndex, /async function persistPlanAutoBackup\(payload = null\)[\s\S]*upsertPlanSnapshotRecord\(saved, "RESPALDO"\);[\s\S]*kind: "RESPALDO"/);
+  // El "no vuelve" se mira DENTRO de las dos funciones de guardado, no en todo el archivo: la
+  // llamada igual existe, y tiene que existir, en el camino de ARRANQUE (app.js:626, el rescate
+  // rapido del borrador, fijada por la camara de optimizedStartupSource de la linea 674). Ahi la
+  // lectura ya no cuesta 31 s gracias al conteo incremental, pero sigue siendo una lectura real
+  // contra el servidor y por eso no se toca.
+  const persistSnapshotSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function persistPlanSnapshot("),
+    pagesIndex.indexOf("function buildPlanAutoBackupPayload("),
+  );
+  const persistBackupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function persistPlanAutoBackup("),
+    pagesIndex.indexOf("async function publishCurrentPlan("),
+  );
+  assert.doesNotMatch(persistSnapshotSource, /loadPlanSnapshots\(/,
+    "guardar el borrador no puede volver a pedir la lista completa");
+  assert.doesNotMatch(persistBackupSource, /loadPlanSnapshots\(/,
+    "guardar el respaldo tampoco");
+  // El upsert reordena, guarda la cache local y redibuja el selector: son los mismos efectos que
+  // dejaba loadPlanSnapshotsImpl. Si se olvidara alguno, la lista y el selector se desincronizan.
+  assert.match(pagesIndex, /function upsertPlanSnapshotRecord\(saved, kind\)[\s\S]*savePlanSnapshotsCache\(planSnapshots\);[\s\S]*renderPlanSnapshotSelect\(\);[\s\S]*renderReports\(\);/);
+  // 3.1: el respaldo automatico se ARMA antes del dialogo de semana y se GUARDA despues. Antes se
+  // guardaba antes de preguntar, y esa ida y vuelta a Apps Script congelaba el boton sin dialogo
+  // visible. El contenido del payload no cambia: se arma en el mismo punto de la carrera.
+  assert.match(scheduleImpl, /const backupPayload = buildPlanAutoBackupPayload\(\);[\s\S]*const chosenWeek = await askGeneratingPlanWeek\(\);\s*if \(!chosenWeek\) return;\s*const backup = await persistPlanAutoBackup\(backupPayload\);/);
+  assert.match(pagesIndex, /function buildPlanAutoBackupPayload\(\) \{[\s\S]*createAppSheetPayload\(\)/);
   assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*appSheetMarkDirtyScope\("plan"\);[\s\S]*await saveAppSheet\(false\);[\s\S]*borrador guardado/);
   assert.match(scheduleImpl, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas;[\s\S]*`, "ui"\)/);
   assert.match(pagesIndex, /function isTransientSaveLockError\(error\)[\s\S]*Otro proceso esta actualizando el plan/);

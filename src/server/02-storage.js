@@ -1221,6 +1221,10 @@ function PP_deletePlanSnapshot_(spreadsheet, snapshotId) {
       if (cell === key) sheet.deleteRow(row);
     }
   });
+  // Borrar filas DESPLAZA todo lo de abajo, asi que el conteo guardado en el script cache ya no
+  // describe esta hoja. Se tira entero y la siguiente lectura lo reconstruye. No hay forma de
+  // "restar" las filas de este snapshot sin saber cuantas habia de cada uno.
+  if (sheetName === 'PLANES_HISTORICOS') PP_invalidatePlanHistoryCountsCache_();
   PP_deletePlanSnapshotPayload_(key);
   PP_removeManifestIndexRecord_(key);
   SpreadsheetApp.flush();
@@ -1382,6 +1386,108 @@ function PP_ensureManifestIndex_() {
   return list;
 }
 
+// MEDIDO 2026-09-26: getDisplayValues() sobre la columna SNAPSHOT_ID de las 138 714 filas de
+// PLANES_HISTORICOS tarda 31 s, y PP_listPlanSnapshots_ la pide COMPLETA en cada carga del estado y
+// otra vez despues de CADA guardado (RULE-PERF-013). Es la lectura mas cara del servidor y no
+// cambia NADA entre dos guardados: solo cambia el numero de filas del final.
+//
+// QUE HACE ESTA PARTE. Cuenta por snapshotId UNA SOLA VEZ y guarda el conteo en el script cache. En
+// la llamada siguiente solo lee la COLA que todavia no se habia leido, y la suma al conteo guardado.
+// El resultado es identico al de leer todo, por construccion: la hoja SOLO crece por
+// PP_appendPlanSnapshot_, que siempre anexa al final (linea 1287). No hay ninguna operacion que
+// escriba o borre en medio de la tabla.
+//
+// POR QUE NO ES UN ACORTE POR RANGO. El bug de la nota de mas abajo en este archivo fue justamente
+// recortar filas, y por ahi no se vuelve: aqui no se descarta NINGUNA fila. Todas se cuentan, las
+// viejas con el conteo guardado y las nuevas leyendolas. La unica diferencia es de donde sale cada
+// fila, y las dos viene de la misma columna de la misma hoja.
+//
+// CUANDO SE RECONSTRUYE ENTERO, Y CADA CASO CON SU RAZON:
+//   - no hay conteo guardado, o no es de ESTA hoja, o cambio de columna, o la cache no cabe:
+//     no hay de donde continuar.
+//   - getLastRow() es MENOR que el de la cache: alguien borro filas. Un conteo guardado mas grande
+//     que la hoja no se puede "restar", porque deleteRow() desplaza todo y no sabemos cuantas
+//     filas de cada snapshot se fueron. Por eso PP_deletePlanSnapshot_ borra la clave de la cache
+//     (PP_invalidatePlanHistoryCountsCache_): borrar es raro y caro, y medirse mal ahi seria peor
+//     que volver a leer entero.
+//
+// SI LA CACHE NO SIRVE, NO SE ROMPE NADA. Todo el bloque esta en try/catch y cae a la lectura
+// completa, que es la de siempre. Un fallo de CacheService cuesta 31 s; no cuesta un error.
+const PP_PLAN_HISTORY_COUNTS_KEY_ = 'PP_PLAN_HISTORY_COUNTS_V1';
+const PP_PLAN_HISTORY_COUNTS_TTL_ = 21600;        // tope de CacheService.put (6 h)
+const PP_PLAN_HISTORY_COUNTS_MAX_CHARS_ = 90000;  // el limite por valor es 100 KB
+
+function PP_planHistoryCountsCache_() {
+  try {
+    if (typeof CacheService === 'undefined' || !CacheService.getScriptCache) return null;
+    return CacheService.getScriptCache();
+  } catch (_) { return null; }
+}
+
+function PP_planHistorySheetId_(sheet) {
+  try { return Number(sheet.getSheetId()); } catch (_) { return 0; }
+}
+
+function PP_readPlanHistoryCountsCache_(cache) {
+  if (!cache) return null;
+  let raw = '';
+  try { raw = cache.get(PP_PLAN_HISTORY_COUNTS_KEY_); } catch (_) { return null; }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.counts || typeof parsed.counts !== 'object') return null;
+    if (Number(parsed.lastRow || 0) < 2) return null;
+    return { sheetId: Number(parsed.sheetId || 0), snapshotCol: Number(parsed.snapshotCol), lastRow: Number(parsed.lastRow), counts: parsed.counts };
+  } catch (_) { return null; }
+}
+
+function PP_writePlanHistoryCountsCache_(cache, payload) {
+  if (!cache) return;
+  let json = '';
+  try { json = JSON.stringify(payload); } catch (_) { return; }
+  try {
+    // Un conteo que no cabe NO se guarda a medias: se saca la clave y se recalcula la vez
+    // siguiente. Guardar 100 KB de conteo parcial seria peor que no guardar nada.
+    if (json.length > PP_PLAN_HISTORY_COUNTS_MAX_CHARS_) { cache.remove(PP_PLAN_HISTORY_COUNTS_KEY_); return; }
+    cache.put(PP_PLAN_HISTORY_COUNTS_KEY_, json, PP_PLAN_HISTORY_COUNTS_TTL_);
+  } catch (_) {}
+}
+
+function PP_invalidatePlanHistoryCountsCache_() {
+  const cache = PP_planHistoryCountsCache_();
+  if (!cache) return;
+  try { cache.remove(PP_PLAN_HISTORY_COUNTS_KEY_); } catch (_) {}
+}
+
+// Devuelve { snapshotId: numeroDeFilas }. Equivalente a contar la columna SNAPSHOT_ID entera.
+function PP_planHistorySnapshotCounts_(sheet, snapshotCol) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return {};
+  const sheetId = PP_planHistorySheetId_(sheet);
+  const cache = PP_planHistoryCountsCache_();
+  const cached = PP_readPlanHistoryCountsCache_(cache);
+  const counts = {};
+  let startRow = 2;
+  const reusa = cached && cached.sheetId === sheetId && cached.snapshotCol === snapshotCol && cached.lastRow <= lastRow;
+  if (reusa) {
+    Object.keys(cached.counts).forEach(function(key) { counts[key] = Number(cached.counts[key] || 0); });
+    startRow = cached.lastRow + 1;
+  }
+  if (startRow > lastRow) return counts;                     // la hoja no crecio: nada que leer
+  // getValues() y NO getDisplayValues(). La columna se escribe con el SNAPSHOT_ID tal cual en
+  // PP_appendPlanSnapshot_ (un UUID o 'draft'), sin formato de celda que getDisplayValues pueda
+  // convertir a otra cosa, asi que el texto es identico. Y es la lectura cruda, sin formatear cada
+  // celda: en 138 714 celdas esa diferencia es de segundos.
+  const tail = sheet.getRange(startRow, snapshotCol + 1, lastRow - startRow + 1, 1).getValues();
+  tail.forEach(function(cell) {
+    const snapshotId = String(cell[0] == null ? '' : cell[0]).trim();
+    if (!snapshotId) return;
+    counts[snapshotId] = (counts[snapshotId] || 0) + 1;
+  });
+  PP_writePlanHistoryCountsCache_(cache, { sheetId: sheetId, snapshotCol: snapshotCol, lastRow: lastRow, counts: counts });
+  return counts;
+}
+
 function PP_listPlanSnapshots_(spreadsheet) {
   const grouped = {};
   const historySheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
@@ -1389,12 +1495,14 @@ function PP_listPlanSnapshots_(spreadsheet) {
     const historyHeader = historySheet.getRange(1, 1, 1, historySheet.getLastColumn()).getDisplayValues()[0];
     const snapshotCol = historyHeader ? historyHeader.indexOf('SNAPSHOT_ID') : -1;
     if (snapshotCol >= 0) {
-      const ids = historySheet.getRange(2, snapshotCol + 1, historySheet.getLastRow() - 1, 1).getDisplayValues();
-      ids.forEach(function(cell) {
-        const snapshotId = String(cell[0] || '').trim();
-        if (!snapshotId) return;
+      // El orden de las claves es el de primera aparicion en la hoja, igual que con el bucle por
+      // filas, y el sort final es estable: los snapshots con la MISMA fecha siguen saliendo en el
+      // mismo orden que antes.
+      const counts = PP_planHistorySnapshotCounts_(historySheet, snapshotCol);
+      Object.keys(counts).forEach(function(snapshotId) {
+        if (!counts[snapshotId]) return;
         if (!grouped[snapshotId]) grouped[snapshotId] = { snapshotId: snapshotId, generatedAt: '', user: '', planStart: '', horizonDays: 0, operations: 0 };
-        grouped[snapshotId].operations += 1;
+        grouped[snapshotId].operations = counts[snapshotId];
       });
     }
   }
