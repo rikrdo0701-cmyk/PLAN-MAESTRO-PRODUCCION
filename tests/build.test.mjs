@@ -769,7 +769,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(storageService, /const fullState = opts\.skipFullState \? null : PP_readPlanSnapshotPayload_\(key\);[\s\S]*if \(!rows\.length && !fullState\)/);
   assert.match(storageService, /function PP_getPlanSnapshotLight_[\s\S]*skipFullState: true/);
   assert.match(storageService, /offset < serialized\.length; offset \+= 32000[\s\S]*staged\[key\] = JSON\.stringify\(manifest\);[\s\S]*properties\.setMany\(staged, appendOnly\)/);
-  assert.match(storageService, /appendOnly: !\(options && options\.snapshotId\)/);
+  assert.match(storageService, /appendOnly: !\(options && options\.snapshotId\) \|\| Boolean\(options && options\.keepPreviousPayload\)/);
   assert.match(storageService, /catch \(error\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_/);
   assert.match(storageService, /keepPreviousPayload[\s\S]*SpreadsheetApp\.flush\(\);[\s\S]*PP_finalizePlanSnapshotPayload_/);
   assert.match(storageService, /function PP_rollbackPlanSnapshotPayload_[\s\S]*setProperty\(transaction\.key, transaction\.previousValue\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_\([^;]+transaction\.newManifest/);

@@ -1286,7 +1286,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
   if (options && options.requireRows && !rows.length) throw new Error('La instantanea no contiene operaciones programadas para guardar');
   const payloadTransaction = PP_storePlanSnapshotPayload_(snapshotId, payload,
     { generatedAt: generatedAt, user: user, operations: rows.length },
-    { keepPrevious: Boolean(options && options.keepPreviousPayload), appendOnly: !(options && options.snapshotId) });
+    { keepPrevious: Boolean(options && options.keepPreviousPayload), appendOnly: !(options && options.snapshotId) || Boolean(options && options.keepPreviousPayload) });
   if (options && options.payloadTransaction) options.payloadTransaction.value = payloadTransaction;
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);

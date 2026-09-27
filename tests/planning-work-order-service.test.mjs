@@ -431,3 +431,123 @@ test("rechaza detalle sin CT", () => {
   assert.match(result.error, /secuencia 1.*sin CT/i);
   assert.doesNotMatch(result.error, /sin tiempo/i);
 });
+
+test("batch getPlanningWorkOrderDataBatch usa PP_netSuiteRestletRequest_ y no fetchAll", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  const restletCalls = [];
+  context.PP_netSuiteRestletRequest_ = (query, body) => {
+    restletCalls.push({ query, body });
+    return {
+      ok: true,
+      status: 200,
+      json: {
+        ok: true,
+        trabajo: { wo: body.woFolio, "WO Internal ID": "913", cantidad: 3 },
+        materiales: [],
+      },
+      raw: "",
+    };
+  };
+  context.UrlFetchApp.fetch = (url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    if (/FROM transaction/i.test(sql)) {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }], hasMore: false }),
+      };
+    }
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        items: [{ id: "1", workorder: "913", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" }],
+        hasMore: false,
+      }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderDataBatch(["2773"]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.length, 1);
+  assert.equal(result.data[0].ok, true);
+  assert.equal(restletCalls.length, 1, "debe llamar PP_netSuiteRestletRequest_ una vez por OT");
+  assert.equal(restletCalls[0].body.woFolio, "2773");
+});
+
+test("batch delega en PP_netSuiteRestletRequest_ para rate-limit (no maneja retry propio)", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  let callCount = 0;
+  context.PP_netSuiteRestletRequest_ = () => {
+    callCount += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: {
+        ok: true,
+        trabajo: { wo: "2773", "WO Internal ID": "913", cantidad: 3 },
+        materiales: [],
+      },
+      raw: "",
+    };
+  };
+  context.UrlFetchApp.fetch = (url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    if (/FROM transaction/i.test(sql)) {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }], hasMore: false }),
+      };
+    }
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        items: [{ id: "1", workorder: "913", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" }],
+        hasMore: false,
+      }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderDataBatch(["2773"]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data[0].ok, true);
+  assert.equal(callCount, 1, "el batch llama PP_netSuiteRestletRequest_ una vez por OT; el retry vive dentro de esa funcion");
+});
+
+test("batch reporta ok:false por OT cuando PP_netSuiteRestletRequest_ falla", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  context.PP_netSuiteRestletRequest_ = () => ({
+    ok: false,
+    status: 400,
+    json: { ok: false, error: "SSS_REQUEST_LIMIT_EXCEEDED" },
+    raw: "rate limit",
+  });
+  context.UrlFetchApp.fetch = (url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    if (/FROM transaction/i.test(sql)) {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }], hasMore: false }),
+      };
+    }
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        items: [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" }],
+        hasMore: false,
+      }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderDataBatch(["2773"]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data[0].ok, false, "el batch no debe fallar completo si un OT falla");
+  assert.match(result.data[0].error, /NetSuite inspeccion/);
+});

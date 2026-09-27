@@ -227,42 +227,31 @@ function getPlanningWorkOrderDataBatch(ots) {
     });
 
     // 4) Para cada OT, llamar al restlet 2244 (detail) para obtener workOrder + materiales.
-    //    Se hace en paralelo con fetchAll para minimizar el tiempo.
+    //    Se usa PP_netSuiteRestletRequest_ para que 400 SSS_REQUEST_LIMIT_EXCEEDED se reintente
+    //    con espera 2/5/10 s (hasta 3 reintentos, re-firmando OAuth en cada uno).
+    //    Se pierde el paralelismo de fetchAll, pero el rate-limit de NetSuite rechazaria
+    //    un burst paralelo de todos modos: la resiliencia importa mas que la paralelizacion.
     const properties = PropertiesService.getScriptProperties();
     const restletQuery = {
       script: properties.getProperty('NS_WO_INSPECTION_SCRIPT') || '2244',
       deploy: properties.getProperty('NS_WO_INSPECTION_DEPLOY') || '1'
     };
-    const restletEndpoint = PP_netSuiteRestletEndpoint_(restletQuery, config);
 
     const validFolios = folios.filter(function(f) { return idByFolio[f]; });
-    const restletCalls = validFolios.map(function(folio) {
-      return {
-        url: restletEndpoint,
-        method: 'post',
-        contentType: 'application/json',
-        headers: {
-          Authorization: PP_oauthHeader_('POST', restletEndpoint, restletQuery, config),
-          Prefer: 'transient'
-        },
-        payload: JSON.stringify({ action: 'detail', woFolio: folio, table: 'WO_INSPECCION', locationId: config.locationId, onlyOpen: true }),
-        muteHttpExceptions: true
-      };
-    });
-
-    const restletResponses = UrlFetchApp.fetchAll(restletCalls);
 
     // 5) Combinar resultados por OT
-    return validFolios.map(function(folio, index) {
-      const response = restletResponses[index];
-      const status = response.getResponseCode();
-      if (status < 200 || status >= 300) {
-        return { ot: folio, ok: false, error: 'NetSuite inspeccion: error HTTP ' + status };
+    return validFolios.map(function(folio) {
+      const response = PP_netSuiteRestletRequest_(restletQuery, {
+        action: 'detail',
+        woFolio: folio,
+        table: 'WO_INSPECCION',
+        locationId: config.locationId,
+        onlyOpen: true
+      }, config);
+      if (!response.ok) {
+        return { ot: folio, ok: false, error: 'NetSuite inspeccion: ' + response.status + ' ' + String(response.raw || '').slice(0, 200) };
       }
-      let data;
-      try { data = JSON.parse(response.getContentText() || '{}'); } catch (_) {
-        return { ot: folio, ok: false, error: 'SuiteQL operaciones OT: respuesta invalida' };
-      }
+      const data = response.json || {};
       if (data && data.ok === false) {
         return { ot: folio, ok: false, error: data.error || 'Respuesta invalida de NetSuite' };
       }

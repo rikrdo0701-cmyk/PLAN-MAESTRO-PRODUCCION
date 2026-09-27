@@ -22,6 +22,11 @@
     // corte con mensaje accionable sea siempre el del cliente.
     fetchNetSuiteWorkOrdersLite: 420000,
     syncNetSuiteWorkOrdersLite: 420000,
+    // El cliente envuelve getPlanningWorkOrderDataBatch en NETSUITE_PLANNING_TIMEOUT_MS (15 s).
+    // Sin entrada propia hereda CALL_TIMEOUT_MS (120 s): el cliente aborta a los 15 s y el
+    // puente sigue esperando 120 s, tirando el trabajo del servidor. 20 s deja que el
+    // corte con mensaje accionable sea siempre el del cliente.
+    getPlanningWorkOrderDataBatch: 20000,
   };
 
   let iframe = null;
