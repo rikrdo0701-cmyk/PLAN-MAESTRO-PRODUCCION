@@ -276,7 +276,7 @@ function PP_buildState_(spreadsheet) {
     }, {}),
     machines: PP_readRows_(spreadsheet.getSheetByName('MAQUINAS')).map(PP_mapMachine_),
     toolCatalog: PP_readRows_(spreadsheet.getSheetByName('HERRAMENTALES')).map(PP_mapTool_),
-    machineToolHistory: PP_readMachineToolHistory_(spreadsheet),
+    machineToolHistory: PP_readMachineToolHistoryCached_(spreadsheet),
     materials: PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_),
     calendarExceptions: PP_readRows_(spreadsheet.getSheetByName('CALENDARIO')).map(PP_mapCalendar_),
     subcontracts: PP_readRows_(spreadsheet.getSheetByName('SUBCONTRATOS')).map(PP_mapSubcontract_),
@@ -1233,7 +1233,10 @@ function PP_deletePlanSnapshot_(spreadsheet, snapshotId) {
     // Borrar filas DESPLAZA todo lo de abajo, asi que el conteo guardado en el script cache ya no
     // describe esta hoja. Se tira entero y la siguiente lectura lo reconstruye. No hay forma de
     // "restar" las filas de este snapshot sin saber cuantas habia de cada uno.
-    if (borro && sheetName === 'PLANES_HISTORICOS') PP_invalidatePlanHistoryCountsCache_();
+    if (borro && sheetName === 'PLANES_HISTORICOS') {
+      PP_invalidatePlanHistoryCountsCache_();
+      PP_invalidateMachineToolHistoryCache_();
+    }
   });
   PP_deletePlanSnapshotPayload_(key);
   PP_removeManifestIndexRecord_(key);
@@ -1615,6 +1618,99 @@ function PP_readMachineToolHistory_(spreadsheet) {
   }).filter(function(item) { return item !== null; }).sort(function(a, b) {
     return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
   }).slice(-2000);
+}
+
+// Cache incremental de machineToolHistory: la hoja PLANES_HISTORICOS tiene 139 876 filas y
+// PP_readMachineToolHistory_ las lee TODAS en cada rebuild frio del estado. Con cache, la primera
+// lectura cuesta ~30-60 s pero las siguientes devuelven el cache si la hoja no crecio, o leen SOLO
+// la cola nueva si crecio. Sin riesgo de doble-booking: el dato siempre esta disponible.
+//
+// La hoja SOLO crece (PP_appendPlanSnapshot_ anexa al final), excepto cuando PP_deletePlanSnapshot_
+// borra filas (poda). Por eso se invalida la cache en PP_deletePlanSnapshot_: borrar desplaza filas
+// y el incremental ya no es valido.
+const PP_MACHINE_TOOL_HISTORY_CACHE_KEY_ = 'PLAN_HISTORY_MACHINE_TOOL_HISTORY';
+
+function PP_readMachineToolHistoryCache_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PP_MACHINE_TOOL_HISTORY_CACHE_KEY_);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.lastRow !== 'number' || !Array.isArray(parsed.data)) return null;
+    return parsed;
+  } catch (ignored) { return null; }
+}
+
+function PP_writeMachineToolHistoryCache_(lastRow, data) {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      PP_MACHINE_TOOL_HISTORY_CACHE_KEY_,
+      JSON.stringify({ lastRow: lastRow, data: data })
+    );
+  } catch (ignored) {
+    // Si PropertiesService no esta disponible, la cache no se persiste pero la
+    // memoria del proceso sigue funcionando para esta llamada.
+  }
+}
+
+function PP_invalidateMachineToolHistoryCache_() {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty(PP_MACHINE_TOOL_HISTORY_CACHE_KEY_);
+  } catch (ignored) { /* sin PropertiesService, la cache en memoria ya se descarta */ }
+}
+
+function PP_readMachineToolHistoryCached_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const cache = PP_readMachineToolHistoryCache_();
+  // Mismo lastRow: la hoja no cambio, devolver cache
+  if (cache && cache.lastRow === lastRow) return cache.data;
+  // lastRow menor: borraron filas, cache invalido, reconstruir entero
+  if (cache && cache.lastRow > lastRow) {
+    const data = PP_readMachineToolHistory_(spreadsheet);
+    PP_writeMachineToolHistoryCache_(lastRow, data);
+    return data;
+  }
+  // lastRow mayor: leer solo la cola nueva y mergear
+  if (cache && cache.lastRow < lastRow) {
+    const tail = PP_readMachineToolHistoryTail_(sheet, cache.lastRow + 1);
+    const merged = cache.data.concat(tail);
+    PP_writeMachineToolHistoryCache_(lastRow, merged);
+    return merged;
+  }
+  // Sin cache: primera lectura, todo desde el principio
+  const data = PP_readMachineToolHistory_(spreadsheet);
+  PP_writeMachineToolHistoryCache_(lastRow, data);
+  return data;
+}
+
+function PP_readMachineToolHistoryTail_(sheet, startRow) {
+  if (startRow > sheet.getLastRow()) return [];
+  const rows = PP_readRowsCols_(sheet, PP_PLAN_HISTORY_COLS_).filter(function(row, index) {
+    return index >= startRow - 2;
+  });
+  return rows.map(function(row, index) {
+    const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
+    const herramental = String(row.HERRAMENTAL || '').trim();
+    const kit = String(row.KIT_HERRAMENTAL || '').trim();
+    const endDate = String(row.F_FIN || '').trim();
+    const endTime = String(row.H_FIN || '').trim();
+    if (!machine || /^CT\s+/i.test(machine) || !herramental || !endDate || !endTime) return null;
+    return {
+      id: 'history-' + String(row.SNAPSHOT_ID || '') + '-' + (index + startRow),
+      operationId: 'snapshot-' + String(row.SNAPSHOT_ID || '') + '-' + String(row.NUM || index + startRow),
+      snapshotId: String(row.SNAPSHOT_ID || ''),
+      ot: String(row.OT || ''),
+      machine: machine,
+      herramental: herramental,
+      kitHerramental: kit,
+      endDate: endDate,
+      endTime: endTime
+    };
+  }).filter(function(item) { return item !== null; }).sort(function(a, b) {
+    return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
+  });
 }
 
 // Igual que PP_readRows_, pero SOLO las columnas pedidas. Se lee una columna por getRange y se

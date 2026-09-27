@@ -317,6 +317,38 @@ test("PP_readRowsCols_ usa getValues() y no getDisplayValues() para las columnas
     "getDisplayValues() por columna es el costo que hace que el rebuild frío supere los 120 s");
 });
 
+test("PP_readMachineToolHistoryCached_ devuelve cache cuando lastRow no cambió", () => {
+  const cached = src.slice(src.indexOf("function PP_readMachineToolHistoryCached_"), src.indexOf("function PP_readMachineToolHistoryTail_"));
+  assert.match(cached, /cache\.lastRow === lastRow/,
+    "si lastRow coincide con la cache, devolver sin leer la hoja");
+  assert.match(cached, /return cache\.data/,
+    "devolver los datos cacheados directamente");
+});
+
+test("PP_readMachineToolHistoryCached_ lee solo la cola cuando la hoja creció", () => {
+  const cached = src.slice(src.indexOf("function PP_readMachineToolHistoryCached_"), src.indexOf("function PP_readMachineToolHistoryTail_"));
+  assert.match(cached, /cache\.lastRow < lastRow/,
+    "si lastRow es mayor, la hoja creció y hay que leer la cola");
+  assert.match(cached, /PP_readMachineToolHistoryTail_\(sheet, cache\.lastRow \+ 1\)/,
+    "leer solo desde la fila cacheada + 1 hasta el final");
+  assert.match(cached, /cache\.data\.concat\(tail\)/,
+    "mergear los datos cacheados con la cola nueva");
+});
+
+test("PP_readMachineToolHistoryCached_ reconstruye cuando borraron filas", () => {
+  const cached = src.slice(src.indexOf("function PP_readMachineToolHistoryCached_"), src.indexOf("function PP_readMachineToolHistoryTail_"));
+  assert.match(cached, /cache\.lastRow > lastRow/,
+    "si lastRow es menor, borraron filas y la cache incremental ya no es válida");
+  assert.match(cached, /PP_readMachineToolHistory_\(spreadsheet\)/,
+    "reconstruir entero desde el principio");
+});
+
+test("PP_deletePlanSnapshot_ invalida la cache de machineToolHistory", () => {
+  const borrar = src.slice(src.indexOf("function PP_deletePlanSnapshot_("), src.indexOf("function PP_clearDraftSnapshot_("));
+  assert.match(borrar, /PP_invalidateMachineToolHistoryCache_\(\)/,
+    "borrar filas invalida la cache incremental de machineToolHistory");
+});
+
 test("PP_listPlanSnapshots_ ya no pide la columna entera de datos con getDisplayValues()", () => {
   const listar = extraer("PP_listPlanSnapshots_");
   // La lectura cara era exactamente esta: getRange(2, col, LASTROW-1, 1).getDisplayValues() sobre
