@@ -363,6 +363,14 @@ test("PP_buildState_ lee OPERACIONES con getValues() no getDisplayValues()", () 
     "PP_readRowsFast_ NO usa getDisplayValues()");
 });
 
+test("PP_buildState_ lee ESTADOS_OPERACION_PLAN con getValues() no getDisplayValues()", () => {
+  // ESTADOS_OPERACION_PLAN tiene ~50 000 filas × 25 columnas. Todas las columnas se usan
+  // en PP_readOperationStatusesByOrigin_, pero son texto plano escrito por el servidor.
+  const build = src.slice(src.indexOf("function PP_buildState_("), src.indexOf("function PP_readConfig_("));
+  assert.match(build, /PP_readRowsFast_\(spreadsheet\.getSheetByName\('ESTADOS_OPERACION_PLAN'\)\)/,
+    "ESTADOS_OPERACION_PLAN se lee con PP_readRowsFast_ (getValues, no getDisplayValues)");
+});
+
 test("PP_listPlanSnapshots_ ya no pide la columna entera de datos con getDisplayValues()", () => {
   const listar = extraer("PP_listPlanSnapshots_");
   // La lectura cara era exactamente esta: getRange(2, col, LASTROW-1, 1).getDisplayValues() sobre

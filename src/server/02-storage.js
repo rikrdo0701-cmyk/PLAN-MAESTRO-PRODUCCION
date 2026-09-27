@@ -207,7 +207,7 @@ function PP_buildState_(spreadsheet) {
   const operators = PP_readRows_(spreadsheet.getSheetByName('OPERADORES'));
   const otConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT'));
   const articleConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'));
-  const operationStatusRows = PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
 
   const state = {
     schemaVersion: PP_SCHEMA_VERSION,
