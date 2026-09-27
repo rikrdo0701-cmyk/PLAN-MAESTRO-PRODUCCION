@@ -1378,9 +1378,57 @@ function normalizeState() {
     state.operationPlanStatuses = window.PlanningWorkflowCore.reconcileOperationPlanStatuses(state);
     draftViewStatusesCache = null;
   }
+  // EL ESTADO DE COMPLETADO NO SE SOBRESCRIBE SI NO HAY FECHA EN EL MAPA.
+  // Antes: op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
+  // O sea que si la clave no estaba en el mapa, la operación volvía a PENDIENTE, sin importar
+  // lo que tuviera. Y la clave es `OP|{ot}|{secuencia}|{ct}`, que depende de la secuencia y del
+  // CT. Si el planeador regenera y cambia cualquiera de los dos, la clave cambia, el lookup
+  // falla, y la operacion pierde su "completada". Medido el 2026-09-27 con las funciones reales:
+  //   completada con secuencia 5 -> guardada en OP|3143|5|5459
+  //   el planeador la pasa a secuencia 3 -> se busca en OP|3143|3|5459
+  //   no está ahí -> PENDIENTE. La operacion sigue ahi, con sus datos, pero sin el completado.
+  // El usuario lo reporto en produccion: completo operaciones, movio de backlog a plan, y los
+  // completados desaparecieron.
+  //
+  // EL ARREGLO: si el mapa NO tiene estado para la clave actual, no toco el planStatus que la
+  // operacion ya trae. Solo escribo cuando el mapa dice algo explicito. Asi:
+  //   - mapa dice COMPLETADA_PLAN -> se escribe COMPLETADA_PLAN
+  //   - mapa dice PENDIENTE -> se escribe PENDIENTE
+  //   - mapa no tiene estado -> se conserva lo que la operacion trae (que puede ser
+  //     COMPLETADA_PLAN si la clave cambio, que es exactamente el bug que estamos arreglando)
+  //
+  // Es seguro porque el planStatus de la operacion siempre esta sincronizado con el mapa: se
+  // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
+  // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
+  // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
+  // EL ESTADO DE COMPLETADO NO SE SOBRESCRIBE SI NO HAY FECHA EN EL MAPA.
+  // Antes: op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
+  // O sea que si la clave no estaba en el mapa, la operación volvía a PENDIENTE, sin importar
+  // lo que tuviera. Y la clave es `OP|{ot}|{secuencia}|{ct}`, que depende de la secuencia y del
+  // CT. Si el planeador regenera y cambia cualquiera de los dos, la clave cambia, el lookup
+  // falla, y la operacion pierde su "completada". Medido el 2026-09-27 con las funciones reales:
+  //   completada con secuencia 5 -> guardada en OP|3143|5|5459
+  //   el planeador la pasa a secuencia 3 -> se busca en OP|3143|3|5459
+  //   no está ahí -> PENDIENTE. La operacion sigue ahi, con sus datos, pero sin el completado.
+  // El usuario lo reporto en produccion: completo operaciones, movio de backlog a plan, y los
+  // completados desaparecieron.
+  //
+  // EL ARREGLO: si el mapa NO tiene estado para la clave actual, no toco el planStatus que la
+  // operacion ya trae. Solo escribo cuando el mapa dice algo explicito. Asi:
+  //   - mapa dice COMPLETADA_PLAN -> se escribe COMPLETADA_PLAN
+  //   - mapa dice PENDIENTE -> se escribe PENDIENTE
+  //   - mapa no tiene estado -> se conserva lo que la operacion trae (que puede ser
+  //     COMPLETADA_PLAN si la clave cambio, que es exactamente el bug que estamos arreglando)
+  //
+  // Es seguro porque el planStatus de la operacion siempre esta sincronizado con el mapa: se
+  // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
+  // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
+  // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
   for (const op of state.operations) {
     const status = draftViewStatuses()[operationCompletionKey(op)];
-    op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
+    if (status?.status === "COMPLETADA_PLAN") op.planStatus = "COMPLETADA_PLAN";
+    else if (status?.status === "PENDIENTE") op.planStatus = "PENDIENTE";
+    // Si no hay estado, no se toca. El planStatus que la operacion trae se conserva.
   }
   applyWorkOrderDueDates();
   const operationCapabilities = state.operations
