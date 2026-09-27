@@ -152,6 +152,18 @@ test("PlannerCore aborta cooperativamente cuando vence el presupuesto", async ()
   assert.ok(result.lastSchedule.diagnostics.some((item) => item.code === "TIME_BUDGET_EXCEEDED"));
 });
 
+test("findEarliestSlot hace early termination cuando la operación no cabe en el horizonte", () => {
+  // Si cursor + productionMinutes + setupMinutes > windowEnd, devolver null inmediatamente
+  // sin seguir probando. Esto no cambia el resultado: evita probes inútiles.
+  const start = source.indexOf("function findEarliestSlot(");
+  const end = source.indexOf("\n  function ", start + 1);
+  const fn = source.slice(start, end);
+  assert.match(fn, /cursor \+ productionMinutes \+ setupMinutes > context\.windowEnd/,
+    "debe verificar si la operación ya no cabe en el horizonte restante");
+  assert.match(fn, /return null/,
+    "y devolver null inmediatamente, sin seguir probando");
+});
+
 test("PlannerCore devuelve el mejor plan completo si vence el presupuesto en una estrategia posterior", async () => {
   const core = loadPlannerCore();
   let nowCalls = 0;

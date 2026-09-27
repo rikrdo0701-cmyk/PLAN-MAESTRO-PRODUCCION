@@ -750,6 +750,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       const efficiency = operationEfficiencyForOperation(context.state, op);
       const productionMinutes = operationDuration(op, performance, efficiency);
       const preserveFractionalDuration = op?.tiempoFallback === true;
+      // Si la operación ya no cabe en el horizonte restante, no seguir probando.
+      if (cursor + productionMinutes + setupMinutes > context.windowEnd) return null;
       let allocation;
       let setupOperator = "";
       if (toolChange.required && setupMinutes > 0) {
