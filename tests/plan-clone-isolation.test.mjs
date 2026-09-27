@@ -57,12 +57,12 @@ function estadoMinimo() {
   };
 }
 
-test("schedulePlan devuelve operaciones NUEVAS, no las referencias del estado original", () => {
+test("schedulePlan devuelve operaciones NUEVAS, no las referencias del estado original", async () => {
   const state = estadoMinimo();
   const opsOriginales = state.operations;
   const op0Original = state.operations[0];
 
-  const result = api.schedulePlan(state, {
+  const result = await api.schedulePlan(state, {
     planStart: state.planStart,
     horizonDays: state.horizonDays,
     executionTime: new Date().toISOString(),
@@ -83,12 +83,12 @@ test("schedulePlan devuelve operaciones NUEVAS, no las referencias del estado or
     "pero debe conservar los mismos datos");
 });
 
-test("el estado de entrada no muta después de schedulePlan", () => {
+test("el estado de entrada no muta después de schedulePlan", async () => {
   const state = estadoMinimo();
   const opsAntes = JSON.stringify(state.operations);
   const op0Antes = state.operations[0];
 
-  api.schedulePlan(state, {
+  await api.schedulePlan(state, {
     planStart: state.planStart,
     horizonDays: state.horizonDays,
     executionTime: new Date().toISOString(),
@@ -108,7 +108,7 @@ test("el estado de entrada no muta después de schedulePlan", () => {
     "las referencias del estado original deben ser las mismas");
 });
 
-test("múltiples llamadas con el mismo estado producen el mismo resultado", () => {
+test("múltiples llamadas con el mismo estado producen el mismo resultado", async () => {
   // Si el probe mutara el estado, la segunda llamada vería un estado corrupto
   // y produciría un resultado diferente. Esto detecta exactamente eso.
   const state = estadoMinimo();
@@ -126,8 +126,8 @@ test("múltiples llamadas con el mismo estado producen el mismo resultado", () =
     onProgress: () => {},
   };
 
-  const r1 = api.schedulePlan(state, opts);
-  const r2 = api.schedulePlan(state, opts);
+  const r1 = await api.schedulePlan(state, opts);
+  const r2 = await api.schedulePlan(state, opts);
 
   assert.strictEqual(r1.operations.length, r2.operations.length,
     "el número de operaciones debe ser idéntico entre corridas");

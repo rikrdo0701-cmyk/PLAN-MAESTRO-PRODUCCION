@@ -60,14 +60,16 @@ if (!path.isAbsolute(RAIZ)) {
 // cliente (poda por evidencia, RULE-OT-051). Las demas son acciones de una persona
 // (bloquear, desbloquear, reordenar, devolver a backlog) o restauraciones de un snapshot.
 const AUTORIZADAS = new Set([
-  "src/server/08-netsuite.js :: PP_applyNetSuitePlantData_()",
-  "src/server/08-netsuite.js :: PP_applyNetSuiteWorkOrdersData_()",
-  "src/web/planning/app.js :: appSheetReleaseSaveGate()",
+  // applyImported y saveAppSheet son async, y el scanner no reconocia `async function`: sus
+  // asignaciones quedaban a nombre de la declaracion anterior. applyImported reemplaza la cola
+  // con la del servidor (es el import); saveAppSheet hace el rollback de _pendingAddOt cuando el
+  // servidor rechaza el guardado. Los dos ya estaban; el scanner es el que los ve ahora.
+  "src/web/planning/app.js :: applyImported()",
+  "src/web/planning/app.js :: saveAppSheet()",
   "src/web/planning/app.js :: applyNetSuiteWorkOrdersPayload()",
   "src/web/planning/app.js :: blockOtForCompletion()",
   "src/web/planning/app.js :: existingOperations()",
   "src/web/planning/app.js :: existingWorkOrder()",
-  "src/web/planning/app.js :: hasPlanningContent()",
   "src/web/planning/app.js :: normalizeState()",
   "src/web/planning/app.js :: pushUnique()",
   "src/web/planning/app.js :: renderPlanStatusChange()",
@@ -76,10 +78,22 @@ const AUTORIZADAS = new Set([
   "src/web/planning/app.js :: toggleAllJobs()",
   "src/web/planning/app.js :: toggleJobLock()",
   "src/web/planning/app.js :: unblockOtAfterCompletion()",
-  "src/web/shared/fluid-client.js :: (modulo)()",
-  "src/web/shared/performance-client.js :: (modulo)()",
+  // wrapQueueMutation es un wrapper transparente: delega en la funcion envuelta y solo intercambia
+  // checkpointState/jobsCache. Escribe las listas al restaurar el snapshot anterior.
+  "src/web/shared/fluid-client.js :: wrapQueueMutation()",
+  // El reconciliador del servidor (PP_applyNetSuiteWorkOrdersData_) es un bloque largo donde la
+  // ultima declaracion con nombre antes de las asignaciones es este predicado. Las tres
+  // asignaciones (merged.workOrders / selectedOts / lockedOts) son suyas por construccion: podan
+  // con confirmadas[], o sea con evidencia de cierre (RULE-OT-051), igual que las dos de arriba.
+  "src/server/08-netsuite.js :: PP_applyNetSuitePlantData_()",
+  "src/server/08-netsuite.js :: PP_applyNetSuiteWorkOrdersData_()",
+  "src/server/08-netsuite.js :: sigueViva()",
   "src/web/shared/performance-client.js :: keep()",
   "src/web/shared/performance-client.js :: preserved()",
+  // trimLocalCachePayload solo hace delete a claves de metadata (_locallyRemovedDraftOts,
+  // _pendingAddOt, expandedOts...) cuando el payload excede el guard de 4 MB. Nunca toca
+  // selectedOts/lockedOts/workOrders. Falso positivo del scanner linea por linea.
+  "src/web/shared/performance-client.js :: trimLocalCachePayload()",
 ]);
 
 async function jsFiles(sub) {
@@ -123,9 +137,13 @@ test("ninguna funcion NUEVA puede quitar una OT de las listas sin que alguien lo
     const fuente = soloCodigo(await readFile(archivo, "utf8"));
     let nombre = "(modulo)";
     for (const linea of fuente.split("\n")) {
-      const def = linea.match(/^function\s+([A-Za-z0-9_$]+)\s*\(/);
+      // Con \s* delante: las funciones de src/server/ estan indentadas dentro del IIFE, y sin
+      // esto el scanner les atribjia el nombre de la anterior sin sangrar, o sea (modulo).
+      const def = linea.match(/^\s*(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/);
       if (def) nombre = def[1];
-      const asig = linea.match(/^\s*const\s+([A-Za-z0-9_$]+)\s*=\s*(?:function|\()/);
+      // var y let tambien: sin ellos, `var sigueViva = function(ot)` no actualiza el nombre y las
+      // asignaciones siguientes se atribuyen a la declaracion anterior.
+      const asig = linea.match(/^\s*(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*(?:function|\()/);
       if (asig) nombre = asig[1];
       if (ASIGNA.test(linea)) {
         encontradas.add(`${path.relative(RAIZ, archivo).replace(/\\/g, "/")} :: ${nombre}()`);
