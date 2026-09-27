@@ -164,6 +164,14 @@ test("findEarliestSlot hace early termination cuando la operación no cabe en el
     "y devolver null inmediatamente, sin seguir probando");
 });
 
+test("ALLOCATION_CHUNK_MINUTES es 120 (chunks 4x más grandes que 30)", () => {
+  // El chunk controla cuánto se avanza por iteración en allocateWork. Con 30 min,
+  // una operación de 480 min necesita 16 iteraciones. Con 120 min, solo 4.
+  // El código ya maneja los límites con Math.min(chunk, remaining, diffMinutes).
+  assert.match(source, /const ALLOCATION_CHUNK_MINUTES = 120/,
+    "el chunk de asignación es 120 minutos, 4× más grande que 30");
+});
+
 test("findBestAssignment usa findBestOfAssignments (O(n) en vez de sort O(n log n))", () => {
   // selectTopKAssignment usa slice(0, 3): necesita los 3 mejores ordenados.
   // findBestOfAssignments encuentra minStart y filtra en una sola pasada O(n),
