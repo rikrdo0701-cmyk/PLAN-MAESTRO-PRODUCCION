@@ -125,27 +125,35 @@ function PP_fetchDirectWorkOrderOperations_(workOrderId, folio, quantity) {
 
 function PP_fetchDirectWorkOrderSuiteQl_(sql, config) {
   const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-  const query = { limit: 1000, offset: 0 };
-  const response = UrlFetchApp.fetch(endpoint + '?limit=1000&offset=0', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: PP_oauthHeader_('POST', endpoint, query, config),
-      Prefer: 'transient'
-    },
-    payload: JSON.stringify({ q: sql }),
-    muteHttpExceptions: true
-  });
-  const status = response.getResponseCode();
-  const raw = response.getContentText();
-  if (status < 200 || status >= 300) {
-    PP_logDirectWorkOrderSuiteQlFailure_(status, raw);
-    throw new Error('SuiteQL operaciones OT: error HTTP ' + status);
+  const limit = 1000;
+  const allItems = [];
+  for (let offset = 0, page = 0; page < 100; page++, offset += limit) {
+    const query = { limit: limit, offset: offset };
+    const response = UrlFetchApp.fetch(endpoint + '?limit=' + limit + '&offset=' + offset, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        Authorization: PP_oauthHeader_('POST', endpoint, query, config),
+        Prefer: 'transient'
+      },
+      payload: JSON.stringify({ q: sql }),
+      muteHttpExceptions: true
+    });
+    const status = response.getResponseCode();
+    const raw = response.getContentText();
+    if (status < 200 || status >= 300) {
+      PP_logDirectWorkOrderSuiteQlFailure_(status, raw);
+      throw new Error('SuiteQL operaciones OT: error HTTP ' + status);
+    }
+    let json;
+    try { json = JSON.parse(raw || '{}'); } catch (_) { throw new Error('SuiteQL operaciones OT: respuesta invalida'); }
+    if (!Array.isArray(json.items)) throw new Error('SuiteQL operaciones OT: respuesta sin items');
+    if (typeof json.hasMore !== 'boolean') throw new Error('SuiteQL operaciones OT: respuesta sin hasMore booleano');
+    allItems.push.apply(allItems, json.items);
+    if (json.hasMore !== true) break;
+    if (page === 99) throw new Error('SuiteQL operaciones OT: paginacion incompleta');
   }
-  let json;
-  try { json = JSON.parse(raw || '{}'); } catch (_) { throw new Error('SuiteQL operaciones OT: respuesta invalida'); }
-  if (!Array.isArray(json.items)) throw new Error('SuiteQL operaciones OT: respuesta sin items');
-  return json;
+  return { items: allItems, hasMore: false };
 }
 
 function PP_directWorkOrderSqlLiteral_(value) {

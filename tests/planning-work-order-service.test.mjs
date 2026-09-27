@@ -35,7 +35,7 @@ function loadService(detail, planningOperations = detail.operaciones || detail.o
       if (/FROM transaction/i.test(sql)) {
         return {
           getResponseCode: () => 200,
-          getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }] }),
+          getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }], hasMore: false }),
         };
       }
       assert.match(sql, /manufacturingoperationtask/i);
@@ -51,6 +51,7 @@ function loadService(detail, planningOperations = detail.operaciones || detail.o
             runrate: 0,
             title: row.Operacion || row.operacion,
           })),
+          hasMore: false,
         }),
       };
     },
@@ -94,7 +95,7 @@ test("carga las operaciones de una OT desde manufacturingoperationtask", () => {
       assert.match(request.payload, /manufacturingoperationtask/i);
       return {
         getResponseCode: () => 200,
-        getContentText: () => JSON.stringify({ items: operationRows }),
+        getContentText: () => JSON.stringify({ items: operationRows, hasMore: false }),
       };
     },
   };
@@ -130,7 +131,7 @@ test("excluye de la ruta las tareas terminales de una OT activa", () => {
         { id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" },
         { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "COMPLETED" },
         { id: "3", operationsequence: 30, manufacturingworkcenter: "5460", work_center: "PINTURA", setuptime: 6, runrate: 0.62, title: "PINTURA", status: "CANCELLED" },
-      ] }),
+      ], hasMore: false }),
     };
   };
 
@@ -160,7 +161,7 @@ test("reporta 'OT completada' cuando todas las operaciones estan en estado termi
         { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "COMPLETED" },
         { id: "3", operationsequence: 30, manufacturingworkcenter: "5460", work_center: "PINTURA", setuptime: 6, runrate: 0.62, title: "PINTURA", status: "CLOSED" }];
     assert.match(sql, /manufacturingoperationtask|FROM transaction/i);
-    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items, hasMore: false }) };
   };
 
   const result = context.getPlanningWorkOrderData("2773");
@@ -199,7 +200,7 @@ test("resuelve el ID interno por folio cuando inspeccion no lo incluye", () => {
     const items = /FROM transaction/i.test(sql)
       ? [{ id: "913", tranid: "2773" }]
       : [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5461", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE" }];
-    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items, hasMore: false }) };
   };
 
   const result = context.getPlanningWorkOrderData("2773");
@@ -224,7 +225,7 @@ test("ignora el id generico de inspeccion y resuelve el Work Order por folio", (
       : /WHERE workorder = '29445'/i.test(sql)
         ? [{ id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "3OTD : CORTE DE TUBO", setuptime: 6, runrate: 0.62, title: "3OTD" }]
         : [];
-    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items }) };
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ items, hasMore: false }) };
   };
 
   const result = context.getPlanningWorkOrderData("2773");
@@ -246,7 +247,7 @@ test("calcula setup mas run rate por la cantidad pendiente de la OT", () => {
     getContentText: () => JSON.stringify({ items: [{
       id: "1", operationsequence: 10, manufacturingworkcenter: "5461", work_center: "CORTE",
       setuptime: 4, runrate: 1.5, title: "CORTE",
-    }] }),
+    }], hasMore: false }),
   });
 
   const result = context.getPlanningWorkOrderData("2773");
@@ -336,6 +337,52 @@ test("rechaza toda la ruta cuando mezcla operaciones validas e invalidas", () =>
 
   assert.equal(result.ok, false);
   assert.match(result.error, /CT|tiempo/i);
+});
+
+test("pagina la respuesta SuiteQL cuando hasMore es true", () => {
+  const context = loadService({
+    trabajo: { wo: "2773", id: "913", cantidad: 3 },
+  });
+  const pages = [];
+  context.UrlFetchApp.fetch = (url, request) => {
+    const sql = JSON.parse(request.payload).q;
+    const offset = Number(new URL(url).searchParams.get("offset") || 0);
+    if (/FROM transaction/i.test(sql)) {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ items: [{ id: "913", tranid: "2773" }], hasMore: false }),
+      };
+    }
+    pages.push(offset);
+    if (offset === 0) {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({
+          items: [
+            { id: "1", operationsequence: 10, manufacturingworkcenter: "5458", work_center: "CORTE", setuptime: 6, runrate: 0.62, title: "CORTE", status: "IN PROGRESS" },
+          ],
+          hasMore: true,
+        }),
+      };
+    }
+    return {
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        items: [
+          { id: "2", operationsequence: 20, manufacturingworkcenter: "5459", work_center: "DOBLEZ", setuptime: 6, runrate: 0.62, title: "DOBLEZ", status: "IN PROGRESS" },
+        ],
+        hasMore: false,
+      }),
+    };
+  };
+
+  const result = context.getPlanningWorkOrderData("2773");
+
+  assert.deepEqual(pages, [0, 1000], "debe pedir la segunda pagina con offset 1000");
+  assert.equal(result.ok, true);
+  assert.equal(result.data.operations.length, 2, "debe acumular operaciones de ambas paginas");
+  assert.equal(result.data.operations[0].descripcion, "CORTE");
+  assert.equal(result.data.operations[1].descripcion, "DOBLEZ");
 });
 
 test("falla cuando no queda ninguna operacion programable", () => {
