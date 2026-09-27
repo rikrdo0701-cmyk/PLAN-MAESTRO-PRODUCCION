@@ -700,8 +700,37 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     countPlanningStat(context.performanceState, "findBestAssignmentCalls");
     const assignments = findAssignments(context, op, previous)
       .filter((assignment) => respectsFixedSuccessor(context, job, op, assignment));
-    assignments.sort((a, b) => compareAssignments(a, b, context.strategy, context));
-    return selectOperationAssignment(context, op, assignments);
+    // Partial selection O(n) en vez de sort O(n log n): selectTopKAssignment usa
+    // slice(0, 3), pero podemos encontrar el minStart y filtrar en una sola pasada,
+    // que es exactamente lo que selectOperationAssignment hace despues del sort.
+    return findBestOfAssignments(context, op, assignments);
+  }
+
+  // Equivalente a sort + selectOperationAssignment pero en una sola pasada O(n).
+  // selectOperationAssignment: minStart → filter → preferred → selectTopK.
+  // selectTopKAssignment: slice(0, 3) → toolAffinityScore → mejor.
+  // Esto produce exactamente el mismo resultado sin ordenar todo el array.
+  function findBestOfAssignments(context, op, candidates) {
+    if (!candidates || !candidates.length) return null;
+    const preferred = anchorPreferredOperator(op);
+    if (preferred) {
+      let minStart = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const start = candidates[i].start.getTime();
+        if (start < minStart) minStart = start;
+      }
+      const atMin = [];
+      for (let i = 0; i < candidates.length; i += 1) {
+        if (candidates[i].start.getTime() === minStart) atMin.push(candidates[i]);
+      }
+      const preferredAtMin = atMin.find((candidate) => String(candidate.operator) === preferred);
+      if (preferredAtMin) {
+        countPlanningStat(context.performanceState, "anchoredOperatorPreferenceHits");
+        return preferredAtMin;
+      }
+      return selectTopKAssignment(context, atMin);
+    }
+    return selectTopKAssignment(context, candidates);
   }
 
   function findAssignments(context, op, previous) {
