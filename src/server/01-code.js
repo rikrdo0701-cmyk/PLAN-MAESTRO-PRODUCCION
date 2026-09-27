@@ -1,5 +1,6 @@
 const PP_APP_VERSION = '2.49.0';
 const PP_SCHEMA_VERSION = 31;
+const PP_RETENCION_PLANES_DIAS = 90;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
 function PP_dateToIso_(value) {
@@ -316,16 +317,16 @@ function edadPlanSnapshots(maxAgeDays) {
 
 // PUNTOS DE ENTRADA SIN ARGUMENTOS, para correr desde el editor de Apps Script. Las dos funciones
 // de arriba piden maxAgeDays, y desde el editor no se le pasan argumentos: habria que escribir un
-// wrapper a mano cada vez, que es justo lo que se quiere evitar. Estos dos fijan el corte de un
-// mes, que es la politica acordada, y devuelven el resultado para pegarlo.
+// wrapper a mano cada vez, que es justo lo que se quiere evitar. Estos dos fijan el corte de
+// 90 dias, que es la politica acordada, y devuelven el resultado para pegarlo.
 //
 // OJO CON LA SEGUNDA: BORRA. La primera no toca nada.
 function DIAG_EDAD_SNAPSHOTS() {
-  return edadPlanSnapshots(30);
+  return edadPlanSnapshots(PP_RETENCION_PLANES_DIAS);
 }
 
 function DIAG_PODA_SNAPSHOTS() {
-  return pruneOldPlanSnapshots(30);
+  return pruneOldPlanSnapshots(PP_RETENCION_PLANES_DIAS);
 }
 
 function getPlanSnapshot(snapshotId) {

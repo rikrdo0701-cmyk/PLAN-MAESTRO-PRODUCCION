@@ -1215,16 +1215,26 @@ function PP_deletePlanSnapshot_(spreadsheet, snapshotId) {
     try { header = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0] || []; } catch (ignored) {}
     const colIndex = header.indexOf('SNAPSHOT_ID');
     if (colIndex < 0) return;
-    for (let row = sheet.getLastRow(); row >= 2; row -= 1) {
-      let cell = '';
-      try { cell = String(sheet.getRange(row, colIndex + 1).getValue() || '').trim(); } catch (ignored) {}
-      if (cell === key) sheet.deleteRow(row);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    // UNA lectura de la columna entera (una llamada), no una por fila.
+    const valores = sheet.getRange(2, colIndex + 1, lastRow - 1, 1).getValues();
+    // Bloques contiguos de este snapshot, de abajo hacia arriba: deleteRows desplaza
+    // lo de abajo, asi que borrar el bloque de mayor posicion primero mantiene validas
+    // las de los bloques de arriba.
+    let cuenta = 0;
+    let borro = false;
+    for (let i = valores.length - 1; i >= 0; i -= 1) {
+      const es = String(valores[i][0] == null ? '' : valores[i][0]).trim() === key;
+      if (es) { cuenta += 1; continue; }
+      if (cuenta > 0) { sheet.deleteRows(i + 2, cuenta); cuenta = 0; borro = true; }
     }
+    if (cuenta > 0) { sheet.deleteRows(2, cuenta); borro = true; }
+    // Borrar filas DESPLAZA todo lo de abajo, asi que el conteo guardado en el script cache ya no
+    // describe esta hoja. Se tira entero y la siguiente lectura lo reconstruye. No hay forma de
+    // "restar" las filas de este snapshot sin saber cuantas habia de cada uno.
+    if (borro && sheetName === 'PLANES_HISTORICOS') PP_invalidatePlanHistoryCountsCache_();
   });
-  // Borrar filas DESPLAZA todo lo de abajo, asi que el conteo guardado en el script cache ya no
-  // describe esta hoja. Se tira entero y la siguiente lectura lo reconstruye. No hay forma de
-  // "restar" las filas de este snapshot sin saber cuantas habia de cada uno.
-  if (sheetName === 'PLANES_HISTORICOS') PP_invalidatePlanHistoryCountsCache_();
   PP_deletePlanSnapshotPayload_(key);
   PP_removeManifestIndexRecord_(key);
   SpreadsheetApp.flush();

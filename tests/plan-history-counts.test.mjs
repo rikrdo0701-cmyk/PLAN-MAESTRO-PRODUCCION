@@ -291,8 +291,17 @@ test("PP_deletePlanSnapshot_ tira la clave de la cache, porque borrar invalida e
   const borrar = src.slice(src.indexOf("function PP_deletePlanSnapshot_("), src.indexOf("function PP_clearDraftSnapshot_("));
   assert.match(borrar, /PP_invalidatePlanHistoryCountsCache_\(\);/,
     "el unico escritor que borra filas de PLANES_HISTORICOS tiene que invalidar el conteo");
-  assert.match(borrar, /if \(sheetName === 'PLANES_HISTORICOS'\)/,
+  assert.match(borrar, /if \(borro && sheetName === 'PLANES_HISTORICOS'\)/,
     "y solo cuando la hoja afectada es PLANES_HISTORICOS: BORRADOR_PLAN no se cuenta aqui");
+  // El borrado bulk usa deleteRows (una llamada por bloque), no deleteRow (una por fila).
+  // Con 138 715 filas, deleteRow por fila son ~277 000 llamadas: no cabe en 6 min de Apps Script.
+  assert.match(borrar, /sheet\.deleteRows\(i \+ 2, cuenta\)/,
+    "debe borrar bloques contiguos con deleteRows, no fila por fila con deleteRow");
+  assert.doesNotMatch(borrar, /sheet\.deleteRow\(/,
+    "deleteRow por fila es O(filas) y no cabe en el limite de 6 min de Apps Script");
+  // Una sola lectura de la columna entera, no una por fila.
+  assert.match(borrar, /sheet\.getRange\(2, colIndex \+ 1, lastRow - 1, 1\)\.getValues\(\)/,
+    "debe leer la columna SNAPSHOT_ID entera en una llamada");
 });
 
 test("PP_listPlanSnapshots_ ya no pide la columna entera de datos con getDisplayValues()", () => {
