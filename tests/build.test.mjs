@@ -673,15 +673,16 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
   assert.match(optimizedStartupSource, /loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
-  // La lectura de caché se difiere con requestIdleCallback para no bloquear el primer paint.
-  // Las variables se inicializan con valores por defecto y se actualizan cuando la lectura termine.
+  // La lectura de caché no se difiere con requestIdleCallback: diferirla corre contra el import
+  // del servidor y pierde el atajo de getAppStateIfChanged. Se resuelve una sola vez, en el
+  // primer uso (justo antes de loadInitialStateConditionally) y se memoriza.
   assert.match(pagesIndex, /let initialLocalCache = \{ usable: false, revision: 0, deferredMaterials: false \}/,
     "la caché inicial se inicializa con valores por defecto");
-  assert.match(pagesIndex, /requestIdleCallback\(read, \{ timeout: 2000 \}\)/,
-    "la lectura de caché se difiere con requestIdleCallback");
-  assert.match(pagesIndex, /initialLocalCache = readUsableLocalStateCache\(initialPerformanceMeta\)/,
-    "la caché se lee cuando el navegador está libre");
-  assert.match(optimizedStartupSource, /loadInitialStateConditionally\(initialLocalCache\)/);
+  assert.match(pagesIndex, /function resolveInitialLocalCache\(\)\s*\{[\s\S]*if \(initialLocalCacheResolved\) return initialLocalCache;[\s\S]*initialLocalCacheResolved = true;[\s\S]*initialLocalCache = readUsableLocalStateCache\(initialPerformanceMeta\);/,
+    "la caché se lee una sola vez y se memoriza");
+  assert.doesNotMatch(pagesIndex, /requestIdleCallback\(read, \{ timeout: 2000 \}\)/,
+    "la lectura de caché no se aplaza al idle");
+  assert.match(optimizedStartupSource, /loadInitialStateConditionally\(resolveInitialLocalCache\(\)\)/);
   assert.match(optimizedStartupSource, /applyInitialWorkspaceView\(\{ scrollToTop: false \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /state\.selectedDetailOt = ""|state\.selectedOperationId = ""/);
   assert.match(pagesIndex, /function showWorkspaceView\(section, tab = "", \{ scrollToTop = false \} = \{\}\)[\s\S]*if \(scrollToTop\) window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/);

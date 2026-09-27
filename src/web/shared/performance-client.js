@@ -7,11 +7,10 @@
   const SAVE_RETRY_MS = [1200, 2500, 5000, 10000, 20000];
   const LOCAL_CACHE_IDENTITY = "plan-produccion-cache-v5";
   const initialPerformanceMeta = readMeta();
-  const initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
-  let deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
-  const loadedMaterialOts = new Set(deferredMaterials
-    ? []
-    : (state.materials || []).map((item) => materialOtKey(item.ot)));
+  let initialLocalCache = { usable: false, revision: 0, deferredMaterials: false };
+  let initialLocalCacheResolved = false;
+  let deferredMaterials = false;
+  const loadedMaterialOts = new Set();
   const activeCalls = new Map();
   const materialRequests = new Map();
   let snapshotsLoaded = false;
@@ -19,7 +18,7 @@
   let syncWorkOrdersMessageRequested = false;
   let syncWorkOrdersManualRequested = false;
   let initialStateLoadPending = true;
-  let deferredRevision = Number(state.revision || initialLocalCache.revision || 0);
+  let deferredRevision = Number(state.revision || 0);
   let localFlushHandle = null;
   let saveIdleHandle = null;
   let saveRetryTimer = null;
@@ -29,6 +28,27 @@
   let priorityQueueRequested = false;
   let planStatusRefreshHandle = null;
   let planStatusRefreshCallback = null;
+
+  // El cache local pesa ~2 MB y leerlo con getItem + JSON.parse es trabajo de main thread.
+  // No se lee al evaluar el modulo: se lee la PRIMERA vez que hace falta y se guarda el
+  // resultado (memo de una vez). Leerlo en requestIdleCallback seria una carrera: el import
+  // del servidor puede terminar antes y su deferredMaterials/loadedMaterialOts serian
+  // sobrescritos por los del cache viejo; y si el idle se adelanta al import, el cache
+  // seguiria marcado como no usable y se perderia el atajo de getAppStateIfChanged.
+  function resolveInitialLocalCache() {
+    if (initialLocalCacheResolved) return initialLocalCache;
+    initialLocalCacheResolved = true;
+    initialLocalCache = readUsableLocalStateCache(initialPerformanceMeta);
+    deferredMaterials = Boolean(initialLocalCache.deferredMaterials);
+    if (deferredMaterials) {
+      loadedMaterialOts.clear();
+    } else {
+      (state.materials || []).forEach((item) => loadedMaterialOts.add(materialOtKey(item.ot)));
+    }
+    const cacheRevision = Number(initialLocalCache.revision || 0);
+    if (cacheRevision > deferredRevision) deferredRevision = cacheRevision;
+    return initialLocalCache;
+  }
 
   function clone(value) {
     if (typeof structuredClone === "function") return structuredClone(value);
@@ -735,7 +755,7 @@
           console.warn("No se pudieron cargar los historicos:", error);
           return null;
         });
-        const result = await loadInitialStateConditionally(initialLocalCache);
+        const result = await loadInitialStateConditionally(resolveInitialLocalCache());
         loaded = result.loaded;
         appSheetAvailable = true;
       } catch (error) {
@@ -947,6 +967,9 @@
     if (document.visibilityState === "hidden") flushPendingSaveOnUnload();
   });
 
+  // writeMeta lee y escribe un objeto de ~120 B: no hay nada que diferir aqui, y diferirlo
+  // dejaba una ventana en la que escribia una revision vieja sobre la que el import del
+  // servidor ya habia avanzado.
   writeMeta({
     revision: Number(state.revision || initialPerformanceMeta.revision || 0),
     deferredMaterials,

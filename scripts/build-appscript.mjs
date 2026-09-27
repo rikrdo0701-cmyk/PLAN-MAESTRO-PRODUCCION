@@ -322,7 +322,7 @@ function patchPerformanceClient(performanceClient) {
           console.warn("No se pudieron cargar los historicos:", error);
           return null;
         });
-        const result = await loadInitialStateConditionally(initialLocalCache);`;
+        const result = await loadInitialStateConditionally(resolveInitialLocalCache());`;
   const startupReplacement = `        await root.PPAppsScriptBridge.ensureReady();
         snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
           console.warn("No se pudieron cargar los historicos:", error);
@@ -341,7 +341,7 @@ function patchPerformanceClient(performanceClient) {
             })
           : Promise.resolve(false);
         void fastDraftRescue;
-        const result = await loadInitialStateConditionally(initialLocalCache);
+        const result = await loadInitialStateConditionally(resolveInitialLocalCache());
         loaded = result.loaded;
         if (loaded) scheduleLocalStorageFlush();`;
   const startupPatched = performanceClient.replace(startupMarker, startupReplacement);

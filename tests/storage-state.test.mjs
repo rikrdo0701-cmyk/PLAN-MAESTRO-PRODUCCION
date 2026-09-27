@@ -13,7 +13,12 @@ function createSheet(headers = ["KEY"], body = []) {
       const targetRow = startRow - 1 + rowOffset;
       if (!rows[targetRow]) rows[targetRow] = [];
       valueRow.forEach((value, columnOffset) => {
-        rows[targetRow][startColumn - 1 + columnOffset] = value;
+        // setValues con undefined deja la celda VACIA en Sheets, no con la palabra
+        // "undefined". Sin esta conversion el mock miente: PP_writeConfigPatch_ serializa
+        // claves sin valor con JSON.stringify(undefined) === undefined, y al releerlas el
+        // mock devolvia la palabra "undefined", de donde Number(...) salia NaN y revision
+        // quedaba en NaN en vez de 0.
+        rows[targetRow][startColumn - 1 + columnOffset] = value === undefined ? "" : value;
       });
     });
   };
@@ -39,6 +44,10 @@ function createSheet(headers = ["KEY"], body = []) {
     getRange: (row, column, rowCount, columnCount) => ({
       setValues(values) {
         write(row, column, values);
+        return this;
+      },
+      setValue(value) {
+        write(row, column, [[value]]);
         return this;
       },
       setFontWeight() { return this; },
@@ -116,6 +125,10 @@ test("persiste tiempoFallback y trata filas antiguas como no fallback", () => {
   fixture.sheets.OPERACIONES = createSheet(legacyHeaders, [
     legacyHeaders.map((header) => header === "ID" ? "legacy-1" : ""),
   ]);
+  // El test cambia la hoja por detras de la cache, cosa que en produccion no puede pasar:
+  // toda escritura pasa por un writer que sube CONFIG.revision y con eso invalida la cache.
+  // Se hace lo mismo aqui para que la lectura sea la de una hoja nueva de verdad.
+  fixture.context.PP_invalidateStateCache_(fixture.spreadsheet);
   const legacy = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
   assert.equal(legacy.operations[0].tiempoFallback, false);
 });
@@ -579,20 +592,84 @@ test("estados por origen: un guardado completo con bucket draft incompleto conse
   assert.equal(state.operationPlanStatuses["kDraft2"].status, "PENDIENTE");
 });
 
-test("PP_writeNetSuiteWorkOrdersState_ escribe la cache de estado para que el próximo getAppState sea tibio", () => {
-  // Sin este fix, PP_writeNetSuiteWorkOrdersState_ sube CONFIG.revision pero no
-  // PP_STATE_CACHE_REVISION, y el siguiente getAppState reconstruye todo (>120 s).
-  // Con el fix, la cache se escribe con la revisión nueva y el próximo getAppState
-  // la encuentra válida (~10 s).
-  // Verificación por patrón de fuente: PP_buildState_ necesita Session/Utilities que
-  // un mock puede no tener, así que se fija el comportamiento en el código.
-  const writeFn = source.slice(source.indexOf("function PP_writeNetSuiteWorkOrdersState_("), source.indexOf("function PP_writeWorkOrderSyncState_("));
-  assert.match(writeFn, /PP_writeCachedState_\(spreadsheet, revision, cachedState\)/,
-    "debe escribir la cache de estado con la revisión nueva");
-  assert.match(writeFn, /PP_buildState_\(spreadsheet\)/,
-    "debe construir el estado desde las hojas ya escritas");
+test("PP_writeNetSuiteWorkOrdersState_ deja la cache sellada con la revision nueva (getAppState tibio)", () => {
+  // Sin el fix, este writer sube CONFIG.revision pero deja PP_STATE_CACHE_REVISION vieja, y
+  // el siguiente getAppState reconstruye entero (>120 s medidos el 2026-09-27) -> timeout
+  // del puente -> la app se queda con sampleState.
+  const fixture = loadStorage();
+  const { context, spreadsheet, sheets } = fixture;
+
+  // 1) Cache caliente: un getAppState la reconstruye y la deja escrita.
+  context.PP_readState_(spreadsheet);
+  assert.ok(sheets.PP_STATE_CACHE, "la primera carga debe crear la hoja de cache");
+
+  // 2) El writer de OTs sube la revision.
+  context.PP_writeNetSuiteWorkOrdersState_(spreadsheet, {
+    workOrders: [{ id: "wo-1", workOrderId: "9", ot: "OT-9", item: "ART-9", status: "ABIERTA" }],
+    operationPlanStatuses: {},
+    selectedOts: ["OT-9"],
+    lockedOts: ["OT-9"],
+  }, "pruebas");
+
+  const config = configObject(context, sheets.CONFIG);
+  assert.equal(config.PP_STATE_CACHE_REVISION, config.revision,
+    "la cache debe quedar sellada con la MISMA revision que CONFIG");
+
+  // 3) Prueba de que el siguiente getAppState es TIBIO y no reconstruye: se sabotea la hoja
+  // OPERACIONES, que PP_buildState_ si lee (4.6M celdas). Si PP_readState_ reconstruyera,
+  // PP_readRowsFast_ lanzaria y el test fallaria. Si la sirve la cache, no la toca.
+  const sabotage = createSheet();
+  sabotage.getDataRange = () => { throw new Error("OPERACIONES leida: el estado se reconstruyo"); };
+  sheets.OPERACIONES = sabotage;
+
+  const state = structuredClone(context.PP_readState_(spreadsheet));
+  assert.equal(state.revision, config.revision);
+  assert.deepEqual(state.workOrders.map((item) => item.ot), ["OT-9"], "workOrders de la cache parcheada");
+  assert.deepEqual(state.selectedOts, ["OT-9"], "selectedOts de CONFIG deben viajar en la cache");
+});
+
+test("el parche de cache NO reconstruye el estado dentro del writer de OTs", () => {
+  // Invariante estructural: el camino de guardado no puede llamar a PP_buildState_. Ese
+  // rebuild mide >120 s y la sincronizacion de OTs ya mide 43-73 s, o sea que trasplantarlo
+  // al guardado tumba la sincronizacion entera, que es peor que un arranque lento. Este test
+  // es de estructura y a proposito: la consecuencia (no leer OPERACIONES) ya la comprueba
+  // el test de arriba con comportamiento real.
+  const patch = source.slice(
+    source.indexOf("function PP_patchCachedStateAfterWorkOrderSync_("),
+    source.indexOf("function PP_readState_(")
+  );
+  assert.doesNotMatch(patch, /PP_buildState_\(/,
+    "el parche de cache no puede reconstruir el estado completo");
+  assert.doesNotMatch(patch, /OPERACIONES/,
+    "el parche no puede leer OPERACIONES: toma operations de la cache");
+
+  const writeFn = source.slice(
+    source.indexOf("function PP_writeNetSuiteWorkOrdersState_("),
+    source.indexOf("function PP_writeWorkOrderSyncState_(")
+  );
+  assert.doesNotMatch(writeFn, /PP_buildState_\(/,
+    "el writer de OTs no puede reconstruir el estado completo");
+  assert.match(writeFn, /PP_patchCachedStateAfterWorkOrderSync_\(spreadsheet, revision\)/,
+    "el writer de OTs debe sellar la cache con el scope que escribio");
   assert.doesNotMatch(writeFn, /PP_STATE_CACHE_REVISION\s*=/,
     "no debe asignar PP_STATE_CACHE_REVISION directamente (lo hace PP_writeCachedState_)");
+});
+
+test("sin cache previa el writer de OTs no inventa una: el siguiente getAppState reconstruye", () => {
+  // El parche solo puede parchear una foto que exista. Si no habia cache, se deja como
+  // estaba y el proximo arranque paga el rebuild frio, igual que antes del fix. Lo que NO
+  // puede pasar es que se selle PP_STATE_CACHE_REVISION de una cache inexistente, porque
+  // eso haria que PP_readCachedState_ devolviera null con la revision "correcta" para siempre.
+  const fixture = loadStorage();
+  const { context, spreadsheet, sheets } = fixture;
+  context.PP_writeNetSuiteWorkOrdersState_(spreadsheet, {
+    workOrders: [{ id: "wo-1", workOrderId: "9", ot: "OT-9", item: "ART-9" }],
+  }, "pruebas");
+  const config = configObject(context, sheets.CONFIG);
+  assert.equal(config.PP_STATE_CACHE_REVISION || 0, 0,
+    "sin cache previa no se sella la revision de la cache");
+  assert.equal(context.PP_readState_(spreadsheet).revision, config.revision,
+    "el siguiente getAppState reconstruye y avanza");
 });
 
 test("PP_snapshotOperationFromRow_ recupera toolChange* desde el comentario formateado", () => {

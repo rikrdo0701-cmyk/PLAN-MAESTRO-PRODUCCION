@@ -144,7 +144,9 @@ async function readRules() {
   } catch {
     return [];
   }
-  const parsed = JSON.parse(content);
+  // Un BOM al principio rompe JSON.parse, y como npm run check va primero en push y deploy,
+  // un BOM en rules.json dejaba el proyecto SIN PODER DESPLEGAR. Se quita en la lectura.
+  const parsed = JSON.parse(content.replace(/^\uFEFF/, ""));
   const list = Array.isArray(parsed) ? parsed : parsed?.rules;
   if (!Array.isArray(list)) throw new Error("rules.json no contiene una lista de reglas valida");
   return list;

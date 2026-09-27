@@ -311,10 +311,18 @@ test("PP_readRowsCols_ usa getValues() y no getDisplayValues() para las columnas
   // servidor (SNAPSHOT_ID, NUM, OT, MAQ_AREA, HERRAMENTAL, KIT_HERRAMENTAL, F_FIN, H_FIN),
   // sin formato de celda que getDisplayValues pueda convertir a otra cosa.
   const leer = extraer("PP_readRowsCols_");
-  assert.match(leer, /getRange\(2, index \+ 1, total, 1\)\.getValues\(\)/,
+  assert.match(leer, /getRange\(desde, index \+ 1, total, 1\)\.getValues\(\)/,
     "las columnas de datos se leen con getValues(), sin formatear 139 876 celdas por columna");
-  assert.doesNotMatch(leer, /getRange\(2, index \+ 1, total, 1\)\.getDisplayValues\(\)/,
+  assert.doesNotMatch(leer, /getRange\(desde, index \+ 1, total, 1\)\.getDisplayValues\(\)/,
     "getDisplayValues() por columna es el costo que hace que el rebuild frío supere los 120 s");
+  // `desde` es la fila inicial (2 por defecto). Es lo que permite que la lectura incremental de
+  // la cola lea SOLO la cola y no la hoja entera: sin esto el "incremental" pagaba las 139 876
+  // filas x 8 columnas y la cache no ahorraba nada.
+  assert.match(leer, /const desde = Number\(firstRow \|\| 2\)/,
+    "la fila inicial es configurable para poder leer solo la cola");
+  assert.match(leer, /const total = sheet\.getLastRow\(\) - desde \+ 1/,
+    "el alto se mide desde la fila inicial, no desde la 2");
+
 });
 
 test("PP_readMachineToolHistoryCached_ devuelve cache cuando lastRow no cambió", () => {

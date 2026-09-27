@@ -48,6 +48,7 @@ function loadClient(options = {}) {
   const documentListeners = new Map();
   const applyImportedCalls = [];
   const metadataWrites = [];
+  const storageReads = [];
   const loadPlanSnapshotsCalls = [];
   const snapshotStateAtLoad = [];
   const syncNetSuiteDataCalls = [];
@@ -108,7 +109,7 @@ function loadClient(options = {}) {
       body: { dataset: {} },
     },
     localStorage: {
-      getItem: (key) => storage.get(key) ?? null,
+      getItem: (key) => { storageReads.push(key); return storage.get(key) ?? null; },
       setItem: (key, value) => {
         storage.set(key, value);
         if (key === "plan-produccion-performance-v2") metadataWrites.push(JSON.parse(value));
@@ -222,6 +223,7 @@ function loadClient(options = {}) {
     documentListeners,
     applyImportedCalls,
     metadataWrites,
+    storageReads,
     loadPlanSnapshotsCalls,
     syncNetSuiteDataCalls,
     snapshotStateAtLoad,
@@ -660,10 +662,39 @@ test("getAppState completo seguido de cache compacta conserva materiales bajo de
   assert.equal(second.state.materials[0].material, "TUBO-DEFERIDO");
 });
 
-test("la validez de cache se captura antes de ensureReady y no acepta sampleState escrito durante la espera", async () => {
+test("el cache local se lee una sola vez, ni al evaluar el modulo ni despues del primer uso", async () => {
+  const localState = coherentLocalState(12, { workOrders: [{ ot: "WO-12" }] });
+  const storage = new Map([
+    ["test", localState],
+    ["plan-produccion-performance-v2", coherentMetadata(12)],
+  ]);
+  const fixture = loadClient({
+    revision: 12,
+    localState,
+    storage,
+    bridgeResults: { getAppStateIfChanged: { unchanged: true, revision: 12 } },
+  });
+  const stateReads = () => fixture.storageReads.filter((key) => key === "test").length;
+
+  assert.equal(stateReads(), 0, "evaluar el modulo no lee el estado cacheado");
+
+  await fixture.context.loadAppStateInBackground();
+  assert.equal(stateReads(), 1, "el arranque lee el cache una vez");
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
+
+  await fixture.context.loadAppStateInBackground();
+  assert.equal(stateReads(), 1, "una segunda carga no vuelve a leer el cache");
+});
+
+test("la validez de cache se captura antes de ensureReady y el sampleState escrito durante la espera no la invalida", async () => {
   const storage = new Map([
     ["plan-produccion-performance-v2", coherentMetadata(12)],
   ]);
+  const remoteState = {
+    revision: 13,
+    operations: [{ id: "remote-op" }],
+    workOrders: [{ ot: "REMOTE-WO" }],
+  };
   const fixture = loadClient({
     revision: 12,
     state: {
@@ -674,16 +705,15 @@ test("la validez de cache se captura antes de ensureReady y no acepta sampleStat
     ensureReady: async (context) => {
       context.scheduleLocalStorageFlush();
     },
-    remote: {
-      revision: 13,
-      operations: [{ id: "remote-op" }],
-      workOrders: [{ ot: "REMOTE-WO" }],
+    remote: remoteState,
+    bridgeResults: {
+      getAppStateIfChanged: structuredClone(remoteState),
     },
   });
 
   await fixture.context.loadAppStateInBackground();
 
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppState"]);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
   assert.equal(fixture.state.revision, 13);
   assert.equal(fixture.state.operations[0].id, "remote-op");
 });

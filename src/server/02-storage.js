@@ -160,9 +160,13 @@ function PP_stateCacheRevision_(spreadsheet) {
   }
 }
 
-function PP_readCachedState_(spreadsheet, revision) {
+// Lector CRUDO de la cache: NO mira la revision. Existe para el parche posterior a un
+// guardado (PP_patchCachedState_), que necesita la ultima foto valida aunque el writer
+// ya haya subido CONFIG.revision y la haya dejado obsoleta. Para SERVIR el estado solo
+// se usa PP_readCachedState_, que si exige PP_STATE_CACHE_REVISION == CONFIG.revision:
+// una foto vieja servida como actual es un estado equivocado, y eso no se acepta.
+function PP_readCachedStateRaw_(spreadsheet) {
   try {
-    if (PP_stateCacheRevision_(spreadsheet) !== Number(revision || 0)) return null;
     const sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
     if (!sheet || sheet.getLastRow() < 2) return null;
     const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
@@ -172,6 +176,33 @@ function PP_readCachedState_(spreadsheet, revision) {
   } catch (error) {
     return null;
   }
+}
+
+function PP_readCachedState_(spreadsheet, revision) {
+  try {
+    if (PP_stateCacheRevision_(spreadsheet) !== Number(revision || 0)) return null;
+    return PP_readCachedStateRaw_(spreadsheet);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Invalida la cache de estado para writers que tocan una hoja de PP_buildState_ SIN subir
+// CONFIG.revision. Sin esto, la cache queda "al dia" para PP_readCachedState_ y se sirve un
+// estado que ya no refleja las hojas: un estado viejo servido como actual.
+//
+// Revalidado 2026-09-27 al arreglar la cache del writer de OTs. El unico writer en esa
+// situacion es PP_clearAllOperationPlanStatuses_ ("Reabrir todo"): vacia
+// ESTADOS_OPERACION_PLAN y NO cambia la revision, porque no es un guardado de plan y no debe
+// invalidar la concurrencia optimista del cliente (CONFLICT_REVISION). El test
+// "reabrir todo: PP_clearAllOperationPlanStatuses_ vacia los buckets de estados" lo fijo.
+//
+// -1 no puede coincidir con una revision real: PP_nextRevision_ solo suma sobre
+// CONFIG.revision, que es 0 o mayor.
+function PP_invalidateStateCache_(spreadsheet) {
+  try {
+    PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: -1 });
+  } catch (error) {}
 }
 
 function PP_writeCachedState_(spreadsheet, revision, state) {
@@ -187,6 +218,71 @@ function PP_writeCachedState_(spreadsheet, revision, state) {
     if (chunks.length) sheet.getRange(2, 1, chunks.length, 1).setValues(chunks);
     PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: Number(revision || 0) });
   } catch (error) {}
+}
+
+// POR QUE EXISTE, Y POR QUE NO ES PP_buildState_.
+//
+// Medido 2026-09-27 (RULE-PERF-014): getAppState TIBIO (lee la cache) responde en ~10 s y
+// getAppState FRIO (reconstruye con PP_buildState_) pasa de 120 s, que es el CALL_TIMEOUT_MS
+// del cliente. El arranque SIEMPRE cae en el frio, porque TODO writer de estado sube
+// CONFIG.revision por PP_nextRevision_ y eso deja PP_STATE_CACHE_REVISION vieja: en una sesion
+// normal siempre hay un guardado antes del siguiente arranque, asi que la cache nunca alcanza
+// a servir. Al agotarse los 120 s, loadAppStateInBackground cae al catch y la app se queda
+// con sampleState (189 operaciones de demostracion, 0 materiales, sin cache local).
+//
+// El parche NO puede llamar a PP_buildState_ dentro del writer: eso trasplanta un rebuild de
+// >120 s al CAMINO DE GUARDADO, que ya de por si es lento (la sincronizacion de OTs mide
+// 43-73 s), y lo multiplica por cada writer. Un guardado asi no finishes nunca y tumba la
+// sincronizacion entera, que es un fallo peor que un arranque lento.
+//
+// En vez de eso se parchea la cache por el scope que el writer toco, releyendo SOLO esas
+// hojas. Es correcto por construccion: cada campo se recalcula con la MISMA funcion que
+// PP_buildState_ usa, sobre la hoja que el writer acaba de escribir. Si no hubiera cache
+// previa no se inventa nada: se devuelve false y el proximo getAppState reconstruye, igual
+// que antes del fix.
+//
+// SCOPE. Solo para PP_writeNetSuiteWorkOrdersState_, que escribe CONFIG, ORDENES_TRABAJO y
+// ESTADOS_OPERACION_PLAN. Los campos del estado que dependen de esas hojas son:
+//   CONFIG                  -> revision, savedAt, syncedAt, source, selectedOts, lockedOts,
+//                              expandedOts, plant, invoicePriceWindow
+//   ORDENES_TRABAJO         -> workOrders, y articleConfigurations (PP_buildArticleConfigurations_
+//                              mapea OT -> articulo con workOrders antes que con operations)
+//   ESTADOS_OPERACION_PLAN  -> operationPlanStatuses, publishedPlanStatuses
+// NO se tocan y por que NO:
+//   OPERACIONES             -> este writer no la escribe; y leerla son 4.6M celdas, que es
+//                              justamente lo que hay que evitar. Se toma operations de la cache.
+//   PLANES_HISTORICOS       -> machineToolHistory es DATO DERIVADO y este writer no lo cambia;
+//                              se conserva el valor cacheado (regla de no pesar la cache en cada
+//                              guardado). Solo PP_deletePlanSnapshot_ lo invalida.
+function PP_patchCachedStateAfterWorkOrderSync_(spreadsheet, revision) {
+  const cached = PP_readCachedStateRaw_(spreadsheet);
+  if (!cached) return false;
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const workOrders = PP_readRows_(spreadsheet.getSheetByName('ORDENES_TRABAJO')).map(PP_mapWorkOrder_);
+  const operations = Array.isArray(cached.operations) ? cached.operations : [];
+  const merged = Object.assign({}, cached, {
+    revision: Number(revision || 0),
+    savedAt: config.savedAt || '',
+    syncedAt: config.syncedAt || '',
+    source: config.source || cached.source || 'apps-script-spreadsheet',
+    selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
+    lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : [],
+    expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : [],
+    plant: config.plant || cached.plant || null,
+    invoicePriceWindow: config.invoicePriceWindow || null,
+    workOrders: workOrders,
+    operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
+    articleConfigurations: PP_buildArticleConfigurations_(
+      PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO')),
+      PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT')),
+      workOrders,
+      operations
+    )
+  });
+  PP_writeCachedState_(spreadsheet, revision, merged);
+  return true;
 }
 
 function PP_readState_(spreadsheet) {
@@ -434,52 +530,18 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
     workOrders: (payload.workOrders || []).length
   })]);
   SpreadsheetApp.flush();
-  // FIX: escribir la cache de estado con la revisión nueva para que el próximo
-  // getAppState la encuentre válida (~10 s) en vez de reconstruir (>120 s).
-  // Sin esto, PP_writeNetSuiteWorkOrdersState_ sube CONFIG.revision pero no
-  // PP_STATE_CACHE_REVISION, y el siguiente arranque paga el rebuild frío.
+  // FIX (RULE-PERF-014): este writer sube CONFIG.revision, asi que dejaba
+  // PP_STATE_CACHE_REVISION vieja y el siguiente getAppState reconstruia entero (>120 s) ->
+  // timeout -> sampleState. Ahora la cache se parchea con el scope de este writer
+  // (CONFIG + ORDENES_TRABAJO + ESTADOS_OPERACION_PLAN) y se sella con la revision nueva.
+  //
+  // NO se reconstruye con PP_buildState_ aqui: eso trasplanta un rebuild de >120 s al camino
+  // de guardado y tumba la sincronizacion de OTs, que ya mide 43-73 s. Ver
+  // PP_patchCachedStateAfterWorkOrderSync_. Si la cache no existia, o el parche falla, el
+  // siguiente getAppState reconstruye como antes: el parche nunca rompe el guardado.
   try {
-    const cachedState = PP_buildState_(spreadsheet);
-    PP_writeCachedState_(spreadsheet, revision, cachedState);
-  } catch (ignored) {
-    // Si la cache falla (p. ej. PP_buildState_ necesita Session/Utilities que un mock
-    // puede no tener), el próximo arranque reconstruye como antes. Nunca rompe el guardado.
-  }
-  // TEMP: para diagnosticar el fallo del test
-  try {
-    const testState = PP_buildState_(spreadsheet);
-    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
-  } catch (testError) {
-    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
-  }
-  // TEMP: para diagnosticar el fallo del test
-  try {
-    const testState = PP_buildState_(spreadsheet);
-    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
-  } catch (testError) {
-    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
-  }
-  // TEMP: para diagnosticar el fallo del test
-  try {
-    const testState = PP_buildState_(spreadsheet);
-    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
-  } catch (testError) {
-    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
-  }
-  // TEMP: para diagnosticar el fallo del test
-  try {
-    const testState = PP_buildState_(spreadsheet);
-    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
-  } catch (testError) {
-    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
-  }
-  // TEMP: para diagnosticar el fallo del test
-  try {
-    const testState = PP_buildState_(spreadsheet);
-    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
-  } catch (testError) {
-    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
-  }
+    PP_patchCachedStateAfterWorkOrderSync_(spreadsheet, revision);
+  } catch (ignored) {}
   return PP_writeStateAck_(revision, savedAt, {
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
@@ -1315,6 +1377,11 @@ function PP_clearAllOperationPlanStatuses_() {
   const sheet = spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN');
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.ESTADOS_OPERACION_PLAN.length).clearContent();
+  // No se sube CONFIG.revision a proposito: "Reabrir todo" no es un guardado de plan y no debe
+  // invalidar la concurrencia optimista del cliente. Pero si deja la cache de estado vigente,
+  // PP_readState_ serviria los estados que se acaban de borrar. Se invalida la cache, no la
+  // revision: el siguiente getAppState reconstruye y el cliente no recibe CONFLICT_REVISION.
+  PP_invalidateStateCache_(spreadsheet);
   return { clearedRows: Math.max(0, lastRow - 1) };
 }
 
@@ -1656,7 +1723,7 @@ function PP_listPlanSnapshots_(spreadsheet) {
 const PP_PLAN_HISTORY_COLS_ = ['SNAPSHOT_ID', 'NUM', 'OT', 'MAQ_AREA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'F_FIN', 'H_FIN'];
 
 function PP_readMachineToolHistory_(spreadsheet) {
-  return PP_readRowsCols_(spreadsheet.getSheetByName('PLANES_HISTORICOS'), PP_PLAN_HISTORY_COLS_).map(function(row, index) {
+  const mapped = PP_readRowsCols_(spreadsheet.getSheetByName('PLANES_HISTORICOS'), PP_PLAN_HISTORY_COLS_).map(function(row, index) {
     const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
     const herramental = String(row.HERRAMENTAL || '').trim();
     const kit = String(row.KIT_HERRAMENTAL || '').trim();
@@ -1674,9 +1741,8 @@ function PP_readMachineToolHistory_(spreadsheet) {
       endDate: endDate,
       endTime: endTime
     };
-  }).filter(function(item) { return item !== null; }).sort(function(a, b) {
-    return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
-  }).slice(-2000);
+  }).filter(function(item) { return item !== null; });
+  return PP_historyLatest_(mapped);
 }
 
 // Cache incremental de machineToolHistory: la hoja PLANES_HISTORICOS tiene 139 876 filas y
@@ -1731,10 +1797,19 @@ function PP_readMachineToolHistoryCached_(spreadsheet) {
     PP_writeMachineToolHistoryCache_(lastRow, data);
     return data;
   }
-  // lastRow mayor: leer solo la cola nueva y mergear
+  // lastRow mayor: leer SOLO la cola nueva y mergear, con el mismo criterio de cierre
+  // (PP_historyLatest_) que aplica el rebuild completo.
+  //
+  // QUE SE CORRIGIO 2026-09-27. Esta rama se llamaba "leer solo la cola" pero no leia la cola:
+  // PP_readMachineToolHistoryTail_ traia la hoja COMPLETA con PP_readRowsCols_ (139 876 filas x
+  // 8 columnas, ~30 s medidos) y despues filtraba en memoria lo que ya estaba en la cache. O sea
+  // que el incremental costaba lo mismo que el rebuild completo y la cache no ahorraba nada.
+  // Ahora la cola se lee desde su propia fila con el parametro firstRow de PP_readRowsCols_.
+  // Y el merge pasa por PP_historyLatest_ porque el concat crudo devolvia una lista mas larga y
+  // sin ordenar, o sea DISTINTA de la del rebuild completo.
   if (cache && cache.lastRow < lastRow) {
     const tail = PP_readMachineToolHistoryTail_(sheet, cache.lastRow + 1);
-    const merged = cache.data.concat(tail);
+    const merged = PP_historyLatest_(cache.data.concat(tail));
     PP_writeMachineToolHistoryCache_(lastRow, merged);
     return merged;
   }
@@ -1744,11 +1819,18 @@ function PP_readMachineToolHistoryCached_(spreadsheet) {
   return data;
 }
 
+// Las filas desde startRow (base 1, como getRange).
+//
+// EL INDICE, Y POR QUE ES startRow - 1. machineToolHistory se compara por id, asi que la cola
+// tiene que producir LOS MISMOS id que produciria la lectura completa de la hoja. En la lectura
+// completa la fila R de la hoja lleva el indice R - 2 (base 0 desde la fila 2) y el id termina
+// en indice + 1 = R - 1. En la cola la fila R cae en la posicion index, con R = startRow +
+// index, asi que el id tiene que terminar en startRow + index - 1. Con index + startRow (como
+// estaba) TODOS los id de la cola salian corridos en uno respecto del rebuild, y el mismo
+// registro tenia dos id distintos segun por que camino se leyera.
 function PP_readMachineToolHistoryTail_(sheet, startRow) {
   if (startRow > sheet.getLastRow()) return [];
-  const rows = PP_readRowsCols_(sheet, PP_PLAN_HISTORY_COLS_).filter(function(row, index) {
-    return index >= startRow - 2;
-  });
+  const rows = PP_readRowsCols_(sheet, PP_PLAN_HISTORY_COLS_, startRow);
   return rows.map(function(row, index) {
     const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
     const herramental = String(row.HERRAMENTAL || '').trim();
@@ -1756,9 +1838,10 @@ function PP_readMachineToolHistoryTail_(sheet, startRow) {
     const endDate = String(row.F_FIN || '').trim();
     const endTime = String(row.H_FIN || '').trim();
     if (!machine || /^CT\s+/i.test(machine) || !herramental || !endDate || !endTime) return null;
+    const numeroFila = index + startRow - 1;
     return {
-      id: 'history-' + String(row.SNAPSHOT_ID || '') + '-' + (index + startRow),
-      operationId: 'snapshot-' + String(row.SNAPSHOT_ID || '') + '-' + String(row.NUM || index + startRow),
+      id: 'history-' + String(row.SNAPSHOT_ID || '') + '-' + numeroFila,
+      operationId: 'snapshot-' + String(row.SNAPSHOT_ID || '') + '-' + String(row.NUM || numeroFila),
       snapshotId: String(row.SNAPSHOT_ID || ''),
       ot: String(row.OT || ''),
       machine: machine,
@@ -1779,16 +1862,34 @@ function PP_readMachineToolHistoryTail_(sheet, startRow) {
 //
 // Si una columna pedida NO existe en esa hoja, se deja como cadena vacia en vez de romper: una
 // hoja vieja a la que le falte una columna no puede hacer que getAppState se caiga.
-function PP_readRowsCols_(sheet, columns) {
+// El criterio con el que PP_readMachineToolHistory_ cierra la lista: ordenar por fecha de fin de
+// operacion y quedarse con las 2000 mas nuevas. Vive aqui, y no duplicado, para que el camino
+// completo y el incremental apliquen EXACTAMENTE el mismo criterio.
+//
+// POR QUE ESTO NO ES COSMETICO. El incremental guardaba cache.data (ya recortada a 2000) y le
+// concatenaba la cola con cache.data.concat(tail) SIN ordenar ni recortar. O sea que la version
+// incremental devolvia una lista distinta de la del rebuild completo: mas larga y sin ordenar por
+// fecha de fin. machineToolHistory alimenta seedMachineToolHistory (planner-core.js), que es lo
+// que evita el doble booking de herramental, asi que "casi lo mismo" no es lo mismo: el
+// planeador estaba recibiendo un historial distinto segun si la hoja habia crecido o no.
+function PP_historyLatest_(items) {
+  return (items || []).sort(function(a, b) {
+    return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
+  }).slice(-2000);
+}
+
+function PP_readRowsCols_(sheet, columns, firstRow) {
   if (!sheet || sheet.getLastRow() < 2) return [];
   const wanted = Array.isArray(columns) && columns.length ? columns : [];
   if (!wanted.length) return [];
+  const desde = Number(firstRow || 2);
+  if (desde > sheet.getLastRow()) return [];
   const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0] || [];
-  const total = sheet.getLastRow() - 1;
+  const total = sheet.getLastRow() - desde + 1;
   const columnsLeidas = wanted.map(function(name) {
     const index = header.indexOf(name);
     if (index < 0) return null;   // la columna no existe en esta hoja
-    return sheet.getRange(2, index + 1, total, 1).getValues().map(function(cell) { return cell[0]; });
+    return sheet.getRange(desde, index + 1, total, 1).getValues().map(function(cell) { return cell[0]; });
   });
   const rows = [];
   for (let r = 0; r < total; r += 1) {

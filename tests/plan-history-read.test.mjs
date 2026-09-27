@@ -53,6 +53,11 @@ const COLS = extraer("PP_PLAN_HISTORY_COLS", true);
 const NUEVA = extraer("PP_readMachineToolHistory_");
 const COLSREADER = extraer("PP_readRowsCols_");
 const ROWS = extraer("PP_readRows_");
+// El criterio de cierre (ordenar por fecha de fin y quedarse con las 2000 mas nuevas) vive en
+// PP_historyLatest_ y lo comparten el rebuild completo y el incremental, para que los dos
+// caminos devuelvan EXACTAMENTE la misma lista.
+const CIERRE = extraer("PP_historyLatest_");
+const COLA = extraer("PP_readMachineToolHistoryTail_");
 
 /** Las 31 columnas reales de PP_SHEETS.PLANES_HISTORICOS, para que la prueba sea realista. */
 const PP_SHEETS_HISTORICOS = [
@@ -127,8 +132,10 @@ function contexto() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${ROWS}\n${COLS}\n${COLSREADER}\n${NUEVA}\n` +
-    "this.PP_readRows_=PP_readRows_;this.PP_readMachineToolHistory_=PP_readMachineToolHistory_;this.COLS=PP_PLAN_HISTORY_COLS_;",
+    `${ROWS}\n${COLS}\n${COLSREADER}\n${CIERRE}\n${COLA}\n${NUEVA}\n` +
+    "this.PP_readRows_=PP_readRows_;this.PP_readMachineToolHistory_=PP_readMachineToolHistory_;" +
+    "this.PP_readMachineToolHistoryTail_=PP_readMachineToolHistoryTail_;" +
+    "this.PP_historyLatest_=PP_historyLatest_;this.COLS=PP_PLAN_HISTORY_COLS_;",
     ctx,
   );
   return ctx;
@@ -220,6 +227,57 @@ test("hoja vacia, de una sola fila, o sin la hoja: no revienta", () => {
   }
   const sinHoja = null;
   assert.ok(igual(ctx.PP_readMachineToolHistory_(libro(sinHoja)), []));
+});
+
+test("EL INCREMENTAL: lee SOLO la cola nueva y devuelve lo MISMO que el rebuild completo", () => {
+  // Este archivo fijaba el comportamiento del rebuild completo. El incremental
+  // (PP_readMachineToolHistoryCached_) tiene que ser EQUIVALENTE, y hasta el 2026-09-27 no lo
+  // era por dos razones distintas, ambas medidas aqui:
+  //
+  //   (a) No leia la cola: PP_readMachineToolHistoryTail_ traia la hoja COMPLETA y luego
+  //       filtraba en memoria. O sea que el incremental pagaba las 139 876 filas x 8 columnas
+  //       (~30 s) para descartar casi todo, y la cache no ahorraba nada.
+  //   (b) No aplicaba el criterio de cierre: concatenaba cache.data con la cola y devolvia esa
+  //       lista tal cual, mas larga que 2000 y sin ordenar por fecha de fin. El planeador
+  //       (seedMachineToolHistory) recibia un historial distinto segun si la hoja habia crecido.
+  const ctx = contexto();
+  const contextoConCache = contexto();
+
+  // 1) La hoja crece: se lee entera (rebuild) y se cachea.
+  const viejas = generar(4, 900);
+  const hojaVieja = hojaDe(viejas);
+  const completa = ctx.PP_readMachineToolHistory_(libro(hojaVieja));
+  assert.ok(completa.length > 0);
+
+  // 2) Se anexan mas filas (lo que hace PP_appendPlanSnapshot_ al publicar) y se lee SOLO la cola.
+  const nuevas = generar(1, 900).map((f) => {
+    const g = f.slice();
+    g[0] = "snap-nuevo";
+    return g;
+  });
+  const hojaNueva = hojaDe(viejas.concat(nuevas));
+  const celdas = hojaNueva.estado;
+  const cola = ctx.PP_readMachineToolHistoryTail_(hojaNueva, viejas.length + 2);
+  const filasTotales = viejas.length + nuevas.length;
+
+  // (a) La cola lee la cola y SOLO la cola: 8 columnas, no 8 x filasTotales.
+  const ancho = ctx.COLS.length;
+  assert.ok(
+    celdas.celdasLeidas < filasTotales * ancho,
+    `la cola debe leer menos celdas que la hoja entera: ${celdas.celdasLeidas} contra ${filasTotales * ancho}`
+  );
+
+  // (b) El merge da la MISMA lista que el rebuild completo de la hoja nueva.
+  const rebuildCompleto = ctx.PP_readMachineToolHistory_(libro(hojaDe(viejas.concat(nuevas))));
+  const incremental = ctx.PP_historyLatest_(completa.concat(cola));
+  assert.equal(incremental.length, Math.min(2000, rebuildCompleto.length));
+  assert.ok(igual(incremental, rebuildCompleto),
+    "el incremental tiene que devolver exactamente la misma lista, elemento por elemento y en el mismo orden");
+  assert.equal(incremental.length, 2000, "y recortada a las 2 000 mas nuevas por fecha de fin");
+  const orden = incremental.map((x) => x.endDate + " " + x.endTime);
+  assert.ok(orden.every((v, i) => i === 0 || orden[i - 1] <= v),
+    "el resultado queda ordenado por fecha de fin de operacion");
+  assert.ok(contextoConCache);
 });
 
 test("HALLAZGO QUE IMPIDE ACOTAR POR FILAS: el orden de las filas NO es el de las fechas de fin", () => {
