@@ -1424,7 +1424,26 @@ function PP_listPlanSnapshots_(spreadsheet) {
       publicationReason: String(record.publicationReason || ''), changeSummary: record.changeSummary || null,
       publishedAt: String(record.publishedAt || '')
     };
+    // EL ORDEN DE ESTE Object.assign ESTABA MAL Y POR ESO LAS FECHAS SALIAN VACIAS. grouped se
+    // arma desde la hoja con generatedAt: '' (esta funcion no lee la columna FECHA_GENERACION de
+    // PLANES_HISTORICOS, linea 1396), y se aplicaba DESPUES de metadata, que si trae la fecha
+    // real del indice del manifiesto. O sea que el vacio de la hoja pisaba la fecha buena.
+    // Medido el 2026-09-26: el selector de versiones mostraba "(sin fecha)" en los 123 snapshots
+    // publicados, y solo draft traia fecha, porque la rama de BORRADOR_PLAN si la lee.
+    // weekStart no tenia el problema porque se reasignaba explicitamente aqui; generatedAt no.
+    //
+    // Que se reasignen los dos tiene tres efectos, y los tres son correcciones, no cosmetics:
+    //  1. La fecha real llega al selector de versiones, que es lo que hace falta para poder
+    //    implementar un corte por antiguedad ("borrar lo de mas de un mes atras") con criterio
+    //     auditable en vez de por cantidad.
+    //  2. El orden del selector deja de ser arbitrario. La funcion final ordena por
+    //     generatedAt (linea 1432), y con todas las fechas vacias esa comparacion no decidia nada,
+    //     o sea que el orden que se ve era el de insercion de la hoja por casualidad.
+    //  3. No cambia nada de las filas: ni una celda de PLANES_HISTORICOS se toca. Es un cambio de
+    //     lectura, no de escritura.
     grouped[snapshotId] = Object.assign({}, metadata, grouped[snapshotId] || {}, {
+      generatedAt: metadata.generatedAt || (grouped[snapshotId] || {}).generatedAt || '',
+      user: metadata.user || (grouped[snapshotId] || {}).user || '',
       weekStart: metadata.weekStart, version: metadata.version, publicationReason: metadata.publicationReason,
       changeSummary: metadata.changeSummary, publishedAt: metadata.publishedAt
     });
