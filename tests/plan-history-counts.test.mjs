@@ -349,6 +349,20 @@ test("PP_deletePlanSnapshot_ invalida la cache de machineToolHistory", () => {
     "borrar filas invalida la cache incremental de machineToolHistory");
 });
 
+test("PP_buildState_ lee OPERACIONES con getValues() no getDisplayValues()", () => {
+  // OPERACIONES es la hoja más grande (~139 876 filas × 33 columnas). getDisplayValues()
+  // formatea cada celda: en 4.6M celdas esa diferencia es de segundos. Todas las columnas
+  // son texto plano escrito por el servidor, sin formato que getDisplayValues() convierta.
+  const build = src.slice(src.indexOf("function PP_buildState_("), src.indexOf("function PP_readConfig_("));
+  assert.match(build, /PP_readRowsFast_\(spreadsheet\.getSheetByName\('OPERACIONES'\)\)/,
+    "OPERACIONES se lee con PP_readRowsFast_ (getValues, no getDisplayValues)");
+  const fast = src.slice(src.indexOf("function PP_readRowsFast_("), src.indexOf("function PP_snapshotComment_("));
+  assert.match(fast, /getDataRange\(\)\.getValues\(\)/,
+    "PP_readRowsFast_ usa getValues(), sin formatear 4.6M celdas");
+  assert.doesNotMatch(fast, /getDataRange\(\)\.getDisplayValues\(\)/,
+    "PP_readRowsFast_ NO usa getDisplayValues()");
+});
+
 test("PP_listPlanSnapshots_ ya no pide la columna entera de datos con getDisplayValues()", () => {
   const listar = extraer("PP_listPlanSnapshots_");
   // La lectura cara era exactamente esta: getRange(2, col, LASTROW-1, 1).getDisplayValues() sobre

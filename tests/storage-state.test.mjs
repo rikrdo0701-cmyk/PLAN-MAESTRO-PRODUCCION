@@ -21,7 +21,10 @@ function createSheet(headers = ["KEY"], body = []) {
     rows: () => rows.map((row) => [...row]),
     getLastRow: () => rows.length,
     getLastColumn: () => Math.max(1, ...rows.map((row) => row.length)),
-    getDataRange: () => ({ getDisplayValues: () => rows.map((row) => row.map(String)) }),
+    getDataRange: () => ({
+      getDisplayValues: () => rows.map((row) => row.map(String)),
+      getValues: () => rows.map((row) => row.map(String)),
+    }),
     clearContents: () => { rows = []; },
     // insertColumnsAfter(afterColumns, howMany) con afterColumns en base 1: afterColumns = 0
     // significa "antes de la primera columna", que es lo que usa PP_ensureWorkbook_.

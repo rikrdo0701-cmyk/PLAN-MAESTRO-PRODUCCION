@@ -201,7 +201,7 @@ function PP_readState_(spreadsheet) {
 
 function PP_buildState_(spreadsheet) {
   const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
-  const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
+  const operationRows = PP_readRowsFast_(spreadsheet.getSheetByName('OPERACIONES'));
   const capabilities = PP_readRows_(spreadsheet.getSheetByName('CAPACIDADES'));
   const matrixRows = PP_readRows_(spreadsheet.getSheetByName('MATRIZ'));
   const operators = PP_readRows_(spreadsheet.getSheetByName('OPERADORES'));
@@ -958,6 +958,19 @@ function PP_writeState_(spreadsheet, payload, user, force) {
 function PP_readRows_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return [];
   const values = sheet.getDataRange().getDisplayValues();
+  const headers = values.shift();
+  return values.filter(function(row) { return row.some(function(value) { return value !== ''; }); }).map(function(row) {
+    return headers.reduce(function(out, header, index) { out[header] = row[index]; return out; }, {});
+  });
+}
+
+// Variante con getValues() para hojas cuyas columnas son TODAS texto plano escrito por el
+// servidor (sin fecha, sin fórmula, sin formato de celda que getDisplayValues() pudiera
+// convertir a otra cosa). OPERACIONES es la hoja más grande (~139 876 filas × 33 columnas)
+// y getDisplayValues() formatea cada celda: en 4.6M celdas esa diferencia es de segundos.
+function PP_readRowsFast_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const values = sheet.getDataRange().getValues();
   const headers = values.shift();
   return values.filter(function(row) { return row.some(function(value) { return value !== ''; }); }).map(function(row) {
     return headers.reduce(function(out, header, index) { out[header] = row[index]; return out; }, {});
