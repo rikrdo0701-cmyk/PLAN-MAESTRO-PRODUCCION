@@ -554,7 +554,10 @@ test("un fallo condicional conserva el estado local y carga solo la lista de his
   await fixture.context.loadAppStateInBackground();
 
   assert.equal(fixture.applyImportedCalls.length, 0);
-  assert.deepEqual(fixture.state.operations, [{ id: "local-op" }]);
+  // [...x].map en vez de deepEqual: state.operations viene de JSON.parse dentro del vm y es un
+  // Array de otro realm (y .map sobre un array de vm devuelve otro de vm). deepEqual estricto
+  // compara prototipos. Lo que se juzga es que la operacion local sobrevive, no el realm.
+  assert.deepEqual([...fixture.state.operations].map((op) => op.id), ["local-op"]);
   assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
   assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
   assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);

@@ -184,6 +184,112 @@ test("el guardado de sincronizacion conserva materiales remotos activos y retira
   assert.deepEqual(restored.closedWorkOrderSummaries, { "OT-CERRADA": { ot: "OT-CERRADA", finalStatus: "CERRADA" } });
 });
 
+test("el writer de la sync ligera SELLA la cache: el siguiente getAppState no reconstruye", () => {
+  // ANTES: PP_writeWorkOrderSyncState_ (el boton "Sincronizar OTs") subia CONFIG.revision sin
+  // tocar PP_STATE_CACHE_REVISION, asi que el siguiente getAppState reconstruia entero. Medido en
+  // produccion el 2026-09-27: cacheRevision 4101 contra revision 4103, y getAppState agotando
+  // los 120 s cuatro veces, con la pagina cayendo a sampleState.
+  const fixture = loadStorage([["revision", "3"]]);
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+
+  // La cache tiene que EXISTIR: el parche no la crea, y si no hay no inventa nada (devuelve false
+  // y el siguiente getAppState reconstruye, igual que antes). En produccion la cache existe de un
+  // getAppState anterior; aqui se crea con uno.
+  fixture.context.PP_readState_(fixture.spreadsheet);
+  assert.ok(fixture.sheets[fixture.context.PP_STATE_CACHE_SHEET_], "la cache existe antes del writer");
+
+  const saved = structuredClone(fixture.context.PP_writeWorkOrderSyncState_(fixture.spreadsheet, {
+    revision: 3,
+    workOrders: [{ ot: "OT-ACTIVA", item: "ACTIVA" }],
+    operations: [{ id: "op-active", ot: "OT-ACTIVA", ct: "CORTE", tiempoProd: 5 }],
+    operationPlanStatuses: { active: { ot: "OT-ACTIVA", status: "PENDIENTE" } },
+    closedWorkOrderSummaries: {},
+    removedWorkOrderOts: [],
+  }, "pruebas"));
+
+  const config = configObject(fixture.context, fixture.sheets.CONFIG);
+  assert.equal(saved.revision, 4);
+  assert.equal(Number(config.PP_STATE_CACHE_REVISION), 4, "la cache queda sellada con la revision nueva");
+
+  // Y SIRVE, que es lo que importa: se sabotea OPERACIONES y la lectura sigue respondiendo. Si la
+  // cache no estuviera sellada, PP_readState_ reconstruiria y la lectura de OPERACIONES daria la
+  // hoja saboteada.
+  fixture.sheets.OPERACIONES = createSheet(fixture.sheets.OPERACIONES.rows()[0], [["SABOTAJE"]]);
+  const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));
+  assert.deepEqual(restored.operations.map((item) => item.ot), ["OT-ACTIVA"], "sirve la cache, no reconstruye");
+  assert.equal(restored.revision, 4);
+});
+
+test("readTest distingue 'desfasada' de 'corrupta': antes las dos decian 'null'", () => {
+  // debugStateCacheInfo reportaba {hit:false, reason:'null'} tanto si PP_STATE_CACHE_REVISION no
+  // coincidia con CONFIG.revision (lo normal, lo que pasa despues de cualquier guardado) como si
+  // el JSON de la cache estaba roto (un fallo de verdad). Son dos problemas distintos con dos
+  // arreglos distintos, y no habia forma de saber cual de los dos era.
+  const fixture = loadStorage([["revision", "3"]]);
+  fixture.context.Session = { getActiveUser: () => ({ getEmail: () => "pruebas" }) };
+  fixture.context.PP_acquireScriptLock_ = () => ({ releaseLock: () => {} });
+  fixture.context.PP_getWorkbook_ = () => fixture.spreadsheet;
+  fixture.context.PP_ensureWorkbook_ = () => {};
+  vm.runInContext(performanceSource, fixture.context, { filename: "15-performance-service.js" });
+
+  const nombre = fixture.context.PP_STATE_CACHE_SHEET_;
+  const conCache = (cacheRows) => {
+    const sheet = createSheet(["CHUNK"], cacheRows);
+    const original = fixture.spreadsheet.getSheetByName;
+    fixture.spreadsheet.getSheetByName = (n) => (n === nombre ? sheet : original(n));
+    return fixture.context.debugStateCacheInfo();
+  };
+
+  // Desfasada: la revision de la cache no es la de CONFIG.
+  const desfasada = conCache([["{}"]]);
+  assert.equal(desfasada.readTest.hit, false);
+  assert.equal(desfasada.readTest.reason, "revision_desfasada");
+  assert.notEqual(desfasada.readTest.reason, "null", "ya no puede decir 'null' para todo");
+
+  // Corrupta: la revision SI coincide, pero el JSON no se puede parsear.
+  fixture.context.PP_writeConfigPatch_(fixture.spreadsheet, { PP_STATE_CACHE_REVISION: 3 });
+  const corrupta = conCache([["{esto no es json"]]);
+  assert.equal(corrupta.readTest.hit, false);
+  assert.equal(corrupta.readTest.reason, "cache_ilegible");
+  assert.match(corrupta.readTest.detail || "", /JSON/, "y el detalle si dice que fue el JSON: " + corrupta.readTest.detail);
+
+  // Sin cache: la hoja no existe o esta vacia.
+  const sinCache = conCache([]);
+  assert.equal(sinCache.readTest.hit, false);
+  assert.equal(sinCache.readTest.reason, "sin_cache");
+
+  // Y sana: coincide y parsea.
+  const sana = conCache([[JSON.stringify({ operations: [{ id: "a" }, { id: "b" }] })]]);
+  assert.equal(sana.readTest.hit, true, "con la revision bien y el JSON bueno, hay acierto");
+});
+
+test("PP_writeCachedState_ recorta las filas que sobran y no deja la cache a medias", () => {
+  // Antes hacia clearContents() y despues escribia los chunks: cualquier interrupcion dejaba la
+  // cache vacia o a medias, y como PP_readCachedStateRaw_ se traga el error en un catch mudo no se
+  // podia diagnosticar. Ahora se escriben los chunks, se recortan las filas que sobran y solo al
+  // final se sella la revision.
+  const fixture = loadStorage([["revision", "0"]]);
+  fixture.context.PP_writeConfigPatch_(fixture.spreadsheet, { PP_STATE_CACHE_REVISION: 0 });
+  const nombre = fixture.context.PP_STATE_CACHE_SHEET_;
+
+  fixture.context.PP_writeCachedState_(fixture.spreadsheet, 0, {
+    operations: Array.from({ length: 400 }, (_, i) => ({ id: "op-" + i, nota: "x".repeat(200) })),
+  });
+  const filasLargas = fixture.spreadsheet.getSheetByName(nombre).rows().length;
+  assert.ok(filasLargas > 2, "la cache larga ocupa varias filas: " + filasLargas);
+
+  fixture.context.PP_writeCachedState_(fixture.spreadsheet, 0, { operations: [{ id: "unica" }] });
+  const sheet = fixture.spreadsheet.getSheetByName(nombre);
+  assert.ok(sheet.rows().length < filasLargas, "las filas viejas se recortan: " + filasLargas + " -> " + sheet.rows().length);
+
+  // Y el contenido es el corto, completo: se puede parsear y trae la unica operacion.
+  const leida = fixture.context.PP_readCachedStateRawWithReason_(fixture.spreadsheet);
+  assert.equal(leida.reason, "", "sin motivo de fallo");
+  assert.equal(leida.state.operations.length, 1, "y trae la operacion del cache corta");
+});
+
 test("usa un objeto vacio para resumenes de OTs cerradas en CONFIG legacy", () => {
   const fixture = loadStorage();
   const restored = structuredClone(fixture.context.PP_readState_(fixture.spreadsheet));

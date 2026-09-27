@@ -640,6 +640,14 @@ function loadClient(options = {}) {
     planningActionsBusy: "",
     planSnapshots: [],
     showToast: (message) => toasts.push(message),
+    // clearNetSuiteSyncAlert/setNetSuiteSyncAlert viven en app.js MAS ABAJO de syncBacklogWorkOrders,
+    // y el arnes recorta syncBacklogWorkOrders sin ellas. Sin este stub la llamada tira
+    // ReferenceError y el catch de syncBacklogWorkOrders lo reporta como un fallo de sync. Hacen lo
+    // mismo que las reales: tocan state.netSuiteSyncAlert.
+    clearNetSuiteSyncAlert: () => { context.state.netSuiteSyncAlert = null; },
+    setNetSuiteSyncAlert: (message) => {
+      context.state.netSuiteSyncAlert = { message: String(message), updatedAt: new Date().toISOString() };
+    },
     setPlanningActionsBusy: (_action, inProgress) => {
       context.planningActionsBusy = inProgress ? "sync" : "";
       busyStates.push(inProgress);
@@ -3147,6 +3155,86 @@ test("un rechazo del guardado dedicado no modifica el estado local", async () =>
   await fixture.context.syncBacklogWorkOrders();
 
   assert.deepEqual(plain(fixture.context.state), before);
+});
+
+test("EL SYNC DEL BOTON LIMPIA EL AVISO DE SINCRONIZACION CUANDO TERMINA BIEN", async () => {
+  // ANTES: clearNetSuiteSyncAlert() solo se llamaba DENTRO del if (isAppsScriptRuntime()) de
+  // syncNetSuiteData, y en GitHub Pages isAppscriptRuntime() es false (la pagina se sirve desde
+  // Pages y el backend va por el puente). El sync del boton (syncBacklogWorkOrders) no lo llamaba
+  // en ningun camino. Resultado medido el 2026-09-27: un sync fallado dejaba un aviso CRITICO de
+  // "Sincronizacion NetSuite" pegado en #planAlerts para siempre, y un sync exitoso por el boton no
+  // lo quitaba tampoco.
+  const fixture = loadClient({
+    installBacklogSync: true,
+    state: { selectedOts: ["200"], workOrders: [{ ot: "200" }] },
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") {
+        return { syncedAt: "2026-09-27T22:00:00.000Z", workOrders: [{ ot: "200", status: "EN PROCESO" }], operations: [{ id: "o1", ot: "200" }] };
+      }
+      if (method === "saveWorkOrderSyncState") return { ok: true, revision: 2 };
+      return { ok: true };
+    },
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+  });
+  fixture.context.state.netSuiteSyncAlert = { message: "Otro proceso esta actualizando el plan", updatedAt: "2026-09-27T21:00:00Z" };
+
+  const resultado = await fixture.context.syncBacklogWorkOrders();
+
+  assert.equal(resultado.ok, true);
+  assert.equal(fixture.context.state.netSuiteSyncAlert, null, "el aviso se limpia: antes quedaba pegado para siempre");
+});
+
+test("SI EL ESTADO NO LLEGA, LA PANTALLA SE HIDRATA CON LA CACHE LOCAL (Y SE AVISA)", async () => {
+  // ANTES: loadState() devuelve deepClone(sampleState) y sampleState NO trae selectedOts. Si
+  // getAppState agota los 120 s, el catch de loadAppStateInBackground solo escribe un console.warn
+  // y state queda en sampleState: la pantalla no muestra NADA de lo que la persona dejo, y lo unico
+  // que aparece es lo que rescata el borrador sobre fichas de demostracion. Medido el 2026-09-27:
+  // 20 OTs en la cola (las del borrador) y getAppState agotando 120 004 ms, 4 veces.
+  //
+  // Se prueba por el camino real (loadAppStateInBackground), no llamando a la funcion: esa vive
+  // dentro del IIFE de performance-client.js y no es global en el arnes.
+  const fixture = loadClient({
+    state: { revision: 0, selectedOts: ["DEMO"], workOrders: [{ ot: "DEMOSTRACION" }] },
+    callAppsScript: async () => { throw new Error("Tiempo agotado al ejecutar getAppState"); },
+    // El boot hace una llamada flotante a syncNetSuiteData despues de que el test termina; en
+    // produccion es la real, aqui se stubba para que no rechace.
+    syncNetSuiteData: async () => ({}),
+  });
+  fixture.context.localStorage.setItem(fixture.context.STORAGE_KEY, JSON.stringify({
+    revision: 4078,
+    savedAt: "2026-09-27T20:00:00.000Z",
+    selectedOts: ["200", "300"],
+    workOrders: [{ ot: "200" }, { ot: "300" }],
+    operations: [],
+    materials: [],
+  }));
+
+  await fixture.context.loadAppStateInBackground();
+
+  // plain() porque state.selectedOts ahora es un Array del vm (JSON.parse dentro del contexto) y
+  // deepEqual estricto compara prototipos. El archivo ya usa plain() para esto.
+  assert.deepEqual(plain(fixture.context.state.selectedOts), ["200", "300"], "la cola viene de la cache, no la de demostracion");
+  assert.equal(fixture.context.state.workOrders.length, 2, "y las fichas");
+  assert.equal(fixture.context.state.operations.length, 0, "operations vacio a proposito: la rescata el borrador");
+  assert.equal(fixture.context.state.fromLocalCache, true, "y queda marcado para el aviso permanente");
+});
+test("LA RAMA DE NAVEGADOR DE syncNetSuiteData YA NO PIDE UN JSON ESTATICO QUE 404", () => {
+  // fetchNetSuiteExercise() pide /api/netsuite-exercise y data/netsuite-exercise.json, y en GitHub
+  // Pages ambos responden 404 (medido el 2026-09-27: "Site not found" / "Page not found"; ningun
+  // archivo esta en el repo). Asi que syncNetSuiteData en el navegador estaba condenada a fallar.
+  const i = appSource.indexOf("async function syncNetSuiteData(");
+  assert.ok(i > 0, "no se encontro syncNetSuiteData");
+  const cuerpo = appSource.slice(i, i + 4000);
+  // Se prohíbe la LLAMADA, no la definicion: fetchNetSuiteExercise() sigue existiendo y se usa en
+  // loadAppSheetIfAvailable, que es otro camino. Antes la rama de navegador la llamaba y por eso
+  // siempre recibia 404.
+  assert.doesNotMatch(cuerpo, /await fetchNetSuiteExercise\(\)/, "la rama de navegador ya no la llama");
+  assert.match(cuerpo, /callAppsScript\("syncNetSuiteWorkOrders"\)/, "el modo workOrders va por el puente");
+  assert.match(cuerpo, /callAppsScript\("syncNetSuitePlant"\)/, "y el modo full tambien");
+  // Y el aviso se limpia en las DOS ramas, no solo en la de Apps Script.
+  const limpieza = cuerpo.slice(cuerpo.indexOf("persistReferencePricesFromSync();"));
+  assert.match(limpieza, /clearNetSuiteSyncAlert\(\)/, "y el aviso se limpia en la rama de navegador tambien");
 });
 
 test("la verificacion de frescura omite la red cuando syncedAt esta dentro del umbral", async () => {

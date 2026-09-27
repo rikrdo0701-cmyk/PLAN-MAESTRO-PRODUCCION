@@ -2323,6 +2323,19 @@ function planAlertItems() {
       message: state.netSuiteSyncAlert.message || "No se pudo sincronizar NetSuite",
     });
   }
+  // AVISO PERMANENTE DE PANTALLA POSIBLEMENTE ATRASADA. Si el arranque no consiguio el estado del
+  // servidor, la pantalla se hidrata con la cache local (hydrateStateFromLocalCache,
+  // performance-client.js) y esto se queda visible hasta que el servidor responde. Un toast no
+  // sirve: se borra en 12 s y una pantalla que puede estar un guardado atras no puede depender de
+  // que la persona lo haya leido. Mientras este aviso este en pantalla, NO hay que fiarse del plan.
+  if (state.fromLocalCache) {
+    alerts.push({
+      level: "critical",
+      title: "Sin conexion con el plan",
+      message: "Mostrando lo guardado en este navegador, que puede estar atrasado. "
+        + "No generes ni publiques el plan hasta que este aviso desaparezca.",
+    });
+  }
   for (const alert of state.netSuiteChangeAlerts || []) {
     alerts.push({
       level: normalizeStatus(alert.severity) === "ALTA" ? "critical" : "warning",
@@ -9468,6 +9481,14 @@ async function syncBacklogWorkOrders() {
     invalidateCurrentPlanOperationsCache();
     resetBacklogWindow();
     render({ save: false });
+    // EL AVISO SE LIMPIA AQUI, Y NO SOLO EN LA RAMA DE APPS SCRIPT. clearNetSuiteSyncAlert() solo se
+    // llamaba en syncNetSuiteData cuando isAppsScriptRuntime() es true, y en GitHub Pages es false
+    // (la pagina se sirve desde Pages y el backend va por el puente, no por google.script.run). O sea
+    // que un sync fallido dejaba un aviso CRITICO pegado en la pantalla del plan para siempre, y un
+    // sync exitoso por el boton no lo quitaba tampoco. Medido el 2026-09-27: "Sincronizacion
+    // NetSuite: Error: Otro proceso esta actualizando el plan" en #planAlerts despues de un sync
+    // exitoso por el boton.
+    clearNetSuiteSyncAlert();
     showToast(smartSyncCounts ? planningCore.smartSyncSummaryMessage(smartSyncCounts) : `${state.workOrders.length} OTs activas sincronizadas`, smartSyncCounts ? 6000 : undefined);
     return { ok: true };
   } catch (error) {
@@ -10022,9 +10043,17 @@ async function syncNetSuiteData(showMessage, options = {}) {
       // cerrada" serian lo mismo. Con ella, la OT se queda hasta que NetSuite lo diga.
       await confirmUnconfirmedWorkOrderClosures();
     } else {
-      const response = await fetchNetSuiteExercise();
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const imported = importJson(await response.text());
+      // EN EL NAVEGADOR NO HAY JSON ESTATICO QUE TRAER, Y ESTA RAMA SIEMPRE FALLABA.
+      // fetchNetSuiteExercise() pide /api/netsuite-exercise y data/netsuite-exercise.json, y en
+      // GitHub Pages ambos responden 404 (medido el 2026-09-27: "Site not found" / "Page not
+      // found"; ningun archivo esta en el repo). O sea que syncNetSuiteData en el navegador estaba
+      // condenada a fallar, y el catch dejaba el aviso CRITICO de "Sincronizacion NetSuite" pegado
+      // para siempre, porque clearNetSuiteSyncAlert() solo estaba en la rama de Apps Script.
+      // La unica via real en el navegador es el puente: google.script.run lo simula el bridge
+      // (syncBacklogWorkOrders ya lo usa y llega al servidor).
+      const imported = mode === "full"
+        ? await callAppsScript("syncNetSuitePlant")
+        : await callAppsScript("syncNetSuiteWorkOrders");
       validateNetSuiteImportedData(imported, mode);
       await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
     }

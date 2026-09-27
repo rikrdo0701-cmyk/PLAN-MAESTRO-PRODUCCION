@@ -178,6 +178,25 @@ function PP_readCachedStateRaw_(spreadsheet) {
   }
 }
 
+// LO MISMO, PERO DICIENDO POR QUE FALLO. PP_readCachedStateRaw_ se traga el error en un catch
+// mudo, y PP_readCachedState_ devuelve null tanto si la revision esta desfasada como si el JSON
+// esta roto. Son dos problemas distintos con dos arreglos distintos, y debugStateCacheInfo
+// reportaba 'null' para los dos (15-performance-service.js:76). Medido el 2026-09-27:
+// cacheRevision 4101 contra revision 4103, readTest {hit:false, reason:'null'} -> no se podia
+// saber si la cache estaba desfasada (lo normal) o corrupta (un fallo de verdad).
+function PP_readCachedStateRawWithReason_(spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet || sheet.getLastRow() < 2) return { state: null, reason: 'sin_cache' };
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    let json = '';
+    for (let i = 0; i < values.length; i++) json += String(values[i][0] || '');
+    return { state: JSON.parse(json), reason: '' };
+  } catch (error) {
+    return { state: null, reason: String(error && error.message || error).slice(0, 120) };
+  }
+}
+
 function PP_readCachedState_(spreadsheet, revision) {
   try {
     if (PP_stateCacheRevision_(spreadsheet) !== Number(revision || 0)) return null;
@@ -213,9 +232,19 @@ function PP_writeCachedState_(spreadsheet, revision, state) {
     const CHUNK = 48000;
     const chunks = [];
     for (let j = 0; j < json.length; j += CHUNK) chunks.push([json.slice(j, j + CHUNK)]);
-    if (sheet.getLastRow() > 0) sheet.clearContents();
+    // ATOMICO, Y POR QUE NO clearContents() PRIMERO. Antes se vaciaba la hoja y despues se
+    // escribian los chunks: cualquier interrupcion dejaba la cache vacia o a medias, y como
+    // PP_readCachedStateRaw_ se traga el error, una cache rota era indistinguible de una ausente
+    // y el siguiente getAppState reconstruia entero sin que nadie pudiera ver el motivo. Ahora se
+    // escriben los chunks nuevos, se recortan las filas que sobran y SOLO AL FINAL se sella la
+    // revision: en cualquier instante la hoja tiene la cache vieja completa o la nueva completa.
+    // Un lector con la revision vieja que lea en la ventana ve un JSON raro -> null -> reconstruye
+    // (fallo seguro, no un estado equivocado); un lector con la revision nueva no puede correr
+    // todavia porque el sello es lo ultimo.
     sheet.getRange(1, 1).setValue('CHUNK');
     if (chunks.length) sheet.getRange(2, 1, chunks.length, 1).setValues(chunks);
+    const sobran = sheet.getLastRow() - (chunks.length + 1);
+    if (sobran > 0) sheet.getRange(chunks.length + 2, 1, sobran, 1).clearContent();
     PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: Number(revision || 0) });
   } catch (error) {}
 }
@@ -291,9 +320,69 @@ function PP_readState_(spreadsheet) {
   const cached = PP_readCachedState_(spreadsheet, revision);
   if (cached) return cached;
   const state = PP_buildState_(spreadsheet);
+  // Se sella SIN lock, y a proposito. La tentacion era serializar los getAppState concurrentes
+  // para que no escriban la cache a la vez, pero el lock del script espera 30 s y falla: si hay
+  // dos lecturas en carrera, NINGUNA consigue el lock y NINGUNA sella, o sea que la cache queda
+  // desfasada para siempre. Peor que el rebuild duplicado que se quiere evitar. Y la escritura ya
+  // es atomica (PP_writeCachedState_), que es lo que de verdad evita una cache rota: dos escritores
+  // concurrentes escriben filas enteras y cada una deja un JSON completo y parseable. Sin lock,
+  // en el peor caso se reconstruye dos veces, que es exactamente el comportamiento de siempre.
   PP_writeCachedState_(spreadsheet, revision, state);
   return state;
 }
+
+// SELLO PARA EL ESCRITOR DE LA SINCRONIZACION LIGERA DE OTs, que es el que usa el boton
+// "Sincronizar OTs" (saveWorkOrderSyncState -> PP_writeWorkOrderSyncState_). Sin este sello CADA
+// sincronizacion dejaba la cache de estado desfasada y el siguiente getAppState reconstruia entero
+// (>120 s medido 4 veces el 2026-09-27), que es lo que tumbaba el arranque de la pagina: la app
+// caia a sampleState y mostraba las OTs de demostracion.
+//
+// POR QUE NO ES COPIA DE PP_patchCachedStateAfterWorkOrderSync_. Aquel cubre CONFIG + ORDENES_TRABAJO
+// + ESTADOS_OPERACION_PLAN. Este cubre, ademas, CONFIGURACION_OT y MATERIALES. Y la diferencia
+// de fondo: OPERACIONES NO SE RELEE. El payload de la sync ligera ya trae la lista completa de
+// operaciones (syncBacklogWorkOrders manda nextState.operations, que es la lista reconciliada), y
+// releer OPERACIONES son 4.6M de celdas, que es justo lo que RULE-PERF-014 se cuido de evitar.
+// Asi que operations sale del payload y solo se releen las hojas baratas.
+//
+// Si no hay cache previa devuelve false y no inventa nada: el siguiente getAppState reconstruye,
+// igual que antes. Va en try/catch en el writer y nunca puede romper una sincronizacion.
+function PP_patchCachedStateAfterWorkOrderSyncLite_(spreadsheet, revision, payload) {
+  const cached = PP_readCachedStateRaw_(spreadsheet);
+  if (!cached) return false;
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const workOrders = PP_readRows_(spreadsheet.getSheetByName('ORDENES_TRABAJO')).map(PP_mapWorkOrder_);
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const otConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT'));
+  const articleConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'));
+  const materials = PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_);
+  const operations = Array.isArray(payload && payload.operations) ? payload.operations : (cached.operations || []);
+  const merged = Object.assign({}, cached, {
+    revision: Number(revision || 0),
+    savedAt: config.savedAt || '',
+    syncedAt: config.syncedAt || '',
+    source: config.source || cached.source || 'apps-script-spreadsheet',
+    selectedOperationId: config.selectedOperationId || '',
+    selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
+    lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : [],
+    expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : [],
+    preparedPlanningByOt: config.preparedPlanningByOt || {},
+    closedWorkOrderSummaries: config.closedWorkOrderSummaries || {},
+    unconfirmedWorkOrders: PP_parseUnconfirmedWorkOrderMarks_(config.UNCONFIRMED_WORK_ORDERS),
+    lastSchedule: config.lastSchedule || null,
+    plant: config.plant || cached.plant || null,
+    invoicePriceWindow: config.invoicePriceWindow || null,
+    workOrders: workOrders,
+    operations: operations,
+    otConfigurations: PP_buildOtConfigurations_(otConfigurationRows, operations),
+    materials: materials,
+    operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
+    articleConfigurations: PP_buildArticleConfigurations_(articleConfigurationRows, otConfigurationRows, workOrders, operations)
+  });
+  PP_writeCachedState_(spreadsheet, revision, merged);
+  return true;
+}
+
 
 function PP_buildState_(spreadsheet) {
   const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
@@ -590,6 +679,15 @@ function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
     removedWorkOrderOts: Object.keys(removedOts).length
   })]);
   SpreadsheetApp.flush();
+  // SELLO DE LA CACHE DE ESTADO. Este writer es el que usa el boton "Sincronizar OTs"
+  // (saveWorkOrderSyncState) y antes era el que mas dejaba la cache desfasada: sube CONFIG.revision
+  // sin tocar PP_STATE_CACHE_REVISION, asi que el siguiente getAppState reconstruia entero (>120 s,
+  // medido 4 veces) y la pagina caia a sampleState mostrando las OTs de demostracion. Ver
+  // PP_patchCachedStateAfterWorkOrderSyncLite_. Si no hay cache, o el parche falla, el siguiente
+  // getAppState reconstruye como antes: nunca rompe la sincronizacion.
+  try {
+    PP_patchCachedStateAfterWorkOrderSyncLite_(spreadsheet, revision, payload);
+  } catch (ignored) {}
   return PP_writeStateAck_(revision, savedAt, { syncedAt: payload.syncedAt || savedAt });
 }
 

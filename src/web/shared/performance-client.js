@@ -728,6 +728,7 @@
       }
     }
     applyImported(imported, { preserveLocalPlanning: false });
+    state.fromLocalCache = false;
     const reappliedAdditions = reapplyLocalAddedDraftOts(localAddedDraftOts, localPrepared);
     const reappliedConfigurations = reapplyLocalOtConfigurations(localOtConfigurations, localEditedOtConfigurations);
     if (reappliedAdditions > 0 || reappliedConfigurations > 0) appSheetMarkDirtyScope("plan");
@@ -741,6 +742,51 @@
       syncedAt: state.syncedAt || "",
     });
     return { loaded: true, unchanged: false, reappliedAdditions, reappliedConfigurations };
+  }
+
+  // HIDRATAR LA PANTALLA CON LA CACHE LOCAL CUANDO EL SERVIDOR NO RESPONDE.
+  //
+  // QUE PASABA. loadState() devuelve deepClone(sampleState) (app.js:1272) y sampleState NO trae
+  // selectedOts. Si getAppState agota los 120 s, el catch de loadAppStateInBackground solo escribe
+  // un console.warn y state queda en sampleState: la pantalla no muestra NADA de lo que la persona
+  // dejo, y lo unico que aparece es lo que rescata el borrador (maybeRestoreSavedDraftOnBoot), que
+  // son las OTs del borrador sobre fichas de demostracion. Medido el 2026-09-27: 20 OTs en la cola
+  // (las del borrador) y getAppState agotando 120 004 ms, 4 veces.
+  //
+  // QUE HACE ESTO. Si hay una cache local con fichas y revision > 0, se aplica a state: la cola,
+  // las fichas, la matriz, los operadores, las maquinas, las configuraciones. operations y materials
+  // vienen vacios a proposito (RULE-PLAN-013: el plan no vive en localStorage) y los rescata
+  // despues maybeRestoreSavedDraftOnBoot, que corre justo porque el estado no vino del servidor.
+  // Y SE AVISA, en silencio no: state.fromLocalCache deja un aviso visible y la app sigue
+  // reintentando el servidor en segundo plano.
+  function readLocalStateSnapshot() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached || typeof cached !== "object" || Array.isArray(cached)) return null;
+      if (!Array.isArray(cached.workOrders) || !(Number(cached.revision) > 0)) return null;
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+
+  function hydrateStateFromLocalCache() {
+    const snapshot = readLocalStateSnapshot();
+    if (!snapshot) return false;
+    // Se aplica la cache ENTERA, operations incluido. En produccion operations y materials vienen
+    // vacios a proposito (RULE-PLAN-013: el plan no vive en localStorage) y los rescata despues
+    // maybeRestoreSavedDraftOnBoot; si traen datos, se conservan. revision no se toca: dejar la del
+    // servidor como esta y que el guard de CONFLICT_REVISION rechace un guardado hecho desde una
+    // pantalla que puede estar atrasada.
+    const { revision, performanceCache, ...rest } = snapshot;
+    Object.assign(state, rest);
+    if (!Array.isArray(state.operations)) state.operations = [];
+    if (!Array.isArray(state.materials)) state.materials = [];
+    state.fromLocalCache = true;
+    state.localCacheRevision = Number(snapshot.revision || 0);
+    return true;
   }
 
   loadAppStateInBackground = function optimizedLoadAppStateInBackground() {
@@ -761,6 +807,17 @@
       } catch (error) {
         appSheetAvailable = false;
         console.warn("Se mantiene el cache local porque el backend no respondio:", error);
+        // Se hidrata state con la cache local y SE AVISA. Sin esto la pantalla queda en
+        // sampleState (que no trae selectedOts) y solo se ve lo que rescata el borrador. Con esto
+        // la persona ve lo que dejo, con un aviso de que puede estar un guardado atras.
+        //
+        // NO se reintenta aqui: scheduleDraftBootRestoreRetry es del borrador, no del estado, y el
+        // estado se reintenta solo en el siguiente arranque o en la siguiente interacion (que pasa
+        // por getAppStateIfChanged). Ver hydrateStateFromLocalCache.
+        if (hydrateStateFromLocalCache()) {
+          const cuando = state.savedAt ? ` de las ${String(state.savedAt).slice(11, 19)}` : "";
+          showToast(`Sin conexion con el plan: mostrando lo guardado${cuando}. Reintentando...`, 12000);
+        }
       }
 
       if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));

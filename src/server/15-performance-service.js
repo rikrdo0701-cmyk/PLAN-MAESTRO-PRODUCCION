@@ -71,13 +71,22 @@ function debugStateCacheInfo() {
     chunks: chunks,
     sampleLengths: sampleLengths,
     readTest: (function() {
-      try {
-        const cached = PP_readCachedState_(spreadsheet, Number(config.revision || 0));
-        if (!cached) return { hit: false, reason: 'null' };
-        return { hit: true, ops: (cached.operations || []).length };
-      } catch (error) {
-        return { hit: false, reason: String(error && error.message || error) };
+      const revision = Number(config.revision || 0);
+      // TRES RAZONES DISTINTAS, porque tres arreglos distintos. Antes las dos primeras devolvian
+      // 'null' y no habia forma de saber si la cache estaba desfasada (lo normal, lo que pasa
+      // despues de cualquier guardado) o corrupta (un fallo de verdad). Medido el 2026-09-27:
+      // cacheRevision 4101 contra revision 4103 y readTest {hit:false, reason:'null'}.
+      const cacheRevision = Number(config.PP_STATE_CACHE_REVISION || 0);
+      if (cacheRevision !== revision) {
+        return { hit: false, reason: 'revision_desfasada', cacheRevision: cacheRevision, revision: revision };
       }
+      const raw = PP_readCachedStateRawWithReason_(spreadsheet);
+      if (!raw.state) {
+        return raw.reason === 'sin_cache'
+          ? { hit: false, reason: 'sin_cache' }
+          : { hit: false, reason: 'cache_ilegible', detail: raw.reason };
+      }
+      return { hit: true, ops: (raw.state.operations || []).length };
     })()
   };
 }
