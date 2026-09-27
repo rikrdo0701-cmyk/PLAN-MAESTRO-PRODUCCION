@@ -314,6 +314,20 @@ function edadPlanSnapshots(maxAgeDays) {
   return PP_pruneOldPlanSnapshots_(spreadsheet, dias, { dryRun: true });
 }
 
+// PUNTOS DE ENTRADA SIN ARGUMENTOS, para correr desde el editor de Apps Script. Las dos funciones
+// de arriba piden maxAgeDays, y desde el editor no se le pasan argumentos: habria que escribir un
+// wrapper a mano cada vez, que es justo lo que se quiere evitar. Estos dos fijan el corte de un
+// mes, que es la politica acordada, y devuelven el resultado para pegarlo.
+//
+// OJO CON LA SEGUNDA: BORRA. La primera no toca nada.
+function DIAG_EDAD_SNAPSHOTS() {
+  return edadPlanSnapshots(30);
+}
+
+function DIAG_PODA_SNAPSHOTS() {
+  return pruneOldPlanSnapshots(30);
+}
+
 function getPlanSnapshot(snapshotId) {
   if (!snapshotId) throw new Error('Falta snapshotId');
   const spreadsheet = PP_getWorkbook_();
