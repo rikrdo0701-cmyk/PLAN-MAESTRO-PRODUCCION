@@ -26,6 +26,25 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+function PP_ensurePruneTrigger_() {
+  const existing = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < existing.length; i += 1) {
+    if (existing[i].getHandlerFunction() === 'pruneOldPlanSnapshots') {
+      ScriptApp.deleteTrigger(existing[i]);
+    }
+  }
+  ScriptApp.newTrigger('pruneOldPlanSnapshots')
+    .timeBased()
+    .everyDays(1)
+    .atHour(3)
+    .create();
+  return { ok: true, message: 'Trigger de poda diaria (3:00) instalado para pruneOldPlanSnapshots(' + PP_RETENCION_PLANES_DIAS + ' dias)' };
+}
+
+function setupPruneTrigger() {
+  return PP_ensurePruneTrigger_();
+}
+
 function setupProductionPlanningApp() {
   const properties = PropertiesService.getScriptProperties();
   let spreadsheetId = properties.getProperty('PLANNING_SPREADSHEET_ID') || PP_DEFAULT_SPREADSHEET_ID;
@@ -38,6 +57,7 @@ function setupProductionPlanningApp() {
   properties.setProperty('PLANNING_SPREADSHEET_ID', spreadsheetId);
 
   PP_ensureWorkbook_(spreadsheet);
+  PP_ensurePruneTrigger_();
   return {
     ok: true,
     spreadsheetId: spreadsheetId,
