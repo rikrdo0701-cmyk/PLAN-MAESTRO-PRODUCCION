@@ -5652,10 +5652,25 @@ async function scheduleCurrentPlanImpl() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
-  const backup = await persistPlanAutoBackup();
-  if (!backup?.ok) showToast("Aviso: no se pudo crear el respaldo del borrador antes de generar", 8000);
+  // 3.1 — EL RESPALDO SE ARMA ANTES DEL DIALOGO Y SE GUARDA DESPUES.
+  // Antes el respaldo se guardaba antes de preguntar la semana, y ese guardado es una ida y vuelta
+  // a Apps Script (2.4 MB de payload, medido 2026-09-26): la interfaz se quedaba congelada con el
+  // boton en "Generar plan" y sin dialogo visible durante ese tiempo, que se leia como que el
+  // boton no hacia nada.
+  //
+  // LO QUE NO SE CAMBIA EN EL CONTENIDO. El payload se arma igual y en el mismo momento de la
+  // carrera: con el state.planStart de ANTES de elegir semana, exactamente como antes. Mover solo
+  // el await no cambia ni un byte de lo que se guarda.
+  //
+  // LO QUE SI SE CAMBIA, Y ES UNA DIFERENCIA REAL: si la persona CANCELA el dialogo, hoy queda un
+  // snapshot de respaldo huérfano en PLANES_HISTORICOS (con UUID propio, no es el borrador) de un
+  // plan que no se llego a generar. Con este orden no se guarda nada, y esa es la razon por la que
+  // el respaldo existe: respaldar el borrador justo antes de regenerarlo.
+  const backupPayload = buildPlanAutoBackupPayload();
   const chosenWeek = await askGeneratingPlanWeek();
   if (!chosenWeek) return;
+  const backup = await persistPlanAutoBackup(backupPayload);
+  if (!backup?.ok) showToast("Aviso: no se pudo crear el respaldo del borrador antes de generar", 8000);
   setScheduleStatus("Revisando plan...");
   const scheduleFreshness = await ensureNetSuiteWorkOrdersFresh({ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "schedule" });
   if (!scheduleFreshness.ok) return;
@@ -6422,6 +6437,64 @@ async function ensureCommercialDataForPlan(ots) {
   return true;
 }
 
+// 1.2 / 3.1 — DESPUES DE GUARDAR, NO SE VUELVE A LEER LA LISTA COMPLETA.
+// MEDIDO 2026-09-26: PP_listPlanSnapshots_ tarda 31 s con las 138 714 filas de PLANES_HISTORICOS,
+// y despues de CADA guardado se pedia entera con loadPlanSnapshots(false,
+// {deferPublishedLoad:true}). Ese era el costo que se veia como pausa justo despues de "Guardando
+// borrador..." y despues de "Actualizando OTs...".
+//
+// QUE SE HACE EN LUGAR: el servidor YA devuelve el registro que acaba de guardar (ver el return de
+// PP_appendPlanSnapshot_: snapshotId, generatedAt, planStart, weekStart, operations, version,
+// publicationReason, changeSummary, publishedAt). Eso se incorpora a la lista que el cliente ya
+// tiene en memoria. Mismo resultado en la lista y en la cache local, sin el viaje de ida y vuelta.
+//
+// LO QUE NO SE HACE, Y POR QUE:
+//  - NO SE INVENTA NINGUN DATO. user y horizonDays no vienen en la respuesta del servidor, asi que
+//    se COPIAN del registro que ya estaba en la lista. Si no habia, quedan vacios/0, igual que
+//    antes. Este camino no estima nada.
+//  - NO SE TOCA reportSnapshot NI la semana. Con deferPublishedLoad:true, loadPlanSnapshots tampoco
+//    cambiaba de plan salvo que no hubiera borrador (ver loadPlanSnapshotsImpl, linea 7167), y el
+//    upsert tampoco. Lo unico que cambia es la lista y lo que se deriva de ella.
+//  - NO REEMPLAZA LA LECTURA COMPLETA. El siguiente arranque, o abrir el selector, siguen trayendo
+//    la lista del servidor. Esto quita una lectura redundante; no inventa una fuente de verdad.
+function upsertPlanSnapshotRecord(saved, kind) {
+  const snapshotId = String(saved?.snapshotId || "").trim();
+  if (!snapshotId) return null;
+  const previous = planSnapshots.find((item) => String(item?.snapshotId || "") === snapshotId) || {};
+  const record = {
+    ...previous,
+    snapshotId,
+    generatedAt: String(saved.generatedAt || previous.generatedAt || ""),
+    planStart: String(saved.planStart || previous.planStart || ""),
+    weekStart: String(saved.weekStart || saved.planStart || previous.weekStart || previous.planStart || ""),
+    operations: Number(saved.operations != null ? saved.operations : (previous.operations || 0)),
+    version: Number(saved.version != null ? saved.version : (previous.version || 0)),
+    publicationReason: String(saved.publicationReason || ""),
+    changeSummary: saved.changeSummary || null,
+    publishedAt: String(saved.publishedAt || ""),
+  };
+  if (kind) record.kind = kind;
+  planSnapshots = [
+    ...planSnapshots.filter((item) => String(item?.snapshotId || "") !== snapshotId),
+    record,
+  ].sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+  savePlanSnapshotsCache(planSnapshots);
+  renderPlanSnapshotSelect();
+  renderReports();
+  return record;
+}
+
+// El respaldo automatico se ARMA aqui, antes de preguntar la semana, y se GUARDA despues del
+// dialogo (ver scheduleCurrentPlanImpl). Armarlo y guardarlo son dos cosas distintas: armar es
+// trabajo de cliente y se mide en milisegundos; guardar es la ida y vuelta a Apps Script, que es lo
+// que congelaba la interfaz antes de que apareciera el dialogo.
+function buildPlanAutoBackupPayload() {
+  return window.PlanningWorkflowCore.buildDraftSnapshot({
+    ...createAppSheetPayload(),
+    operations: currentPlanOperations(),
+  }, new Date().toISOString());
+}
+
 async function persistPlanSnapshot() {
   const payload = window.PlanningWorkflowCore.buildDraftSnapshot({
     ...createAppSheetPayload(),
@@ -6440,7 +6513,7 @@ async function persistPlanSnapshot() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       saved = await response.json();
     }
-    await loadPlanSnapshots(false, { deferPublishedLoad: true });
+    upsertPlanSnapshotRecord(saved, "BORRADOR");
     return saved;
   } catch (error) {
     if (window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(error)) {
@@ -6452,15 +6525,11 @@ async function persistPlanSnapshot() {
   }
 }
 
-async function persistPlanAutoBackup() {
+async function persistPlanAutoBackup(payload = null) {
   if (!isAppsScriptRuntime()) return { ok: false, reason: "runtime-local", snapshotId: "" };
   try {
-    const payload = window.PlanningWorkflowCore.buildDraftSnapshot({
-      ...createAppSheetPayload(),
-      operations: currentPlanOperations(),
-    }, new Date().toISOString());
-    const saved = await callAppsScript("savePlanSnapshot", payload);
-    await loadPlanSnapshots(false, { deferPublishedLoad: true });
+    const saved = await callAppsScript("savePlanSnapshot", payload || buildPlanAutoBackupPayload());
+    upsertPlanSnapshotRecord(saved, "RESPALDO");
     return Object.assign({ ok: true, kind: "RESPALDO" }, saved || {});
   } catch (error) {
     console.error("[persistPlanAutoBackup] No se pudo crear el respaldo del borrador:", error, error && error.stack);
@@ -10399,13 +10468,51 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
   try {
     const updatedOts = [];
     let failed = 0;
-    for (let index = 0; index < refreshOts.length; index += 1) {
-      const ot = refreshOts[index];
-      if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const outcome = await ensureWorkOrderPlanningData(ot);
-      if (outcome?.ready) updatedOts.push(ot);
-      else failed += 1;
+    if (refreshOts.length > 1) {
+      // BATCH: una sola llamada al servidor para todas las OTs
+      if (label) label.textContent = `Actualizando ${refreshOts.length} OTs...`;
+      const batchResult = await window.PlanningWorkflowCore.withTimeout(
+        callAppsScript("getPlanningWorkOrderDataBatch", refreshOts),
+        NETSUITE_PLANNING_TIMEOUT_MS
+      );
+      if (batchResult?.ok && Array.isArray(batchResult.data)) {
+        for (let index = 0; index < batchResult.data.length; index += 1) {
+          const item = batchResult.data[index];
+          if (label) label.textContent = `Aplicando OT ${index + 1} de ${batchResult.data.length}...`;
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          if (item?.ok && item?.data) {
+            const key = materialOtKey(item.ot);
+            if (key && mergeIndividualPlanningData(item.data, key)) {
+              individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+              individualPlanningUnavailableReasons.delete(key);
+              updatedOts.push(item.ot);
+            } else {
+              failed += 1;
+            }
+          } else {
+            failed += 1;
+          }
+        }
+      } else {
+        // Fallback a llamadas individuales si el batch falla
+        for (let index = 0; index < refreshOts.length; index += 1) {
+          const ot = refreshOts[index];
+          if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          const outcome = await ensureWorkOrderPlanningData(ot);
+          if (outcome?.ready) updatedOts.push(ot);
+          else failed += 1;
+        }
+      }
+    } else {
+      for (let index = 0; index < refreshOts.length; index += 1) {
+        const ot = refreshOts[index];
+        if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        const outcome = await ensureWorkOrderPlanningData(ot);
+        if (outcome?.ready) updatedOts.push(ot);
+        else failed += 1;
+      }
     }
     let after = availability();
     let missingOts = after.missingOts;
