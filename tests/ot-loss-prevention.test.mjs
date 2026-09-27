@@ -348,6 +348,132 @@ test("RULE-OT-051: 'Generar plan' no quita una OT porque una operacion diga cerr
   assert.doesNotMatch(cuerpo, /jobStatusForOt/, "NO debe usar el estatus agregado, que cae a las operaciones");
 });
 
+// ---------------------------------------------------------------------------------------------
+// EL CLIENTE NO DESHACIA LA PROTECCION. Pedido de la persona el 2026-09-27: "lo que ponga en
+// Planeado / No planeado no se mueva de ahi, y al refrescar la pagina siga como lo deje".
+//
+// QUE PASABA, Y SON DOS PASOS QUE SE REFUERZAN. applyNetSuiteWorkOrdersPayload (app.js:9841):
+//   1. corria reconcileActiveWorkOrders, que deja en workOrders las OTs que solo faltan y NO
+//      tienen evidencia de cierre (planning-workflow-core.js:1075-1077). Proteccion correcta.
+//   2. state.workOrders = payload.workOrders.map(...) SUSTITUIA esa lista reconciliada por el
+//      payload crudo, y con ello se perdian las OTs conservadas en el paso 1.
+//   3. y despues corria pruneDraftToOpenWorkOrders(state, state.workOrders), que poda por SIMPLE
+//      AUSENCIA: keep = items.filter(ot => open.has(normalize(ot))). Sin evidencia, sin marcas de
+//      por confirmar, sin guarda de caida masiva.
+// Con 2 y 3, una OT que solo faltaba en un listado de NetSuite perdia su ficha Y salia de la cola,
+// sin que nadie confirmara nada. Y el resultado se persistia. Medido esa noche: 25 seleccionadas
+// contra 222 fichas, 0 perdidas; la via estaba abierta y no habia descargado.
+//
+// QUE NO SE TOCA, Y POR QUE. pruneDraftToOpenWorkOrders no se borra: queda como red para cuando
+// PlanningWorkflowCore no trae la routine. Y estos tests comprueban que las TRES formas de cierre
+// legitimo siguen podando, que es por donde se podria romper algo al corregir.
+function extraerFuncion(fuente, nombre) {
+  const inicio = fuente.indexOf(`function ${nombre}(`);
+  if (inicio < 0) throw new Error(`no se encontro ${nombre}`);
+  // Se cuentan llaves sin contar las que hay en comentarios: un "{ /* } */ " descuadra el conteo.
+  const sinComentarios = fuente
+    .slice(inicio)
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+  let nivel = 0, abierto = false;
+  for (let i = 0; i < sinComentarios.length; i += 1) {
+    if (sinComentarios[i] === "{") { nivel += 1; abierto = true; }
+    else if (sinComentarios[i] === "}") {
+      nivel -= 1;
+      if (abierto && nivel === 0) return fuente.slice(inicio, inicio + i + 1);
+    }
+  }
+  throw new Error(`no se cerro la llave de ${nombre}`);
+}
+
+/** Corre el applyNetSuiteWorkOrdersPayload REAL de app.js contra el core REAL. */
+function harness() {
+  const ctx = {
+    window: { PlanningWorkflowCore: contexto.window.PlanningWorkflowCore },
+    console, Math, JSON, Date, Object, Array, Number, String, Boolean, Set, Map, RegExp,
+    isFinite, isNaN, parseInt, parseFloat, structuredClone,
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(`
+    let state = null;
+    function invalidateCurrentPlanOperationsCache() {}
+    function resetBacklogWindow() {}
+    ${extraerFuncion(app, "materialOtKey")}
+    ${extraerFuncion(app, "mergeWorkOrderLocalOverrides")}
+    ${extraerFuncion(app, "applyNetSuiteWorkOrdersPayload")}
+    this.__aplicar = (payload) => { applyNetSuiteWorkOrdersPayload(payload); return state; };
+    this.__poner = (s) => { state = s; };
+  `, ctx, { filename: "applyNetSuiteWorkOrdersPayload" });
+  return {
+    aplicar: (estado, payload) => { ctx.__poner(structuredClone(estado)); return ctx.__aplicar(payload); },
+  };
+}
+
+test("RULE-OT-051: el cliente NO saca de la cola una OT que solo falta en el listado", () => {
+  const { aplicar } = harness();
+  const estado = estadoConOts(["3000", "3001", "3002"]);
+  // Solo vuelve 3000. Las otras dos no vienen, y NADIE dijo que esten cerradas.
+  const r = aplicar(estado, { workOrders: [{ ot: "3000", item: "ART-0", status: "EN PROCESO" }] });
+
+  // structuredClone en las comparaciones: lo que sale del vm es un Array de otro realm y
+  // deepEqual estricto compara prototipos. Es el mismo cuidado que ya usa este archivo mas abajo.
+  assert.deepEqual(structuredClone(r.selectedOts), ["3000", "3001", "3002"],
+    "lo que la persona puso en Planeado se queda: ausencia no es cierre");
+  assert.deepEqual(structuredClone(r.workOrders.map((w) => w.ot)), ["3000", "3001", "3002"],
+    "y las tres conservan su ficha, que es lo que prueba que la OT existe");
+  assert.ok(r.workOrders.some((w) => w.ot === "3001"), "incluida la que no vino en el payload");
+});
+
+test("RULE-OT-051: pero una OT con evidencia POSITIVA si sale de la cola", () => {
+  const { aplicar } = harness();
+  const base = estadoConOts(["3000", "3001", "3002"]);
+
+  // exists === false: el payload dice que ya no existe.
+  const porExists = aplicar(base, { workOrders: [
+    { ot: "3000", item: "ART-0", status: "EN PROCESO" },
+    { ot: "3001", item: "ART-1", status: "BORRADA", exists: false },
+    { ot: "3002", item: "ART-2", status: "EN PROCESO" },
+  ] });
+  assert.deepEqual(structuredClone(porExists.selectedOts), ["3000", "3002"], "exists:false es evidencia y poda");
+  assert.equal(porExists.workOrders.length, 2, "y su ficha tambien se va");
+
+  // Y la ficha previa que YA decia CERRADA, sin necesidad de que vuelva a venir.
+  const cerradaAntes = estadoConOts(["3000", "3001", "3002"]);
+  cerradaAntes.workOrders[1].status = "CERRADA";
+  const porEstatus = aplicar(cerradaAntes, { workOrders: [
+    { ot: "3000", item: "ART-0", status: "EN PROCESO" },
+    { ot: "3002", item: "ART-2", status: "EN PROCESO" },
+  ] });
+  assert.deepEqual(structuredClone(porEstatus.selectedOts), ["3000", "3002"], "una ficha que ya decia CERRADA no se revalida");
+  assert.ok(porEstatus.closedWorkOrderSummaries["3001"], "y queda con su resumen de cerrada");
+});
+
+test("RULE-OT-051: caida masiva en el cliente tampoco se lleva la cola", () => {
+  const { aplicar } = harness();
+  const estado = estadoConOts(ots(222));
+  const vuelven = ots(222).slice(0, 205).map((ot) => ({ ot, item: "ART", status: "EN PROCESO" }));
+  const r = aplicar(estado, { workOrders: vuelven });
+
+  assert.equal(r.selectedOts.length, 222, "17 de 222 ausentes no es una lectura a medias");
+  assert.equal(r.workOrders.length, 222, "y ninguna ficha se pierde");
+  assert.equal(r.lastWorkOrderReconcile.massDrop, false);
+  assert.equal(Object.keys(r.closedWorkOrderSummaries).length, 0, "nadie dijo que estuvieran cerradas");
+});
+
+test("RULE-OT-051: la poda por ausencia queda solo como red, nunca como camino normal", () => {
+  // Guarda estructural sobre el CODIGO, sin comentarios: mientras reconcileActiveWorkOrders este
+  // disponible, la poda desnuda no puede ser la ultima palabra.
+  const sinComentarios = app
+    .slice(app.indexOf("function applyNetSuiteWorkOrdersPayload("), app.indexOf("function persistReferencePricesFromSync("))
+    .split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
+  assert.match(sinComentarios, /huboReconciliacion = true/, "se marca que hubo reconciliacion");
+  assert.match(sinComentarios, /if \(!huboReconciliacion\) \{[\s\S]{0,200}pruneDraftToOpenWorkOrders/,
+    "la poda por ausencia solo corre cuando NO hubo reconciliacion");
+  assert.doesNotMatch(sinComentarios, /state\.workOrders = payload\.workOrders\.map/,
+    "la lista reconciliada no se sustituye por el payload crudo: ahi se perdian las OTs conservadas");
+});
+
 test("RULE-OT-051: el 2244 expone el estatus que hace posible la confirmacion", async () => {
   const restlet = await readFile(new URL("../netsuite-restlet-wo-inspeccion.js", import.meta.url), "utf8");
   // El action detail es el que ignora onlyOpen, o sea el unico que ve las OTs cerradas.

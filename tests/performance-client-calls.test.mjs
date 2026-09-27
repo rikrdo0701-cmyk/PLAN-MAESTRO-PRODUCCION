@@ -1388,7 +1388,12 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
   const state = {
     selectedOts: ["200", "300"], lockedOts: ["200"], expandedOts: ["200", "300"],
     lastSchedule: { scheduledOts: ["200", "300"] },
-    workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300" }],
+    // El estatus va en `status`, y 300 lo tiene en CERRADA. Antes esta ficha no traia ninguno, y
+    // el fixture se cerraba solo: la 300 se iba del payload y el test daba por hecho que eso era
+    // cierre. Es la inferencia "ausente del payload = cerrada" que RULE-OT-049 prohibio y que
+    // RULE-OT-051 sustituyo por evidencia positiva; el test se legitimaba a si mismo. El hermano
+    // de abajo ya se habia corregido con el mismo criterio y su comentario lo dice.
+    workOrders: [{ ot: "100" }, { ot: "200" }, { ot: "300", status: "CERRADA" }],
   };
   const applyNetSuiteWorkOrdersPayload = Function(
     "state", "window", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "materialOtKey",
@@ -1399,10 +1404,12 @@ test("la sincronizacion de OTs retira cerradas sin reactivar las devueltas a bac
 
   applyNetSuiteWorkOrdersPayload({ selectedOts: ["100", "200", "300"], workOrders: [{ ot: "100" }, { ot: "200" }] });
 
-  assert.deepEqual(state.selectedOts, ["200"]);
-  assert.deepEqual(state.lockedOts, ["200"]);
-  assert.deepEqual(state.expandedOts, ["200"]);
-  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+  // plain() porque estas cuatro listas salen del return de reconcileActiveWorkOrders, que corre
+  // en el vm del core: lo que se juzga es el contenido, no el realm del Array.
+  assert.deepEqual(plain(state.selectedOts), ["200"]);
+  assert.deepEqual(plain(state.lockedOts), ["200"]);
+  assert.deepEqual(plain(state.expandedOts), ["200"]);
+  assert.deepEqual(plain(state.lastSchedule.scheduledOts), ["200"]);
 });
 
 test("la carga reconcilia tambien el borrador: la OT cerrada sale de operaciones, cola y resumen", () => {
@@ -1434,12 +1441,13 @@ test("la carga reconcilia tambien el borrador: la OT cerrada sale de operaciones
 
   // Sin operaciones y sin work order, getPriorityJobs() deja de crear un trabajo para la
   // OT (app.js:11676-11683), asi que tampoco reaparece en "trabajos en espera".
-  assert.deepEqual(state.operations.map((op) => op.id), ["op-200"]);
-  assert.deepEqual(state.workOrders.map((wo) => wo.ot), ["200"]);
-  assert.deepEqual(state.selectedOts, ["200"]);
-  assert.deepEqual(state.lockedOts, []);
-  assert.deepEqual(state.expandedOts, []);
-  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+  // plain() en las listas: salen del return de reconcileActiveWorkOrders, que corre en el vm.
+  assert.deepEqual(plain(state.operations.map((op) => op.id)), ["op-200"]);
+  assert.deepEqual(plain(state.workOrders.map((wo) => wo.ot)), ["200"]);
+  assert.deepEqual(plain(state.selectedOts), ["200"]);
+  assert.deepEqual(plain(state.lockedOts), []);
+  assert.deepEqual(plain(state.expandedOts), []);
+  assert.deepEqual(plain(state.lastSchedule.scheduledOts), ["200"]);
   assert.equal(state.lastSchedule.generatedAt, "2026-09-25T10:00:00.000Z");
   assert.deepEqual(Object.keys(state.operationPlanStatuses), ["b"]);
   assert.deepEqual(plain(state.otConfigurations), {});
@@ -1473,7 +1481,11 @@ test("la carga no toca el borrador de una OT que NetSuite sigue reportando abier
   assert.deepEqual(state.operations.map((op) => op.id), ["op-200", "op-300"]);
   assert.deepEqual(plain(state.otConfigurations), { "300": { machine: "M1" } });
   assert.deepEqual(plain(state.closedWorkOrderSummaries), {});
-  assert.deepEqual(state.workOrders.map((wo) => wo.ot), ["200", "300"]);
+  // plain() como en las dos aserciones de arriba: state.workOrders ahora viene del return de
+  // reconcileActiveWorkOrders, que se ejecuta en el vm del core, y .map sobre un array de vm
+  // devuelve un array de vm. El CONTENIDO es el que se comprueba; la diferencia de realm no es
+  // un fallo de la app.
+  assert.deepEqual(plain(state.workOrders.map((wo) => wo.ot)), ["200", "300"]);
 });
 
 test("la sincronizacion persiste el precio de venta en referenceSalePrice, separado del manual (RULE-REP-021)", () => {

@@ -18,7 +18,10 @@
     "deploy": "npm run check && clasp deploy",
     "build:pages": "node scripts/build-appscript.mjs",
     "preview:pages": "python -m http.server 4173 --directory site",
-    "probe": "node scripts/web-probe.mjs"
+    "probe": "node scripts/web-probe.mjs",
+    "probe:generar": "node scripts/web-probe-generar-plan.mjs",
+    "probe:generar:seco": "node scripts/web-probe-generar-plan.mjs --dry",
+    "probe:cierre": "node scripts/web-probe-cierre-ot.mjs"
   },
   "devDependencies": {
     "playwright": "^1.62.1"

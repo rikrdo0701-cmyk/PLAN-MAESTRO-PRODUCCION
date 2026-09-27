@@ -9843,6 +9843,9 @@ function applyNetSuiteWorkOrdersPayload(payload) {
   // separado, el closedDetectedAt del resumen de una OT cerrada no coincidiria con
   // syncedAt de la misma carga.
   const nowIso = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
+  // Si hubo reconciliacion, la poda por ausencia NO se aplica: reconcileActiveWorkOrders ya
+  // resolvio que OTs se van, y solo con evidencia positiva. Ver el comentario de las dos lineas.
+  let huboReconciliacion = false;
   if (Array.isArray(payload?.workOrders)) {
     const core = window.PlanningWorkflowCore;
     // reconcileActiveWorkOrders se corre ANTES de sustituir la lista porque necesita la
@@ -9854,12 +9857,30 @@ function applyNetSuiteWorkOrdersPayload(payload) {
       // Object.assign y no `state = ...`: el resto de la funcion muta el mismo objeto y
       // quien lo llama debe ver el resultado sin cambiar de referencia.
       Object.assign(state, core.reconcileActiveWorkOrders(state, payload.workOrders, nowIso));
+      huboReconciliacion = true;
     }
     const localByOt = new Map((state.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
-    state.workOrders = payload.workOrders.map((item) =>
+    // LA BASE ES LA LISTA RECONCILIADA, NO EL PAYLOAD CRUDO. reconcileActiveWorkOrders deja en
+    // workOrders las OTs que solo faltan y NO tienen evidencia de cierre
+    // (planning-workflow-core.js:1075-1077), que es la proteccion de RULE-OT-051. Al sustituir
+    // esa lista por el payload crudo, la conservacion se perdia aqui mismo, y la poda de abajo
+    // se llevaba despues a esas OTs de la cola. Medido el 2026-09-27: 25 seleccionadas contra
+    // 222 fichas, 0 perdidas, o sea que la via estaba abierta y no habia descargado. Es el mismo
+    // estado roto que el backend evita a proposito (08-netsuite.js:330-333).
+    // mergeWorkOrderLocalOverrides es idempotente cuando local e item son el mismo objeto, asi
+    // que mapear sobre la lista reconciliada no cambia los overrides locales.
+    const base = huboReconciliacion ? state.workOrders : payload.workOrders;
+    state.workOrders = base.map((item) =>
       mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item));
   }
-  Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+  // pruneDraftToOpenWorkOrders se queda UNICAMENTE como red cuando no hubo reconciliacion, que
+  // solo pasa si PlanningWorkflowCore no trae la routine. Poda por simple ausencia, sin las tres
+  // capas (evidencia positiva, marcas de por confirmar y guarda de caida masiva) que si tiene
+  // reconcileActiveWorkOrders, y con ella se cumplia el pedido del 2026-09-27: lo que la persona
+  // pone en Planeado no se mueve de ahi, y al recargar sigue como lo dejo.
+  if (!huboReconciliacion) {
+    Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+  }
   if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
   if (payload?.plant) state.plant = payload.plant;
   state.syncedAt = nowIso;
