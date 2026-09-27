@@ -29,16 +29,22 @@ function doGet(e) {
 function PP_ensurePruneTrigger_() {
   const existing = ScriptApp.getProjectTriggers();
   for (let i = 0; i < existing.length; i += 1) {
-    if (existing[i].getHandlerFunction() === 'pruneOldPlanSnapshots') {
+    if (existing[i].getHandlerFunction() === 'pruneOldPlanSnapshotsDaily') {
       ScriptApp.deleteTrigger(existing[i]);
     }
   }
-  ScriptApp.newTrigger('pruneOldPlanSnapshots')
+  ScriptApp.newTrigger('pruneOldPlanSnapshotsDaily')
     .timeBased()
     .everyDays(1)
     .atHour(3)
     .create();
   return { ok: true, message: 'Trigger de poda diaria (3:00) instalado para pruneOldPlanSnapshots(' + PP_RETENCION_PLANES_DIAS + ' dias)' };
+}
+
+// Los triggers de Apps Script no pueden pasar parametros: este wrapper es el que se
+// registra en el trigger y llama a pruneOldPlanSnapshots con la politica vigente.
+function pruneOldPlanSnapshotsDaily() {
+  return pruneOldPlanSnapshots(PP_RETENCION_PLANES_DIAS);
 }
 
 function setupPruneTrigger() {
