@@ -641,7 +641,16 @@ async function loadAppStateInBackground() {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
-  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+  // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
+  // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
+  // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
+  // abajo no corre nunca. snapshotsRequest es una lectura de red: si esa falla, el borrador no se
+  // restauraba nunca aunque la sincronizacion hubiera terminado bien. Y al reventar el sync, la
+  // red de seguridad se caia justo cuando se necesitaba: que es el escenario entero del rescate.
+  void Promise.all([
+    Promise.resolve(bootSync).catch(() => false),
+    Promise.resolve(snapshotsRequest).catch(() => null),
+  ]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
@@ -742,11 +751,31 @@ async function maybeRestoreSavedDraftOnBoot() {
   }
 }
 
+// POR QUE EL PRESUPUESTO ESTA EN TIEMPO Y NO EN INTENTOS, Y POR QUE 180 s.
+//
+// Este reintento existe para esperar a que se libere netSuiteSyncInFlight, en la puerta de
+// maybeRestoreSavedDraftOnBoot. La llamada que lo mantiene ocupado es getAppState, y su tope es el
+// CALL_TIMEOUT_MS de 120 000 ms del puente (apps-script-bridge-client.js). Con el presupuesto
+// anterior de 15 intentos cada 2 500 ms, la cadena se agotaba a los 37,5 s: 82 s ANTES de que se
+// liberara el flag. Para entonces no quedaba ningun disparador vivo, y el unico que quedaba
+// dependia de que la sincronizacion resolviera, o sea de lo mismo que la estaba bloqueando. Es
+// decir: el rescate del borrador se agotaba justo en el escenario para el que existe, que es
+// cuando el servidor NO responde.
+//
+// 180 000 ms es 120 000 del timeout del puente + 60 000 de margen. El numero esta escrito a mano a
+// proposito (el CALL_TIMEOUT_MS vive en otro archivo y no se puede leer desde aqui), y esa es
+// justamente la debilidad: si el tope del puente se moviera, este presupuesto se quedaria corto
+// otra vez y en silencio. Por eso tests/plan-draft-boot-restore.test.mjs lee las DOS constantes y
+// falla si el presupuesto deja de durar mas que el timeout que espera. Si se cambia uno, hay que
+// cambiar el otro y el test lo dice.
+const DRAFT_BOOT_RESTORE_RETRY_MS = 2500;
+const DRAFT_BOOT_RESTORE_BUDGET_MS = 180000;
+
 function scheduleDraftBootRestoreRetry() {
-  const retries = Number(globalThis.__draftBootRestoreRetries || 0);
-  if (retries >= 15) return;
-  globalThis.__draftBootRestoreRetries = retries + 1;
-  setTimeout(() => { void maybeRestoreSavedDraftOnBoot(); }, 2500);
+  const spent = Number(globalThis.__draftBootRestoreRetrySpentMs || 0);
+  if (spent >= DRAFT_BOOT_RESTORE_BUDGET_MS) return;
+  globalThis.__draftBootRestoreRetrySpentMs = spent + DRAFT_BOOT_RESTORE_RETRY_MS;
+  setTimeout(() => { void maybeRestoreSavedDraftOnBoot(); }, DRAFT_BOOT_RESTORE_RETRY_MS);
 }
 
 function bindElements() {

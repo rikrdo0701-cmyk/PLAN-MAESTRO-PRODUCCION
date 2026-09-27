@@ -78,7 +78,16 @@ function patchPlanningApp(app) {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
-  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+  // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
+  // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
+  // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
+  // abajo no corre nunca. snapshotsRequest es una lectura de red: si esa falla, el borrador no se
+  // restauraba nunca aunque la sincronizacion hubiera terminado bien. Y al reventar el sync, la
+  // red de seguridad se caia justo cuando se necesitaba: que es el escenario entero del rescate.
+  void Promise.all([
+    Promise.resolve(bootSync).catch(() => false),
+    Promise.resolve(snapshotsRequest).catch(() => null),
+  ]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
@@ -110,7 +119,16 @@ function patchPlanningApp(app) {
   const bootSync = isAppsScriptRuntime()
     ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
     : Promise.resolve(false);
-  void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
+  // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
+  // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
+  // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
+  // abajo no corre nunca. snapshotsRequest es una lectura de red: si esa falla, el borrador no se
+  // restauraba nunca aunque la sincronizacion hubiera terminado bien. Y al reventar el sync, la
+  // red de seguridad se caia justo cuando se necesitaba: que es el escenario entero del rescate.
+  void Promise.all([
+    Promise.resolve(bootSync).catch(() => false),
+    Promise.resolve(snapshotsRequest).catch(() => null),
+  ]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
