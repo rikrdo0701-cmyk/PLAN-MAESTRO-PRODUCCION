@@ -310,10 +310,10 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
     });
   }
   Object.keys(openOts).forEach(function(clave) { delete porConfirmar[clave]; });
-  // Segunda ausencia: ya si es cierre confirmado.
-  Object.keys(porConfirmar).forEach(function(clave) {
-    if (porConfirmar[clave].misses >= 2) confirmadas[clave] = true;
-  });
+  // Segunda ausencia NO es cierre confirmado. La poda por segunda ausencia se elimino
+  // (ver reconcileActiveWorkOrders en planning-workflow-core.js): ahora solo se poda con
+  // evidencia positiva de NetSuite (confirmWorkOrderClosures). El backend no debe cerrar
+  // OTs que el frontend no cerraria.
   Object.keys(confirmadas).forEach(function(clave) { delete porConfirmar[clave]; });
   merged.unconfirmedWorkOrders = porConfirmar;
   merged.lastWorkOrderReconcile = {

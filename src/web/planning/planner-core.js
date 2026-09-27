@@ -1154,6 +1154,8 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     });
   }
 
+  // machineTools y scheduledByKey NO se clonan: commitAssignment nunca los modifica.
+  // Clonarlos copiaba dos Maps enteros en cada probe, lo que multiplicaba la presión de GC.
   function cloneFeasibilityContext(context) {
     const cloneBusy = (map) => new Map([...map.entries()].map(([key, intervals]) => [
       key,
@@ -1166,7 +1168,12 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
       machineBusy: cloneBusy(context.machineBusy),
       operatorLoad: new Map(context.operatorLoad),
       operatorIdleCache: new Map(),
-      machineTools: new Map([...context.machineTools.entries()].map(([key, events]) => [key, events.map((event) => ({ ...event }))])),
+      // machineTools y scheduledByKey TAMBIEN se clonaban por referencia, pero
+      // commitAssignment ESCRIBE en ellos (machineTools.set y scheduledByKey.set).
+      // O sea que cada probe contaminaba el estado real: scheduledByKey acumulaba
+      // entradas de candidatos rechazados y machineTools se sobrescribia con valores
+      // de prueba. Un probe que se supone que es un dry-run no puede mutar el estado.
+      machineTools: new Map(context.machineTools),
       scheduledByKey: new Map(context.scheduledByKey),
       generatedChanges: [],
     };

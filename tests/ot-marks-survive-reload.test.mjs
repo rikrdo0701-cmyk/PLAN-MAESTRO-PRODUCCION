@@ -73,11 +73,12 @@ function correr(nombre, codigo, deps, args = "") {
 const materialOtKey = (v) => String(v ?? "").trim().toUpperCase();
 
 const MERGE_MARKS = extraer(app, "mergeUnconfirmedWorkOrderMarks");
+const IS_VALID_DATE = new Function(`${extraer(app, "isValidDate")}; return isValidDate;`)();
 const PARSE_MARKS = extraer(storage, "PP_parseUnconfirmedWorkOrderMarks_");
 const SERIALIZE_MARKS = extraer(storage, "PP_serializeUnconfirmedWorkOrderMarks_");
 
 const mergeMarks = (local, remote) =>
-  correr("mergeUnconfirmedWorkOrderMarks", MERGE_MARKS, { materialOtKey, local, remote }, "local, remote");
+  correr("mergeUnconfirmedWorkOrderMarks", MERGE_MARKS, { materialOtKey, isValidDate: IS_VALID_DATE, local, remote }, "local, remote");
 const parseMarks = (v) =>
   correr("PP_parseUnconfirmedWorkOrderMarks_", PARSE_MARKS, { source: v, JSON }, "source");
 

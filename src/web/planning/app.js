@@ -1401,29 +1401,6 @@ function normalizeState() {
   // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
   // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
   // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
-  // EL ESTADO DE COMPLETADO NO SE SOBRESCRIBE SI NO HAY FECHA EN EL MAPA.
-  // Antes: op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
-  // O sea que si la clave no estaba en el mapa, la operación volvía a PENDIENTE, sin importar
-  // lo que tuviera. Y la clave es `OP|{ot}|{secuencia}|{ct}`, que depende de la secuencia y del
-  // CT. Si el planeador regenera y cambia cualquiera de los dos, la clave cambia, el lookup
-  // falla, y la operacion pierde su "completada". Medido el 2026-09-27 con las funciones reales:
-  //   completada con secuencia 5 -> guardada en OP|3143|5|5459
-  //   el planeador la pasa a secuencia 3 -> se busca en OP|3143|3|5459
-  //   no está ahí -> PENDIENTE. La operacion sigue ahi, con sus datos, pero sin el completado.
-  // El usuario lo reporto en produccion: completo operaciones, movio de backlog a plan, y los
-  // completados desaparecieron.
-  //
-  // EL ARREGLO: si el mapa NO tiene estado para la clave actual, no toco el planStatus que la
-  // operacion ya trae. Solo escribo cuando el mapa dice algo explicito. Asi:
-  //   - mapa dice COMPLETADA_PLAN -> se escribe COMPLETADA_PLAN
-  //   - mapa dice PENDIENTE -> se escribe PENDIENTE
-  //   - mapa no tiene estado -> se conserva lo que la operacion trae (que puede ser
-  //     COMPLETADA_PLAN si la clave cambio, que es exactamente el bug que estamos arreglando)
-  //
-  // Es seguro porque el planStatus de la operacion siempre esta sincronizado con el mapa: se
-  // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
-  // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
-  // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
   // EL FALLBACK DE operationPlanStatusEntry, CABLEADO AL CAMINO QUE FALLABA.
   // Antes: draftViewStatuses()[operationCompletionKey(op)] — busqueda directa, sin fallback.
   // Si la clave cambiaba (secuencia o CT), el lookup fallaba y la operacion perdia su
@@ -7683,6 +7660,12 @@ function mergeClosedWorkOrderSummaries(local, remote) {
 // Lo que NO hace esta funcion, a proposito: no borra marcas, no decide cierres y no inventa
 // ninguna. La ausencia de evidencia sigue sin ser evidencia (RULE-OT-051). Resolver la marca es
 // trabajo del reconciliador del proximo sync, que ya tiene las tres capas de evidencia.
+function isValidDate(value) {
+  if (!value) return false;
+  const d = new Date(value);
+  return !isNaN(d.getTime());
+}
+
 function mergeUnconfirmedWorkOrderMarks(local, remote) {
   const merged = {};
   const add = (key, value) => {
@@ -7691,8 +7674,8 @@ function mergeUnconfirmedWorkOrderMarks(local, remote) {
     if (!ot) return;
     const incoming = {
       ot: String(value.ot || key).trim(),
-      firstSeenAt: String(value.firstSeenAt || ""),
-      lastSeenAt: String(value.lastSeenAt || ""),
+      firstSeenAt: isValidDate(value.firstSeenAt) ? String(value.firstSeenAt) : "",
+      lastSeenAt: isValidDate(value.lastSeenAt) ? String(value.lastSeenAt) : "",
       misses: Number(value.misses) > 0 ? Number(value.misses) : 1,
     };
     const existing = merged[ot];
@@ -12866,7 +12849,7 @@ function isConfirmedClosedWorkOrder(ot) {
   const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
   if (ficha && isClosedJobStatus(ficha.status)) return true;
   // Si NetSuite ya lo confirmo en una sincronizacion anterior, sigue siendo cierto.
-  if (String(state.closedWorkOrderSummaries?.[ot]?.ot || "").trim()) return true;
+  if (String(state.closedWorkOrderSummaries?.[materialOtKey(ot)]?.ot || "").trim()) return true;
   return false;
 }
 

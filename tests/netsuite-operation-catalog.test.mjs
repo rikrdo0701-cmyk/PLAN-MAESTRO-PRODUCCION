@@ -594,11 +594,14 @@ test("PP_applyNetSuiteWorkOrdersData_ marca para confirmar una caida que NO es m
   assert.equal(merged.unconfirmedWorkOrders[ots[0]].misses, 1);
   assert.equal(merged.lastWorkOrderReconcile.confirmedClosed, 0);
 
-  // La segunda pasada, con la OT siguen sin venir, SI confirma el cierre.
+  // La segunda pasada, con la OT siguen sin venir, NO confirma el cierre.
+  // La poda por segunda ausencia se elimino: ahora solo se poda con evidencia positiva
+  // de NetSuite (confirmWorkOrderClosures). Ver reconcileActiveWorkOrders.
   const segunda = context.PP_applyNetSuiteWorkOrdersData_(merged, snapshot);
-  assert.equal(segunda.workOrders.length, 9, "la segunda ausencia ya si poda");
-  assert.equal(segunda.selectedOts.length, 9);
-  assert.deepEqual(Object.keys(segunda.unconfirmedWorkOrders), []);
+  assert.equal(segunda.workOrders.length, 10, "la segunda ausencia NO poda");
+  assert.equal(segunda.selectedOts.length, 10);
+  assert.equal(segunda.unconfirmedWorkOrders[ots[0]].misses, 2, "la marca se acumula");
+  assert.equal(segunda.lastWorkOrderReconcile.confirmedClosed, 0, "no hay cierre confirmado");
 });
 
 test("PP_applyNetSuiteWorkOrdersData_ no inventa la cola cuando el estado venia vacio", () => {

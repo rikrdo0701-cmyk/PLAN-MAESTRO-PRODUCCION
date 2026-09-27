@@ -249,7 +249,7 @@ test("el servidor tampoco persiste la poda por inferencia, y avisa de la caida m
   assert.match(bloque, /item\.exists === false \|\| item\.existe === false/, "capa 1: exists === false");
   assert.match(bloque, /function estatusCerrado\(item\)/, "capa 1: estatus cerrado");
   assert.match(bloque, /caidaMasiva/, "capa 3: guardia de caida masiva");
-  assert.match(bloque, /misses >= 2/, "capa 2: segunda ausencia confirma");
+  assert.doesNotMatch(bloque, /misses >= 2/, "capa 2: segunda ausencia NO confirma (solo evidencia positiva)");
   assert.match(bloque, /merged\.unconfirmedWorkOrders = porConfirmar/);
   assert.match(bloque, /merged\.lastWorkOrderReconcile = \{/);
   assert.match(bloque, /sigueViva = function\(ot\) \{ return !confirmadas/, "la poda se decide por evidencia, no por openOts");
