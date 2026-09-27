@@ -304,6 +304,19 @@ test("PP_deletePlanSnapshot_ tira la clave de la cache, porque borrar invalida e
     "debe leer la columna SNAPSHOT_ID entera en una llamada");
 });
 
+test("PP_readRowsCols_ usa getValues() y no getDisplayValues() para las columnas de datos", () => {
+  // PP_readMachineToolHistory_ lee 8 columnas de las 139 876 filas de PLANES_HISTORICOS en
+  // cada rebuild frío del estado. getDisplayValues() formatea cada celda: en 139 876 celdas
+  // por columna eso son segundos por columna. Las columnas son texto plano escrito por el
+  // servidor (SNAPSHOT_ID, NUM, OT, MAQ_AREA, HERRAMENTAL, KIT_HERRAMENTAL, F_FIN, H_FIN),
+  // sin formato de celda que getDisplayValues pueda convertir a otra cosa.
+  const leer = extraer("PP_readRowsCols_");
+  assert.match(leer, /getRange\(2, index \+ 1, total, 1\)\.getValues\(\)/,
+    "las columnas de datos se leen con getValues(), sin formatear 139 876 celdas por columna");
+  assert.doesNotMatch(leer, /getRange\(2, index \+ 1, total, 1\)\.getDisplayValues\(\)/,
+    "getDisplayValues() por columna es el costo que hace que el rebuild frío supere los 120 s");
+});
+
 test("PP_listPlanSnapshots_ ya no pide la columna entera de datos con getDisplayValues()", () => {
   const listar = extraer("PP_listPlanSnapshots_");
   // La lectura cara era exactamente esta: getRange(2, col, LASTROW-1, 1).getDisplayValues() sobre

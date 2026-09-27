@@ -1633,7 +1633,7 @@ function PP_readRowsCols_(sheet, columns) {
   const columnsLeidas = wanted.map(function(name) {
     const index = header.indexOf(name);
     if (index < 0) return null;   // la columna no existe en esta hoja
-    return sheet.getRange(2, index + 1, total, 1).getDisplayValues().map(function(cell) { return cell[0]; });
+    return sheet.getRange(2, index + 1, total, 1).getValues().map(function(cell) { return cell[0]; });
   });
   const rows = [];
   for (let r = 0; r < total; r += 1) {
