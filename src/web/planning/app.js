@@ -9535,17 +9535,53 @@ async function refreshSmartSyncOtTimes(records) {
   candidates.forEach(({ key }, index) => {
     if (index >= SMART_SYNC_TIME_REFRESH_LIMIT) results[key] = { changed: false, skipped: true };
   });
-  for (const { record, key } of candidates.slice(0, SMART_SYNC_TIME_REFRESH_LIMIT)) {
-    if (!isAppsScriptRuntime()) {
-      results[key] = { changed: false, skipped: true };
-      continue;
+  const toRefresh = candidates.slice(0, SMART_SYNC_TIME_REFRESH_LIMIT);
+  if (!toRefresh.length) return results;
+
+  if (!isAppsScriptRuntime()) {
+    toRefresh.forEach(({ key }) => { results[key] = { changed: false, skipped: true }; });
+    return results;
+  }
+
+  // Capturar firmas ANTES del batch merge
+  const beforeByKey = new Map();
+  toRefresh.forEach(({ key }) => beforeByKey.set(key, otOperationsRouteTimesSignature(key)));
+
+  // Una sola llamada batch para todas las OTs candidatas
+  const ots = toRefresh.map(({ record }) => record.ot);
+  const batchResult = await window.PlanningWorkflowCore.withTimeout(
+    callAppsScript("getPlanningWorkOrderDataBatch", ots),
+    NETSUITE_PLANNING_TIMEOUT_MS
+  );
+
+  if (batchResult?.ok && Array.isArray(batchResult.data)) {
+    const okKeys = new Set();
+    for (const item of batchResult.data) {
+      if (item?.ok && item?.data) {
+        const key = materialOtKey(item.ot);
+        if (key && mergeIndividualPlanningData(item.data, key)) {
+          individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+          individualPlanningUnavailableReasons.delete(key);
+          okKeys.add(key);
+        }
+      }
     }
-    const before = otOperationsRouteTimesSignature(key);
-    const result = await ensureWorkOrderPlanningData(record.ot);
-    const after = otOperationsRouteTimesSignature(key);
-    const changed = result.ready && before !== after;
-    if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
-    results[key] = { changed, skipped: !result.ready };
+    for (const { key } of toRefresh) {
+      if (!okKeys.has(key)) { results[key] = { changed: false, skipped: true }; continue; }
+      const after = otOperationsRouteTimesSignature(key);
+      const changed = beforeByKey.get(key) !== after;
+      if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+      results[key] = { changed, skipped: false };
+    }
+  } else {
+    // Fallback: llamadas individuales solo si el batch falla
+    for (const { record, key } of toRefresh) {
+      const result = await ensureWorkOrderPlanningData(record.ot);
+      const after = otOperationsRouteTimesSignature(key);
+      const changed = result.ready && beforeByKey.get(key) !== after;
+      if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+      results[key] = { changed, skipped: !result.ready };
+    }
   }
   return results;
 }
@@ -10468,43 +10504,32 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
   try {
     const updatedOts = [];
     let failed = 0;
-    if (refreshOts.length > 1) {
-      // BATCH: una sola llamada al servidor para todas las OTs
-      if (label) label.textContent = `Actualizando ${refreshOts.length} OTs...`;
-      const batchResult = await window.PlanningWorkflowCore.withTimeout(
-        callAppsScript("getPlanningWorkOrderDataBatch", refreshOts),
-        NETSUITE_PLANNING_TIMEOUT_MS
-      );
-      if (batchResult?.ok && Array.isArray(batchResult.data)) {
-        for (let index = 0; index < batchResult.data.length; index += 1) {
-          const item = batchResult.data[index];
-          if (label) label.textContent = `Aplicando OT ${index + 1} de ${batchResult.data.length}...`;
-          await new Promise((resolve) => window.setTimeout(resolve, 0));
-          if (item?.ok && item?.data) {
-            const key = materialOtKey(item.ot);
-            if (key && mergeIndividualPlanningData(item.data, key)) {
-              individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
-              individualPlanningUnavailableReasons.delete(key);
-              updatedOts.push(item.ot);
-            } else {
-              failed += 1;
-            }
+    // BATCH: una sola llamada al servidor para todas las OTs (incluso 1)
+    if (label) label.textContent = `Actualizando ${refreshOts.length} OTs...`;
+    const batchResult = await window.PlanningWorkflowCore.withTimeout(
+      callAppsScript("getPlanningWorkOrderDataBatch", refreshOts),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    if (batchResult?.ok && Array.isArray(batchResult.data)) {
+      for (let index = 0; index < batchResult.data.length; index += 1) {
+        const item = batchResult.data[index];
+        if (label) label.textContent = `Aplicando OT ${index + 1} de ${batchResult.data.length}...`;
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        if (item?.ok && item?.data) {
+          const key = materialOtKey(item.ot);
+          if (key && mergeIndividualPlanningData(item.data, key)) {
+            individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+            individualPlanningUnavailableReasons.delete(key);
+            updatedOts.push(item.ot);
           } else {
             failed += 1;
           }
-        }
-      } else {
-        // Fallback a llamadas individuales si el batch falla
-        for (let index = 0; index < refreshOts.length; index += 1) {
-          const ot = refreshOts[index];
-          if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
-          await new Promise((resolve) => window.setTimeout(resolve, 0));
-          const outcome = await ensureWorkOrderPlanningData(ot);
-          if (outcome?.ready) updatedOts.push(ot);
-          else failed += 1;
+        } else {
+          failed += 1;
         }
       }
     } else {
+      // Fallback a llamadas individuales si el batch falla
       for (let index = 0; index < refreshOts.length; index += 1) {
         const ot = refreshOts[index];
         if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
