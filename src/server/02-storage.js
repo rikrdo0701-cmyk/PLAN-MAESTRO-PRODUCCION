@@ -1434,8 +1434,30 @@ function PP_listPlanSnapshots_(spreadsheet) {
   });
 }
 
+// MEDIDO 2026-09-26 (sonda ORIGENES_REALES): PLANES_HISTORICOS tiene 138 715 filas en 123
+// snapshots, y leerla ENTERA tardo 38 s. Esta funcion esta en el camino de getAppState
+// (PP_readState_ la llama en la linea 279), o sea que ese costo se paga en CADA carga del estado.
+//
+// LO QUE SE INTENTO Y SE DESHIZO, Y POR QUE, QUE ES LO IMPORTANTE DE ESTA NOTA. Se intento leer
+// solo la COLA de la hoja, con un bucle que sube el tamano hasta llegar a 2 000 filas validas.
+// Parecia equivalente porque el resultado final es un slice(-2000). NO LO ES, y el test lo
+// demonstro: la lectura completa devolvia fechas de fin MAS NUEVAS (2026-09-28, del snapshot 060)
+// que la cola (2026-09-26, del snapshot 088). La razon es que la hoja se anexa por orden de
+// GENERACION y esta funcion ordena por FECHA DE FIN DE LA OPERACION, y una operacion puede
+// terminar antes que otra de un snapshot mas nuevo. Acotar por filas cambia el resultado. NO SE
+// VUELVE A INTENTAR con recorte de filas; hay un test que fija este hallazgo para que no se
+// reintente. El arreglo de raiz es que la hoja no crezca, y eso es borrar snapshots, que es
+// decision de la persona.
+//
+// LO QUE SI SE HACE, Y ES EQUIVALENTE POR CONSTRUCCION: leer solo las columnas que esta funcion
+// usa. PP_readRows_ trae las 31 columnas de PP_SHEETS.PLANES_HISTORICOS y esta funcion mira ocho:
+// SNAPSHOT_ID, NUM, OT, MAQ_AREA, HERRAMENTAL, KIT_HERRAMENTAL, F_FIN y H_FIN. Leer 8 de 31 es
+// un 74 % menos de celdas con el MISMO resultado, porque las otras 23 no se usan aqui y no pueden
+// cambiar un slice. No hay aproximacion: es la misma aritmetica con menos datos.
+const PP_PLAN_HISTORY_COLS_ = ['SNAPSHOT_ID', 'NUM', 'OT', 'MAQ_AREA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'F_FIN', 'H_FIN'];
+
 function PP_readMachineToolHistory_(spreadsheet) {
-  return PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).map(function(row, index) {
+  return PP_readRowsCols_(spreadsheet.getSheetByName('PLANES_HISTORICOS'), PP_PLAN_HISTORY_COLS_).map(function(row, index) {
     const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
     const herramental = String(row.HERRAMENTAL || '').trim();
     const kit = String(row.KIT_HERRAMENTAL || '').trim();
@@ -1456,6 +1478,39 @@ function PP_readMachineToolHistory_(spreadsheet) {
   }).filter(function(item) { return item !== null; }).sort(function(a, b) {
     return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
   }).slice(-2000);
+}
+
+// Igual que PP_readRows_, pero SOLO las columnas pedidas. Se lee una columna por getRange y se
+// juntan por encabezado, en el orden pedido. Es lo que hace mas barato leer 8 columnas sueltas
+// que traer las 31 de una vez: la hoja tiene 138 715 filas y el costo de Apps Script crece sobre
+// todo con las filas, asi que recortar columnas recorta celdas.
+//
+// Si una columna pedida NO existe en esa hoja, se deja como cadena vacia en vez de romper: una
+// hoja vieja a la que le falte una columna no puede hacer que getAppState se caiga.
+function PP_readRowsCols_(sheet, columns) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const wanted = Array.isArray(columns) && columns.length ? columns : [];
+  if (!wanted.length) return [];
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0] || [];
+  const total = sheet.getLastRow() - 1;
+  const columnsLeidas = wanted.map(function(name) {
+    const index = header.indexOf(name);
+    if (index < 0) return null;   // la columna no existe en esta hoja
+    return sheet.getRange(2, index + 1, total, 1).getDisplayValues().map(function(cell) { return cell[0]; });
+  });
+  const rows = [];
+  for (let r = 0; r < total; r += 1) {
+    const row = {};
+    let tieneAlgo = false;
+    for (let c = 0; c < wanted.length; c += 1) {
+      const values = columnsLeidas[c];
+      const value = values ? (values[r] === undefined ? '' : values[r]) : '';
+      row[wanted[c]] = value;
+      if (value !== '') tieneAlgo = true;
+    }
+    if (tieneAlgo) rows.push(row);
+  }
+  return rows;
 }
 
 function PP_getPlanSnapshot_(spreadsheet, snapshotId, options) {
