@@ -19,7 +19,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const appSrc = readFileSync("C:/Users/plane/Downloads/plangit/src/web/planning/app.js", "utf8");
+const appSrc = readFileSync(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 
 /** Saca una funcion por nombre con indexOf. */
 function extraer(nombre) {

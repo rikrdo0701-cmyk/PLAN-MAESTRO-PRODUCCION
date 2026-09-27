@@ -22,7 +22,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const appSrc = readFileSync("C:/Users/plane/Downloads/plangit/src/web/planning/app.js", "utf8");
+const appSrc = readFileSync(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 
 /** Saca una funcion por nombre con indexOf, no regex. */
 function extraer(nombre) {
@@ -99,7 +99,7 @@ test("lo que NO sobrevive: el id posicional del planeador", () => {
   // No podemos probarlo sin cargar toda la cerradura, pero el codigo lo dice claro:
   //   planner-core.js:3257 -> id: op.id || `op-${index + 1}`
   // Y ese id cambia con la posicion. No sirve como identidad.
-  const plannerSrc = readFileSync("C:/Users/plane/Downloads/plangit/src/web/planning/planner-core.js", "utf8");
+  const plannerSrc = readFileSync(new URL("../src/web/planning/planner-core.js", import.meta.url), "utf8");
   const fuente = "id: op.id || `op-${index + 1}`";
   assert.ok(plannerSrc.includes(fuente), "la fuente del id posicional esta en planner-core.js:3257");
 });
