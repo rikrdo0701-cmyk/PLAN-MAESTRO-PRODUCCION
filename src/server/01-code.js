@@ -273,6 +273,47 @@ function listPlanSnapshots() {
   return PP_listPlanSnapshots_(spreadsheet);
 }
 
+// RETENCION POR ANTIGUEDAD DE LOS PLANES PUBLICADOS. Decision de la persona (2026-09-27).
+// Se llama a mano para limpiar el atraso acumulado, y ademas se corre en cada publicacion.
+//
+// QUE PROTEGE, Y NO ES NEGOCIABLE:
+//   - El borrador NUNCA se borra, ni por antiguedad ni por nada.
+//   - El snapshot mas reciente por generatedAt NUNCA se borra, aunque sea viejo.
+//   - Un snapshot SIN generatedAt NO se borra: se devuelve en sinFecha para que la persona decida.
+//     La ausencia de fecha no es evidencia de antiguedad.
+//
+// QUE DEVUELVE: cuantos evaluo, cuantos borro, cuantas filas libera, cuales protegio y cuales
+// dejo sin fecha. Si algo falla, el error sube: no hay catch silencioso.
+//
+// maxAgeDays es obligatorio. Sin el no se ejecuta, porque "borrar todo porque no me dijeron
+// cuantos dias" es la peor respuesta posible a una pregunta mal hecha. Para la politica acordada
+// (un mes) se llama pruneOldPlanSnapshots(30).
+function pruneOldPlanSnapshots(maxAgeDays) {
+  const dias = Number(maxAgeDays);
+  if (!isFinite(dias) || dias <= 0) {
+    throw new Error('pruneOldPlanSnapshots necesita maxAgeDays numerico y mayor que 0. Received: ' + maxAgeDays);
+  }
+  const lock = PP_acquireScriptLock_('podar planes antiguos', 120000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_pruneOldPlanSnapshots_(spreadsheet, dias, {});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// DIAGNOSTICO DE LA ANTIGUEDAD, SIN BORRAR NADA. Para fijar el corte con números y no con
+// suposiciones: cuántos snapshots hay por rango de días, cuántos NO tienen fecha, y cuántos
+// liberarían con el corte indicado. Usa la MISMA función que borra, con dryRun, para que la
+// simulación no pueda divergir de lo que de verdad pasa.
+function edadPlanSnapshots(maxAgeDays) {
+  const dias = Number(maxAgeDays) > 0 ? Number(maxAgeDays) : 30;
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return PP_pruneOldPlanSnapshots_(spreadsheet, dias, { dryRun: true });
+}
+
 function getPlanSnapshot(snapshotId) {
   if (!snapshotId) throw new Error('Falta snapshotId');
   const spreadsheet = PP_getWorkbook_();
