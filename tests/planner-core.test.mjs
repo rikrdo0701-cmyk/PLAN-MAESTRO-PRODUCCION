@@ -164,6 +164,25 @@ test("findEarliestSlot hace early termination cuando la operación no cabe en el
     "y devolver null inmediatamente, sin seguir probando");
 });
 
+test("findAssignments cachea nextBusyConflictEnd por (operator, machine) dentro de una llamada", () => {
+  // Dentro de una sola llamada a findAssignments el contexto NO cambia (no se confirma
+  // ninguna operación), así que el mismo (operator, machine, start, end) siempre produce
+  // el mismo resultado. La cache elimina escaneos redundantes de segmentos ocupados.
+  const start = source.indexOf("function findAssignments(");
+  const end = source.indexOf("\n  function ", start + 1);
+  const fn = source.slice(start, end);
+  assert.match(fn, /const conflictCache = new Map\(\)/,
+    "debe crear una cache Map por llamada");
+  assert.match(fn, /cachedNextBusyConflictEnd/,
+    "debe usar la cache en vez de llamar nextBusyConflictEnd directamente");
+  assert.match(fn, /conflictCache\.has\(key\)/,
+    "debe verificar la cache antes de escanear");
+  assert.match(fn, /conflictCache\.set\(key, result\)/,
+    "debe guardar el resultado en la cache");
+  assert.match(fn, /findEarliestSlot\(context, op, earliest, operator, machine, finite, cachedNextBusyConflictEnd\)/,
+    "debe pasar la cache a findEarliestSlot");
+});
+
 test("ALLOCATION_CHUNK_MINUTES es 120 (chunks 4x más grandes que 30)", () => {
   // El chunk controla cuánto se avanza por iteración en allocateWork. Con 30 min,
   // una operación de 480 min necesita 16 iteraciones. Con 120 min, solo 4.

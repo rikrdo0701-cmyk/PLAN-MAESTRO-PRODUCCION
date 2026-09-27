@@ -751,19 +751,32 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
     const selectedMachine = String(op.maquina || "").trim();
     const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(resolvedBendingCt(op, context.state)) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
 
+    // Cache de nextBusyConflictEnd por (operator, machine): dentro de una sola llamada
+    // a findAssignments el contexto NO cambia (no se confirma ninguna operación), así que
+    // el mismo (operator, machine, start, end) siempre produce el mismo resultado.
+    // Esto elimina escaneos redundantes de segmentos ocupados.
+    const conflictCache = new Map();
+    const cachedNextBusyConflictEnd = function(start, end, operatorList, machineId, isFinite) {
+      const key = operatorList.join('|') + '::' + machineId + '::' + start.getTime() + '::' + end.getTime() + '::' + isFinite;
+      if (conflictCache.has(key)) return conflictCache.get(key);
+      const result = nextBusyConflictEnd(context, start, end, operatorList, machineId, isFinite);
+      conflictCache.set(key, result);
+      return result;
+    };
+
     for (const operator of operators) {
       for (const machine of machineOrder) {
         if (context.abortReason) return assignments;
         countPlanningStat(context.performanceState, "assignmentCandidateEvaluations");
         assertPlanningBudget(context.performanceState, "assignment-candidates", context);
-        const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
+        const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite, cachedNextBusyConflictEnd);
         if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
       }
     }
     return assignments;
   }
 
-  function findEarliestSlot(context, op, earliest, operator, machine, finite) {
+  function findEarliestSlot(context, op, earliest, operator, machine, finite, conflictFn) {
     if (context.abortReason) return null;
     let cursor = ceilToSnap(earliest);
     while (!context.abortReason && cursor < context.windowEnd) {
@@ -843,8 +856,7 @@ const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy
         };
       }
       const allocationConflictEnd = context.lastAllocationConflictEnd;
-      const conflictEnd = allocationConflictEnd && allocationConflictEnd > cursor ? allocationConflictEnd : nextBusyConflictEnd(
-        context,
+      const conflictEnd = allocationConflictEnd && allocationConflictEnd > cursor ? allocationConflictEnd : conflictFn(
         cursor,
         addMinutes(cursor, setupMinutes + productionMinutes),
         [operator, setupOperator].filter(Boolean),
