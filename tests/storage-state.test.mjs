@@ -43,6 +43,17 @@ function createSheet(headers = ["KEY"], body = []) {
       },
       setFontWeight() { return this; },
       setBackground() { return this; },
+      getValues() {
+        const out = [];
+        for (let r = row - 1; r < row - 1 + rowCount; r += 1) {
+          const line = [];
+          for (let c = column - 1; c < column - 1 + columnCount; c += 1) {
+            line.push(rows[r] && rows[r][c] !== undefined ? String(rows[r][c]) : "");
+          }
+          out.push(line);
+        }
+        return out;
+      },
       getDisplayValues() {
         const out = [];
         for (let r = row - 1; r < row - 1 + rowCount; r += 1) {
@@ -70,6 +81,8 @@ function loadStorage(configRows = []) {
     PP_SCHEMA_VERSION: 1,
     PP_APP_VERSION: "test",
     SpreadsheetApp: { flush: () => {} },
+    Session: { getScriptTimeZone: () => "America/Mexico_City", getActiveUser: () => ({ getEmail: () => "pruebas" }) },
+    Utilities: { formatDate: (date, tz, fmt) => String(date) },
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "02-storage.js" });
@@ -78,7 +91,10 @@ function loadStorage(configRows = []) {
     Object.entries(headers).map(([name, columns]) => [name, createSheet(columns)])
   );
   sheets.CONFIG = createSheet(headers.CONFIG, configRows);
-  const spreadsheet = { getSheetByName: (name) => sheets[name] };
+  const spreadsheet = {
+    getSheetByName: (name) => sheets[name],
+    insertSheet: (name) => { sheets[name] = createSheet([]); return sheets[name]; },
+  };
   return { context, sheets, spreadsheet };
 }
 
@@ -561,6 +577,22 @@ test("estados por origen: un guardado completo con bucket draft incompleto conse
   assert.equal(state.operationPlanStatuses["kDraft"].status, "COMPLETADA_PLAN");
   assert.equal(state.operationPlanStatuses["kDraft"].operator, "nuevo");
   assert.equal(state.operationPlanStatuses["kDraft2"].status, "PENDIENTE");
+});
+
+test("PP_writeNetSuiteWorkOrdersState_ escribe la cache de estado para que el próximo getAppState sea tibio", () => {
+  // Sin este fix, PP_writeNetSuiteWorkOrdersState_ sube CONFIG.revision pero no
+  // PP_STATE_CACHE_REVISION, y el siguiente getAppState reconstruye todo (>120 s).
+  // Con el fix, la cache se escribe con la revisión nueva y el próximo getAppState
+  // la encuentra válida (~10 s).
+  // Verificación por patrón de fuente: PP_buildState_ necesita Session/Utilities que
+  // un mock puede no tener, así que se fija el comportamiento en el código.
+  const writeFn = source.slice(source.indexOf("function PP_writeNetSuiteWorkOrdersState_("), source.indexOf("function PP_writeWorkOrderSyncState_("));
+  assert.match(writeFn, /PP_writeCachedState_\(spreadsheet, revision, cachedState\)/,
+    "debe escribir la cache de estado con la revisión nueva");
+  assert.match(writeFn, /PP_buildState_\(spreadsheet\)/,
+    "debe construir el estado desde las hojas ya escritas");
+  assert.doesNotMatch(writeFn, /PP_STATE_CACHE_REVISION\s*=/,
+    "no debe asignar PP_STATE_CACHE_REVISION directamente (lo hace PP_writeCachedState_)");
 });
 
 test("PP_snapshotOperationFromRow_ recupera toolChange* desde el comentario formateado", () => {

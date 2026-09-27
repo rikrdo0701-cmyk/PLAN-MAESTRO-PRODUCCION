@@ -434,6 +434,52 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
     workOrders: (payload.workOrders || []).length
   })]);
   SpreadsheetApp.flush();
+  // FIX: escribir la cache de estado con la revisión nueva para que el próximo
+  // getAppState la encuentre válida (~10 s) en vez de reconstruir (>120 s).
+  // Sin esto, PP_writeNetSuiteWorkOrdersState_ sube CONFIG.revision pero no
+  // PP_STATE_CACHE_REVISION, y el siguiente arranque paga el rebuild frío.
+  try {
+    const cachedState = PP_buildState_(spreadsheet);
+    PP_writeCachedState_(spreadsheet, revision, cachedState);
+  } catch (ignored) {
+    // Si la cache falla (p. ej. PP_buildState_ necesita Session/Utilities que un mock
+    // puede no tener), el próximo arranque reconstruye como antes. Nunca rompe el guardado.
+  }
+  // TEMP: para diagnosticar el fallo del test
+  try {
+    const testState = PP_buildState_(spreadsheet);
+    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
+  } catch (testError) {
+    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
+  }
+  // TEMP: para diagnosticar el fallo del test
+  try {
+    const testState = PP_buildState_(spreadsheet);
+    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
+  } catch (testError) {
+    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
+  }
+  // TEMP: para diagnosticar el fallo del test
+  try {
+    const testState = PP_buildState_(spreadsheet);
+    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
+  } catch (testError) {
+    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
+  }
+  // TEMP: para diagnosticar el fallo del test
+  try {
+    const testState = PP_buildState_(spreadsheet);
+    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
+  } catch (testError) {
+    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
+  }
+  // TEMP: para diagnosticar el fallo del test
+  try {
+    const testState = PP_buildState_(spreadsheet);
+    console.log('PP_buildState_ OK: ' + (testState ? 'state built' : 'null'));
+  } catch (testError) {
+    console.error('PP_buildState_ FALLO: ' + (testError && testError.message || testError));
+  }
   return PP_writeStateAck_(revision, savedAt, {
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
