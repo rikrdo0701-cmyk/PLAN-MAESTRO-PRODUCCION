@@ -1424,9 +1424,35 @@ function normalizeState() {
   // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
   // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
   // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
+  // EL FALLBACK DE operationPlanStatusEntry, CABLEADO AL CAMINO QUE FALLABA.
+  // Antes: draftViewStatuses()[operationCompletionKey(op)] — busqueda directa, sin fallback.
+  // Si la clave cambiaba (secuencia o CT), el lookup fallaba y la operacion perdia su
+  // "completada". Ahora se usa operationPlanStatusEntry, que tiene tres niveles:
+  //   1. clave directa
+  //   2. por operationId (el id de NetSuite, que no cambia)
+  //   3. por ot+secuencia+ct (por contenido, si el id tampoco coincide)
+  // Con eso se recuperan los completados aunque la clave haya cambiado.
+  //
+  // LA GUARDA DE REAPERTURA. Si la entrada tiene reopenedAt, la operacion fue reabierta y NO
+  // debe marcarse como COMPLETADA_PLAN, aunque el estatus diga eso. Sin esta guarda, el
+  // fallback por contenido podria recuperar un COMPLETADA_PLAN viejo y no respetar la reapertura.
+  // Es un conflicto real: la hoja tiene entradas con FECHA_REAPERTURA (ej. OP|3385|1|5458).
+  // EL FALLBACK DE operationPlanStatusEntry, CABLEADO AL CAMINO QUE FALLABA.
+  // Antes: draftViewStatuses()[operationCompletionKey(op)] — busqueda directa, sin fallback.
+  // Si la clave cambiaba (secuencia o CT), el lookup fallaba y la operacion perdia su
+  // "completada". Ahora se usa operationPlanStatusEntry, que tiene tres niveles:
+  //   1. clave directa
+  //   2. por operationId (el id de NetSuite, que no cambia)
+  //   3. por ot+secuencia+ct (por contenido, si el id tampoco coincide)
+  // Con eso se recuperan los completados aunque la clave haya cambiado.
+  //
+  // LA GUARDA DE REAPERTURA. Si la entrada tiene reopenedAt, la operacion fue reabierta y NO
+  // debe marcarse como COMPLETADA_PLAN, aunque el estatus diga eso. Sin esta guarda, el
+  // fallback por contenido podria recuperar un COMPLETADA_PLAN viejo y no respetar la reapertura.
+  // Es un conflicto real: la hoja tiene entradas con FECHA_REAPERTURA (ej. OP|3385|1|5458).
   for (const op of state.operations) {
-    const status = draftViewStatuses()[operationCompletionKey(op)];
-    if (status?.status === "COMPLETADA_PLAN") op.planStatus = "COMPLETADA_PLAN";
+    const status = window.PlanningWorkflowCore?.operationPlanStatusEntry?.(state, op, draftViewStatuses());
+    if (status?.status === "COMPLETADA_PLAN" && !status.reopenedAt) op.planStatus = "COMPLETADA_PLAN";
     else if (status?.status === "PENDIENTE") op.planStatus = "PENDIENTE";
     // Si no hay estado, no se toca. El planStatus que la operacion trae se conserva.
   }

@@ -726,8 +726,11 @@ expandedOts: without(state?.expandedOts),
     return `OP|${normalize(operation?.ot)}|${Number(operation?.secuencia || 0)}|${normalize(operation?.ct || "SIN_CT")}`;
   }
 
-  function operationPlanStatusEntry(state, operation) {
-    const statuses = state?.operationPlanStatuses;
+  // statusesOverride permite pasarle el mapa combinado de draftViewStatuses() (que incluye
+  // publishedPlanStatuses del origin activo) en vez de state.operationPlanStatuses solo. Sin ese
+  // parametro, normalizeState no podria usar esta funcion porque necesita el mapa combinado.
+  function operationPlanStatusEntry(state, operation, statusesOverride) {
+    const statuses = statusesOverride || state?.operationPlanStatuses;
     if (!statuses || !operation) return null;
     const rows = Array.isArray(statuses) ? statuses : Object.values(statuses);
     const key = stableOperationCompletionKey(operation);
@@ -1719,5 +1722,6 @@ expandedOts: without(state?.expandedOts),
     classifyReportOperation, reportCoverageIssues, reportCoverageDiagnostics, reportDateRange, selectReportRows,
     isUnsupportedDraftSnapshotError, weeklyPlanningTypeClass, effectiveFinishingAmount,
     weeklyFinishingCost, weeklyFinishingRowsByType,
-    mondayIso, operationsStartingInWeek, planAnchoredAt, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode };
+    mondayIso, operationsStartingInWeek, planAnchoredAt, selectIncrementalBase, incrementalScope, nextWeeklyVersion, weeklyPlanIdentifier, compactVersionDiff, loadOperationsForMode,
+    operationPlanStatusEntry };
 });

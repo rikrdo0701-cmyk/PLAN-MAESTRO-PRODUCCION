@@ -27,6 +27,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 const appSrc = readFileSync(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 
@@ -63,6 +64,8 @@ function makeEntry(map) {
 
 /** Corre el bloque real sobre un estado. */
 function correrBloque(state, entry) {
+  // El bloque usa window.PlanningWorkflowCore?.operationPlanStatusEntry?.(...), asi que el
+  // arnes tiene que proveer window.PlanningWorkflowCore con la funcion.
   const windowStub = { PlanningWorkflowCore: { operationPlanStatusEntry: entry } };
   const fn = new Function("state", "window", "draftViewStatuses", BLOQUE);
   return fn(state, windowStub, () => state.operationPlanStatuses || {});
@@ -88,6 +91,8 @@ test("el fallback por operationId RECUPERA el completado cuando la clave cambia"
 });
 
 test("y el fallback por ot+secuencia+ct también, si el id tampoco coincide", () => {
+  // El fallback por contenido matchea cuando la secuencia y el CT son los mismos pero el id
+  // es diferente. Si la secuencia tambien cambio, no matchea (y no deberia: es otra operacion).
   const state = {
     operations: [
       { ot: "3494", secuencia: 27, ct: "5458", tipoInsercion: "PROCESO", id: "otro-id", planStatus: "PENDIENTE" },
