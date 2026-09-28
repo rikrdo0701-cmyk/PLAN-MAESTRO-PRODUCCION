@@ -1,6 +1,6 @@
 /**
  * @NApiVersion 2.1
- * @NScriptType ScheduledScript
+ * @NScriptType scheduledscript
  *
  * Barrido de la ingesta NetSuite -> Supabase. Cubre lo que los User Events NO pueden
  * cubrir y funciona como red de seguridad de los que si:

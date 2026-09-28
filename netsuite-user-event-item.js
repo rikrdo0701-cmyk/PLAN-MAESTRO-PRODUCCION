@@ -1,6 +1,6 @@
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `item` -> catalogo de articulos en Supabase (`items`).
  *

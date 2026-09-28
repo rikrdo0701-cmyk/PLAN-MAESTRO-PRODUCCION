@@ -1,6 +1,6 @@
 /**
  * @NApiVersion 2.1
- * @NScriptType Suitelet
+ * @NScriptType suitelet
  *
  * Despachador de la ingesta NetSuite -> Supabase. Lo encolan los User Events
  * (netsuite-user-event-*.js) y lo puede ejecutar uno a mano desde

@@ -1,6 +1,6 @@
 /**
  * @NApiVersion 2.1
- * @NScriptType Restlet
+ * @NScriptType restlet
  *
  * RESTlet de la ingesta NetSuite -> Supabase. ES EL UNICO ESCRITOR de las tablas que
  * NetSuite manda (work_orders, operations, materials, items, machines, inventory,

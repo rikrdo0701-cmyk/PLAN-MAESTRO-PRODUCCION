@@ -16,7 +16,7 @@ ORDEN DE DESPLIEGUE:
 
 /**
  * @NApiVersion 2.1
- * @NScriptType Restlet
+ * @NScriptType restlet
  *
  * RESTlet de la ingesta NetSuite -> Supabase. ES EL UNICO ESCRITOR de las tablas que
  * NetSuite manda (work_orders, operations, materials, items, machines, inventory,
@@ -1442,7 +1442,7 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
 
 /**
  * @NApiVersion 2.1
- * @NScriptType Suitelet
+ * @NScriptType suitelet
  *
  * Despachador de la ingesta NetSuite -> Supabase. Lo encolan los User Events
  * (netsuite-user-event-*.js) y lo puede ejecutar uno a mano desde
@@ -1576,7 +1576,7 @@ define(['N/https', 'N/runtime', 'N/log'], (https, runtime, log) => {
 
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `workorder`: el disparador principal de la ingesta a Supabase.
  *
@@ -1679,7 +1679,7 @@ define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
 
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `manufacturingoperationtask` (una operacion de la OT).
  *
@@ -1780,7 +1780,7 @@ define(['N/record', 'N/task', 'N/runtime', 'N/log'], (record, task, runtime, log
 
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `item` -> catalogo de articulos en Supabase (`items`).
  *
@@ -1870,7 +1870,7 @@ define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
 
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `workcenter` (centro de trabajo) -> `machines` en Supabase.
  *
@@ -1946,7 +1946,7 @@ define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
 
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEvent
+ * @NScriptType usereventscript
  *
  * User Event de `salesorder` (orden de venta) -> `sales_orders` en Supabase.
  *
@@ -2020,7 +2020,7 @@ define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
 
 /**
  * @NApiVersion 2.1
- * @NScriptType ScheduledScript
+ * @NScriptType scheduledscript
  *
  * Barrido de la ingesta NetSuite -> Supabase. Cubre lo que los User Events NO pueden
  * cubrir y funciona como red de seguridad de los que si:
