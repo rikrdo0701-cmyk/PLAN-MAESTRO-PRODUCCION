@@ -662,6 +662,21 @@ async function loadAppStateInBackground() {
 }
 
 async function maybeRestoreSavedDraftOnBoot() {
+  // DESHABILITADA A PEDIDO DEL USUARIO el 2026-09-27, y solo esta funcion.
+  //
+  // El rescate hacia `state.selectedOts = payload.selectedOts` (o uniq(restored.map(ot))) y despues
+  // saveState("plan"), o sea que DEJABA LA COLA ORDENADA COMO EL BORRADOR y la guardaba asi. El orden
+  // de las operaciones del borrador es el orden de PROGRAMACION; el orden de la cola es el MANUAL que
+  // puso la persona, y el segundo no tiene por que seguir al primero. Como __planningRestoredFromServer
+  // no se marca en el camino normal de getAppState (solo en el build-patch
+  // restoreDraftPlanFromSharedState, build-appscript.mjs:196), el rescate corria en cada arranque y
+  // reordenaba la cola de la persona en silencio.
+  //
+  // El coste de deshabilitarla: si el arranque NO consigue el estado del servidor, ya no se recupera
+  // el borrador y la app cae a sampleState (sin plan). Es la contrapartida que acepta la persona: no
+  // quiere que le reordenen la cola. NO se toco nada mas: ni los disparadores, ni el orden del rescate,
+  // ni state.operations = merged (que sigue siendo correcto si alguna vez se vuelve a habilitar).
+  return;
   if (globalThis.__draftBootRestoreAttempted === true) return;
   if (globalThis.__planningRestoredFromServer === true) return;
   globalThis.__draftBootRestoreAttempted = true;
