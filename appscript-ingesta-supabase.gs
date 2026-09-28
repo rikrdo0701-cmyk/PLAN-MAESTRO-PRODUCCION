@@ -326,7 +326,7 @@ function traducirEstado_(crudo) {
 // Punto de entrada
 // =============================================================================
 
-function PP_ingesta_() {
+function ingesta() {
   const config = PP_config_();
   const ahora = new Date();
   const dia = ahora.getDay();
@@ -360,7 +360,7 @@ function PP_ingesta_() {
 
 // =============================================================================
 // Trigger (se configura en Apps Script: Edit > Triggers > Add Trigger)
-//   Function: PP_ingesta_
+//   Function: ingesta
 //   Event source: Time-driven
 //   Type: Minutes timer
 //   Interval: Every 15 minutes
