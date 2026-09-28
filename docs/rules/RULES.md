@@ -239,6 +239,6 @@ Nota `RULE-OT-014`: la ruta directa de OT (`getPlanningWorkOrderData`) entrega c
 
 ## Pendientes y ambigüedades
 
-- El delta de esquema de la ingesta (`items`, `inventory`, `sales_orders`, `materials.line_id` UNIQUE, RLS; **`machines.tipo` ya no se agrega**, RULE-SUP-010) está **escrito y no aplicado** en `docs/schema-supabase-sync-netsuite.sql`; aplicarlo es decisión de la persona.
+- El delta de esquema de la ingesta (`items`, `inventory`, `sales_orders`, `materials.line_id` UNIQUE, RLS; **`machines.tipo` ya no se agrega**, RULE-SUP-010) está **APLICADO** el 2026-09-28 en el proyecto `xtgtfjcwxcoxvixholpj`. Verificado: las 3 tablas existen, `materials.line_id` existe y `materials_line_id_key` (UNIQUE) existe.
 - Balanceo y BOM carecen de reglas explícitas más allá de lo listado (evidencia insuficiente).
 - Los enlaces a líneas/archivos pueden quedar obsoletos; este registro referencia fuentes, no las reescribe.

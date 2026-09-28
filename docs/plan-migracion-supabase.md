@@ -171,11 +171,11 @@ antes los datos salían de NetSuite por askew hacia Apps Script; ahora NetSuite 
 vive en Supabase** en los dos casos. Contrato completo en
 `docs/integrations/netsuite-supabase-sync.md`.
 
-**Delta de esquema que la ingesta necesita y que sigue sin aplicar:**
+**Delta de esquema APLICADO el 2026-09-28** en el proyecto `xtgtfjcwxcoxvixholpj`:
 `docs/schema-supabase-sync-netsuite.sql` (crea `items`, `inventory`, `sales_orders`; agrega
-`materials.line_id` con su UNIQUE; **ya no agrega `machines.tipo`**, revocado 2026-09-28 por
-RULE-SUP-010). Propuesto, no aplicado, por la misma regla que
-arriba: *no se mueve nada hasta que se apruebe*.
+`materials.line_id` con su UNIQUE; **no agrega `machines.tipo`**, revocado por RULE-SUP-010).
+Verificado después de aplicar: las 3 tablas existen, `materials.line_id` existe y
+`materials_line_id_key` (UNIQUE) existe.
 
 ### 3.5 Concurrencia
 

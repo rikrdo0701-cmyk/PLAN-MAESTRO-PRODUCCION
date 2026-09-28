@@ -1,0 +1,2117 @@
+﻿================================================================================
+NETSUITE SUPABASE SCRIPTS - LISTOS PARA COPIAR/PEGAR
+================================================================================
+
+ORDEN DE DESPLIEGUE:
+  1. Suitelet (netsuite-suitelet-sync-tarea.js) -> anota Script ID y Deployment ID
+  2. RESTlet (netsuite-restlet-supabase-sync.js) -> configura script parameters
+  3. 6 User Events -> cada uno sobre su record type, con SCRIPT_ID_TAREA y DEPLOY_ID_TAREA del Suitelet
+  4. Scheduled Script (netsuite-scheduled-sincronizacion.js)
+
+================================================================================
+
+################################################################################
+# RESTLET | N/A | Params: SUPABASE_URL, SUPABASE_KEY, UBICACION
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType Restlet
+ *
+ * RESTlet de la ingesta NetSuite -> Supabase. ES EL UNICO ESCRITOR de las tablas que
+ * NetSuite manda (work_orders, operations, materials, items, machines, inventory,
+ * sales_orders). Ver RULE-SUP-001 (un escritor) y RULE-SUP-005 (este deployment NO
+ * debe quedar "Available Externally": la service_role key sale de un script parameter,
+ * pero el endpoint no tiene por que estar expuesto).
+ *
+ * Lo dispara el Suitelet `netsuite-suitelet-sync-tarea.js`, que es lo que encolan los
+ * User Events. Ver docs/integrations/netsuite-supabase-sync.md para el contrato completo.
+ *
+ * ---------------------------------------------------------------------------------
+ * POST body
+ * {
+ *   accion: 'workorders' | 'operaciones' | 'materiales' | 'items' | 'centros'
+ *         | 'inventario' | 'ordenes_venta' | 'todas' | 'diagnostico',
+ *   ids: { workorderIds: ['1234'], itemIds: ['ART-1'], salesOrderIds: ['500'],
+ *          folios: ['3177'] },
+ *   ubicacion: 1,            // si falta, LOCACION_ID
+ *   lote: 200,               // 1..500, filas por escritura
+ *   modo: 'comparar' | 'upsert',   // default comparar
+ *   soloAbiertos: true,      // solo workorders/operaciones
+ *   dryRun: true             // no escribe: dice quÃ© escribirÃ­a
+ * }
+ *
+ * Respuesta
+ * { ok, accion, tabla, modoUsado, leidas, escritas, omitidas, conflictos: [],
+ *   batches, truncado, avisos: [], notas: {} }
+ *
+ * ---------------------------------------------------------------------------------
+ * LO QUE SE REUSA DE LOS OTROS RESTLETS, Y POR QUE NO SE REINVENTA
+ *
+ * - La cantidad ensamblada NO esta en SuiteQL: `transaction.built/quantitybuilt/
+ *   quantityremaining` dan "Unknown identifier" (medido el 2026-09-28). Sale del record
+ *   (`record:built`), igual que en el 2244, para que las dos digan lo mismo de la misma OT.
+ * - Las fechas de SuiteQL de esta cuenta son `dd/MM/aaaa` sin hora ni zona, en TODAS las
+ *   columnas de los 7 lectores. `new Date("25/09/2026")` es Invalid Date y
+ *   `new Date("03/04/2026")` se lee como mes/dia y corre la fecha: se arman a mano
+ *   (ver `isoFechaNetsuite`).
+ * - Paginacion: la cuenta SI acepta `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY`
+ *   (medido el 2026-09-28), pero NO acepta el orden inverso ni `LIMIT`. Aqui TODA la
+ *   paginacion es recorte en memoria con tope de filas, que ya se sabe que funciona; ver
+ *   RULE-REP-016-A para por que el 2244 dio 400 en produccion el 2026-09-26.
+ * - `BUILTIN.DF` sobre `mot.status` y `mot.manufacturingworkcenter` revienta TODA la
+ *   consulta con "Cannot build builtin function" (medido el 2026-09-26). Por eso en
+ *   operaciones se piden crudos y se envuelven otros campos, no esos.
+ * - `BUILTIN.DF(t.status)` sobre `transaction` SI funciona (verificado por el 2244).
+ * - El SQL de operaciones es el del 1762 (`netsuite-restlet-operaciones.js`), que es el
+ *   unico que se sabe que corre en esta cuenta.
+ * - El SQL de materiales es el del 2244 (`getMaterials`), que ya devuelve `tl.id`.
+ * - El CT NO es el nombre del centro de trabajo: el app lo extrae con digitos
+ *   (PP_extractOperationCatalogCt_ en src/server/08-netsuite.js:573). Aqui se usa la
+ *   MISMA extraccion, con respaldo en el id interno si el nombre no trae digitos.
+ */
+define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, runtime, log, record) => {
+  // ---------------------------------------------------------------- configuracion
+  // El deployment del RESTlet NO debe quedar "Available Externally" (RULE-SUP-005): lo llama
+  // el Suitelet por URL interna. Ver docs/integrations/netsuite-supabase-sync.md.
+
+  // Cada accion dice a que tabla de docs/schema-supabase.sql escribe y por que columna
+  // es upsert. `claves` es la clave natural: tiene UNIQUE en el esquema.
+  const ACCIONES = {
+    workorders:    { tabla: 'work_orders', claves: ['ot'],            maxScan: 500,  porId: 'workorderIds' },
+    operaciones:   { tabla: 'operations',  claves: ['operation_id'],  maxScan: 5000, porId: 'workorderIds' },
+    materiales:    { tabla: 'materials',   claves: ['line_id'],       maxScan: 5000, porId: 'workorderIds' },
+    items:         { tabla: 'items',       claves: ['codigo'],        maxScan: 5000, porId: 'itemIds' },
+    centros:       { tabla: 'machines',    claves: ['nombre'],        maxScan: 500,  porId: 'workcenterIds' },
+    inventario:    { tabla: 'inventory',   claves: ['item', 'ubicacion'], maxScan: 5000, porId: 'itemIds' },
+    ordenes_venta: { tabla: 'sales_orders', claves: ['folio'],        maxScan: 2000, porId: 'salesOrderIds' }
+  };
+
+  // El modo estricto hace UNA llamada por fila (PATCH con guarda de revision), asi que
+  // tiene tope. Pasado el tope se degrada a upsert y SE DICE en la respuesta, nunca en silencio.
+  const MAX_FILAS_COMPARAR = 60;
+  const LOTE_MAX = 500;
+  const MAX_PARAMETROS_SQL = 400; // tope conservador de binds por SuiteQL
+
+  // Sin esto NO se puede escribir nada, y es un problema de configuracion del deployment,
+  // no un fallo de datos. Se dice una vez, no una vez por fila.
+  const FALTA_CREDENCIAL = 'Faltan los script parameters SUPABASE_URL y SUPABASE_KEY en el deployment de este RESTlet. Sin los dos no se puede leer ni escribir en Supabase; por eso no se hizo ni una llamada.';
+
+  // Columnas que cambian en CADA ejecucion. No entran en la comparacion "cambio algo?",
+  // o de lo contrario ninguna fila se saltaria nunca. Consecuencia de la decision:
+  // work_orders.synced_at queda con la fecha del ULTIMO CAMBIO real, no de la ultima corrida.
+  const VOLATILES = { work_orders: ['synced_at'] };
+
+  // Campos de negocio que la ingesta escribe. La comparacion pre-escritura (saltar lo que
+  // no cambio) mira SOLO estos, para no depender de created_at/updated_at.
+  const CAMPOS = {
+    work_orders: ['ot', 'wo_internal_id', 'articulo', 'descripcion', 'cantidad', 'estatus',
+      'cliente', 'cant_ensamblada', 'cant_pendiente', 'fecha_inicio_ns', 'fecha_fin_ns',
+      'fecha_vencimiento', 'synced_at'],
+    operations: ['operation_id', 'ot', 'secuencia', 'ct', 'descripcion', 'operador', 'maquina',
+      'cant_total', 'cant_pendiente', 'tiempo_ciclo', 'tiempo_setup', 'tiempo_prod',
+      'fecha_inicio', 'fecha_fin', 'tipo_insercion', 'estatus', 'locked', 'auto_frozen',
+      'subcontract_type', 'subcontract_days'],
+    materials: ['line_id', 'ot', 'wo_internal_id', 'ensamble', 'componente_id', 'componente',
+      'descripcion', 'unidad', 'requerido', 'emitido', 'pendiente'],
+    items: ['codigo', 'descripcion', 'descripcion_compra', 'nombre_mostrado', 'tipo', 'clase',
+      'es_ensamblaje', 'inactivo', 'ultima_modificacion'],
+    machines: ['nombre', 'activa'],
+    inventory: ['item', 'ubicacion', 'disponible', 'fisico', 'comprometido', 'pickeado',
+      'en_transito'],
+    sales_orders: ['folio', 'sales_order_id', 'cliente', 'cliente_id', 'fecha', 'estatus',
+      'aprobacion', 'total', 'moneda', 'memo', 'lineas']
+  };
+
+  // ------------------------------------------------------------------ punto de entrada
+  function post(body) {
+    const payload = body || {};
+    const accion = String(payload.accion || payload.action || '').trim().toLowerCase();
+    try {
+      const ctx = contexto(payload);
+      if (accion === 'diagnostico') return diagnostico(ctx);
+      if (!accion) return { ok: false, error: 'falta accion', acciones: Object.keys(ACCIONES).concat(['todas', 'diagnostico']) };
+      if (accion !== 'todas' && !ACCIONES[accion]) {
+        return { ok: false, error: 'accion no soportada: ' + accion, acciones: Object.keys(ACCIONES).concat(['todas', 'diagnostico']) };
+      }
+      if (accion === 'todas') return sincronizarTodas(ctx);
+
+      const def = ACCIONES[accion];
+      const origen = lector_[accion](ctx);
+      // Los avisos del LECTOR (descartes, truncados, campos que no se pudieron leer) son
+      // parte del reporte: sin esto, un descarte de centros o un tope de barrido pasaba
+      // inadvertido y el que lee la respuesta creia que se empujaron todas las filas.
+      ctx.avisos = ctx.avisos.concat(origen.avisos || []);
+      const reporte = escribir(ctx, def, origen.filas);
+      reporte.accion = accion;
+      reporte.tabla = def.tabla;
+      reporte.claves = def.claves;
+      reporte.leidas = origen.filas.length;
+      reporte.truncado = origen.truncado === true;
+      reporte.origen = origen;
+      if (ctx.dryRun) reporte.ok = reporte.conflictos.length === 0;
+      return reporte;
+    } catch (error) {
+      const texto = String((error && error.message) || error);
+      try { log.error('SUPA_SYNC', accion + ': ' + texto + ' | ' + JSON.stringify(String(error && error.stack || '')).slice(0, 800)); } catch (e) { /* sin log */ }
+      return { ok: false, accion: accion, error: texto, stack: String((error && error.stack) || '').slice(0, 800) };
+    }
+  }
+
+  function sincronizarTodas(ctx) {
+    const resultados = {};
+    let ok = true;
+    Object.keys(ACCIONES).forEach((accion) => {
+      const def = ACCIONES[accion];
+      try {
+        const origen = lector_[accion](ctx);
+        ctx.avisos = ctx.avisos.concat(origen.avisos || []);
+        const reporte = escribir(ctx, def, origen.filas);
+        reporte.accion = accion;
+        reporte.tabla = def.tabla;
+        reporte.leidas = origen.filas.length;
+        reporte.truncado = origen.truncado === true;
+        if (reporte.conflictos.length) ok = false;
+        resultados[accion] = reporte;
+      } catch (error) {
+        ok = false;
+        resultados[accion] = { ok: false, accion: accion, tabla: def.tabla, error: String((error && error.message) || error) };
+      }
+    });
+    const escritas = Object.keys(resultados).reduce((s, k) => s + (resultados[k].escritas || 0), 0);
+    return { ok: ok, accion: 'todas', resultados: resultados, escritasTotales: escritas };
+  }
+
+  // ------------------------------------------------------------------------ contexto
+  function contexto(payload) {
+    const params = parametros();
+    const ubicacion = toInt(payload.ubicacion != null ? payload.ubicacion : params.UBICACION, 1);
+    return {
+      ubicacion: ubicacion,
+      lote: clamp(toInt(payload.lote, 200), 1, LOTE_MAX),
+      modoPedido: String(payload.modo || 'comparar').trim().toLowerCase(),
+      dryRun: payload.dryRun === true,
+      soloAbiertos: payload.soloAbiertos !== false,
+      folios: lista(payload.folios),
+      ids: ids(payload.ids),
+      avisos: []
+    };
+  }
+
+  function ids(origen) {
+    const o = origen || {};
+    return {
+      workorderIds: lista(o.workorderIds || o.workorderId),
+      itemIds: lista(o.itemIds || o.itemId),
+      salesOrderIds: lista(o.salesOrderIds || o.salesOrderId),
+      workcenterIds: lista(o.workcenterIds || o.workcenterId)
+    };
+  }
+
+  function lista(valor) {
+    if (valor == null) return [];
+    if (Array.isArray(valor)) return valor.map((v) => String(v).trim()).filter(Boolean);
+    return String(valor).split(',').map((v) => v.trim()).filter(Boolean);
+  }
+
+  function parametros() {
+    const leer = (nombre) => {
+      try { return runtime.getParameter({ name: nombre }); } catch (e) { return null; }
+    };
+    return {
+      SUPABASE_URL: leer('SUPABASE_URL'),
+      SUPABASE_KEY: leer('SUPABASE_KEY'),
+      UBICACION: leer('UBICACION')
+    };
+  }
+
+  // ========================================================================= LECTORES
+  // Cada lector devuelve { filas, truncado, avisos, ... }. Todos leen de NetSuite por
+  // SuiteQL; ninguno escribe en NetSuite.
+
+  // ---------------------------------------------------------------- workorders
+  // Origen de cada columna de work_orders (docs/schema-supabase.sql:156):
+  //   ot               <- t.tranid
+  //   wo_internal_id   <- t.id
+  //   articulo         <- BUILTIN.DF(tl.item) de la linea MAINLINE
+  //   descripcion      <- item.description / purchasedescription / displayname
+  //   cantidad         <- ABS(tl.quantity) mainline
+  //   estatus          <- BUILTIN.DF(t.status)   (esta envoltura SI funciona en transaction)
+  //   cliente          <- BUILTIN.DF(t.entity)
+  //   cant_ensamblada  <- ver leerEnsamblada_(): built, o quantityremaining, o la ultima operacion
+  //   cant_pendiente   <- cantidad - cant_ensamblada, igual que PP_pendingWorkOrderQuantity_ (08-netsuite.js)
+  //   fecha_vencimiento<- t.enddate
+  //   fecha_inicio_ns  <- t.startdate
+  //   fecha_fin_ns     <- t.enddate  (NetSuite no tiene una fecha de fin REAL separada:
+  //                       hoy FECHA_FIN_NS y FECHA_VENCIMIENTO salen del mismo campo)
+  function leerWorkorders(ctx) {
+    const avisos = [];
+    const ids = [];
+    const where = ["t.type = 'WorkOrd'"];
+    if (ctx.soloAbiertos) {
+      where.push("UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'");
+      where.push("UPPER(BUILTIN.DF(t.status)) NOT LIKE '%COMPLET%'");
+      where.push("UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'");
+      where.push("UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CANCEL%'");
+    }
+    if (ctx.folios.length) {
+      where.push('t.tranid IN ({{IN}})');
+      ctx.folios.forEach((f) => ids.push(f));
+    }
+    if (ctx.ids.workorderIds.length) {
+      where.push('t.id IN ({{IN}})');
+      ctx.ids.workorderIds.forEach((f) => ids.push(bind(f)));
+    }
+
+    const sql = [
+      'SELECT DISTINCT',
+      '  t.id                                     AS wo_internal_id,',
+      '  t.tranid                                 AS ot,',
+      '  BUILTIN.DF(tl.item)                      AS articulo,',
+      '  COALESCE(i.description, i.purchasedescription, i.displayname) AS descripcion,',
+      '  ABS(NVL(tl.quantity, 0))                 AS cantidad,',
+      '  BUILTIN.DF(t.status)                     AS estatus,',
+      '  BUILTIN.DF(t.entity)                     AS cliente,',
+      '  t.startdate                              AS fecha_inicio,',
+      '  t.enddate                                AS fecha_fin',
+      'FROM transaction t',
+      'JOIN transactionline tl ON tl.transaction = t.id',
+      "  AND tl.mainline = 'T'",
+      'LEFT JOIN item i ON i.id = tl.item',
+      'WHERE ' + where.join('\n  AND ')
+    ].join('\n');
+
+    const crudas = suiteql(sql, ids, 'workorders');
+    const truncado = ctx.ids.workorderIds.length === 0 && ctx.folios.length === 0 && crudas.length > ACCIONES.workorders.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.workorders.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + crudas.length + ' OTs y solo se empujan ' + ACCIONES.workorders.maxScan + ': el barrido tiene tope.');
+
+    const filas = recorte.map((r) => {
+      const cantidad = Math.abs(num(r.cantidad));
+      const ensamblada = leerEnsamblada_(r.wo_internal_id, cantidad, avisos);
+      const fila = {
+        ot: txt(r.ot),
+        wo_internal_id: txt(r.wo_internal_id),
+        articulo: txt(r.articulo),
+        descripcion: txt(r.descripcion),
+        cantidad: Math.round(cantidad),
+        estatus: txt(r.estatus),
+        cliente: txt(r.cliente),
+        cant_ensamblada: Math.round(ensamblada.valor),
+        cant_pendiente: Math.max(0, Math.round(cantidad - ensamblada.valor)),
+        fecha_inicio_ns: isoFecha(r.fecha_inicio),
+        fecha_fin_ns: isoFecha(r.fecha_fin),
+        fecha_vencimiento: isoFecha(r.fecha_fin),
+        synced_at: new Date().toISOString()
+      };
+      fila._fuenteEnsamblada = ensamblada.fuente;
+      return fila;
+    });
+
+    return {
+      filas: filas, truncado: truncado, avisos: avisos,
+      notas: { ensamblada: fuentesEnsamblada(filas), fecha_fin: 'fecha_fin_ns y fecha_vencimiento salen de t.enddate (NetSuite no separa fin real de entrega)' }
+    };
+  }
+
+  /**
+   * Cantidad ensamblada de la OT. MEDIDO el 2026-09-28 en esta cuenta: la cantidad
+   * ensamblada NO existe en SuiteQL, solo en el record. `SELECT built/quantitybuilt/
+   * quantityremaining FROM transaction` responden "Unknown identifier" (400), y lo mismo con
+   * `transaction.unbuilt/quantity/origquantity/approveddate` (500). El campo real es `built`
+   * del record de la OT, que es exactamente de donde lo saca el 2244 (`record:built`) y de
+   * donde sale `cantidadEnsamblada` que la app ya muestra. Se copia esa fuente y no otra,
+   * para que esta ingesta y la app digan lo MISMO de la misma OT.
+   *
+   * Los respaldos de SuiteQL se quedan al final, pero son aproximaciones y se declaran:
+   * `MAX(mot.completedquantity)` puede EXCEDER la cantidad de la OT (folio 2204: cantidad
+   * 3000, MAX(mot) 4200, record:built 4200) porque la operacion y la OT no se miden en la
+   * misma unidad. Por eso se acota a `cantidad` y la fuente queda en `notas.ensamblada`.
+   *
+   * OJO: la cadena se evalua en ORDEN y se devuelve en la PRIMERA que de un valor. Con un
+   * forEach el `return` solo salta de la iteracion, no de la funcion, y entonces la ultima
+   * estrategia que respondiera se comia a las anteriores: con `built` disponible, la fila
+   * igual salia de quantityremaining.
+   */
+  function leerEnsamblada_(workOrderId, cantidad, avisos) {
+    if (!workOrderId) return { valor: 0, fuente: 'sin-id' };
+    const intentos = [];
+
+    // 1) El record de la OT: la unica fuente que responde en esta cuenta. Se cargan
+    // `built` y `quantityremaining` del MISMO record, con una sola llamada.
+    let registro = null;
+    try {
+      registro = record.load({ type: record.Type.WORK_ORDER, id: toInt(workOrderId, 0) });
+    } catch (error) {
+      intentos.push('record.load=error(' + String((error && error.message) || error).slice(0, 60) + ')');
+    }
+    if (registro) {
+      const valor = num(registro.getValue('built'));
+      intentos.push('record:built=' + valor);
+      if (valor > 0) return { valor: valor, fuente: 'record:built' };
+      const restante = num(registro.getValue('quantityremaining'));
+      intentos.push('record:quantityremaining=' + restante);
+      if (restante > 0) return { valor: Math.max(0, Math.min(cantidad, cantidad - restante)), fuente: 'record:quantityremaining' };
+    }
+
+    // El nombre del campo va CERRADO en la estrategia: si se tomara de un parametro suelto
+    // al invocarla, el SELECT salia como `SELECT undefined AS v` y la cuenta devolvia una
+    // columna vacia en vez de un error visible.
+    const estrategias = ['built', 'quantitybuilt'].map((campo) => function () {
+      const rows = suiteql('SELECT ' + campo + ' AS v FROM transaction WHERE id = ?', [workOrderId], 'ensamblada');
+      const v = rows.length ? num(rows[0].v) : null;
+      intentos.push('transaction.' + campo + '=' + (v == null ? 'vacio' : v));
+      if (v == null || v < 0) return null;
+      return { valor: Math.min(cantidad, v), fuente: 'transaction.' + campo };
+    }).concat([
+      function () {
+        const rows = suiteql('SELECT quantityremaining AS v FROM transaction WHERE id = ?', [workOrderId], 'ensamblada');
+        const v = rows.length ? num(rows[0].v) : null;
+        intentos.push('transaction.quantityremaining=' + (v == null ? 'vacio' : v));
+        if (v == null || v < 0) return null;
+        return { valor: Math.max(0, Math.min(cantidad, cantidad - v)), fuente: 'transaction.quantityremaining' };
+      },
+      function () {
+        const rows = suiteql('SELECT MAX(NVL(mot.completedquantity, 0)) AS v FROM manufacturingoperationtask mot WHERE mot.workorder = ?', [workOrderId], 'ensamblada');
+        const v = rows.length ? num(rows[0].v) : null;
+        intentos.push('mot.completedquantity(MAX)=' + (v == null ? 'vacio' : v));
+        if (v == null || v <= 0) return null;
+        return { valor: Math.min(cantidad, v), fuente: 'manufacturingoperationtask.completedquantity' };
+      }
+    ]);
+    for (let i = 0; i < estrategias.length; i++) {
+      try {
+        const r = estrategias[i]();
+        if (r) return r;
+      } catch (e) {
+        intentos.push('estrategia ' + (i + 1) + '=error');
+      }
+    }
+    avisos.push('No se pudo leer la cantidad ensamblada de la OT ' + workOrderId + ' (' + intentos.join(', ') + '): se empuja 0.');
+    return { valor: 0, fuente: 'no-disponible' };
+  }
+
+  function fuentesEnsamblada(filas) {
+    const conteo = {};
+    filas.forEach((f) => { const k = f._fuenteEnsamblada || '?'; conteo[k] = (conteo[k] || 0) + 1; });
+    return conteo;
+  }
+
+  // ---------------------------------------------------------------- operaciones
+  // SQL del 1762, que es el unico verificado en esta cuenta. Motivos de cada columna:
+  //   operation_id  <- 'ns-' + mot.id  (id estable; es la UNIQUE de operations)
+  //   ot            <- wo.tranid
+  //   ct            <- el id interno del centro (mot.manufacturingworkcenter), que es lo que
+  //                    el app llama 'Centro de trabajo' (PP_mapNetSuiteOperation_, 08-netsuite.js:1041)
+  //   descripcion   <- BUILTIN.DF(mot.manufacturingworkcenter) (lo que el app llama Operacion)
+  //   operador      <- mot.laborresources   (RULE-BAL-005: la validacion contra la lista de
+  //                    operadores activos sigue en el app, aqui se empuja el valor crudo)
+  //   maquina       <- mot.machineresources
+  //   cant_total    <- mot.inputquantity
+  //   cant_pendiente<- inputquantity - completedquantity
+  //   tiempo_setup  <- mot.setuptime
+  //   tiempo_prod   <- MISMA formula del app (08-netsuite.js:1055): runrate x pendiente, o
+  //                    el trabajo restante, o el estimado
+  //   tiempo_ciclo  <- tiempo_prod / cant_pendiente
+  //   fecha_inicio  <- mot.startdatetime ; fecha_fin <- mot.enddate
+  //   estatus       <- traducciion de mot.status, mismo vocabulario que el 1762
+  // Lo que el app hace con estas filas esta en PP_mapNetSuiteOperation_ (08-netsuite.js:1038),
+  // medido sobre el 2240 que es la fuente real: `descripcion` sale de `operation` (el nombre
+  // del centro) y `ct` de `workcenter` (el id interno). Por eso el CT es el id y no un numero
+  // sacado del nombre: el id 5459 es '10OTD : DOBLEZ DE TUBERIA' y el app lo usa como CT de
+  // doblado (08-netsuite.js:1061).
+  function leerOperaciones(ctx) {
+    const avisos = [];
+    const where = [
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'"
+    ];
+    const ids = [];
+    if (ctx.folios.length) {
+      where.push('wo.tranid IN ({{IN}})');
+      ctx.folios.forEach((f) => ids.push(f));
+    }
+    if (ctx.ids.workorderIds.length) {
+      where.push('wo.id IN ({{IN}})');
+      ctx.ids.workorderIds.forEach((f) => ids.push(bind(f)));
+    }
+
+    const sql = [
+      'SELECT',
+      '  mot.id                                    AS id,',
+      '  wo.tranid                                 AS ot,',
+      '  mot.operationsequence                     AS secuencia,',
+      '  mot.manufacturingworkcenter               AS ct_id,',
+      // OJO: el nombre del centro sale de BUILTIN.DF(mot.manufacturingworkcenter), que es
+      // una REFERENCIA A ENTIDAD, y eso SI se puede envolver (medido el 2026-09-28: devuelve
+      // '10OTD : DOBLEZ DE TUBERIA'). Lo que NO se puede envolver es un campo ESTATICO, y
+      // `mot.status` lo es: da 'Cannot build builtin function / Static field is not supported'.
+      // Antes esta consulta pedia el nombre con `LEFT JOIN manufacturingworkcenter` y
+      // `BUILTIN.DF(wc.id)`: esa TABLA NO EXISTE en el SuiteQL de esta cuenta ('Tipo de busqueda
+      // no valida: manufacturingworkcenter'), o sea que la accion entera moria con 400. Los
+      // centros de trabajo son `entitygroup` (medido), no una tabla propia. El 2240 ya pide
+      // el nombre asi y por eso es el unico que funciona.
+      '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
+      '  NVL(mot.title, \'\')                      AS titulo,',
+      '  mot.inputquantity                         AS cant_total,',
+      '  NVL(mot.completedquantity, 0)             AS cant_realizada,',
+      '  mot.setuptime                             AS tiempo_setup,',
+      '  NVL(mot.runrate, 0)                       AS tasa,',
+      '  NVL(mot.remainingwork, 0)                 AS restante,',
+      '  NVL(mot.estimatedwork, 0)                 AS estimado,',
+      // CRUDO a proposito: `mot.status` es un campo estatico y envolverlo tumba la consulta.
+      // Y el `//` de este comentario tampoco puede quedar DENTRO del texto del SQL: SuiteQL no
+      // lo acepta como comentario y la consulta entera pasa a fallar con 'Failed to parse SQL'
+      // (medido el 2026-09-28, antes de arreglarlo la accion 'operaciones' no podia correr).
+      "  mot.status                                AS estado,",
+      '  NVL(mot.laborresources, \'\')             AS operador,',
+      '  NVL(mot.machineresources, \'\')           AS maquina,',
+      '  mot.startdatetime                         AS fecha_inicio,',
+      '  mot.enddate                               AS fecha_fin',
+      'FROM manufacturingoperationtask mot',
+      'JOIN transaction wo ON wo.id = mot.workorder',
+      'WHERE ' + where.join('\n  AND '),
+      'ORDER BY wo.id, mot.operationsequence, mot.id'
+    ].join('\n');
+
+    const crudas = suiteql(sql, ids, 'operaciones');
+    const truncado = !ctx.ids.workorderIds.length && !ctx.folios.length && crudas.length > ACCIONES.operaciones.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.operaciones.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + crudas.length + ' operaciones y solo se empujan ' + ACCIONES.operaciones.maxScan + '.');
+
+    const filas = recorte.map((r) => {
+      const total = Math.abs(num(r.cant_total));
+      const realizada = Math.abs(num(r.cant_realizada));
+      const pendiente = Math.max(0, total - realizada);
+      const tasa = Math.max(0, num(r.tasa));
+      const restante = Math.max(0, num(r.restante));
+      const estimado = Math.max(0, num(r.estimado));
+      const produccion = pendiente > 0 && tasa > 0 ? Math.round(tasa * pendiente * 100) / 100 : (restante || estimado || 0);
+      const ct = extraerCt(r.ct_nombre, r.ct_id);
+      return {
+        operation_id: 'ns-' + txt(r.id),
+        ot: txt(r.ot),
+        secuencia: Math.round(num(r.secuencia)),
+        ct: ct,
+        descripcion: txt(r.ct_nombre) || txt(r.titulo),
+        operador: txt(r.operador),
+        maquina: txt(r.maquina),
+        cant_total: Math.round(total),
+        cant_pendiente: Math.round(pendiente),
+        tiempo_ciclo: pendiente > 0 && produccion > 0 ? Math.round((produccion / pendiente) * 100) / 100 : 0,
+        tiempo_setup: Math.max(0, num(r.tiempo_setup)),
+        tiempo_prod: produccion,
+        fecha_inicio: isoFechaHora(r.fecha_inicio),
+        fecha_fin: isoFechaHora(r.fecha_fin),
+        tipo_insercion: 'OPERACION',
+        estatus: traducirEstado(r.estado),
+        locked: false,
+        auto_frozen: false,
+        // NetSuite no trae el tipo/dias de subcontrato de la app: son decision de planeacion
+        // (RULE-MAT-005, RULE-SUBC-001). No se inventan.
+        subcontract_type: '',
+        subcontract_days: 0
+      };
+    });
+
+    const sinCt = filas.filter((f) => !f.ct).length;
+    if (sinCt) avisos.push(sinCt + ' operaciones quedaron SIN CT: ni el nombre del centro ni su id traen digitos.');
+    return { filas: filas, truncado: truncado, avisos: avisos, notas: { sinCt: sinCt } };
+  }
+
+  /**
+   * El CT es el ID INTERNO del centro de trabajo, no un numero sacado del nombre. Medido el
+   * 2026-09-28 sobre los 159 centros que trae la cuenta: 158 NO tienen 3+ digitos en el nombre
+   * ('10OTD : DOBLEZ DE TUBERIA', 'AB20 : TROQUELADO DE ESCUADRA', ...) y el unico que si los
+   * tiene es '500 :  SUBCONTRATO'. El app no saca el CT del nombre para las operaciones: usa la
+   * columna `workcenter` del 2240, que es `mot.manufacturingworkcenter` crudo
+   * (PP_mapNetSuiteOperation_, src/server/08-netsuite.js:1041). Y el id SI es el CT: el 5459 es
+   * '10OTD : DOBLEZ DE TUBERIA' y el app trata 5459 y 5527 como los centros de doblado
+   * (08-netsuite.js:1061).
+   *
+   * Por eso el orden es id primero. Antes se copiaba la regla de PP_extractOperationCatalogCt_
+   * (08-netsuite.js:573), que es la del CATALOGO de rutings y no la de la lista de operaciones:
+   * con esa regla el unico centro con 3+ digitos en el nombre ('500 : SUBCONTRATO', id 6462) se
+   * escribia como '500' mientras el app leeria '6462', o sea dos CT distintos para el mismo centro.
+   */
+  function extraerCt(nombre, idInterno) {
+    const crudo = String(idInterno == null ? '' : idInterno).trim();
+    if (crudo) return crudo;
+    const texto = String(nombre || '').trim();
+    const conPrefijo = texto.match(/(?:^|\b)CT[\s:_-]*(\d{3,})\b/i);
+    if (conPrefijo) return String(conPrefijo[1]);
+    const digitos = texto.match(/\b(\d{3,})\b/);
+    if (digitos) return String(digitos[1]);
+    return texto;
+  }
+
+  // ---------------------------------------------------------------- materiales
+  // SQL del 2244 (getMaterials). La identidad de fila es `tl.id`, el id de la linea de
+  // transaccion de NetSuite: es estable y es el mismo criterio que operations.operation_id.
+  // materials NO tiene esa columna en docs/schema-supabase.sql: hace falta agregarla con su
+  // UNIQUE (docs/schema-supabase-sync-netsuite.sql). `diagnostico` lo dice si falta.
+  function leerMateriales(ctx) {
+    const avisos = [];
+    const ids = [];
+    // OJO: el FROM de este SQL es `FROM transaction wo`, asi que TODA la clausula del WHERE
+    // lleva el alias `wo`. Con un `t.type = 'WorkOrd'` (que es lo que estaba) el SuiteQL no
+    // parsea y TODA la consulta muere; y si `t` existiera por otra tabla, el filtro seria
+    // de la tabla equivocada. Un alias no se improvisa: o coincide con el FROM o no corre.
+    //
+    // SOLO OTs ABIERTAS (decision del usuario 2026-09-28: "solo me interesan las abiertas").
+    // Mismo patron de 3 NOT LIKE que leerOperaciones y leerWorkorders. Sin este filtro el
+    // barrido leia 28 671 materiales de TODAS las OTs y truncaba a 5 000; midido el mismo
+    // dia, solo 2 413 son de OTs abiertas. Las 26 258 de OTs cerradas las empujaba este lector
+    // y ningun otro (workorders y operaciones ya filtran abiertas), o sea que se guardaban
+    // materiales de OTs que no existen en work_orders.
+    const where = [
+      "wo.type = 'WorkOrd'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
+      "UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'"
+    ];
+    if (ctx.folios.length) {
+      where.push('wo.tranid IN ({{IN}})');
+      ctx.folios.forEach((f) => ids.push(f));
+    }
+    if (ctx.ids.workorderIds.length) {
+      where.push('wo.id IN ({{IN}})');
+      ctx.ids.workorderIds.forEach((f) => ids.push(bind(f)));
+    }
+    const sql = [
+      'SELECT',
+      '  wo.id                                     AS wo_internal_id,',
+      '  wo.tranid                                 AS ot,',
+      '  mainline_item.item                        AS ensamble_id,',
+      '  BUILTIN.DF(mainline_item.item)            AS ensamble,',
+      '  comp.id                                   AS line_id,',
+      '  comp.item                                 AS componente_id,',
+      '  BUILTIN.DF(comp.item)                     AS componente,',
+      '  COALESCE(ci.description, ci.purchasedescription, ci.displayname) AS descripcion,',
+      "  BUILTIN.DF(comp.units)                    AS unidad,",
+      '  ABS(NVL(comp.quantity, 0))                AS requerido,',
+      '  ABS(NVL(comp.quantityshiprecv, 0))        AS emitido',
+      'FROM transaction wo',
+      "JOIN transactionline mainline_item ON mainline_item.transaction = wo.id AND mainline_item.mainline = 'T'",
+      "JOIN transactionline comp ON comp.transaction = wo.id",
+      "  AND comp.mainline = 'F'",
+      '  AND comp.item IS NOT NULL',
+      'LEFT JOIN item ci ON ci.id = comp.item',
+      'WHERE ' + where.join('\n  AND '),
+      '  AND ABS(NVL(comp.quantity, 0)) > 0',
+      'ORDER BY wo.tranid, comp.id'
+    ].join('\n');
+    const crudas = suiteql(sql, ids, 'materiales');
+    const truncado = !ctx.ids.workorderIds.length && !ctx.folios.length && crudas.length > ACCIONES.materiales.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.materiales.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + crudas.length + ' materiales y solo se empujan ' + ACCIONES.materiales.maxScan + '.');
+
+    const filas = recorte.map((r) => {
+      const requerido = Math.abs(num(r.requerido));
+      const emitido = Math.abs(num(r.emitido));
+      return {
+        line_id: txt(r.line_id),
+        ot: txt(r.ot),
+        wo_internal_id: txt(r.wo_internal_id),
+        ensamble: txt(r.ensamble),
+        componente_id: txt(r.componente_id),
+        componente: txt(r.componente),
+        descripcion: txt(r.descripcion),
+        unidad: txt(r.unidad),
+        requerido: Math.round(requerido),
+        emitido: Math.round(emitido),
+        pendiente: Math.round(Math.max(0, requerido - emitido))
+      };
+    });
+    const sinLinea = filas.filter((f) => !f.line_id).length;
+    if (sinLinea) avisos.push(sinLinea + ' materiales quedaron SIN line_id: no se pueden upsertar (falta la columna en materials).');
+    return { filas: filas.filter((f) => f.line_id), truncado: truncado, avisos: avisos, notas: { descartadosSinLinea: sinLinea } };
+  }
+
+  // ---------------------------------------------------------------- items
+  function leerItems(ctx) {
+    const avisos = [];
+    const ids = [];
+    const where = [];
+    if (ctx.ids.itemIds.length) {
+      where.push('i.itemid IN ({{IN}})');
+      ctx.ids.itemIds.forEach((f) => ids.push(f));
+    }
+    // MEDIDO 2026-09-28 con `SELECT * FROM item` (62 columnas, la lista real): la columna del
+    // tipo se llama `itemtype`, NO `type`, y NO existe `isassortmentitem`. Con los dos nombres
+    // que estaban, el lector morÃ­a con 500 y la acciÃ³n `items` entera se caÃ­a.
+    //
+    // `itemtype` es un ENUM DE TEXTO, no un id: `Assembly` 1591, `InvtPart` 675, `NonInvtPart`
+    // 238, `Service` 14, `OthCharge` 3, `Kit` 1 (2522 articulos). Por eso `tipo` va como texto
+    // y no como entero: si se guardara con num(), las 2522 filas quedarian en 0 y la consulta
+    // devolveria 200, o sea un fallo SILENCIOSO, peor que el 500. Ver RULE-SUP-009: NetSuite
+    // es solo lectura y lo que se guarda es una copia fiel.
+    //
+    // `es_ensamblaje` NO tiene columna propia en `item` (medido: no existe `isassortmentitem`
+    // ni `isassemblyitem`, ambos 500). La unica fuente es el tipo: solo `Assembly` cuenta como
+    // ensamble padre, `Kit` NO, y esa es la decision del usuario del 2026-09-28. Por eso se
+    // deriva en el SQL con un CASE y no con un envoltorio: `BUILTIN.DF(i.itemtype)` si funciona
+    // ('Ensamblaje') pero no se puede usar en un GROUP BY (400) y aqui no hace falta.
+    const sql = [
+      'SELECT',
+      '  i.itemid                    AS codigo,',
+      '  NVL(i.description, \'\')     AS descripcion,',
+      '  NVL(i.purchasedescription, \'\') AS descripcion_compra,',
+      '  NVL(i.displayname, \'\')     AS nombre_mostrado,',
+      '  i.itemtype                  AS tipo,',
+      '  i.class                     AS clase,',
+      "  CASE WHEN i.itemtype = 'Assembly' THEN 'T' ELSE 'F' END AS es_ensamblaje,",
+      "  NVL(i.isinactive, 'F')      AS inactivo,",
+      '  i.lastmodifieddate          AS ultima_modificacion',
+      'FROM item i',
+      where.length ? 'WHERE ' + where.join('\n  AND ') : '',
+      'ORDER BY i.itemid'
+    ].join('\n');
+    const crudas = suiteql(sql, ids, 'items');
+    const truncado = !ctx.ids.itemIds.length && crudas.length > ACCIONES.items.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.items.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + crudas.length + ' articulos y solo se empujan ' + ACCIONES.items.maxScan + '.');
+    const filas = recorte.map((r) => ({
+      codigo: txt(r.codigo),
+      descripcion: txt(r.descripcion),
+      descripcion_compra: txt(r.descripcion_compra),
+      nombre_mostrado: txt(r.nombre_mostrado),
+      // TEXTO, no numero: es el enum de NetSuite tal cual (RULE-SUP-009). Antes se guardaba con
+      // num() y un nombre de columna que no existe, o sea 500 y, si se hubiera arreglado solo el
+      // nombre, 2522 filas en 0 sin avisar.
+      tipo: txt(r.tipo),
+      clase: num(r.clase),
+      es_ensamblaje: String(r.es_ensamblaje).toUpperCase() === 'T',
+      inactivo: String(r.inactivo).toUpperCase() === 'T',
+      ultima_modificacion: isoFechaHora(r.ultima_modificacion)
+    }));
+    return { filas: filas, truncado: truncado, avisos: avisos };
+  }
+
+  // ---------------------------------------------------------------- centros
+  // Los centros de trabajo son `entitygroup` y NO la tabla `manufacturingworkcenter`: esa
+  // tabla no existe en el SuiteQL de esta cuenta (400 'Tipo de busqueda no valida', medido),
+  // y el record type 'workcenter' tampoco existe en la REST Record API (404, medido el
+  // 2026-09-28, igual entitygroupworkcenter). El nombre del centro sale de `eg.groupname`
+  // (el mismo texto que BUILTIN.DF(mot.manufacturingworkcenter): '10OTD : DOBLEZ DE TUBERIA').
+  //
+  // NO hay columna de tipo: `workcentertype` no existe como columna en ninguna tabla de
+  // SuiteQL ni como campo de la REST Record API, y NO se necesita porque la maquina se
+  // captura en el plan (decision del usuario 2026-09-28). Por eso no hay `machines.tipo` ni
+  // filtro `soloProduccion`: el barrido toma todos los entitygroup marcados como centro de
+  // trabajo, sin descartar a nadie ni inventar un tipo.
+  function leerCentros(ctx) {
+    const avisos = [];
+    const ids = [];
+    const where = [];
+    if (ctx.ids.workcenterIds.length) {
+      // Caso del User Event de workcenter: confia en el id que manda el record (un workcenter
+      // recien salvado puede llegar con el flag aun sin confirmar, y el que dispara ES el record).
+      where.push('eg.id IN ({{IN}})');
+      ctx.ids.workcenterIds.forEach((f) => ids.push(bind(f)));
+    } else {
+      // Barrido: solo los entitygroup que son centro de trabajo (202 de 206, medido).
+      where.push("eg.ismanufacturingworkcenter = 'T'");
+    }
+    const sql = [
+      'SELECT',
+      '  eg.groupname             AS nombre,',
+      "  NVL(eg.isinactive, 'F')  AS inactivo",
+      'FROM entitygroup eg',
+      'WHERE ' + where.join('\n  AND '),
+      'ORDER BY eg.groupname'
+    ].join('\n');
+    const crudas = suiteql(sql, ids, 'centros');
+    const truncado = !ctx.ids.workcenterIds.length && crudas.length > ACCIONES.centros.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.centros.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + crudas.length + ' centros y solo se empujan ' + ACCIONES.centros.maxScan + '.');
+    const filas = recorte.map((r) => ({
+      nombre: txt(r.nombre),
+      activa: String(r.inactivo).toUpperCase() !== 'T'
+    })).filter((f) => f.nombre);
+    const sinNombre = recorte.length - filas.length;
+    if (sinNombre) avisos.push(sinNombre + ' centros sin nombre (groupname vacio): no se empujan.');
+    return { filas: filas, truncado: truncado, avisos: avisos };
+  }
+
+  // ---------------------------------------------------------------- inventario
+  // aggregateitemlocation es el mismo agregado que usa el 2244. No hay User Event posible
+  // (ver docs): el inventario es un resultado, no un registro que se guarde.
+  //
+  // MEDIDO 2026-09-28 con `SELECT * FROM aggregateitemlocation` (las 15 columnas reales, las
+  // unicas): el comprometido se llama `quantitycommitted`, NO `quantityreserved`, y NO existe
+  // ninguna columna de cantidad pickeada. Con los dos nombres que estaban, el lector moria con
+  // 400 *Busqueda invalida o no compatible* y la accion `inventario` entera se caia. El 2244 ya
+  // usaba `quantitycommitted` (que es el nombre bueno) y por eso nunca lo noto.
+  //
+  // `pickeado` NO tiene fuente y se deja en 0 a proposito, declarado en el aviso. Se busco en
+  // todas las demas (medido 2026-09-28): `transactionline.quantitypicked` SI existe, pero es la
+  // cantidad pickeada de ESE renglon de OT / SO / TrnfrOrd, no un estado de existencias por
+  // (articulo, ubicacion); en esta cuenta lo tienen 37481 lineas y NINGUNA es de tipo ItemShip
+  // (0 de 33330), y `transaction.ordpicked` es un booleano, no una cantidad. Poner una cosa
+  // donde va la otra seria un dato falso: ver RULE-SUP-009.
+  //
+  // Y aqui NO puede haber `SUM`/`GROUP BY` con `BUILTIN.DF` en la proyeccion: MEDIDO, eso da
+  // 400 *Busqueda invalida o no compatible* (el `GROUP BY` solo, con ids crudos, si corre; lo
+  // que tumba la consulta es el envoltorio dentro de una consulta agregada). No hace falta el
+  // agregado: `aggregateitemlocation` trae YA una fila por par - medido 2426 filas y 2426 pares
+  // distintos (articulo, ubicacion) en toda la cuenta, 1946 pares en la planta 1 y 3
+  // ubicaciones. Sin el `SUM`, el `BUILTIN.DF` si funciona y da el codigo del articulo y el
+  // nombre de la planta. Por si algun dia aparecen dos filas del mismo par, se suman en JS y se
+  // avisa, en vez de romper el `unique (item, ubicacion)` de la tabla.
+  function leerInventario(ctx) {
+    const avisos = [];
+    const ids = [];
+    const where = [];
+    if (ctx.ubicacion) { where.push('ail.location = ?'); ids.push(ctx.ubicacion); }
+    if (ctx.ids.itemIds.length) {
+      where.push('ail.item IN ({{IN}})');
+      ctx.ids.itemIds.forEach((f) => ids.push(bind(f)));
+    }
+    const sql = [
+      'SELECT',
+      '  BUILTIN.DF(ail.item)                       AS item,',
+      '  BUILTIN.DF(ail.location)                   AS ubicacion,',
+      '  NVL(ail.quantityavailable, 0)              AS disponible,',
+      '  NVL(ail.quantityonhand, 0)                 AS fisico,',
+      '  NVL(ail.quantitycommitted, 0)              AS comprometido,',
+      '  NVL(ail.quantityintransit, 0)              AS en_transito',
+      'FROM aggregateitemlocation ail',
+      where.length ? 'WHERE ' + where.join('\n  AND ') : '',
+      'ORDER BY item, ubicacion'
+    ].join('\n');
+    const crudas = suiteql(sql, ids, 'inventario');
+
+    const porPar = {};
+    let repetidos = 0;
+    crudas.forEach((r) => {
+      const item = txt(r.item);
+      const ubicacion = txt(r.ubicacion);
+      if (!item || !ubicacion) return;
+      const clave = item + ' @ ' + ubicacion;
+      if (!porPar[clave]) {
+        porPar[clave] = { item: item, ubicacion: ubicacion, disponible: 0, fisico: 0, comprometido: 0, en_transito: 0 };
+      } else {
+        repetidos += 1;
+      }
+      porPar[clave].disponible += num(r.disponible);
+      porPar[clave].fisico += num(r.fisico);
+      porPar[clave].comprometido += num(r.comprometido);
+      porPar[clave].en_transito += num(r.en_transito);
+    });
+    if (repetidos) avisos.push(repetidos + ' renglones de inventario venian repetidos por (articulo, ubicacion) y se sumaron en JS.');
+
+    const todas = Object.keys(porPar).map((k) => porPar[k]);
+    const truncado = todas.length > ACCIONES.inventario.maxScan;
+    const recorte = todas.slice(0, ACCIONES.inventario.maxScan);
+    if (truncado) avisos.push('Se leyeron ' + todas.length + ' renglones de inventario y solo se empujan ' + ACCIONES.inventario.maxScan + '.');
+    avisos.push('pickeado se guarda en 0 y es SIN FUENTE declarada: en esta cuenta la cantidad pickeada no es un estado de existencias por (articulo, ubicacion) sino el renglon de la OT / SO / TrnfrOrd que se pickeo, y vive en transactionline.quantitypicked, no en el agregado.');
+    const filas = recorte.map((r) => ({
+      item: r.item,
+      ubicacion: r.ubicacion,
+      disponible: r.disponible,
+      fisico: r.fisico,
+      comprometido: r.comprometido,
+      // SIN FUENTE. No se deduce de otro campo que significa otra cosa (RULE-SUP-009).
+      pickeado: 0,
+      en_transito: r.en_transito
+    }));
+    return { filas: filas, truncado: truncado, avisos: avisos };
+  }
+
+  // ---------------------------------------------------------------- ordenes de venta
+  // Una fila por orden. Las lineas van en `lineas` (jsonb) para que la escritura sea una
+  // sola por orden; si maÃ±ana hacen falta consultas por linea, se parte en otra tabla.
+  function leerOrdenesVenta(ctx) {
+    const avisos = [];
+    const binds = [];
+    // SOLO ORDENES ABIERTAS (decision del usuario 2026-09-28: "ordenes de venta tambien las
+    // abiertas"). Midido el mismo dia contra el ERP: 2 408 SalesOrd, 1 870 no cerradas,
+    // 1 24 abiertas (ni Cerrada ni Facturada). Sin el filtro el barrido truncaba a 2 000.
+    // `BUILTIN.DF(t.status)` SI funciona (es referencia a entidad); lo que NO se puede es
+    // agrupar por el (400), de ahi el NOT LIKE sobre el texto.
+    const where = [
+      "t.type = 'SalesOrd'",
+      "UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
+      "UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
+      "UPPER(BUILTIN.DF(t.status)) NOT LIKE '%FACTURAD%'"
+    ];
+    if (ctx.folios.length) {
+      where.push('t.tranid IN ({{IN}})');
+      ctx.folios.forEach((f) => binds.push(f));
+    }
+    if (ctx.ids.salesOrderIds.length) {
+      where.push('t.id IN ({{IN}})');
+      ctx.ids.salesOrderIds.forEach((f) => binds.push(bind(f)));
+    }
+    const sql = [
+      'SELECT',
+      '  t.id              AS sales_order_id,',
+      '  t.tranid          AS folio,',
+      '  BUILTIN.DF(t.entity)  AS cliente,',
+      '  t.entity          AS cliente_id,',
+      '  t.trandate        AS fecha,',
+      '  BUILTIN.DF(t.status)  AS estatus,',
+      '  BUILTIN.DF(t.approvalstatus) AS aprobacion,',
+      '  t.foreigntotal    AS total,',
+      '  t.currency        AS moneda,',
+      "  NVL(t.memo, '')   AS memo",
+      'FROM transaction t',
+      'WHERE ' + where.join('\n  AND '),
+      'ORDER BY t.tranid'
+    ].join('\n');
+    const crudas = suiteql(sql, binds, 'ordenes_venta');
+    const truncado = !ctx.ids.salesOrderIds.length && !ctx.folios.length && crudas.length > ACCIONES.ordenes_venta.maxScan;
+    const recorte = crudas.slice(0, ACCIONES.ordenes_venta.maxScan);
+    if (truncado) avisos.push('Se leieron ' + crudas.length + ' ordenes de venta y solo se empujan ' + ACCIONES.ordenes_venta.maxScan + '.');
+
+    const idsLineas = recorte.map((r) => r.sales_order_id).filter((v) => v != null && v !== '');
+    const lineas = leerLineasVenta(idsLineas, avisos);
+    const filas = recorte.map((r) => ({
+      folio: txt(r.folio),
+      sales_order_id: txt(r.sales_order_id),
+      cliente: txt(r.cliente),
+      cliente_id: num(r.cliente_id),
+      fecha: isoFecha(r.fecha),
+      estatus: txt(r.estatus),
+      aprobacion: txt(r.aprobacion),
+      total: num(r.total),
+      moneda: num(r.moneda),
+      memo: txt(r.memo),
+      lineas: lineas[txt(r.sales_order_id)] || []
+    }));
+    return { filas: filas, truncado: truncado, avisos: avisos };
+  }
+
+  function leerLineasVenta(ids, avisos) {
+    const porOrden = {};
+    if (!ids.length) return porOrden;
+    // El `IN` de las ordenes lo resuelve suiteql_ troceando por MAX_PARAMETROS_SQL, asi que
+    // aqui no hace falta trocear a mano.
+    const sql = [
+      'SELECT',
+      '  tl.transaction   AS order_id,',
+      '  tl.item          AS item_id,',
+      '  BUILTIN.DF(tl.item)  AS item,',
+      '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
+      '  NVL(tl.rate, 0)  AS precio,',
+      '  NVL(tl.units, \'\') AS unidad',
+      'FROM transactionline tl',
+      "WHERE tl.mainline = 'F'",
+      '  AND tl.transaction IN ({{IN}})',
+      'ORDER BY tl.transaction, tl.id'
+    ].join('\n');
+    suiteql(sql, ids, 'ordenes_venta_lineas').forEach((r) => {
+      const id = txt(r.order_id);
+      if (!porOrden[id]) porOrden[id] = [];
+      porOrden[id].push({
+        item: txt(r.item),
+        item_id: num(r.item_id),
+        cantidad: num(r.cantidad),
+        precio: num(r.precio),
+        unidad: txt(r.unidad)
+      });
+    });
+    return porOrden;
+  }
+
+  const lector_ = {
+    workorders: leerWorkorders,
+    operaciones: leerOperaciones,
+    materiales: leerMateriales,
+    items: leerItems,
+    centros: leerCentros,
+    inventario: leerInventario,
+    ordenes_venta: leerOrdenesVenta
+  };
+
+  // ======================================================================= ESCRITURA
+  /**
+   * Upsert contra la clave natural. Dos modos:
+   *
+   * - comparar (default): UNA llamada por fila. Lee la fila antes (para saber la revision y
+   *   para no reescribir lo que no cambio), y luego PATCH ... WHERE <clave>=eq.<valor>
+   *   AND revision=eq.<anterior>. Si affected=0, alguien escribio en medio: se reporta como
+   *   conflicto y NO se pisa. Si la fila no existia, POST; un 409 tambien es conflicto.
+   *   Es la concurrencia optimista del plan (seccion 3.5) translatora a PostgREST.
+   *
+   * - upsert: un POST por lote con Prefer: resolution=merge-duplicates. Es last-write-wins:
+   *   NO hay guarda de revision. Se usa solo cuando el lote pasa de MAX_FILAS_COMPARAR, y
+   *   la respuesta dice `modoUsado` y `degradaciones` para que no se note como verdad.
+   */
+  function escribir(ctx, def, filas) {
+    const avisos = ctx.avisos.slice();
+    const conflictos = [];
+    // Se corta ANTES de tocar Supabase. Sin credenciales cada lectura previa y cada
+    // escritura devuelven el mismo error y el reporte terminaba con N conflictos que
+    // parecieran choques de `revision`. Ademas dryRun SI corre sin ellas: para eso sirve
+    // (verificar el mapeo sin escribir).
+    if (!ctx.dryRun && !hayCredenciales()) {
+      avisos.push(FALTA_CREDENCIAL);
+      return {
+        ok: false, error: FALTA_CREDENCIAL, escrituras: 0, escritas: 0, omitidas: 0,
+        leidas: filas.length, batches: 0, conflictos: conflictos, avisos: avisos,
+        modoUsado: ctx.modoPedido, degradaciones: [], credencialesFaltantes: true
+      };
+    }
+    if (!filas.length) {
+      return { ok: true, escrituras: 0, escritas: 0, omitidas: 0, leidas: 0, batches: 0, conflictos: conflictos, avisos: avisos, modoUsado: ctx.modoPedido, degradaciones: [] };
+    }
+
+    const negocio = CAMPOS[def.tabla] || [];
+    const volatiles = VOLATILES[def.tabla] || [];
+    const comparables = negocio.filter((c) => def.claves.indexOf(c) < 0 && volatiles.indexOf(c) < 0);
+    const degradaciones = [];
+
+    let modo = ctx.modoPedido === 'comparar' ? 'comparar' : 'upsert';
+    if (modo === 'comparar' && filas.length > MAX_FILAS_COMPARAR) {
+      modo = 'upsert';
+      degradaciones.push('Se pidieron ' + filas.length + ' filas en modo comparar y el tope es ' + MAX_FILAS_COMPARAR + ': se degrado a upsert (merge-duplicates, sin guarda de revision).');
+    }
+    if (ctx.dryRun) {
+      // Se devuelven las filas tal como irian, ya filtradas a las columnas del esquema (la
+      // `revision` no se agrega aqui: depende de lo que ya este en Supabase, que en dryRun
+      // no se lee). Es la forma de VERIFICAR el mapeo sin escribir nada (RULE-SUP-007).
+      return {
+        ok: true, dryRun: true, escritas: 0, omitidas: 0, leidas: filas.length, batches: 0,
+        conflictos: [], avisos: avisos.concat(['dryRun: no se llamo a Supabase.']),
+        modoUsado: modo, degradaciones: degradaciones,
+        clavesQueSeEscribirian: filas.map((f) => claveDe(f, def.claves)),
+        filasQueSeEscribirian: filas.map((f) => soloCampos(f, negocio))
+      };
+    }
+
+    const escritas = { n: 0 };
+    const omitidas = { n: 0 };
+    let batches = 0;
+
+    if (modo === 'comparar') {
+      const previas = leerPrevias(def, filas, negocio, avisos);
+      filas.forEach((fila) => {
+        const k = claveDe(fila, def.claves);
+        const previa = previas[k];
+        if (previa && mismaFila(previa, fila, comparables)) { omitidas.n += 1; return; }
+        const revisionAnterior = previa ? num(previa.revision) : null;
+        const nueva = conRevision(soloCampos(fila, negocio), revisionAnterior);
+        const res = previa
+          ? parchearConGuarda(def, nueva, revisionAnterior)
+          : insertar(def, nueva);
+        if (res.ok) { escritas.n += 1; }
+        else { conflictos.push({ clave: k, motivo: res.motivo, status: res.status }); }
+      });
+      return cerrar(escritas, omitidas, conflictos, avisos, modo, degradaciones, filas, batches);
+    }
+
+    for (let i = 0; i < filas.length; i += ctx.lote) {
+      const trozo = filas.slice(i, i + ctx.lote);
+      const previas = leerPrevias(def, trozo, negocio, avisos);
+      const cambios = [];
+      const sinRevision = [];
+      trozo.forEach((fila) => {
+        const previa = previas[claveDe(fila, def.claves)];
+        if (previa && mismaFila(previa, fila, comparables)) { omitidas.n += 1; return; }
+        const revisionAnterior = previa ? num(previa.revision) : null;
+        cambios.push(conRevision(soloCampos(fila, negocio), revisionAnterior));
+        if (revisionAnterior == null) sinRevision.push(claveDe(fila, def.claves));
+      });
+      if (!cambios.length) continue;
+      batches += 1;
+      const res = upsertLote(def, cambios);
+      if (!res.ok) {
+        conflictos.push({ motivo: res.error, status: res.status, lote: batches, claves: cambios.map((f) => claveDe(f, def.claves)) });
+        continue;
+      }
+      escritas.n += cambios.length;
+      // Sin guarda de revision no se puede saber si hubo choque; las altas de fila nueva si
+      // son detectables, porque un 409 es un conflicto real de clave natural.
+      if (res.status === 409 && sinRevision.length) {
+        conflictos.push({ motivo: '409 conflicto de clave natural (la fila aparecio entre la lectura y el Upsert)', status: 409, claves: sinRevision });
+      }
+    }
+    return cerrar(escritas, omitidas, conflictos, avisos, modo, degradaciones, filas, batches);
+  }
+
+  function cerrar(escritas, omitidas, conflictos, avisos, modo, degradaciones, filas, batches) {
+    avisos.forEach((a) => { try { log.info('SUPA_SYNC', a); } catch (e) { /* sin log */ } });
+    return {
+      ok: conflictos.length === 0,
+      escrituras: escritas.n,
+      escritas: escritas.n,
+      omitidas: omitidas.n,
+      leidas: filas.length,
+      batches: batches,
+      conflictos: conflictos,
+      avisos: avisos,
+      modoUsado: modo,
+      degradaciones: degradaciones
+    };
+  }
+
+  /** Lee las filas que ya existen, con sus columnas de negocio y su revision. */
+  function leerPrevias(def, filas, negocio, avisos) {
+    const resultado = {};
+    if (!filas.length) return resultado;
+    const porLote = Math.max(1, Math.floor(200 / def.claves.length));
+    for (let i = 0; i < filas.length; i += porLote) {
+      const trozo = filas.slice(i, i + porLote);
+      const filtros = def.claves.map((columna) => {
+        const valores = trozo.map((f) => sanitizarIn(String(f[columna] == null ? '' : f[columna])));
+        return columna + '=in.(' + valores.join(',') + ')';
+      });
+      const select = negocio.concat(['revision']).filter((c, k, a) => a.indexOf(c) === k).join(',');
+      const res = httpJson({
+        method: 'GET',
+        ruta: def.tabla,
+        query: filtros.join('&') + '&select=' + encodeURIComponent(select) + '&limit=' + porLote
+      });
+      if (!res.ok) {
+        avisos.push('No se pudo leer el estado previo de ' + def.tabla + ' (' + res.status + '): ' + recortar(res.texto) + '. Se escribe sin poder comparar.');
+        return resultado;
+      }
+      let filasPrevias = [];
+      try { filasPrevias = JSON.parse(res.texto || '[]'); } catch (e) { filasPrevias = []; }
+      filasPrevias.forEach((f) => { resultado[claveDe(f, def.claves)] = f; });
+    }
+    return resultado;
+  }
+
+  function parchearConGuarda(def, nueva, revisionAnterior) {
+    const filtros = def.claves.map((columna) => columna + '=eq.' + encodeURIComponent(String(nueva[columna] == null ? '' : nueva[columna]))).join('&');
+    const res = httpJson({
+      method: 'PATCH',
+      ruta: def.tabla,
+      query: filtros + '&revision=eq.' + revisionAnterior,
+      cuerpo: nueva,
+      prefer: 'return=representation'
+    });
+    if (!res.ok) return { ok: false, status: res.status, motivo: recortar(res.texto) };
+    let devueltas = [];
+    try { devueltas = JSON.parse(res.texto || '[]'); } catch (e) { devueltas = []; }
+    if (!devueltas.length) {
+      return { ok: false, status: 200, motivo: 'La fila cambio entre la lectura y la escritura (revision esperada ' + revisionAnterior + '): no se pisa.' };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Solo viajan las columnas declaradas en CAMPOS. Los lectores pueden dejar notas internas
+   * (por ejemplo `_fuenteEnsamblada` en work_orders) y si se colaran al POST, PostgREST
+   * responderia 400 "column not found" y la ingesta entera se caeria.
+   */
+  function soloCampos(fila, declarados) {
+    const salida = {};
+    declarados.forEach((columna) => {
+      if (Object.prototype.hasOwnProperty.call(fila, columna)) salida[columna] = fila[columna];
+    });
+    return salida;
+  }
+
+  function conRevision(fila, revisionAnterior) {
+    const salida = Object.assign({}, fila);
+    salida.revision = revisionAnterior == null ? 1 : revisionAnterior + 1;
+    return salida;
+  }
+
+  function insertar(def, nueva) {
+    const res = httpJson({
+      method: 'POST',
+      ruta: def.tabla,
+      cuerpo: [nueva],
+      prefer: 'resolution=merge-duplicates,return=minimal'
+    });
+    if (!res.ok) return { ok: false, status: res.status, motivo: recortar(res.texto) };
+    return { ok: true };
+  }
+
+  function upsertLote(def, cambios) {
+    return httpJson({
+      method: 'POST',
+      ruta: def.tabla,
+      query: 'on_conflict=' + def.claves.join(','),
+      cuerpo: cambios,
+      prefer: 'resolution=merge-duplicates,return=minimal'
+    });
+  }
+
+  function mismaFila(previa, nueva, comparables) {
+    for (let i = 0; i < comparables.length; i++) {
+      const columna = comparables[i];
+      if (!igual(anteriorDe(previa, columna), nueva[columna])) return false;
+    }
+    return true;
+  }
+
+  /** Compara tolerando el ISO de Postgres ("2026-09-30T10:00:00+00:00") contra el que
+   *  se manda ("2026-09-30T10:00:00.000Z"): mismo instante, texto distinto. Los objetos
+   *  (p. ej. sales_orders.lineas) se comparan por JSON, porque String([{a:1}]) sale
+   *  "[object Object]" y daria IGUAL para dos lineas distintas. */
+  function igual(a, b) {
+    if (a == null && (b == null || b === '')) return true;
+    if (a == null || a === '') return b == null || b === '' || b === false || b === 0;
+    if (typeof a === 'object' || typeof b === 'object') {
+      try { return JSON.stringify(a) === JSON.stringify(b); } catch (e) { return false; }
+    }
+    if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
+    if (typeof a === 'number' || typeof b === 'number') return num(a) === num(b);
+    const sa = String(a);
+    const sb = String(b == null ? '' : b);
+    if (sa === sb) return true;
+    const ta = Date.parse(sa);
+    const tb = Date.parse(sb);
+    if (!Number.isNaN(ta) && !Number.isNaN(tb) && /\d{4}-\d{2}-\d{2}/.test(sa) && /\d{4}-\d{2}-\d{2}/.test(sb)) return ta === tb;
+    return false;
+  }
+
+  // =================================================================== DIAGNOSTICO
+  /**
+   * Dice, sin escribir: que SuiteQL corre y con que columnas, y que tablas/columnas existen
+   * en Supabase. Es la forma de no adivinar antes de aplicar
+   * docs/schema-supabase-sync-netsuite.sql.
+   */
+  function diagnostico(ctx) {
+    const suiteql_ = {};
+    Object.keys(ACCIONES).forEach((accion) => {
+      const def = ACCIONES[accion];
+      const necesitaId = def.porId ? ' ids.' + def.porId : ' (barrido)';
+      try {
+        const origen = lector_[accion](ctx);
+        suiteql_[accion] = {
+          tabla: def.tabla, claves: def.claves, filas: origen.filas.length,
+          truncado: origen.truncado === true, avisos: origen.avisos || [],
+          ejemplo: origen.filas[0] || null
+        };
+      } catch (error) {
+        suiteql_[accion] = { tabla: def.tabla, claves: def.claves, error: String((error && error.message) || error).slice(0, 300), necesitaId: necesitaId };
+      }
+    });
+
+    const supabase = {};
+    Object.keys(ACCIONES).forEach((accion) => {
+      const def = ACCIONES[accion];
+      const res = httpJson({ method: 'GET', ruta: def.tabla, query: 'select=' + encodeURIComponent(def.claves.join(',')) + '&limit=1' });
+      supabase[accion] = {
+        tabla: def.tabla,
+        existe: res.ok,
+        status: res.status,
+        claves: def.claves,
+        error: res.ok ? '' : recortar(res.texto)
+      };
+    });
+
+    return {
+      ok: true,
+      accion: 'diagnostico',
+      supabaseUrl: credenciales().url + ' (la key NO se imprime)',
+      tablasFaltantes: Object.keys(supabase).filter((k) => !supabase[k].existe),
+      suiteql: suiteql_,
+      supabase: supabase,
+      escrituraPropuesta: {
+        modoPorDefecto: 'comparar',
+        topeComparar: MAX_FILAS_COMPARAR,
+        loteMaximo: LOTE_MAX,
+        sqlPorAccion: 'docs/schema-supabase-sync-netsuite.sql (NO aplicado todavia)'
+      }
+    };
+  }
+
+  // ===================================================================== HTTP SUPABASE
+  function httpJson(opciones) {
+    const params = credenciales();
+    if (!params.url || !params.key) {
+      return { ok: false, status: 0, texto: FALTA_CREDENCIAL };
+    }
+    const url = params.url.replace(/\/+$/, '') + '/rest/v1/' + opciones.ruta + (opciones.query ? '?' + opciones.query : '');
+    const headers = {
+      'Content-Type': 'application/json;charset=UTF-8',
+      'apikey': params.key,
+      Authorization: 'Bearer ' + params.key
+    };
+    if (opciones.prefer) headers.Prefer = opciones.prefer;
+    const request = {
+      url: url,
+      method: opciones.method,
+      headers: headers
+    };
+    if (opciones.cuerpo != null) request.body = JSON.stringify(opciones.cuerpo);
+    let response = null;
+    try {
+      response = https.request(request);
+    } catch (error) {
+      return { ok: false, status: 0, texto: String((error && error.message) || error) };
+    }
+    const status = Number(response.code || 0);
+    return { ok: status >= 200 && status < 300, status: status, texto: String(response.body || '') };
+  }
+
+  function cachearParametros() {
+    const p = parametros();
+    paramsCache = {
+      url: String(p.SUPABASE_URL || '').trim(),
+      key: String(p.SUPABASE_KEY || '').trim()
+    };
+    return paramsCache;
+  }
+
+  // Los script parameters se cachean por ejecucion: son dos llamadas a runtime y las
+  // hace falta en cada peticion HTTP.
+  let paramsCache = { url: '', key: '' };
+
+  function credenciales() {
+    return paramsCache.url ? paramsCache : cachearParametros();
+  }
+
+  function hayCredenciales() {
+    const p = credenciales();
+    return !!(p.url && p.key);
+  }
+
+  // ========================================================================= UTILES
+  /**
+   * Consulta de SuiteQL. Las clausulas `IN` se escriben con el marcador `{{IN}}` y los
+   * valores van en `valores`, en el MISMO orden en que aparecen los marcadores dentro del
+   * texto. Si hay mas valores que MAX_PARAMETROS_SQL, la consulta se repite por trozos: cada
+   * trozo lleva su propio numero de `?`, y las filas se concatenan. Es el recorte en memoria
+   * que ya se sabe que funciona en esta cuenta, con un tope de binds por consulta.
+   */
+  function suiteql(sql, valores, etiqueta) {
+    const lista = valores || [];
+    if (sql.indexOf('{{IN}}') < 0) return consultar(sql, lista, etiqueta);
+    if (!lista.length) throw new Error('SuiteQL [' + etiqueta + ']: hay una clausula {{IN}} sin valores.');
+    const trozos = [];
+    for (let i = 0; i < lista.length; i += MAX_PARAMETROS_SQL) {
+      trozos.push(lista.slice(i, i + MAX_PARAMETROS_SQL));
+    }
+    const todas = [];
+    for (let i = 0; i < trozos.length; i++) {
+      const consulta = sql.replace(/\{\{IN\}\}/g, placeholders(trozos[i].length));
+      const filas = consultar(consulta, trozos[i], etiqueta);
+      for (let f = 0; f < filas.length; f++) todas.push(filas[f]);
+    }
+    return todas;
+  }
+
+  /** Un id de NetSuite siempre es numerico; si llega como texto se liga como numero, para
+   *  no comparar `t.id` (number) contra '1234' (string) y no traer la OT vacia. */
+  function bind(valor) {
+    const texto = String(valor == null ? '' : valor).trim();
+    return /^\d+$/.test(texto) ? parseInt(texto, 10) : texto;
+  }
+
+  function consultar(sql, params, etiqueta) {
+    const payload = (params && params.length) ? { query: sql, params: params } : { query: sql };
+    try {
+      const rs = query.runSuiteQL(payload);
+      return rs.asMappedResults() || [];
+    } catch (error) {
+      const texto = String((error && error.message) || error);
+      try { log.error('SUPA_SYNC_SQL', etiqueta + ': ' + texto); } catch (e) { /* sin log */ }
+      throw new Error('SuiteQL [' + etiqueta + ']: ' + texto.slice(0, 300));
+    }
+  }
+
+  function placeholders(n) {
+    return new Array(Math.max(0, n)).fill('?').join(',');
+  }
+
+  function sanitizarIn(valor) {
+    // Un valor con coma o parentesis rompe el filtro in.(...) de PostgREST.
+    return String(valor == null ? '' : valor).replace(/[,()]/g, ' ');
+  }
+
+  function claveDe(fila, claves) {
+    return claves.map((c) => String(fila[c] == null ? '' : fila[c])).join('');
+  }
+
+  function anteriorDe(fila, columna) {
+    if (!fila) return null;
+    if (Object.prototype.hasOwnProperty.call(fila, columna)) return fila[columna];
+    const keys = Object.keys(fila);
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].toLowerCase() === columna.toLowerCase()) return fila[keys[i]];
+    }
+    return null;
+  }
+
+  function txt(valor) { return valor == null ? '' : String(valor).trim(); }
+
+  function num(valor) {
+    if (valor == null || valor === '') return 0;
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function toInt(valor, respaldo) {
+    const n = parseInt(valor, 10);
+    return Number.isFinite(n) ? n : respaldo;
+  }
+
+  function clamp(valor, min, max) { return Math.max(min, Math.min(max, valor)); }
+
+  function recortar(texto) { return String(texto || '').replace(/\s+/g, ' ').slice(0, 300); }
+
+  /**
+   * Fechas de SuiteQL a ISO. MEDIDO el 2026-09-28 en esta cuenta, columna por columna de los
+   * 7 lectores: `transaction.startdate`, `transaction.enddate`, `transaction.trandate`,
+   * `mot.startdatetime`, `mot.enddate` e `item.lastmodifieddate` devuelven TODAS
+   * `dd/MM/aaaa` (p. ej. "25/09/2026"), sin hora y sin zona. Antes se convertible el texto
+   * con `new Date(texto)`, y eso estaba mal de dos maneras:
+   *   - dia > 12: `new Date("25/09/2026")` es Invalid Date y se devolvia el texto crudo, que
+   *     PostgREST rechaza en un timestamptz -> 400 y se caia el lote entero.
+   *   - dia <= 12: `new Date("03/04/2026")` SI se puede leer, como MES/DIA, y "03/04/2026"
+   *     (3 de abril) se guardaba como 4 de marzo: la fecha CORRIDA y sin ningun error.
+   * Por eso el texto ya NO se le pasa a `new Date`: se desarman dia/mes/anio y se arma el
+   * ISO a mano. Sin hora no se inventa: medianoche UTC, que es lo que ya hacia la version
+   * anterior para las fechas ISO, y de paso la conversion deja de depender de la zona del
+   * servidor donde corra el RESTlet.
+   */
+  function isoFecha(valor) { return isoFechaNetsuite(valor); }
+
+  function isoFechaHora(valor) { return isoFechaNetsuite(valor); }
+
+  function isoFechaNetsuite(valor) {
+    if (valor == null || valor === '') return null;
+    var texto = String(valor).trim();
+    if (!texto) return null;
+
+    // dd/MM/aaaa, con hora opcional "dd/MM/aaaa HH:mm[:ss]" o "dd/MM/aaaa hh:mm AM|PM".
+    var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp]\.?[Mm]\.?)?)?$/.exec(texto);
+    if (m) {
+      var dia = parseInt(m[1], 10);
+      var mes = parseInt(m[2], 10);
+      var anio = parseInt(m[3], 10);
+      if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return texto;
+      var hh = m[4] ? parseInt(m[4], 10) : 0;
+      var mm2 = m[5] ? parseInt(m[5], 10) : 0;
+      var ss = m[6] ? parseInt(m[6], 10) : 0;
+      if (m[7]) {
+        var ampm = m[7].toLowerCase().charAt(0) === 'a';
+        if (hh === 12) hh = 0;
+        if (!ampm) hh += 12;
+      }
+      var d = new Date(Date.UTC(anio, mes - 1, dia, hh, mm2, ss));
+      if (Number.isNaN(d.getTime())) return texto;
+      // `Date.UTC` normaliza el dia 31 de un mes corto rodandolo; se avisa con el texto
+      // crudo en vez de mandar una fecha que NetSuite nunca dio.
+      if (d.getUTCMonth() !== mes - 1 || d.getUTCDate() !== dia) return texto;
+      return d.toISOString();
+    }
+
+    // aaaa-mm-dd (y aaaa-mm-dd hh:mm:ss), que es lo que traen los campos de texto que
+    // arma la app. Sin ambiguedad de orden, asi que aqui si se puede usar Date.
+    var iso = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(texto);
+    if (iso) {
+      var d2 = new Date(Date.UTC(parseInt(iso[1], 10), parseInt(iso[2], 10) - 1, parseInt(iso[3], 10),
+        iso[4] ? parseInt(iso[4], 10) : 0, iso[5] ? parseInt(iso[5], 10) : 0, iso[6] ? parseInt(iso[6], 10) : 0));
+      if (!Number.isNaN(d2.getTime())) return d2.toISOString();
+    }
+
+    return texto;
+  }
+
+  /**
+   * Los valores REALES de `mot.status` en esta cuenta, medidos el 2026-09-28 con
+   * `GROUP BY mot.status` sobre las 30864 tareas: COMPLETE (28663), NOTSTART (2148) y PROGRESS
+   * (53). No hay ni INPROCESS ni COMPLETED ni CLOSED. La tabla de abajo traducÃ­a justo las tres
+   * que NO existen, asi que el 98.6% de las operaciones se escribia con el valor crudo
+   * ('COMPLETE') mezclado con el espaÃ±ol de las otras ('No iniciado'), que es lo que hace hoy el
+   * app con el 2240 pero no lo que puede leer una columna.
+   * El vocabulario de salida es el del app (PP_mapNetSuiteOperation_, 'Estado'), y las llaves
+   * viejas se dejan como alias: no hacen dano y evitan romper si otra cuenta usara esos valores.
+   */
+  function traducirEstado(valor) {
+    const s = String(valor == null ? '' : valor).trim();
+    if (s === 'NOTSTART') return 'No iniciado';
+    if (s === 'PROGRESS' || s === 'INPROCESS') return 'En proceso';
+    if (s === 'COMPLETE' || s === 'COMPLETED') return 'Completado';
+    if (s === 'CLOSED') return 'Cerrado';
+    return s;
+  }
+
+  return { post: post };
+});
+
+
+################################################################################
+# FIN: netsuite-restlet-supabase-sync.js
+################################################################################
+
+################################################################################
+# SUITELET | N/A | Params: Ninguno
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType Suitelet
+ *
+ * Despachador de la ingesta NetSuite -> Supabase. Lo encolan los User Events
+ * (netsuite-user-event-*.js) y lo puede ejecutar uno a mano desde
+ * Customization > Maps > SuiteCloud Documents > Suitelets > Execute as Suitelet.
+ *
+ * POR QUE UN SUITELET Y NO LA LLAMADA DIRECTA: el User Event (afterSubmit) se ejecuta
+ * DENTRO de la transaccion del usuario. Si el push a Supabase se hiciera ahi, cada
+ * guardado de OT pagaria un viaje de ida y vuelta y, si Supabase se cayera, el guardado
+ * de NetSuite se veria afectado. Encolando una tarea, NetSuite guarda igual y la ingesta
+ * corre aparte. Ver RULE-SUP-003.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters (en el deployment de ESTE Suitelet)
+ *   RESTLET_SCRIPT_ID   customscript_supasync_restlet   (script id del RESTlet)
+ *   RESTLET_DEPLOY_ID    customdeploy_supasync_restlet  (deployment id, el mismo que se
+ *                       pone como Default en el Suitelet para poder probarlo a mano)
+ *
+ * Body de la tarea: lo que produce el User Event, sin cambios.
+ *   { accion, ids: {...}, folios: [...], lote, modo, dryRun }
+ *
+ * NO reintenta solo. Si el RESTlet falla, devuelve el error y la tabla; el barrido
+ * programado (netsuite-scheduled-sincronizacion.js) es quien reconcilia. Reintentar a
+ * ciegas en una tarea sin espera solo gasta llamadas de gobierno (10,000/dia por cliente)
+ * y llega al mismo sitio.
+ */
+define(['N/https', 'N/runtime', 'N/log'], (https, runtime, log) => {
+  const RUTA = '/app/site/hosting/scriptlet.nl';
+
+  function onRequest(context) {
+    const body = (context && context.request && context.request.body) || {};
+    return ejecutar(normalizar(body), 'SUITELET');
+  }
+
+  // onRequestGet permite probarlo desde el mapa de un Suitelet con parametros sueltos.
+  function onRequestGet(context) {
+    const q = (context && context.request && context.request.queryParameters) || {};
+    return ejecutar(normalizar(q), 'SUITELET_GET');
+  }
+
+  function normalizar(entrada) {
+    const o = entrada || {};
+    let ids = o.ids;
+    if (typeof ids === 'string') {
+      try { ids = JSON.parse(ids); } catch (e) { ids = { folios: ids }; }
+    }
+    const salida = {
+      accion: String(o.accion || o.action || '').trim().toLowerCase(),
+      ids: ids || {},
+      folios: o.folios || [],
+      lote: o.lote,
+      modo: o.modo,
+      ubicacion: o.ubicacion,
+      soloAbiertos: o.soloAbiertos,
+      dryRun: o.dryRun === true
+    };
+    Object.keys(salida).forEach((k) => { if (salida[k] === undefined) delete salida[k]; });
+    return salida;
+  }
+
+  function ejecutar(payload, origen) {
+    if (!payload.accion) {
+      return { ok: false, error: 'falta accion', origen: origen };
+    }
+    const scriptId = parametro('RESTLET_SCRIPT_ID');
+    const deployId = parametro('RESTLET_DEPLOY_ID');
+    if (!scriptId || !deployId) {
+      return {
+        ok: false,
+        error: 'Faltan los script parameters RESTLET_SCRIPT_ID y RESTLET_DEPLOY_ID en el deployment de este Suitelet.',
+        origen: origen
+      };
+    }
+
+    const url = runtime.getCurrentScript() + RUTA + '?script=' + encodeURIComponent(scriptId) + '&deploy=' + encodeURIComponent(deployId);
+    let respuesta = null;
+    try {
+      respuesta = https.request({
+        url: url,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json;charset=UTF-8' },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      const texto = String((error && error.message) || error);
+      registrar('SUPA_SYNC_ENCOLADO', origen + ' no pudo llamar al RESTlet: ' + texto);
+      return { ok: false, accion: payload.accion, error: 'No se pudo llamar al RESTlet: ' + texto, origen: origen };
+    }
+
+    const status = Number(respuesta.code || 0);
+    const cuerpo = String(respuesta.body || '');
+    let json = null;
+    try { json = JSON.parse(cuerpo || '{}'); } catch (e) { json = null; }
+    if (status < 200 || status >= 300) {
+      registrar('SUPA_SYNC_ENCOLADO', origen + ' ' + payload.accion + ': HTTP ' + status + ' ' + cuerpo.slice(0, 300));
+      return { ok: false, accion: payload.accion, status: status, error: cuerpo.slice(0, 500), origen: origen };
+    }
+    if (!json) {
+      return { ok: false, accion: payload.accion, status: status, error: 'El RESTlet respondio sin JSON: ' + cuerpo.slice(0, 300), origen: origen };
+    }
+    if (json.ok === false) {
+      registrar('SUPA_SYNC_ENCOLADO', origen + ' ' + payload.accion + ' fallo: ' + String(json.error || '').slice(0, 300));
+    }
+    json.origen = origen;
+    return json;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { onRequest: onRequest, onRequestGet: onRequestGet };
+});
+
+
+################################################################################
+# FIN: netsuite-suitelet-sync-tarea.js
+################################################################################
+
+################################################################################
+# USER EVENT | workorder | Params: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType UserEvent
+ *
+ * User Event de `workorder`: el disparador principal de la ingesta a Supabase.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters (en el deployment de ESTE User Event)
+ *   SCRIPT_ID_TAREA   customscript_supasync_suitelet  (script id del Suitelet)
+ *   DEPLOY_ID_TAREA   customdeploy_supasync_suitelet (deployment id del Suitelet)
+ *   ACTIVO            'S' encola la ingesta. Con cualquier otra cosa NO encola nada, que es
+ *                     la forma de apagar la ingesta sin redesplegar los User Events.
+ *
+ * ---------------------------------------------------------------------------------
+ * QUE SE ENCOLA Y POR QUE UNA sola OT dispara TRES acciones:
+ *
+ *   workorders  -> la ficha de la OT (work_orders)
+ *   operaciones -> su ruta (operations). Un User Event de workorder NO la dispara: las
+ *                  operaciones son manufacturingoperationtask, otro registro.
+ *   materiales  -> sus componentes de BOM (materials)
+ *
+ * Se encolan por separado y no en una sola llamada, porque la clave de escritura de cada
+ * tabla es distinta y porque asÃ­ un fallo de materiales no tumba la de la OT
+ * (RULE-SUP-002: una tabla por llamada, sin efectos de cascada entre ellas).
+ *
+ * En el BORRADO no se manda la OT a Supabase: se manda el folio con `eliminado`, y el
+ * RESTlet escribe estatus='BORRADA'. Borrar la fila perderia el rastro de que existio, y
+ * RULE-OT-051 trata el cierre de OT como informacion de tres capas, no de una fila que
+ * desaparece.
+ */
+define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
+  function afterSubmit(context) {
+    if (!activo()) return;
+    if (context.type === context.UserEventType.DELETE) {
+      // El afterSubmit de un borrado llega con newRecord nulo: el folio solo esta en el viejo.
+      const viejo = context.oldRecord;
+      const folio = viejo ? String(viejo.getValue({ fieldId: 'tranid' }) || '').trim() : '';
+      if (!folio) {
+        registrar('SUPA_SYNC', 'Se borro una OT y no se pudo leer su folio: no se encola nada.');
+        return;
+      }
+      encolar('workorders', { folios: [folio], eliminado: true });
+      return;
+    }
+    const nuevo = context.newRecord;
+    if (!nuevo || !nuevo.id) return;
+    encolar('workorders', { workorderIds: [String(nuevo.id)] });
+    encolar('operaciones', { workorderIds: [String(nuevo.id)] });
+    encolar('materiales', { workorderIds: [String(nuevo.id)] });
+  }
+
+  function encolar(accion, params) {
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este User Event: no se encola ' + accion + '.');
+      return;
+    }
+    const cuerpo = { accion: accion, ids: {} };
+    Object.keys(params || {}).forEach((k) => { cuerpo.ids[k] = params[k]; });
+    if (params && params.folios) cuerpo.folios = params.folios;
+    try {
+      task.enqueue({
+        taskType: task.Type.SUITELET,
+        scriptId: scriptId,
+        deploymentId: deployId,
+        params: cuerpo
+      });
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo encolar ' + accion + ': ' + String((error && error.message) || error));
+    }
+  }
+
+  function activo() {
+    const v = parametro('ACTIVO');
+    return String(v || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { afterSubmit: afterSubmit };
+});
+
+
+################################################################################
+# FIN: netsuite-user-event-workorder.js
+################################################################################
+
+################################################################################
+# USER EVENT | manufacturingoperationtask | Params: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType UserEvent
+ *
+ * User Event de `manufacturingoperationtask` (una operacion de la OT).
+ *
+ * Es el unico disparador de `operaciones` que mantiene al dia lo que la web lee: la
+ * cantidad realizada (mot.completedquantity) y el estado (mot.status) SOLO cambian cuando
+ * se guarda la operacion, no cuando se guarda la OT. Sin este User Event, el estatus de las
+ * operaciones en Supabase se congelaria en la ultima vez que se toco la OT, y es
+ * justamente el dato con el que la web decide que ya se termino una operacion.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO (igual que el User Event de
+ * workorder; ver netsuite-user-event-workorder.js).
+ *
+ * Delega en el RESTlet la decision de si la fila cambio: el RESTlet lee lo que ya esta en
+ * Supabase y omite la escritura si es identico, asi que encolar de mas no produce escrituras
+ * de mas, solo llamadas de lectura (RULE-SUP-004).
+ */
+define(['N/record', 'N/task', 'N/runtime', 'N/log'], (record, task, runtime, log) => {
+  const CAMPO_OT = 'workorder';
+
+  function afterSubmit(context) {
+    if (!activo()) return;
+    if (context.type === context.UserEventType.DELETE) {
+      // Una operacion borrada no se puede leer despues. Se encola la OT para que el RESTlet
+      // relea su ruta completa y la fila que ya no existe se marque (ver docs).
+      const viejo = context.oldRecord;
+      if (!viejo) return;
+      encolar(viejo);
+      return;
+    }
+    const nuevo = context.newRecord;
+    if (!nuevo) return;
+    encolar(nuevo);
+  }
+
+  function encolar(registro) {
+    if (!registro) return;
+    let otId = '';
+    try {
+      const valor = registro.getValue({ fieldId: CAMPO_OT });
+      const referencia = valor && valor.value ? valor.value : valor;
+      otId = referencia == null ? '' : String(referencia);
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo leer la OT de la operacion: ' + String((error && error.message) || error));
+      return;
+    }
+    if (!otId) {
+      registrar('SUPA_SYNC', 'La operacion no tiene OT: no se encola nada.');
+      return;
+    }
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este User Event.');
+      return;
+    }
+    try {
+      task.enqueue({
+        taskType: task.Type.SUITELET,
+        scriptId: scriptId,
+        deploymentId: deployId,
+        params: { accion: 'operaciones', ids: { workorderIds: [otId] } }
+      });
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo encolar operaciones: ' + String((error && error.message) || error));
+    }
+  }
+
+  function activo() {
+    const v = parametro('ACTIVO');
+    return String(v || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { afterSubmit: afterSubmit };
+});
+
+
+################################################################################
+# FIN: netsuite-user-event-operacion.js
+################################################################################
+
+################################################################################
+# USER EVENT | item | Params: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType UserEvent
+ *
+ * User Event de `item` -> catalogo de articulos en Supabase (`items`).
+ *
+ * El catalogo de articulos es la tabla de la que salen las columnas articulo/descripcion de
+ * `work_orders` y de `operations`, y la de la que cuelgan herramentales y configuraciones
+ * por articulo. Si el articulo se renombra en NetSuite y no se empuja, la web sigue viendo
+ * el nombre viejo.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO.
+ *
+ * OJO CON EL ALCANCE: aqui NO se encola `inventario`. El inventario no es un registro que se
+ * guarde, es un agregado (aggregateitemlocation) que se recalcula solo con cada movimiento;
+ * no tiene User Event posible. Lo lee el barrido programado
+ * (netsuite-scheduled-sincronizacion.js). Ver RULE-SUP-006.
+ */
+define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
+  function afterSubmit(context) {
+    if (!activo()) return;
+    if (context.type === context.UserEventType.DELETE) {
+      registrar('SUPA_SYNC', 'Se borro un articulo: no se encola nada, en Supabase queda el ultima version leida.');
+      return;
+    }
+    const nuevo = context.newRecord;
+    if (!nuevo || !nuevo.id) return;
+    const itemId = idDeItem(nuevo);
+    if (!itemId) {
+      registrar('SUPA_SYNC', 'El articulo no tiene id legible: no se encola nada.');
+      return;
+    }
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este User Event.');
+      return;
+    }
+    try {
+      task.enqueue({
+        taskType: task.Type.SUITELET,
+        scriptId: scriptId,
+        deploymentId: deployId,
+        params: { accion: 'items', ids: { itemIds: [itemId] } }
+      });
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo encolar items: ' + String((error && error.message) || error));
+    }
+  }
+
+  function idDeItem(registro) {
+    try {
+      const valor = registro.getValue({ fieldId: 'itemid' });
+      return valor == null ? '' : String(valor).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function activo() {
+    const v = parametro('ACTIVO');
+    return String(v || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { afterSubmit: afterSubmit };
+});
+
+
+################################################################################
+# FIN: netsuite-user-event-item.js
+################################################################################
+
+################################################################################
+# USER EVENT | workcenter | Params: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType UserEvent
+ *
+ * User Event de `workcenter` (centro de trabajo) -> `machines` en Supabase.
+ *
+ * `machines` es el catalogo contra el que se resuelven las operaciones: el CT de la
+ * operacion (los digitos del nombre del centro) tiene que existir en `machines` para que la
+ * web pueda asignarle maquina. Si un centro nuevo se queda solo en NetSuite, sus
+ * operaciones llegan a Supabase sin maquina resoluble.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO.
+ *
+ * No hay filtro por `workcentertype`: el usuario decidio (2026-09-28) que `machines.tipo`
+ * no se necesita porque la maquina se captura en el plan, y `workcentertype` no existe en
+ * ninguna fuente medible (SuiteQL ni REST Record API). El RESTlet guarda todos los
+ * entitygroup marcados como centro de trabajo, sin descartar a nadie.
+ */
+define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
+  function afterSubmit(context) {
+    if (!activo()) return;
+    if (context.type === context.UserEventType.DELETE) {
+      registrar('SUPA_SYNC', 'Se borro un centro de trabajo: no se encola nada, en Supabase queda con el ultimo estado leido.');
+      return;
+    }
+    const nuevo = context.newRecord;
+    if (!nuevo || !nuevo.id) return;
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este User Event.');
+      return;
+    }
+    try {
+      task.enqueue({
+        taskType: task.Type.SUITELET,
+        scriptId: scriptId,
+        deploymentId: deployId,
+        params: { accion: 'centros', ids: { workcenterIds: [String(nuevo.id)] } }
+      });
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo encolar centros: ' + String((error && error.message) || error));
+    }
+  }
+
+  function activo() {
+    const v = parametro('ACTIVO');
+    return String(v || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { afterSubmit: afterSubmit };
+});
+
+
+################################################################################
+# FIN: netsuite-user-event-workcenter.js
+################################################################################
+
+################################################################################
+# USER EVENT | salesorder | Params: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType UserEvent
+ *
+ * User Event de `salesorder` (orden de venta) -> `sales_orders` en Supabase.
+ *
+ * La orden de venta es de donde sale `work_orders.cliente`: una OT se crea desde un pedido,
+ * y es el pedido el que sabe a quien se le entrega. Push separado del de la OT (no se saca
+ * el cliente de la linea de la OT, porque alli no esta), y con clave propia (`folio`).
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters: SCRIPT_ID_TAREA, DEPLOY_ID_TAREA, ACTIVO.
+ *
+ * Se manda la orden COMPLETA con sus lineas en `lineas` (jsonb) y no una fila por linea:
+ * asi la escritura es una por orden. Si mas adelante hacen falta consultas o filtros por
+ * linea, se parte en `sales_order_lines`; el RESTlet es el unico lugar que hay que tocar.
+ */
+define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
+  function afterSubmit(context) {
+    if (!activo()) return;
+    if (context.type === context.UserEventType.DELETE) {
+      registrar('SUPA_SYNC', 'Se borro una orden de venta: no se encola nada, en Supabase queda la ultima version leida.');
+      return;
+    }
+    const nuevo = context.newRecord;
+    if (!nuevo || !nuevo.id) return;
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este User Event.');
+      return;
+    }
+    try {
+      task.enqueue({
+        taskType: task.Type.SUITELET,
+        scriptId: scriptId,
+        deploymentId: deployId,
+        params: { accion: 'ordenes_venta', ids: { salesOrderIds: [String(nuevo.id)] } }
+      });
+    } catch (error) {
+      registrar('SUPA_SYNC', 'No se pudo encolar ordenes_venta: ' + String((error && error.message) || error));
+    }
+  }
+
+  function activo() {
+    const v = parametro('ACTIVO');
+    return String(v || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.error(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { afterSubmit: afterSubmit };
+});
+
+
+################################################################################
+# FIN: netsuite-user-event-salesorder.js
+################################################################################
+
+################################################################################
+# SCHEDULED | N/A | Params: Ninguno
+################################################################################
+
+/**
+ * @NApiVersion 2.1
+ * @NScriptType ScheduledScript
+ *
+ * Barrido de la ingesta NetSuite -> Supabase. Cubre lo que los User Events NO pueden
+ * cubrir y funciona como red de seguridad de los que si:
+ *
+ *  1. `inventario`: es un agregado (aggregateitemlocation) que se recalcula con cada
+ *     movimiento. No existe ningun registro que "guardar", asi que no hay User Event posible.
+ *     Este es su unico disparador (RULE-SUP-006).
+ *  2. Reconciliacion: un User Event se puede perder (una tarea encolada que no corre, un
+ *     despliegue mal puesto, una ingesta que fallo con Supabase caido). El barrido relee
+ *     todo y vuelve a escribir solo lo que difiere, asi que la diferencia entre NetSuite y
+ *     Supabase se cierra sola.
+ *
+ * ---------------------------------------------------------------------------------
+ * Script parameters (en el deployment de ESTO)
+ *   SCRIPT_ID_TAREA, DEPLOY_ID_TAREA   (el Suitelet, igual que en los User Events)
+ *   ACCIONES    lista separada por comas. Vacio = TODAS. Ej: 'inventario' o
+ *               'workorders,operaciones,materiales,items,centros,inventario,ordenes_venta'
+ *   DRY_RUN     'S' encola todo con dryRun (no escribe): sirve para ver el tamano del
+ *               barrido antes de dejarlo escribir solo.
+ *
+ * ESPERA_MS YA NO EXISTE, y el motivo es que no se podia garantizar. El espaciado se
+ * intentaba pedir con task.submit({ taskType: task.Type.WAIT, functionName: 'continuar' })
+ * nombrando una funcion de ESTE script; si esa llamada falla, las acciones restantes se
+ * perdian en silencio, y eso es justo lo que un barrido no puede hacer: su trabajo ES la
+ * red de seguridad de la ingesta por User Event. Ahora todas las acciones se encolan de
+ * una vez y el conteo de lo que si se encolo queda en el log.
+ *
+ * Para no gastar las 10,000 llamadas externas/dia de golpe hay dos palancas que SI son
+ * reales y medibles: correr el barrido con menos ACCIONES por corrida, o pedir
+ * `modo:'upsert'`, que es una llamada por lote en vez de una por fila.
+ *
+ * NO escribe en NetSuite en ningun caso, y no borra de Supabase: solo upsert. Por eso es
+ * seguro correrlo cada hora.
+ */
+define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
+  const TODAS = ['workorders', 'operaciones', 'materiales', 'items', 'centros', 'inventario', 'ordenes_venta'];
+
+  function execute() {
+    const scriptId = parametro('SCRIPT_ID_TAREA');
+    const deployId = parametro('DEPLOY_ID_TAREA');
+    if (!scriptId || !deployId) {
+      registrar('SUPA_SYNC', 'Faltan SCRIPT_ID_TAREA / DEPLOY_ID_TAREA en el deployment de este script programado.');
+      return;
+    }
+    if (parametro('ESPERA_MS')) {
+      registrar('SUPA_SYNC', 'ESPERA_MS ya no se usa y se ignora. Para espaciar el barrido: fewer ACCIONES por corrida, o modo upsert.');
+    }
+    const acciones = listaAcciones();
+    const dryRun = esSi(parametro('DRY_RUN'));
+
+    let encoladas = 0;
+    acciones.forEach(function (accion) {
+      const params = { accion: accion, ids: {} };
+      if (dryRun) params.dryRun = true;
+      try {
+        task.enqueue({ taskType: task.Type.SUITELET, scriptId: scriptId, deploymentId: deployId, params: params });
+        encoladas += 1;
+      } catch (error) {
+        registrar('SUPA_SYNC', 'No se pudo encolar el barrido de ' + accion + ': ' + String((error && error.message) || error));
+      }
+    });
+    registrar('SUPA_SYNC', 'Barrido: ' + encoladas + '/' + acciones.length + ' accion(es) encoladas, dryRun=' + dryRun + '.');
+  }
+
+  function listaAcciones() {
+    const cruda = parametro('ACCIONES');
+    if (!cruda) return TODAS.slice();
+    return cruda.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  }
+
+  function esSi(valor) {
+    return String(valor || '').toUpperCase().indexOf('S') === 0;
+  }
+
+  function parametro(nombre) {
+    try {
+      const v = runtime.getParameter({ name: nombre });
+      return v == null ? '' : String(v).trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function registrar(marca, texto) {
+    try { log.info(marca, texto); } catch (e) { /* sin log */ }
+  }
+
+  return { execute: execute };
+});
+
+
+################################################################################
+# FIN: netsuite-scheduled-sincronizacion.js
+################################################################################
