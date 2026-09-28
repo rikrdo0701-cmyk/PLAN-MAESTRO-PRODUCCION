@@ -6,26 +6,41 @@
  *
  * NO escribe en NetSuite: solo lee (SuiteQL SELECT) y escribe en Supabase.
  *
- * Configuracion: UNA sola Script Property llamada 'CONFIG' con un JSON:
- *   {
- *     "NS_ACCOUNT_ID": "...", "NS_CONSUMER_KEY": "...", "NS_CONSUMER_SECRET": "...",
- *     "NS_TOKEN": "...", "NS_TOKEN_SECRET": "...",
- *     "SUPABASE_URL": "https://xtgtfjcwxcoxvixholpj.supabase.co",
- *     "SUPABASE_KEY": "...", "UBICACION": "1"
- *   }
+ * Configuracion: una Hoja de calculo llamada 'CONFIG' con dos columnas (key, value):
+ *   NS_ACCOUNT_ID, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN, NS_TOKEN_SECRET,
+ *   SUPABASE_URL, SUPABASE_KEY, UBICACION
  *
  * Trigger: cada 15 minutos, lun-vie, 7am-5pm (se configura en Apps Script).
  */
 
 // =============================================================================
-// Configuracion
+// Configuracion — lee de una Hoja de calculo (sin limite de 50 properties)
 // =============================================================================
 
 function PP_config_() {
-  const p = PropertiesService.getScriptProperties();
-  const raw = p.getProperty('CONFIG');
-  if (!raw) throw new Error('Falta la Script Property CONFIG (JSON con NS_* y SUPABASE_*)');
-  return JSON.parse(raw);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('CONFIG');
+  if (!sheet) throw new Error('No existe la hoja CONFIG. Creala con columnas key,value.');
+  const rows = sheet.getDataRange().getValues();
+  const config = {};
+  for (let i = 1; i < rows.length; i++) {
+    const key = String(rows[i][0] || '').trim();
+    const value = String(rows[i][1] || '').trim();
+    if (key) config[key] = value;
+  }
+  if (!config.NS_ACCOUNT_ID || !config.SUPABASE_URL) {
+    throw new Error('La hoja CONFIG no tiene NS_ACCOUNT_ID o SUPABASE_URL');
+  }
+  return {
+    accountId: config.NS_ACCOUNT_ID,
+    consumerKey: config.NS_CONSUMER_KEY,
+    consumerSecret: config.NS_CONSUMER_SECRET,
+    token: config.NS_TOKEN,
+    tokenSecret: config.NS_TOKEN_SECRET,
+    supabaseUrl: config.SUPABASE_URL,
+    supabaseKey: config.SUPABASE_KEY,
+    ubicacion: config.UBICACION || '1'
+  };
 }
 
 // =============================================================================
