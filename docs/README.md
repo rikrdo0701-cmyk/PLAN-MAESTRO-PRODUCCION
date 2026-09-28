@@ -61,6 +61,10 @@ Seguir este orden da el contexto completo sin redundancia:
 | `docs/REBUILD.md` | Reconstrucción desde cero | Operación |
 | `docs/APPS_SCRIPT_DEPLOYMENT_Y_BYPASS.md` | Deploy Apps Script + bridge | Operación |
 | `docs/RENDIMIENTO_GITHUB_PAGES.md` | Rendimiento del frontend | Operación |
+| `docs/plan-migracion-supabase.md` | Migración a Supabase: fases, ingesta (§3.4), drifts (§3.3.1) | Migración |
+| `docs/schema-supabase.sql` | Esquema objetivo de Supabase (21 tablas) | Esquema |
+| `docs/schema-supabase-sync-netsuite.sql` | Delta de la ingesta NetSuite → Supabase (**propuesto, no aplicado**) | Esquema |
+| `docs/integrations/netsuite-supabase-sync.md` | Contrato de la ingesta: User Event → Suitelet → RESTlet → PostgREST | Integración |
 | `.project-memory/*.json` | Memoria estructurada del proyecto | Machine-readable |
 
 ## Dónde está la fuente estructurada
@@ -72,7 +76,7 @@ sincronizados con ella.
 - Reglas: `.project-memory/rules.json` ↔ `docs/REGLAS.md` + `docs/rules/RULES.md`.
 - Fuentes de datos: `.project-memory/data-sources.json` ↔ `docs/data/sources.md`.
 - Módulos: `.project-memory/modules.json` ↔ `docs/project/module-map.md`.
-- Integraciones: `.project-memory/integrations.json`.
+- Integraciones: `.project-memory/integrations.json` ↔ `docs/integrations/`.
 - Estructura: `.project-memory/structure.json`.
 
 ## Política de mantenimiento

@@ -519,7 +519,7 @@ Headers: `ID, Artículo, Material, Descripción, Cantidad, Emitido, Pendiente po
 - OAuth 1.0a HMAC-SHA256 (`PP_oauthHeader_`). Credenciales en Script Properties (`NS_*`).
 - **Costo por llamada (medido, RULE-REP-019):** `ms = 2023 + 0.543 × filas`, ajustado sobre cuatro `pageSize` del 1766 (200→2124 ms, 500→2306, 1000→2561, 2000→2371). El término fijo de ~2 s domina: pedir 5× más filas cuesta 0.34 s más, **repetir la llamada cuesta 2 s**. Por eso `PP_RESTLET_PAGE_SIZE_` sube el tamaño mientras el restlet lo aguante: `1766: 1000` (tope real), `2240: 2500` (2400 filas ⇒ **1 llamada**), resto `200` (máximo **no verificado**, no subir a ciegas).
 - **El 2240 (CORREGIDO 2026-09-26, se sube a NetSuite a mano):** el archivo del repo ya trae las tres correcciones de RULE-REP-019, pero **producción sigue con la versión vieja** hasta que se suba. Antes: `const all = runSuiteQL_(sql)` + `all.slice(from, to)`, o sea que **cada llamada re-ejecutaba el JOIN completo** de `manufacturingoperationtask` + `transaction` + `transactionline`, y `post()` **ignoraba `body.locationId`** (solo leía `pageSize` y `pageIndex`). Ahora: página en SQL con `FETCH NEXT`/`OFFSET`, `tl.location = ?` como parámetro ligado y `location` en la respuesta. El desglose medido que motiva el filtro: **2231** operaciones de planta 1 contra **169** de otras (7%).
-  - **Riesgo y cómo se cubre:** `FETCH NEXT/OFFSET` resultó **no existir** en el SuiteQL de esta cuenta, y `BUILTIN.DF` **no** se puede aplicar sobre `mot.status` (sí sobre `mot.manufacturingworkcenter`, que es referencia a entidad). Ambos se comprobaron en producción el 2026-09-26: al subirlos, los dos RESTlets devolvieron `400 "Failed to parse SQL"` y la app se quedó sin operaciones ni inspección. Por eso el RESTlet trae un **fallback de estrategias** y la última es **literalmente el SQL de producción** (sin `tl.location`, sin `FETCH NEXT`): `con-ubicacion` → `sql-de-produccion`. Si una lanza excepción se pasa a la siguiente; si el filtro por ubicación devuelve **0 filas sin excepción**, también degrada. `debug` deja constancia de qué estrategia respondió.
+  - **Riesgo y cómo se cubre:** `BUILTIN.DF` **no** se puede aplicar sobre `mot.status` (sí sobre `mot.manufacturingworkcenter`, que es referencia a entidad). Se comprobó en producción el 2026-09-26: al subirlo, los dos RESTlets devolvieron `400 "Failed to parse SQL"` y la app se quedó sin operaciones ni inspección. **Corrección 2026-09-28:** la parte de la paginación de este texto era **incorrecta** — `FETCH NEXT`/`OFFSET` **sí existen** en el SuiteQL de esta cuenta, pero solo en el orden `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY`; el 400 de producción fue por el **orden inverso** que escribió el código, no porque la cláusula no existiera (RULE-REP-016-A, RULE-SUP-008). El fallback de estrategias **se queda igual** y por eso no hay que tocarlo: la última sigue siendo **literalmente el SQL de producción** (sin `tl.location`, sin cláusulas de paginación) y ese camino ya está probado. `con-ubicacion` → `sql-de-produccion`. Si una lanza excepción se pasa a la siguiente; si el filtro por ubicación devuelve **0 filas sin excepción**, también degrada. `debug` deja constancia de qué estrategia respondió.
   - **Verificado en producción 2026-09-26 08:12** (`DIAG_restlets`, 0 fallos): `estrategia: con-ubicacion`, `degradaciones: []`, **2231 filas** con 2231 ids únicos, 0 repetidas — exactamente la línea base de planta 1, ni una menos. `tl.location` **sí** es una columna válida: el filtro funciona y las 169 filas de otras plantas ya no viajan. **2556 ms** por el camino de la app, contra las 12 llamadas y ~25 s previas. El `pageSize: 2500` del servidor es lo que da ese ~10×; la paginación en SQL no aporta nada aquí.
   - El `2244` responde 200 con **222** OTs de inspección, 222 ids únicos, 0 repetidas. Como `getInspectionWorkOrders` pide una sola página (`pageIndex: 0`, `pageSize: 500`), la app ve las 222 completas. El día que superen 500, la app solo verá la primera página: es un límite conocido, no una regresión.
   - El `ORDER BY` ganó un desempate por `mot.id` (`wo.id, mot.operationsequence, mot.id`): sin un orden total, `OFFSET` puede repetir o saltar filas entre páginas, lo que rompería el `operationId` estable `ns-<id>` (RULE-OT-031).
@@ -589,6 +589,169 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
 
 ---
 
+# Parte F — Supabase (destino de la migración; **aún sin tablas y sin datos reales**)
+
+Proyecto ref **`xtgtfjcwxcoxvixholpj`**. Sigue **sin ser una fuente de datos**: es el destino del
+plan `docs/plan-migracion-supabase.md` (2026-09-27, *"No se mueve nada hasta que se apruebe"*).
+La diferencia desde la versión anterior de esta parte: **la ingesta ya está escrita y es el único
+writer**, pero **nada se ha ejecutado contra el proyecto**, así que no hay columnas reales que
+documentar aquí. Se documenta para que nadie la busque como origen de algo.
+
+- **Dos hosts que no se intercambian**: la Data API, el panel y `/auth` son
+  `https://xtgtfjcwxcoxvixholpj.supabase.co` (**sin** prefijo `db.`); el Postgres directo del 5432
+  es `db.xtgtfjcwxcoxvixholpj.supabase.co` (**con** prefijo) y salió **IPv6-only** — DoH devuelve
+  `NODATA` para el tipo `A`, o sea que no es alcanzable por IPv4 desde esta red. El connection string
+  `postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres` es el **host de Postgres**,
+  no el de la API.
+- **Columnas**: ninguna en el proyecto. Medido el 2026-09-28, `/auth/v1/health` respondió `401` sin
+  `apikey` y los pasos de Data API quedaron *sin datos*, así que **no se pudo contar ninguna tabla
+  real**. Los esquemas escritos en el repo son: `docs/schema-supabase.sql` (**21** `create table`,
+  derivado de las hojas de este documento) y `docs/schema-supabase-sync-netsuite.sql`
+  (**delta propuesto de la ingesta, NO aplicado**).
+- **Readers**: ninguno del producto. No hay código en `src/` que lea Supabase: la fase 3 del plan
+  (la lectura desde la web) no está hecha. El único lector es la sonda
+  `scripts/supabase-read-test.mjs`, de solo lectura (`RULE-TST-002`).
+- **Writers**: uno solo, del lado NetSuite. `netsuite-restlet-supabase-sync.js` es el **único
+  escritor** de las 7 tablas que NetSuite manda —`work_orders`, `operations`, `materials`, `items`,
+  `machines`, `inventory`, `sales_orders`— con upsert por clave natural y guarda de `revision`
+  (`RULE-SUP-001`, `RULE-SUP-004`). Lo disparan **6 User Events** a través de
+  `netsuite-suitelet-sync-tarea.js` y un barrido programado (`netsuite-scheduled-sincronizacion.js`),
+  que además es la red de seguridad de los seis porque un User Event se puede perder
+  (`RULE-SUP-003`, `RULE-SUP-006`). Apps Script conserva la escritura de las tablas de **estado y
+  plan** (`app_state`, `plan_snapshots`, `operation_plan_statuses` y la cola) hasta la fase 4 del
+  plan, y es el único que tiene el OAuth de NetSuite. **Ningún writer escribe en NetSuite**:
+  Supabase no puede llamarlo. Contrato completo: `docs/integrations/netsuite-supabase-sync.md`.
+- **Restricción de credenciales**: no hay **ninguna** en el repo —ni contraseña de la base, ni clave
+  `anon`, ni `service_role`—. La `service_role` que usa el RESTlet va como **script parameter**
+  `SUPABASE_KEY` del deployment en NetSuite, nunca en el repo, y el deployment **no** debe quedar
+  *Available Externally* (`RULE-SUP-005`). Para cerrar la lectura de filas hace falta la clave `anon`;
+  para el paso directo a Postgres, además `SUPABASE_DB_PASSWORD` y el paquete `pg`.
+- **Drift conocido — dos, ninguno corregido**: (1) la sección 3 del plan declara **22** tablas y
+  `schema-supabase.sql` crea **21**: falta `prepared_planning_by_ot` (`CONFIG.preparedPlanningByOt`,
+  `RULE-OT-010`). (2) La ingesta escribe 7 tablas y el esquema solo tiene **4**: faltan las tablas
+  `items`, `inventory` y `sales_orders`; `materials` no tiene `line_id`, que es su clave natural y sin
+  la cual no hay `on_conflict`; y `machines` no tiene `tipo`, que es la evidencia de por qué se
+  descartó un centro. El delta está en `docs/schema-supabase-sync-netsuite.sql` y **no se ejecutó**.
+  El hueco se **declara** en la respuesta del RESTlet con `accion:'diagnostico'` (`tablasFaltantes`),
+  no se asume resuelto (`RULE-SUP-007`). Detalle y pendientes en `docs/plan-migracion-supabase.md`
+  §3.3.1.
+- **Verificación contra el ERP real (2026-09-28, lector 1 de 7, `accion:'workorders'`).** La sonda
+  `.openchamber/verifica-restlet-01.mjs` extrae el SQL **del propio RESTlet** (si el SQL cambia, la
+  sonda se queda vieja y falla en vez de mentir), lee **277 OTs abiertas** de producción, las mete por
+  el RESTlet de verdad —con el `record:built` que reporta el 2244 desplegado— y revisa el cuerpo
+  exacto que se mandaría a PostgREST, **sin escribir**. Resultado: folio, id interno, artículo,
+  descripción, cantidad, estatus y las tres fechas coinciden con el valor crudo de SuiteQL;
+  `cant_ensamblada` coincide con `record:built` del 2244; `cant_pendiente` es el resto; y
+  `CAMPOS.work_orders` está entero en el DDL. `work_orders.cliente` queda `''` y es lo correcto: una
+  WorkOrder no tiene entidad. **Dos defectos que solo aparecieron al medir** (ya corregidos): las
+  fechas de SuiteQL son `dd/MM/aaaa` sin hora ni zona, y `new Date()` sobre ese texto o no parseaba
+  (el texto crudo lo rechazaba un `timestamptz`) o se leía como mes/día y guardaba 3 de abril como
+  4 de marzo sin ningún error; y la cantidad ensamblada **no existe en SuiteQL**
+  (`transaction.built`/`quantitybuilt`/`quantityremaining` = *Unknown identifier*), por lo que la
+  cadena terminaba siempre en `MAX(mot.completedquantity)`, que además **puede exceder la cantidad
+  de la OT** (folio 2204: 3000 contra 4200). Ahora sale del record.
+- Lector 2 `operaciones`, verificado el 2026-09-28 con `.openchamber/verifica-restlet-02.mjs`: 85
+  operaciones reales de 3 OTs abiertas, columna por columna contra el valor crudo y contra el **2240
+  desplegado** (0 diferencias inesperadas en `ct`, `descripcion`, `secuencia`, `cant_total`,
+  `cant_realizada`, `tiempo_setup` y `maquina`). Orígenes de sus columnas: `operation_id` =
+  `'ns-' + mot.id`; `ot` = `wo.tranid`; `ct` = **`mot.manufacturingworkcenter` crudo** (el id
+  interno: es lo que el app lee como `workcenter`, `08-netsuite.js:1041`); `descripcion` =
+  `BUILTIN.DF(mot.manufacturingworkcenter)` (lo que el app llama `operation`, `:1070`), con
+  `mot.title` de respaldo — `mot.operationname` no existe; `cant_total` = `mot.inputquantity`;
+  `cant_pendiente` = input − completed; `tiempo_prod` = `runrate × pendiente`, o `remainingwork`, o
+  `estimatedwork`; `tiempo_ciclo` = `tiempo_prod / cant_pendiente`; `tiempo_setup` = `mot.setuptime`;
+  `operador`/`maquina` = `mot.laborresources`/`mot.machineresources` crudos; `fecha_inicio`/`fecha_fin`
+  = `mot.startdatetime`/`mot.enddate`; `estatus` = traducción de `mot.status` a los valores reales
+  de la cuenta (`COMPLETE` 28663, `NOTSTART` 2148, `PROGRESS` 53). **Cuatro defectos que solo
+  aparecieron al medir** (corregidos): el SQL pedía el nombre del centro con
+  `LEFT JOIN manufacturingworkcenter` + `BUILTIN.DF(wc.id)`, y **`manufacturingworkcenter` no es
+  tabla en esta cuenta** (*Tipo de búsqueda no válida*), o sea que la acción moría con 400 sin
+  escribir nada — la regla que motivó ese JOIN ("`BUILTIN.DF` no funciona sobre
+  `mot.manufacturingworkcenter`") era **falsa**: funciona sobre referencias a entidad y falla solo
+  sobre campos estáticos como `mot.status`; el texto del SQL llevaba un `//` de comentario, que
+  SuiteQL no parsea (*Failed to parse SQL*); el CT se sacaba de los dígitos del nombre antes que del
+  id (158 de 159 centros no tienen 3+ dígitos, y el único que sí los tiene, `'500 : SUBCONTRATO'`,
+  se escribía como `500` cuando el app leería `6462`); y la tabla de traducción de `mot.status` tenía
+  las tres llaves que **no existen** en la cuenta, así que el 98.6 % de las operaciones se escribía
+  con `'COMPLETE'` mezclado con el español de las demás. Los topes no truncan hoy: 2400 de 5000
+  operaciones y 277 de 500 OTs.
+- **Guard de parseo de los 7 lectores, 2026-09-28 (`.openchamber/verifica-sql.mjs`).** Corre el
+  `const sql = [...]` **extraído del propio RESTlet** (nunca copiado a mano: la primera versión
+  copió a mano y dio un 500 en `workorders` por un `approveddate` que el RESTlet no tiene, casi
+  reportado como defecto de un lector ya verificado) de cada uno de los 7 lectores, sustituyendo
+  `?` y `{{IN}}` por literales. Sustituye y no liga porque el endpoint SuiteQL v1 por REST no liga
+  `p` y `query.runSuiteQL` dentro de NetSuite sí liga `?` (eso sí lo prueban el 2240 y el 2244
+  desplegados): prueba que el SQL es válido, no el mecanismo de binds. **Primera pasada: 3 de 7
+  caídos**, y ninguno por un dato equivocado sino por columnas que no existen.
+- **`items` (`accion:'items'`), verificado y corregido el 2026-09-28.** Daba **500** y la acción
+  entera se caía sin escribir nada. Orígenes de sus columnas: `codigo` = `i.itemid`; `descripcion`,
+  `descripcion_compra` y `nombre_mostrado` = `i.description`, `i.purchasedescription`,
+  `i.displayname`; `inactivo` = `i.isinactive`; `ultima_modificacion` = `i.lastmodifieddate`;
+  `clase` = `i.class` crudo (**2470 de 2522 artículos lo tienen en NULL**, así que vale 0 en la
+  mayoría); `tipo` = **`i.itemtype`**, no `i.type` que no existe, y es un **enum de texto**
+  (`Assembly` 1591, `InvtPart` 675, `NonInvtPart` 238, `Service` 14, `OthCharge` 3, `Kit` 1);
+  `es_ensamblaje` = derivado de `itemtype = 'Assembly'`, porque **`isassortmentitem` no existe**
+  (500) ni hay ninguna otra columna de ensamblaje en `item`. Decisión del usuario del 2026-09-28:
+  **solo `Assembly`** es ensamble padre, un `Kit` no. Consecuencia de esquema: `items.tipo` pasó de
+  `integer` a `text`, porque con `num()` las 2522 filas quedan en 0 **sin error** (`RULE-SUP-009`).
+  El DDL además afirmaba que `es_ensamblaje` venía de `isassortmentitem`; esa línea era falsa y ya
+  no está.
+- **`inventario` (`accion:'inventario'`), verificado y corregido el 2026-09-28.** Daba **400**
+  (*Búsqueda inválida o no compatible*) por dos columnas que no existen: `ail.quantityreserved`
+  (la real es **`ail.quantitycommitted`**) y **`ail.quantitypicked`**, que no tiene equivalente
+  (medido). `disponible`, `fisico` y `en_transito` salen de `ail.quantityavailable`,
+  `ail.quantityonhand` y `ail.quantityintransit`; `item` = `BUILTIN.DF(ail.item)` (el código) y
+  `ubicacion` = `BUILTIN.DF(ail.location)` (p. ej. `'Planta MM del Llano'`). **No lleva `SUM` ni
+  `GROUP BY`** por dos motivos medidos: envolver la proyección con `BUILTIN.DF` en una consulta
+  agregada da 400, y el agregado **trae ya una fila por par** (2426 filas = 2426 pares distintos;
+  1946 en la planta 1, 3 ubicaciones). Aun así el lector suma en JS y avisa si un par viene
+  repetido, para no romper el `unique (item, ubicacion)`. **`pickeado` queda en 0 y SIN FUENTE
+  declarada**: la cantidad pickeada sí existe pero en `transactionline.quantitypicked`, que es el
+  renglón de OT / SO / TrnfrOrd que se pickeó (lo tienen 37 481 líneas y **ninguna** es de tipo
+  `ItemShip`: 0 de 33 330), no un estado de existencias por (artículo, ubicación), y
+  `transaction.ordpicked` es un booleano (28 006). `RULE-SUP-009`.
+- **`centros` (`accion:'centros'`), corregido el 2026-09-28.** Daba **400** (*Tipo de búsqueda no
+  válida*) porque consultaba la tabla `manufacturingworkcenter`, que **no existe** en el SuiteQL de
+  esta cuenta. Los centros de trabajo son **`entitygroup`**: 206 grupos, **202 con
+  `ismanufacturingworkcenter='T'`**. El nombre es `eg.groupname` (el mismo texto que
+  `BUILTIN.DF(mot.manufacturingworkcenter)`: `'10OTD : DOBLEZ DE TUBERIA'`) y `activa` sale de
+  `isinactive`. **No hay `tipo`**: `workcentertype` no existe como columna de SuiteQL ni como
+  campo/record type de la REST Record API (`workcenter`, `workCenter`, `manufacturingworkcenter` y
+  `entitygroupworkcenter` dan todos **404** *Record type ... does not exist*; el record real es
+  `entitygroup`, con `isManufacturingWorkCenter`, `laborResources`, `machineResources` y
+  `workCalendar`, sin columna de tipo). El usuario decidió que **`machines.tipo` no se necesita**
+  porque la máquina se captura en el plan: el lector guarda solo `nombre` y `activa`, sin
+  descartar a nadie por tipo ni inventar un 0. `RULE-SUP-010`.
+- **`materiales` (`accion:'materiales'`), verificado y corregido el 2026-09-28.** Sonda
+  `.openchamber/verifica-restlet-03.mjs`: SQL extraído del RESTlet, filas reales de OTs abiertas,
+  **0 discrepancias** columna por columna contra el valor crudo de SuiteQL. `line_id` = `comp.id`
+  es único por OT y nunca vacío. `BUILTIN.DF(comp.item)` y `BUILTIN.DF(mainline_item.item)`
+  coinciden con `item.itemid` del catálogo. **Corregido el 2026-09-28** (decisión del usuario:
+  *"solo me interesan las abiertas"*): el lector ahora filtra **solo OTs abiertas** con el mismo
+  patrón de 3 `NOT LIKE` (`CERRAD`/`CLOSED`/`COMPLET`) que `workorders`/`operaciones`. Sin el
+  filtro el barrido leía **28 676** materiales de TODAS las OTs y truncaba a 5 000; midido el
+  mismo día, solo **2 301** son de OTs abiertas. Las 26 375 de OTs cerradas las empujaba este
+  lector y **ningún otro** (workorders y operaciones ya filtran abiertas), o sea que se guardaban
+  materiales de OTs que no existen en `work_orders`. Con el filtro el barrido no trunca
+  (2 301 ≤ 5 000).
+- **`ordenes_venta` / `ordenes_venta_lineas` (`accion:'ordenes_venta'`), verificado y corregido el
+  2026-09-28.** Sonda `.openchamber/verifica-restlet-04.mjs`: SQL extraído del RESTlet, orden
+  real SO916 con 12 líneas, **0 discrepancias** columna por columna. `BUILTIN.DF(t.entity)`
+  coincide con el cliente. Fechas en ISO. `lineas` (jsonb) trae las líneas correctas en el orden
+  del SQL. **Corregido el 2026-09-28** (decisión del usuario: *"ordenes de venta tambien las
+  abiertas"*): el lector ahora filtra **solo ordenes abiertas** — ni `Cerrada` ni `Facturada`
+  (mismo patrón `NOT LIKE`). Midido el mismo día: 2 408 SalesOrd, 1 870 no cerradas, **124
+  abiertas**. Sin el filtro el barrido truncaba a 2 000; con el filtro no trunca (124 ≤ 2 000).
+- **Los 7 lectores quedan verificados** contra el ERP real (solo lectura): `workorders`
+  (verifica-restlet-01), `operaciones` (verifica-restlet-02), `materiales` (verifica-restlet-03),
+  `ordenes_venta`/`_lineas` (verifica-restlet-04), `items` e `inventario` (corregidos y con columnas
+  medidas), `centros` (entitygroup, 202 filas).
+- Registros estructurados: `.project-memory/integrations.json` `INT-SUPABASE` (status *detectado*,
+  modo `push`), `.project-memory/data-sources.json` `SUPABASE-PLAN` (status `in_progress`, con
+  `writers` y `drift`), y las reglas `RULE-SUP-001..010`.
+
+---
+
 # Conflictos y pendientes (documentados, sin corregir)
 
 1. `Operaciones Programadas` vs `Operaciones programadas` (mayúscula en la "p").
@@ -600,3 +763,11 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
 6. `NetSuiteOAuth.request` ignora el 5º argumento (`Prefer: transient` no se aplica en
    `EXISTENCIAS INV.js`).
 7. `getDeploymentStatus()` no devuelve `frontendOrigin` (discrepancia con documentación antigua).
+8. **Supabase**, dos huecos y ninguno corregido a propósito — el plan exige aprobación antes de
+   mover nada, y agregar tablas o columnas es decisión de la persona: (a) el plan declara 22 tablas
+   y `docs/schema-supabase.sql` crea 21, falta `prepared_planning_by_ot`; (b) la ingesta escribe 7
+   tablas y el esquema tiene 4: faltan `items`, `inventory` y `sales_orders`, más
+   `materials.line_id` (UNIQUE). El delta de (b) está escrito y **no aplicado** en
+   `docs/schema-supabase-sync-netsuite.sql`; hasta que se aplique, `accion:'diagnostico'` del RESTlet
+   lo declara en `tablasFaltantes`. (c) El delta **también cambió de forma** el 2026-09-28 al medir contra el ERP: `items.tipo` pasó de `integer` a `text`, porque `item.itemtype` es un enum de texto (`Assembly`, `InvtPart`, …) y con `num()` las 2522 filas quedarían en 0 **sin dar error** (`RULE-SUP-009`); la columna `inventory.pickeado` se documentó **sin fuente** en lugar de salir de `ail.quantitypicked`, que no existe; y `machines.tipo` **se retiró del delta** porque `workcentertype` no tiene fuente y el usuario decidió que no se necesita (2026-09-28, `RULE-SUP-010`). Quien aplique el delta debe tomar estas versiones, no las anteriores. Ver `docs/plan-migracion-supabase.md` §3.3.1 y
+   `docs/integrations/netsuite-supabase-sync.md`.

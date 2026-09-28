@@ -25,6 +25,14 @@
     "MATERIALES FINAL.js",
     "NETAUTHSUITEQL.js",
     "NetSuiteOAuth.js",
+    "netsuite-restlet-supabase-sync.js",
+    "netsuite-suitelet-sync-tarea.js",
+    "netsuite-user-event-workorder.js",
+    "netsuite-user-event-operacion.js",
+    "netsuite-user-event-item.js",
+    "netsuite-user-event-workcenter.js",
+    "netsuite-user-event-salesorder.js",
+    "netsuite-scheduled-sincronizacion.js",
     "OPERACION FINAL.js",
     "OT_RULES.md",
     "PRINCIPAL.js",
@@ -50,5 +58,5 @@
     "tests",
     "utility.js"
   ],
-  "updated_at": "2026-08-09T18:42:31.547059-06:00"
+  "updated_at": "2026-09-28T00:00:00-06:00"
 }

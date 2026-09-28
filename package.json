@@ -19,6 +19,8 @@
     "build:pages": "node scripts/build-appscript.mjs",
     "preview:pages": "python -m http.server 4173 --directory site",
     "probe": "node scripts/web-probe.mjs",
+    "probe:lectura:supabase": "node scripts/supabase-read-test.mjs",
+    "probe:lectura:appscript": "node scripts/appsscript-bridge-read-test.mjs",
     "probe:generar": "node scripts/web-probe-generar-plan.mjs",
     "probe:generar:seco": "node scripts/web-probe-generar-plan.mjs --dry",
     "probe:cierre": "node scripts/web-probe-cierre-ot.mjs"

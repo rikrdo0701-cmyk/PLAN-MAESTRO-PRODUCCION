@@ -25,14 +25,20 @@
  *    `all.slice(from, to)`, o sea que CADA pagina re-ejecutaba el JOIN completo de
  *    manufacturingoperationtask + transaction + transactionline y mandaba solo el
  *    trozo. Con 2400 filas y pageSize 200 eran 12 escaneos completos del JOIN para
- *    usar el ultimo. Ahora la pagina se resuelve con FETCH NEXT / OFFSET, igual que
- *    ya hace el restlet 2244 (RULE-REP-016-A), y hasMore se deduce de la fila extra
- *    (pageSize + 1) en vez de con un totalRows.
+ *    usar el ultimo.
+ *    ESTE CAMINO SE REVERTIÓ: hoy la pagina se recorta EN MEMORIA, otra vez, y por
+ *    DECISION (no porque la cuenta lo prohiba: ver la medicion de abajo). hasMore se
+ *    deduce de la fila extra (pageSize + 1) en vez de con un totalRows. El recorte en
+ *    memoria se conservo porque con este catalogo (2400 filas) el ahorro de viajes se
+ *    consigue con el pageSize, que es decision del servidor. Si alguna vez se quiere
+ *    paginar en la consulta, el orden correcto es `ORDER BY ... OFFSET n ROWS
+ *    FETCH NEXT m ROWS ONLY` y el ORDER BY es obligatorio.
  *
- *    ATENCION: FETCH NEXT/OFFSET es sintaxis SuiteQL. Si el scripting de la cuenta lo
- *    rechazara, el listado devolveria 200 {ok:false}. La sonda DIAG_inspeccion400
- *    (ya ejecutada en el editor de Apps Script) sirve para verificarlo en NetSuite
- *    antes de dar por buena la change. Este archivo se SUBE A MANO.
+ *    MEDIDO 2026-09-28 contra esta cuenta (sondas de solo lectura, ver RULE-REP-016-A):
+ *    `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY` SI se acepta. El 400 "Failed to
+ *    parse SQL" que se vio el 2026-09-26 fue por escribir las clausulas al reves
+ *    (`FETCH NEXT m ROWS ONLY OFFSET n ROWS`). `LIMIT` no existe (400) y `OFFSET` sin
+ *    `ORDER BY` se ignora en silencio. Este archivo se SUBE A MANO.
  *
  * 2. FILTRO DE UBICACION EN EL SQL. Antes el body traia `locationId: 1` y `post()`
  *    lo IGNORABA (solo leia pageSize y pageIndex), asi que se traian las operaciones de
@@ -159,7 +165,13 @@ define(['N/query'], (query) => {
       debug: {
         idSource: 'mot.id',
         estrategia: elegida.nombre,
-        paginacion: 'recorte en memoria (FETCH NEXT/OFFSET no lo acepta esta cuenta)',
+        // OJO, medido el 2026-09-28: esta cuenta SI acepta
+        // `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY`. El 400 "Failed to parse SQL" del
+        // 2026-09-26 fue por el ORDEN de las clausulas (`FETCH NEXT m ROWS ONLY OFFSET n ROWS`).
+        // Se sigue recortando en memoria por decision, no por imposibilidad: ver la nota de
+        // consultar_ mas abajo. La razon se dice entera para que el app no se guie por un
+        // "no se puede" que resulto falso.
+        paginacion: 'recorte en memoria por decision (la cuenta SI acepta ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY; lo que no existe es LIMIT, y OFFSET sin ORDER BY se ignora)',
         filtroUbicacion: elegida.porUbicacion ? `tl.location = ${body.locationId}` : 'sin filtro por ubicacion',
         degradaciones: intentos,
         note: 'RESTlet exclusivo del plan maestro; devuelve id estable de manufacturingoperationtask'
@@ -177,10 +189,14 @@ define(['N/query'], (query) => {
    * degradar a sin filtro en vez de devolver una lista vacia.
    */
   function consultar_(estrategia, pageIndex, pageSize, locationId) {
-    // Siempre trae el catalogo completo y recorta en memoria: el SuiteQL de esta cuenta NO
-    // acepta FETCH NEXT/OFFSET (verificado en produccion el 2026-09-26 08:00, 400 "Failed to
-    // parse SQL"), asi que la paginacion dentro de la consulta no es una opcion. El ahorro de
-    // viajes se consegue con el pageSize, que es decision del servidor.
+    // Siempre trae el catalogo completo y recorta en memoria. Esto es DECISION, no imposibilidad:
+    // medido el 2026-09-28 contra esta cuenta, `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY`
+    // SI se acepta. El 400 de las 08:00 del 2026-09-26 vino de escribir las clausulas al reves
+    // (`FETCH NEXT m ROWS ONLY OFFSET n ROWS`), que es lo que decia este comentario y quedo
+    // registrado como si la cuenta no aceptara paginacion.
+    // Otros limites medidos el mismo dia: `LIMIT` no existe (400) y `OFFSET` sin `ORDER BY` se
+    // ignora en silencio (RULE-REP-016-A). Se mantiene el recorte en memoria porque con este
+    // catalogo (2400 filas) el ahorro se consigue con el pageSize, que es decision del servidor.
     let conFiltro = null;
     if (estrategia.porUbicacion) {
       const c = armarSql_(true, pageIndex, pageSize, locationId);
@@ -224,10 +240,14 @@ define(['N/query'], (query) => {
       '  mot.inputquantity                         AS qty_to_process,',
       '  mot.startdatetime                         AS start_planned,',
       '  mot.enddate                               AS end_planned,',
-      // OJO: mot.status y mot.manufacturingworkcenter se piden SIN BUILTIN.DF, como estaban
-      // desde siempre. Envolverlos en BUILTIN.DF hizo que TODA la consulta fallara con
-      // "Cannot build builtin function" (verificado en produccion el 2026-09-26 08:00), y
-      // translateStatus_ de abajo justamente espera el valor crudo (NOTSTART), no el nombre.
+      // OJO, MEDIDO el 2026-09-28 (este comentario estaba mal el 2026-09-26): `mot.status` se
+      // pide CRUDO y no se puede envolver, porque es un campo enumerado/estatico y BUILTIN.DF
+      // responde 400 "Cannot build builtin function / Static field is not supported for
+      // Builtin.DF function". `mot.manufacturingworkcenter` SI se puede envolver, porque es una
+      // referencia a entidad, y de hecho el nombre de la operacion sale de ahi (arriba, `AS
+      // operation`). Lo que se puede envolver NO depende del campo: depende de si el campo es
+      // una referencia o un valor estatico. Abajo, `workcenter` se deja crudo porque ese es el
+      // valor que la app usa como CT.
       '  mot.status                                AS status_op,',
       '  mot.manufacturingworkcenter               AS workcenter,',
       '  mot.setuptime                             AS setup_min,',
@@ -240,8 +260,14 @@ define(['N/query'], (query) => {
       '  mot.completedquantity                     AS qty_completed,',
       // tl.location SOLO en la estrategia con filtro: si la columna no se llamara asi en la
       // cuenta, el parseo de TODA la consulta falla y la app se queda sin operaciones. Por eso
-      // la ultima estrategia ni la menciona. Aqui solo se agrega una columna mas; la que
-      // hace que la consulta no sea parseable es BUILTIN.DF, y esa no se toca.
+      // la ultima estrategia ni la menciona. Aqui solo se agrega una columna mas.
+      // Sobre BUILTIN.DF, MEDIDO el 2026-09-28: se puede envolver un campo que sea REFERENCIA
+      // A ENTRO (`mot.manufacturingworkcenter`, `transaction.status`, `wc.id` de un JOIN) y NO
+      // se puede envolver un campo ESTATICO/enumerado (`mot.status`), que responde 400 con
+      // "Cannot build builtin function / Static field is not supported for Builtin.DF function".
+      // Antes se generalize mal a "BUILTIN.DF no funciona" y por eso el lector de operaciones
+      // del restlet de ingesta se fue a un JOIN contra la tabla `manufacturingworkcenter`, que
+      // no existe en esta cuenta, y dejo la accion entera muerta.
       porUbicacion ? '  tl.location                               AS location' : "  ''                                       AS location",
       'FROM manufacturingoperationtask mot',
       'JOIN transaction wo',
@@ -254,10 +280,12 @@ define(['N/query'], (query) => {
       'ORDER BY wo.id, mot.operationsequence, mot.id'
     ];
 
-    // La pagina se recorta en memoria, como siempre. NO se usa FETCH NEXT/OFFSET: se comprobo
-    // en produccion el 2026-09-26 08:00 que el SuiteQL de esta cuenta NO lo acepta y responde
-    // 400 "Failed to parse SQL". El 2244 fallo por lo mismo, que es lo que permitio confirmarlo
-    // por eliminacion (su unico cambio nuevo era ese).
+    // La pagina se recorta en memoria. NO se usa FETCH NEXT/OFFSET por DECISION, no porque la
+    // cuenta lo rechace: medido el 2026-09-28, `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS
+    // ONLY` SI se acepta en esta cuenta. El 400 "Failed to parse SQL" del 2026-09-26 08:00 (con
+    // el que se dio por hecho que la cuenta no aceptaba paginacion) fue por el ORDEN de las
+    // clausulas, no por la sintaxis. Si se cambia esto, el orden correcto es OFFSET antes de
+    // FETCH NEXT y con ORDER BY de antemano.
     // Lo que si se aprovecho del cambio es el pageSize: con 2500 en vez de 200, las 2400 filas
     // entran en UNA llamada en vez de 12, y el termino fijo medido es de ~2 s por llamada
     // (2023 ms + 0.543 ms por fila), asi que el ahorro son ~22 s por sincronizacion.

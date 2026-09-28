@@ -48,19 +48,28 @@ function makeRows(count) {
   }));
 }
 
-test("el listado NO usa FETCH NEXT/OFFSET: el SuiteQL de la cuenta no lo acepta", () => {
-  // Verificado en produccion el 2026-09-26 08:00: al subir la version con paginacion en la
-  // consulta, el 2244 devolvio 400 "Failed to parse SQL" y la inspeccion se quedo vacia. El
-  // diagnostico inicial ("Cannot build builtin function") apuntaba a otra causa, pero el 2244
-  // solo habia cambiado en esto, asi que por eliminacion quedo claro que FETCH NEXT/OFFSET no
-  // existe en el SuiteQL de la cuenta. Se prueba sobre el SQL que de verdad se manda.
+test("el listado NO usa clausulas de paginacion: se recorta en memoria, y no por imposibilidad", () => {
+  // Por que existe este guard, con la razon CORRECTA. En produccion el 2026-09-26 08:00 al
+  // subir la version con paginacion en la consulta, el 2244 devolvio 400 "Failed to parse SQL".
+  // Se concluyo entonces (por eliminacion: el 2244 solo habia cambiado en eso) que la cuenta
+  // no acepta FETCH NEXT ni OFFSET. MEDIDO el 2026-09-28: eso era FALSO. La cuenta si acepta
+  // paginacion, en el orden `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY` (que devuelve
+  // las filas desplazadas, con orden total); el 400 era por el ORDEN INVERSO que escribio el
+  // codigo (`FETCH NEXT n ROWS ONLY OFFSET m ROWS`). LIMIT tampoco existe.
+  //
+  // El recorte en memoria SE MANTIENE, pero por decision y no por limites del ERP: con
+  // pageSize 500 la pagina completa cabe (222 OTs de inspeccion), asi que paginar en SQL no
+  // ahorra trabajo y si agrega el riesgo de repetir o saltar filas entre paginas. Este guard
+  // existe para que nadie reintroduzca la paginacion en SQL creyendo que no funciona ninguna
+  // forma: funciona una, y no se usa a proposito.
   const { post, calls } = loadRestlet({ rows: makeRows(5) });
 
   post({ table: "WO_INSPECCION", action: "list", pageIndex: 1, pageSize: 2 });
 
   assert.equal(calls.length, 1);
-  assert.doesNotMatch(calls[0].sql, /FETCH NEXT/, "agregarlo otra vez deja la inspeccion sin datos");
+  assert.doesNotMatch(calls[0].sql, /FETCH NEXT/, "reintroducir paginacion en SQL sin medarla de nuevo");
   assert.doesNotMatch(calls[0].sql, /OFFSET \d+ ROWS/);
+  assert.doesNotMatch(calls[0].sql, /\bLIMIT\b/i, "esta cuenta no tiene LIMIT: da 400");
 });
 
 test("la pagina se recorta en memoria con SELECT DISTINCT, como siempre", () => {

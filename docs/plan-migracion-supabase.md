@@ -86,17 +86,96 @@ El cuello de botella: `getAppState` las lee **todas**, y el reconstruido frío p
 | `prepared_planning_by_ot` | CONFIG.preparedPlanningByOt | |
 | `plan_snapshots` | PLANES_HISTORICOS + BORRADOR_PLAN | snapshotId + operations (jsonb) |
 
-### 3.4 La ingesta NetSuite → Supabase
+#### 3.3.1 Tablas del plan que `schema-supabase.sql` todavía NO crea — pendiente de aprobar
 
-Un RESTlet de Apps Script (el 1764 ya existe; se añade un endpoint de catálogos) corre **en horario**
-(fuerte: un trigger programado) y escribe en Supabase por su REST API con la service key:
+Contraste hecho el **2026-09-28** con `scripts/supabase-read-test.mjs` (paso `plan.documento`, que
+lee las dos fuentes y las compara). Esta sección del plan declara **22 tablas**;
+`docs/schema-supabase.sql` crea **21**:
+
+| Falta en el SQL | Origen | Qué guarda |
+|---|---|---|
+| `prepared_planning_by_ot` | `CONFIG.preparedPlanningByOt` | la preparación validada de cada OT (máquina, herramental, kit, tipo/días de subcontrato) antes de generar plan — ver RULE-OT-010 |
+
+**No se agregó el `create table`.** Este plan dice arriba *"No se mueve nada hasta que se apruebe"*
+y `schema-supabase.sql` es el artefacto de la **fase 1**; agregar la tabla es una decisión de la
+persona, no de la sonda. Se deja anotado aquí para que la diferencia se vea antes de la migración y
+no el día de ejecutarla, que es cuando ya cuesta caro.
+
+**Y un segundo drift, del lado de la ingesta (2026-09-28), que tampoco se aplicó.** La sección 3.4
+reescribió la ingesta a un RESTlet de NetSuite con 7 tablas, y `schema-supabase.sql` solo tiene 4 de
+esas 7. El delta va en `docs/schema-supabase-sync-netsuite.sql` (propuesto): crea `items`,
+`inventory` y `sales_orders`, y altera `materials` y `machines`:
+
+| Drift | Por qué la ingesta lo necesita |
+|---|---|
+| falta la tabla `items` | la acciones `items` no tiene dónde escribir |
+| falta la tabla `inventory` | ídem para `inventario` |
+| falta la tabla `sales_orders` | ídem para `ordenes_venta` |
+| `materials` no tiene `line_id` | es la **clave natural** de la fila: sin ella no hay `on_conflict` y el upsert degrada a borrar-y-reinsertar |
+| `machines` no tiene `tipo` | **ya no se agrega** (RULE-SUP-010): `workcentertype` no existe en ninguna fuente (SuiteQL ni REST Record API, medido) y el usuario decidió que el dato no se necesita porque la máquina se captura en el plan; `centros` guarda solo `nombre` y `activa` |
+
+Mientras ese SQL no se aplique, `accion: 'diagnostico'` del RESTlet responde `tablasFaltantes` con
+`items`, `inventory` y `sales_orders`, y dice qué hacer. Ese es el mecanismo: el hueco se declara en
+la respuesta en vez de asumirse.
+
+Además, medido el mismo día y sin credenciales:
+
+- **El proyecto existe y responde**, pero **no se pudo contar ninguna tabla real**: `/auth/v1/health`
+  devolvió `401` sin `apikey` (respuesta normal de un Supabase sano) y los pasos de Data API
+  quedaron *sin datos*, no *fallidos*. Ver `.project-memory/integrations.json` `INT-SUPABASE` y
+  `.project-memory/data-sources.json` `SUPABASE-PLAN` (status `planned`: **sin tablas y sin datos**).
+- **Los dos hosts no son intercambiables**: la Data API, el panel y `/auth` son
+  `https://xtgtfjcwxcoxvixholpj.supabase.co` (**sin** prefijo `db.`), y el Postgres del 5432 es
+  `db.xtgtfjcwxcoxvixholpj.supabase.co` (**con** prefijo), que además salió **IPv6-only** (DoH
+  devuelve `NODATA` para el tipo A), o sea que no es alcanzable por IPv4 desde esta red.
+- **No hay ninguna credencial en el repo**: ni contraseña de la base, ni clave `anon`, ni
+  `service_role`. Para cerrar la comprobación de lectura de filas hace falta la clave `anon` y, para
+  el paso directo a Postgres, además `SUPABASE_DB_PASSWORD` y el paquete `pg`.
+
+### 3.4 La ingesta NetSuite → Supabase — **CAMBIO 2026-09-28: push desde NetSuite, no Apps Script**
+
+La versión anterior de esta sección decía que la ingesta sería *un RESTlet de Apps Script corriendo en
+horario*. **Eso cambió**: el push se hace **desde dentro de NetSuite**. La razón es que el trigger ya
+existe y es el correcto — el propio guardado del registro — y ningun User Event de NetSuite puede
+invocar a Apps Script de forma nativa sin una indirección (RESTlet → App Script → Supabase) que
+devuelve el problema: una llamada extra en la transacción del usuario, y un punto más donde la ingesta
+se puede caer sin que nadie se entere.
 
 ```
-NetSuite RESTlets ──► Apps Script (OAuth ya está) ──► Supabase REST ──► tablas
+User Event (afterSubmit)  ──encola──►  Suitelet  ──URL interna──►  RESTlet  ──PostgREST──►  Supabase
+   (6, uno por registro)              (encolado,               (lee NetSuite         (upsert por
+                                       corre aparte)            por SuiteQL)          clave natural)
+                                       
+Script programado  ──encola──►  Suitelet  (barrido: inventario + reconciliación)
 ```
 
-La web lee Supabase directo. Para las escrituras que necesitan NetSuite, la web llama a Apps Script
-(que sigue siendo la única capa con el OAuth), pero **el estado vive en Supabase**.
+Piezas, todas en la raíz del repo:
+
+| Archivo | Tipo | Qué hace |
+|---|---|---|
+| `netsuite-user-event-workorder.js` | UserEvent `workorder` | encola `workorders` + `operaciones` + `materiales` (son tres registros distintos) |
+| `netsuite-user-event-operacion.js` | UserEvent `manufacturingoperationtask` | encola `operaciones` |
+| `netsuite-user-event-item.js` | UserEvent `item` | encola `items` |
+| `netsuite-user-event-workcenter.js` | UserEvent `workcenter` (los centros son registros de tipo `workcenter`, respaldados por `entitygroup`) | encola `centros` |
+| `netsuite-user-event-salesorder.js` | UserEvent `salesorder` | encola `ordenes_venta` |
+| `netsuite-suitelet-sync-tarea.js` | Suitelet | despacha al RESTlet por URL interna; no reintenta solo |
+| `netsuite-restlet-supabase-sync.js` | Restlet | **el único escritor** de las 7 tablas; lee por SuiteQL, hace upsert |
+| `netsuite-scheduled-sincronizacion.js` | ScheduledScript | barrido: `inventario` (sin User Event posible) + reconciliación |
+
+El User Event de `workorder` **no** dispara la ingesta de operaciones ni de materiales: esos son otros
+registros (`manufacturingoperationtask`, `transactionline`). Por eso hay seis User Events y no uno.
+
+**Lo que NO cambió:** Apps Script sigue siendo la única capa con el OAuth de NetSuite, y por eso sigue
+siendo quien responde a la web cuando la escritura necesita ir a NetSuite. El cambio es de dirección:
+antes los datos salían de NetSuite por askew hacia Apps Script; ahora NetSuite empuja. El **estado
+vive en Supabase** en los dos casos. Contrato completo en
+`docs/integrations/netsuite-supabase-sync.md`.
+
+**Delta de esquema que la ingesta necesita y que sigue sin aplicar:**
+`docs/schema-supabase-sync-netsuite.sql` (crea `items`, `inventory`, `sales_orders`; agrega
+`materials.line_id` con su UNIQUE; **ya no agrega `machines.tipo`**, revocado 2026-09-28 por
+RULE-SUP-010). Propuesto, no aplicado, por la misma regla que
+arriba: *no se mueve nada hasta que se apruebe*.
 
 ### 3.5 Concurrencia
 
@@ -114,6 +193,13 @@ y espera `revision + 1`. Si no, rechaza. Es el equivalente de `CONFLICT_REVISION
 
 Cada fase se verifica con las sondas que ya existen (`web-probe.mjs`, `web-probe-generar-plan.mjs`).
 
+Las fases que tocan Supabase agregan **`scripts/supabase-read-test.mjs`** (`npm run
+probe:lectura:supabase`), que es de **solo lectura** y no escribe nada: `--list` imprime qué tablas
+expone la Data API y cuáles del esquema faltan, y `--table=<tabla>` lee filas reales con conteo
+exacto, columnas y muestra. La comparación de esquema (`plan.esquema`) no depende de la credencial:
+siempre contrasta lo expuesto contra `docs/schema-supabase.sql`, de modo que sirve para las fases 1
+a 3; la lectura de filas necesita la clave `anon`. Es la sonda del `RULE-TST-002`.
+
 ## 5. Riesgos
 
 - **La concurrencia**: hay que recrear `CONFLICT_REVISION` en Supabase o dos sesiones se pisarán.
@@ -121,4 +207,13 @@ Cada fase se verifica con las sondas que ya existen (`web-probe.mjs`, `web-probe
 - **La migración**: 138 715 filas de PLANES_HISTORICOS + el estado completo. Se hace una vez y se verifica.
 - **La ingesta**: si el sync falla, la web lee datos viejos de Supabase. Hay que avisar, no esconder.
 - **El OAuth de NetSuite sigue en Apps Script**: Supabase no puede llamar a NetSuite directamente. La
-  ingesta pasa por Apps Script.
+  lectura de NetSuite que necesita la web sigue pasando por Apps Script; la escritura desde NetSuite a
+  Supabase es el sentido inverso y no usa OAuth (§3.4).
+- **El modo `comparar` es una llamada por fila.** Con el gobierno de 10,000 llamadas externas/día por
+  cliente, un barrido grande no puede ir en `comparar`. Por eso `MAX_FILAS_COMPARAR = 60` y pasado ese
+  tope el RESTlet degrada a `upsert` (una llamada por lote) **y lo declara** en `degradaciones`. Un
+  `POST` con `Prefer: resolution=merge-duplicates` es last-write-wins: sin guarda de `revision`. Es una
+  degradación consciente, no un default.
+- **La service role key sale de un script parameter de NetSuite**, nunca del repo. Si ese deployment
+  queda *Available Externally*, la clave queda expuesta por una URL. Por eso el RESTlet se invoca por
+  URL interna desde el Suitelet (RULE-SUP-005).

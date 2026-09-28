@@ -1321,7 +1321,41 @@
       "references": [
         "src/server/09-photos.js"
       ]
+    },
+    {
+      "source_id": "SUPABASE-PLAN",
+      "type": "supabase_postgrest",
+      "name": "Supabase (destino de la migracion; SIN datos y SIN tablas; la ingesta ya esta escrita y es el writer)",
+      "location/origin": "Proyecto ref xtgtfjcwxcoxvixholpj. Data API https://xtgtfjcwxcoxvixholpj.supabase.co (SIN prefijo 'db.'); Postgres directo db.xtgtfjcwxcoxvixholpj.supabase.co:5432 (CON prefijo, medido solo AAAA). El connection string compartido por el usuario es postgresql://postgres:<password>@db.xtgtfjcwxcoxvixholpj.supabase.co:5432/postgres, o sea el host de Postgres, NO el de la Data API.",
+      "columns": "NINGUNA en el proyecto: medido el 2026-09-28, /auth/v1/health responde 401 sin apikey y los pasos de Data API (OpenAPI y lectura de tabla) quedaron SIN DATOS por falta de credencial, de modo que no se pudo contar ninguna tabla real. El esquema OBETIVO esta escrito en el repo, no en el proyecto: docs/schema-supabase.sql (21 'create table') mas docs/schema-supabase-sync-netsuite.sql (PROPUESTO, NO APLICADO: crea items, inventory y sales_orders, y altera materials.line_id con su UNIQUE; ya NO agrega machines.tipo, revocado el 2026-09-28 por RULE-SUP-010). El delta se corrigio el 2026-09-28 tras medir: items.tipo es TEXT y no integer, porque `item.itemtype` es un enum de texto de NetSuite y con num() las 2522 filas quedaban en 0 sin error (RULE-SUP-009). El drift de la ingesta se declara en la respuesta del RESTlet con accion 'diagnostico' (tablasFaltantes), no se asume resuelto.",
+      "readers": "NINGUNO en el producto todavia. No hay codigo en src/ que lea Supabase: la migracion de la lectura web (fase 3 del plan) NO esta hecha. La sonda scripts/supabase-read-test.mjs (RULE-TST-002) es el unico lector, y es de solo lectura.",
+      "writers": "PARCIAL, y solo del lado NetSuite. netsuite-restlet-supabase-sync.js es el UNICO writer de las 7 tablas que NetSuite manda (work_orders, operations, materials, items, machines, inventory, sales_orders) con upsert por clave natural y guarda de revision (RULE-SUP-001, RULE-SUP-004). Lo disparan 6 User Events via netsuite-suitelet-sync-tarea.js y un barrido programado. Apps Script conserva la escritura de las tablas de estado y plan (app_state, plan_snapshots, operation_plan_statuses y la cola) hasta la fase 4 del plan, y es el unico que tiene el OAuth de NetSuite. NINGUN writer escribe en NetSuite: Supabase no puede llamar a NetSuite, no hay OAuth ahi. VERIFICACION CONTRA EL ERP REAL (2026-09-28, lector 1 de 7, accion 'workorders'): con el SQL extraido del propio RESTlet se leyeron 277 OTs abiertas y se metieron por el RESTlet de verdad, con el record:built que reporta el 2244 desplegado, revisando el cuerpo exacto que se mandaria a PostgREST sin escribir nada. Resultado: folio, id interno, articulo, descripcion, cantidad, estatus y las tres fechas coinciden con el valor crudo de SuiteQL; cant_ensamblada coincide con record:built del 2244; cant_pendiente es el resto; y ninguna fecha queda como texto crudo (work_orders.cliente queda vacio y es lo correcto: una WorkOrder no tiene entidad). Se corrigieron dos defectos que solo aparecieron al medir: las fechas de SuiteQL son dd/MM/aaaa sin zona (el parser con new Date las rechazaba o las corria en silencio) y la cantidad ensamblada no existe en SuiteQL, asi que sale del record. VERIFICACION EN VALORES COMPLETA (2026-09-28, sondas verifica-restlet-0{1,2,3,4}.mjs, solo lectura): `workorders` 277 OTs abiertas 0 discrepancias; `operaciones` 0 discrepancias; `materiales` 80 filas de OTs abiertas 0 discrepancias, line_id unico, BUILTIN.DF coincide con item.itemid; `ordenes_venta`/`_lineas` orden SO916 con 12 lineas 0 discrepancias. Los 7 lectores quedan verificados. CORREGIDO EL 2026-09-28 (decision del usuario: 'solo me interesan las abiertas'): `materiales` filtra SOLO OTs abiertas (mismo patron 3 NOT LIKE CERRAD/CLOSED/COMPLET que workorders/operaciones) — sin el filtro el barrido leia 28 676 filas y truncaba a 5 000, con el filtro lee 2 301 y no trunca; `ordenes_venta` filtra SOLO ordenes abiertas (NOT LIKE CERRAD/CLOSED/FACTURAD) — sin el filtro leia 2 408 y truncaba a 2 000, con el filtro lee 124 y no trunca. ACTUALIZADO EL 2026-09-28: el guard de parseo (.openchamber/verifica-sql.mjs, que corre el SQL de los 7 lectores extraido del ARCHIVO) encontro que 3 de 7 lectores NO CORRIAN en esta cuenta. Corregidos y verificados: `items` (daba 500; en `item` la columna del tipo es `itemtype` y es un enum de texto -Assembly 1591, InvtPart 675, NonInvtPart 238, Service 14, OthCharge 3, Kit 1- y NO existen `type` ni `isassortmentitem`, asi que `es_ensamblaje` se deriva de `itemtype = 'Assembly'`) e `inventario` (daba 400; el comprometido es `ail.quantitycommitted`, no existe `quantityreserved` ni ninguna columna de pickeado, y `BUILTIN.DF` no se puede envolver en la proyeccion de una consulta agregada, asi que el lector no lleva SUM ni GROUP BY porque el agregado ya trae una fila por par: 2426 filas = 2426 pares). Corren 6 de 7; queda `centros`, que usa la tabla inexistente `manufacturingworkcenter` y depende de `workcentertype`, que no tiene fuente. Sin verificar en VALORES (aunque su SQL corra): `materiales`, `ordenes_venta` y `ordenes_venta_lineas`. Nueva regla RULE-SUP-009: NetSuite es SOLO LECTURA y lo que se guarda es una copia fiel, o no se guarda.",
+      "rules": [
+        "RULE-SUP-001",
+        "RULE-SUP-002",
+        "RULE-SUP-003",
+        "RULE-SUP-004",
+        "RULE-SUP-005",
+        "RULE-SUP-006",
+        "RULE-SUP-007",
+        "RULE-SUP-008",
+        "RULE-SUP-009",
+        "RULE-TST-002"
+      ],
+      "status": "in_progress",
+      "drift": "DOS drifts declarados, ninguno aplicado. (1) El plan seccion 3 declara 22 tablas y docs/schema-supabase.sql crea 21: falta prepared_planning_by_ot (CONFIG.preparedPlanningByOt). (2) La ingesta (plan seccion 3.4, reescrita el 2026-09-28 de Apps Script a push desde NetSuite) escribe 7 tablas y el esquema solo tiene 4: faltan las tablas items, inventory y sales_orders; materials no tiene line_id, que es su clave natural y sin la cual no hay on_conflict; y machines NO lleva columna de tipo: se retiro del delta el 2026-09-28 (RULE-SUP-010) porque workcentertype no existe en ninguna fuente (SuiteQL ni REST Record API) y el usuario decidio que el dato no se necesita ya que la maquina se captura en el plan. Ojo con el delta: desde el 2026-09-28 `items.tipo` es TEXT y no integer, porque NetSuite devuelve un enum de texto (`item.itemtype`) y guardarlo con num() pondria 0 en las 2522 filas sin dar error (RULE-SUP-009). El delta esta en docs/schema-supabase-sync-netsuite.sql y NO se ejecuto: el plan dice 'No se mueve nada hasta que se apruebe'.",
+      "references": [
+        "docs/plan-migracion-supabase.md",
+        "docs/schema-supabase.sql",
+        "docs/schema-supabase-sync-netsuite.sql",
+        "docs/integrations/netsuite-supabase-sync.md",
+        "scripts/supabase-read-test.mjs",
+        "netsuite-restlet-supabase-sync.js",
+        "netsuite-suitelet-sync-tarea.js",
+        "netsuite-user-event-workorder.js",
+        "netsuite-scheduled-sincronizacion.js"
+      ]
     }
   ],
-  "updated_at": "2026-09-05"
+  "updated_at": "2026-09-28"
 }
