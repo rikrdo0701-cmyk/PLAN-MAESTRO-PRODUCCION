@@ -39,6 +39,15 @@ define(['N/task', 'N/runtime', 'N/log'], (task, runtime, log) => {
   const TODAS = ['workorders', 'operaciones', 'materiales', 'items', 'centros', 'inventario', 'ordenes_venta'];
 
   function execute() {
+    // Solo horario laboral: lunes a viernes, 7am-5pm. Fuera de eso, no encola nada.
+    // El schedule del deployment sigue siendo "cada 15 minutos" pero este guard
+    // evita llamadas al RESTlet en horas donde no hay modificaciones de registros.
+    const ahora = new Date();
+    const dia = ahora.getDay(); // 0=domingo, 6=sabado
+    const hora = ahora.getHours();
+    if (dia === 0 || dia === 6 || hora < 7 || hora >= 17) {
+      return;
+    }
     const scriptId = parametro('SCRIPT_ID_TAREA');
     const deployId = parametro('DEPLOY_ID_TAREA');
     if (!scriptId || !deployId) {
