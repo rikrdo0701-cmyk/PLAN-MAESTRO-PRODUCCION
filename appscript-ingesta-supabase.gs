@@ -6,41 +6,33 @@
  *
  * NO escribe en NetSuite: solo lee (SuiteQL SELECT) y escribe en Supabase.
  *
- * Configuracion: una Hoja de calculo llamada 'CONFIG' con dos columnas (key, value):
- *   NS_ACCOUNT_ID, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN, NS_TOKEN_SECRET,
- *   SUPABASE_URL, SUPABASE_KEY, UBICACION
+ * Configuracion: las credenciales van como constantes abajo (NS_CONFIG y
+ * SUPABASE_CONFIG). Si algun dia hace falta rotarlas, se cambian aqui.
  *
  * Trigger: cada 15 minutos, lun-vie, 7am-5pm (se configura en Apps Script).
  */
 
 // =============================================================================
-// Configuracion — lee de una Hoja de calculo (sin limite de 50 properties)
+// Configuracion — credenciales como constantes (el proyecto ya tiene 50+
+// properties y no caben mas; si hace falta rotarlas, se cambian aqui)
 // =============================================================================
 
+const NS_CONFIG = {
+  accountId: 'TU_ACCOUNT_ID',
+  consumerKey: 'TU_CONSUMER_KEY',
+  consumerSecret: 'TU_CONSUMER_SECRET',
+  token: 'TU_TOKEN',
+  tokenSecret: 'TU_TOKEN_SECRET'
+};
+
+const SUPABASE_CONFIG = {
+  supabaseUrl: 'https://xtgtfjcwxcoxvixholpj.supabase.co',
+  supabaseKey: 'TU_SERVICE_ROLE_KEY',
+  ubicacion: '1'
+};
+
 function PP_config_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('CONFIG');
-  if (!sheet) throw new Error('No existe la hoja CONFIG. Creala con columnas key,value.');
-  const rows = sheet.getDataRange().getValues();
-  const config = {};
-  for (let i = 1; i < rows.length; i++) {
-    const key = String(rows[i][0] || '').trim();
-    const value = String(rows[i][1] || '').trim();
-    if (key) config[key] = value;
-  }
-  if (!config.NS_ACCOUNT_ID || !config.SUPABASE_URL) {
-    throw new Error('La hoja CONFIG no tiene NS_ACCOUNT_ID o SUPABASE_URL');
-  }
-  return {
-    accountId: config.NS_ACCOUNT_ID,
-    consumerKey: config.NS_CONSUMER_KEY,
-    consumerSecret: config.NS_CONSUMER_SECRET,
-    token: config.NS_TOKEN,
-    tokenSecret: config.NS_TOKEN_SECRET,
-    supabaseUrl: config.SUPABASE_URL,
-    supabaseKey: config.SUPABASE_KEY,
-    ubicacion: config.UBICACION || '1'
-  };
+  return Object.assign({}, NS_CONFIG, SUPABASE_CONFIG);
 }
 
 // =============================================================================
