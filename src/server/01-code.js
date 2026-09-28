@@ -214,6 +214,46 @@ function getAppState() {
   return PP_readState_(spreadsheet);
 }
 
+// LEE UNA HOJA CUALQUIERA Y DEVUELVE SUS FILAS COMO OBJETOS.
+//
+// POR QUE EXISTE. La migracion a Supabase necesita sacar los datos de las Hojas sin perder ni un
+// registro, y getAppState() no sirve para eso: devuelve el estado ya PROCESADO (con claves
+// normalizadas, campos derived y, en el caso de operators, reducido a un array de strings que se
+// lleva por delante ACTIVO, MINUTOS_CAPACIDAD y RENDIMIENTO_PCT). Para migrar con fidelidad hace
+// falta el contenido BRUTO de cada hoja, y eso es lo que devuelve esta funcion: un array de
+// objetos, uno por fila, con los encabezados de la fila 1 como claves y los valores como texto.
+//
+// LO QUE NO HACE, A PROPOSITO. No normaliza, no interpreta, no convierte tipos ni infiere claves.
+// Cada celda sale como texto tal como esta en la hoja (con trim). Si una fila esta vacia, se omite.
+// La logica de negocio sigue viviendo en PP_mapOperation_, PP_buildOtConfigurations_ y demas; esto
+// es solo el lector de la hoja, y quien migra decide que hace con cada campo.
+function readSheetRows(sheetName) {
+  const sheet = PP_getWorkbook_().getSheetByName(String(sheetName || ''));
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return [];
+  const rows = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  if (!rows.length) return [];
+  const headers = rows[0].map(function(h, i) {
+    const t = String(h == null ? '' : h).trim();
+    return t || ('COL_' + (i + 1));
+  });
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = {};
+    let empty = true;
+    for (let c = 0; c < headers.length; c++) {
+      const v = rows[r][c];
+      const s = v == null ? '' : String(v).trim();
+      if (s) empty = false;
+      row[headers[c]] = s;
+    }
+    if (!empty) out.push(row);
+  }
+  return out;
+}
+
 function PP_acquireScriptLock_(action, timeoutMs) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(timeoutMs || 30000)) {
