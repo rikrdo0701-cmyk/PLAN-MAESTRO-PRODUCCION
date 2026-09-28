@@ -6,9 +6,13 @@
  *
  * NO escribe en NetSuite: solo lee (SuiteQL SELECT) y escribe en Supabase.
  *
- * Configuracion (Script Properties en Apps Script):
- *   NS_ACCOUNT_ID, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN, NS_TOKEN_SECRET
- *   SUPABASE_URL, SUPABASE_KEY, UBICACION
+ * Configuracion: UNA sola Script Property llamada 'CONFIG' con un JSON:
+ *   {
+ *     "NS_ACCOUNT_ID": "...", "NS_CONSUMER_KEY": "...", "NS_CONSUMER_SECRET": "...",
+ *     "NS_TOKEN": "...", "NS_TOKEN_SECRET": "...",
+ *     "SUPABASE_URL": "https://xtgtfjcwxcoxvixholpj.supabase.co",
+ *     "SUPABASE_KEY": "...", "UBICACION": "1"
+ *   }
  *
  * Trigger: cada 15 minutos, lun-vie, 7am-5pm (se configura en Apps Script).
  */
@@ -19,16 +23,9 @@
 
 function PP_config_() {
   const p = PropertiesService.getScriptProperties();
-  return {
-    accountId: p.getProperty('NS_ACCOUNT_ID'),
-    consumerKey: p.getProperty('NS_CONSUMER_KEY'),
-    consumerSecret: p.getProperty('NS_CONSUMER_SECRET'),
-    token: p.getProperty('NS_TOKEN'),
-    tokenSecret: p.getProperty('NS_TOKEN_SECRET'),
-    supabaseUrl: p.getProperty('SUPABASE_URL'),
-    supabaseKey: p.getProperty('SUPABASE_KEY'),
-    ubicacion: p.getProperty('UBICACION') || '1'
-  };
+  const raw = p.getProperty('CONFIG');
+  if (!raw) throw new Error('Falta la Script Property CONFIG (JSON con NS_* y SUPABASE_*)');
+  return JSON.parse(raw);
 }
 
 // =============================================================================
