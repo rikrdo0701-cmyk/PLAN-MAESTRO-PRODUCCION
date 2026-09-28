@@ -74,7 +74,11 @@ function PP_suiteql_(sql, config) {
   }).join('&');
   const res = UrlFetchApp.fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: PP_oauthHeader_('POST', endpoint, query, config) },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
+      'Prefer': 'transient'
+    },
     payload: JSON.stringify({ q: sql }),
     muteHttpExceptions: true
   });
