@@ -327,11 +327,15 @@ function traducirEstado_(crudo) {
 // =============================================================================
 
 function ingesta() {
+  console.log('=== INGESTA START ===');
   const config = PP_config_();
+  console.log('Config OK. Account: ' + config.accountId);
   const ahora = new Date();
   const dia = ahora.getDay();
   const hora = ahora.getHours();
+  console.log('Hora: ' + ahora.toISOString() + ' (dia=' + dia + ', hora=' + hora + ')');
   if (dia === 0 || dia === 6 || hora < 7 || hora >= 17) {
+    console.log('Fuera de horario laboral. Saliendo.');
     return;
   }
 
@@ -348,14 +352,19 @@ function ingesta() {
   const log = [];
   acciones.forEach(function(a) {
     try {
+      console.log('Leyendo ' + a.nombre + '...');
       const filas = a.lector(config);
+      console.log(a.nombre + ': ' + filas.length + ' filas leidas');
       const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
       log.push(a.nombre + ': ' + r.escritas + ' filas');
+      console.log(a.nombre + ': ' + r.escritas + ' escritas');
     } catch (e) {
       log.push(a.nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
+      console.log(a.nombre + ': ERROR ' + String(e.message || e).slice(0, 200));
     }
   });
   console.log('Ingesta: ' + log.join(' | '));
+  console.log('=== INGESTA END ===');
 }
 
 // =============================================================================
