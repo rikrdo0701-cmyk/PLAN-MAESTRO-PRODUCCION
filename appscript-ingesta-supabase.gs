@@ -13,26 +13,21 @@
  */
 
 // =============================================================================
-// Configuracion — credenciales como constantes (el proyecto ya tiene 50+
-// properties y no caben mas; si hace falta rotarlas, se cambian aqui)
+// Configuracion — NS_* de las Script Properties existentes, SUPABASE_* constantes
 // =============================================================================
 
-const NS_CONFIG = {
-  accountId: 'TU_ACCOUNT_ID',
-  consumerKey: 'TU_CONSUMER_KEY',
-  consumerSecret: 'TU_CONSUMER_SECRET',
-  token: 'TU_TOKEN',
-  tokenSecret: 'TU_TOKEN_SECRET'
-};
-
-const SUPABASE_CONFIG = {
-  supabaseUrl: 'https://xtgtfjcwxcoxvixholpj.supabase.co',
-  supabaseKey: 'TU_SERVICE_ROLE_KEY',
-  ubicacion: '1'
-};
-
 function PP_config_() {
-  return Object.assign({}, NS_CONFIG, SUPABASE_CONFIG);
+  const p = PropertiesService.getScriptProperties();
+  return {
+    accountId: p.getProperty('NS_ACCOUNT_ID'),
+    consumerKey: p.getProperty('NS_CONSUMER_KEY'),
+    consumerSecret: p.getProperty('NS_CONSUMER_SECRET'),
+    token: p.getProperty('NS_TOKEN'),
+    tokenSecret: p.getProperty('NS_TOKEN_SECRET'),
+    supabaseUrl: 'https://xtgtfjcwxcoxvixholpj.supabase.co',
+    supabaseKey: 'TU_SERVICE_ROLE_KEY',
+    ubicacion: '1'
+  };
 }
 
 // =============================================================================
