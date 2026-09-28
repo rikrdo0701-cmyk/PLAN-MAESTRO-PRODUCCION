@@ -121,8 +121,8 @@ function PP_supabaseUpsert_(tabla, filas, clave, config) {
 function leerWorkorders_(config) {
   const sql = [
     'SELECT',
-    '  t.id, t.tranid, t.entity, t.status, t.trandate, t.custbody_ubicacion,',
-    '  t.cantidad, t.cantidad_ensamblada, t.descripcion',
+    '  t.id, t.tranid, t.entity, t.status, t.trandate,',
+    '  t.custbody_ubicacion, t.memo',
     'FROM transaction t',
     "WHERE t.type = 'WorkOrd'",
     "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
@@ -138,9 +138,7 @@ function leerWorkorders_(config) {
       cliente: String(r.entity || ''),
       estatus: String(r.status || ''),
       fecha: r.trandate || null,
-      cantidad: Number(r.cantidad) || 0,
-      cant_ensamblada: Number(r.cantidad_ensamblada) || 0,
-      descripcion: String(r.descripcion || '')
+      memo: String(r.memo || '')
     };
   });
 }
