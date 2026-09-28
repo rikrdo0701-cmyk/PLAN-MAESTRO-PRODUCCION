@@ -133,3 +133,30 @@ test("la puerta de frescura del rescate sigue comparando generatedAt contra el s
   assert.match(app, /savedGeneratedAtMs > currentGeneratedAtMs/, "el rescate debe seguir exigiendo que el snapshot sea mas nuevo");
   assert.match(app, /savedToolChanges === 0\) return;/, "sin cambios de herramental y sin borrador mas nuevo, no se restaura");
 });
+
+test("el rescate del borrador NO pisa el orden de la cola si la cola ya tiene OTs", async () => {
+  const app = await leerApp();
+  // Medido el 2026-09-27: el orden del estado y el de la pantalla eran EXACTAMENTE el orden del
+  // borrador (2752, 3331, 3556, 3302, ...), no el orden manual que habia puesto la persona. El
+  // rescate hacia `state.selectedOts = payload.selectedOts` y despues saveState("plan"): la cola
+  // quedaba ordenada como el borrador Y ASI SE GUARDABA, asi que el orden manual se perdia para
+  // siempre. Y __planningRestoredFromServer no se marca en el camino normal (solo en el build-patch
+  // restoreDraftPlanFromSharedState), asi que el rescate corria en cada arranque.
+  const ini = app.indexOf("async function maybeRestoreSavedDraftOnBoot(");
+  const fin = app.indexOf("function validateNetSuiteImportedData(", ini);
+  assert.ok(ini > 0 && fin > ini, "no se encontro maybeRestoreSavedDraftOnBoot");
+  const cuerpo = app.slice(ini, fin);
+  assert.match(cuerpo, /const colaVacia =/, "la cola vacia tiene que medirse antes de tocar la cola");
+  // Se busca la asignacion en CODIGO, no en el comentario (el comentario la menciona y
+  // indexOf encontraria primero al comentario). Por eso el patron incluye el if que la precede.
+  const iAsign = cuerpo.indexOf("payload.selectedOts.length) state.selectedOts = payload.selectedOts");
+  const iGuarda = cuerpo.indexOf("if (colaVacia)");
+  assert.ok(iAsign > 0, "no se encontro la asignacion de selectedOts");
+  assert.ok(
+    iGuarda > 0 && iGuarda < iAsign,
+    "state.selectedOts solo puede asignarse DENTRO de if (colaVacia): si no, pisa el orden manual "
+      + "en cada arranque y el borrador reordena la cola de la persona",
+  );
+  // Y la cola vacia sigue poblandose desde el borrador, que es el caso que el rescate cubre.
+  assert.match(cuerpo, /state\.selectedOts = uniq\(restored\.map/, "con la cola vacia, si se pobla desde el borrador");
+});

@@ -721,10 +721,26 @@ async function maybeRestoreSavedDraftOnBoot() {
     }
     for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
     state.operations = merged;
-    if (Array.isArray(payload.selectedOts) && payload.selectedOts.length) state.selectedOts = payload.selectedOts;
-    else state.selectedOts = uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean));
-    if (Array.isArray(payload.lockedOts) && payload.lockedOts.length) state.lockedOts = payload.lockedOts;
-    else state.lockedOts = uniq(restored.filter((op) => op.locked === true).map((op) => String(op.ot || "").trim()).filter(Boolean));
+    // LA COLA NO SE PISA SI YA TIENE OTs. El orden de la cola es el orden MANUAL que puso la
+    // persona; el orden de las operaciones del borrador es el orden de PROGRAMACION, que es otra
+    // cosa. Antes el rescate hacia `state.selectedOts = payload.selectedOts` y despues
+    // saveState("plan"): la cola quedaba ordenada como el borrador Y ASI SE GUARDABA, de modo que
+    // el orden manual se perdia para siempre. Medido el 2026-09-27: el orden del estado y el de
+    // la pantalla son exactamente el del borrador (2752, 3331, 3556, 3302, ...), no el manual, y
+    // __planningRestoredFromServer no se marca en el camino normal (solo en el build-patch
+    // restoreDraftPlanFromSharedState), asi que el rescate corria en cada arranque.
+    // En el arranque degradado la cola esta vacia (sampleState no trae selectedOts), y ahi si
+    // tiene sentido poblarla desde el borrador.
+    const colaVacia = !Array.isArray(state.selectedOts) || !state.selectedOts.length;
+    if (colaVacia) {
+      if (Array.isArray(payload.selectedOts) && payload.selectedOts.length) state.selectedOts = payload.selectedOts;
+      else state.selectedOts = uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean));
+    }
+    const colaBloqueadaVacia = !Array.isArray(state.lockedOts) || !state.lockedOts.length;
+    if (colaBloqueadaVacia) {
+      if (Array.isArray(payload.lockedOts) && payload.lockedOts.length) state.lockedOts = payload.lockedOts;
+      else state.lockedOts = uniq(restored.filter((op) => op.locked === true).map((op) => String(op.ot || "").trim()).filter(Boolean));
+    }
     if (payload.lastSchedule && typeof payload.lastSchedule === "object") state.lastSchedule = payload.lastSchedule;
     else state.lastSchedule = {
       ...(state.lastSchedule || {}),
