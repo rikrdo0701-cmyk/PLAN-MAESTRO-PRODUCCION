@@ -22,6 +22,20 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    env:
+      # El lector de Supabase del frontend (src/web/shared/supabase-reader.js) sale
+      # del build con estos dos marcadores VACIOS si no estan, y isConfigured() da
+      # falso, o sea que readCatalogs() no se puede ni intentar. MEDIDO 2026-09-29:
+      # en el bundle servido de Pages DEFAULT_URL y DEFAULT_ANON_KEY venian vacios y
+      # el modulo no tenia a quien llamarlo, que ademas es el otro problema.
+      #
+      # Son VARIABLES de repositorio, no secretos, y a proposito: la clave
+      # publicable viaja dentro del bundle publico de todos modos, que es lo que
+      # permite que la pagina lea por PostgREST sin login. La service role key no
+      # esta aqui y no debe estar nunca: vive en CONFIG.js, dentro del proyecto de
+      # Apps Script.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

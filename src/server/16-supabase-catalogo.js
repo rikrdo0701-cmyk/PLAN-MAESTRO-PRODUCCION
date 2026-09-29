@@ -441,7 +441,16 @@ function PP_fecha_(valor) {
   return Utilities.formatDate(d, 'America/Mexico_City', 'yyyy-MM-dd');
 }
 
-/** timestamptz: ISO si se puede; '' -> null (la columna es nullable). */
+/**
+ * timestamptz: ISO si se puede; celda vacia -> null.
+ *
+ * MEDIDO 2026-09-29: null SI se acepta en esta columna, aunque el OpenAPI que
+ * sirve PostgREST la marque NOT NULL. Se comprobo porque el comentario anterior
+ * daba por hecho que la columna admitia null y porque el OpenAPI decia lo
+ * contrario; la unica forma de saberlo era midiendo. Conclusion: la bandera
+ * nullable del OpenAPI de PostgREST no es de fiar para decidir esto, y este
+ * comentario se queda como estaba porque la medicion le da la razon.
+ */
 function PP_timestamp_(valor) {
   if (valor == null || String(valor).trim() === '') return null;
   if (Object.prototype.toString.call(valor) === '[object Date]') {
