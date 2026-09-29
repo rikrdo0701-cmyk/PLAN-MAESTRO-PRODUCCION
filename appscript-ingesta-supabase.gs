@@ -270,19 +270,19 @@ function leerInventario_(config) {
 }
 
 function leerOrdenesVenta_(config) {
-  const filas = PP_restletPaginado_('1769', '1', {}, config);
+  const filas = PP_restletPaginado_('1767', '1', {}, config);
   return filas.map(function(r) {
     return {
-      folio: String(r.folio || ''),
-      sales_order_id: String(r.sales_order_id || ''),
-      cliente: String(r.cliente || ''),
-      cliente_id: Number(r.cliente_id) || 0,
-      fecha: isoFecha_(r.fecha),
-      estatus: String(r.estatus || ''),
-      aprobacion: String(r.aprobacion || ''),
-      total: Number(r.total) || 0,
-      moneda: Number(r.moneda) || 0,
-      memo: String(r.memo || ''),
+      folio: String(r.orden || ''),
+      sales_order_id: String(r.orden || ''),
+      cliente: String(r.nombre_cliente || ''),
+      cliente_id: Number(r.clave_cliente) || 0,
+      fecha: isoFecha_(r.fecha_captura),
+      estatus: String(r.estado || ''),
+      aprobacion: String(r.estado_proceso || ''),
+      total: Number(r.monto_pendiente_facturar) || 0,
+      moneda: 1,
+      memo: String(r.comentarios || ''),
       lineas: []
     };
   });
