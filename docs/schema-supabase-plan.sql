@@ -53,6 +53,17 @@
 -- (plan_start, report_week_start son text). Si mas adelante hay que filtrar por
 -- fecha, la conversion se hace en el RPC con try_cast y no en la fila.
 --
+-- precio_desde y precio_hasta son text y NO numeric, y el nombre engaña: parece
+-- una ventana de precio y es una ventana de FECHAS. MEDIDO 2026-09-29:
+-- app.js:1726 hace averageSalePriceFrom: normalizeOtDate(item.averageSalePriceFrom ||
+-- item.precioDesde), o sea que la app los normaliza como fecha, y
+-- 02-storage.js:2182 los lee de la hoja SIN Number(), al lado de
+-- PRECIO_PROMEDIO_VENTA que si lleva Number(). La primera version de este DDL los
+-- declaro numeric por el nombre, y habria reventado el INSERT entero con una fecha
+-- en un numeric, con el rollback dejando work_orders con los datos viejos
+-- (RULE-SUP-021). El nombre no alcanza para decidir el tipo: el que lo decide es el
+-- mapeo de state a tabla, y eso es lo que hizo el agente de escritura al guardarlo.
+--
 -- prioridad es text y no integer porque la app la acepta en las dos formas:
 -- normalizePriority() convierte 'ALTO' en 1, 'BAJO' en 100 y deja 999 si no
 -- entiende el valor (app.js, normalizePriority). Un integer la rechazaria.
@@ -67,8 +78,8 @@ alter table public.operations add column if not exists tiempo_fallback numeric;
 alter table public.operations add column if not exists kit_pending boolean not null default false;
 
 alter table public.work_orders add column if not exists due_date_override text;
-alter table public.work_orders add column if not exists precio_desde numeric;
-alter table public.work_orders add column if not exists precio_hasta numeric;
+alter table public.work_orders add column if not exists precio_desde text;
+alter table public.work_orders add column if not exists precio_hasta text;
 
 comment on column public.operations.num is 'Numero de secuencia tal como lo muestra la app (estado.operations[].num)';
 comment on column public.operations.prioridad is 'Texto: la app acepta numero o palabra (ALTO/BAJO) y la convierte con normalizePriority';

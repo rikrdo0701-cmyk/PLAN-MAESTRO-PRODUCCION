@@ -73,8 +73,8 @@ test("las 12 columnas que el usuario aprobo estan, con los tipos que la app nece
     [/operations add column if not exists tiempo_fallback numeric/, "operations.tiempo_fallback"],
     [/operations add column if not exists kit_pending boolean not null default false/, "operations.kit_pending"],
     [/work_orders add column if not exists due_date_override text/, "work_orders.due_date_override"],
-    [/work_orders add column if not exists precio_desde numeric/, "work_orders.precio_desde"],
-    [/work_orders add column if not exists precio_hasta numeric/, "work_orders.precio_hasta"],
+    [/work_orders add column if not exists precio_desde text/, "work_orders.precio_desde"],
+    [/work_orders add column if not exists precio_hasta text/, "work_orders.precio_hasta"],
   ];
   for (const [re, nombre] of esperadas) {
     assert.match(ddl, re, `falta la columna ${nombre} con su tipo`);
@@ -90,6 +90,9 @@ test("prioridad y las fechas NO son numeric ni date, y el motivo queda escrito",
   // Postgres que no dice de donde viene. El motivo tiene que estar en el archivo.
   assert.doesNotMatch(ddl, /prioridad (integer|numeric|bigint)/i);
   assert.doesNotMatch(ddl, /fecha_req date/i);
+  // precio_desde y precio_hasta PARECEN precios y son una ventana de FECHAS: app.js:1726
+  // los normaliza con normalizeOtDate. Numeric aqui revienta el INSERT entero.
+  assert.doesNotMatch(ddl, /precio_(desde|hasta) (numeric|integer|date)/i);
   assert.match(ddl, /POR QUE LAS FECHAS SON text/, "el por que de los tipos tiene que estar en el archivo");
   assert.match(ddl, /prioridad es text y no integer/i);
 });
