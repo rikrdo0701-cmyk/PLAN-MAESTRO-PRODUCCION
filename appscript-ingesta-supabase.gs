@@ -224,9 +224,9 @@ function leerWorkorders_(config) {
 }
 
 function leerOperaciones_(config) {
-  // El RESTlet 1762 devuelve 280 filas sin parametros, pero 2350 con los correctos.
-  // El truco: pedir pageSize grande para que traiga todas en una sola pagina.
-  const filas = PP_restletPaginado_('1762', '17', { pageSize: 5000 }, config);
+  // El RESTlet 1762 tiene un limite interno de 280 filas por pagina.
+  // La paginacion con pageIndex/pageSize ya funciona en PP_restletPaginado_.
+  const filas = PP_restletPaginado_('1762', '17', { pageSize: 280 }, config);
   return deduplicar_(filas.map(function(r) {
     const total = Math.abs(Number(r.qty_to_process) || 0);
     const realizada = Math.abs(Number(r.qty_completed) || 0);
