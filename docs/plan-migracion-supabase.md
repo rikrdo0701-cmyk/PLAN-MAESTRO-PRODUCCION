@@ -240,9 +240,25 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
   hace nada.
   - **Excluye `machines` a propósito**: la escribe el RESTlet 2246 (entitygroup que es centro de
     trabajo, RULE-SUP-010) y la hoja `MAQUINAS` guarda lo mismo; espejarla serían dos escritores
-    peleándose la tabla cada 15 minutos. **Hueco declarado:** si alguien desactiva una máquina en la
-    página, ese cambio **no llega** a `machines.activa` de Supabase. No se inventó un
-    `activa_override` para taparlo.
+    peleándose la tabla cada 15 minutos.
+  - **Lo que esa exclusión produce, medido el 2026-09-29 (corregido: aquí se había escrito que
+    "desactivar una máquina no llega a Supabase", y era impreciso).** `machines.activa` **sí viene de
+    NetSuite** (`netsuite-restlet-unificado-supabase.js:287`, `entitygroup.isinactive`) y hay **202
+    máquinas, 0 inactivas**. La app **no puede** desactivar una máquina: el único control es
+    *"Eliminar máquina"* (`app.js:5443-5454`), que quita la fila; no hay toggle como sí lo hay para
+    `ot_types` (`app.js:5555`). Los dos conceptos están separados: *"NetSuite dice que está inactivo"*
+    es del ERP y lo trae el RESTlet; *"aquí no quiero agendar"* es decisión de la app y hoy se
+    expresa **borrando la fila**, no bajando un flag. **El conflicto real es el borrado**: si
+    `machines` se espejara desde Apps Script, cada borrado del catálogo lo desharía el mirror del
+    RESTlet en menos de 15 minutos. Ésa es la razón de excluirla, no una regla inventada.
+  - **Consecuencia en el cutover, abierta para decidir:** hoy "retirar una máquina del catálogo" se
+    respeta (vive en la hoja). Cuando la página lea las máquinas de Supabase **dejará de respetarse**,
+    porque manda NetSuite y no habrá forma de apartar una máquina de la planificación. Caminos:
+    (a) aceptar y documentarlo — hoy no cuesta nada porque hay 0 inactivas y la UI no produce el
+    flag; (b) `machines.activa_override` nullable, que el frontend aplique al leer ("NetSuite manda
+    salvo que alguien lo anule") — es la que resuelve el caso real; (c) no cambiar la fuente de
+    `machines` en el cutover. (b) implica decidir si la planificación puede contradecir a NetSuite, y
+    eso no se inventa.
 - **Requisito previo, sin aplicar: `docs/schema-supabase-cierre-catalogos.sql`.** Medido contra el
   esquema **desplegado**, el de los catálogos **no puede representar lo que las Hojas guardan**
   (RULE-SUP-016): falta `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
