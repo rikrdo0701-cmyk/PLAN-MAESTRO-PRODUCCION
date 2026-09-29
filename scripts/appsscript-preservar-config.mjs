@@ -1,89 +1,92 @@
 #!/usr/bin/env node
 /**
- * Preserva supabase-config.gs a traves de los despliegues.
+ * Preserva los archivos que el pipeline no publica.
  *
- * QUE HACE. La service role key de Supabase vive en un archivo del PROYECTO de
- * Apps Script, no en el repo: en el repo acabaria publicada por GitHub Pages y
- * el CI la subiria en cada push. Ese archivo no esta en src/server/ a proposito
- * (src/server/ se copia entero a dist/, y dist/ es lo que sube el workflow).
+ * QUE HACE Y POR QUE HACE FALTA. MEDIDO 2026-09-29: el usuario pego a mano
+ * config.js con la service role key de Supabase. El siguiente despliegue se la
+ * llevo: el proyecto paso de 27 archivos a 26 y config.js desaparecio. La
+ * ingesta, que antes decia "Config OK", iba a morir con SUPABASE_KEY no definida.
  *
- * MEDIDO 2026-09-29, leyendo el codigo de clasp: `clasp push --force` NO borra
- * del remoto los archivos que no estan en el directorio local. push.ts solo
- * llama a files.getChangedFiles() y sube lo que cambia; --force significa
- * "sobrescribe el manifiesto", no "borra lo que no veo". Tampoco hay delete ni
- * removeContent en todo el archivo. O sea que un archivo pegado a mano en el
- * editor sobrevive a los despliegues por si solo.
+ * POR QUE. clasp push NO actualiza archivo por archivo. Leyendo su codigo
+ * (src/core/files.ts:616), push junta la lista de archivos locales y llama a
+ * script.projects.updateContent con esa lista, que es una sustitucion del
+ * PROYECTO ENTERO: lo que no esta en la lista, no existe despues. No hay
+ * delete ni removeFile en push.ts porque no hace falta: la API borra por
+ * ausencia. Por eso este archivo existe, y por eso antes decia (mal) que un
+ * archivo pegado a mano sobrevivia a los despliegues.
  *
- * AUN ASI, esto lo deja gestionado de verdad. Antes, la clave era un archivo
- * suelto: nadie lo respaldaba, y un `clasp clean`, un cambio de proyecto o que
- * alguien lo metiera en src/server/ por error la perdian sin aviso. Con este
- * paso, cada despliegue se baja la version REMOTA del archivo y la vuelve a
- * subir, asi que el pipeline se vuelve el dueno del archivo y la clave ya no
- * depende de que nadie la toque.
+ * QUE PROBLEMA HUBO ADEMAS. La primera version de este script buscaba un
+ * archivo llamado supabase-config.gs, el nombre que estaba en el repo, y el
+ * usuario lo habia llamado config.js. Con eso el paso no preservo nada: reporto
+ * "el remoto NO tiene supabase-config.gs" mientras la clave estaba ahi, y el
+ * despliegue siguiente la borro. UnNombre es un detalle; el archivo es el que
+ * importa. Ahora se preserva por CONTENIDO: cualquier archivo del proyecto que
+ * no venga de dist/ se copia de vuelta antes del push, se sea cual sea su
+ * nombre, y se avisa de cada uno.
  *
- * POR QUE SE PUEDE SEGUIR ADELANTE SI FALLA (y por que no es peligro).
- * El unico modo de perder el archivo es subir una version distinta de el, y este
- * script nunca tiene una version distinta que subir: si no consegue bajarlo,
- * dist/ se queda SIN el archivo, y push no borra lo que no ve, o sea que el
- * remoto sigue intacto. Por eso aqui se avisa y se sigue, en vez de tumbar el
- * despliegue por un archivo que no corre riesgo.
+ * QUE NO HACE, A PROPOSITO. No adivina si un archivo sobra. Copiar de vuelta un
+ * archivo que ya no se quiere es un annoyance; borrarlo sin que nadie lo pida es
+ * perder trabajo. Se preserva todo y se dice, que la decision es de quien
+ * entiende el proyecto.
  *
- * EL PLACEHOLDER NUNCA SE SUBE. No existe ninguna plantilla con
- * TU_SERVICE_ROLE_KEY en src/ ni en dist/: si existiera, un fallo de la API de
- * Google en el paso de aqui seria justo el que la machaca. El archivo remoto
- * es la unica fuente, y si aun no existe, el primer despliegue lo deja como
- * estaba y avisa de que falta pegarlo en el editor.
+ * POR QUE SE PUEDE SEGUIR ADELANTE SI FALLA. El unico modo de perder un archivo
+ * es subir una version distinta de la que esta ahi, y este script nunca tiene una
+ * version distinta que subir: si no consigue bajar el remoto, dist/ se queda SIN
+ * el archivo y el push lo borra del proyecto. Por eso aqui, si la lectura falla,
+ * se BLOQUEA el despliegue en vez de avisar y continuar. Antes hacia lo
+ * contrario, y por el camino borro la clave: un fallo transitorio de la API
+ * habria dejado dist/ sin el archivo y el push siguiente lo eliminaba. Cortar el
+ * despliegue es mas molesto que perder un archivo, y no se pierde nada.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DIST = path.join(RAIZ, "dist");
+const TEMPORAL = path.join(RAIZ, ".clasp-preserve");
 
 const limpiarTemporal = () => rmSync(TEMPORAL, { recursive: true, force: true });
 process.on("exit", limpiarTemporal);
 
-const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CONFIG = "supabase-config.gs";
-const DIST = path.join(RAIZ, "dist");
-const TEMPORAL = path.join(RAIZ, ".clasp-preserve");
-
-/** El valor de ejemplo que trae supabase-config.gs en el repo. Nunca es una clave real. */
-const PLACEHOLDER = "TU_SERVICE_ROLE_KEY";
-
-function avisar(mensaje) {
-  console.log(`[preserve-config] ${mensaje}`);
-}
+const avisar = (m) => console.log(`[preserve-config] ${m}`);
 
 /**
- * No se imprime el contenido del archivo: es una credencial. Solo se mira si
- * sigue el marcador de ejemplo, y se dice cual de los tres valores falla.
+ * Un archivo es de credenciales si declara los valores que la ingesta lee. Se
+ * busca por CONTENIDO y no por nombre a proposito: el archivo del proyecto se
+ * llama config.js, no supabase-config.gs, y buscarlo por su nombre fue
+ * exactamente el fallo que borro la clave.
  */
-function diagnostico(contenido) {
-  const problemas = [];
-  if (!/const\s+SUPABASE_URL\s*=\s*'https:\/\/[^']+'/s.test(contenido)) problemas.push("SUPABASE_URL");
-  const clave = (contenido.match(/const\s+SUPABASE_KEY\s*=\s*'([^']*)'/s) || [])[1];
-  if (!clave) problemas.push("SUPABASE_KEY (no esta declarado)");
-  else if (clave.includes(PLACEHOLDER)) problemas.push(`SUPABASE_KEY sigue con ${PLACEHOLDER}`);
-  if (!/const\s+UBICACION\s*=/s.test(contenido)) problemas.push("UBICACION");
-  return problemas;
+function esDeCredenciales(texto) {
+  return /\bSUPABASE_(URL|KEY)\b/.test(texto) || /\bUBICACION\b/.test(texto);
 }
 
-/** El archivo pegado en el editor, si el proyecto remoto ya lo tiene. */
-function bajarDelRemoto(claspJson) {
-  // Gancho de prueba. El camino de "el remoto SI tiene el archivo" no se puede
-  // ejercitar sin un proyecto que ya lo tenga, y este archivo no lo tiene todavia
-  // (MEDIDO 2026-09-29), o sea que sin esto ese camino queda sin ejecutar nunca.
-  // Se lee un archivo local en vez de preguntar a Google. El workflow nunca lo
-  // pone: si lo pusiera, el pipeline subiria lo que marque esta variable en vez de
-  // la clave de verdad, que es justo lo que este script evita.
-  if (process.env.PRESERVE_CONFIG_DESDE) {
-    const desde = path.resolve(process.env.PRESERVE_CONFIG_DESDE);
-    return existsSync(desde)
-      ? { estado: "ok", texto: readFileSync(desde, "utf8") }
-      : { estado: "ausente" };
+/** Que valores del archivo siguen sin rellenar, sin imprimir ninguno. */
+function diagnostico(texto) {
+  const faltan = [];
+  if (!/const\s+SUPABASE_URL\s*=\s*'https:\/\/[^']+'/s.test(texto)) faltan.push("SUPABASE_URL");
+  const clave = (texto.match(/const\s+SUPABASE_KEY\s*=\s*'([^']*)'/s) || [])[1];
+  if (!clave) faltan.push("SUPABASE_KEY (no esta declarado)");
+  else if (/^TU_|PLACEHOLDER|^<|^xxx/i.test(clave)) faltan.push("SUPABASE_KEY sigue con el valor de ejemplo");
+  if (!/const\s+UBICACION\s*=/s.test(texto)) faltan.push("UBICACION");
+  return faltan;
+}
+
+/** Baja el proyecto entero. clasp pull no acepta un archivo suelto. */
+function bajar(claspJson) {
+  // Gancho de prueba. El camino de 'el proyecto tiene archivos que dist/ no tiene'
+  // SI se puede ejercitar sin credenciales, passandole un directorio que haga de
+  // remoto. El de 'el remoto no se puede leer' tambien, con un directorio que no
+  // exista. Ningun workflow lo usa: si lo usara, el pipeline subiria lo que
+  // marque la variable en vez de lo que hay en el proyecto de verdad, que es
+  // justamente el borrado que este script existe para que no pase.
+  if (process.env.PRESERVE_CONFIG_REMOTO_DIR) {
+    const dir = path.resolve(process.env.PRESERVE_CONFIG_REMOTO_DIR);
+    if (!existsSync(dir)) return { estado: 'fallo', motivo: 'PRESERVE_CONFIG_REMOTO_DIR no existe: ' + dir };
+    const archivos = readdirSync(dir).filter((n) => n !== '.clasp.json');
+    return { estado: 'ok', archivos, leer: (n) => readFileSync(path.join(dir, n), 'utf8') };
   }
-  // clasp pull no acepta un archivo suelto: trae el proyecto entero. Se tira a un
-  // directorio aparte para no pisar dist/, que es el build recien generado.
   rmSync(TEMPORAL, { recursive: true, force: true });
   mkdirSync(TEMPORAL, { recursive: true });
   writeFileSync(path.join(TEMPORAL, ".clasp.json"), JSON.stringify({ ...claspJson, rootDir: "." }, null, 2));
@@ -92,59 +95,53 @@ function bajarDelRemoto(claspJson) {
     encoding: "utf8",
     shell: process.platform === "win32",
   });
-  const destino = path.join(TEMPORAL, CONFIG);
-  // MEDIDO 2026-09-29: este caso se confundia con el otro y decia "no se pudo
-  // bajar" cuando clasp pull habia salido 0 y lo que faltaba era que el archivo no
-  // esta en el remoto. Son dos cosas distintas con el mismo aviso: una se
-  // arregla reintentando, la otra pegando el archivo en el editor.
-  if (r.status !== 0) {
-    return { estado: "fallo", motivo: `clasp pull fallo (${r.status}): ${String(r.stderr || r.stdout || "").trim().slice(0, 300)}` };
-  }
-  if (!existsSync(destino)) {
-    return { estado: "ausente" };
-  }
-  return { estado: "ok", texto: readFileSync(destino, "utf8") };
+  if (r.status !== 0) return { estado: "fallo", motivo: `clasp pull fallo (${r.status}): ${String(r.stderr || r.stdout || "").trim().slice(0, 250)}` };
+  const archivos = readdirSync(TEMPORAL).filter((n) => n !== ".clasp.json");
+  return { estado: "ok", archivos, leer: (n) => readFileSync(path.join(TEMPORAL, n), "utf8") };
 }
 
-const claspPath = path.join(RAIZ, ".clasp.json");
-if (!existsSync(claspPath)) {
-  avisar("no hay .clasp.json en el repo: no hay proyecto remoto contra el que preservar nada (no es un despliegue)");
+// --- Reglas de salida. Nada de esto se puede saltar por accidente.
+if (!existsSync(path.join(RAIZ, ".clasp.json"))) {
+  avisar("no hay .clasp.json: no es un despliegue, se sale");
   process.exit(0);
 }
-const claspJson = JSON.parse(readFileSync(claspPath, "utf8"));
+const claspJson = JSON.parse(readFileSync(path.join(RAIZ, ".clasp.json"), "utf8"));
 if (/^AKfy/.test(claspJson.scriptId || "")) {
-  avisar(".clasp.json trae un deploymentId en vez de un scriptId: no se puede preservar");
+  avisar(".clasp.json trae un deploymentId en vez de un scriptId: se sale");
   process.exit(0);
 }
 if (!existsSync(DIST)) {
-  avisar("no hay dist/: se ejecuta despues de npm run check (que es lo que genera el build)");
+  console.error("[preserve-config] no hay dist/: se ejecuta despues del build. CORTO el despliegue para no borrar archivos.");
+  process.exit(1);
+}
+
+const r = bajar(claspJson);
+if (r.estado === "fallo") {
+  // Bloquea, no avisa: el push siguiente borraria lo que hay en el proyecto y no
+  // hay copia en dist/ de donde recuperarlo. Ver la cabecera del archivo.
+  console.error(`[preserve-config] ${r.motivo}`);
+  console.error("[preserve-config] CORTO el despliegue: sin copia del remoto no se puede saber que hay que preservar.");
+  process.exit(1);
+}
+
+const enDist = new Set(readdirSync(DIST));
+const extras = r.archivos.filter((n) => !enDist.has(n));
+if (!extras.length) {
+  avisar(`el proyecto tiene los mismos ${enDist.size} archivos que dist/: nada que preservar`);
   process.exit(0);
 }
 
-const r = bajarDelRemoto(claspJson);
-if (r.estado !== "ok") {
-  const enDist = path.join(DIST, CONFIG);
-  if (existsSync(enDist)) {
-    // El build no lo genera nunca, pero si alguien lo metio a mano en dist/, se
-    // retira: subir una version distinta al remoto es la unica forma de perderlo.
-    rmSync(enDist, { force: true });
-    avisar(`habia un ${CONFIG} en dist/ y se retiro: sin copia del remoto, subir otra version lo perderia`);
+let conCredenciales = 0;
+for (const n of extras) {
+  const texto = r.leer(n);
+  writeFileSync(path.join(DIST, n), texto, "utf8");
+  const cred = esDeCredenciales(texto);
+  if (cred) conCredenciales += 1;
+  avisar(`preservado ${n}: NO viene de dist/ y clasp push borra del proyecto lo que no sube (updateContent reemplaza el proyecto entero). ${cred ? "Declara credenciales de Supabase." : ""}`);
+  if (cred) {
+    const faltan = diagnostico(texto);
+    if (faltan.length) avisar(`  AVISO: ${n} tiene sin rellenar -> ${faltan.join(", ")}. ingesta() lo dira con ese mismo texto`);
   }
-  if (r.estado === "ausente") {
-    avisar(`el proyecto remoto NO tiene ${CONFIG}: la ingesta no corrara hasta que lo pegues en el editor de Apps Script`);
-  } else {
-    avisar(`no se preservo (${r.motivo}); el remoto no se toca, asi que no se pierde`);
-  }
-  process.exit(0);
 }
-
-const contenido = r.texto;
-const problemas = diagnostico(contenido);
-// Se escribe desde el texto ya leido, no desde el archivo del temporal: ese
-// directorio se borra al salir del proceso.
-writeFileSync(path.join(DIST, CONFIG), contenido, "utf8");
-avisar(`${CONFIG} preservado del remoto y puesto en dist/ para que el push lo reenvie`);
-if (problemas.length) {
-  avisar(`AVISO: el archivo del proyecto tiene estos valores sin rellenar -> ${problemas.join(", ")}. ingesta() lo dira con ese mismo texto`);
-}
+avisar(`${extras.length} archivo(s) de ${conCredenciales} con credenciales reenviados en este despliegue`);
 process.exit(0);

@@ -1,16 +1,30 @@
-// La service role key de Supabase vive en un archivo del PROYECTO de Apps Script
-// (supabase-config.gs), no en el repo. Estos tests fijan por que no puede viajar
-// al repo ni colarse en dist/ por accidente, porque el unico modo de perderla es
-// que alguien suba una version distinta de la que esta pegada en el proyecto.
+// Los archivos que el pipeline NO publica (la clave de Supabase, entre otros)
+// sobreviven a los despliegues porque scripts/appsscript-preservar-config.mjs los
+// baja del proyecto y los vuelve a poner en dist/ antes del push.
+//
+// POR QUE ESTOS TESTS EXISTEN. MEDIDO 2026-09-29: el usuario pego config.js con
+// la service role key. El siguiente despliegue borro el archivo entero y el
+// proyecto paso de 27 archivos a 26. La causa: clasp push no actualiza archivo por
+// archivo, llama a script.projects.updateContent (src/core/files.ts:616) con la
+// lista completa de archivos locales, y esa API SUSTITUYE el proyecto entero. Lo
+// que no esta en la lista, no existe despues. No hay delete ni removeFile en
+// push.ts porque no hace falta: la API borra por ausencia.
+//
+// Y el fallo de la primera version de la preservacion fue de NOMBRE: buscaba
+// supabase-config.gs, que es como se llama en el repo, y el usuario lo habia
+// llamado config.js. El paso reporto 'el remoto NO tiene supabase-config.gs' con
+// la clave ahi a la vista, y el despliegue siguiente la borro. Por eso ahora se
+// preserva por contenido y no por nombre.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RAIZ = fileURLToPath(new URL("../", import.meta.url));
-const CONFIG = "supabase-config.gs";
+const SCRIPT = path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs");
+const WORKFLOW = path.join(RAIZ, ".github", "workflows", "deploy-appscript.yml");
 
 function archivosDe(dir, filtro) {
   if (!existsSync(dir)) return [];
@@ -20,139 +34,146 @@ function archivosDe(dir, filtro) {
   });
 }
 
-test("el build NO genera ninguna plantilla de supabase-config.gs en dist/", () => {
-  // Si existiera, un fallo de la API de Google en el paso de preservacion seria
-  // justo el que la sobreescribiera con el valor de ejemplo.
-  const enSrc = archivosDe(path.join(RAIZ, "src"), (p) => p.endsWith(".gs") || p.includes(CONFIG));
-  assert.deepEqual(enSrc, [], "src/ no debe traer ningun .gs: dist/ se sube entero y publicaria la plantilla");
-  assert.ok(
-    !existsSync(path.join(RAIZ, "dist", CONFIG)),
-    "dist/supabase-config.gs solo puede existir si lo bajo el remoto, nunca por build"
-  );
-  // Y la copia local es el ejemplo, no una clave: esta en .gitignore, asi que no
-  // llega al CI, pero aun asi no debe tener una clave real.
-  const local = path.join(RAIZ, CONFIG);
-  if (existsSync(local)) {
-    const txt = readFileSync(local, "utf8");
-    assert.match(txt, /TU_SERVICE_ROLE_KEY/, "la copia del repo es la plantilla con el valor de ejemplo");
-    assert.doesNotMatch(txt, /sb_secret_[A-Za-z0-9_-]{8,}/, "una clave real en un archivo del repo se publica");
+/** Corre la preservacion contra un directorio que hace de remoto. */
+function correr(remotoDir) {
+  return spawnSync(process.execPath, [SCRIPT], {
+    env: { ...process.env, PRESERVE_CONFIG_REMOTO_DIR: remotoDir },
+    encoding: "utf8",
+  });
+}
+
+/** Deja dist/ como estaba, pase lo que pase. */
+function conDistLimpio(fn) {
+  const antes = new Map();
+  for (const n of readdirSync(path.join(RAIZ, "dist"))) antes.set(n, readFileSync(path.join(RAIZ, "dist", n)));
+  try {
+    return fn();
+  } finally {
+    for (const n of readdirSync(path.join(RAIZ, "dist"))) if (!antes.has(n)) rmSync(path.join(RAIZ, "dist", n), { force: true });
+    for (const [n, t] of antes) writeFileSync(path.join(RAIZ, "dist", n), t);
   }
+}
+
+test("el build NO pone ninguna plantilla de credenciales en dist/", () => {
+  // Si existiera, se subiria al proyecto y el paso de preservacion, al no
+  // encontrarlo en el remoto, no podria hacer nada: la plantilla ya estaria
+  // substituting a la clave real.
+  const gs = archivosDe(path.join(RAIZ, "src"), (p) => p.endsWith(".gs") || /supabase-config/.test(p));
+  assert.deepEqual(gs, [], "src/ no debe traer ningun .gs ni un config: dist/ se sube entero");
+  assert.ok(!existsSync(path.join(RAIZ, "dist", "supabase-config.gs")), "dist/supabase-config.gs solo puede venir del remoto");
+});
+
+test("el despliegue preserva ANTES de subir, con el nombre de archivo correcto", () => {
+  const yml = readFileSync(WORKFLOW, "utf8");
+  const preservar = yml.indexOf("appsscript-preservar-config.mjs");
+  const push = yml.indexOf("clasp push");
+  assert.ok(preservar > 0, "el workflow no llama a la preservacion: cualquier archivo a mano se pierde en el push");
+  assert.ok(push > 0, "el workflow ya no hace clasp push");
+  assert.ok(preservar < push, "preservar despues del push no preserva nada: ese push ya borro lo que no venia de dist/");
+  assert.ok(existsSync(SCRIPT), "el archivo que el workflow ejecuta tiene que existir");
 });
 
 test("el despliegue verifica el CONTENIDO del proyecto, no solo que la funcion exista", () => {
-  // MEDIDO 2026-09-29: el pipeline dijo "Pushed 26 files" con el archivo
+  // MEDIDO 2026-09-29: dos despliegues dijeron "Pushed 26 files" con el archivo
   // listado y el proyecto seguia con la version vieja (13620 bytes contra 14563).
-  // La verificacion que habia (que 'ingesta' apareciera entre las funciones
-  // desplegadas) daba verde igual: el bug no cambiaba ningun nombre, cambiaba el
-  // cuerpo. Sin comparar contenido, un despliegue a medias es indetectable.
-  const yml = readFileSync(path.join(RAIZ, ".github", "workflows", "deploy-appscript.yml"), "utf8");
+  // La comprobacion de antes, que 'ingesta' apareciera entre las funciones
+  // desplegadas, daba verde igual: el bug no cambiaba ningun nombre, cambiaba el
+  // cuerpo de la funcion. Sin comparar contenido, un despliegue a medias es
+  // indetectable.
+  const yml = readFileSync(WORKFLOW, "utf8");
   const push = yml.indexOf("clasp push");
   const verificar = yml.indexOf("verificar-deploy-appscript.mjs");
   assert.ok(verificar > 0, "el workflow no verifica lo que subio: un deploy a medias sale verde");
   assert.ok(verificar > push, "verificar antes del push no verifica nada");
-  assert.ok(
-    existsSync(path.join(RAIZ, "scripts", "verificar-deploy-appscript.mjs")),
-    "el script que verifica tiene que existir"
-  );
-  // Y tiene que comparar contenido de verdad, no nombres de funciones.
   const txt = readFileSync(path.join(RAIZ, "scripts", "verificar-deploy-appscript.mjs"), "utf8");
   assert.match(txt, /clasp pull/);
   assert.doesNotMatch(txt, /goog\.script\.init|functionNames/, "la lista de funciones es lo que no alcanza");
   assert.match(txt, /readFileSync\(path\.join\(DIST, n\)/, "tiene que leer el archivo de dist/ y compararlo");
 });
 
-test("el despliegue preserva el archivo antes de subir, no despues", () => {
-  const yml = readFileSync(path.join(RAIZ, ".github", "workflows", "deploy-appscript.yml"), "utf8");
-  const preservar = yml.indexOf("appsscript-preservar-config.mjs");
-  const push = yml.indexOf("clasp push");
-  assert.ok(preservar > 0, "el workflow no llama al script de preservacion: la clave dejaria de viajar con el despliegue");
-  assert.ok(push > 0, "el workflow ya no hace clasp push");
-  assert.ok(preservar < push, "preservar despues del push no preservaria nada: el archivo se perderia en ese push");
-  // Y el nombre que pone es el de verdad. MEDIDO 2026-09-29: se escribio
-  // 'appscript-preservar-config.mjs' con una s menos, asi que el paso habria
-  // fallado en CI con MODULE_NOT_FOUND. Un test que solo busca 'preservar-config'
-  // no lo ve: el workflow si Mentionaba la palabra.
-  assert.ok(
-    existsSync(path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs")),
-    "el archivo que el workflow ejecuta tiene que existir"
-  );
+test("ningun workflow usa el gancho de prueba", () => {
+  for (const f of readdirSync(path.join(RAIZ, ".github", "workflows"))) {
+    const yml = readFileSync(path.join(RAIZ, ".github", "workflows", f), "utf8");
+    assert.doesNotMatch(yml, /PRESERVE_CONFIG_REMOTO_DIR/, `${f} usa el gancho de prueba en produccion`);
+  }
 });
 
-test("el script de preservacion no imprime el contenido ni trae una clave", () => {
-  const txt = readFileSync(path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs"), "utf8");
+test("un archivo con credenciales y otro nombre tambien se preserva", () => {
+  // El caso medido: config.js, no supabase-config.gs. La primera version buscaba
+  // por nombre, no encontro nada y el despliegue siguiente lo borro.
+  const remoto = path.join(RAIZ, ".openchamber", "remoto-prueba");
+  rmSync(remoto, { recursive: true, force: true });
+  mkdirSync(remoto, { recursive: true });
+  const clave = [
+    "const SUPABASE_URL = 'https://xtgtfjcwxcoxvixholpj.supabase.co';",
+    "const SUPABASE_KEY = 'sb_secret_VALORDEPRUEBANOSEIMPRIME';",
+    "const UBICACION = '1';",
+  ].join("\n");
+  writeFileSync(path.join(remoto, "config.js"), clave, "utf8");
+  writeFileSync(path.join(remoto, "otro.js"), "function sinRelacion() { return 1; }\n", "utf8");
+  try {
+    conDistLimpio(() => {
+      const r = correr(remoto);
+      assert.equal(r.status, 0, `salio ${r.status}: ${r.stderr}`);
+      const destino = path.join(RAIZ, "dist", "config.js");
+      assert.ok(existsSync(destino), "config.js no llego a dist/: el push lo borraria del proyecto");
+      assert.equal(readFileSync(destino, "utf8"), clave, "no llego identico");
+      assert.ok(existsSync(path.join(RAIZ, "dist", "otro.js")), "tambien hay que preservar lo que no lleva credenciales");
+      assert.match(r.stdout, /config\.js/);
+      assert.match(r.stdout, /credenciales/i);
+    });
+    // Y con la clave de ejemplo tiene que avisar, no subirla sin decir nada.
+    // En otro bloque: la corrida anterior dejo los archivos en dist/, y entonces
+    // ya no cuentan como propios del remoto y no se preserva nada. Eso no es un
+    // fallo del script, pero hace que el aviso no salga y el test no lo ve.
+    rmSync(path.join(RAIZ, "dist", "config.js"), { force: true });
+    rmSync(path.join(RAIZ, "dist", "otro.js"), { force: true });
+    writeFileSync(path.join(remoto, "config.js"), "const SUPABASE_KEY = 'TU_SERVICE_ROLE_KEY';\nconst UBICACION = '1';\n", "utf8");
+    conDistLimpio(() => {
+      const r2 = correr(remoto);
+      assert.equal(r2.status, 0, `salio ${r2.status}: ${r2.stderr}`);
+      assert.match(r2.stdout, /valor de ejemplo/, "con la clave de ejemplo tiene que avisar");
+    });
+  } finally {
+    rmSync(remoto, { recursive: true, force: true });
+  }
+});
+
+test("sin archivo propio, no inventa ninguno", () => {
+  // Un remoto que es una copia exacta de dist/ no debe hacer que aparezca nada
+  // nuevo: si el script fabricara un archivo de credenciales de repuesto,
+  // cualquier despliegue volveria a pisar la clave con el ejemplo.
+  const remoto = path.join(RAIZ, ".openchamber", "remoto-vacio");
+  rmSync(remoto, { recursive: true, force: true });
+  mkdirSync(remoto, { recursive: true });
+  for (const n of readdirSync(path.join(RAIZ, "dist"))) {
+    writeFileSync(path.join(remoto, n), readFileSync(path.join(RAIZ, "dist", n)));
+  }
+  try {
+    conDistLimpio(() => {
+      const antes = readdirSync(path.join(RAIZ, "dist")).length;
+      const r = correr(remoto);
+      assert.equal(r.status, 0);
+      assert.equal(readdirSync(path.join(RAIZ, "dist")).length, antes, "aparecio un archivo que no venia del remoto");
+      assert.match(r.stdout, /nada que preservar/);
+    });
+  } finally {
+    rmSync(remoto, { recursive: true, force: true });
+  }
+});
+
+test("si no puede leer el remoto, CORTA el despliegue en vez de seguir", () => {
+  // Antes hacia lo contrario: avisaba y continuaba, con lo que dist/ se quedaba
+  // sin el archivo y el push siguiente lo eliminaba del proyecto. Perder la clave
+  // por un fallo transitorio de la API de Google es el peor resultado posible.
+  const r = correr(path.join(RAIZ, ".openchamber", "no-existe-este-directorio"));
+  assert.equal(r.status, 1, "con el remoto ilegible tiene que salir con 1, no con 0");
+  assert.match(r.stderr, /CORTO el despliegue/);
+});
+
+test("la preservacion no trae claves ni imprime el contenido", () => {
+  const txt = readFileSync(SCRIPT, "utf8");
   assert.doesNotMatch(txt, /sb_secret_[A-Za-z0-9_-]{8,}/);
   assert.doesNotMatch(txt, /sb_publishable_[A-Za-z0-9_-]{8,}/);
-  // Imprimir el archivo seria filtrar la clave en el log publico del workflow.
-  assert.doesNotMatch(txt, /console\.log\([^)]*contenido\b/, "el contenido del archivo no se imprime");
-  assert.doesNotMatch(txt, /console\.log\([^)]*readFileSync/, "el contenido del archivo no se imprime");
-});
-
-test("el script de preservacion nunca sube una version distinta de la remota", () => {
-  const txt = readFileSync(path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs"), "utf8");
-  // Si el remoto no se pudo bajar, la unica escritura admitida es borrar lo que
-  // hubiera en dist/, no dejar un archivo de mas.
-  assert.match(txt, /rmSync\(enDist, \{ force: true \}\)/, "sin copia del remoto hay que quitar el archivo de dist/, no subirlo");
-  assert.doesNotMatch(
-    txt,
-    /writeFileSync\(path\.join\(DIST, CONFIG\)[^)]*contenido\s*\|\|\s*(contenido|[\`'])/,
-    "no se puede escribir en dist/ un valor por defecto cuando no se bajo el remoto"
-  );
-});
-
-test("ningun workflow usa el gancho de prueba PRESERVE_CONFIG_DESDE", () => {
-  // El gancho salta la lectura del remoto. Si un workflow lo usara, el pipeline
-  // subiria lo que marque la variable en vez de la clave de verdad: exactamente
-  // lo que este script existe para que no pase.
-  const dir = path.join(RAIZ, ".github", "workflows");
-  for (const f of readdirSync(dir)) {
-    const yml = readFileSync(path.join(dir, f), "utf8");
-    assert.doesNotMatch(yml, /PRESERVE_CONFIG_DESDE/, `${f} usa el gancho de prueba en produccion`);
-  }
-});
-
-test("con el remoto presente, el archivo llega a dist/ igual que estaba", async () => {
-  // Ejercita de verdad el camino que en el proyecto real no se puede ejecutar:
-  // MEDIDO 2026-09-29, el remoto NO tiene todavia supabase-config.gs, o sea que
-  // sin el gancho de prueba este camino no se correria nunca.
-  const config = path.join(RAIZ, CONFIG);
-  assert.ok(existsSync(config), "se necesita la copia local como fuente de prueba");
-  const destino = path.join(RAIZ, "dist", CONFIG);
-  const habia = existsSync(destino);
-  const antes = habia ? readFileSync(destino, "utf8") : null;
-  try {
-    const r = spawnSync(process.execPath, [path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs")], {
-      env: { ...process.env, PRESERVE_CONFIG_DESDE: config },
-      encoding: "utf8",
-    });
-    assert.equal(r.status, 0, `el script salio ${r.status}: ${r.stderr}`);
-    assert.ok(existsSync(destino), "no puso el archivo en dist/: el push no lo reenviaria");
-    assert.equal(readFileSync(destino, "utf8"), readFileSync(config, "utf8"), "dist/ no coincide con el remoto");
-    // Y avisa de que la clave sigue siendo el ejemplo, en vez de subirla callado.
-    assert.match(r.stdout, /TU_SERVICE_ROLE_KEY/, "con la clave de ejemplo tiene que avisar, no subirla sin decir nada");
-  } finally {
-    if (habia) writeFileSync(destino, antes, "utf8");
-    else rmSync(destino, { force: true });
-  }
-});
-
-test("sin el remoto, dist/ se queda igual y el aviso es el correcto", async () => {
-  const destino = path.join(RAIZ, "dist", CONFIG);
-  const habia = existsSync(destino);
-  const antes = habia ? readFileSync(destino, "utf8") : null;
-  try {
-    // El gancho apunta a algo inexistente: es el mismo caso que "el remoto no lo tiene".
-    const r = spawnSync(process.execPath, [path.join(RAIZ, "scripts", "appsscript-preservar-config.mjs")], {
-      env: { ...process.env, PRESERVE_CONFIG_DESDE: path.join(RAIZ, "no-existe.gs") },
-      encoding: "utf8",
-    });
-    assert.equal(r.status, 0, `el script salio ${r.status}: ${r.stderr}`);
-    assert.equal(existsSync(destino), false, "sin copia del remoto no debe quedar nada en dist/");
-    // El aviso tiene que decir que falta pegarlo, no que fallo la lectura: MEDIDO
-    // 2026-09-29 la primera version decia "no se pudo bajar" con clasp pull saliendo
-    // 0, y mandaba a pegar a mano un archivo que ya estaba.
-    assert.match(r.stdout, /NO tiene/);
-    assert.doesNotMatch(r.stdout, /no se pudo bajar/);
-  } finally {
-    if (habia) writeFileSync(destino, antes, "utf8");
-  }
+  assert.doesNotMatch(txt, /console\.log\([^)]*\btexto\b/, "el contenido de un archivo de credenciales no se imprime");
 });

@@ -283,36 +283,37 @@ la necesita para otra cosa, la obtiene del panel de Supabase y la pega en NetSui
 ### 8.1 En Apps Script, la service key vive en un archivo del PROYECTO
 
 Del lado de Apps Script hay otro consumidor de la misma clave (la ingesta, RULE-SUP-018) y ahí **no**
-se puede usar un script parameter como en NetSuite: se lee desde
-`PP_config_()` (`src/server/19-appscript-ingesta-supabase.js`), que la toma de `supabase-config.gs`.
+se puede usar un script parameter como en NetSuite: se lee desde `PP_config_()`
+(`src/server/19-appscript-ingesta-supabase.js`), que la toma de un archivo del proyecto.
 
-Ese archivo se pega a mano en el editor de Apps Script. **No está en el repo y no se mete en el
-build, a propósito**:
+Ese archivo lo pega el usuario en el editor de Apps Script. MEDIDO 2026-09-29: lo pegó como
+`config.js`, no como `supabase-config.gs`, y el despliegue siguiente **lo borró**. La causa está en
+clasp: `push` no actualiza archivo por archivo, arma la lista completa de archivos locales y llama a
+`script.projects.updateContent` (`google/clasp`, `src/core/files.ts:616`), que **sustituye el
+proyecto entero**. Lo que no está en la lista, no existe después. El proyecto pasó de 27 archivos a 26.
 
-- si estuviera en `src/server/`, el build lo copiaría a `dist/` y el CI lo subiría en cada push, o
-  sea que la clave acabaría publicada en GitHub Pages;
-- si una plantilla con el valor de ejemplo se subiera alguna vez, un fallo de la API de Google sería
-  justo lo que la machacara, dejando la clave real como `TU_SERVICE_ROLE_KEY`.
+Por lo mismo ese archivo **no puede estar en el build**: `src/server/` se copia entero a `dist/` y el
+CI sube `dist/`, así que una clave ahí acabaría publicada en GitHub Pages y se reenviaría en cada
+despliegue.
 
-Lo que evita eso es `scripts/appscript-preservar-config.mjs`, un paso del workflow
-`deploy-appscript.yml` que corre **antes** del `clasp push`: baja `supabase-config.gs` del proyecto
-remoto y lo pone en `dist/` para que el push lo reenvíe. Así la clave la mantiene el pipeline y no
-depende de que nadie la toque.
+Lo que evita el borrado es `scripts/appscript-preservar-config.mjs`, paso del workflow
+`deploy-appscript.yml` que corre **antes** del `clasp push`: baja el proyecto y copia a `dist/` todo
+archivo que no venga de `dist/`, se llame como se llame, avisando de cada uno. Se preserva **por
+contenido** (reconoce `SUPABASE_URL` / `SUPABASE_KEY` / `UBICACION`), no por nombre, porque el nombre
+fue justo lo que falló. Si no puede leer el remoto, **corta el despliegue**: si no, `dist/` se
+quedaría sin el archivo y el push siguiente lo eliminaría del proyecto.
 
-Medido el 2026-09-29:
+`scripts/verificar-deploy-appscript.mjs` es el otro paso, después del deploy: baja el proyecto y
+compara byte a byte contra `dist/`. Existe porque dos despliegues seguidos dijeron `Pushed 26 files`
+con el archivo listado y el proyecto seguía con la versión anterior. La comprobación anterior —que
+`ingesta` apareciera entre las funciones desplegadas— daba verde igual: el bug no cambiaba ningún
+nombre, cambiaba el cuerpo de la función.
 
-- `clasp push --force` **no borra** del remoto los archivos que no están en el directorio local
-  (`push.ts` solo llama a `files.getChangedFiles()` y sube lo que cambia; no hay `delete` en el
-  archivo, y `--force` es "sobrescribe el manifiesto"). El archivo ya sobrevivía solo; el paso lo deja
-  gestionado.
-- El proyecto remoto **aún no tiene** `supabase-config.gs`. La ingesta no correrá hasta pegarlo.
-- Si el remoto no se puede leer, el script **retira** cualquier `supabase-config.gs` que haya en
-  `dist/` en vez de subirlo, y avisa. Se puede seguir desplegando: el remoto no se toca.
-
-Guardas de `tests/supabase-config-supervivencia.test.mjs` (7): que el build no genere la plantilla,
-que el paso vaya antes del push y con el nombre de archivo correcto, y que el camino de "el remoto sí
-lo tiene" copie el archivo a `dist/` de verdad (con un gancho `PRESERVE_CONFIG_DESDE` que ningún
-workflow puede usar).
+Guardas de `tests/supabase-config-supervivencia.test.mjs` (8): que el build no genere ninguna
+plantilla de credenciales, que la preservación vaya antes del push, que la verificación vaya después y
+compare contenido, que ningún workflow use el gancho de prueba, y los tres caminos ejecutados de
+verdad —archivo con credenciales y nombre inesperado, remoto idéntico a `dist/`, y remoto ilegible
+cortando el despliegue.
 
 ## 9. Pruebas
 
