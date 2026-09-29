@@ -427,7 +427,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -442,6 +442,8 @@ export async function buildProject() {
     read("src/web/skills/IndexSkills.html"),
     read("src/web/shared/supabase-reader.js"),
     read("src/web/shared/supabase-auth.js"),
+    read("src/web/shared/supabase-catalog-boot.js"),
+    read("src/web/shared/supabase-catalog-apply.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
@@ -465,7 +467,22 @@ export async function buildProject() {
   const supabaseAuth = supabaseAuthRaw
     .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
     .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
-  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  // Orden de los runtime clients, y por que es este:
+  //   auth  -> pantalla de entrada y token
+  //   reader-> sabe leer de Supabase
+  //   boot  -> reintentos y avisos, sin los cuales el reader se traga los fallos
+  //   apply -> envuelve applyImported y aplica DESPUES de que el puente cargue
+  // apply va el ultimo a proposito: envuelve window.applyImported, que la app
+  // declara como funcion de primer nivel, o sea que es una global de window. No se
+  // toca app.js porque el build guarda una COPIA LITERAL de loadAppStateInBackground
+  // para parchearla (startupMarker) y una sola linea de mas ahi rompe el build. Se
+  // intento y MEDIDO 2026-09-29: 'No se encontro la carga inicial para recuperar el
+  // borrador'. Envolver applyImported no depende de ese texto.
+  const catalogBoot = catalogBootRaw
+    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
+    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+  const catalogApply = catalogApplyRaw;
+  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,
