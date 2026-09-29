@@ -346,9 +346,24 @@ begin
   execute format('delete from public.%I where id <> %L::uuid', v_tabla, '00000000-0000-0000-0000-000000000000');
   get diagnostics v_borradas = row_count;
 
-  insert into public.%I
-  select (jsonb_populate_recordset(null::public.%I, p_filas)).*
-    from jsonb_array_elements(p_filas) as f;
+  -- CORREGIDO 2026-09-29. La version anterior de estas tres lineas era:
+  --   insert into public.%I
+  --   select (jsonb_populate_recordset(null::public.%I, p_filas)).*
+  --     from jsonb_array_elements(p_filas) as f;
+  -- sin el format() ni las comillas, o sea que Postgres parseaba public.%I como un
+  -- identificador y contestaba syntax error at or near "%". Y el
+  -- `from jsonb_array_elements` no solo sobraba: MULTIPLICABA las filas. En
+  -- PostgreSQL una funcion que devuelve un conjunto, puesta en la lista de
+  -- seleccion, se expande y se evalua UNA VEZ POR CADA FILA de las demas tablas del
+  -- FROM, asi que N filas de entrada daban N al cuadrado en el insert. Los dos
+  -- errores estaban en la misma sentencia y el de sintaxis tapaba al otro.
+  --
+  -- p_filas viaja como parametro de EXECUTE y no dentro del texto del format(),
+  -- para que un valor con comillas no pueda romper la sentencia montada.
+  execute format(
+    'insert into public.%I select (jsonb_populate_recordset(null::public.%I, $1)).*',
+    v_tabla, v_tabla
+  ) using p_filas;
   get diagnostics v_insertadas = row_count;
 
   return jsonb_build_object('ok', true, 'tabla', v_tabla, 'borradas', v_borradas, 'insertadas', v_insertadas);
