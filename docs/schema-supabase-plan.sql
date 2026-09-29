@@ -432,7 +432,10 @@ begin
    where schemaname = 'public' and tablename = 'operation_events'
      and indexname like 'operation_events%';
   if n <> 4 then
-    raise exception 'operation_events: hay % indices con nombre operation_events% y tienen que ser 4', n;
+  -- OJO: el %% del mensaje es un % LITERAL, no un marcador. plpgsql trata TODO % del
+  -- mensaje como marcador, asi que el comodin de LIKE de abajo tiene que ir doblado.
+  -- Con un solo % aqui, Postgres complains: too few parameters specified for RAISE.
+  raise exception 'operation_events: hay % indices con nombre operation_events%% y tienen que ser 4', n;
   end if;
 
   -- 3. Ninguna politica abierta a anon. Debe salir 0.
