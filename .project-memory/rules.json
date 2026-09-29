@@ -1804,6 +1804,15 @@
       "source": "decision del usuario 2026-09-28; medido el mismo dia con la sonda REST Record API .openchamber/probe-workcenter-record.mjs (404 en workcenter y variantes, entitygroup/5459 200, entitygroup 202 filas de centros via SuiteQL) y .openchamber/verifica-sql.mjs (centros corre: 202 filas)",
       "domain": "supabase",
       "updated_at": "2026-09-28"
+    },
+    {
+      "rule_id": "RULE-SUP-011",
+      "name": "materials excluye el item dummy 'Costo 0 manufactura'",
+      "status": "implementada",
+      "rule": "PEDIDO DEL USUARIO 2026-09-29: 'filtrar en materials la columna de componente los que digan Costo 0 manufactura que no aparezcan'. El componente 'Costo 0 manufactura' (BUILTIN.DF(comp.item)) es un item dummy de costo, no un material real, y aparecia en 1930 de las 2376 filas de materials (81%), en 230 OTs de las abiertas (medido 2026-09-29 paginando el SQL del 2246). Filtro aplicado en el SQL SuiteQL de materiales_ del RESTlet 2246: AND UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA'. Verificado 2026-09-29 contra NetSuite real: el SQL aceptado da 446 filas y 0 restos de 'Costo 0 manufactura'. El filtro vive SOLO en el SQL del RESTlet (NetSuite solo lectura): ni la hoja Supabase (materials es espejo de lo que NetSuite devuelve) ni Apps Script lo replican. Nota: el filtro no es por componente_id (el id del item no es estable entre instalaciones) sino por el texto del display name; si NetSuite renombra el item, el filtro deja de matchear y conviene revisarlo.",
+      "source": "pedido del usuario 2026-09-29; medido con .openchamber/diag-materiales-costo0.mjs (1930/2376 'Costo 0 manufactura', descripcion undefined) y .openchamber/diag-materiales-filtro-aplicado.mjs (SQL con filtro: 446 filas, 0 restos); netsuite-restlet-unificado-supabase.js materiales_ (WHERE con UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA')",
+      "domain": "supabase",
+      "updated_at": "2026-09-29"
     }
   ]
 }

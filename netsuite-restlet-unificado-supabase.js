@@ -191,6 +191,10 @@ define(['N/query'], (query) => {
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
       '  AND ABS(NVL(comp.quantity, 0)) > 0',
+      // El item dummy "Costo 0 manufactura" es un componente de costo, no un material
+      // real: se excluye para que no ensucie BOMs (medido 2026-09-29: 1930 de 2376
+      // filas de materials eran ese componente, en 230 OTs).
+      "  AND UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA'",
       'ORDER BY wo.tranid, comp.id'
     ].join('\n');
     const rows = runSuiteQL_(sql);

@@ -131,7 +131,10 @@ Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` d
 - `work_orders` → `ot`
 - `operations` → `operation_id` (`ns-<mot.id>`)
 - `materials` → `ot,line_id` (UNIQUE compuesto; `comp.id` es el número de línea *dentro* de
-  la OT y se repite entre OTs, medido el 2026-09-29)
+  la OT y se repite entre OTs, medido el 2026-09-29). **Excluye el item dummy `Costo 0
+  manufactura`** (pedido del usuario 2026-09-29: era el 81 % de las filas, 1930/2376, en 230
+  OTs; filtro en el SQL del 2246, `UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA'`,
+  verificado: 446 filas, RULE-SUP-011).
 - `items` → `codigo`
 - `machines` → `nombre`
 - `inventory` → `item,ubicacion`
