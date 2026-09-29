@@ -6,8 +6,10 @@
  *
  * NO escribe en NetSuite: solo lee y escribe en Supabase.
  *
- * MIRROR EXACTO: cada corrida BORRA cada tabla completa y reescribe lo que
- * devuelve NetSuite, para que no queden filas de corridas anteriores.
+ * MIRROR EXACTO ATOMICO: cada corrida llama al RPC public.ingesta_mirror
+ * (docs/rpc-ingesta-mirror.sql), que BORRA cada tabla completa y reescribe lo
+ * que devuelve NetSuite en UNA transaccion: no quedan datos antiguos y, si algo
+ * falla, el rollback deja la tabla con los datos anteriores (nunca vacia).
  *
  * Trigger: cada 15 minutos, lun-vie, 7am-5pm.
  */
@@ -97,47 +99,29 @@ function PP_restletUnificado_(accion, config) {
 // Supabase (PostgREST)
 // =============================================================================
 
-function PP_supabaseBorrar_(tabla, config) {
-  // Borra TODAS las filas de la tabla (full refresh): la ingesta ahora reescribe
-  // cada tabla desde cero para que no queden datos antiguos de corridas previas.
-  // El filtro id=neq.<uuid-vacio> es una tautologia que PostgREST acepta para
-  // borrar todo, incluso si la tabla ya esta vacia.
-  const url = config.supabaseUrl + '/rest/v1/' + tabla + '?id=neq.00000000-0000-0000-0000-000000000000';
-  const res = UrlFetchApp.fetch(url, {
-    method: 'DELETE',
-    headers: {
-      'apikey': config.supabaseKey,
-      'Authorization': 'Bearer ' + config.supabaseKey,
-      'Prefer': 'count=none'
-    },
-    muteHttpExceptions: true
-  });
-  const code = res.getResponseCode();
-  if (code !== 200 && code !== 204) {
-    throw new Error('Supabase borrar ' + tabla + ' ' + code + ': ' + res.getContentText().slice(0, 300));
-  }
-  return true;
-}
-
-function PP_supabaseUpsert_(tabla, filas, clave, config) {
-  if (!filas.length) return { escritas: 0 };
-  const url = config.supabaseUrl + '/rest/v1/' + tabla + '?on_conflict=' + clave;
+function PP_supabaseMirror_(tabla, filas, config) {
+  // MIRROR ATOMICO via el RPC public.ingesta_mirror (docs/rpc-ingesta-mirror.sql):
+  // borra todas las filas e inserta las nuevas DENTRO de una sola transaccion de
+  // Postgres. Si el insert falla, el rollback revierte el borrado y la tabla
+  // queda con los datos anteriores (nunca vacia ni a medias). El DELETE+POST que
+  // habia antes (commit c883d5e) dejaba la tabla vacia si el POST fallaba.
+  const url = config.supabaseUrl + '/rest/v1/rpc/ingesta_mirror';
   const res = UrlFetchApp.fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'apikey': config.supabaseKey,
-      'Authorization': 'Bearer ' + config.supabaseKey,
-      'Prefer': 'resolution=merge-duplicates'
+      'Authorization': 'Bearer ' + config.supabaseKey
     },
-    payload: JSON.stringify(filas),
+    payload: JSON.stringify({ p_tabla: tabla, p_filas: filas }),
     muteHttpExceptions: true
   });
   const code = res.getResponseCode();
-  if (code !== 200 && code !== 201) {
-    throw new Error('Supabase ' + tabla + ' ' + code + ': ' + res.getContentText().slice(0, 300));
+  if (code !== 200) {
+    throw new Error('Supabase rpc ingesta_mirror ' + tabla + ' ' + code + ': ' + res.getContentText().slice(0, 300));
   }
-  return { escritas: filas.length };
+  const r = JSON.parse(res.getContentText());
+  return { escritas: r.insertadas || 0, borradas: r.borradas || 0 };
 }
 
 // =============================================================================
@@ -216,12 +200,12 @@ function ingesta() {
       if (nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
       if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
       if (nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
-      // Mirror exacto de NetSuite: borra la tabla completa y escribe lo nuevo,
-      // para que no queden filas de corridas anteriores.
-      PP_supabaseBorrar_(def.tabla, config);
-      const r = PP_supabaseUpsert_(def.tabla, filas, def.clave, config);
-      log.push(nombre + ': ' + r.escritas + ' filas (borrado+reescrito)');
-      console.log(nombre + ': ' + r.escritas + ' escritas (tabla reescrita completa)');
+      // Mirror atómico de NetSuite: el RPC borra la tabla completa y escribe lo
+      // nuevo en una sola transacción, para que no queden filas de corridas
+      // anteriores ni ventanas con la tabla vacía.
+      const r = PP_supabaseMirror_(def.tabla, filas, config);
+      log.push(nombre + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
+      console.log(nombre + ': ' + r.escritas + ' escritas / ' + r.borradas + ' borradas (mirror atomico)');
     } catch (e) {
       log.push(nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
       console.log(nombre + ': ERROR ' + String(e.message || e).slice(0, 200));

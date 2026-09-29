@@ -100,7 +100,7 @@ POST { accion, ids: {workorderIds, itemIds, salesOrderIds, workcenterIds}, folio
 Respuesta: `{ ok, accion, tabla, modoUsado, leidas, escritas, omitidas, conflictos[], batches,
 truncado, avisos[], degradaciones[] }`.
 
-## 5. Modo de escritura: MIRROR EXACTO (borrar + reescribir)
+## 5. Modo de escritura: MIRROR EXACTO ATOMICO (RPC)
 
 Desde el 2026-09-29 la ingesta no hace upsert incremental: **borra cada tabla completa y
 reescribe lo que NetSuite devuelve en esa corrida** (decisión del usuario: "que no se queden
@@ -108,10 +108,18 @@ datos antiguos"). Las 7 tablas quedan como espejo exacto de las filas abiertas d
 
 El flujo corre en Google Apps Script (`appscript-ingesta-supabase.gs`, función `ingesta`):
 1. Una sola llamada al RESTlet unificado **2246** con `accion: 'todas'` (solo lectura).
-2. Por cada tabla: `DELETE ... WHERE id=neq.<uuid-vacio>` (borra todo; es el único writer,
-   la service role key de `supabase-config.gs`) y luego `POST` con `on_conflict=<clave>`.
+2. Por cada tabla: `POST /rest/v1/rpc/ingesta_mirror` con `{ p_tabla, p_filas }`. El RPC
+   (`docs/rpc-ingesta-mirror.sql`) hace `delete` + `insert` **dentro de una sola transacción**:
+   o COMMIT (200) o ROLLBACK (400). Si el insert falla, la tabla queda con los datos
+   anteriores a la corrida, nunca vacía ni a medias (el DELETE+POST previo del commit
+   c883d5e dejaba la tabla vacía si el POST fallaba).
+3. El RPC valida que `p_tabla` esté en las 7 tablas de la whitelist, que las columnas del
+   payload existan en la tabla (los desconocidas RAISAN, como el PGRST204), castea cada
+   valor contra el tipo real de la columna (`jsonb_populate_recordset`) y solo
+   `service_role` puede ejecutarlo (la service key de `supabase-config.gs`).
 
-Claves naturales (`on_conflict`):
+Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` dedupe por
+`codigo`, `materiales` por `ot+line_id`, `inventario` por `item+ubicacion`):
 - `work_orders` → `ot`
 - `operations` → `operation_id` (`ns-<mot.id>`)
 - `materials` → `ot,line_id` (UNIQUE compuesto; `comp.id` es el número de línea *dentro* de
@@ -121,9 +129,8 @@ Claves naturales (`on_conflict`):
 - `inventory` → `item,ubicacion`
 - `sales_orders` → `folio`
 
-Sin guarda de `revision` ni modo `comparar`: el mirror semanal/quincenal convive con la
-concurrencia optimista de `app_state`/`plan_snapshots` (que son tablas de estado, no de
-ingesta), sin pisarse.
+Sin guarda de `revision` ni modo `comparar`: el mirror convive con la concurrencia optimista
+de `app_state`/`plan_snapshots` (que son tablas de estado, no de ingesta), sin pisarse.
 
 **`dryRun` corre sin credenciales** y devuelve `clavesQueSeEscribirian` y `filasQueSeEscribirian`.
 Es la forma de verificar el mapeo contra el esquema antes de escribir: si aparece una columna que no
