@@ -427,7 +427,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -444,6 +444,8 @@ export async function buildProject() {
     read("src/web/shared/supabase-auth.js"),
     read("src/web/shared/supabase-catalog-boot.js"),
     read("src/web/shared/supabase-catalog-apply.js"),
+    read("src/web/shared/supabase-writer.js"),
+    read("src/web/shared/supabase-event-log.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
@@ -472,17 +474,31 @@ export async function buildProject() {
   //   reader-> sabe leer de Supabase
   //   boot  -> reintentos y avisos, sin los cuales el reader se traga los fallos
   //   apply -> envuelve applyImported y aplica DESPUES de que el puente cargue
-  // apply va el ultimo a proposito: envuelve window.applyImported, que la app
-  // declara como funcion de primer nivel, o sea que es una global de window. No se
-  // toca app.js porque el build guarda una COPIA LITERAL de loadAppStateInBackground
-  // para parchearla (startupMarker) y una sola linea de mas ahi rompe el build. Se
-  // intento y MEDIDO 2026-09-29: 'No se encontro la carga inicial para recuperar el
-  // borrador'. Envolver applyImported no depende de ese texto.
+  //   eventos-> la vista de depuracion de operation_events; usa el token de auth y
+  //            la url/clave del reader, asi que va detras de los dos
+  // apply va antes que eventos a proposito: envuelve window.applyImported, que la
+  // app declara como funcion de primer nivel, o sea que es una global de window. No
+  // se toca app.js porque el build guarda una COPIA LITERAL de
+  // loadAppStateInBackground para parchearla (startupMarker) y una sola linea de mas
+  // ahi rompe el build. Se intento y MEDIDO 2026-09-29: 'No se encontro la carga
+  // inicial para recuperar el borrador'. Envolver applyImported no depende de ese
+  // texto, y la vista de eventos tampoco: se engancha al hash y al DOM.
   const catalogBoot = catalogBootRaw
     .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
     .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
   const catalogApply = catalogApplyRaw;
-  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  // El escritor entra DESPUES de reader y boot, y antes del registro de eventos: usa el
+  // token de supabase-auth y la url de supabase-reader, y el registro lee lo que el
+  // escritor produjo. MEDIDO 2026-09-29: sin esto, PPSupabaseWriter existe pero
+  // ninguna pagina lo puede llamar, que es la forma de tener codigo muerto que
+  // parece funcionar.
+  const catalogWrite = supabaseWriterRaw
+    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
+    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+  // La vista de eventos no trae marcadores de configuracion: la URL y la clave las
+  // pide al lector (un solo sitio las sabe) y el JWT a la sesion.
+  const eventLog = eventLogRaw;
+  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${catalogWrite.trimEnd()}\n${eventLog.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,

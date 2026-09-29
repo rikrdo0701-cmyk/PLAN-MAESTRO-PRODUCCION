@@ -1931,6 +1931,48 @@ tr:last-child td { border-bottom: 0; }
 .table-action { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--red); font-size: 18px; }
 .status-note { color: var(--muted); font-size: 9px; }
 
+/* Vista de depuracion del registro de eventos (operation_events). Se inserta desde
+   supabase-event-log.js, no desde el template: es una vista de soporte y no tiene
+   por que estar en el HTML de la app. El selector de data-section la enciende igual
+   que las demas vistas de configuracion, para que showWorkspaceView no sepa nada. */
+.workspace[data-view="config"][data-section="eventos"] .eventos-view { display: block; }
+.eventos-body { display: grid; gap: 10px; }
+.eventos-filtros { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.eventos-filtros .compact-control input { width: 150px; }
+.eventos-filtros .compact-control input[type="date"] { width: 128px; }
+.eventos-filtros .compact-control input[type="number"] { width: 74px; }
+.eventos-filtros .compact-control input[type="search"] { width: 130px; }
+.eventos-filtros .compact-control input[type="text"] { width: 200px; }
+.eventos-recargar { margin-left: auto; }
+.eventos-avisos { display: grid; gap: 8px; }
+.eventos-aviso { margin: 0; padding: 9px 10px; border-left: 3px solid var(--line-strong); background: var(--surface-subtle); color: var(--text); font-size: 10px; line-height: 1.5; }
+.eventos-aviso[hidden] { display: none; }
+.eventos-aviso-ddl { border-left-color: var(--amber); background: #fdf6e8; color: #6b4708; }
+.eventos-aviso-error { border-left-color: var(--red); background: #fff4f4; color: #70262e; }
+.eventos-pie { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px; font-weight: 650; }
+.eventos-vacio { margin: 0; padding: 18px; border: 1px dashed var(--line-strong); border-radius: 3px; background: var(--surface-subtle); color: var(--muted); font-size: 11px; text-align: center; }
+.eventos-vacio[hidden] { display: none; }
+.eventos-tabla-wrap[hidden] { display: none; }
+.eventos-fila td:first-child { padding-left: 10px; }
+.eventos-tabla { min-width: 1080px; }
+.eventos-tabla td { vertical-align: top; }
+.eventos-fila:nth-child(even) { background: var(--surface-subtle); }
+.eventos-celda-fecha { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.eventos-celda-ot { font-weight: 700; white-space: nowrap; }
+.eventos-celda-tipo { font-weight: 650; white-space: nowrap; color: var(--teal-dark); }
+.eventos-celda-actor { white-space: nowrap; color: var(--muted); }
+.eventos-celda-texto { color: var(--muted); word-break: break-all; }
+.eventos-celda-num { text-align: right; font-variant-numeric: tabular-nums; }
+.eventos-celda-payload { width: 46%; }
+.eventos-payload { display: grid; gap: 3px; font-family: Consolas, "Courier New", monospace; font-size: 10px; }
+.eventos-payload-fila { display: grid; grid-template-columns: minmax(90px, 32%) minmax(0, 1fr); gap: 8px; }
+.eventos-payload-grupo { margin-top: 3px; color: var(--text); font-weight: 700; }
+.eventos-payload-anidada { padding-left: 10px; border-left: 2px solid var(--line); }
+.eventos-payload-clave { color: var(--muted); word-break: break-word; }
+.eventos-payload-valor { color: var(--text); word-break: break-word; }
+.eventos-payload-escalar { word-break: break-word; }
+.eventos-payload-vacio { color: var(--muted); font-style: italic; }
+
 .planning-dialog {
   width: min(680px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 32px));
