@@ -69,6 +69,16 @@ comment on column public.operators.nombre_real is
 --     El USING fija 1 en las filas que ya existen porque el boolean sembrado no
 --     permite saber el factor original: no se adivina. El siguiente espejo de
 --     catalogos sobrescribe la tabla entera con el valor real de la hoja.
+--
+--     MEDIDO 2026-09-29 (intento 1, rollback): el ALTER ... TYPE falla con
+--     'default for column "solapamiento" cannot be cast automatically to type
+--     numeric'. Al cambiar el tipo, Postgres castea TAMBIÉN la expresión del
+--     DEFAULT, y el default sembrado era boolean, que no tiene conversion
+--     automatica a numeric. Por eso el ORDEN importa: primero se quita el
+--     default, despues se cambia el tipo, y al final se vuelve a poner ya en
+--     numeric. Con las tres en el orden correcto el archivo es idempotente.
+alter table public.capabilities
+  alter column solapamiento drop default;
 alter table public.capabilities
   alter column solapamiento type numeric using (1::numeric);
 alter table public.capabilities
