@@ -52,8 +52,13 @@ Write-Host '    Es idempotente: volver a correrlo no rompe nada.' -ForegroundCol
 Write-Host ''
 
 if (-not $Si) {
-  $r = Read-Host '  Continuar? (s/N)'
-  if ($r -ne 's' -and $r -ne 'S') { Write-Host 'Cancelado. No se aplico nada.'; exit 0 }
+  $r = (Read-Host '  Continuar? escribe s y Enter').Trim().ToLower()
+  if ($r -notin @('s', 'si', 'sí', 'y', 'yes')) {
+    Write-Host ''
+    Write-Host '  Cancelado. NO se aplico nada.' -ForegroundColor Yellow
+    Write-Host '  Para correrlo sin confirmacion:  -Si   (asi solo te pide la contrasena)' -ForegroundColor DarkGray
+    exit 0
+  }
 }
 
 $seguro = Read-Host '  Password de postgres' -AsSecureString
