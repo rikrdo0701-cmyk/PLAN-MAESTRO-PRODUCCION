@@ -94,6 +94,7 @@
       "workOrders[].dueDateOverride | falta la columna due_date_override | la hoja ORDENES_TRABAJO tiene FECHA_ENTREGA_AJUSTADA. La agrega docs/schema-supabase-plan.sql (text) y ese DDL SIGUE SIN APLICAR. Se deja '' y no se copia fecha_vencimiento: la fecha ajustada a mano manda sobre la de NetSuite, y copiarla seria afirmar que nadie la ajusto.",
       "workOrders[].averageSalePriceFrom | falta la columna precio_desde | la hoja ORDENES_TRABAJO tiene PRECIO_DESDE y el nombre no dice lo que es: no es un precio, es la FECHA desde la que vale el precio promedio de venta. MEDIDO 2026-09-29: app.js:1726 lo pasa por normalizeOtDate y 02-storage.js:2182 lo lee sin Number(), al lado de PRECIO_PROMEDIO_VENTA que si lleva Number(). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
       "workOrders[].averageSalePriceTo | falta la columna precio_hasta | la hoja tiene PRECIO_HASTA, la FECHA hasta la que vale ese precio promedio (misma medicion que en el anterior). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
+      "workOrders[].startDate, endDate y dueDate | falta la FORMA de la columna fecha_inicio_ns | las tres son timestamptz y el estado espera el texto 'AAAA-MM-DD' de la hoja (PP_mapWorkOrder_, 02-storage.js:2179). Se resuelve con una REGLA, no con una columna: partir el ISO en UTC sin convertir de zona, y la hora (que el estado no tiene campo para estas tres) se descarta en vez de inventarse un lugar donde ponerla. La regla y su motivo estan en partirFechaTexto().",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -110,8 +111,7 @@
       "operations[].toolChangeFromKit | falta la columna KIT_ORIGEN | la hoja lo tiene, la mitad 'desde' del cambio de kit. Sin columna.",
       "operations[].toolChangeToHerramental | falta la columna HERRAMENTAL_DESTINO | la hoja lo tiene, la mitad 'hasta' del cambio de herramental. Sin columna.",
       "operations[].toolChangeToKit | falta la columna KIT_DESTINO | la hoja lo tiene, la mitad 'hasta' del cambio de kit. Sin columna.",
-      "operations[].fechaInicio y fechaFin | falta la FORMA de la columna fecha_inicio | la columna existe pero es timestamptz, y el state espera el texto 'AAAA-MM-DD' que la hoja guarda en FECHA_INICIO (PP_mapOperation_). Partir un timestamptz en la fecha de la planta exige su zona horaria, que no esta medida ni escrita en el repositorio: se deja sin mapear en vez de correr la fecha un dia.",
-      "operations[].horaInicio y horaFin | falta la FORMA de la columna hora_inicio | la columna existe pero es timestamptz, y el state espera 'HH:MM'. Mismo motivo que en la fecha: sin la zona horaria de la planta, partirla seria inventar una hora.",
+      "operations[].fechaInicio, horaInicio, fechaFin y horaFin | falta la FORMA de la columna fecha_inicio | las cuatro son timestamptz y el estado espera dos textos, 'AAAA-MM-DD' y 'HH:MM' (PP_OPERATION_FIELDS, 02-storage.js:45). MEDIDO 2026-09-29: hora_inicio y hora_fin nulas en 1000/1000 y fecha_inicio siempre T00:00:00+00:00, o sea que lo que hay son FECHAS SIN HORA. Se resuelve con una REGLA, no con una columna: partir el ISO en UTC SIN convertir de zona (la planta es America/Mexico_City y aplicarla moveria las 1000 fechas un dia hacia atras) y dejar la hora VACIA cuando el valor es medianoche. La regla y su motivo estan en partirFechaTexto().",
     ],
   };
 
@@ -232,6 +232,100 @@
     if (category === "TD") return category;
     if (/AJUST/.test(normalizeKey(operator))) return "FUERA_DE_PLAN";
     return /PINTURA|ACABADO/.test(normalizeKey(operator)) ? "ACABADOS" : "TD";
+  }
+
+  // ---- la regla de las fechas, que es SIMETRICA con el escritor ----
+  //
+  // QUE HAY EN LA BASE. MEDIDO 2026-09-29 sobre filas reales, no sobre el DDL objetivo:
+  //   operations, 1000 filas: `hora_inicio` y `hora_fin` NULAS en 1000/1000, y `fecha_inicio`
+  //     SIEMPRE con la forma T00:00:00+00:00.
+  //   work_orders, 212 filas: `fecha_inicio_ns` y `fecha_fin_ns` NULAS en 212/212, y
+  //     `fecha_vencimiento` con valor en 212/212.
+  // O sea que lo que hay guardado NO es un plan con horas: son FECHAS sin hora.
+  //
+  // POR QUE NO SE CONVIERTE DE ZONA, Y POR QUE ES EL ERROR MAS CARO DE ESTE MODULO. La zona
+  // de la planta es America/Mexico_City (16-supabase-catalogo.js:429 y :441, y el default de
+  // 16-inspection-service.js), y aplicarla aqui MOVERIA LAS 1000 FECHAS MEDIDAS UN DIA HACIA
+  // ATRAS: 2026-09-30T00:00:00+00:00 en Ciudad de Mexico es 2026-09-29 18:00. Se escribe aqui
+  // para que nadie "aplique la zona horaria" sin volver a medir.
+  //
+  // LA REGLA ES SIMETRICA CON EL ESCRITOR, Y ESO ES LO QUE LA JUSTIFICA. El escritor
+  // (supabase-writer.js, instante(), que copia el criterio de isoFechaHora_ del RESTlet 2246,
+  // netsuite-restlet-unificado-supabase.js:396) trata la hora de pared como UTC y escribe con
+  // toISOString; la ingesta del RESTlet hace lo mismo (isoFechaHora_ usa Date.UTC). O sea que
+  // la columna guarda la fecha del estado TAL CUAL, con un +00:00 de etiqueta. Releerla en
+  // otro criterio no es una mejora: es un viaje de ida y vuelta que pierde un dia.
+  //
+  // POR QUE MEDIANOCHE DEJA LA HORA VACIA. T00:00:00+00:00 no es una operacion a las 00:00: es
+  // lo que sale cuando la app NO TENIA HORA (instante() con solo la fecha produce exactamente
+  // eso). Poner "00:00" afirmaria una hora que nadie escribio y pondria la operacion a media
+  // noche. Con la hora vacia el estado la trata como lo que es: una fecha. Y esto es lo que
+  // hacen las 1000 filas reales, que es la medicion que manda. El margen que queda, y se dice:
+  // la columna no distingue una 00:00 REAL de una fecha sin hora, porque el escritor produce
+  // las dos igual; se elige la lectura de fecha sin hora porque es la de las filas medidas.
+  //
+  // LO QUE ESTA REGLA NO HACE, Y NO VA A HACER. No hay `new Date()`, ni getTimezoneOffset, ni
+  // toLocaleDateString, ni tabla de zonas en ninguna de las funciones de la regla. Un valor con
+  // zona explicita (un -06:00, o un +00:00 que no sea el del escritor) se devuelve con SUS
+  // cifras, sin desplazarlas: no se inventa una conversion que nadie pidio. Un valor con un
+  // formato que no es una fecha ISO se devuelve TAL CUAL en el campo de fecha y con la hora
+  // vacia, en vez de adivinar un dia.
+  //
+  // NINGUNA OTRA FECHA DEL MODULO ENTRA AQUI. Las de calendar_exceptions, ot_configurations,
+  // article_configurations y demas se leen como estaban, porque de donde salen no esta medido.
+
+  /**
+   * "HH:MM" de una hora de pared, o "" si no hay hora. `horas` en null es que el valor no
+   * traia hora; una hora fuera de rango se devuelve vacia en vez de normalizarla con un Date,
+   * que correria el dia entero. 00:00:00 devuelve "" por lo de arriba: medianoche es una fecha
+   * sin hora, no una operacion a las cero. Con segundos NO nulos no es medianoche, y entonces
+   * si hay hora (00:00:30 es una hora, no una ausencia).
+   */
+  function horaDePared(horas, minutos, segundos) {
+    if (horas == null) return "";
+    const hh = Number(horas);
+    const mm = Number(minutos);
+    const ss = Number(segundos == null || segundos === "" ? 0 : segundos);
+    if (!isFinite(hh) || !isFinite(mm) || hh > 23 || mm > 59) return "";
+    if (hh === 0 && mm === 0 && ss === 0) return "";
+    return (hh < 10 ? "0" + hh : String(hh)) + ":" + (mm < 10 ? "0" + mm : String(mm));
+  }
+
+  /**
+   * Texto de una columna timestamptz -> { fecha, hora } para el estado. NUNCA convierte de zona.
+   * Ver el bloque de arriba, que dice por que.
+   */
+  function partirFechaTexto(valor) {
+    const texto = String(valor == null ? "" : valor).trim();
+    if (!texto) return { fecha: "", hora: "" };
+    // 1) "AAAA-MM-DD", o "AAAA-MM-DD hh:mm[:ss]" sin zona. No hay offset que aplicar, y las
+    //    cifras del texto son las que puso quien las escribio.
+    const plano = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(texto);
+    if (plano) return { fecha: plano[1], hora: horaDePared(plano[2], plano[3], plano[4]) };
+    // 2) "AAAA-MM-DDThh:mm:ss[.fff]" con "Z" o con "+hh:mm"/"-hh:mm". Se leen las CIFRAS del
+    //    texto tal cual: el offset se ignora a proposito, porque moverlo seria aplicar la zona
+    //    de la planta y correr la fecha un dia.
+    const conZona = /^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/i.exec(texto);
+    if (conZona) return { fecha: conZona[1], hora: horaDePared(conZona[2], conZona[3], conZona[4]) };
+    // 3) Formato raro ("31/12/2026", o un texto que no es una fecha). Se devuelve tal cual en la
+    //    fecha y con la hora vacia. Se PUEDE ver raro en la pagina, y eso es mejor que una fecha
+    //    que nadie escribio.
+    return { fecha: texto, hora: "" };
+  }
+
+  /**
+   * La fecha y la hora de UN momento del estado, que en la tabla son DOS columnas: `principal`
+   * trae el instante y `repetida` es la misma fila puesta en la otra columna (el escritor pone
+   * hora_inicio = fecha_inicio, supabase-writer.js:530-534, y la ingesta del RESTlet ni escribe
+   * la repetida). La hora sale de `principal`; si esa no trae hora se mira `repetida`, que es el
+   * mismo instante. NUNCA se mezclan dos horas: si las dos traen una distinta, manda `principal`,
+   * que es la columna que escribe la ingesta del RESTlet 2246
+   * (netsuite-restlet-unificado-supabase.js:163) y la que trae las 1000 filas medidas.
+   */
+  function momentoDelTexto(principal, repetida) {
+    const primero = partirFechaTexto(principal);
+    if (primero.hora) return primero;
+    return { fecha: primero.fecha, hora: partirFechaTexto(repetida).hora };
   }
 
   // ---- mapeo de catalogos ----
@@ -502,7 +596,11 @@
     // perderla seria peor que devolverla con el id vacio.
     return (rows || []).map(function (row) {
       const subcontractType = String(row.subcontract_type == null ? "" : row.subcontract_type).trim();
-      return {
+      // Las cuatro fechas se parten con la regla simetrica: sin convertir de zona y con la
+      // hora vacia cuando el valor es medianoche. Ver el bloque de partirFechaTexto.
+      const inicio = momentoDelTexto(row.fecha_inicio, row.hora_inicio);
+      const fin = momentoDelTexto(row.fecha_fin, row.hora_fin);
+      const operacion = {
         // `operation_id` es la clave natural de la fila (la clave del espejo es esa columna,
         // 19-appscript-ingesta-supabase.js:259) y es la que el plan usa para referenciar una
         // operacion; `id` es el uuid de la base.
@@ -521,6 +619,10 @@
         tiempoCiclo: number(row.tiempo_ciclo),
         tiempoSetup: number(row.tiempo_setup),
         tiempoProd: number(row.tiempo_prod),
+        fechaInicio: inicio.fecha,
+        horaInicio: inicio.hora,
+        fechaFin: fin.fecha,
+        horaFin: fin.hora,
         tipoInsercion: String(row.tipo_insercion == null ? "" : row.tipo_insercion).trim(),
         estatus: String(row.estatus == null ? "" : row.estatus).trim(),
         locked: asBool(row.locked, false),
@@ -529,6 +631,30 @@
         subcontractDays: number(row.subcontract_days),
         is_subcontract: Boolean(subcontractType),
       };
+      // LAS MARCAS DE RETIRADA, que son columnas NUEVAS: las agrega
+      // docs/schema-supabase-plan.sql:434-435 y MEDIDO 2026-09-29 NO estan en el esquema
+      // desplegado (docs/esquema-supabase-medido.json no las trae), asi que hasta que se
+      // aplique el DDL PostgREST no las manda y la fila llega sin ellas. Por eso los campos se
+      // anaden SOLO si la fila las trae: rellenar con "" cuando la columna no existe
+      // afirmaria que la operacion esta en el plan (que es lo que significa el null del
+      // comentario del DDL) sin que la base tenga nada que decir. Es la misma regla que el
+      // resto de columnas ausentes: lo que no esta, no se rellena.
+      if (Object.prototype.hasOwnProperty.call(row, "retirada_en")
+        || Object.prototype.hasOwnProperty.call(row, "retirada_por")) {
+        // retirada_en se devuelve como el TEXTO que llega, sin partir y sin convertir: no hay
+        // un campo del estado donde ponerla (el comentario del DDL, lineas 437-440, dice que
+        // no existe ninguna lista de operaciones retiradas) y `now()` la escribe con zona real,
+        // o sea que no es una fecha sin hora. Vacio = sin marca.
+        operacion.retiradaEn = String(row.retirada_en == null ? "" : row.retirada_en).trim();
+        // retirada_por es el correo de quien provoco la retirada, del JWT (mismo comentario del
+        // DDL). Vacio = sin marca.
+        operacion.retiradaPor = String(row.retirada_por == null ? "" : row.retirada_por).trim();
+      }
+      // Y NO se decide nada con las marcas: el lector no quita operaciones del plan, no arma
+      // una lista de retiradas y no las repone. Que una retirada deba sacar la operacion de la
+      // vista es una regla de la pagina (la fuente real y persistida es selected_ots, segun el
+      // comentario del DDL), y aqui solo se lleva el dato.
+      return operacion;
     });
   }
 
@@ -550,10 +676,24 @@
       const quantity = number(row.cantidad);
       const builtQuantity = number(row.cant_ensamblada);
       const rawPending = String(row.cant_pendiente == null ? "" : row.cant_pendiente).trim();
+      // Las tres fechas usan la MISMA regla simetrica que las de operations: sin convertir de
+      // zona. MEDIDO 2026-09-29: fecha_inicio_ns y fecha_fin_ns NULAS en 212/212, o sea que
+      // solo llega fecha_vencimiento, y llega como fecha sin hora.
+      //
+      // LA HORA DE ESTAS TRES NO TIENE DONDE IR, Y SE DICE. PP_mapWorkOrder_
+      // (02-storage.js:2179) deja startDate, endDate y dueDate como un solo campo de texto
+      // cada uno: no hay startTime ni endTime en el estado de una orden. Se mapea la fecha y
+      // la hora se descarta, en vez de inventar un campo que el estado no tiene. Con los datos
+      // medidos no se pierde nada (las tres columnas son nulas o son medianoche); si alguna
+      // vez llegara con hora, la decision de donde guardarla es de quien mantenga el shape del
+      // estado, no de este lector.
+      const inicio = partirFechaTexto(row.fecha_inicio_ns);
+      const fin = partirFechaTexto(row.fecha_fin_ns);
+      const vencimiento = partirFechaTexto(row.fecha_vencimiento);
       return {
         id: row.id, workOrderId: row.wo_internal_id, ot: row.ot, item: row.articulo,
-        description: row.descripcion, photoUrl: row.foto_url, startDate: row.fecha_inicio_ns,
-        endDate: row.fecha_fin_ns, dueDate: row.fecha_vencimiento, dueDateOverride: "",
+        description: row.descripcion, photoUrl: row.foto_url, startDate: inicio.fecha,
+        endDate: fin.fecha, dueDate: vencimiento.fecha, dueDateOverride: "",
         quantity: quantity, status: row.estatus, customer: row.cliente, builtQuantity: builtQuantity,
         pendingQuantity: rawPending === "" ? Math.max(0, quantity - builtQuantity) : Math.max(0, number(row.cant_pendiente)),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
@@ -685,6 +825,10 @@
     mapOperations: mapOperations,
     mapSubcontracts: mapSubcontracts,
     mapWorkOrders: mapWorkOrders,
+    // La regla de las fechas se exporta para que se pueda probar SOLA, sobre un valor, sin
+    // montar una lectura: es la parte del lector que mas dano hace si se cambia por error.
+    partirFechaTexto: partirFechaTexto,
+    momentoDelTexto: momentoDelTexto,
     TABLES: TABLES,
     CATALOG_TABLES: CATALOG_TABLES,
     MAPPING_GAPS: MAPPING_GAPS,

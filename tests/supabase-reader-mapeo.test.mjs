@@ -395,10 +395,17 @@ test("operations: herramental y kit si se mapean, y lo que no tiene columna no s
   for (const campo of ["num", "parte", "contenido", "prioridad", "fechaReq", "comentario", "tiempoFallback", "kitPending", "log", "generatedBy"]) {
     assert.equal(op[campo], undefined, `${campo} no tiene columna en la tabla: no se inventa`);
   }
-  // Y las fechas NO se parten: son timestamptz, y hacerlo exige la zona horaria de la planta
-  // (MAPPING_GAPS.operations lo declara como falta de FORMA, no de columna).
+  // Y las fechas YA NO se dejan sin mapear: la regla simetrica existe (partir el ISO en UTC,
+  // sin convertir de zona, y medianoche = hora vacia) y esta probada mas abajo. Esta fila no
+  // trae ninguna columna de fecha, o sea que lo unico que se puede decir es que estan vacias:
+  // "" y no undefined, porque las columnas SI existen y lo que no hay es un dato. Y las dos
+  // marcas de retirada NO se rellenan: la columna todavia no esta en el esquema medido
+  // (MEDIDO 2026-09-29), y poner "" afirmaria que la operacion esta en el plan.
   for (const campo of ["fechaInicio", "horaInicio", "fechaFin", "horaFin"]) {
-    assert.equal(op[campo], undefined, `${campo} es timestamptz: partirlo seria correr la fecha`);
+    assert.equal(op[campo], "", `${campo}: la columna existe y no trae valor, no se inventa`);
+  }
+  for (const campo of ["retiradaEn", "retiradaPor"]) {
+    assert.equal(op[campo], undefined, `${campo}: la columna no esta en el esquema medido, no se inventa`);
   }
 });
 
@@ -418,4 +425,229 @@ test("una tabla que NO se pudo leer no llega como vacia: llega como undefined", 
   const vacia = await catalogsDe({ tools: [], calendar_exceptions: [] }, ["tools", "calendar_exceptions"]);
   assert.deepEqual(vacia.catalogs.toolCatalog, [], "si se leyo y esta vacia, [] es informacion real");
   assert.deepEqual(vacia.catalogs.calendarExceptions, []);
+});
+
+// ---------------------------------------------------------------------------
+// LA REGLA DE LAS FECHAS
+// ---------------------------------------------------------------------------
+//
+// QUE SE MEDIO, Y NO SE RE-INVESTIGA AQUI. El 2026-09-29, sobre filas reales y no sobre el DDL
+// objetivo: operations.hora_inicio y operations.hora_fin NULAS en 1000/1000, y
+// operations.fecha_inicio SIEMPRE con la forma T00:00:00+00:00; work_orders.fecha_inicio_ns y
+// work_orders.fecha_fin_ns NULAS en 212/212, y work_orders.fecha_vencimiento con valor en
+// 212/212. O sea que lo que hay en la base son FECHAS SIN HORA.
+//
+// EL ERROR QUE ESTOS TESTS ATRAPAN, POR QUE ES FACIL DE COMETER Y POR QUE CUESTA UN DIA. La
+// zona de la planta es America/Mexico_City (16-supabase-catalogo.js:429 y :441, y el default de
+// 16-inspection-service.js). 2026-09-30T00:00:00+00:00 en Ciudad de Mexico es 2026-09-29
+// 18:00, o sea que "aplicar la zona horaria" al leer MOVERIA LAS 1000 FECHAS UN DIA HACIA
+// ATRAS. La regla que se aplica es la SIMETRICA con el escritor (supabase-writer.js instante(),
+// que copia el criterio de isoFechaHora_ del RESTlet 2246,
+// netsuite-restlet-unificado-supabase.js:396): la hora de pared se escribio como UTC, asi que
+// se relee en UTC, partiendo el texto y sin tocar el offset.
+
+test("una fecha a medianoche UTC devuelve la fecha y la HORA VACIA, no 00:00", () => {
+  const medianoche = reader.partirFechaTexto("2026-09-30T00:00:00+00:00");
+  assert.equal(medianoche.fecha, "2026-09-30");
+  assert.equal(medianoche.hora, "", "medianoche es que la app NO TENIA hora, no una operacion a las 00:00");
+  // Las dos formas que hay en la base dan lo mismo, porque son el mismo instante escrito por
+  // dos escritores distintos: el +00:00 de la ingesta (isoFechaHora_ con Date.UTC) y el
+  // .000Z del escritor de la pagina (toISOString).
+  assert.deepEqual(
+    copiar(reader.partirFechaTexto("2026-09-30T00:00:00.000Z")),
+    { fecha: "2026-09-30", hora: "" }
+  );
+  // Y una fecha sin hora, que es como la hoja la guarda.
+  assert.deepEqual(copiar(reader.partirFechaTexto("2026-10-01")), { fecha: "2026-10-01", hora: "" });
+  assert.deepEqual(copiar(reader.partirFechaTexto("2026-10-01 00:00:00")), { fecha: "2026-10-01", hora: "" });
+  // Sin valor: vacio en los dos, y no una fecha inventada.
+  assert.deepEqual(copiar(reader.partirFechaTexto(null)), { fecha: "", hora: "" });
+  assert.deepEqual(copiar(reader.partirFechaTexto("")), { fecha: "", hora: "" });
+});
+
+test("un valor con hora distinta de medianoche devuelve ESA hora", () => {
+  assert.deepEqual(
+    copiar(reader.partirFechaTexto("2026-09-30T08:30:00+00:00")),
+    { fecha: "2026-09-30", hora: "08:30" }
+  );
+  assert.deepEqual(
+    copiar(reader.partirFechaTexto("2026-09-30T08:30:00.000Z")),
+    { fecha: "2026-09-30", hora: "08:30" }
+  );
+  // A "HH:MM", que es lo que el estado guarda en HORA_INICIO/HORA_FIN: una hora con un digito
+  // se rellena, los segundos se pierden porque no hay donde ponerlos.
+  assert.equal(reader.partirFechaTexto("2026-09-30T8:05:00+00:00").hora, "08:05");
+  assert.equal(reader.partirFechaTexto("2026-09-30T08:05:59+00:00").hora, "08:05");
+  assert.equal(reader.partirFechaTexto("2026-09-30 23:59").hora, "23:59");
+  // Medianoche CON segundos no es una ausencia: hay hora, y 00:00 es su HH:MM. La regla de
+  // medianoche es de 00:00:00, que es lo que produce el escritor cuando no hay hora.
+  assert.equal(reader.partirFechaTexto("2026-09-30T00:00:30+00:00").hora, "00:00");
+});
+
+test("NINGUN valor se convierte de zona: un T00:00:00+00:00 conserva su dia", () => {
+  // El dia que se pierde al convertir es el dia 30. Se mide aqui con Intl para que el test no
+  // dependa de una suposicion sobre la zona: en America/Mexico_City, este valor es el dia 29.
+  assert.equal(
+    new Date("2026-09-30T00:00:00+00:00").toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" }),
+    "2026-09-29",
+    "la conversion que el lector NO hace: por eso la fecha leida tiene que ser la del 30"
+  );
+  assert.equal(reader.partirFechaTexto("2026-09-30T00:00:00+00:00").fecha, "2026-09-30", "sin aplicar la zona de la planta");
+  // Las cuatro fechas de una fila real, con la forma medida.
+  const [op] = reader.mapOperations([
+    { operation_id: "ns-1", fecha_inicio: "2026-09-30T00:00:00+00:00", fecha_fin: "2026-12-31T00:00:00+00:00" },
+  ]);
+  assert.equal(op.fechaInicio, "2026-09-30", "el 30, no el 29");
+  assert.equal(op.fechaFin, "2026-12-31", "tampoco el 31 de diciembre se corre al 30");
+  assert.equal(op.horaInicio, "", "y sin hora, porque el valor es medianoche");
+  // Y las tres de work_orders, que es la otra mitad del mismo problema.
+  const [wo] = reader.mapWorkOrders([
+    { id: "uuid-1", wo_internal_id: "WO-1", ot: "OT-1", fecha_inicio_ns: "2026-09-30T00:00:00+00:00", fecha_vencimiento: "2026-10-01T00:00:00+00:00" },
+  ]);
+  assert.equal(wo.startDate, "2026-09-30");
+  assert.equal(wo.dueDate, "2026-10-01");
+});
+
+test("las CUATRO fechas de operations salen del instante, y la hora solo si la hay", () => {
+  const [op] = reader.mapOperations([
+    {
+      operation_id: "ns-4821-10",
+      fecha_inicio: "2026-09-30T08:00:00+00:00", hora_inicio: "2026-09-30T08:00:00+00:00",
+      fecha_fin: "2026-10-02T17:45:00.000Z", hora_fin: null,
+    },
+  ]);
+  assert.equal(op.fechaInicio, "2026-09-30");
+  assert.equal(op.horaInicio, "08:00", "la hora sale del instante que trae la columna");
+  assert.equal(op.fechaFin, "2026-10-02");
+  assert.equal(op.horaFin, "17:45", "y con hora_fin NULAS la hora sale de fecha_fin, que es el mismo instante");
+  // hora_inicio y hora_fin son el MISMO instante que sus columnas de fecha (el escritor pone
+  // hora_inicio = fecha_inicio, supabase-writer.js:530-534), asi que si la de fecha no trae
+  // hora porque es medianoche, la repetida puede traeria.
+  const [repetida] = reader.mapOperations([
+    { operation_id: "ns-2", fecha_inicio: "2026-09-30T00:00:00+00:00", hora_inicio: "2026-09-30T08:30:00+00:00" },
+  ]);
+  assert.equal(repetida.fechaInicio, "2026-09-30");
+  assert.equal(repetida.horaInicio, "08:30", "la hora la trae la columna repetida, no la de fecha");
+  // Y si las dos traen una hora DISTINTA, manda la de fecha: es la columna que escribe la
+  // ingesta del RESTlet 2246 (netsuite-restlet-unificado-supabase.js:163) y la que tiene las
+  // 1000 filas medidas. Nunca se mezclan dos horas ni se promedian.
+  const [dos] = reader.mapOperations([
+    { operation_id: "ns-3", fecha_inicio: "2026-09-30T08:30:00+00:00", hora_inicio: "2026-09-30T22:00:00+00:00" },
+  ]);
+  assert.equal(dos.horaInicio, "08:30");
+  // Sin ninguna de las dos columnas: vacio, que es lo que hay en 1000/1000.
+  const [nada] = reader.mapOperations([{ operation_id: "ns-4", fecha_inicio: null, hora_inicio: null, fecha_fin: null, hora_fin: null }]);
+  assert.deepEqual(
+    copiar([nada.fechaInicio, nada.horaInicio, nada.fechaFin, nada.horaFin]),
+    ["", "", "", ""]
+  );
+});
+
+test("las TRES fechas de work_orders usan la misma regla que las de operations", () => {
+  // MEDIDO 2026-09-29: las dos primeras NULAS en 212/212 y la tercera con valor.
+  const [medida] = reader.mapWorkOrders([
+    { id: "uuid-1", ot: "OT-1", fecha_inicio_ns: null, fecha_fin_ns: null, fecha_vencimiento: "2026-09-30T00:00:00+00:00" },
+  ]);
+  assert.equal(medida.startDate, "", "nula es vacio, no una fecha inventada");
+  assert.equal(medida.endDate, "");
+  assert.equal(medida.dueDate, "2026-09-30");
+  // Si una llegara con hora, la fecha se queda igual: PP_mapWorkOrder_ (02-storage.js:2179) no
+  // tiene un campo de hora para una orden, y aqui no se inventa uno.
+  const [conHora] = reader.mapWorkOrders([{ id: "uuid-2", ot: "OT-2", fecha_vencimiento: "2026-09-30T18:03:11+00:00" }]);
+  assert.equal(conHora.dueDate, "2026-09-30", "la hora no se cuela en la fecha");
+  // Y una fecha con la forma del escritor tambien entra igual.
+  const [conZ] = reader.mapWorkOrders([{ id: "uuid-3", ot: "OT-3", fecha_inicio_ns: "2026-09-30T00:00:00.000Z" }]);
+  assert.equal(conZ.startDate, "2026-09-30");
+});
+
+test("un valor con zona explicita se devuelve TAL CUAL, con sus cifras", () => {
+  // Un -06:00 no se desplaza ni a la zona de la planta ni a UTC: se leen los numeros del
+  // texto, porque aplicar el offset seria una conversion que nadie pidio.
+  const conOffset = reader.partirFechaTexto("2026-09-30T08:30:00-06:00");
+  assert.equal(conOffset.fecha, "2026-09-30");
+  assert.equal(conOffset.hora, "08:30");
+  assert.deepEqual(copiar(reader.partirFechaTexto("2026-09-30T08:30:00-0600")), { fecha: "2026-09-30", hora: "08:30" });
+  // Formato raro: se devuelve entero en la fecha y con la hora vacia. Se puede ver raro en la
+  // pagina, y eso es mejor que una fecha que nadie escribio.
+  assert.deepEqual(copiar(reader.partirFechaTexto("30/09/2026")), { fecha: "30/09/2026", hora: "" });
+  assert.deepEqual(copiar(reader.partirFechaTexto("2026-13-45")), { fecha: "2026-13-45", hora: "" });
+  assert.deepEqual(copiar(reader.partirFechaTexto("no es una fecha")), { fecha: "no es una fecha", hora: "" });
+  // Una hora fuera de rango NO se normaliza con un Date, que correria el dia entero: se deja
+  // vacia y la fecha del texto se conserva.
+  const fuera = reader.partirFechaTexto("2026-09-30T25:00:00+00:00");
+  assert.equal(fuera.fecha, "2026-09-30", "ni la fecha se rodia a 26 ni a 01");
+  assert.equal(fuera.hora, "");
+});
+
+test("retirada_en y retirada_por se leen cuando existen, y no se inventan cuando no", () => {
+  // MEDIDO 2026-09-29: las columnas NO estan en el esquema desplegado; las agrega
+  // docs/schema-supabase-plan.sql:434-435, que sigue sin aplicar. Y NO estan declaradas
+  // ausentes en MAPPING_GAPS, a proposito: el lector ya sabe leerlas, asi que no son un hueco
+  // de mapeo, y declararlas faltantes diria justo lo contrario, que el dato no se puede traer.
+  // Por eso tampoco estan en PENDIENTES_DEL_PLAN, que es la lista de huecos de mapeo: la
+  // contraprueba de que el DDL sigue sin aplicar la hace el test de mas abajo.
+  const declaradas = huecos().filter((hueco) => hueco.columna === "retirada_en" || hueco.columna === "retirada_por");
+  assert.deepEqual(declaradas.map((hueco) => `${hueco.tabla}.${hueco.columna}`), [], "el lector sabe leerlas: no son un hueco");
+  // Sin columna (que es el estado de HOY) el campo NO se rellena: un "" afirmaria que la
+  // operacion esta en el plan, que es lo que el comentario del DDL define como el null.
+  const [sinColumna] = reader.mapOperations([{ operation_id: "ns-1" }]);
+  assert.equal(sinColumna.retiradaEn, undefined);
+  assert.equal(sinColumna.retiradaPor, undefined);
+  // Con columna: la marca viaja tal cual. retirada_en se devuelve como texto, sin partir y sin
+  // convertir de zona, porque la escribe now() con zona REAL (no es una fecha sin hora) y
+  // porque el estado no tiene campo donde ponerla (comentario del DDL, lineas 437-440).
+  const [marcada] = reader.mapOperations([
+    { operation_id: "ns-2", retirada_en: "2026-09-29T18:03:11.234+00:00", retirada_por: "persona@ejemplo.com" },
+  ]);
+  assert.equal(marcada.retiradaEn, "2026-09-29T18:03:11.234+00:00", "sin convertir de zona y sin partir");
+  assert.equal(marcada.retiradaPor, "persona@ejemplo.com");
+  // Null es la marca limpia: la operacion esta en el plan, y eso si se puede decir con "".
+  const [enPlan] = reader.mapOperations([{ operation_id: "ns-3", retirada_en: null, retirada_por: null }]);
+  assert.equal(enPlan.retiradaEn, "");
+  assert.equal(enPlan.retiradaPor, "");
+  // Y la marca NO decide nada: el lector no quita la operacion del plan ni arma una lista de
+  // retiradas. Que una retirada saque la operacion de la vista es de la pagina, no de aqui.
+  assert.equal(enPlan.id, "ns-3", "la operacion sigue en la lista que devuelve el lector");
+  assert.equal(enPlan.ot, "");
+});
+
+test("retirada_en y retirada_por SIGUEN sin existir en el esquema medido", () => {
+  // Si el dia que se aplique el DDL esto falla, que es lo que tiene que pasar: la rama de las
+  // marcas pasa a ejecutarse en TODAS las filas y hay que decidir que hace la pagina con ellas.
+  // Si el esquema medido no estuviera, esto NO puede seguir en verde: seria una comprobacion
+  // apagada sin avisar. Se falla en vez de saltarse.
+  if (!ESQUEMA) throw new Error("falta docs/esquema-supabase-medido.json: la red general no se puede comprobar");
+  for (const columna of ["retirada_en", "retirada_por"]) {
+    assert.equal(
+      columnasDe("operations").has(columna),
+      false,
+      "docs/schema-supabase-plan.sql ya esta aplicado: hay que decidir que hace la pagina con las marcas de retirada"
+    );
+  }
+});
+
+test("el hueco de FORMA de las fechas dice la REGLA, no 'no se sabe'", () => {
+  // Lo que QUEDA del hueco viejo no es 'falta la forma y no se sabe como': es que la columna es
+  // timestamptz y el estado espera texto, y eso se resuelve con una regla. Si alguien deja de
+  // lado el motivo y pone solo que falta, este test lo dice.
+  const deOperations = MAPPING_GAPS.operations.filter((entrada) => entrada.includes("fecha_inicio"));
+  assert.equal(deOperations.length, 1, "una sola entrada para las cuatro fechas de operations");
+  assert.match(deOperations[0], /falta la FORMA de la columna fecha_inicio \|/);
+  assert.match(deOperations[0], /sin convertir de zona/i, "el motivo tiene que decir la regla");
+  assert.match(deOperations[0], /medianoche/, "y cuando la hora queda vacia");
+  // Y lo mismo en work_orders, por las mismas tres columnas.
+  const deWorkOrders = MAPPING_GAPS.work_orders.filter((entrada) => entrada.includes("fecha_inicio_ns"));
+  assert.equal(deWorkOrders.length, 1);
+  assert.match(deWorkOrders[0], /falta la FORMA de la columna fecha_inicio_ns \|/);
+  assert.match(deWorkOrders[0], /sin convertir de zona/i);
+});
+
+test("el lector NO tiene maquinaria de zona horaria: ninguna fecha se puede convertir", () => {
+  // Los tests de arriba comprueban COMO SE LEE HOY un valor. Este comprueba que la conversion no
+  // se puede colar ni por error: no hay ninguna llamada en el codigo que la haga. Se quitan los
+  // comentarios de linea, que es donde si se nombra 'new Date()' al explicar que no se usa.
+  const codigo = readerSource.replace(/(^|[^:])\/\/.*$/gm, "$1");
+  for (const llamada of ["new Date(", "Date.UTC", "toLocaleDateString", "toLocaleString", "getTimezoneOffset", "Intl."]) {
+    assert.equal(codigo.includes(llamada), false, `el lector tiene ${llamada}: aplicaria una zona y moveria las fechas un dia`);
+  }
 });
