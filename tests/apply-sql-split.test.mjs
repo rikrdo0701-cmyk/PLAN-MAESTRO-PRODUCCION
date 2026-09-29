@@ -98,6 +98,30 @@ test("un ';' dentro de un cuerpo $$...$$ no parte, y un '--' ahi no es comentari
   assert.equal(partes[1], "select 1");
 });
 
+test("el cuerpo $$ abre Y cierra: los dos del delimitador, en los dos lados", () => {
+  // MEDIDO 2026-09-29: el cierre perdia un '$' y la sentencia llegaba a Postgres
+  // terminando en '$', con 'unterminated dollar-quoted string'. El sintoma era
+  // real, la causa era del divisor. Este test falla si vuelve a pasar.
+  const partes = dividir("create function f() returns void as $$\nbegin\nend;\n$$;\nselect 1;");
+  assert.equal(partes.length, 2);
+  assert.ok(partes[0].includes("as $$"), "abre con $$");
+  assert.ok(/\$\$/.test(partes[0]), "cierra con $$");
+  assert.ok(partes[0].trimEnd().endsWith("$$"), `el cuerpo debe terminar en $$, termina en: ...${partes[0].slice(-12)}`);
+  // Invariante general: los delimitadores dollar siempre van de dos en dos, o
+  // el cuerpo esta partido o sin cerrar.
+  for (const p of partes) {
+    const n = (p.match(/\$\$/g) || []).length;
+    assert.equal(n % 2, 0, `delimitadores $$ impares (${n}) en: ${p.slice(0, 80)}`);
+  }
+});
+
+test("el $$ de cierre se conserva tambien con sql pegado detras", () => {
+  const partes = dividir("create function f() returns void as $$ begin end; $$; revoke all on function f() from public;");
+  assert.equal(partes.length, 2);
+  assert.ok(partes[0].trimEnd().endsWith("$$"), `termina en: ...${partes[0].slice(-12)}`);
+  assert.equal(partes[1], "revoke all on function f() from public");
+});
+
 test("comentarios de bloque /* ... */ tampoco parten", () => {
   const partes = dividir("/* bloque; con punto y coma */ select 1; select 2;");
   assert.equal(partes.length, 2);
@@ -141,12 +165,25 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
   assert.equal(partes.length, 32, `se esperaban 32 sentencias y hay ${partes.length}`);
 });
 
-test("el cuerpo de ingesta_mirror queda entero en una sola sentencia", () => {
+test("el cuerpo de ingesta_mirror queda entero y bien cerrado en una sola sentencia", () => {
   const conCuerpo = dividir(ddl).filter((p) => /as \$\$/.test(p));
   assert.equal(conCuerpo.length, 1, "debe haber exactamente un cuerpo $$: la funcion ingesta_mirror");
-  assert.match(conCuerpo[0], /language plpgsql/);
-  assert.match(conCuerpo[0], /return jsonb_build_object/);
-  assert.equal(/\$\$/.test(conCuerpo[0]), true);
+  const fn = conCuerpo[0];
+  assert.match(fn, /language plpgsql/);
+  assert.match(fn, /return jsonb_build_object/);
+  // Ni se pierde un ';' del cuerpo ni un '$' del cierre: esto es lo que
+  // reporto 'unterminated dollar-quoted string' el 2026-09-29.
+  assert.ok(fn.trimEnd().endsWith("$$"), `el cuerpo debe terminar en $$, termina en: ...${fn.slice(-12)}`);
+  assert.equal((fn.match(/\$\$/g) || []).length % 2, 0, "los delimitadores $$ tienen que ir de dos en dos");
+  assert.match(fn, /execute format\('delete from %s where id <>/, "el DELETE tautologico del RPC sigue ahi");
+  assert.match(fn, /revoke|raise exception/, "el cuerpo no se corto a la mitad");
+});
+
+test("ninguna sentencia del DDL tiene un cuerpo dollar sin cerrar", () => {
+  for (const [i, p] of dividir(ddl).entries()) {
+    const n = (p.match(/\$\$/g) || []).length;
+    assert.equal(n % 2, 0, `sentencia #${i + 1} tiene ${n} delimitadores $$`);
+  }
 });
 
 test("las piezas que el DDL declara siguen enteras", () => {

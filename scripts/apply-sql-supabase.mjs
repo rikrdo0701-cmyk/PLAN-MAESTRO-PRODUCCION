@@ -65,12 +65,18 @@ export function dividir(texto) {
     const c = texto[i];
 
     if (etiqueta) {
-      actual += c;
+      // MEDIDO 2026-09-29: aqui se perdia el segundo '$' del cierre. Se hacia
+      // 'actual += c' (un solo caracter) y luego se pretendia completar con
+      // texto.slice(i+1, i+1), que es cadena vacia: el cuerpo llegaba a
+      // Postgres terminando en '$' y la respuesta era 'unterminated
+      // dollar-quoted string'. Se anexa el delimitador ENTERO.
       if (c === "$" && texto.startsWith(etiqueta, i)) {
-        actual += texto.slice(i + 1, i + etiqueta.length - 1);
+        actual += etiqueta;
         i += etiqueta.length - 1;
         etiqueta = null;
+        continue;
       }
+      actual += c;
       continue;
     }
     if (enLinea) {
