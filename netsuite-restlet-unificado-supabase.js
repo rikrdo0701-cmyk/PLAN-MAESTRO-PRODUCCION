@@ -304,8 +304,11 @@ define(['N/query'], (query) => {
       '  ail.quantityintransit AS en_transito',
       'FROM aggregateitemlocation ail',
       // Misma decision de planta que workorders/operaciones/materiales (RULE-SUP-013):
-      // solo la ubicacion 1 (Planta MM del Llano). Verificado: de 2401 pares item/location,
-      // 2426 total en la corrida anterior; aqui el filtro deja solo la planta 1.
+      // solo la ubicacion 1 (Planta MM del Llano). MEDIDO 2026-09-29 con
+      // .openchamber/diag-inventario-ubicacion.mjs sobre estos SQL: 1948 filas
+      // crudas -> 1933 pares item/ubicacion, y todas de "Planta MM del Llano".
+      // Sin este WHERE, el RESTlet desplegado en NetSuite devuelve las demas
+      // plantas y Supabase quedo con 2401 filas.
       "WHERE ail.location = 1",
       'ORDER BY ail.item, ail.location'
     ].join('\n');
