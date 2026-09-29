@@ -121,11 +121,15 @@ function PP_supabaseUpsert_(tabla, filas, clave, config) {
 function leerWorkorders_(config) {
   const sql = [
     'SELECT DISTINCT',
-    '  t.id, t.tranid, BUILTIN.DF(tl.item),',
-    '  COALESCE(i.description, i.purchasedescription, i.displayname),',
-    '  ABS(NVL(tl.quantity, 0)),',
-    '  BUILTIN.DF(t.status), BUILTIN.DF(t.entity),',
-    '  t.startdate, t.enddate',
+    '  t.id AS wo_internal_id,',
+    '  t.tranid AS ot,',
+    '  BUILTIN.DF(tl.item) AS articulo,',
+    '  COALESCE(i.description, i.purchasedescription, i.displayname) AS descripcion,',
+    '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
+    '  BUILTIN.DF(t.status) AS estatus,',
+    '  BUILTIN.DF(t.entity) AS cliente,',
+    '  t.startdate AS fecha_inicio,',
+    '  t.enddate AS fecha_fin',
     'FROM transaction t',
     "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
     'LEFT JOIN item i ON i.id = tl.item',
@@ -138,15 +142,15 @@ function leerWorkorders_(config) {
   const crudas = PP_suiteql_(sql, config);
   return crudas.map(function(r) {
     return {
-      ot: String(r.tranid || ''),
-      wo_internal_id: String(r.t.id || ''),
-      articulo: String(r.BUILTIN_DF_tl_item || ''),
-      descripcion: String(r.COALESCE_i_description_i_purchasedescription_i_displayname || ''),
-      cantidad: Math.abs(Number(r.ABS_NVL_tl_quantity_0) || 0),
-      estatus: String(r.BUILTIN_DF_t_status || ''),
-      cliente: String(r.BUILTIN_DF_t_entity || ''),
-      fecha_inicio: r.t_startdate || null,
-      fecha_fin: r.t_enddate || null
+      ot: String(r.ot || ''),
+      wo_internal_id: String(r.wo_internal_id || ''),
+      articulo: String(r.articulo || ''),
+      descripcion: String(r.descripcion || ''),
+      cantidad: Math.abs(Number(r.cantidad) || 0),
+      estatus: String(r.estatus || ''),
+      cliente: String(r.cliente || ''),
+      fecha_inicio: isoFecha_(r.fecha_inicio),
+      fecha_fin: isoFecha_(r.fecha_fin)
     };
   });
 }
@@ -241,7 +245,7 @@ function leerItems_(config) {
       tipo: String(r.itemtype || ''),
       es_ensamblaje: r.itemtype === 'Assembly',
       inactivo: r.isinactive === 'T',
-      ultima_modificacion: r.lastmodifieddate || null
+      ultima_modificacion: isoFecha_(r.lastmodifieddate)
     };
   });
 }
@@ -304,7 +308,7 @@ function leerOrdenesVenta_(config) {
       sales_order_id: String(r.id || ''),
       cliente: String(r.BUILTIN_DF_t_entity || ''),
       cliente_id: Number(r.entity) || 0,
-      fecha: r.trandate || null,
+      fecha: isoFecha_(r.trandate),
       estatus: String(r.BUILTIN_DF_t_status || ''),
       aprobacion: String(r.BUILTIN_DF_t_approvalstatus || ''),
       total: Number(r.foreigntotal) || 0,
@@ -325,6 +329,28 @@ function traducirEstado_(crudo) {
     'CLOSED': 'Cerrado'
   };
   return mapa[crudo] || crudo;
+}
+
+/** NetSuite devuelve fechas como dd/MM/yyyy. Supabase espera ISO yyyy-MM-dd. */
+function isoFecha_(crudo) {
+  if (!crudo) return null;
+  const s = String(crudo).trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  return s;
+}
+
+/** Deduplica filas por clave natural (materiales e inventario vienen repetidos). */
+function deduplicar_(filas, claveFn) {
+  const vistos = {};
+  const out = [];
+  filas.forEach(function(f) {
+    const k = claveFn(f);
+    if (vistos[k]) return;
+    vistos[k] = true;
+    out.push(f);
+  });
+  return out;
 }
 
 // =============================================================================
@@ -358,8 +384,10 @@ function ingesta() {
   acciones.forEach(function(a) {
     try {
       console.log('Leyendo ' + a.nombre + '...');
-      const filas = a.lector(config);
+      let filas = a.lector(config);
       console.log(a.nombre + ': ' + filas.length + ' filas leidas');
+      if (a.nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
+      if (a.nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
       const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
       log.push(a.nombre + ': ' + r.escritas + ' filas');
       console.log(a.nombre + ': ' + r.escritas + ' escritas');
