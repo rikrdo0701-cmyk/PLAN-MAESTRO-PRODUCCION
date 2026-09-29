@@ -171,18 +171,15 @@ function traducirEstado_(crudo) {
 
 function leerWorkorders_(config) {
   const filas = PP_restletPaginado_('1764', '1', { table: 'WO_LISTA', locationId: 1, onlyOpen: true }, config);
-  if (filas.length) {
-    console.log('workorders: headers = ' + Object.keys(filas[0]).join(', '));
-  }
   return deduplicar_(filas.map(function(r) {
     return {
-      ot: String(r['Orden de trabajo'] || r.workorder_tranid || ''),
-      wo_internal_id: String(r['ID (link)'] || r.workorder_id || ''),
-      articulo: String(r['Artículo'] || r.item_name || ''),
-      descripcion: String(r['Descripción'] || r.description || ''),
-      cantidad: Number(r['Cantidad a procesar'] || r.qty_to_process) || 0,
-      estatus: String(r['Estado'] || r.status_op || ''),
-      cliente: String(r['Cliente'] || r.entity || '')
+      ot: String(r['WO Folio'] || ''),
+      wo_internal_id: String(r['WO Internal ID'] || ''),
+      articulo: String(r['Artículo'] || ''),
+      descripcion: String(r['Descripción'] || ''),
+      cantidad: Number(r['Cantidad']) || 0,
+      estatus: String(r['Estatus'] || ''),
+      cliente: String(r['Cliente'] || '')
     };
   }), function(f) { return f.ot; });
 }
@@ -210,18 +207,20 @@ function leerOperaciones_(config) {
 function leerMateriales_(config) {
   const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true, pageSize: 200 }, config);
   return deduplicar_(filas.map(function(r) {
+    const requerido = Number(r['Requerido']) || 0;
+    const emitido = Number(r['Emitido']) || 0;
     return {
-      line_id: String(r.line_id || ''),
-      ot: String(r.workorder_tranid || ''),
-      wo_internal_id: String(r.workorder_id || ''),
-      ensamble: String(r.item_name || ''),
-      componente_id: String(r.componente_id || ''),
-      componente: String(r.componente || ''),
-      descripcion: String(r.descripcion || ''),
-      unidad: String(r.unidad || ''),
-      requerido: Number(r.requerido) || 0,
-      emitido: Number(r.emitido) || 0,
-      pendiente: Math.round(Math.max(0, (Number(r.requerido) || 0) - (Number(r.emitido) || 0)))
+      line_id: String(r['WO Internal ID'] || ''),
+      ot: String(r['WO Folio'] || ''),
+      wo_internal_id: String(r['WO Internal ID'] || ''),
+      ensamble: String(r['Ensamble'] || ''),
+      componente_id: String(r['Componente ID'] || ''),
+      componente: String(r['Componente'] || ''),
+      descripcion: String(r['Descripción'] || ''),
+      unidad: String(r['Unidad'] || ''),
+      requerido: Math.round(requerido),
+      emitido: Math.round(emitido),
+      pendiente: Math.round(Math.max(0, requerido - emitido))
     };
   }), function(f) { return f.line_id; });
 }
@@ -235,11 +234,11 @@ function leerItems_(config) {
     items[id] = {
       codigo: String(r['Artículo'] || ''),
       descripcion: String(r['Descripción'] || ''),
-      descripcion_compra: String(r['Descripción compra'] || ''),
+      descripcion_compra: String(r['Descripción'] || ''),
       nombre_mostrado: String(r['Artículo'] || ''),
       tipo: String(r['Tipo'] || ''),
-      es_ensamblaje: r['Tipo'] === 'Assembly',
-      inactivo: r['Inactivo'] === 'T',
+      es_ensamblaje: r['Tipo'] === 'Ensamblaje',
+      inactivo: false,
       ultima_modificacion: isoFecha_(r['Última modificación'])
     };
   });
