@@ -149,8 +149,7 @@ function leerWorkorders_(config) {
       cantidad: Math.abs(Number(r.cantidad) || 0),
       estatus: String(r.estatus || ''),
       cliente: String(r.cliente || ''),
-      fecha_inicio: isoFecha_(r.fecha_inicio),
-      fecha_fin: isoFecha_(r.fecha_fin)
+      fecha_inicio: isoFecha_(r.fecha_inicio)
     };
   });
 }
@@ -331,7 +330,7 @@ function traducirEstado_(crudo) {
   return mapa[crudo] || crudo;
 }
 
-/** NetSuite devuelve fechas como dd/MM/yyyy. Supabase espera ISO yyyy-MM-dd. */
+/** NetSuite devuelve fechas como dd/MM/yyyy o dd/MM/yyyy HH:mm:ss. Supabase espera ISO yyyy-MM-dd. */
 function isoFecha_(crudo) {
   if (!crudo) return null;
   const s = String(crudo).trim();
@@ -386,8 +385,9 @@ function ingesta() {
       console.log('Leyendo ' + a.nombre + '...');
       let filas = a.lector(config);
       console.log(a.nombre + ': ' + filas.length + ' filas leidas');
-      if (a.nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
+      if (a.nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.line_id; });
       if (a.nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
+      if (a.nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
       const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
       log.push(a.nombre + ': ' + r.escritas + ' filas');
       console.log(a.nombre + ': ' + r.escritas + ' escritas');
