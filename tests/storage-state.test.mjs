@@ -5,6 +5,11 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/server/02-storage.js", import.meta.url), "utf8");
 const performanceSource = await readFile(new URL("../src/server/15-performance-service.js", import.meta.url), "utf8");
+// El espejo de catalogos a Supabase vive en su propio archivo de servidor y lo
+// llaman PP_writeState_, PP_writeSkillState_ y PP_writeNetSuiteSyncState_. En
+// Apps Script todos los archivos comparten globales, asi que aqui se carga
+// tambien: si no, los guardados del test revientan con "is not defined".
+const catalogoSource = await readFile(new URL("../src/server/16-supabase-catalogo.js", import.meta.url), "utf8");
 
 function createSheet(headers = ["KEY"], body = []) {
   let rows = [headers, ...body].map((row) => [...row]);
@@ -95,6 +100,7 @@ function loadStorage(configRows = []) {
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "02-storage.js" });
+  vm.runInContext(catalogoSource, context, { filename: "16-supabase-catalogo.js" });
   const headers = JSON.parse(vm.runInContext("JSON.stringify(PP_SHEETS)", context));
   const sheets = Object.fromEntries(
     Object.entries(headers).map(([name, columns]) => [name, createSheet(columns)])

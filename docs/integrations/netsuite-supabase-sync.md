@@ -16,7 +16,16 @@ Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **
 - Writer único de las 7 tablas en el camino que corre: el RESTlet unificado 2246 (deploy 1), invocado
   por Apps Script (`RULE-SUP-001`). El diseño de User Events nombra otro writer; mientras no se
   despliegue, no sustituye al 2246.
-- Reglas: `RULE-SUP-001` a `RULE-SUP-014` en `.project-memory/rules.json`.
+- **Un segundo escritor, y es la respuesta a "quién escribe" (2026-09-29).** El `anon` **no puede
+  escribir** en ninguna de las 24 tablas (medido: `401 / 42501`), y es a propósito, porque la clave
+  publicable va en el bundle público de Pages. Así que la escritura la hace **Apps Script** con la
+  service role key: las **7 tablas de NetSuite** las sigue escribiendo el 2246, y las **10 tablas de
+  catálogo** las espeja `src/server/16-supabase-catalogo.js` en cada guardado. El `machines` queda
+  **excluido** del espejo a propósito para no tener dos escritores peleándose la tabla
+  (`RULE-SUP-015`). Ese espejo **requiere antes** `docs/schema-supabase-cierre-catalogos.sql`, que
+  sigue **sin aplicar** (falta `SUPABASE_DB_PASSWORD`), y sin él falla a propósito
+  (`RULE-SUP-016`).
+- Reglas: `RULE-SUP-001` a `RULE-SUP-016` en `.project-memory/rules.json`.
 - Plan: `docs/plan-migracion-supabase.md` §3.4 y §4 (fase 3).
 
 ---

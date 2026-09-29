@@ -532,7 +532,7 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
     machines: (payload.machines || []).length,
     tools: (payload.toolCatalog || []).length,
     subcontracts: (payload.subcontracts || []).length
-  });
+  }, PP_CATALOGO_TABLAS_CATALOGOS_);
 }
 
 function PP_writeSkillState_(spreadsheet, payload, user) {
@@ -550,7 +550,7 @@ function PP_writeSkillState_(spreadsheet, payload, user) {
   }, {
     operators: (payload.operators || []).length,
     capabilities: (payload.configuredCapabilities || []).length
-  });
+  }, PP_CATALOGO_TABLAS_MATRIZ_);
 }
 
 function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
@@ -587,6 +587,9 @@ function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
     materials: (payload.materials || []).length
   })]);
   SpreadsheetApp.flush();
+  // El sync de NetSuite solo puede cambiar el catalogo de operaciones; se espeja
+  // despues del flush porque la hoja es la autoridad y Supabase es el espejo.
+  PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet, PP_CATALOGO_TABLAS_SYNC_), 'SINCRONIZAR_NETSUITE', revision);
   return PP_writeStateAck_(revision, savedAt, {
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
@@ -691,7 +694,18 @@ function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
   return PP_writeStateAck_(revision, savedAt, { syncedAt: payload.syncedAt || savedAt });
 }
 
-function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail) {
+/**
+ * Cierra un guardado parcial: sube la revision, deja la fila de auditoria, hace
+ * flush y devuelve el acuse.
+ *
+ * `catalogoTablas` (opcional) son las tablas de catalogo que este guardado toco:
+ * despues del flush se espejan a Supabase para que la pagina pueda leerlas de
+ * alla. Se hace DESPUES del flush a proposito: la hoja es la autoridad y un fallo
+ * de Supabase jamas puede impedir que el plan quede guardado. El espejo tampoco
+ * lanza (ver PP_mirrorCatalogosSupabase_), asi que un Supabase caido solo se
+ * refleja en el log y en la fila de auditoria.
+ */
+function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail, catalogoTablas) {
   const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
   const savedAt = new Date().toISOString();
   const revision = currentRevision + 1;
@@ -703,6 +717,9 @@ function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch,
   }, configPatch || {}));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, action, revision, JSON.stringify(detail || {})]);
   SpreadsheetApp.flush();
+  if (catalogoTablas && catalogoTablas.length) {
+    PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet, catalogoTablas), action, revision);
+  }
   return PP_writeStateAck_(revision, savedAt);
 }
 
@@ -1156,6 +1173,10 @@ function PP_writeState_(spreadsheet, payload, user, force) {
   const audit = spreadsheet.getSheetByName('AUDITORIA');
   audit.appendRow([savedAt, user, 'GUARDAR_PLAN', revision, JSON.stringify({ operations: (payload.operations || []).length })]);
   SpreadsheetApp.flush();
+  // El guardado completo reescribe TODOS los catalogos, asi que aqui si se
+  // espejan los diez (sin filtro). Va despues del flush y nunca lanza: la hoja
+  // quedo escrita y el guardado esta hecho.
+  PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet), 'GUARDAR_PLAN', revision);
   const saved = PP_readState_(spreadsheet);
   saved.ok = true;
   return saved;

@@ -220,13 +220,49 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
 - **Sonda:** `npm run probe:lectura:frontend` (`scripts/supabase-reader-verify.mjs`) ejecuta el MISMO
   código que se sirve en Pages contra el Supabase real. Medido el 2026-09-29: 24 tablas, 208
   `work_orders`, 2119 `operations`, 327 `materials`, 202 `machines`, 86 `operation_catalog`, 78 CTs.
-- **Lo que falta para engancharlo (decisión pendiente).** Los catálogos (`operators`, `capabilities`,
-  `operation_catalog`, `matrix`, `machines`, `ot_types`, `ot_configurations`,
-  `article_configurations`) tienen `created_at` del **2026-09-28T05:11** y **ningún escritor** que los
-  mantenga al día: se editan en las Hojas. Leerlos como fuente de verdad hoy serviría datos viejos.
-  Antes de engancharlos hay que decidir **quién alimenta los catálogos a Supabase** (doble escritura
-  en Apps Script, o Supabase como fuente única con los escritores migrados). Hasta entonces, la fase
-  3 no debe cambiar la fuente de los catálogos.
+- **Decisión tomada (2026-09-29): "la información de restlet desde Apps Script y lectura y escritura
+  desde Supabase".** Se **midió** antes de escribir código, porque la decisión define si hace falta
+  login: el rol `anon` **no puede escribir** en ninguna de las 24 tablas (`POST /rest/v1/tools` →
+  `401 {"code":"42501","message":"new row violates row-level security policy for table \"tools\""}`,
+  `.openchamber/diag-supabase-escritura.mjs`). Las 24 tienen RLS con **solo** la política `lectura_web`
+  de SELECT, y es a propósito (`docs/schema-supabase-sync-netsuite.sql:198-200`: *"NADIE escribe desde
+  la web… si la web pudiera escribir, podría pisar el plan"*), porque la clave publicable viaja
+  dentro del bundle público de Pages. Por tanto **no hace falta Supabase Auth**: la página **lee** con
+  la publicable y **Apps Script escribe** con la service role key (`sb_secret_…`, nunca en el repo).
+  Dos escritores, con **uno solo por tabla** (RULE-SUP-015).
+- **Espejo de catálogos implementado** (`src/server/16-supabase-catalogo.js`). Apps Script
+  convierte las 10 tablas de catálogo de las Hojas a Supabase por el mismo RPC atómico
+  `public.ingesta_mirror`, enganchado a los **tres** caminos de guardado (`PP_finishPartialWrite_`
+  para catálogos y matriz, `PP_writeNetSuiteSyncState_` y `PP_writeState_`). Cada guardado paga solo
+  las tablas que tocó, el espejo entero tiene un presupuesto de 20 s, y va **después** de
+  `SpreadsheetApp.flush()` y dentro de `try/catch`: **un Supabase caído no puede impedir guardar el
+  plan**, solo se pierde la frescura, que el siguiente guardado reintenta. Sin credencial el espejo no
+  hace nada.
+  - **Excluye `machines` a propósito**: la escribe el RESTlet 2246 (entitygroup que es centro de
+    trabajo, RULE-SUP-010) y la hoja `MAQUINAS` guarda lo mismo; espejarla serían dos escritores
+    peleándose la tabla cada 15 minutos. **Hueco declarado:** si alguien desactiva una máquina en la
+    página, ese cambio **no llega** a `machines.activa` de Supabase. No se inventó un
+    `activa_override` para taparlo.
+- **Requisito previo, sin aplicar: `docs/schema-supabase-cierre-catalogos.sql`.** Medido contra el
+  esquema **desplegado**, el de los catálogos **no puede representar lo que las Hojas guardan**
+  (RULE-SUP-016): falta `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
+  el **factor** de `capabilities.solapamiento` (la hoja lo guarda como ratio 0..1 y en la tabla
+  quedó `boolean`), `tools.codigo`, `subcontracts.codigo`, la ventana de `calendar_exceptions` y
+  `article_configurations.precio_ref_venta`. El archivo corrige eso y mete las 10 tablas en la
+  whitelist de `ingesta_mirror` **sin abrir escritura a `anon`** (el RPC sigue siendo
+  `SECURITY INVOKER` y revocado a `PUBLIC`). Está escrito y verificado, pero **sin aplicar**: falta
+  `SUPABASE_DB_PASSWORD`. Al revés, el espejo falla a propósito (columna desconocida / tabla no
+  permitida) y queda registrado en `AUDITORIA`.
+- **Verificación sin escribir nada.** `.openchamber/diag-catalogo-payload.mjs` compara las columnas
+  que emite el mapeador contra el esquema real (leído por la Data API) más las del DDL de cierre:
+  **10/10 tablas OK**. Esa sonda **encontró un bug real** —el mapeador leía `TIPO_TRABJO` en vez de
+  `TIPO_TRABAJO` y el campo salía vacío **sin dar error**—, y `tests/supabase-catalogo-mapping.test.mjs`
+  lo vuelve a cazar (se comprobó mutando el typo a propósito: el test falla nombrando la columna).
+- **Lo que falta para enganchar el lector al arranque**, en orden:
+  1. aplicar `docs/schema-supabase-cierre-catalogos.sql` (necesita `SUPABASE_DB_PASSWORD`),
+  2. desplegar el archivo nuevo de servidor en Apps Script (25 archivos; el build lo agrega solo),
+  3. confirmar que los catálogos de Supabase se refrescan al guardar,
+  4. recién entonces cambiar la fuente de los catálogos en la página.
 - **Tablas vacías** (cola/estado/plan: `app_state`, `selected_ots`, `locked_ots`,
   `operation_plan_statuses`, `plan_snapshots`, `closed_work_order_summaries`,
   `unconfirmed_work_orders`, `tools`, `subcontracts`, `calendar_exceptions`): siguen viniendo del
