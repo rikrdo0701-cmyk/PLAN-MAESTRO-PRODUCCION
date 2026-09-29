@@ -162,7 +162,10 @@ function ingesta() {
   const TABLAS = {
     workorders: { tabla: 'work_orders', clave: 'ot' },
     operaciones: { tabla: 'operations', clave: 'operation_id' },
-    materiales: { tabla: 'materials', clave: 'line_id' },
+    // materials: la identidad es (ot, line_id). comp.id de NetSuite es el numero de
+    // linea DENTRO de la OT y se repite entre OTs (medido 2026-09-29): con line_id
+    // solo el upsert y el dedupe descartaban materiales de otras OTs.
+    materiales: { tabla: 'materials', clave: 'ot,line_id' },
     items: { tabla: 'items', clave: 'codigo' },
     centros: { tabla: 'machines', clave: 'nombre' },
     inventario: { tabla: 'inventory', clave: 'item,ubicacion' },
@@ -186,7 +189,7 @@ function ingesta() {
       // Deduplicar por clave natural
       const def = TABLAS[nombre];
       if (nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
-      if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.line_id; });
+      if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
       if (nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
       const r = PP_supabaseUpsert_(def.tabla, filas, def.clave, config);
       log.push(nombre + ': ' + r.escritas + ' filas');

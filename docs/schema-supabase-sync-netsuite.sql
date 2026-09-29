@@ -149,9 +149,13 @@ create table if not exists public.sales_orders (
 -- reinsertar la lista completa de cada OT en cada corrida, que es peor que
 -- cualquier cosa: dos corridas concurrentes se pisarian.
 --
--- El id de la linea de transaccion (comp.id) es el MISMO criterio que ya usa
--- operations.operation_id ('ns-' + mot.id): un id interno de NetSuite, estable
--- entre corridas y unico por renglon.
+-- OJO (corregido el 2026-09-29): la identidad NO es line_id sola. comp.id de
+-- NetSuite es el numero de linea DENTRO de la OT (1, 2, 3...) y se repite entre
+-- OTs (medido: ot 271 id=1, ot 820 id=1, ot 1052 id=1...). Con UNIQUE(line_id)
+-- el upsert/dedupe colapsaba las 2376 filas a 31 y DESCARTABA materiales de
+-- otras OTs. La identidad real es (ot, line_id), asi que el UNIQUE es compuesto.
+-- La ingesta (appscript-ingesta-supabase.gs) deduce y upsertea por
+-- `on_conflict=ot,line_id`.
 --
 -- Es NOT NULL porque una fila sin linea no tiene identidad: el RESTlet descarta
 -- esas filas y lo avisa, en vez de empujar una fila que despues no se puede
@@ -163,7 +167,9 @@ alter table public.materials add column if not exists line_id text;
 update public.materials set line_id = id::text where line_id is null;
 alter table public.materials alter column line_id set default '';
 alter table public.materials alter column line_id set not null;
-alter table public.materials add constraint materials_line_id_key unique (line_id);
+-- UNIQUE compuesto (ot, line_id); reemplaza al UNIQUE(line_id) aplicado antes:
+alter table public.materials drop constraint if exists materials_line_id_key;
+alter table public.materials add constraint materials_ot_line_id_key unique (ot, line_id);
 
 -- =============================================================================
 -- 5. MACHINES TIPO — DECISION DEL USUARIO: NO SE AGREGA
@@ -215,5 +221,6 @@ create index if not exists idx_items_clase on public.items (clase);
 create index if not exists idx_inventory_item on public.inventory (item);
 create index if not exists idx_sales_orders_cliente on public.sales_orders (cliente);
 create index if not exists idx_sales_orders_fecha on public.sales_orders (fecha desc);
--- materials ya tiene idx_materials_ot; lo que faltaba era el UNIQUE de line_id,
+-- materials ya tiene idx_materials_ot; lo que faltaba era la identidad unica,
+-- que ahora es el UNIQUE compuesto (ot, line_id),
 -- que es indice de por si (arriba, en la constraint).

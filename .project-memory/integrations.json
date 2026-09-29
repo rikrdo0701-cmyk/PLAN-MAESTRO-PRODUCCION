@@ -89,7 +89,7 @@
         ".project-memory/rules.json RULE-SUP-001..010"
       ],
       "updated_at": "2026-09-28",
-      "verified": "esquema 7 tablas verificado con scripts/dump-schema-supabase.mjs (2026-09-28); probe-2246-todas.mjs 7/7 OK",
+      "verified": "esquema 7 tablas verificado con scripts/dump-schema-supabase.mjs (2026-09-28); probe-2246-todas.mjs 7/7 OK; materials con UNIQUE(ot,line_id) corregido 2026-09-29",
       "writers": "La ingesta la dispara Google Apps Script (appscript-ingesta-supabase.gs) contra el RESTlet unificado 2246/deploy 1 (netsuite-restlet-unificado-supabase.js): el unico writer de las 7 tablas que NetSuite manda (RULE-SUP-001). Apps Script conserva app_state, plan_snapshots, operation_plan_statuses y la cola hasta la fase 4 del plan. NADIE escribe en NetSuite desde Supabase: no hay OAuth ahi."
     }
   ],
