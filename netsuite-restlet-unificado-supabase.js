@@ -89,50 +89,78 @@ define(['N/query'], (query) => {
   // 1762 — WO_OPERACIONES: SuiteQL en manufacturingoperationtask
   // ===========================================================================
   function operaciones_() {
+    // Replica EXACTO el payload del sync original verificado (netsuite-restlet-supabase-sync.js
+    // leerOperaciones): las columnas son las de la tabla `operations` desplegada (medido con
+    // information_schema el 2026-09-28): operation_id='ns-<mot.id>' es la UNIQUE; `ct` es el id
+    // interno del centro (mot.manufacturingworkcenter), lo que el app llama 'Centro de trabajo';
+    // `descripcion` es BUILTIN.DF(mot.manufacturingworkcenter) (lo que el app llama Operacion);
+    // `cant_pendiente` = inputquantity - completedquantity; `tiempo_prod` usa la MISMA formula
+    // del app: runrate x pendiente, o el trabajo restante, o el estimado; `tiempo_ciclo` =
+    // tiempo_prod / cant_pendiente; `estatus` traduce mot.status al vocabulario del app.
     const sql = [
       'SELECT',
       '  mot.id AS workorder_id,',
       '  wo.tranid AS workorder_tranid,',
-      '  BUILTIN.DF(mot.manufacturingworkcenter) AS operation,',
       '  mot.operationsequence AS sequence,',
-      '  mot.inputquantity AS qty_to_process,',
-      '  mot.startdatetime AS start_planned,',
-      '  mot.enddate AS end_planned,',
-      '  mot.status AS status_op,',
-      '  mot.manufacturingworkcenter AS workcenter,',
+      '  mot.manufacturingworkcenter AS ct_id,',
+      '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
+      "  NVL(mot.title, '') AS titulo,",
+      '  mot.inputquantity AS cant_total,',
+      '  NVL(mot.completedquantity, 0) AS cant_realizada,',
       '  mot.setuptime AS setup_min,',
-      '  mot.estimatedwork AS est_min,',
-      '  mot.actualwork AS real_min,',
-      '  mot.remainingwork AS remaining_min,',
-      '  mot.runrate AS production_rate,',
-      '  mot.laborresources AS human_resource,',
-      '  mot.machineresources AS machine_resource,',
-      '  mot.completedquantity AS qty_completed',
+      '  NVL(mot.runrate, 0) AS runrate,',
+      '  NVL(mot.remainingwork, 0) AS restante,',
+      '  NVL(mot.estimatedwork, 0) AS estimado,',
+      '  mot.status AS status_op,',
+      "  NVL(mot.laborresources, '') AS operador,",
+      "  NVL(mot.machineresources, '') AS maquina,",
+      '  mot.startdatetime AS start_planned,',
+      '  mot.enddate AS end_planned',
       'FROM manufacturingoperationtask mot',
       'JOIN transaction wo ON wo.id = mot.workorder',
       "WHERE wo.type = 'WorkOrd'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
-      'ORDER BY wo.id, mot.operationsequence'
+      'ORDER BY wo.id, mot.operationsequence, mot.id'
     ].join('\n');
     const rows = runSuiteQL_(sql);
     return {
       ok: true,
-      headers: ['workorder_id', 'workorder_tranid', 'operation', 'sequence', 'qty_to_process', 'status_op', 'workcenter', 'setup_min', 'est_min', 'real_min', 'remaining_min', 'production_rate', 'human_resource', 'machine_resource', 'qty_completed'],
-      rows: rows.map(r => ({
-        workorder_id: String(r.workorder_id || ''),
-        workorder_tranid: String(r.workorder_tranid || ''),
-        descripcion: String(r.operation || ''),
-        sequence: Number(r.sequence) || 0,
-        qty_to_process: Number(r.qty_to_process) || 0,
-        status_op: String(r.status_op || ''),
-        workcenter: String(r.workcenter || ''),
-        setup_min: Number(r.setup_min) || 0,
-        real_min: Number(r.real_min) || 0,
-        remaining_min: Number(r.remaining_min) || 0,
-        qty_completed: Number(r.qty_completed) || 0
-      })),
+      headers: ['operation_id', 'ot', 'secuencia', 'ct', 'descripcion', 'operador', 'maquina', 'cant_total', 'cant_pendiente', 'tiempo_ciclo', 'tiempo_setup', 'tiempo_prod', 'fecha_inicio', 'fecha_fin', 'tipo_insercion', 'estatus', 'locked', 'auto_frozen', 'subcontract_type', 'subcontract_days'],
+      rows: rows.map(r => {
+        const cantTotal = Math.abs(Number(r.cant_total) || 0);
+        const realizada = Math.abs(Number(r.cant_realizada) || 0);
+        const pendiente = Math.max(0, cantTotal - realizada);
+        const tasa = Math.max(0, Number(r.runrate) || 0);
+        const restante = Math.max(0, Number(r.restante) || 0);
+        const estimado = Math.max(0, Number(r.estimado) || 0);
+        const produccion = pendiente > 0 && tasa > 0 ? Math.round(tasa * pendiente * 100) / 100 : (restante || estimado || 0);
+        return {
+          operation_id: 'ns-' + String(r.workorder_id || ''),
+          ot: String(r.workorder_tranid || ''),
+          secuencia: Math.round(Number(r.sequence) || 0),
+          ct: extraerCt_(r.ct_nombre, r.ct_id),
+          descripcion: String(r.ct_nombre || '') || String(r.titulo || ''),
+          operador: String(r.operador || ''),
+          maquina: String(r.maquina || ''),
+          cant_total: Math.round(cantTotal),
+          cant_pendiente: Math.round(pendiente),
+          tiempo_ciclo: pendiente > 0 && produccion > 0 ? Math.round((produccion / pendiente) * 100) / 100 : 0,
+          tiempo_setup: Math.max(0, Number(r.setup_min) || 0),
+          tiempo_prod: produccion,
+          fecha_inicio: isoFechaHora_(r.start_planned),
+          fecha_fin: isoFechaHora_(r.end_planned),
+          tipo_insercion: 'OPERACION',
+          estatus: traducirEstado_(r.status_op),
+          locked: false,
+          auto_frozen: false,
+          // NetSuite no trae el tipo/dias de subcontrato de la app: son decision de planeacion
+          // (RULE-MAT-005, RULE-SUBC-001). No se inventan.
+          subcontract_type: '',
+          subcontract_days: 0
+        };
+      }),
       totalRows: rows.length
     };
   }
@@ -333,6 +361,66 @@ define(['N/query'], (query) => {
     const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
     if (m) return m[3] + '-' + m[2] + '-' + m[1];
     return s;
+  }
+
+  // dd/MM/aaaa [HH:mm[:ss] [AM|PM]] -> ISO con hora en UTC (mismo criterio que isoFechaNetsuite
+  // del sync original: NetSuite manda las fechas-hora sin zona).
+  function isoFechaHora_(valor) {
+    if (valor == null || valor === '') return null;
+    const texto = String(valor).trim();
+    if (!texto) return null;
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp]\.?[Mm]\.?)?)?$/.exec(texto);
+    if (m) {
+      const dia = parseInt(m[1], 10), mes = parseInt(m[2], 10), anio = parseInt(m[3], 10);
+      if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return texto;
+      let hh = m[4] ? parseInt(m[4], 10) : 0;
+      const mi = m[5] ? parseInt(m[5], 10) : 0;
+      const ss = m[6] ? parseInt(m[6], 10) : 0;
+      if (m[7]) {
+        const am = m[7].toLowerCase().charAt(0) === 'a';
+        if (hh === 12) hh = 0;
+        if (!am) hh += 12;
+      }
+      const d = new Date(Date.UTC(anio, mes - 1, dia, hh, mi, ss));
+      if (Number.isNaN(d.getTime())) return texto;
+      // Date.UTC normaliza el dia 31 de un mes corto rodandolo; se avisa con el texto crudo.
+      if (d.getUTCMonth() !== mes - 1 || d.getUTCDate() !== dia) return texto;
+      return d.toISOString();
+    }
+    const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(texto);
+    if (iso) {
+      const d2 = new Date(Date.UTC(
+        parseInt(iso[1], 10), parseInt(iso[2], 10) - 1, parseInt(iso[3], 10),
+        iso[4] ? parseInt(iso[4], 10) : 0,
+        iso[5] ? parseInt(iso[5], 10) : 0,
+        iso[6] ? parseInt(iso[6], 10) : 0
+      ));
+      if (!Number.isNaN(d2.getTime())) return d2.toISOString();
+    }
+    return texto;
+  }
+
+  // Mismo vocabulario que el 1762/sync original (medido: solo existen NOTSTART, PROGRESS, COMPLETE).
+  function traducirEstado_(valor) {
+    const s = String(valor == null ? '' : valor).trim();
+    if (s === 'NOTSTART') return 'No iniciado';
+    if (s === 'PROGRESS' || s === 'INPROCESS') return 'En proceso';
+    if (s === 'COMPLETE' || s === 'COMPLETED') return 'Completado';
+    if (s === 'CLOSED') return 'Cerrado';
+    return s;
+  }
+
+  // El `ct` es el id interno del centro (mot.manufacturingworkcenter); el nombre es el fallback
+  // tal como hacia el sync original (extraerCt de netsuite-restlet-supabase-sync.js:522).
+  function extraerCt_(nombre, idInterno) {
+    const crudo = String(idInterno == null ? '' : idInterno).trim();
+    if (crudo) return crudo;
+    const texto = String(nombre || '').trim();
+    const conPrefijo = texto.match(/(?:^|\b)CT[\s:_-]*(\d{3,})\b/i);
+    if (conPrefijo) return String(conPrefijo[1]);
+    const digitos = texto.match(/\b(\d{3,})\b/);
+    if (digitos) return String(digitos[1]);
+    return texto;
   }
 
   return { post };
