@@ -42,13 +42,18 @@ function correrBoot({ lecturas = null, config = true } = {}) {
       }
       return { ok: true, status: 200, json: async () => [] };
     },
+    // MEDIDO 2026-09-29: este doble usaba 'configured' y 'config', que el lector
+    // NUNCA exporto. El arranque se apagaba siempre y el test pasaba igual, porque el
+    // doble estaba escrito a la medida de la suposicion equivocada. Se corrige a la
+    // API real, y tests/lector-supabase-real.test.mjs corre los dos modulos de verdad
+    // para que un desajuste futuro no pueda volver a esconderse aqui.
     PPSupabaseReader: config
       ? {
-          configured: () => true,
-          config: { url: "https://x.supabase.co", anonKey: "k" },
+          isConfigured: () => true,
+          config: () => ({ url: "https://x.supabase.co", anonKey: "k" }),
           readCatalogs: lecturas || (async () => ({ catalogs: { operators: [1], matrix: { a: 1 } }, missing: [], errors: {} })),
         }
-      : { configured: () => false },
+      : { isConfigured: () => false, config: () => ({ url: "", anonKey: "" }) },
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
