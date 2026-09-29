@@ -69,7 +69,7 @@
       "integration_id": "INT-SUPABASE",
       "name": "supabase",
       "status": "active",
-      "detail": "Destino de la migracion (plan docs/plan-migracion-supabase.md). Proyecto ref xtgtfjcwxcoxvixholpj. Data API https://xtgtfjcwxcoxvixholpj.supabase.co (SIN prefijo 'db.'); pooler aws-0-us-east-1.pooler.supabase.com con usuario postgres.xtgtfjcwxcoxvixholpj (el host db.xtgtfjcwxcoxvixholpj.supabase.co es IPv6-only, medido). MEDIDO el 2026-09-28: esquema de las 7 tablas desplegado y verificado con scripts/dump-schema-supabase.mjs (information_schema, usario SUPABASE_DB_PASSWORD); las 7 tablas existen con las columnas exactas que emite el RESTlet unificado (operations con operation_id/secuencia/ct..., sales_orders con folio UNIQUE, materials.line_id UNIQUE). ESCRITURA lista: la ingesta Apps Script llama al RESTlet 2246 y escribe las 7 tablas via PostgREST; la web todavia no lee de aca. Apps Script conserva el OAuth de NetSuite y las escrituras de estado/plan.",
+      "detail": "Destino de la migracion (plan docs/plan-migracion-supabase.md). Proyecto ref xtgtfjcwxcoxvixholpj. Data API https://xtgtfjcwxcoxvixholpj.supabase.co (SIN prefijo 'db.'); pooler aws-0-us-east-1.pooler.supabase.com con usuario postgres.xtgtfjcwxcoxvixholpj (el host db.xtgtfjcwxcoxvixholpj.supabase.co es IPv6-only, medido). MEDIDO el 2026-09-28: esquema de las 7 tablas desplegado y verificado con scripts/dump-schema-supabase.mjs (information_schema, usario SUPABASE_DB_PASSWORD); las 7 tablas existen con las columnas exactas que emite el RESTlet unificado (operations con operation_id/secuencia/ct..., sales_orders con folio UNIQUE, materials.line_id UNIQUE). ESCRITURA lista: la ingesta Apps Script llama al RESTlet 2246 y escribe las 7 tablas via PostgREST. LECTURA (fase 3) INICIADA 2026-09-29: src/web/shared/supabase-reader.js lee la Data API por PostgREST con la clave PUBLICABLE (cliente) y mapea al shape de PP_buildState_; va APAGADO sin SUPABASE_URL/SUPABASE_ANON_KEY (inyectadas en el build, nunca del repo) y solo hace GET. La sonda npm run probe:lectura:frontend (scripts/supabase-reader-verify.mjs) lo prueba contra el Supabase real: 24 tablas visibles, 881/881 en npm run check. Apps Script conserva el OAuth de NetSuite y las escrituras de estado/plan. FRESCURA MEDIDA 2026-09-29: las 7 tablas de ingesta se refrescaron a las 04:08 (mirror atomico), los catalogos siguen en 2026-09-28T05:11 (sin escritor que los mantenga al dia) e inventory sigue en 2401 (esperado ~1933 con RULE-SUP-013; el RESTlet desplegado aun no trae el filtro).",
       "hosts": "data",
       "project_ref": "xtgtfjcwxcoxvixholpj",
       "api_host": "https://xtgtfjcwxcoxvixholpj.supabase.co",
@@ -77,6 +77,8 @@
       "credentials_in_repo": false,
       "consumers": [
         "scripts/supabase-read-test.mjs",
+        "scripts/supabase-reader-verify.mjs",
+        "src/web/shared/supabase-reader.js",
         "netsuite-restlet-unificado-supabase.js"
       ],
       "related": [
@@ -86,9 +88,9 @@
         "docs/integrations/netsuite-supabase-sync.md",
         "netsuite-restlet-unificado-supabase.js",
         "appscript-ingesta-supabase.gs",
-        ".project-memory/rules.json RULE-SUP-001..010"
+        ".project-memory/rules.json RULE-SUP-001..014"
       ],
-      "updated_at": "2026-09-28",
+      "updated_at": "2026-09-29",
       "verified": "esquema 7 tablas verificado con scripts/dump-schema-supabase.mjs (2026-09-28); probe-2246-todas.mjs 7/7 OK; materials con UNIQUE(ot,line_id) corregido 2026-09-29; RPC ingesta_mirror aplicado y verificado con payloads reales en transaccion+ROLLBACK el 2026-09-29 (7/7, solo service_role puede ejecutarlo); camino HTTP real (POST /rest/v1/rpc/ingesta_mirror con la service key, igual que Apps Script) verificado el 2026-09-29: whitelist rechaza tabla no permitida y columna desconocida revierte la transaccion (work_orders intacta en 283). El DELETE del RPC lleva WHERE id <> '00000000-0000-0000-0000-000000000000' (tautologia) porque PostgREST rechaza DELETE sin WHERE (21000, issue supabase-py #534); con la tautologia el mirror pasa por HTTP y con la tabla vacia",
       "writers": "La ingesta la dispara Google Apps Script (appscript-ingesta-supabase.gs) contra el RESTlet unificado 2246/deploy 1 (netsuite-restlet-unificado-supabase.js): el unico writer de las 7 tablas que NetSuite manda (RULE-SUP-001). Apps Script conserva app_state, plan_snapshots, operation_plan_statuses y la cola hasta la fase 4 del plan. NADIE escribe en NetSuite desde Supabase: no hay OAuth ahi."
     }

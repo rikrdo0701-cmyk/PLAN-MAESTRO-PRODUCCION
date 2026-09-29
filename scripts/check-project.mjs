@@ -34,6 +34,7 @@ for (const file of files.filter((name) => name.endsWith(".js"))) {
 }
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/apps-script-bridge-client.js")], { stdio: "inherit" });
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/performance-client.js")], { stdio: "inherit" });
+execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/supabase-reader.js")], { stdio: "inherit" });
 
 const suite = runTestSuite();
 
@@ -59,6 +60,12 @@ if (!pagesIndex.includes("manifest.webmanifest") || !pagesIndex.includes("servic
 }
 if (/{{[A-Z0-9_]+}}/.test(index) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(pagesIndex)) {
   throw new Error("El build contiene marcadores sin reemplazar");
+}
+if (!pagesIndex.includes("PPSupabaseReader")) {
+  throw new Error("El frontend de Pages no contiene el lector de Supabase");
+}
+if (pagesIndex.includes("__PP_SUPABASE_URL__") || pagesIndex.includes("__PP_SUPABASE_ANON_KEY__")) {
+  throw new Error("El build no reemplazo los marcadores de configuracion de Supabase");
 }
 for (const skills of [distSkills, pagesSkills]) {
   if (!skills.includes("PPAppsScriptBridge")) throw new Error("skills.html no contiene el cliente del puente remoto");

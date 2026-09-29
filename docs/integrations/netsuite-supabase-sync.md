@@ -1,12 +1,23 @@
 # Ingesta NetSuite → Supabase (push desde NetSuite)
 
-**Estado:** código escrito y probado (23 pruebas). **El esquema de destino NO está aplicado**
-(`docs/schema-supabase-sync-netsuite.sql` es propuesta). **Los deployments de NetSuite no existen
-todavía**: los archivos del repo son el fuente, subirlos es manual.
+**Estado (actualizado 2026-09-29):** el **esquema de destino SÍ está aplicado** — el proyecto
+`xtgtfjcwxcoxvixholpj` expone **24 tablas** por la Data API y la ingesta **está corriendo**: las 7
+tablas de NetSuite (`work_orders`, `operations`, `materials`, `items`, `inventory`, `sales_orders`,
+`machines`) se refrescaron a las **2026-09-29T04:08** con el mismo `created_at` en todas las filas
+(mirror atómico de la RPC `ingesta_mirror`), medido con `.openchamber/diag-supabase-frescura.mjs`.
 
-- Writer único de las 7 tablas: `netsuite-restlet-supabase-sync.js`.
-- Reglas: `RULE-SUP-001` a `RULE-SUP-007` en `.project-memory/rules.json`.
-- Plan: `docs/plan-migracion-supabase.md` §3.4.
+**Ojo — dos caminos conviven en el repo.** El que **corre hoy** es **Apps Script → RESTlet unificado
+2246 → Supabase** (`appscript-ingesta-supabase.gs` + `netsuite-restlet-unificado-supabase.js`), que
+hace un *mirror* atómico (borra y reescribe) y por eso deja todas las filas con el mismo `created_at`.
+La arquitectura de **User Events** que describe este documento (seis archivos `netsuite-user-event-*.js`,
+Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **diseño propuesto** y
+**no está desplegada** en NetSuite; sus `deployments` no existen todavía y subirlos es manual.
+
+- Writer único de las 7 tablas en el camino que corre: el RESTlet unificado 2246 (deploy 1), invocado
+  por Apps Script (`RULE-SUP-001`). El diseño de User Events nombra otro writer; mientras no se
+  despliegue, no sustituye al 2246.
+- Reglas: `RULE-SUP-001` a `RULE-SUP-014` en `.project-memory/rules.json`.
+- Plan: `docs/plan-migracion-supabase.md` §3.4 y §4 (fase 3).
 
 ---
 

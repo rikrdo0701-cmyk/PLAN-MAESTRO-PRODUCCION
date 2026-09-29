@@ -187,6 +187,7 @@ y espera `revision + 1`. Si no, rechaza. Es el equivalente de `CONFLICT_REVISION
 1. **Esquema** en Supabase (tablas, ids, índices, RLS si hace falta). Sin tocar la app.
 2. **Migración de datos** (una vez, de Hojas a Supabase). Verificación fila por fila.
 3. **Lectura**: la web lee los catálogos/operaciones de Supabase. Escritores siguen en Hojas.
+   *(Iniciada el 2026-09-29: existe `src/web/shared/supabase-reader.js` + sonda; ver §4.1.)*
 4. **Escritura**: los escritores pasan a Supabase. Hojas pasa a historial.
 5. **Ingesta NetSuite** → Supabase en horario. Se retira el puente de lectura.
 6. **Fuera** el puBridge de lectura (queda solo para escrituras que necesitan NetSuite).
@@ -199,6 +200,41 @@ expone la Data API y cuáles del esquema faltan, y `--table=<tabla>` lee filas r
 exacto, columnas y muestra. La comparación de esquema (`plan.esquema`) no depende de la credencial:
 siempre contrasta lo expuesto contra `docs/schema-supabase.sql`, de modo que sirve para las fases 1
 a 3; la lectura de filas necesita la clave `anon`. Es la sonda del `RULE-TST-002`.
+
+### 4.1 Fase 3 — estado al 2026-09-29 (iniciada)
+
+El **primer cambio de fuente** de la fase 3 ya está en el repo: `src/web/shared/supabase-reader.js`,
+un lector de **solo lectura** que trae filas de Supabase por PostgREST con la clave **publicable**
+(cliente) y las mapea al MISMO shape que arma `PP_buildState_` (`src/server/02-storage.js`).
+
+- **Va apagado por defecto.** La URL y la clave se inyectan en el build desde `SUPABASE_URL` /
+  `SUPABASE_ANON_KEY` (nunca del repo). Sin ellas, `isConfigured()` es `false` y **nada** del lector
+  toca el arranque: la página sigue por el puente de Apps Script. Estar fuera de la ruta de arranque
+  es deliberado: primero se prueba, después se engancha.
+- **No infiere.** Los campos del state que la tabla de hoy NO puede llenar están declarados en
+  `MAPPING_GAPS` (`capabilities.operationRules.overlap` por ser booleano en Supabase y numérico en la
+  hoja, `capabilities` sin `PALABRAS_CLAVE`/`CUSTOM`, `tools.id` textual vs uuid, `KIT_HERRAMENTAL` vs
+  `kit`, `calendar_exceptions` sin hora inicio/fin, `article_configurations.PRECIO_REF_VENTA`,
+  `work_orders.FECHA_ENTREGA_AJUSTADA`/`PRECIO_DESDE`/`PRECIO_HASTA` y los campos faltantes de
+  `operations`).
+- **Sonda:** `npm run probe:lectura:frontend` (`scripts/supabase-reader-verify.mjs`) ejecuta el MISMO
+  código que se sirve en Pages contra el Supabase real. Medido el 2026-09-29: 24 tablas, 208
+  `work_orders`, 2119 `operations`, 327 `materials`, 202 `machines`, 86 `operation_catalog`, 78 CTs.
+- **Lo que falta para engancharlo (decisión pendiente).** Los catálogos (`operators`, `capabilities`,
+  `operation_catalog`, `matrix`, `machines`, `ot_types`, `ot_configurations`,
+  `article_configurations`) tienen `created_at` del **2026-09-28T05:11** y **ningún escritor** que los
+  mantenga al día: se editan en las Hojas. Leerlos como fuente de verdad hoy serviría datos viejos.
+  Antes de engancharlos hay que decidir **quién alimenta los catálogos a Supabase** (doble escritura
+  en Apps Script, o Supabase como fuente única con los escritores migrados). Hasta entonces, la fase
+  3 no debe cambiar la fuente de los catálogos.
+- **Tablas vacías** (cola/estado/plan: `app_state`, `selected_ots`, `locked_ots`,
+  `operation_plan_statuses`, `plan_snapshots`, `closed_work_order_summaries`,
+  `unconfirmed_work_orders`, `tools`, `subcontracts`, `calendar_exceptions`): siguen viniendo del
+  puente; su migración es la fase 2/4, no la 3.
+- **Pendiente de despliegue (solo el usuario).** El RESTlet 2246 desplegado en NetSuite **aún no trae**
+  el filtro `ail.location = 1` de `RULE-SUP-013`: `inventory` sigue en **2401** filas cuando el SQL
+  filtrado da ~1933. Hay que pegar `netsuite-restlet-unificado-supabase.js` en NetSuite. Igual, el
+  `.gs` de Apps Script desplegado aún no coincide con el local (falta el guard de horario).
 
 ## 5. Riesgos
 
