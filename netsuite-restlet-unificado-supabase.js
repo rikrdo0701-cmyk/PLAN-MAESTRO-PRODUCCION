@@ -53,7 +53,7 @@ define(['N/query'], (query) => {
       '  t.id AS wo_internal_id,',
       '  t.tranid AS ot,',
       '  BUILTIN.DF(tl.item) AS articulo,',
-      '  COALESCE(i.salesdescription, i.purchasedescription, i.displayname) AS descripcion,',
+      '  COALESCE(i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
       '  BUILTIN.DF(t.status) AS estatus,',
       '  BUILTIN.DF(t.entity) AS cliente,',
@@ -199,11 +199,11 @@ define(['N/query'], (query) => {
       '  i.id AS item_id,',
       '  i.itemid AS codigo,',
       '  i.itemtype AS tipo,',
-      '  COALESCE(i.salesdescription, i.purchasedescription, i.displayname) AS descripcion,',
+      '  COALESCE(i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
       '  i.isinactive AS inactivo,',
       '  i.lastmodifieddate AS ultima_modificacion',
       'FROM item i',
-      "WHERE i.itemtype IN ('InvtPart', 'Assembly')",
+      "WHERE i.itemtype IN ('InvtPart', 'Assembly', 'NonInvtPart', 'Service', 'OthCharge', 'Kit')",
       'ORDER BY i.itemid'
     ].join('\n');
     const rows = runSuiteQL_(sql);
@@ -286,13 +286,10 @@ define(['N/query'], (query) => {
     const sql = [
       'SELECT',
       '  t.id AS internalid,',
-      '  t.datecreated AS fecha_captura,',
+      '  t.trandate AS fecha_captura,',
       '  t.tranid AS orden,',
       '  BUILTIN.DF(t.entity) AS clave_cliente,',
       '  BUILTIN.DF(t.entity) AS nombre_cliente,',
-      '  t.quantity AS cantidad_piezas,',
-      '  t.quantity - NVL(t.quantityfulfilled, 0) AS cantidad_pendiente_surtir,',
-      '  BUILTIN.DF(t.statusref) AS estado,',
       '  t.shipdate AS fecha_embarque,',
       '  t.memo AS comentarios,',
       '  t.foreigntotal AS monto_pendiente_facturar',
@@ -306,16 +303,13 @@ define(['N/query'], (query) => {
     const rows = runSuiteQL_(sql);
     return {
       ok: true,
-      headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'cantidad_piezas', 'cantidad_pendiente_surtir', 'estado', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar'],
+      headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar'],
       rows: rows.map(r => ({
         internalid: String(r.internalid || ''),
         fecha_captura: fmtDate_(r.fecha_captura),
         orden: String(r.orden || ''),
         clave_cliente: String(r.clave_cliente || ''),
         nombre_cliente: String(r.nombre_cliente || ''),
-        cantidad_piezas: Number(r.cantidad_piezas) || 0,
-        cantidad_pendiente_surtir: Number(r.cantidad_pendiente_surtir) || 0,
-        estado: String(r.estado || ''),
         fecha_embarque: fmtDate_(r.fecha_embarque),
         comentarios: String(r.comentarios || ''),
         monto_pendiente_facturar: Number(r.monto_pendiente_facturar) || 0
