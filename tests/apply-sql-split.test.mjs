@@ -1,42 +1,121 @@
-// Prueba del divisor de sentencias de scripts/apply-sql-supabase.mjs, sin base de
-// datos: importa la funcion con un truco de ESM (el archivo es un script con
-// codigo de nivel superior, asi que se lee el fuente y se evalua solo la funcion).
-// El fallo que vigila es concreto: si el split por ';' no respeta $$...$$, el
-// cuerpo de ingesta_mirror se parte en trozos y el modo -Diagnosticar reportaria
-// errores que no existen, que es peor que no diagnosticar.
+// Red contra el modo -Diagnosticar de scripts/apply-sql-supabase.mjs.
+//
+// POR QUE EXISTE. Un diagnostico que reporta errores falsos es PEOR que no
+// diagnosticar, porque hace perseguir bugs que no existen. MEDIDO 2026-09-29: la
+// primera version del divisor solo sabia de literales y $$...$$, no de
+// comentarios, y al correrla sobre docs/schema-supabase-cierre-catalogos.sql
+// reporto 10 fallos de los cuales 7 eran inventados: un ';' dentro de un
+// comentario -- partia la sentencia, y una comilla dentro de un comentario
+// entraba en modo literal y se comia el resto del archivo.
+//
+// Estos tests fijan los casos que de verdad rompieron, mas la red general: en un
+// DDL de este repo, NINGUN fragmento puede empezar por texto de comentario.
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 
 const fuente = await readFile(new URL("../scripts/apply-sql-supabase.mjs", import.meta.url), "utf8");
-const cuerpo = fuente.slice(fuente.indexOf("function dividir("), fuente.indexOf("async function diagnosticarTodas("));
-const ctx = { console, JSON, String, Number, Array, Object, Error };
+
+// El archivo se ejecuta al importarlo (conecta y aplica), asi que no se importa:
+// se toma su fuente y se evalua en un contexto limpio.
+const desde = (marca, hasta) => {
+  const a = fuente.indexOf(marca);
+  const b = hasta ? fuente.indexOf(hasta, a) : fuente.length;
+  assert.ok(a >= 0 && b > a, `no encontre el bloque entre ${marca} y ${hasta}`);
+  return fuente.slice(a, b);
+};
+const ctx = { console, JSON, String, Number, Array, Object, Error, RegExp };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(cuerpo + "\nglobalThis.dividir = dividir;", ctx);
-// El array que devuelve la funcion vive en el contexto vm y trae otro
-// Array.prototype: deepEqual (estricto) lo rechaza aunque las cadenas cuadren. Se
-// copia al realm de aqui para comparar el valor y no el prototipo.
+vm.runInContext(
+  desde("function dividir(", "const PALABRAS_SQL") +
+    desde("const PALABRAS_SQL", "async function diagnosticarTodas(") +
+    "\nglobalThis.dividir = dividir; globalThis.diagnosticoDeFragmentos = diagnosticoDeFragmentos;",
+  ctx
+);
 const dividir = (...args) => Array.from(ctx.dividir(...args));
+const diagnosticoDeFragmentos = (s) => Array.from(ctx.diagnosticoDeFragmentos(s));
+
+// ---------------------------------------------------------------------------
+// Los casos que realmente rompieron
+// ---------------------------------------------------------------------------
+
+test("un ';' dentro de un comentario -- no parte la sentencia", () => {
+  // Este es el que produjo "syntax error at or near el" y "el codigo es el
+  // identificador de la hoja, que es" como sentencias sueltas.
+  const sql = [
+    "-- El id uuid lo genera la base; el codigo es el identificador de la hoja",
+    "-- (las filas sembradas antes lo traian vacio).",
+    "alter table public.tools add column if not exists codigo text not null default '';",
+  ].join("\n");
+  const partes = dividir(sql);
+  assert.equal(partes.length, 1, `se esperaba 1 sentencia y hay ${partes.length}`);
+  assert.match(partes[0], /alter table public\.tools/);
+});
+
+test("una comilla dentro de un comentario no abre modo literal", () => {
+  // El archivo tiene comentarios con palabras como 'dias' y 'texto': si la
+  // comilla entraba en modo literal, se comia el resto del archivo y todo lo que
+  // venia despues se perdia o se partia mal.
+  const sql = [
+    "-- la columna 'fecha' es un dia, no una ventana; ver la hoja CALENDARIO",
+    "alter table public.calendar_exceptions add column if not exists hora_inicio text not null default '';",
+    "comment on column public.calendar_exceptions.hora_inicio is 'HORA_INICIO; tal cual';",
+  ].join("\n");
+  const partes = dividir(sql);
+  assert.equal(partes.length, 2, `se esperaban 2 sentencias y hay ${partes.length}`);
+  assert.match(partes[0], /hora_inicio text/);
+  assert.match(partes[1], /^comment on column public\.calendar_exceptions\.hora_inicio/);
+  assert.match(partes[1], /'HORA_INICIO; tal cual'$/, "el ; dentro del literal no debe cortar");
+});
+
+test("el DEFAULT de solapamiento va con su sentencia aunque el comentario tenga ';'", () => {
+  const sql = [
+    "-- el USING fija 1; no se adivina el factor original",
+    "alter table public.capabilities",
+    "  alter column solapamiento drop default;",
+    "alter table public.capabilities",
+    "  alter column solapamiento type numeric using (1::numeric);",
+  ].join("\n");
+  const partes = dividir(sql);
+  assert.equal(partes.length, 2);
+  assert.match(partes[0], /drop default$/);
+  assert.match(partes[1], /type numeric/);
+});
+
+test("un ';' dentro de un cuerpo $$...$$ no parte, y un '--' ahi no es comentario", () => {
+  const partes = dividir(
+    "create or replace function f() returns void as $$\n" +
+    "begin\n" +
+    "  -- esto es plsql, no comentario: el ; de abajo es real\n" +
+    "  execute 'delete from t;';\n" +
+    "end;\n" +
+    "$$;\nselect 1;"
+  );
+  assert.equal(partes.length, 2, `se esperaban 2 y hay ${partes.length}`);
+  assert.match(partes[0], /delete from t;/);
+  assert.equal(partes[1], "select 1");
+});
+
+test("comentarios de bloque /* ... */ tampoco parten", () => {
+  const partes = dividir("/* bloque; con punto y coma */ select 1; select 2;");
+  assert.equal(partes.length, 2);
+  assert.match(partes[0], /select 1/);
+  assert.match(partes[1], /select 2/);
+});
+
+// ---------------------------------------------------------------------------
+// Los casos basicos, que no pueden regressar
+// ---------------------------------------------------------------------------
 
 test("divide un DDL sencillo", () => {
   assert.deepEqual(dividir("a; b;  c ;"), ["a", "b", "c"]);
 });
 
-test("no parte por ';' dentro de un literal", () => {
+test("no parte por ';' dentro de un literal, y respeta el '' escapado", () => {
   assert.deepEqual(dividir("select 'a;b'; select 2;"), ["select 'a;b'", "select 2"]);
-  // El '' escapado no cierra el literal.
   assert.deepEqual(dividir("select 'a'';b'; select 2;"), ["select 'a'';b'", "select 2"]);
-});
-
-test("no parte por ';' dentro de un cuerpo $$...$$", () => {
-  const sql = "create or replace function f() returns void as $$\nbegin\n  execute 'delete from t;';\nend;\n$$;\nselect 1;";
-  const partes = dividir(sql);
-  assert.equal(partes.length, 2, `se esperaban 2 sentencias y hay ${partes.length}`);
-  assert.match(partes[0], /^create or replace function/);
-  assert.match(partes[0], /delete from t;/, "el ; interno debe seguir dentro del cuerpo");
-  assert.equal(partes[1], "select 1");
 });
 
 test("respeta el dollar-quoting etiquetado ($tag$)", () => {
@@ -46,26 +125,46 @@ test("respeta el dollar-quoting etiquetado ($tag$)", () => {
   assert.equal(partes[1], "select 2");
 });
 
-test("el DDL de cierre se divide sin partir el cuerpo de ingesta_mirror", async () => {
-  const ddl = await readFile(new URL("../docs/schema-supabase-cierre-catalogos.sql", import.meta.url), "utf8");
+// ---------------------------------------------------------------------------
+// La red general: sobre el DDL real, ningun fragmento puede ser texto de comentario
+// ---------------------------------------------------------------------------
+
+const ddl = await readFile(new URL("../docs/schema-supabase-cierre-catalogos.sql", import.meta.url), "utf8");
+
+test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL", () => {
   const partes = dividir(ddl);
-  // 1 create table machine_planning_overrides + 2 RLS + ... + la funcion del RPC
-  // tienen que quedar enteras: si una se partiera, el diagnostico mentiria.
-  const conCuerpo = partes.filter((p) => /as \$\$/.test(p));
+  const malos = diagnosticoDeFragmentos(partes);
+  assert.deepEqual(malos, [], "fragmentos que no son SQL:\n" + malos.join("\n"));
+  // 32 sentencias, todas SQL de verdad. La version que no entendia comentarios
+  // daba 37: las 5 de mas eran texto de comentario que|reportaba como errores de
+  // sintaxis, y habian escondido los errores de verdad del DDL.
+  assert.equal(partes.length, 32, `se esperaban 32 sentencias y hay ${partes.length}`);
+});
+
+test("el cuerpo de ingesta_mirror queda entero en una sola sentencia", () => {
+  const conCuerpo = dividir(ddl).filter((p) => /as \$\$/.test(p));
   assert.equal(conCuerpo.length, 1, "debe haber exactamente un cuerpo $$: la funcion ingesta_mirror");
   assert.match(conCuerpo[0], /language plpgsql/);
-  assert.match(conCuerpo[0], /revoke|return jsonb_build_object/);
-  // Y ninguna sentencia puede quedar a medias con un ';' suelto al final.
-  for (const p of partes) {
-    assert.equal(p.endsWith(";"), false, `la sentencia termina en ';', se partio mal: ${p.slice(-40)}`);
-  }
-  // El capileto con las 4 columnas de una vez debe quedar en una sola pieza.
+  assert.match(conCuerpo[0], /return jsonb_build_object/);
+  assert.equal(/\$\$/.test(conCuerpo[0]), true);
+});
+
+test("las piezas que el DDL declara siguen enteras", () => {
+  const partes = dividir(ddl);
+  // El ALTER de calendar_exceptions mete 4 columnas en una sola sentencia.
   const calendario = partes.find((p) => /fecha_inicio date/.test(p));
   assert.ok(calendario, "no encontre el ALTER de calendar_exceptions");
-  assert.match(calendario, /hora_fin text not null default '';?\s*$/);
-  // El fix del DEFAULT de solapamiento: drop default ANTES del cambio de tipo.
+  for (const col of ["fecha_inicio date", "hora_inicio text", "fecha_fin date", "hora_fin text"]) {
+    assert.ok(calendario.includes(col), `falta ${col} en la misma sentencia`);
+  }
+  // El default de solapamiento se cae ANTES del cambio de tipo, o Postgres no
+  // castea (fallo medido 2026-09-29: 'cannot be cast automatically to numeric').
   const iDrop = partes.findIndex((p) => /solapamiento drop default/.test(p));
   const iType = partes.findIndex((p) => /solapamiento type numeric/.test(p));
   assert.ok(iDrop >= 0 && iType >= 0, "faltan las sentencias de solapamiento");
-  assert.ok(iDrop < iType, "el default debe caer antes de cambiar el tipo, o Postgres no castea");
+  assert.ok(iDrop < iType, "el default debe caer antes de cambiar el tipo");
+  // La tabla del override y su RLS.
+  assert.ok(partes.some((p) => /^create table if not exists public\.machine_planning_overrides/m.test(p)));
+  assert.ok(partes.some((p) => /enable row level security/.test(p)));
+  assert.ok(partes.some((p) => /^grant execute on function public\.ingesta_mirror/m.test(p)));
 });
