@@ -79,7 +79,7 @@ define(['N/query'], (query) => {
         cantidad: Number(r.cantidad) || 0,
         estatus: String(r.estatus || ''),
         cliente: String(r.cliente || ''),
-        fecha_vencimiento: fmtDate_(r.fecha_vencimiento)
+        fecha_vencimiento: isoFecha_(r.fecha_vencimiento)
       })),
       totalRows: rows.length
     };
@@ -129,7 +129,6 @@ define(['N/query'], (query) => {
         status_op: String(r.status_op || ''),
         workcenter: String(r.workcenter || ''),
         setup_min: Number(r.setup_min) || 0,
-        est_min: Number(r.est_min) || 0,
         real_min: Number(r.real_min) || 0,
         remaining_min: Number(r.remaining_min) || 0,
         production_rate: Number(r.production_rate) || 0,
@@ -176,7 +175,6 @@ define(['N/query'], (query) => {
       rows: rows.map(r => ({
         wo_internal_id: String(r.wo_internal_id || ''),
         ot: String(r.ot || ''),
-        ensamble_id: String(r.ensamble_id || ''),
         ensamble: String(r.ensamble || ''),
         line_id: String(r.line_id || ''),
         componente_id: String(r.componente_id || ''),
@@ -211,12 +209,11 @@ define(['N/query'], (query) => {
       ok: true,
       headers: ['item_id', 'codigo', 'tipo', 'descripcion', 'inactivo', 'ultima_modificacion'],
       rows: rows.map(r => ({
-        item_id: String(r.item_id || ''),
         codigo: String(r.codigo || ''),
         tipo: String(r.tipo || ''),
         descripcion: String(r.descripcion || ''),
         inactivo: r.inactivo === 'T',
-        ultima_modificacion: fmtDate_(r.ultima_modificacion)
+        ultima_modificacion: isoFecha_(r.ultima_modificacion)
       })),
       totalRows: rows.length
     };
@@ -240,9 +237,8 @@ define(['N/query'], (query) => {
       ok: true,
       headers: ['id', 'nombre', 'isinactive'],
       rows: rows.map(r => ({
-        id: String(r.id || ''),
         nombre: String(r.nombre || ''),
-        isinactive: r.isinactive
+        activa: r.isinactive !== 'T'
       })),
       totalRows: rows.length
     };
@@ -306,11 +302,10 @@ define(['N/query'], (query) => {
       headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar'],
       rows: rows.map(r => ({
         internalid: String(r.internalid || ''),
-        fecha_captura: fmtDate_(r.fecha_captura),
+        fecha_captura: isoFecha_(r.fecha_captura),
         orden: String(r.orden || ''),
-        clave_cliente: String(r.clave_cliente || ''),
         nombre_cliente: String(r.nombre_cliente || ''),
-        fecha_embarque: fmtDate_(r.fecha_embarque),
+        fecha_embarque: isoFecha_(r.fecha_embarque),
         comentarios: String(r.comentarios || ''),
         monto_pendiente_facturar: Number(r.monto_pendiente_facturar) || 0
       })),
