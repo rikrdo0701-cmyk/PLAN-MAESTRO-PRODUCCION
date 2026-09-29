@@ -148,8 +148,7 @@ function leerWorkorders_(config) {
       descripcion: String(r.descripcion || ''),
       cantidad: Math.abs(Number(r.cantidad) || 0),
       estatus: String(r.estatus || ''),
-      cliente: String(r.cliente || ''),
-      fecha_inicio: isoFecha_(r.fecha_inicio)
+      cliente: String(r.cliente || '')
     };
   });
 }
@@ -385,9 +384,16 @@ function ingesta() {
       console.log('Leyendo ' + a.nombre + '...');
       let filas = a.lector(config);
       console.log(a.nombre + ': ' + filas.length + ' filas leidas');
+      if (filas.length) {
+        console.log(a.nombre + ': columnas = ' + Object.keys(filas[0]).join(', '));
+        console.log(a.nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));
+      }
       if (a.nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.line_id; });
       if (a.nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
       if (a.nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
+      if (filas.length !== a.lector(config).length) {
+        console.log(a.nombre + ': deduplicacion ' + a.lector(config).length + ' -> ' + filas.length);
+      }
       const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
       log.push(a.nombre + ': ' + r.escritas + ' filas');
       console.log(a.nombre + ': ' + r.escritas + ' escritas');
