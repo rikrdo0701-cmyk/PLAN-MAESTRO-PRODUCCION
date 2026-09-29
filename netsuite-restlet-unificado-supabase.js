@@ -132,8 +132,6 @@ define(['N/query'], (query) => {
         real_min: Number(r.real_min) || 0,
         remaining_min: Number(r.remaining_min) || 0,
         production_rate: Number(r.production_rate) || 0,
-        human_resource: String(r.human_resource || ''),
-        machine_resource: String(r.machine_resource || ''),
         qty_completed: Number(r.qty_completed) || 0
       })),
       totalRows: rows.length
@@ -181,8 +179,8 @@ define(['N/query'], (query) => {
         componente: String(r.componente || ''),
         descripcion: String(r.descripcion || ''),
         unidad: String(r.unidad || ''),
-        requerido: Number(r.requerido) || 0,
-        emitido: Number(r.emitido) || 0
+        requerido: Math.round(Number(r.requerido) || 0),
+        emitido: Math.round(Number(r.emitido) || 0)
       })),
       totalRows: rows.length
     };
@@ -306,7 +304,7 @@ define(['N/query'], (query) => {
         orden: String(r.orden || ''),
         nombre_cliente: String(r.nombre_cliente || ''),
         fecha_embarque: isoFecha_(r.fecha_embarque),
-        comentarios: String(r.comentarios || ''),
+        memo: String(r.comentarios || ''),
         monto_pendiente_facturar: Number(r.monto_pendiente_facturar) || 0
       })),
       totalRows: rows.length
