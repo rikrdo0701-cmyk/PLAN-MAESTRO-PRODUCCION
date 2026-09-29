@@ -7,7 +7,7 @@
 // ESTOS TESTS NO APLICAN NADA. Solo leen el archivo y comprueban que:
 //   1. se divide en sentencias que son SQL de verdad, sin que ningun comentario
 //      se coma como sentencia;
-//   2. los bloques $$ abren y cierran, que es donde el divisor ya fallo una vez;
+//   2. los bloques$ abren y cierran, que es donde el divisor ya fallo una vez;
 //   3. las 12 columnas que el usuario aprobo estan, con los tipos que la app
 //      necesita, que es la parte que no se puede inventar y por eso se fija;
 //   4. la tabla del log existe, con los cuatro indices que hacen falta para que
@@ -48,10 +48,13 @@ test("el DDL se divide en SQL de verdad", () => {
 test("ningun bloque dollar-quoted queda partido", () => {
   // MEDIDO 2026-09-29: el divisor perdia un '$' del cierre $$ y la sentencia llegaba
   // a Postgres como 'unterminated dollar-quoted string'. Con el DDL del plan hay
-  // cuatro bloques (dos funciones y dos comprobaciones) y se comprueba cada uno.
+  // seis bloques y se comprueba cada uno: las dos funciones del espejo, la nueva
+  // plan_guardar, y tres comprobaciones que abortan. El numero esta fijado a
+  // proposito: si al anadir una comprobacion sube, el que lo cambia tiene que
+  // venir aqui y confirmar que el bloque nuevo abre y cierra.
   const partes = dividir(ddl);
   const conD = partes.filter((p) => p.includes("$$"));
-  assert.equal(conD.length, 4, `deberian ser 4 bloques $$ y hay ${conD.length}`);
+  assert.equal(conD.length, 6, `deberian ser 6 bloques $$ y hay ${conD.length}`);
   for (const p of conD) {
     const abiertos = (p.match(/\$\$/g) || []).length;
     assert.equal(abiertos % 2, 0, `bloque con un numero impar de $$: quedaria sin cerrar\n${p.slice(0, 120)}`);
@@ -161,4 +164,193 @@ test("las 7 tablas del estado del plan salen de 'no hay escritor' a 'la web escr
     assert.ok(enLectura.includes(`'${t}'`), `${t} tiene que estar en las lecturas`);
     assert.ok(enEscritura.includes(`'${t}'`), `${t} tiene que estar en las escrituras: hoy no la escribe nadie`);
   }
+});
+
+// ===========================================================================
+// EL GUARDADO EN UNA TRANSACCION, y las marcas de retirada.
+// ===========================================================================
+//
+// Estos tests no aplican nada: leen el DDL. La razon es la misma de los de
+// arriba, y mas fuerte: plan_guardar es la unica parte de este proyecto que
+// decide si la persona pierde su trabajo, y no se puede deshacer con un ctrl+z.
+
+test("plan_guardar existe, con la firma que el navegador va a llamar", () => {
+  assert.match(
+    ddl,
+    /create or replace function public\.plan_guardar\(\s*p_payload jsonb,\s*p_revision_esperada integer,\s*p_actor text default null\s*\)\s*returns jsonb/,
+    "la firma tiene que ser exactamente la que el escritor va a llamar: si cambia, el POST del navegador da 404"
+  );
+  assert.match(ddl, /language plpgsql/);
+  assert.match(ddl, /security definer/);
+});
+
+test("la revision se comprueba con un bloqueo de fila, no con una lectura normal", () => {
+  // ESTA ES LA LINEA QUE HACE QUE FUNCIONE. Un `select ... for update` sobre la
+  // fila unica de app_state serializa a los que guardan: el segundo espera a que
+  // el primero termine, y para entonces ve la revision nueva y se rechaza. Sin el
+  // `for update`, los dos compararian contra el mismo numero y los dos pasarian.
+  // Y el `is distinct from` es a proposito: con `<>` un null nunca seria igual a
+  // nada y el primer guardado con estado nuevo pasaria sin comprobar nada.
+  assert.match(ddl, /select revision into v_actual from public\.app_state where id = 1 for update/i);
+  assert.match(ddl, /if p_revision_esperada is distinct from v_actual then/i);
+});
+
+test("un conflicto NO se reporta como error de red", () => {
+  // La distincion es lo que evita que alguien pierda su trabajo en silencio:
+  // un conflicto se recarga y se reintenta, un error de red no. Si la pagina los
+  // mezcla, en el peor caso ensaya otra vez encima del trabajo de otro.
+  assert.match(ddl, /'conflicto', 'CONFLICT_REVISION'/);
+  assert.match(ddl, /'revision_actual', v_actual/);
+  // El recorte va desde la COMPROBACION del conflicto, no desde la primera
+  // mencion de la palabra. Antes empezaba en el comentario de cabecera y
+  // arrastraba hasta el raise de "p_payload no es un objeto", que ese si tiene
+  // que ser excepcion: un payload mal formado no es recuperable, es un bug.
+  const bloqueConflicto = ddl.slice(
+    ddl.indexOf("if p_revision_esperada is distinct from v_actual then"),
+    ddl.indexOf("v_nueva :=")
+  );
+  assert.ok(
+    !/raise exception/.test(bloqueConflicto),
+    "el conflicto se devuelve como jsonb, no se lanza: es recuperable y una excepcion lo hace parecer un fallo"
+  );
+  assert.match(bloqueConflicto, /return jsonb_build_object/);
+});
+
+test("la transaccion se deshace sola si algo falla a mitad", () => {
+  // Un guardado a medias es PEOR que no guardar: la pagina siguiente lee un plan
+  // que no escribio ninguna persona. Por eso no se envuelve en un jsonb con
+  // ok:false, sino que se relanza y Postgres deshace.
+  assert.match(ddl, /when others then[\s\S]{0,400}raise;/);
+  assert.ok(
+    !/when others then[\s\S]{0,400}jsonb_build_object\(\s*'ok', false/.test(ddl),
+    "un error unexpected no puede disfrazarse de un ok:false, porque la pagina no podria distinguir fallo de conflicto"
+  );
+});
+
+test("operations, work_orders y materials SOLO se actualizan: nunca insert ni delete", () => {
+  // MEDIDO 2026-09-29: operations tiene 1000 filas de la ingesta del RESTlet 2246
+  // con operation_id ns-XXXXX, y el navegador usa el MISMO key natural. Un borrado
+  // desde la pagina se llevaria las filas que una sincronizacion metio despues de
+  // la ultima carga, y no daria ningun error. Por eso el modo es 'actualiza'.
+  const bloque = ddl.slice(ddl.indexOf("LAS TRES DEL ERP"), ddl.indexOf("LAS MARCAS DE RETIRADA"));
+  assert.match(bloque, /update public\.%I t set %s from ex/);
+  assert.ok(
+    !/delete from public\.%I/.test(bloque),
+    "no puede haber DELETE en las tres del ERP: destruirian la ingesta de NetSuite que el navegador no conoce"
+  );
+  assert.ok(
+    !/insert into public\.%I t/.test(bloque),
+    "no puede haber INSERT: la pagina no crea operaciones, las crea NetSuite"
+  );
+  // Y el modo sale de la tabla de reglas, no esta escrito a mano en la funcion.
+  assert.match(bloque, /from public\.plan_tabla_escritura where tabla = v_tabla/);
+  assert.match(bloque, /if v_modo <> 'actualiza' then/);
+});
+
+test("el update solo toca las columnas que la web decide, y eso sale de una tabla", () => {
+  // El riesgo del otro lado: un update de fila completa pondria en NULL los datos
+  // del ERP que el navegador no trae (descripcion, cantidades, tiempos). Perder
+  // datos por no mandarlos es tan grave como perderlos por borrarlos.
+  assert.match(ddl, /v_asignar := \(select string_agg\(quote_ident\(c\)/);
+  assert.match(ddl, /create table if not exists public\.plan_tabla_escritura/);
+  assert.match(ddl, /modo text not null check \(modo in \('actualiza','espejo','anexo','flujo'\)\)/);
+  // Y las columnas del ERP tienen que estar EXCLUIDAS de la lista de la web.
+  const listaOperaciones = ddl.slice(
+    ddl.indexOf("('operations', 'actualiza'"),
+    ddl.indexOf("'Solo decisiones de plan")
+  );
+  for (const fueraDeLaWeb of ["descripcion", "cant_total", "tiempo_ciclo", "tipo_insercion", "created_at"]) {
+    assert.ok(
+      !new RegExp("'" + fueraDeLaWeb + "'").test(listaOperaciones),
+      fueraDeLaWeb + " es un dato del ERP y no puede estar en la lista de lo que la web escribe"
+    );
+  }
+  for (const decisionDeLaWeb of ["maquina", "operador", "fecha_inicio", "hora_inicio", "kit_pending"]) {
+    assert.ok(
+      new RegExp("'" + decisionDeLaWeb + "'").test(listaOperaciones),
+      decisionDeLaWeb + " si es una decision de la persona y tiene que estar en la lista"
+    );
+  }
+});
+
+test("app_state se actualiza AL FINAL, y su revision no se manda desde el navegador", () => {
+  // La revision se incrementa DENTRO de la misma transaccion. Si se moviera
+  // primero y algo fallara despues, la pagina creeria que guardo y el siguiente
+  // guardado se rechazaria contra un numero que ya no corresponde a nada.
+  const cuerpo = ddl.slice(ddl.indexOf("plan_guardar("), ddl.indexOf("comment on function public.plan_guardar"));
+  const iAppState = cuerpo.indexOf("update public.app_state");
+  const iEventos = cuerpo.indexOf("insert into public.operation_events");
+  assert.ok(iAppState > iEventos, "app_state se actualiza despues de los eventos, no antes");
+  assert.match(cuerpo, /set revision = v_nueva/);
+  assert.ok(
+    !/"revision"\s*:/.test(cuerpo.slice(0, iAppState)),
+    "el navegador no puede mandar la revision: la incrementa la funcion dentro de la transaccion"
+  );
+});
+
+test("las marcas de retirada salen de selected_ots, y no borran la operacion", () => {
+  // MEDIDO 2026-09-29: NO existe en el estado ninguna lista de operaciones
+  // retiradas. operationPlanStatuses es un objeto (app.js:249) y removedOperations
+  // solo se calcula para el preview del dialogo de restaurar
+  // (planning-workflow-core.js:1315). La unica fuente real y persistida es
+  // selected_ots: si la OT sale de ahi, sus operaciones salen del plan.
+  assert.match(ddl, /add column if not exists retirada_en timestamptz/);
+  assert.match(ddl, /add column if not exists retirada_por text/);
+  const bloque = ddl.slice(ddl.indexOf("LAS MARCAS DE RETIRADA"), ddl.indexOf("LAS CUATRO QUE LA PERSONA"));
+  assert.match(bloque, /set retirada_en = now\(\), retirada_por = v_actor/);
+  assert.match(bloque, /where ot = any\(v_salientes\) and retirada_en is null/);
+  assert.ok(
+    !/delete from public\.operations/.test(bloque),
+    "retirar NO es borrar: la fila tambien la escribe la ingesta de NetSuite"
+  );
+  // Y al volver la OT, la marca se levanta. Sin esto, una OT que vuelve al plan
+  // con sus operaciones saldria marcada como retirada para siempre.
+  assert.match(bloque, /set retirada_en = null, retirada_por = null/);
+  assert.match(bloque, /v_entrantes/);
+  // El actor viene del JWT, no de lo que mande el navegador.
+  assert.match(ddl, /v_actor := coalesce\(p_actor, 'desconocido'\)/);
+});
+
+test("app_state recibe su fila id=1 antes de que plan_guardar la necesite", () => {
+  // MEDIDO 2026-09-29: app_state esta VACIA (0 filas). Sin esta fila, el
+  // `select ... for update` no encuentra nada y no hay contra que comparar la
+  // revision, o sea que la funcion no puede decidir y el guardado no va.
+  assert.match(ddl, /insert into public\.app_state \(id, revision\) values \(1, 0\) on conflict \(id\) do nothing/);
+  assert.match(ddl, /if not found then[\s\S]{0,200}raise exception/);
+});
+
+test("los indices unicos que hacen posible el upsert estan, con su justificacion medida", () => {
+  // MEDIDO 2026-09-29 con sondas reales: operations.operation_id y
+  // materials(ot,line_id) TIENEN indice unico (el upsert responde 200), pero
+  // work_orders.wo_internal_id NO lo tenia, y el upsert ahi falla con 42P10
+  // "there is no unique or exclusion constraint matching the ON CONFLICT
+  // specification". Ese fallo solo se ve en produccion, nunca en un test unitario.
+  assert.match(ddl, /create unique index if not exists work_orders_wo_internal_id_key on public\.work_orders \(wo_internal_id\)/);
+  assert.match(ddl, /create unique index if not exists plan_snapshots_snapshot_id_key\s+on public\.plan_snapshots \(snapshot_id\)/);
+  // Y el abort que hay al final comprueba que un indice no se quedo a medias.
+  assert.match(ddl, /faltan indices unicos para el upsert/);
+});
+
+test("plan_guardar se abre a authenticated y SIGUE cerrada a anon, con la razon escrita", () => {
+  // Es la distincion importante: ingesta_mirror borra tablas enteras sin mirar quien
+  // llama, asi que sigue revocado para el navegador. plan_guardar no borra nada del
+  // ERP, no crea operaciones, y rechaza el guardado si la revision no es la que el
+  // navegador leyo. Eso es lo que hace aceptable exponerla, y la comprobacion del
+  // bloque final aborta si alguien la abrio a anon.
+  assert.match(ddl, /grant execute on function public\.plan_guardar\(jsonb, integer, text\) to authenticated/);
+  assert.match(ddl, /revoke execute on function public\.plan_guardar\(jsonb, integer, text\) from anon/);
+  assert.match(ddl, /revoke execute on function public\.plan_guardar\(jsonb, integer, text\) from public/);
+  assert.match(ddl, /plan_guardar tiene EXECUTE para anon/);
+  // Y sigue sin abrirse el que borra.
+  assert.match(ddl, /revoke execute on function public\.ingesta_mirror\(text, jsonb\) from authenticated/);
+});
+
+test("la funcion declara que se deshace con raise, no que devuelve un ok falso", () => {
+  // Si el error se envolviera en jsonb, la pagina no podria distinguir "no se
+  // guardo, no pasa nada" de "hay un conflicto, recarga". Y con la transaccion ya
+  // deshecha, devolver ok:false seria mentir: el estado no cambio pero la pagina
+  // podria leerlo como un exito parcial.
+  const cuerpo = ddl.slice(ddl.indexOf("exception"), ddl.indexOf("comment on function public.plan_guardar"));
+  assert.match(cuerpo, /when others then/);
+  assert.match(cuerpo, /raise;/);
 });

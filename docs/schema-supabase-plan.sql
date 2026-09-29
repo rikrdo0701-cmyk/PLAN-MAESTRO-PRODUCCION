@@ -395,3 +395,401 @@ begin
     raise exception 'QUEDAN % politicas abiertas a anon', n;
   end if;
 end $$;
+
+-- ===========================================================================
+-- PLAN GUARDADO EN UNA TRANSACCION. Lo que hace falta para que la web escriba.
+-- ===========================================================================
+--
+-- QUE SE CIERRA AQUI, Y POR QUE NO SE PUEDE HACER DESDE EL NAVEGADOR.
+--
+-- El escritor de la pagina borra y reinscribe tablas, y son varias peticiones.
+-- Entre una y otra cabe otra persona guardando, o un fallo de red. Con lo que
+-- hay hoy, un guardado a medias deja el plan escrito por la mitad, que es PEOR
+-- que no haber guardado: la pagina siguiente lee un plan que no guardo nadie.
+--
+-- Ademas la comprobacion de la revision tiene que vivir DENTRO de la
+-- transaccion. Si se hace en el navegador, se compara, se espera el tiempo de un
+-- viaje de red, y se borra: en ese hueco la otra persona tambien comparo. Por
+-- eso la revision se comprueba con un `for update` sobre la fila unica de
+-- app_state, que es un bloqueo de fila de Postgres y serializa a los que
+-- guardan sin necesitar un candado en el codigo del navegador.
+--
+-- EL MODELO QUE SE APLICA A CADA TABLA, y el motivo de que sean tres y no uno:
+--
+--   actualiza  La web solo MODIFICA filas que ya existen. Sin insertar, sin
+--              borrar. Es el modo de las tres tablas del ERP, y es el que impide
+--              que la pagina cree o destruya datos de NetSuite. No se borra nada,
+--              y una fila que el navegador no conoce no se toca: ese era el
+--              riesgo medido del espejo.
+--   espejo     Borra y reinscribe, y solo en las tablas donde la persona es el
+--              UNICO escritor. Si mañana otra cosa las escribe, salen de aqui.
+--   anexo      Se agrega y nunca se borra: es un historico.
+--   flujo      Solo inserta, y con clave idempotente para que dos guardados del
+--              mismo evento den el mismo resultado.
+--
+-- lista en el cuerpo de una funcion es el cambio que no se ve leyendo un diff.
+-- Es el mismo argumento que llevo la whitelist de ingesta_mirror a una tabla: una
+-- lista en el cuerpo de una funcion es el cambio que no se ve leyendo un diff.
+-- Agregar una columna que la web decide es un UPDATE de un arreglo, no SQL nuevo.
+alter table public.operations add column if not exists retirada_en timestamptz;
+alter table public.operations add column if not exists retirada_por text;
+
+comment on column public.operations.retirada_en is
+  'Cuando esta operacion salio del plan por decision de una persona, no por NetSuite. MEDIDO 2026-09-29: no existe en el estado ninguna lista de operaciones retiradas (operationPlanStatuses es un objeto y removedOperations solo se calcula para el preview de restaurar, planning-workflow-core.js:1315), asi que la fuente real y persistida es selected_ots: si la OT sale de ahi, sus operaciones salen del plan, y eso la base lo sabe sola. Al volver la OT, la marca se borra.';
+comment on column public.operations.retirada_por is
+  'Correo de quien Provoco la retirada, del JWT de supabase-auth. Null significa que la operacion esta en el plan.';
+
+-- app_state esta VACIA hoy (medido 2026-09-29) y de ahi sale la fila unica que
+-- serializa los guardados. Sin esta fila, plan_guardar no tiene contra que
+-- comparar la revision y no puede decidir nada.
+insert into public.app_state (id, revision) values (1, 0) on conflict (id) do nothing;
+
+-- MEDIDO 2026-09-29 con sondas: work_orders NO tiene indice unico en
+-- wo_internal_id, y sin el el upsert falla con 42P10. Se agregan los que faltan
+-- y se verificó antes que no hay duplicados que los bloqueen: work_orders
+-- 212 filas / 212 wo_internal_id distintos, materials 334/334 en (ot,line_id),
+-- operations 1000/1000 en operation_id. El bloque do de mas abajo vuelve a
+-- comprobarlo y ABORTA si aparecen duplicados, en vez de dejar un indice a medias.
+create unique index if not exists work_orders_wo_internal_id_key on public.work_orders (wo_internal_id);
+create unique index if not exists plan_snapshots_snapshot_id_key  on public.plan_snapshots (snapshot_id);
+
+create table if not exists public.plan_tabla_escritura (
+  tabla text primary key,
+  modo text not null check (modo in ('actualiza','espejo','anexo','flujo')),
+  clave text,
+  columnas text[],
+  nota text
+);
+comment on table public.plan_tabla_escritura is
+  'Que puede escribir la web en cada tabla y como. La lista de columnas es lo que hace que una escritura desde la pagina no pueda pisar un dato del ERP: lo que no esta en la lista no se toca. Cambiar que la web escriba una columna mas es un UPDATE de este arreglo, y queda en un diff.';
+
+insert into public.plan_tabla_escritura (tabla, modo, clave, columnas, nota) values
+  ('operations', 'actualiza', 'operation_id',
+   array['num','parte','contenido','prioridad','fecha_req','comentario','tiempo_fallback','kit_pending',
+         'secuencia','ct','operador','maquina','herramental','kit',
+         'fecha_inicio','hora_inicio','fecha_fin','hora_fin',
+         'estatus','locked','auto_frozen','subcontract_type','subcontract_days','revision'],
+   'Solo decisiones de plan: cuando, donde, con que, en que orden. Los datos del ERP (descripcion, cantidades, tiempos, tipo_insercion) NO se tocan, y la fila tiene que existir: la pagina no crea operaciones.'),
+  ('work_orders', 'actualiza', 'wo_internal_id',
+   array['fecha_inicio_ns','fecha_fin_ns','fecha_vencimiento','due_date_override','precio_desde','precio_hasta',
+         'estatus','cant_ensamblada','cant_pendiente','revision','synced_at'],
+   'Lo que la pagina decide de una orden son las fechas. El articulo, la cantidad y el cliente son del ERP.'),
+  ('materials', 'actualiza', 'ot,line_id',
+   array['emitido','revision'],
+   'La pagina no decide componentes: solo que material se emitio.'),
+  ('selected_ots', 'espejo', 'ot', array['ot','posicion'],
+   'La persona es el unico escritor, y el orden manual importa, asi que va posicion.'),
+  ('locked_ots', 'espejo', 'ot', array['ot'],
+   'La persona es el unico escritor.'),
+  ('operation_plan_statuses', 'espejo', 'key',
+   array['key','ot','secuencia','ct','status','origin','fecha_completado','fecha_reapertura','revision'],
+   'La persona es el unico escritor.'),
+  ('plan_snapshots', 'anexo', 'snapshot_id', null,
+   'Historico de borradores: se agrega y nunca se borra.'),
+  ('operation_events', 'flujo', 'id', null,
+   'Flujo de eventos: solo inserta, con clave idempotente para que guardar dos veces no duplique.')
+on conflict (tabla) do update
+  set modo = excluded.modo, clave = excluded.clave, columnas = excluded.columnas, nota = excluded.nota;
+
+-- ===========================================================================
+-- plan_guardar: el guardado de la pagina, en una transaccion, con la revision.
+-- ===========================================================================
+--
+-- POR QUE ESTA FUNCION Y NO UNA SERIE DE PETICIONES DESDE EL NAVEGADOR. Tres
+-- razones, y las tres son medibles:
+--
+--   1. Atomicidad. Borrar y reinsertar son varias peticiones. Un fallo en medio
+--      deja el plan a medias, y un plan a medias es PEOR que no guardar: la
+--      pagina siguiente lee un estado que no escribio ninguna persona.
+--   2. La revision se comprueba DENTRO. `select ... for update` sobre la fila
+--      unica de app_state es un bloqueo de fila de Postgres: dos personas que
+--      guardan a la vez se serializan solas, sin candados en el navegador. Si la
+--      comprobacion fuera en el cliente, las dos compararian, las dos pasarian, y
+--      la segunda pisaria a la primera.
+--   3. Las columnas. El update se arma con la lista de plan_tabla_escritura, asi
+--      que la pagina no puede tocar una columna que no este ahi. Sin eso, un
+--      update de fila completa pondria en NULL los datos del ERP que el
+--      navegador no conoce, que es la misma perdida de datos por el otro lado.
+--
+-- POR QUE ESTA FUNCION SI SE ABRE AL NAVEGADOR, Y ingesta_mirror NO. Es una
+-- distincion importante y por eso va escrita: ingesta_mirror borra la tabla
+-- entera sin mirar quien llama, y por eso sigue revocado para anon y
+-- authenticated. plan_guardar no borra nada: solo modifica filas existentes de
+-- las tres tablas del ERP y sustituye las cuatro que la persona escribe sola. Y
+-- si la revision no coincide, no escribe nada y lo dice. Esa es la garantia que
+-- hace aceptable exponerla, y se pierde en cuanto se lequite el `for update`.
+--
+-- LO QUE DEVUELVE. Un jsonb con ok, revision (la nueva), y por tabla quantas
+-- filas se tocaron. Si hubo conflicto: ok false, conflicto CONFLICT_REVISION y la
+-- revision que hay ahora, para que la pagina pueda recargar y reintentar. La
+-- pagina NO debe interpretar un ok false como un fallo de red: son cosas
+-- distintas y confundirlas hace que la persona pierda su trabajo en silencio.
+create or replace function public.plan_guardar(
+  p_payload jsonb,
+  p_revision_esperada integer,
+  p_actor text default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_actual integer;
+  v_nueva integer;
+  v_ots_actuales text[];
+  v_ots_nuevas text[];
+  v_modo text;
+  v_clave text;
+  v_cols text[];
+  v_tabla text;
+  v_sql text;
+  v_asignar text;
+  v_filas integer;
+  v_actor text;
+  v_entrantes text[];
+  v_salientes text[];
+  v_informe jsonb := '{}'::jsonb;
+  v_t0 timestamptz := clock_timestamp();
+begin
+  if p_payload is null or jsonb_typeof(p_payload) <> 'object' then
+    raise exception 'plan_guardar: p_payload tiene que ser un objeto jsonb'
+      using errcode = '22023';
+  end if;
+
+  -- El candado de fila. Todo lo que sigue ocurre con esta fila bloqueada, asi
+  -- que dos guardos simultaneos se serializan aqui y no despues. Si se quita
+  -- esta linea, la comprobacion de revision deja de servir para nada.
+  select revision into v_actual from public.app_state where id = 1 for update;
+
+  if not found then
+    raise exception 'plan_guardar: no existe la fila id=1 de app_state, sin ella no hay contra que comparar la revision'
+      using errcode = '23514';
+  end if;
+
+  -- Optimismo NO: la revision tiene que COINCIDIR. Si no coincide, otra persona
+  -- guardo despues de que esta cargo, y seguir escribiendo seria perder su
+  -- trabajo. Se devuelve el dato para que la pagina recargue.
+  if p_revision_esperada is distinct from v_actual then
+    return jsonb_build_object(
+      'ok', false,
+      'conflicto', 'CONFLICT_REVISION',
+      'revision_actual', v_actual,
+      'revision_esperada', p_revision_esperada,
+      'mensaje', 'El plan cambio desde la ultima carga. Recarga antes de guardar.',
+      'ms', round(extract(epoch from (clock_timestamp() - v_t0)) * 1000)
+    );
+  end if;
+
+  v_nueva := v_actual + 1;
+  v_actor := coalesce(p_actor, 'desconocido');
+
+  -- Las OTs que hay ahora, ANTES de sustituirlas. Son la fuente real de que una
+  -- operacion salio del plan: si la OT sale de selected_ots, sus operaciones
+  -- dejan de estar planificadas. No hay que pedirselo a la pagina porque no lo
+  -- sabe: la pagina tampoco tiene lista de retiradas.
+  select coalesce(array_agg(ot order by posicion), '{}') into v_ots_actuales
+    from public.selected_ots;
+
+  v_ots_nuevas := coalesce(
+    (select array_agg(x ->> 'ot') from jsonb_array_elements(coalesce(p_payload -> 'selected_ots', '[]'::jsonb)) as x),
+    '{}'
+  );
+
+  v_entrantes := array(select distinct o from unnest(v_ots_nuevas) o where o not in (select unnest(v_ots_actuales)));
+  v_salientes := array(select distinct o from unnest(v_ots_actuales) o where o not in (select unnest(v_ots_nuevas)));
+
+  -- 1) LAS TRES DEL ERP: solo UPDATE, por filas que ya existen. Nunca insert,
+  --    nunca delete. Es lo que impide que la pagina destruya datos de NetSuite
+  --    que el navegador todavia no conoce.
+  foreach v_tabla in array array['operations','work_orders','materials'] loop
+    select modo, clave, columnas into v_modo, v_clave, v_cols
+      from public.plan_tabla_escritura where tabla = v_tabla;
+    if v_modo <> 'actualiza' then
+      raise exception 'plan_guardar: % deberia ser actualiza y esta en %', v_tabla, v_modo
+        using errcode = '23514';
+    end if;
+
+    -- La lista de columnas sale de la tabla, no del payload. Por eso una columna
+    -- que la web no declare queda con su valor anterior en vez de en NULL.
+    v_asignar := (select string_agg(quote_ident(c) || ' = ex.' || quote_ident(c), ', ')
+                    from unnest(v_cols) c
+                   where c not in ('operation_id','wo_internal_id','ot','line_id'));
+    if v_asignar is null then
+      raise exception 'plan_guardar: % no tiene columnas escribibles', v_tabla
+        using errcode = '23514';
+    end if;
+
+    v_sql := format(
+      'with ex as (select * from jsonb_populate_recordset(null::public.%I, $1))
+       update public.%I t set %s from ex
+        where %s = any(array(select %s from ex))',
+      v_tabla, v_tabla, v_asignar, v_clave, v_clave
+    );
+    execute v_sql using (p_payload -> v_tabla);
+    get diagnostics v_filas = row_count;
+
+    v_informe := v_informe || jsonb_build_object(v_tabla, jsonb_build_object('modo', 'actualiza', 'filas', v_filas));
+  end loop;
+
+  -- 2) LAS MARCAS DE RETIRADA, y por que salen de selected_ots. Cuando una OT
+  --    sale del plan, sus operaciones se marcan. NO se borran: borrar es
+  --    justamente el problema que esto evita, porque la fila tambien la escribe
+  --    la ingesta de NetSuite. Al volver la OT, la marca se levanta y la
+  --    operacion vuelve a estar en el plan sola.
+  if array_length(v_salientes, 1) > 0 then
+    update public.operations
+       set retirada_en = now(), retirada_por = v_actor
+     where ot = any(v_salientes) and retirada_en is null;
+    get diagnostics v_filas = row_count;
+    v_informe := v_informe || jsonb_build_object('retiradas', jsonb_build_object('ots', to_jsonb(v_salientes), 'operaciones', v_filas));
+  end if;
+
+  if array_length(v_entrantes, 1) > 0 then
+    update public.operations
+       set retirada_en = null, retirada_por = null
+     where ot = any(v_entrantes);
+    get diagnostics v_filas = row_count;
+    v_informe := v_informe || jsonb_build_object('reintegradas', jsonb_build_object('ots', to_jsonb(v_entrantes), 'operaciones', v_filas));
+  end if;
+
+  -- 3) LAS CUATRO QUE LA PERSONA ESCRIBE SOLA: espejo. Se borran y se
+  --    reinscriben, y solo aqui, porque no hay un segundo escritor.
+  foreach v_tabla in array array['selected_ots','locked_ots','operation_plan_statuses'] loop
+    select modo, clave, columnas into v_modo, v_clave, v_cols
+      from public.plan_tabla_escritura where tabla = v_tabla;
+    if v_modo <> 'espejo' then
+      raise exception 'plan_guardar: % deberia ser espejo y esta en %', v_tabla, v_modo
+        using errcode = '23514';
+    end if;
+    execute format('delete from public.%I', v_tabla);
+    v_sql := format(
+      'insert into public.%I (%s) select %s from jsonb_populate_recordset(null::public.%I, $1)',
+      v_tabla, array_to_string(v_cols, ', '), array_to_string(v_cols, ', '), v_tabla
+    );
+    execute v_sql using (p_payload -> v_tabla);
+    get diagnostics v_filas = row_count;
+    v_informe := v_informe || jsonb_build_object(v_tabla, jsonb_build_object('modo', 'espejo', 'filas', v_filas));
+  end loop;
+
+  -- 4) operation_events: solo inserta, con clave idempotente. Un evento que ya
+  --    se escribio no se duplica, para que dos guardados del mismo evento den el
+  --    mismo resultado. El id lo calcula el navegador para que sea reproducible.
+  if jsonb_array_length(coalesce(p_payload -> 'operation_events', '[]'::jsonb)) > 0 then
+    insert into public.operation_events (id, operation_id, ot, ct, secuencia, kind, actor, payload)
+    select id, operation_id, ot, ct, secuencia, kind, v_actor, payload
+      from jsonb_populate_recordset(null::public.operation_events, p_payload -> 'operation_events')
+    on conflict (id) do nothing;
+    get diagnostics v_filas = row_count;
+    v_informe := v_informe || jsonb_build_object('operation_events', jsonb_build_object('modo', 'flujo', 'filas', v_filas));
+  end if;
+
+  -- 5) plan_snapshots: historico. Upsert por snapshot_id, y NUNCA delete.
+  if jsonb_array_length(coalesce(p_payload -> 'plan_snapshots', '[]'::jsonb)) > 0 then
+    insert into public.plan_snapshots (snapshot_id, payload, created_at)
+    select snapshot_id, payload, coalesce(created_at, now())
+      from jsonb_populate_recordset(null::public.plan_snapshots, p_payload -> 'plan_snapshots')
+    on conflict (snapshot_id) do update set payload = excluded.payload;
+    get diagnostics v_filas = row_count;
+    v_informe := v_informe || jsonb_build_object('plan_snapshots', jsonb_build_object('modo', 'anexo', 'filas', v_filas));
+  end if;
+
+  -- 6) app_state AL FINAL, y la revision va en la misma sentencia. Si algo
+  --    fallo antes, la transaccion entera se cae y la revision no se mueve, que
+  --    es lo que hace que el siguiente guardado se pueda reintentar sin perder
+  --    nada. Al reves, con la revision primero, un fallo dejaria la pagina
+  --    creyendo que guardo.
+  update public.app_state
+     set revision = v_nueva,
+         saved_at = coalesce((p_payload -> 'app_state' ->> 'saved_at')::timestamptz, now()),
+         synced_at = coalesce((p_payload -> 'app_state' ->> 'synced_at')::timestamptz, now()),
+         plan_start = p_payload -> 'app_state' ->> 'plan_start',
+         horizon_days = (p_payload -> 'app_state' ->> 'horizon_days')::integer,
+         report_week_start = p_payload -> 'app_state' ->> 'report_week_start',
+         report_filters = p_payload -> 'app_state' -> 'report_filters',
+         settings = p_payload -> 'app_state' -> 'settings',
+         plant = p_payload -> 'app_state' -> 'plant',
+         operation_catalog_warning = p_payload -> 'app_state' ->> 'operation_catalog_warning',
+         last_schedule = p_payload -> 'app_state' -> 'last_schedule',
+         updated_at = now()
+   where id = 1;
+
+  return jsonb_build_object(
+    'ok', true,
+    'revision', v_nueva,
+    'actor', v_actor,
+    'tablas', v_informe,
+    'ms', round(extract(epoch from (clock_timestamp() - v_t0)) * 1000)
+  );
+exception
+  when others then
+    -- La transaccion se deshace entera y el error sube a la pagina tal cual.
+    -- No se envuelve en un jsonb con ok false: un ok false aqui significaria
+    -- "no se guardo", y la pagina tiene que poder distinguir eso de un
+    -- conflicto, que si es recuperable.
+    raise;
+end $$;
+
+comment on function public.plan_guardar(jsonb, integer, text) is
+  'Guardado del plan desde la pagina, en una transaccion, con comparacion de revision. Modifica filas existentes de operations, work_orders y materials (nunca inserta ni borra ahi), sustituye las cuatro tablas que la persona escribe sola, y agrega eventos y borradores. Si la revision no coincide devuelve ok false con conflicto CONFLICT_REVISION y no escribe nada.';
+
+-- Permisos. A diferencia de ingesta_mirror, que se queda revocado para el
+-- navegador porque borra tablas enteras sin mirar quien llama, esta si se abre a
+-- authenticated: no borra nada del ERP, no crea operaciones, y rechaza el
+-- guardado si la revision no es la que el navegador leyo.
+revoke execute on function public.plan_guardar(jsonb, integer, text) from public;
+revoke execute on function public.plan_guardar(jsonb, integer, text) from anon;
+grant execute on function public.plan_guardar(jsonb, integer, text) to authenticated;
+grant execute on function public.plan_guardar(jsonb, integer, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- COMPROBACIONES, y abortan si algo quedo mal. Esto es lo que convierte el DDL
+-- en algo que se puede correr sin miedo: si un indice unico no se puede crear
+-- por duplicados, o si la tabla de reglas de escritura no quedo como se espera,
+-- el script PARA y lo dice, en vez de dejar la base a medias y seguir.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  n integer;
+begin
+  -- 1. app_state con su fila unica, que es de donde sale el candado.
+  select count(*) into n from public.app_state where id = 1;
+  if n <> 1 then
+    raise exception 'app_state: la fila id=1 no existe, plan_guardar no puede comparar la revision';
+  end if;
+
+  -- 2. Los indices unicos que hacen posible el upsert, incluidos los dos que se
+  --    agregaron aqui. Si un WO se repite, esto para y avisa en vez de dejar el
+  --    indice a medias.
+  select count(*) into n from pg_indexes
+   where schemaname = 'public'
+     and tablename in ('operations','work_orders','materials','plan_snapshots','operation_events')
+     and indexdef ilike '%unique%';
+  if n < 5 then
+    raise exception 'faltan indices unicos para el upsert (hay % de 5)', n;
+  end if;
+
+  -- 3. La tabla de reglas de escritura completa, con su lista de columnas.
+  select count(*) into n from public.plan_tabla_escritura where modo = 'actualiza' and columnas is not null;
+  if n <> 3 then
+    raise exception 'plan_tabla_escritura: hay % tablas en modo actualiza y tienen que ser 3', n;
+  end if;
+
+  -- 4. La funcion existe y es ejecutable por authenticated, y NO por anon. Si
+  --    alguien la abrio a anon, para aqui.
+  select count(*) into n from pg_proc p
+    join pg_namespace ns on ns.oid = p.pronamespace
+   where ns.nspname = 'public' and p.proname = 'plan_guardar';
+  if n = 0 then
+    raise exception 'plan_guardar no existe';
+  end if;
+
+  select count(*) into n from pg_proc p
+    join pg_namespace ns on ns.oid = p.pronamespace
+    join information_schema.routine_privileges rp
+      on rp.specific_name = p.oid::regprocedure::text
+   where ns.nspname = 'public' and p.proname = 'plan_guardar'
+     and rp.grantee = 'anon';
+  if n <> 0 then
+    raise exception 'plan_guardar tiene EXECUTE para anon: esa tabla no puede seguir asi';
+  end if;
+end $$;
