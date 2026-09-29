@@ -120,10 +120,15 @@ function PP_supabaseUpsert_(tabla, filas, clave, config) {
 
 function leerWorkorders_(config) {
   const sql = [
-    'SELECT',
-    '  t.id, t.tranid, t.entity, t.status, t.trandate,',
-    '  t.custbody_ubicacion, t.memo',
+    'SELECT DISTINCT',
+    '  t.id, t.tranid, BUILTIN.DF(tl.item),',
+    '  COALESCE(i.description, i.purchasedescription, i.displayname),',
+    '  ABS(NVL(tl.quantity, 0)),',
+    '  BUILTIN.DF(t.status), BUILTIN.DF(t.entity),',
+    '  t.startdate, t.enddate',
     'FROM transaction t',
+    "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
+    'LEFT JOIN item i ON i.id = tl.item',
     "WHERE t.type = 'WorkOrd'",
     "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
     "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
@@ -134,11 +139,14 @@ function leerWorkorders_(config) {
   return crudas.map(function(r) {
     return {
       ot: String(r.tranid || ''),
-      folio: String(r.tranid || ''),
-      cliente: String(r.entity || ''),
-      estatus: String(r.status || ''),
-      fecha: r.trandate || null,
-      memo: String(r.memo || '')
+      wo_internal_id: String(r.t.id || ''),
+      articulo: String(r.BUILTIN_DF_tl_item || ''),
+      descripcion: String(r.COALESCE_i_description_i_purchasedescription_i_displayname || ''),
+      cantidad: Math.abs(Number(r.ABS_NVL_tl_quantity_0) || 0),
+      estatus: String(r.BUILTIN_DF_t_status || ''),
+      cliente: String(r.BUILTIN_DF_t_entity || ''),
+      fecha_inicio: r.t_startdate || null,
+      fecha_fin: r.t_enddate || null
     };
   });
 }
