@@ -231,7 +231,7 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
   la publicable y **Apps Script escribe** con la service role key (`sb_secret_…`, nunca en el repo).
   Dos escritores, con **uno solo por tabla** (RULE-SUP-015).
 - **Espejo de catálogos implementado** (`src/server/16-supabase-catalogo.js`). Apps Script
-  convierte las 10 tablas de catálogo de las Hojas a Supabase por el mismo RPC atómico
+  convierte las 11 tablas de catálogo de las Hojas a Supabase por el mismo RPC atómico
   `public.ingesta_mirror`, enganchado a los **tres** caminos de guardado (`PP_finishPartialWrite_`
   para catálogos y matriz, `PP_writeNetSuiteSyncState_` y `PP_writeState_`). Cada guardado paga solo
   las tablas que tocó, el espejo entero tiene un presupuesto de 20 s, y va **después** de
@@ -240,7 +240,9 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
   hace nada.
   - **Excluye `machines` a propósito**: la escribe el RESTlet 2246 (entitygroup que es centro de
     trabajo, RULE-SUP-010) y la hoja `MAQUINAS` guarda lo mismo; espejarla serían dos escritores
-    peleándose la tabla cada 15 minutos.
+    peleándose la tabla cada 15 minutos — y como el espejo del RESTlet **borra la tabla entera**,
+    cualquier columna que escribiera la app en `machines` se perdería en la siguiente corrida. Por
+    eso la decisión de apartar una máquina va a `machine_planning_overrides` (abajo, RULE-SUP-017).
   - **Lo que esa exclusión produce, medido el 2026-09-29 (corregido: aquí se había escrito que
     "desactivar una máquina no llega a Supabase", y era impreciso).** `machines.activa` **sí viene de
     NetSuite** (`netsuite-restlet-unificado-supabase.js:287`, `entitygroup.isinactive`) y hay **202
@@ -251,27 +253,41 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
     expresa **borrando la fila**, no bajando un flag. **El conflicto real es el borrado**: si
     `machines` se espejara desde Apps Script, cada borrado del catálogo lo desharía el mirror del
     RESTlet en menos de 15 minutos. Ésa es la razón de excluirla, no una regla inventada.
-  - **Consecuencia en el cutover, abierta para decidir:** hoy "retirar una máquina del catálogo" se
-    respeta (vive en la hoja). Cuando la página lea las máquinas de Supabase **dejará de respetarse**,
-    porque manda NetSuite y no habrá forma de apartar una máquina de la planificación. Caminos:
-    (a) aceptar y documentarlo — hoy no cuesta nada porque hay 0 inactivas y la UI no produce el
-    flag; (b) `machines.activa_override` nullable, que el frontend aplique al leer ("NetSuite manda
-    salvo que alguien lo anule") — es la que resuelve el caso real; (c) no cambiar la fuente de
-    `machines` en el cutover. (b) implica decidir si la planificación puede contradecir a NetSuite, y
-    eso no se inventa.
+  - **Consecuencia en el cutover, DECIDIDA el 2026-09-29 (RULE-SUP-017).** El usuario autorizó que
+    la planificación **aparte** una máquina que NetSuite da por activa, y solo en esa dirección: no
+    hay forma de forzar el uso de una máquina que NetSuite da por inactiva, porque nadie concedió
+    ese permiso. La implementación es una **tabla aparte**, `machine_planning_overrides`
+    (`machine_nombre` + `excluida`), **no** una columna en `machines`:
+    - *Por qué aparte:* el RESTlet 2246 borra y reescribe `machines` entera cada 15 minutos, así que
+      cualquier columna de la app en esa tabla se perdería en la siguiente corrida. Y el espejo de
+      catálogos no puede escribir `machines` sin ser un segundo escritor.
+    - *Un solo escritor:* `machine_planning_overrides` la escribe Apps Script (desde la hoja
+      `MAQUINAS`, columna `EXCLUIDA`, que se añadió); el RESTlet nunca la toca.
+    - *Bandera efectiva:* `machines.activa AND NOT excluida`, calculada en **un solo lugar por
+      capa** (`PP_mapMachine_`, `mapMachines()` del lector, y la normalización de `state.machines`)
+      para no tocar los ~6 filtros `.filter(m => m.active !== false)` que ya consumen el estado.
+    - *Ausencia de fila = no apartada.* El espejo escribe la fila de **todas** las máquinas, no solo
+      de las excluidas, para que no haya dos formas de decir "se puede agendar".
+    - *Unión por texto normalizado* (trim + upper) entre `machines.nombre` y `machine_nombre`: con
+      la unión exacta, una máquina apartada se volvería a agendar sola y el fallo sería silencioso.
+    - *UI:* el toggle **Apartar / Reincluir** sustituye a "Eliminar máquina" como forma de apartar
+      (eliminar ya no serviría: el RESTlet reviviría la fila). El botón de eliminar se conserva.
+    - *Estado:* la tabla la crea `docs/schema-supabase-cierre-catalogos.sql`, que **sigue sin
+      aplicar**. Hasta entonces el lector la reporta en `errors` y la página se comporta como antes.
 - **Requisito previo, sin aplicar: `docs/schema-supabase-cierre-catalogos.sql`.** Medido contra el
   esquema **desplegado**, el de los catálogos **no puede representar lo que las Hojas guardan**
   (RULE-SUP-016): falta `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
   el **factor** de `capabilities.solapamiento` (la hoja lo guarda como ratio 0..1 y en la tabla
-  quedó `boolean`), `tools.codigo`, `subcontracts.codigo`, la ventana de `calendar_exceptions` y
-  `article_configurations.precio_ref_venta`. El archivo corrige eso y mete las 10 tablas en la
+  quedó `boolean`), `tools.codigo`, `subcontracts.codigo`, la ventana de `calendar_exceptions`,
+  `article_configurations.precio_ref_venta` y la tabla `machine_planning_overrides` (RULE-SUP-017).
+  El archivo corrige eso y mete las 11 tablas de catálogo en la
   whitelist de `ingesta_mirror` **sin abrir escritura a `anon`** (el RPC sigue siendo
   `SECURITY INVOKER` y revocado a `PUBLIC`). Está escrito y verificado, pero **sin aplicar**: falta
   `SUPABASE_DB_PASSWORD`. Al revés, el espejo falla a propósito (columna desconocida / tabla no
   permitida) y queda registrado en `AUDITORIA`.
 - **Verificación sin escribir nada.** `.openchamber/diag-catalogo-payload.mjs` compara las columnas
   que emite el mapeador contra el esquema real (leído por la Data API) más las del DDL de cierre:
-  **10/10 tablas OK**. Esa sonda **encontró un bug real** —el mapeador leía `TIPO_TRABJO` en vez de
+  **11/11 tablas OK**. Esa sonda **encontró un bug real** —el mapeador leía `TIPO_TRABJO` en vez de
   `TIPO_TRABAJO` y el campo salía vacío **sin dar error**—, y `tests/supabase-catalogo-mapping.test.mjs`
   lo vuelve a cazar (se comprobó mutando el typo a propósito: el test falla nombrando la columna).
 - **Lo que falta para enganchar el lector al arranque**, en orden:

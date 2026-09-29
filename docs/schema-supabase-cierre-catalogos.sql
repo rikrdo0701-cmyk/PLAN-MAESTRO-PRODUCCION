@@ -140,7 +140,51 @@ comment on column public.calendar_exceptions.hora_fin is
   'HORA_FIN de la hoja CALENDARIO (texto, tal como lo guarda la hoja).';
 
 -- -----------------------------------------------------------------------------
--- 6. El espejo: admision de las tablas de catalogo en la whitelist de ingesta_mirror
+-- 6. machine_planning_overrides: la planificacion puede apartar una maquina
+-- -----------------------------------------------------------------------------
+-- DECISION DEL USUARIO 2026-09-29: "si, la planificacion puede apartar una
+-- maquina que NetSuite da por activa". RULE-SUP-017.
+--
+-- POR QUE UNA TABLA APARTE Y NO UNA COLUMNA EN `machines`. `machines` la escribe
+-- el RESTlet 2246 con public.ingesta_mirror, que BORRA la tabla entera e inserta
+-- lo que devuelve NetSuite. Cualquier columna que la app escribiera ahi se
+-- perderia en la siguiente corrida (cada 15 minutos). Poner el override aqui es
+-- lo que hace falta para que no se pierda, y ademas deja un solo escritor por
+-- tabla: `machines` = NetSuite, esta = Apps Script.
+--
+-- QUE ES Y QUE NO ES. Es SOLO lo que la planificacion puede hacer por su cuenta:
+-- APARTAR una maquina. La direccion contraria (usar una maquina que NetSuite da
+-- por inactiva) NO esta autorizada y por eso no hay columna para forzarla:
+-- inventar esa regla seria inventar un permiso que nadie concedio.
+--
+-- COMO SE LEE. La maquina es utilizable si NetSuite la da activa Y nadie la
+-- aparto:  activa_efectiva = machines.activa AND NOT excluida.  El `false` de
+-- `excluida` significa "usala", y ausencia de fila tambien significa "usala":
+-- por eso la columna es NOT NULL DEFAULT false y el espejo escribe la fila de
+-- TODAS las maquinas, no solo las excluidas, para que no haya dos formas de
+-- decir lo mismo.
+create table if not exists public.machine_planning_overrides (
+  id              uuid primary key default gen_random_uuid(),
+  machine_nombre  text not null unique,        -- machines.nombre / hoja MAQUINAS.ID
+  excluida        boolean not null default false,
+  actualizado     timestamptz not null default now(),
+  created_at      timestamptz not null default now()
+);
+
+comment on table public.machine_planning_overrides is
+  'Maquinas que la PLANIFICACION aparta. Decision del usuario 2026-09-29: la planificacion puede apartar una maquina que NetSuite da por activa. Tabla aparte a proposito: `machines` la reescribe por completo el RESTlet 2246 cada 15 minutos y se llevaria cualquier columna de la app. Solo se autoriza APARTAR, no forzar el uso de una maquina inactiva en NetSuite.';
+comment on column public.machine_planning_overrides.machine_nombre is
+  'Nombre de la maquina, el mismo texto que machines.nombre y que la hoja MAQUINAS guarda en ID. Se compara normalizado (trim + upper) porque el state normaliza a mayusculas.';
+
+-- RLS: igual que las demas, SOLO lectura para anon. Quien escribe es Apps Script con la
+-- service role key, que se salta RLS. A `anon` no se le da escritura ni aqui ni en
+-- ninguna otra tabla (RULE-SUP-015): la clave publicable va en el bundle publico de Pages.
+alter table public.machine_planning_overrides enable row level security;
+drop policy if exists lectura_web on public.machine_planning_overrides;
+create policy "lectura_web" on public.machine_planning_overrides for select to anon using (true);
+
+-- -----------------------------------------------------------------------------
+-- 7. El espejo: admision de las tablas de catalogo en la whitelist de ingesta_mirror
 -- -----------------------------------------------------------------------------
 -- El RPC es SECURITY INVOKER y solo service_role puede ejecutarlo (revoke de
 -- PUBLIC al final), asi que ampliar la whitelist NO abre escritura a anon: el
@@ -164,15 +208,18 @@ declare
   v_insertadas  int;
   v_sql         text;
 begin
-  -- Whitelist: las 7 tablas de la ingesta de NetSuite MAS las 11 de catalogos
-  -- que espeja el escritor appscript-catalogo-supabase.gs. Sigue sin incluir
+  -- Whitelist: las 7 tablas de la ingesta de NetSuite MAS las de catalogos que
+  -- espeja el escritor src/server/16-supabase-catalogo.js. Sigue sin incluir
   -- app_state, selected_ots, locked_ots, operation_plan_statuses ni
   -- plan_snapshots: esas son escritura de la app (fase 4) y no se espejan.
+  -- machine_planning_overrides entra: la escribe Apps Script (la app es quien
+  -- aparta maquinas) y el RESTlet NUNCA la toca, asi que no hay dos escritores.
   if p_tabla not in ('work_orders','operations','materials','items','machines',
                      'inventory','sales_orders',
                      'operators','capabilities','operation_catalog','matrix',
                      'tools','subcontracts','ot_types','calendar_exceptions',
-                     'ot_configurations','article_configurations') then
+                     'ot_configurations','article_configurations',
+                     'machine_planning_overrides') then
     raise exception 'ingesta_mirror: tabla no permitida: %', p_tabla;
   end if;
   if p_filas is null or jsonb_typeof(p_filas) <> 'array' then

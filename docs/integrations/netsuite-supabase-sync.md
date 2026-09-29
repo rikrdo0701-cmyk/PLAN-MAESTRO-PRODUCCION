@@ -19,13 +19,21 @@ Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **
 - **Un segundo escritor, y es la respuesta a "quién escribe" (2026-09-29).** El `anon` **no puede
   escribir** en ninguna de las 24 tablas (medido: `401 / 42501`), y es a propósito, porque la clave
   publicable va en el bundle público de Pages. Así que la escritura la hace **Apps Script** con la
-  service role key: las **7 tablas de NetSuite** las sigue escribiendo el 2246, y las **10 tablas de
+  service role key: las **7 tablas de NetSuite** las sigue escribiendo el 2246, y las **11 tablas de
   catálogo** las espeja `src/server/16-supabase-catalogo.js` en cada guardado. El `machines` queda
   **excluido** del espejo a propósito para no tener dos escritores peleándose la tabla
   (`RULE-SUP-015`). Ese espejo **requiere antes** `docs/schema-supabase-cierre-catalogos.sql`, que
   sigue **sin aplicar** (falta `SUPABASE_DB_PASSWORD`), y sin él falla a propósito
   (`RULE-SUP-016`).
-- Reglas: `RULE-SUP-001` a `RULE-SUP-016` en `.project-memory/rules.json`.
+- **La decisión de apartar una máquina va en `machine_planning_overrides`, no en `machines`
+  (`RULE-SUP-017`, decisión del usuario 2026-09-29).** La planificación puede apartar una máquina que
+  NetSuite da por activa, y solo en esa dirección. No puede ser una columna de `machines` porque el
+  2246 **borra y reescribe esa tabla entera** cada 15 minutos: la decisión se perdería en la siguiente
+  corrida. La tabla nueva tiene un único escritor (Apps Script, desde la columna `EXCLUIDA` de la hoja
+  `MAQUINAS`) y el RESTlet nunca la toca. La bandera efectiva es
+  `machines.activa AND NOT excluida`, calculada en un solo lugar por capa para no cambiar los filtros
+  que ya consumen el estado. La crea `docs/schema-supabase-cierre-catalogos.sql`, **sin aplicar**.
+- Reglas: `RULE-SUP-001` a `RULE-SUP-017` en `.project-memory/rules.json`.
 - Plan: `docs/plan-migracion-supabase.md` §3.4 y §4 (fase 3).
 
 ---

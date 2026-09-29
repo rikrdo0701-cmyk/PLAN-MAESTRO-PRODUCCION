@@ -1342,7 +1342,18 @@ function normalizeState() {
   state.matrixSearch = String(state.matrixSearch || "");
   state.operationRules = state.operationRules && typeof state.operationRules === "object" ? state.operationRules : {};
   state.machines = (Array.isArray(state.machines) ? state.machines : [])
-    .map((machine) => ({ id: String(machine.id || machine.machine || machine.maquina || "").trim().toUpperCase(), active: machine.active !== false }))
+    .map((machine) => {
+      // `active` es la bandera EFECTIVA de "esta maquina se puede agendar": lo que diga
+      // NetSuite (o la hoja) menos lo que la planificacion decidio apartar. Se calcula aqui
+      // una sola vez para que los ~6 filtros `.filter(m => m.active !== false)` de la pagina
+      // no tengan que conocer el detalle (RULE-SUP-017).
+      const excluded = machine.excluded === true;
+      return {
+        id: String(machine.id || machine.machine || machine.maquina || "").trim().toUpperCase(),
+        excluded: excluded,
+        active: machine.active !== false && !excluded,
+      };
+    })
     .filter((machine) => machine.id);
   state.toolCatalog = (Array.isArray(state.toolCatalog) ? state.toolCatalog : []).map((item, index) => ({
     id: String(item.id || `tool-${index + 1}`),
@@ -5443,9 +5454,26 @@ function netSuiteAssemblyItems() {
 function renderMachines() {
   const rows = [...state.machines]
     .sort((a, b) => String(a.id || "").localeCompare(String(b.id || ""), "es", { numeric: true }))
-    .map((item) => `<tr><td>${escapeHtml(item.id)}</td><td>${item.active === false ? "Inactiva" : "Activa"}</td><td><button class="table-action" type="button" data-delete-machine="${escapeHtml(item.id)}" aria-label="Eliminar maquina">&times;</button></td></tr>`)
+    .map((item) => {
+      const estado = item.excluded === true
+        ? "Apartada de la planificacion"
+        : (item.active === false ? "Inactiva" : "Activa");
+      return `<tr><td>${escapeHtml(item.id)}</td><td>${estado}</td><td><button class="button small secondary" type="button" data-toggle-machine="${escapeHtml(item.id)}">${item.excluded === true ? "Reincluir" : "Apartar"}</button> <button class="table-action" type="button" data-delete-machine="${escapeHtml(item.id)}" aria-label="Eliminar maquina">&times;</button></td></tr>`;
+    })
     .join("");
   els.machineTable.innerHTML = `<thead><tr><th>Maquina</th><th>Estado</th><th></th></tr></thead><tbody>${rows || emptyTableRow(3, "Sin maquinas configuradas")}</tbody>`;
+  els.machineTable.querySelectorAll("[data-toggle-machine]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.machines.find((machine) => machine.id === button.dataset.toggleMachine);
+      if (!item) return;
+      // Apartar NO borra la maquina: la deja de agendar aunque NetSuite la de activa
+      // (RULE-SUP-017). Borrarla ya no serviria de nada, porque `machines` la reescribe
+      // el RESTlet 2246 cada 15 minutos.
+      item.excluded = item.excluded !== true;
+      item.active = item.excluded !== true;
+      saveAndRender(`Maquina ${item.id} ${item.excluded ? "apartada" : "reincluida"} de la planificacion`, "catalogs");
+    });
+  });
   els.machineTable.querySelectorAll("[data-delete-machine]").forEach((button) => {
     button.addEventListener("click", () => {
       state.machines = state.machines.filter((item) => item.id !== button.dataset.deleteMachine);

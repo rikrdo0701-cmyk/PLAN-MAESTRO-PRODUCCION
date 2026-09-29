@@ -29,7 +29,11 @@
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
-  // 24 tablas expuestas por la Data API (medido 2026-09-29 con .openchamber/diag-supabase-todas.mjs).
+  // Tablas expuestas por la Data API. MEDIDO 2026-09-29 con
+  // .openchamber/diag-supabase-todas.mjs: 24. `machine_planning_overrides` es la 25 y todavia
+  // NO existe en el proyecto: la crea docs/schema-supabase-cierre-catalogos.sql, que sigue sin
+  // aplicar (falta SUPABASE_DB_PASSWORD). mientras tanto readTable la reporta en `errors` y la
+  // pagina sigue leyendo maquinas sin override, que es el comportamiento viejo.
   const TABLES = [
     "app_state", "article_configurations", "calendar_exceptions", "capabilities",
     "closed_work_order_summaries", "inventory", "items", "locked_ots", "machines",
@@ -45,6 +49,9 @@
     "operators", "capabilities", "operation_catalog", "matrix", "machines",
     "ot_types", "subcontracts", "tools", "calendar_exceptions",
     "ot_configurations", "article_configurations", "materials",
+    // La decision de la planificacion de apartar una maquina. No va en `machines` porque
+    // esa tabla la reescribe entera el RESTlet 2246 cada 15 minutos (RULE-SUP-017).
+    "machine_planning_overrides",
   ];
 
   // Lo que readCatalogs()/status() leen por omision: los catalogos + las tablas operativas de la
@@ -263,11 +270,30 @@
     return matrix;
   }
 
-  function mapMachines(rows) {
+  function machineKey(value) {
+    // La union entre `machines` (nombre de NetSuite) y `machine_planning_overrides`
+    // (machine_nombre) es por TEXTO, y el state normaliza a mayusculas
+    // (app.js:1345), asi que las dos partes se comparan con el mismo criterio.
+    return String(value == null ? "" : value).trim().toUpperCase();
+  }
+
+  function mapMachines(rows, overrides) {
     // El state identifica la maquina por su NOMBRE (PP_mapMachine_: id = row.ID, y la hoja MAQUINAS
     // guarda el nombre en ID). En Supabase el uuid es 'id' y el nombre es 'nombre'.
+    //
+    // `activa` sale de NetSuite (entitygroup.isinactive, la escribe el RESTlet 2246) y
+    // `excluida` de machine_planning_overrides (la decision de la planificacion de no
+    // agendar en ella, RULE-SUP-017). La bandera EFECTIVA se calcula aqui, en un solo
+    // lugar, para no tocar los ~6 filtros `.filter(m => m.active !== false)` del frontend.
+    const apartadas = {};
+    (overrides || []).forEach(function (row) {
+      const key = machineKey(row.machine_nombre);
+      if (key) apartadas[key] = asBool(row.excluida, false);
+    });
     return (rows || []).map(function (row) {
-      return { id: String(row.nombre == null ? "" : row.nombre).trim(), active: asBool(row.activa, true) };
+      const id = String(row.nombre == null ? "" : row.nombre).trim();
+      const excluded = apartadas[machineKey(id)] === true;
+      return { id: id, excluded: excluded, active: asBool(row.activa, true) && !excluded };
     }).filter(function (item) { return Boolean(item.id); });
   }
 
@@ -368,7 +394,7 @@
         cts: cts,
         operationCatalog: mapOperationCatalog(rows.operation_catalog),
         matrix: mapMatrix(rows.matrix),
-        machines: mapMachines(rows.machines),
+        machines: mapMachines(rows.machines, rows.machine_planning_overrides),
         otTypes: mapOtTypes(rows.ot_types),
         subcontracts: mapSubcontracts(rows.subcontracts),
       },

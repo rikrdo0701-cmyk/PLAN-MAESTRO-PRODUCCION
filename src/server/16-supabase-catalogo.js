@@ -15,14 +15,20 @@
  * puede leerlo (RULE-SUP-015).
  *
  * QUE ESPEJA Y QUE NO, Y POR QUE.
- *  - Espeja las 10 tablas de catalogo de abajo, con el MISMO mecanismo atomico
+ *  - Espeja las 11 tablas de catalogo de abajo, con el MISMO mecanismo atomico
  *    de la ingesta de NetSuite: el RPC public.ingesta_mirror borra la tabla e
  *    inserta lo nuevo DENTRO de una transaccion. Si algo falla, el rollback
  *    deja la tabla con los datos anteriores: nunca queda a medias ni vacia.
  *  - NO espeja `machines`: esa tabla la escribe el RESTlet unificado 2246 desde
  *    NetSuite (los entitygroup que son centro de trabajo, RULE-SUP-010) y la
  *    hoja MAQUINAS guarda lo mismo. Espejarla aqui serian DOS escritores
- *    peleandose la tabla cada 15 minutos. Un solo escritor por almacen.
+ *    peleandose la tabla cada 15 minutos, y ademas el espejo del RESTlet borra la
+ *    tabla entera, asi que cualquier columna de la app se perderia en la
+ *    siguiente corrida. Un solo escritor por almacen.
+ *  - Lo que la planificacion PUEDE hacer con una maquina (apartarla aunque
+ *    NetSuite la de activa, decision del usuario 2026-09-29) no va en `machines`
+ *    por lo anterior: va en `machine_planning_overrides`, que si espeja este
+ *    archivo y en la que el RESTlet nunca entra (RULE-SUP-017).
  *  - NO espeja `app_state`, `selected_ots`, `locked_ots`, `operation_plan_statuses`
  *    ni `plan_snapshots`: son estado y plan de la aplicacion, no catalogo.
  *    Migrarlos es la fase 4 y no se hace de contrabando.
@@ -122,6 +128,23 @@ const PP_CATALOGO_TABLAS_ = [
         tiempo_ajuste_herr: PP_numero_(r.TIEMPO_AJUSTE_HERR, 0),
         tiempo_ajuste_kit: PP_numero_(r.TIEMPO_AJUSTE_KIT, 0),
         activo: PP_boolCelda_(r.ACTIVO, true)
+      };
+    }
+  },
+  {
+    // NO es la tabla `machines`: esa la reescribe por completo el RESTlet 2246 cada 15
+    // minutos (borra + inserta) y se llevaria cualquier columna que escribiera la app.
+    // Aqui se guarda SOLO la decision de la planificacion de apartar una maquina, con un
+    // unico escritor (Apps Script): el RESTlet nunca toca esta tabla (RULE-SUP-017).
+    // Se escriben TODAS las maquinas, no solo las excluidas, para que no haya dos formas
+    // de decir "esta se puede agendar" (fila con excluida=false y fila que no existe).
+    tabla: 'machine_planning_overrides',
+    hoja: 'MAQUINAS',
+    clave: function (r) { return String(r.ID || '').trim().toUpperCase(); },
+    mapear: function (r) {
+      return {
+        machine_nombre: String(r.ID || '').trim().toUpperCase(),
+        excluida: PP_boolCelda_(r.EXCLUIDA, false)
       };
     }
   },
@@ -227,7 +250,8 @@ const PP_CATALOGO_TABLAS_ = [
 // PP_writeCatalogState_: la pestana Catalogos de la pagina.
 var PP_CATALOGO_TABLAS_CATALOGOS_ = [
   'ot_configurations', 'article_configurations', 'tools',
-  'calendar_exceptions', 'subcontracts', 'ot_types'
+  'calendar_exceptions', 'subcontracts', 'ot_types',
+  'machine_planning_overrides'
 ];
 
 // PP_writeSkillState_: la pestana de matriz/operadores.

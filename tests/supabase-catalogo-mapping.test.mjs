@@ -17,6 +17,9 @@ import { readFile } from "node:fs/promises";
 
 const storageSource = await readFile(new URL("../src/server/02-storage.js", import.meta.url), "utf8");
 const catalogoSource = await readFile(new URL("../src/server/16-supabase-catalogo.js", import.meta.url), "utf8");
+// El DDL de cierre esta SIN APLICAR todavia: el test lo trata como la especificacion,
+// no como el estado de la base.
+const ddlCierre = await readFile(new URL("../docs/schema-supabase-cierre-catalogos.sql", import.meta.url), "utf8");
 
 function cargar() {
   const context = {
@@ -169,4 +172,74 @@ test("el espejo se apaga sin credencial en vez de fallar", () => {
   // dependeria de que Supabase este disponible.
   assert.match(catalogoSource, /if \(!url \|\| !key\) return null;/);
   assert.match(catalogoSource, /motivo: 'sin configuracion de Supabase'/);
+});
+
+// ---------------------------------------------------------------------------
+// RULE-SUP-017: la planificacion puede apartar una maquina que NetSuite da por
+// activa. El flag vive en una TABLA APARTE, no en `machines`.
+// ---------------------------------------------------------------------------
+
+test("apartar una maquina se guarda en machine_planning_overrides, no en machines", () => {
+  // `machines` la reescribe ENTERA el RESTlet 2246 cada 15 minutos (borra + inserta):
+  // una columna de la app ahi se perderia en la siguiente corrida. Y el espejo de
+  // catalogos no puede escribir `machines` porque seria un segundo escritor.
+  const tablas = TABLAS.map((def) => def.tabla);
+  assert.equal(tablas.includes("machines"), false, "el espejo no debe escribir machines");
+  assert.equal(tablas.includes("machine_planning_overrides"), true, "falta la tabla del override");
+  const def = TABLAS.find((item) => item.tabla === "machine_planning_overrides");
+  assert.equal(def.hoja, "MAQUINAS", "el override se lee de la hoja MAQUINAS");
+});
+
+test("la columna EXCLUIDA existe en la hoja MAQUINAS", () => {
+  assert.deepEqual(SHEETS.MAQUINAS, ["ID", "ACTIVA", "EXCLUIDA"]);
+});
+
+test("PP_mapMachine_ calcula la bandera efectiva en un solo lugar", () => {
+  // `active` = lo que diga la hoja MENOS lo que la planificacion aparto. Se calcula en
+  // PP_mapMachine_ (y en el lector de Supabase) para no tocar los ~6 filtros
+  // `.filter(m => m.active !== false)` del frontend.
+  const ctx = cargar();
+  // PP_readRows_ entrega un objeto con una propiedad por encabezado, leida con
+  // getDisplayValues(): por eso los booleanos vuelven como "TRUE"/"FALSE" y no como true.
+  const casos = [
+    [{ ID: "A1", ACTIVA: "TRUE", EXCLUIDA: "FALSE" }, true, false],
+    [{ ID: "A1", ACTIVA: "TRUE", EXCLUIDA: "TRUE" }, false, true],
+    [{ ID: "A1", ACTIVA: "FALSE", EXCLUIDA: "FALSE" }, false, false],
+    [{ ID: "A1", ACTIVA: "FALSE", EXCLUIDA: "TRUE" }, false, true],
+    // Si alguien escribe un booleano de verdad (getValues en vez de getDisplayValues).
+    [{ ID: "A1", ACTIVA: true, EXCLUIDA: true }, false, true],
+    // Columnas ausentes o vacias: el default de siempre (ACTIVA true, EXCLUIDA false).
+    [{ ID: "A1" }, true, false],
+    [{ ID: "A1", ACTIVA: "TRUE", EXCLUIDA: "" }, true, false],
+  ];
+  for (const [fila, activeEsperado, excludedEsperado] of casos) {
+    const r = vm.runInContext(`PP_mapMachine_(${JSON.stringify(fila)})`, ctx);
+    assert.equal(r.id, "A1");
+    assert.equal(r.active, activeEsperado, `active con ${JSON.stringify(fila)}`);
+    assert.equal(r.excluded, excludedEsperado, `excluded con ${JSON.stringify(fila)}`);
+  }
+});
+
+test("el guardado de catalogos escribe las 3 columnas de la hoja MAQUINAS", () => {
+  // Si se olvidara una, PP_writeTable_ la deja vacia y la exclusion se pierde al releer.
+  const renglon = storageSource.match(
+    /getSheetByName\('MAQUINAS'\).*?return \[([^\]]+)\]/
+  );
+  assert.ok(renglon, "no encontre el renglon de MAQUINAS");
+  const partes = renglon[1].split(",");
+  assert.equal(partes.length, 3, `se esperaban 3 columnas y hay ${partes.length}: ${renglon[1]}`);
+  assert.match(partes[2], /excluded/);
+});
+
+test("el DDL de cierre crea el override con RLS de solo lectura y en la whitelist", () => {
+  assert.match(ddlCierre, /create table if not exists public\.machine_planning_overrides/);
+  assert.match(ddlCierre, /machine_nombre\s+text not null unique/);
+  assert.match(ddlCierre, /excluida\s+boolean not null default false/);
+  // Escritura para anon, ni aqui ni en ninguna otra tabla.
+  assert.match(ddlCierre, /alter table public\.machine_planning_overrides enable row level security/);
+  assert.match(ddlCierre, /create policy "lectura_web" on public\.machine_planning_overrides for select to anon using \(true\)/);
+  assert.equal(/for (insert|update|delete)/i.test(ddlCierre), false, "el DDL no debe abrir escritura a anon");
+  // Y el RPC puede espejarla.
+  assert.match(ddlCierre, /'ot_configurations','article_configurations',\s*\n\s*'machine_planning_overrides'\)/);
+  assert.match(ddlCierre, /revoke all on function public\.ingesta_mirror\(text, jsonb\) from public/);
 });

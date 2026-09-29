@@ -20,7 +20,10 @@ const PP_SHEETS = {
   // aparece sola en la hoja, sin migracion.
   CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'PRECIO_REF_VENTA', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
-  MAQUINAS: ['ID', 'ACTIVA'],
+  // EXCLUIDA es la decision de la PLANIFICACION de no agendar en esa maquina aunque
+  // NetSuite la de activa (decision del usuario 2026-09-29, RULE-SUP-017). ACTIVA se
+  // sigue escribiendo como "utilizable", que es lo que Historically ha significado.
+  MAQUINAS: ['ID', 'ACTIVA', 'EXCLUIDA'],
   HERRAMENTALES: ['ID', 'PARTE', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIEMPO_AJUSTE_HERR', 'TIEMPO_AJUSTE_KIT', 'ACTIVO'],
   MATERIALES: ['ID', 'OT', 'WO_INTERNAL_ID', 'ENSAMBLE', 'COMPONENTE_ID', 'COMPONENTE', 'DESCRIPCION', 'UNIDAD', 'REQUERIDO', 'EMITIDO', 'PENDIENTE'],
   CALENDARIO: ['ID', 'CONCEPTO', 'MAQUINA', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'MOTIVO', 'ACTIVO'],
@@ -511,7 +514,7 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
   PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
+  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false, item.excluded === true]; }));
   PP_writeTable_(spreadsheet.getSheetByName('HERRAMENTALES'), PP_SHEETS.HERRAMENTALES, (payload.toolCatalog || []).map(function(item) {
     return [item.id, item.part || item.parte, item.herramental, item.kitHerramental, Number(item.toolSetupMinutes || 0), Number(item.kitSetupMinutes || 0), item.active !== false];
   }));
@@ -1153,7 +1156,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     });
   });
   PP_writeTable_(spreadsheet.getSheetByName('MATRIZ'), PP_SHEETS.MATRIZ, matrixRows);
-  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
+  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false, item.excluded === true]; }));
   PP_writeTable_(spreadsheet.getSheetByName('HERRAMENTALES'), PP_SHEETS.HERRAMENTALES, (payload.toolCatalog || []).map(function(item) {
     return [item.id, item.part || item.parte, item.herramental, item.kitHerramental, Number(item.toolSetupMinutes || 0), Number(item.kitSetupMinutes || 0), item.active !== false];
   }));
@@ -2343,7 +2346,14 @@ function PP_capabilityFromKey_(key) {
   return { key: text, ct: text.slice(0, separator), label: text.slice(separator + 2).replace(/_/g, ' '), custom: false };
 }
 
-function PP_mapMachine_(row) { return { id: row.ID, active: PP_bool_(row.ACTIVA, true) }; }
+// `active` es la bandera EFECTIVA de "esta maquina se puede agendar": lo que diga la
+// hoja (ACTIVA) menos lo que la planificacion decidio apartar (EXCLUIDA). Se calcula
+// aqui, en un solo lugar, para que los ~6 filtros que hacen `.filter(m => m.active !==
+// false)` de la pagina sigan funcionando sin cambios (RULE-SUP-017).
+function PP_mapMachine_(row) {
+  const excluded = PP_bool_(row.EXCLUIDA, false);
+  return { id: row.ID, excluded: excluded, active: PP_bool_(row.ACTIVA, true) && !excluded };
+}
 function PP_mapTool_(row) { return { id: row.ID, part: row.PARTE, herramental: row.HERRAMENTAL, kitHerramental: row.KIT_HERRAMENTAL, toolSetupMinutes: Number(row.TIEMPO_AJUSTE_HERR || 0), kitSetupMinutes: Number(row.TIEMPO_AJUSTE_KIT || 0), active: PP_bool_(row.ACTIVO, true) }; }
 function PP_mapMaterial_(row) { return { id: row.ID, ot: row.OT, workOrderId: row.WO_INTERNAL_ID, assembly: row.ENSAMBLE, componentId: row.COMPONENTE_ID, component: row.COMPONENTE, description: row.DESCRIPCION, unit: row.UNIDAD, required: Number(row.REQUERIDO || 0), issued: Number(row.EMITIDO || 0), pending: Number(row.PENDIENTE || 0) }; }
 function PP_mapCalendar_(row) { return { id: row.ID, concept: row.CONCEPTO, machine: row.MAQUINA, startDate: row.FECHA_INICIO, start: row.HORA_INICIO, endDate: row.FECHA_FIN, end: row.HORA_FIN, reason: row.MOTIVO, active: PP_bool_(row.ACTIVO, true) }; }

@@ -62,6 +62,19 @@ create table public.operation_catalog (
   updated_at  timestamptz not null default now()
 );
 
+-- Lo que la PLANIFICACION aparta de una maquina que NetSuite da por activa. Tabla
+-- APARTE a proposito: `machines` la reescribe por completo el RESTlet 2246 cada 15
+-- minutos (borra + inserta) y se llevaria cualquier columna que escribiera la app.
+-- Decision del usuario 2026-09-29 (RULE-SUP-017). Solo se autoriza APARTAR, no
+-- forzar el uso de una maquina que NetSuite da por inactiva.
+create table public.machine_planning_overrides (
+  id              uuid primary key default gen_random_uuid(),
+  machine_nombre  text not null unique,      -- machines.nombre / hoja MAQUINAS.ID
+  excluida        boolean not null default false,
+  actualizado     timestamptz not null default now(),
+  created_at      timestamptz not null default now()
+);
+
 create table public.machines (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null unique,          -- nombre de la maquina
@@ -338,7 +351,7 @@ begin
     'ot_types','calendar_exceptions','ot_configurations','article_configurations','matrix',
     'work_orders','operations','operation_plan_statuses','materials',
     'app_state','selected_ots','locked_ots','closed_work_order_summaries',
-    'unconfirmed_work_orders','plan_snapshots'
+    'unconfirmed_work_orders','plan_snapshots','machine_planning_overrides'
   ]
   loop
     execute format('alter table public.%I enable row level security', t);
