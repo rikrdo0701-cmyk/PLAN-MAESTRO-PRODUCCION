@@ -39,6 +39,28 @@ test("el build NO genera ninguna plantilla de supabase-config.gs en dist/", () =
   }
 });
 
+test("el despliegue verifica el CONTENIDO del proyecto, no solo que la funcion exista", () => {
+  // MEDIDO 2026-09-29: el pipeline dijo "Pushed 26 files" con el archivo
+  // listado y el proyecto seguia con la version vieja (13620 bytes contra 14563).
+  // La verificacion que habia (que 'ingesta' apareciera entre las funciones
+  // desplegadas) daba verde igual: el bug no cambiaba ningun nombre, cambiaba el
+  // cuerpo. Sin comparar contenido, un despliegue a medias es indetectable.
+  const yml = readFileSync(path.join(RAIZ, ".github", "workflows", "deploy-appscript.yml"), "utf8");
+  const push = yml.indexOf("clasp push");
+  const verificar = yml.indexOf("verificar-deploy-appscript.mjs");
+  assert.ok(verificar > 0, "el workflow no verifica lo que subio: un deploy a medias sale verde");
+  assert.ok(verificar > push, "verificar antes del push no verifica nada");
+  assert.ok(
+    existsSync(path.join(RAIZ, "scripts", "verificar-deploy-appscript.mjs")),
+    "el script que verifica tiene que existir"
+  );
+  // Y tiene que comparar contenido de verdad, no nombres de funciones.
+  const txt = readFileSync(path.join(RAIZ, "scripts", "verificar-deploy-appscript.mjs"), "utf8");
+  assert.match(txt, /clasp pull/);
+  assert.doesNotMatch(txt, /goog\.script\.init|functionNames/, "la lista de funciones es lo que no alcanza");
+  assert.match(txt, /readFileSync\(path\.join\(DIST, n\)/, "tiene que leer el archivo de dist/ y compararlo");
+});
+
 test("el despliegue preserva el archivo antes de subir, no despues", () => {
   const yml = readFileSync(path.join(RAIZ, ".github", "workflows", "deploy-appscript.yml"), "utf8");
   const preservar = yml.indexOf("appsscript-preservar-config.mjs");

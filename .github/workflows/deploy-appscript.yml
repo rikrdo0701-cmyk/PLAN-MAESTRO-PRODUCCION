@@ -69,3 +69,12 @@ jobs:
         env:
           APPS_SCRIPT_DEPLOYMENT_ID: AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q
         run: npx --yes @google/clasp deploy --deploymentId "$APPS_SCRIPT_DEPLOYMENT_ID" --description "GitHub $GITHUB_SHA"
+      - name: Verificar que el proyecto quedo igual que dist/
+        # MEDIDO 2026-09-29: dos despliegues seguidos dijeron "Pushed 26 files" con
+        # el archivo listado, y el proyecto seguia con la version anterior (13620
+        # bytes en el remoto contra 14563 en dist/). La comprobacion de antes, que
+        # la funcion exista en la lista de desplegadas, no lo ve: el bug no
+        # cambiaba ningun nombre, cambiaba el cuerpo de la funcion. Aqui se baja el
+        # proyecto y se compara byte a byte contra dist/, con lo que un despliegue
+        # que no subio lo que decia sale en ROJO en vez de en verde.
+        run: node scripts/verificar-deploy-appscript.mjs
