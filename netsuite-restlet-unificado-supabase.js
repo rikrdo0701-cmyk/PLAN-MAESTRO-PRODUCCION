@@ -53,7 +53,10 @@ define(['N/query'], (query) => {
       '  t.id AS wo_internal_id,',
       '  t.tranid AS ot,',
       '  BUILTIN.DF(tl.item) AS articulo,',
-      '  COALESCE(i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
+      // La descripcion real del producto vive en item.description (279/282 OTs abiertas
+      // la tienen; purchasedescription solo 2, medido 2026-09-29). Antes solo se leia
+      // purchasedescription y casi siempre caia al displayname (= el codigo, incorrecto).
+      '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
       '  BUILTIN.DF(t.status) AS estatus,',
       '  BUILTIN.DF(t.entity) AS cliente,',
@@ -226,7 +229,10 @@ define(['N/query'], (query) => {
       '  i.id AS item_id,',
       '  i.itemid AS codigo,',
       '  i.itemtype AS tipo,',
-      '  COALESCE(i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
+      // Mismo fix que workorders_ (2026-09-29): la descripcion real del producto esta en
+      // i.description; purchasedescription esta vacia en casi todos (2/282 en OTs abiertas)
+      // y antes la mayoria caia al displayname (= codigo).
+      '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
       '  i.isinactive AS inactivo,',
       '  i.lastmodifieddate AS ultima_modificacion',
       'FROM item i',

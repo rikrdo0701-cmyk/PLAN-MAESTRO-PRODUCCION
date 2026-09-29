@@ -1813,6 +1813,15 @@
       "source": "pedido del usuario 2026-09-29; medido con .openchamber/diag-materiales-costo0.mjs (1930/2376 'Costo 0 manufactura', descripcion undefined) y .openchamber/diag-materiales-filtro-aplicado.mjs (SQL con filtro: 446 filas, 0 restos); netsuite-restlet-unificado-supabase.js materiales_ (WHERE con UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA')",
       "domain": "supabase",
       "updated_at": "2026-09-29"
+    },
+    {
+      "rule_id": "RULE-SUP-012",
+      "name": "La descripcion de workorders e items sale de item.description, no de purchasedescription",
+      "status": "implementada",
+      "rule": "QUEJA DEL USUARIO 2026-09-29: 'en workorders la descripcion aparece incorrecta'. Medido contra NetSuite real el mismo dia: item.purchasedescription (la primera fuente del COALESCE anterior) esta VACIA en casi todo el catalogo — solo 2 de las 282 OTs abiertas tienen un ítem con purchasedescription; i.displayname e i.itemid son el mismo texto (el codigo de articulo, p. ej. 'C 590'). Por eso work_orders.descripcion y items.descripcion caian al codigo en vez del texto real del producto (p. ej. 'Codo 5\" x 90° Pintado'). La descripcion real vive en item.description: poblada en 279 de 282 OTs abiertas. Fix aplicado en el RESTlet 2246 (workorders_ e items_): COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid). Verificado contra NetSuite real: 282 workorders, 266 con descripcion mas larga que el codigo (texto real); los 3 restantes no tienen description y caen al displayname (correcto). Item.description respeta el tipo de dato y no da 500 (i.memo, i.softdescript y salesdescription no existen en esta cuenta: 500 medidos). OJO para sondas de la cuenta: el limite de SuiteQL es 1000 y el offset maximo 2000; superar el offset da 404 'out of bounds', y la paginacion con ORDER BY i.itemid se solapa en esta cuenta (la pagina 2000 repite desde el inicio) — verificado 2026-09-29.",
+      "source": "queja del usuario 2026-09-29; medido con .openchamber/diag-workorders-descripcion.mjs (purchasedescription vacia, i.description = 'Codo 5\" x 90° Pintado', i.memo/i.softdescript/salesdescription dan 500) y .openchamber/diag-workorders-descripcion-aplicado.mjs (282 workorders con el nuevo COALESCE, 266 con texto real); netsuite-restlet-unificado-supabase.js workorders_ e items_",
+      "domain": "supabase",
+      "updated_at": "2026-09-29"
     }
   ]
 }
