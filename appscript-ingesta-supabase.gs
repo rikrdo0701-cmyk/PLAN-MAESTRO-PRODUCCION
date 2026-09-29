@@ -1,8 +1,8 @@
 /**
  * Ingesta NetSuite -> Supabase desde Google Apps Script.
  *
- * Usa los RESTlets existentes (1762, 1763, 1764, 1765, 1767) con el mapeo
- * correcto basado en el codigo real de cada RESTlet.
+ * Llama al RESTlet unificado (2246) que devuelve todas las acciones en una
+ * sola llamada HTTP. SuiteQL directo, sin N/search ni record.load.
  *
  * NO escribe en NetSuite: solo lee y escribe en Supabase.
  *
@@ -10,6 +10,8 @@
  */
 
 const RESTLET_URL = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
+const RESTLET_SCRIPT = '2246';
+const RESTLET_DEPLOY = '1';
 
 // =============================================================================
 // Configuracion — NS_* de las Script Properties existentes
@@ -62,12 +64,12 @@ function PP_oauthEncode_(value) {
 }
 
 // =============================================================================
-// Llamada generica a un RESTlet con paginacion
+// Llamada al RESTlet unificado
 // =============================================================================
 
-function PP_restlet_(script, deploy, body, config) {
+function PP_restletUnificado_(accion, config) {
   const endpoint = RESTLET_URL;
-  const query = { script: script, deploy: deploy };
+  const query = { script: RESTLET_SCRIPT, deploy: RESTLET_DEPLOY };
   const url = endpoint + '?' + Object.keys(query).map(function(key) {
     return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
   }).join('&');
@@ -78,67 +80,14 @@ function PP_restlet_(script, deploy, body, config) {
       'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
       'Prefer': 'transient'
     },
-    payload: JSON.stringify(body),
+    payload: JSON.stringify({ accion: accion }),
     muteHttpExceptions: true
   });
   const json = JSON.parse(res.getContentText());
   if (res.getResponseCode() !== 200) {
-    throw new Error('RESTlet ' + script + ' ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+    throw new Error('RESTlet ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
   }
   return json;
-}
-
-function PP_restletPaginado_(script, deploy, body, config) {
-  const todas = [];
-  let pageIndex = 0;
-  const pageSize = body.pageSize || 1000;
-  while (true) {
-    body.pageIndex = pageIndex;
-    body.pageSize = pageSize;
-    const json = PP_restlet_(script, deploy, body, config);
-    const rows = json.rows || json.results || [];
-    for (let i = 0; i < rows.length; i++) todas.push(rows[i]);
-    if (!json.hasMore) break;
-    pageIndex++;
-  }
-  return todas;
-}
-
-// =============================================================================
-// SuiteQL (para centros de trabajo — entitygroup)
-// =============================================================================
-
-function PP_suiteql_(sql, config) {
-  const endpoint = 'https://' + config.accountId.toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-  const todas = [];
-  let offset = 0;
-  const limite = 1000;
-  while (true) {
-    const query = { limit: limite, offset: offset };
-    const url = endpoint + '?' + Object.keys(query).map(function(key) {
-      return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
-    }).join('&');
-    const res = UrlFetchApp.fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
-        'Prefer': 'transient'
-      },
-      payload: JSON.stringify({ q: sql }),
-      muteHttpExceptions: true
-    });
-    if (res.getResponseCode() === 404) break;
-    const json = JSON.parse(res.getContentText());
-    if (res.getResponseCode() !== 200) {
-      throw new Error('SuiteQL ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
-    }
-    const items = json.items || [];
-    for (let i = 0; i < items.length; i++) todas.push(items[i]);
-    if (items.length < limite) break;
-    offset += limite;
-  }
-  return todas;
 }
 
 // =============================================================================
@@ -170,14 +119,6 @@ function PP_supabaseUpsert_(tabla, filas, clave, config) {
 // Utilidades
 // =============================================================================
 
-function isoFecha_(crudo) {
-  if (!crudo) return null;
-  const s = String(crudo).trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return m[3] + '-' + m[2] + '-' + m[1];
-  return s;
-}
-
 function deduplicar_(filas, claveFn) {
   const vistos = {};
   const out = [];
@@ -188,177 +129,6 @@ function deduplicar_(filas, claveFn) {
     out.push(f);
   });
   return out;
-}
-
-function traducirEstado_(crudo) {
-  const mapa = {
-    'NOTSTART': 'No iniciado',
-    'PROGRESS': 'En proceso',
-    'INPROCESS': 'En proceso',
-    'COMPLETE': 'Completado',
-    'COMPLETED': 'Completado',
-    'CLOSED': 'Cerrado'
-  };
-  return mapa[crudo] || crudo;
-}
-
-// =============================================================================
-// Lectores — mapeo basado en el codigo real de cada RESTlet
-// =============================================================================
-
-// 1764 — WO_LISTA: search en transaction + record.load para BOM Revision
-// Headers: WO Internal ID, WO Folio, Artículo, Descripción, Cantidad,
-//          Fecha de vencimiento, Estatus, BOM Revision, Revisión, Cliente
-function leerWorkorders_(config) {
-  const filas = PP_restletPaginado_('1764', '1', { table: 'WO_LISTA', locationId: 1, onlyOpen: true }, config);
-  return deduplicar_(filas.map(function(r) {
-    return {
-      ot: String(r['WO Folio'] || ''),
-      wo_internal_id: String(r['WO Internal ID'] || ''),
-      articulo: String(r['Artículo'] || ''),
-      descripcion: String(r['Descripción'] || ''),
-      cantidad: Number(r['Cantidad']) || 0,
-      estatus: String(r['Estatus'] || ''),
-      cliente: String(r['Cliente'] || '')
-    };
-  }), function(f) { return f.ot; });
-}
-
-// 1762 — WO_OPERACIONES: SuiteQL en manufacturingoperationtask
-// Headers: ID (link), Artículo, Operación, Secuencia, Cantidad a procesar,
-//          Orden de trabajo, Fecha inicio programada, Fecha fin programada,
-//          Estado, Centro de trabajo, Tiempo preparación (min),
-//          Tiempo estimado (min), Tiempo real (min), Trabajo restante (min),
-//          Tasa producción, Recurso humano, Recurso máquina,
-//          Fecha inicio real, Fecha fin real, Cantidad realizada
-function leerOperaciones_(config) {
-  const filas = PP_restletPaginado_('1762', '17', { pageSize: 280 }, config);
-  return deduplicar_(filas.map(function(r) {
-    const total = Math.abs(Number(r.qty_to_process) || 0);
-    const realizada = Math.abs(Number(r.qty_completed) || 0);
-    return {
-      operation_id: 'ns-' + String(r.workorder_id || ''),
-      ot: String(r.workorder_tranid || ''),
-      secuencia: Number(r.sequence) || 0,
-      ct: String(r.workcenter || ''),
-      descripcion: String(r.operation || ''),
-      cant_total: Math.round(total),
-      cant_pendiente: Math.round(Math.max(0, total - realizada)),
-      estatus: traducirEstado_(r.status_op),
-      fecha_inicio: isoFecha_(r.start_actual),
-      fecha_fin: isoFecha_(r.end_actual)
-    };
-  }), function(f) { return f.operation_id; });
-}
-
-// 1763 — WO_MATERIALES: search en work orders + record.load para BOM
-// Headers: WO Internal ID, WO Folio, Ensamble, Componente ID, Componente,
-//          Descripción, Unidad, Requerido, Emitido, Pendiente
-function leerMateriales_(config) {
-  const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true, pageSize: 200 }, config);
-  return deduplicar_(filas.map(function(r) {
-    const requerido = Number(r['Requerido']) || 0;
-    const emitido = Number(r['Emitido']) || 0;
-    return {
-      line_id: String(r['WO Internal ID'] || ''),
-      ot: String(r['WO Folio'] || ''),
-      wo_internal_id: String(r['WO Internal ID'] || ''),
-      ensamble: String(r['Ensamble'] || ''),
-      componente_id: String(r['Componente ID'] || ''),
-      componente: String(r['Componente'] || ''),
-      descripcion: String(r['Descripción'] || ''),
-      unidad: String(r['Unidad'] || ''),
-      requerido: Math.round(requerido),
-      emitido: Math.round(emitido),
-      pendiente: Math.round(Math.max(0, requerido - emitido))
-    };
-  }), function(f) { return f.line_id; });
-}
-
-// 1765 — INV_PLANTAS: search en item con cantidades por ubicacion
-// Headers: Ubicación, Artículo ID Interno, Artículo, Tipo, Descripción,
-//          Físico, Comprometido, Disponible, En orden (OC), En tránsito,
-//          WIP, Consumo promedio, Costo unitario, Valor total
-function leerItems_(config) {
-  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
-  const items = {};
-  filas.forEach(function(r) {
-    const id = String(r['Artículo ID Interno'] || '').trim();
-    if (!id) return;
-    items[id] = {
-      codigo: String(r['Artículo'] || ''),
-      descripcion: String(r['Descripción'] || ''),
-      descripcion_compra: String(r['Descripción'] || ''),
-      nombre_mostrado: String(r['Artículo'] || ''),
-      tipo: String(r['Tipo'] || ''),
-      es_ensamblaje: r['Tipo'] === 'Ensamblaje',
-      inactivo: false,
-      ultima_modificacion: isoFecha_(r['Última modificación'])
-    };
-  });
-  return Object.values(items);
-}
-
-// 1765 — INV_PLANTAS (mismo RESTlet, mismas filas)
-function leerInventario_(config) {
-  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
-  return deduplicar_(filas.map(function(r) {
-    return {
-      item: String(r['Artículo'] || ''),
-      ubicacion: String(r['Ubicación'] || ''),
-      disponible: Number(r['Disponible']) || 0,
-      fisico: Number(r['Físico']) || 0,
-      comprometido: Number(r['Comprometido']) || 0,
-      pickeado: 0,
-      en_transito: Number(r['En tránsito']) || 0
-    };
-  }), function(f) { return f.item + '#' + f.ubicacion; });
-}
-
-// Centros de trabajo — SuiteQL directo a entitygroup
-// (el RESTlet 1765 devuelve articulos, no centros)
-function leerCentros_(config) {
-  const sql = [
-    'SELECT',
-    '  eg.id AS id,',
-    '  eg.groupname AS nombre,',
-    '  eg.isinactive AS isinactive',
-    'FROM entitygroup eg',
-    "WHERE eg.ismanufacturingworkcenter = 'T'",
-    'ORDER BY eg.groupname'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  const centros = {};
-  crudas.forEach(function(r) {
-    const nombre = String(r.nombre || '').trim();
-    if (!nombre) return;
-    centros[nombre] = { nombre: nombre, activa: r.isinactive !== 'T' };
-  });
-  return Object.values(centros);
-}
-
-// 1767 — SO_EXPORT: search en sales order lines con summaries
-// Results: internalid, fecha_captura, orden, clave_cliente, nombre_cliente,
-//          sales_rep, po_num, cantidad_piezas, cantidad_pendiente_surtir,
-//          estado, fecha_embarque, direccion_envio, via_envio, comentarios,
-//          monto_pendiente_facturar, monto_facturado
-function leerOrdenesVenta_(config) {
-  const filas = PP_restletPaginado_('1767', '1', {}, config);
-  return filas.map(function(r) {
-    return {
-      folio: String(r.orden || ''),
-      sales_order_id: String(r.internalid || ''),
-      cliente: String(r.nombre_cliente || ''),
-      cliente_id: Number(r.clave_cliente) || 0,
-      fecha: isoFecha_(r.fecha_captura),
-      estatus: String(r.estado || ''),
-      aprobacion: String(r.estado_proceso || ''),
-      total: Number(r.monto_pendiente_facturar) || 0,
-      moneda: 1,
-      memo: String(r.comentarios || ''),
-      lineas: []
-    };
-  });
 }
 
 // =============================================================================
@@ -378,34 +148,54 @@ function ingesta() {
     return;
   }
 
-  const acciones = [
-    { nombre: 'workorders', tabla: 'work_orders', clave: 'ot', lector: leerWorkorders_ },
-    { nombre: 'operaciones', tabla: 'operations', clave: 'operation_id', lector: leerOperaciones_ },
-    { nombre: 'materiales', tabla: 'materials', clave: 'line_id', lector: leerMateriales_ },
-    { nombre: 'items', tabla: 'items', clave: 'codigo', lector: leerItems_ },
-    { nombre: 'centros', tabla: 'machines', clave: 'nombre', lector: leerCentros_ },
-    { nombre: 'inventario', tabla: 'inventory', clave: 'item,ubicacion', lector: leerInventario_ },
-    { nombre: 'ordenes_venta', tabla: 'sales_orders', clave: 'folio', lector: leerOrdenesVenta_ }
-  ];
+  // Una sola llamada al RESTlet unificado
+  console.log('Llamando al RESTlet unificado (2246)...');
+  const respuesta = PP_restletUnificado_('todas', config);
+  if (!respuesta.ok) {
+    throw new Error('RESTlet no ok: ' + JSON.stringify(respuesta).slice(0, 300));
+  }
 
+  const acciones = respuesta.acciones;
   const log = [];
-  acciones.forEach(function(a) {
+
+  // Mapeo de accion -> tabla, clave natural, y funcion de transformacion
+  const TABLAS = {
+    workorders: { tabla: 'work_orders', clave: 'ot' },
+    operaciones: { tabla: 'operations', clave: 'operation_id' },
+    materiales: { tabla: 'materials', clave: 'line_id' },
+    items: { tabla: 'items', clave: 'codigo' },
+    centros: { tabla: 'machines', clave: 'nombre' },
+    inventario: { tabla: 'inventory', clave: 'item,ubicacion' },
+    ordenes_venta: { tabla: 'sales_orders', clave: 'folio' }
+  };
+
+  for (const nombre in TABLAS) {
     try {
-      console.log('Leyendo ' + a.nombre + '...');
-      let filas = a.lector(config);
-      console.log(a.nombre + ': ' + filas.length + ' filas leidas');
-      if (filas.length) {
-        console.log(a.nombre + ': columnas = ' + Object.keys(filas[0]).join(', '));
-        console.log(a.nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));
+      const accion = acciones[nombre];
+      if (!accion || !accion.ok) {
+        log.push(nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 100));
+        console.log(nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 200));
+        continue;
       }
-      const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
-      log.push(a.nombre + ': ' + r.escritas + ' filas');
-      console.log(a.nombre + ': ' + r.escritas + ' escritas');
+      let filas = accion.rows || [];
+      console.log(nombre + ': ' + filas.length + ' filas recibidas');
+      if (filas.length) {
+        console.log(nombre + ': columnas = ' + Object.keys(filas[0]).join(', '));
+        console.log(nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));
+      }
+      // Deduplicar por clave natural
+      const def = TABLAS[nombre];
+      if (nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
+      if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.line_id; });
+      if (nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
+      const r = PP_supabaseUpsert_(def.tabla, filas, def.clave, config);
+      log.push(nombre + ': ' + r.escritas + ' filas');
+      console.log(nombre + ': ' + r.escritas + ' escritas');
     } catch (e) {
-      log.push(a.nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
-      console.log(a.nombre + ': ERROR ' + String(e.message || e).slice(0, 200));
+      log.push(nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
+      console.log(nombre + ': ERROR ' + String(e.message || e).slice(0, 200));
     }
-  });
+  }
   console.log('Ingesta: ' + log.join(' | '));
   console.log('=== INGESTA END ===');
 }
