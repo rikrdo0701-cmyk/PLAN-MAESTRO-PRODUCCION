@@ -65,8 +65,13 @@ test("el build NO pone ninguna plantilla de credenciales en dist/", () => {
 
 test("el despliegue preserva ANTES de subir, con el nombre de archivo correcto", () => {
   const yml = readFileSync(WORKFLOW, "utf8");
-  const preservar = yml.indexOf("appsscript-preservar-config.mjs");
-  const push = yml.indexOf("clasp push");
+  // Se ancla a la linea "run:" y no al nombre del script. MEDIDO 2026-09-29: al
+  // anadir el script al filtro "paths" del workflow, un indexOf del nombre plano
+  // empezo a encontrar ESA entrada, que esta antes del push, y el test reportaba
+  // que el paso de verificacion iba antes cuando si iba despues. Un test que
+  // mide mal es peor que no tener test: da verde mintiendo.
+  const preservar = yml.indexOf("run: node scripts/appsscript-preservar-config.mjs");
+  const push = yml.indexOf("npx --yes @google/clasp push");
   assert.ok(preservar > 0, "el workflow no llama a la preservacion: cualquier archivo a mano se pierde en el push");
   assert.ok(push > 0, "el workflow ya no hace clasp push");
   assert.ok(preservar < push, "preservar despues del push no preserva nada: ese push ya borro lo que no venia de dist/");
@@ -81,8 +86,8 @@ test("el despliegue verifica el CONTENIDO del proyecto, no solo que la funcion e
   // cuerpo de la funcion. Sin comparar contenido, un despliegue a medias es
   // indetectable.
   const yml = readFileSync(WORKFLOW, "utf8");
-  const push = yml.indexOf("clasp push");
-  const verificar = yml.indexOf("verificar-deploy-appscript.mjs");
+  const push = yml.indexOf("npx --yes @google/clasp push");
+  const verificar = yml.indexOf("run: node scripts/verificar-deploy-appscript.mjs");
   assert.ok(verificar > 0, "el workflow no verifica lo que subio: un deploy a medias sale verde");
   assert.ok(verificar > push, "verificar antes del push no verifica nada");
   const txt = readFileSync(path.join(RAIZ, "scripts", "verificar-deploy-appscript.mjs"), "utf8");
