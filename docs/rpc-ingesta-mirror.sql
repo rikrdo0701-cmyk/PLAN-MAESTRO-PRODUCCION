@@ -65,7 +65,13 @@ begin
 
   -- Borrar TODO (esto es un mirror) y dejar que el insert nuevo viva en la
   -- misma transaccion: si algo falla, el rollback restaura lo anterior.
-  execute format('delete from %s', v_tabla);
+  --
+  -- El filtro "id <> <uuid-vacio>" es una tautologia (ningun id vale el uuid
+  -- nulo) que borra todas las filas igual, pero con WHERE: PostgREST/Supabase
+  -- rechaza un DELETE sin clausula WHERE (error 21000 "DELETE requires a WHERE
+  -- clause"); con WHERE pasa incluso cuando la tabla esta vacia. Identity real
+  -- de las 7 tablas: id uuid pk con default gen_random_uuid().
+  execute format('delete from %s where id <> ''00000000-0000-0000-0000-000000000000''', v_tabla);
   get diagnostics v_borradas = row_count;
 
   -- Columnas: las del payload, filtradas contra el esquema real.

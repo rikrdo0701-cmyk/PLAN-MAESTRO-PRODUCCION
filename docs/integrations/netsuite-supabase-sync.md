@@ -118,6 +118,14 @@ El flujo corre en Google Apps Script (`appscript-ingesta-supabase.gs`, función 
    valor contra el tipo real de la columna (`jsonb_populate_recordset`) y solo
    `service_role` puede ejecutarlo (la service key de `supabase-config.gs`).
 
+   **El DELETE lleva `WHERE id <> '00000000-0000-0000-0000-000000000000'`** (tautología:
+   ningún id vale el uuid nulo, borra todas las filas igual). Motivo medido el 2026-09-29:
+   PostgREST rechaza un DELETE sin cláusula WHERE con `21000 DELETE requires a WHERE
+   clause` (issue supabase-py #534, PostgREST #663); con la tautología el mirror pasa
+   incluso llamando desde Apps Script y con la tabla vacía. Un DELETE directo sobre el
+   endpoint de tabla sin filtro (`DELETE /rest/v1/<tabla>` sin query) NO está permitido:
+   la ingesta solo borra vía el RPC.
+
 Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` dedupe por
 `codigo`, `materiales` por `ot+line_id`, `inventario` por `item+ubicacion`):
 - `work_orders` → `ot`

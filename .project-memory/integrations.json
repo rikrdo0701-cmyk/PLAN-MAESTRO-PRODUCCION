@@ -89,7 +89,7 @@
         ".project-memory/rules.json RULE-SUP-001..010"
       ],
       "updated_at": "2026-09-28",
-      "verified": "esquema 7 tablas verificado con scripts/dump-schema-supabase.mjs (2026-09-28); probe-2246-todas.mjs 7/7 OK; materials con UNIQUE(ot,line_id) corregido 2026-09-29; RPC ingesta_mirror aplicado y verificado con payloads reales en transaccion+ROLLBACK el 2026-09-29 (7/7, solo service_role puede ejecutarlo)",
+      "verified": "esquema 7 tablas verificado con scripts/dump-schema-supabase.mjs (2026-09-28); probe-2246-todas.mjs 7/7 OK; materials con UNIQUE(ot,line_id) corregido 2026-09-29; RPC ingesta_mirror aplicado y verificado con payloads reales en transaccion+ROLLBACK el 2026-09-29 (7/7, solo service_role puede ejecutarlo); camino HTTP real (POST /rest/v1/rpc/ingesta_mirror con la service key, igual que Apps Script) verificado el 2026-09-29: whitelist rechaza tabla no permitida y columna desconocida revierte la transaccion (work_orders intacta en 283). El DELETE del RPC lleva WHERE id <> '00000000-0000-0000-0000-000000000000' (tautologia) porque PostgREST rechaza DELETE sin WHERE (21000, issue supabase-py #534); con la tautologia el mirror pasa por HTTP y con la tabla vacia",
       "writers": "La ingesta la dispara Google Apps Script (appscript-ingesta-supabase.gs) contra el RESTlet unificado 2246/deploy 1 (netsuite-restlet-unificado-supabase.js): el unico writer de las 7 tablas que NetSuite manda (RULE-SUP-001). Apps Script conserva app_state, plan_snapshots, operation_plan_statuses y la cola hasta la fase 4 del plan. NADIE escribe en NetSuite desde Supabase: no hay OAuth ahi."
     }
   ],
