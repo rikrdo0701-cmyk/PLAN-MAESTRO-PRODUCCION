@@ -131,7 +131,6 @@ define(['N/query'], (query) => {
         setup_min: Number(r.setup_min) || 0,
         real_min: Number(r.real_min) || 0,
         remaining_min: Number(r.remaining_min) || 0,
-        production_rate: Number(r.production_rate) || 0,
         qty_completed: Number(r.qty_completed) || 0
       })),
       totalRows: rows.length
@@ -302,10 +301,13 @@ define(['N/query'], (query) => {
         sales_order_id: String(r.internalid || ''),
         fecha: isoFecha_(r.fecha_captura),
         folio: String(r.orden || ''),
-        nombre_cliente: String(r.nombre_cliente || ''),
-        fecha_embarque: isoFecha_(r.fecha_embarque),
-        memo: String(r.comentarios || ''),
-        monto_pendiente_facturar: Number(r.monto_pendiente_facturar) || 0
+        cliente: String(r.nombre_cliente || ''),
+        cliente_id: 0,
+        estatus: '',
+        aprobacion: '',
+        total: Number(r.monto_pendiente_facturar) || 0,
+        moneda: 1,
+        memo: String(r.comentarios || '')
       })),
       totalRows: rows.length
     };
