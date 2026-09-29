@@ -319,16 +319,55 @@ test("app_state recibe su fila id=1 antes de que plan_guardar la necesite", () =
   assert.match(ddl, /if not found then[\s\S]{0,200}raise exception/);
 });
 
-test("los indices unicos que hacen posible el upsert estan, con su justificacion medida", () => {
-  // MEDIDO 2026-09-29 con sondas reales: operations.operation_id y
-  // materials(ot,line_id) TIENEN indice unico (el upsert responde 200), pero
-  // work_orders.wo_internal_id NO lo tenia, y el upsert ahi falla con 42P10
-  // "there is no unique or exclusion constraint matching the ON CONFLICT
-  // specification". Ese fallo solo se ve en produccion, nunca en un test unitario.
+test("los indices unicos del upsert se comprueban por COLUMNAS, no contando", () => {
+  // MEDIDO 2026-09-29 con sondas reales, y el hallazgo cambio el DDL:
+  //   operations.operation_id      -> el indice unico EXISTE, el upsert responde 200
+  //   materials(ot,line_id)        -> EXISTE, responde 200
+  //   work_orders.wo_internal_id   -> NO EXISTE: 42P10, there is no unique or
+  //                                  exclusion constraint matching the ON CONFLICT
+  //                                  specification
+  // O sea que el codigo del escritor era correcto y faltaba la RESTRICCION, que es
+  // justo lo que ningun test unitario ve y lo que un conteo de indices jamas iba a
+  // encontrar. El DDL agrega el que falta, verificado antes que no hay duplicados que
+  // lo bloqueen: 212 work_orders con 212 wo_internal_id distintos, 334 materiales en
+  // 334 pares (ot,line_id), 1000 operaciones en 1000 operation_id.
   assert.match(ddl, /create unique index if not exists work_orders_wo_internal_id_key on public\.work_orders \(wo_internal_id\)/);
   assert.match(ddl, /create unique index if not exists plan_snapshots_snapshot_id_key\s+on public\.plan_snapshots \(snapshot_id\)/);
-  // Y el abort que hay al final comprueba que un indice no se quedo a medias.
-  assert.match(ddl, /faltan indices unicos para el upsert/);
+
+  // Y la comprobacion final busca el indice por las columnas EXACTAS del on_conflict.
+  // Las cinco van en el MISMO ORDEN que el on_conflict, porque Postgres infiere el
+  // indice por esa lista y uno con las columnas invertidas no sirve.
+  for (const [tabla, cols] of [
+    ["operations", "array['operation_id']"],
+    ["work_orders", "array['wo_internal_id']"],
+    ["materials", "array['ot','line_id']"],
+    ["plan_snapshots", "array['snapshot_id']"],
+    ["operation_events", "array['id']"],
+  ]) {
+    assert.ok(ddl.includes(cols), "la comprobacion tiene que buscar el indice de " + tabla + " por sus columnas: " + cols);
+  }
+  assert.ok(ddl.includes("v_tablas text[] := array['operations','work_orders','materials','plan_snapshots','operation_events']"));
+  assert.match(ddl, /x\.indisunique/);
+  assert.match(ddl, /sin indice unico para el upsert en: %/);
+
+  // Y el conteo viejo, que era una comprobacion que no comprobaba nada: cualquier
+  // primary key cuenta como unico, asi que exigir 5 unicos sobre 5 tablas era casi
+  // imposible que fallara. Que no vuelva.
+  //
+  // Se comprueba sobre el DDL SIN COMENTARIOS, y no por un motivo deesthesia: la
+  // frase que explica por que se quito el conteo NOMBRA el conteo, asi que un
+  // detector que lee el archivo entero se marca su propia explicacion. Ya ha pasado
+  // dos veces en este DDL, con el %I suelto y con el $, y las dos veces el
+  // detector era el que habia que ajustar, no el DDL. Un detector que se queja de su
+  // propio comentario deja de avisar de verdad.
+  const codigo = ddl
+    .split(/\r?\n/)
+    .filter((linea) => !/^\s*--/.test(linea))
+    .join("\n");
+  assert.ok(
+    !/indexdef ilike '%unique%'/.test(codigo),
+    "el conteo de indices unicos volvio: es una comprobacion que no puede fallar y por tanto no comprueba"
+  );
 });
 
 test("plan_guardar se abre a authenticated y SIGUE cerrada a anon, con la razon escrita", () => {

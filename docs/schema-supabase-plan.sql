@@ -388,6 +388,7 @@ grant execute on function public.ingesta_mirror_v1(text, jsonb) to service_role;
 do $$
 declare
   n integer;
+  k integer;
 begin
   -- 1. Las columnas nuevas de operations
   select count(*) into n from information_schema.columns
@@ -409,10 +410,29 @@ begin
   if not exists (select 1 from pg_class where relname = 'operation_events') then
     raise exception 'no se creo operation_events';
   end if;
+  -- Por NOMBRE, no contando. MEDIDO 2026-09-29: la primera version de este chequeo
+  -- contaba todos los indices de la tabla y exigia 4, y la base tiene 5, porque
+  -- `id uuid primary key` es un indice mas. El DDL estaba bien y la asercion mal.
+  -- Ademas contar no es lo que se queria comprobar: lo que hace rapida la vista de
+  -- debug son los cuatro indices con nombre, y que no haya indices de mas.
+  select count(*) into n
+     from unnest(array[
+       'operation_events_ot_at_idx',
+       'operation_events_kind_at_idx',
+       'operation_events_at_idx',
+       'operation_events_operation_idx']) as pedido(nombre)
+    where not exists (select 1 from pg_indexes i
+                       where i.schemaname = 'public'
+                         and i.tablename = 'operation_events'
+                         and i.indexname = pedido.nombre);
+  if n <> 0 then
+    raise exception 'operation_events: faltan % de los 4 indices con nombre (la vista de debug haria seq scan)', n;
+  end if;
   select count(*) into n from pg_indexes
-   where schemaname = 'public' and tablename = 'operation_events';
+   where schemaname = 'public' and tablename = 'operation_events'
+     and indexname like 'operation_events%';
   if n <> 4 then
-    raise exception 'operation_events: hay % de 4 indices', n;
+    raise exception 'operation_events: hay % indices con nombre operation_events% y tienen que ser 4', n;
   end if;
 
   -- 3. Ninguna politica abierta a anon. Debe salir 0.
@@ -808,16 +828,50 @@ begin
     raise exception 'app_state: la fila id=1 no existe, plan_guardar no puede comparar la revision';
   end if;
 
-  -- 2. Los indices unicos que hacen posible el upsert, incluidos los dos que se
-  --    agregaron aqui. Si un WO se repite, esto para y avisa en vez de dejar el
-  --    indice a medias.
-  select count(*) into n from pg_indexes
-   where schemaname = 'public'
-     and tablename in ('operations','work_orders','materials','plan_snapshots','operation_events')
-     and indexdef ilike '%unique%';
-  if n < 5 then
-    raise exception 'faltan indices unicos para el upsert (hay % de 5)', n;
-  end if;
+  -- 2. LOS INDICES UNICOS DEL UPSERT, POR COLUMNAS. El chequeo anterior contaba
+  --    indices unicos con `indexdef ilike '%unique%'` sobre cinco tablas y exigia 5,
+  --    lo cual casi no puede fallar: cualquier primary key cuenta como unico. Eso es
+  --    una comprobacion que no comprueba. Lo que hace falta es que exista un indice
+  --    unico sobre las columnas EXACTAS del on_conflict, porque de eso depende que el
+  --    upsert de la pagina funcione: MEDIDO 2026-09-29, work_orders NO tenia indice
+  --    unico en wo_internal_id y el upsert contestaba 42P10, there is no unique or
+  --    exclusion constraint matching the ON CONFLICT specification. El codigo era
+  --    correcto y faltaba la restriccion, que es justo lo que un conteo no ve.
+  --
+  --    Las columnas van en el MISMO ORDEN que el on_conflict, porque Postgres infiere
+  --    el indice por esa lista y un indice con las columnas invertidas no sirve.
+  declare
+    v_tablas text[] := array['operations','work_orders','materials','plan_snapshots','operation_events'];
+    v_cols text[][] := array[
+      array['operation_id'],
+      array['wo_internal_id'],
+      array['ot','line_id'],
+      array['snapshot_id'],
+      array['id']
+    ];
+    v_falta text;
+  begin
+    for k in 1 .. array_length(v_tablas, 1) loop
+      if not exists (
+        select 1
+          from pg_index x
+          join pg_class c on c.oid = x.indrelid
+          join pg_namespace ns on ns.oid = c.relnamespace
+         where ns.nspname = 'public'
+           and c.relname = v_tablas[k]
+           and x.indisunique
+           and (select array_agg(a.attname order by u.ord)
+                  from unnest(x.indkey) with ordinality as u(attnum, ord)
+                  join pg_attribute a on a.attrelid = x.indrelid and a.attnum = u.attnum
+               ) = v_cols[k]
+      ) then
+        v_falta := coalesce(v_falta || ' ', '') || v_tablas[k];
+      end if;
+    end loop;
+    if v_falta is not null then
+      raise exception 'sin indice unico para el upsert en: %', v_falta;
+    end if;
+  end;
 
   -- 3. La tabla de reglas de escritura completa, con su lista de columnas.
   select count(*) into n from public.plan_tabla_escritura where modo = 'actualiza' and columnas is not null;
