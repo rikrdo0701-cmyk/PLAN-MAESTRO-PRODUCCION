@@ -218,13 +218,16 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
   `work_orders.FECHA_ENTREGA_AJUSTADA`/`PRECIO_DESDE`/`PRECIO_HASTA` y los campos faltantes de
   `operations`).
 - **Sonda:** `npm run probe:lectura:frontend` (`scripts/supabase-reader-verify.mjs`) ejecuta el MISMO
-  código que se sirve en Pages contra el Supabase real. Medido el 2026-09-29: 24 tablas, 208
+  código que se sirve en Pages contra el Supabase real. Medido el 2026-09-29: 25 tablas (desde el
+  2026-09-29 con `machine_planning_overrides`, que crea el DDL de cierre), 208
   `work_orders`, 2119 `operations`, 327 `materials`, 202 `machines`, 86 `operation_catalog`, 78 CTs.
 - **Decisión tomada (2026-09-29): "la información de restlet desde Apps Script y lectura y escritura
   desde Supabase".** Se **midió** antes de escribir código, porque la decisión define si hace falta
-  login: el rol `anon` **no puede escribir** en ninguna de las 24 tablas (`POST /rest/v1/tools` →
+  login: el rol `anon` **no puede escribir** en ninguna de las 25 tablas (`POST /rest/v1/tools` →
   `401 {"code":"42501","message":"new row violates row-level security policy for table \"tools\""}`,
-  `.openchamber/diag-supabase-escritura.mjs`). Las 24 tienen RLS con **solo** la política `lectura_web`
+  `.openchamber/diag-supabase-escritura.mjs`; y tampoco actualizar —
+  `Content-Range */0` sobre una fila real — ni ejecutar `ingesta_mirror`, según
+  `.openchamber/diag-ddl-cierre.mjs`). Las 25 tienen RLS con **solo** la política `lectura_web`
   de SELECT, y es a propósito (`docs/schema-supabase-sync-netsuite.sql:198-200`: *"NADIE escribe desde
   la web… si la web pudiera escribir, podría pisar el plan"*), porque la clave publicable viaja
   dentro del bundle público de Pages. Por tanto **no hace falta Supabase Auth**: la página **lee** con
@@ -272,37 +275,65 @@ un lector de **solo lectura** que trae filas de Supabase por PostgREST con la cl
       la unión exacta, una máquina apartada se volvería a agendar sola y el fallo sería silencioso.
     - *UI:* el toggle **Apartar / Reincluir** sustituye a "Eliminar máquina" como forma de apartar
       (eliminar ya no serviría: el RESTlet reviviría la fila). El botón de eliminar se conserva.
-    - *Estado:* la tabla la crea `docs/schema-supabase-cierre-catalogos.sql`, que **sigue sin
-      aplicar**. Hasta entonces el lector la reporta en `errors` y la página se comporta como antes.
-- **Requisito previo, sin aplicar: `docs/schema-supabase-cierre-catalogos.sql`.** Medido contra el
+    - *Estado:* la tabla la crea `docs/schema-supabase-cierre-catalogos.sql`, **aplicada el
+      2026-09-29** y verificada. Sigue **vacía** hasta que Apps Script la siembre, y la UI se comporta
+      como antes mientras tanto (una máquina sin fila de override no está apartada, que es el
+      comportamiento correcto).
+- **`docs/schema-supabase-cierre-catalogos.sql`: APLICADO el 2026-09-29.** Medido contra el
   esquema **desplegado**, el de los catálogos **no puede representar lo que las Hojas guardan**
-  (RULE-SUP-016): falta `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
+  (RULE-SUP-016): faltaba `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
   el **factor** de `capabilities.solapamiento` (la hoja lo guarda como ratio 0..1 y en la tabla
   quedó `boolean`), `tools.codigo`, `subcontracts.codigo`, la ventana de `calendar_exceptions`,
   `article_configurations.precio_ref_venta` y la tabla `machine_planning_overrides` (RULE-SUP-017).
   El archivo corrige eso y mete las 11 tablas de catálogo en la
   whitelist de `ingesta_mirror` **sin abrir escritura a `anon`** (el RPC sigue siendo
-  `SECURITY INVOKER` y revocado a `PUBLIC`). Está escrito y verificado, pero **sin aplicar**: falta
-  `SUPABASE_DB_PASSWORD`. Al revés, el espejo falla a propósito (columna desconocida / tabla no
-  permitida) y queda registrado en `AUDITORIA`.
+  `SECURITY INVOKER` y revocado a `PUBLIC`).
+  - **Cómo se aplicó:** `scripts/aplicar-ddl-cierre.ps1 -Si -Teclado`, que pide la contraseña de
+    postgres por prompt enmascarado y la pasa solo por la memoria del proceso; ni el archivo, ni el
+    historial de PowerShell, ni el repo la ven. Son **32 sentencias** y el archivo es idempotente.
+  - **Costó tres intentos, y dos de los fallos eran míos, no de la base.** `scripts/apply-sql-supabase.mjs`
+    divide el SQL él mismo, y su primera versión no entendía comentarios: un `;` dentro de un
+    comentario `--` partía la sentencia y una comilla dentro de un comentario abría modo literal. Eso
+    produjo **7 errores falsos** ("syntax error at or near el", "column codigo does not exist") que
+    perseguí como si fueran del DDL. El segundo bug: al cerrar un cuerpo `$$…$$` se perdía **uno de
+    los dos `$`** y la función llegaba a Postgres sin cerrar. Con el divisor arreglado, el diagnóstico
+    dio `OK: las 32 sentencias se aplicarían sin error` y la aplicación fue limpia.
+  - **El `-Diagnosticar` existe por esto:** Postgres se detiene en el primer error de un lote, así que
+    sin él, un DDL con varios `ALTER` obliga a una corrida por cada error. Ejecuta cada sentencia en
+    su propio `SAVEPOINT`, lista todos los fallos y hace `ROLLBACK` total. Además **audita el archivo
+    antes de tocar la base**: si un fragmento no empieza por palabra clave SQL, no ejecuta nada y lo
+    avisa, porque un diagnóstico que inventa errores es peor que no diagnosticar.
+  - **Verificado después de aplicarlo** con `.openchamber/diag-ddl-cierre.mjs` (solo clave publicable,
+    no necesita la contraseña): **25 tablas visibles**, `machine_planning_overrides` creada con RLS y
+    solo `lectura_web`, las **15 columnas nuevas se leen** por `anon`, `capabilities.solapamiento` ya es
+    `numeric` (las 76 filas quedaron en `1` por el DEFAULT documentado), `anon` **no inserta**
+    (`401 42501`), **no actualiza** (`Content-Range */0`, medido reescribiendo una fila real de
+    `capabilities` su propio valor) y **no ejecuta `ingesta_mirror`** (`401 42501`). El **borrado** por
+    `anon` no quedó medido y la sonda lo declara: con la tabla vacía un `DELETE` devuelve `200` con
+    `0` filas tanto si puede como si no, y medirlo exigiría borrar datos de producción.
 - **Verificación sin escribir nada.** `.openchamber/diag-catalogo-payload.mjs` compara las columnas
   que emite el mapeador contra el esquema real (leído por la Data API) más las del DDL de cierre:
   **11/11 tablas OK**. Esa sonda **encontró un bug real** —el mapeador leía `TIPO_TRABJO` en vez de
   `TIPO_TRABAJO` y el campo salía vacío **sin dar error**—, y `tests/supabase-catalogo-mapping.test.mjs`
   lo vuelve a cazar (se comprobó mutando el typo a propósito: el test falla nombrando la columna).
-- **Lo que falta para enganchar el lector al arranque**, en orden:
-  1. aplicar `docs/schema-supabase-cierre-catalogos.sql` (necesita `SUPABASE_DB_PASSWORD`),
-  2. desplegar el archivo nuevo de servidor en Apps Script (25 archivos; el build lo agrega solo),
-  3. confirmar que los catálogos de Supabase se refrescan al guardar,
-  4. recién entonces cambiar la fuente de los catálogos en la página.
+- **Lo que falta para enganchar el lector al arranque**, en orden (el paso 1 ya está hecho):
+  1. ~~aplicar `docs/schema-supabase-cierre-catalogos.sql`~~ — **hecho el 2026-09-29**,
+  2. **desplegar el archivo nuevo de servidor en Apps Script** (25 archivos; el build lo agrega solo),
+  3. **guardar una vez la pestaña de catálogos** en la página, que es lo que dispara el espejo,
+  4. confirmar que los catálogos de Supabase se refrescan (dejan de estar en `2026-09-28T05:11`),
+  5. recién entonces cambiar la fuente de los catálogos en la página.
 - **Tablas vacías** (cola/estado/plan: `app_state`, `selected_ots`, `locked_ots`,
   `operation_plan_statuses`, `plan_snapshots`, `closed_work_order_summaries`,
   `unconfirmed_work_orders`, `tools`, `subcontracts`, `calendar_exceptions`): siguen viniendo del
-  puente; su migración es la fase 2/4, no la 3.
-- **Pendiente de despliegue (solo el usuario).** El RESTlet 2246 desplegado en NetSuite **aún no trae**
-  el filtro `ail.location = 1` de `RULE-SUP-013`: `inventory` sigue en **2401** filas cuando el SQL
-  filtrado da ~1933. Hay que pegar `netsuite-restlet-unificado-supabase.js` en NetSuite. Igual, el
-  `.gs` de Apps Script desplegado aún no coincide con el local (falta el guard de horario).
+  puente; su migración es la fase 2/4, no la 3. `machine_planning_overrides` está en la lista
+  también, pero por otra razón: la crea el espejo de catálogos, no la ingesta.
+- **Pendiente de despliegue (solo el usuario).**
+  1. **RESTlet 2246 en NetSuite** con el filtro `ail.location = 1` de `RULE-SUP-013`: `inventory`
+     sigue en **2401** filas cuando el SQL filtrado da ~1933. Hay que pegar
+     `netsuite-restlet-unificado-supabase.js` en NetSuite.
+  2. **Apps Script**: el `.gs` desplegado aún no coincide con el local (falta el guard de horario), y
+     falta subir el `16-supabase-catalogo.js` nuevo.
+  3. **Rota la contraseña de postgres** en el panel de Supabase: quedó escrita en el chat.
 
 ## 5. Riesgos
 

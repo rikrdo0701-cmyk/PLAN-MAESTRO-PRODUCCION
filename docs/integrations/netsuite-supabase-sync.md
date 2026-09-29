@@ -1,7 +1,8 @@
 # Ingesta NetSuite → Supabase (push desde NetSuite)
 
-**Estado (actualizado 2026-09-29):** el **esquema de destino SÍ está aplicado** — el proyecto
-`xtgtfjcwxcoxvixholpj` expone **24 tablas** por la Data API y la ingesta **está corriendo**: las 7
+**Estado (actualizado 2026-09-29):** el **esquema de destino SÍ está aplicado, y también el DDL de
+cierre** — el proyecto `xtgtfjcwxcoxvixholpj` expone **25 tablas** por la Data API y la ingesta **está
+corriendo**: las 7
 tablas de NetSuite (`work_orders`, `operations`, `materials`, `items`, `inventory`, `sales_orders`,
 `machines`) se refrescaron a las **2026-09-29T04:08** con el mismo `created_at` en todas las filas
 (mirror atómico de la RPC `ingesta_mirror`), medido con `.openchamber/diag-supabase-frescura.mjs`.
@@ -17,14 +18,19 @@ Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **
   por Apps Script (`RULE-SUP-001`). El diseño de User Events nombra otro writer; mientras no se
   despliegue, no sustituye al 2246.
 - **Un segundo escritor, y es la respuesta a "quién escribe" (2026-09-29).** El `anon` **no puede
-  escribir** en ninguna de las 24 tablas (medido: `401 / 42501`), y es a propósito, porque la clave
+  escribir** en ninguna de las 25 tablas (medido: `401 / 42501`), y es a propósito, porque la clave
   publicable va en el bundle público de Pages. Así que la escritura la hace **Apps Script** con la
   service role key: las **7 tablas de NetSuite** las sigue escribiendo el 2246, y las **11 tablas de
   catálogo** las espeja `src/server/16-supabase-catalogo.js` en cada guardado. El `machines` queda
   **excluido** del espejo a propósito para no tener dos escritores peleándose la tabla
-  (`RULE-SUP-015`). Ese espejo **requiere antes** `docs/schema-supabase-cierre-catalogos.sql`, que
-  sigue **sin aplicar** (falta `SUPABASE_DB_PASSWORD`), y sin él falla a propósito
-  (`RULE-SUP-016`).
+  (`RULE-SUP-015`). Ese espejo ya puede correr: `docs/schema-supabase-cierre-catalogos.sql` **se aplicó
+  el 2026-09-29** con `scripts/aplicar-ddl-cierre.ps1 -Si -Teclado`, que pide la contraseña por prompt
+  enmascarado y no la deja en disco ni en el historial (`RULE-SUP-016`). Antes hubo que arreglar dos
+  bugs del divisor de sentencias de `scripts/apply-sql-supabase.mjs` —que inventaba 7 errores falsos—,
+  y por eso el modo `-Diagnosticar` ejecuta cada sentencia en su propio `SAVEPOINT` y lo revierte todo
+  antes de tocar la base. Lo que falta ahora no es el esquema, es **desplegar el `.gs` en Apps Script**:
+  hasta que el `16-supabase-catalogo.js` esté desplegado y se guarde una vez la pestaña de catálogos,
+  los catálogos de Supabase siguen con la siembra del `2026-09-28T05:11`.
 - **La decisión de apartar una máquina va en `machine_planning_overrides`, no en `machines`
   (`RULE-SUP-017`, decisión del usuario 2026-09-29).** La planificación puede apartar una máquina que
   NetSuite da por activa, y solo en esa dirección. No puede ser una columna de `machines` porque el
@@ -32,7 +38,12 @@ Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **
   corrida. La tabla nueva tiene un único escritor (Apps Script, desde la columna `EXCLUIDA` de la hoja
   `MAQUINAS`) y el RESTlet nunca la toca. La bandera efectiva es
   `machines.activa AND NOT excluida`, calculada en un solo lugar por capa para no cambiar los filtros
-  que ya consumen el estado. La crea `docs/schema-supabase-cierre-catalogos.sql`, **sin aplicar**.
+  que ya consumen el estado. La crea `docs/schema-supabase-cierre-catalogos.sql`, **aplicada el
+  2026-09-29** y verificada con `.openchamber/diag-ddl-cierre.mjs` (existe, con RLS y solo lectura;
+  `anon` no inserta `401/42501`, no actualiza `Content-Range */0` medido sobre una fila real, y no
+  ejecuta `ingesta_mirror` `401/42501`; el borrado por `anon` **no quedó medido** porque la tabla está
+  vacía y medirlo exigiría borrar datos reales, y la sonda lo dice en vez de declarar un OK). Sigue
+  **vacía** hasta que Apps Script la siembre.
 - Reglas: `RULE-SUP-001` a `RULE-SUP-017` en `.project-memory/rules.json`.
 - Plan: `docs/plan-migracion-supabase.md` §3.4 y §4 (fase 3).
 
