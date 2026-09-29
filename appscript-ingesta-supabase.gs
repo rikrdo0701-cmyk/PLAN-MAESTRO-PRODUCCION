@@ -1,8 +1,8 @@
 /**
  * Ingesta NetSuite -> Supabase desde Google Apps Script.
  *
- * Usa los RESTlets existentes (1762, 1763, 1764, 1765, 1766, 1769) que ya
- * funcionan en producción, en vez de escribir SQL nuevo.
+ * Usa los RESTlets existentes (1762, 1763, 1764, 1765, 1767) con el mapeo
+ * correcto basado en el codigo real de cada RESTlet.
  *
  * NO escribe en NetSuite: solo lee y escribe en Supabase.
  *
@@ -96,8 +96,6 @@ function PP_restletPaginado_(script, deploy, body, config) {
     body.pageIndex = pageIndex;
     body.pageSize = pageSize;
     const json = PP_restlet_(script, deploy, body, config);
-    // RESTlets 1762/1763/1764/1765 devuelven { rows, hasMore }
-    // RESTlet 1767 devuelve { results, hasMore }
     const rows = json.rows || json.results || [];
     for (let i = 0; i < rows.length; i++) todas.push(rows[i]);
     if (!json.hasMore) break;
@@ -205,9 +203,12 @@ function traducirEstado_(crudo) {
 }
 
 // =============================================================================
-// Lectores — usan los RESTlets existentes
+// Lectores — mapeo basado en el codigo real de cada RESTlet
 // =============================================================================
 
+// 1764 — WO_LISTA: search en transaction + record.load para BOM Revision
+// Headers: WO Internal ID, WO Folio, Artículo, Descripción, Cantidad,
+//          Fecha de vencimiento, Estatus, BOM Revision, Revisión, Cliente
 function leerWorkorders_(config) {
   const filas = PP_restletPaginado_('1764', '1', { table: 'WO_LISTA', locationId: 1, onlyOpen: true }, config);
   return deduplicar_(filas.map(function(r) {
@@ -223,9 +224,14 @@ function leerWorkorders_(config) {
   }), function(f) { return f.ot; });
 }
 
+// 1762 — WO_OPERACIONES: SuiteQL en manufacturingoperationtask
+// Headers: ID (link), Artículo, Operación, Secuencia, Cantidad a procesar,
+//          Orden de trabajo, Fecha inicio programada, Fecha fin programada,
+//          Estado, Centro de trabajo, Tiempo preparación (min),
+//          Tiempo estimado (min), Tiempo real (min), Trabajo restante (min),
+//          Tasa producción, Recurso humano, Recurso máquina,
+//          Fecha inicio real, Fecha fin real, Cantidad realizada
 function leerOperaciones_(config) {
-  // El RESTlet 1762 tiene un limite interno de 280 filas por pagina.
-  // La paginacion con pageIndex/pageSize ya funciona en PP_restletPaginado_.
   const filas = PP_restletPaginado_('1762', '17', { pageSize: 280 }, config);
   return deduplicar_(filas.map(function(r) {
     const total = Math.abs(Number(r.qty_to_process) || 0);
@@ -245,6 +251,9 @@ function leerOperaciones_(config) {
   }), function(f) { return f.operation_id; });
 }
 
+// 1763 — WO_MATERIALES: search en work orders + record.load para BOM
+// Headers: WO Internal ID, WO Folio, Ensamble, Componente ID, Componente,
+//          Descripción, Unidad, Requerido, Emitido, Pendiente
 function leerMateriales_(config) {
   const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true, pageSize: 200 }, config);
   return deduplicar_(filas.map(function(r) {
@@ -266,6 +275,10 @@ function leerMateriales_(config) {
   }), function(f) { return f.line_id; });
 }
 
+// 1765 — INV_PLANTAS: search en item con cantidades por ubicacion
+// Headers: Ubicación, Artículo ID Interno, Artículo, Tipo, Descripción,
+//          Físico, Comprometido, Disponible, En orden (OC), En tránsito,
+//          WIP, Consumo promedio, Costo unitario, Valor total
 function leerItems_(config) {
   const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
   const items = {};
@@ -286,9 +299,25 @@ function leerItems_(config) {
   return Object.values(items);
 }
 
+// 1765 — INV_PLANTAS (mismo RESTlet, mismas filas)
+function leerInventario_(config) {
+  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
+  return deduplicar_(filas.map(function(r) {
+    return {
+      item: String(r['Artículo'] || ''),
+      ubicacion: String(r['Ubicación'] || ''),
+      disponible: Number(r['Disponible']) || 0,
+      fisico: Number(r['Físico']) || 0,
+      comprometido: Number(r['Comprometido']) || 0,
+      pickeado: 0,
+      en_transito: Number(r['En tránsito']) || 0
+    };
+  }), function(f) { return f.item + '#' + f.ubicacion; });
+}
+
+// Centros de trabajo — SuiteQL directo a entitygroup
+// (el RESTlet 1765 devuelve articulos, no centros)
 function leerCentros_(config) {
-  // Los centros de trabajo son entitygroup con ismanufacturingworkcenter='T'.
-  // El RESTlet 1765 devuelve artículos, no centros. Usamos SuiteQL directo.
   const sql = [
     'SELECT',
     '  eg.id AS id,',
@@ -308,27 +337,17 @@ function leerCentros_(config) {
   return Object.values(centros);
 }
 
-function leerInventario_(config) {
-  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
-  return deduplicar_(filas.map(function(r) {
-    return {
-      item: String(r['Artículo'] || ''),
-      ubicacion: String(r['Ubicación'] || ''),
-      disponible: Number(r['Disponible']) || 0,
-      fisico: Number(r['Físico']) || 0,
-      comprometido: Number(r['Comprometido']) || 0,
-      pickeado: 0,
-      en_transito: Number(r['En tránsito']) || 0
-    };
-  }), function(f) { return f.item + '#' + f.ubicacion; });
-}
-
+// 1767 — SO_EXPORT: search en sales order lines con summaries
+// Results: internalid, fecha_captura, orden, clave_cliente, nombre_cliente,
+//          sales_rep, po_num, cantidad_piezas, cantidad_pendiente_surtir,
+//          estado, fecha_embarque, direccion_envio, via_envio, comentarios,
+//          monto_pendiente_facturar, monto_facturado
 function leerOrdenesVenta_(config) {
   const filas = PP_restletPaginado_('1767', '1', {}, config);
   return filas.map(function(r) {
     return {
       folio: String(r.orden || ''),
-      sales_order_id: String(r.orden || ''),
+      sales_order_id: String(r.internalid || ''),
       cliente: String(r.nombre_cliente || ''),
       cliente_id: Number(r.clave_cliente) || 0,
       fecha: isoFecha_(r.fecha_captura),
