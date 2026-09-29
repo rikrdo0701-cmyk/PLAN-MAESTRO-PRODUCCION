@@ -1,0 +1,1338 @@
+{
+ "_medido": "2026-09-29, del OpenAPI que sirve PostgREST en GET /rest/v1/ con la service role key. information_schema NO es accesible por PostgREST (404 PGRST205) y la raiz del OpenAPI con la clave publicable da 401 'Only secret API keys can be used for this endpoint'. Se versiona para que la red general de los tests de mapeo tenga su entrada en un clon limpio: si el archivo no esta, el test se salta y da verde por un motivo falso, que es peor que no tener test.",
+ "matrix": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "capability_key",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "operator",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "habilitado",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "capabilities": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "key",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ct",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "operacion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "activa",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "capacidad",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "solapamiento",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "requiere_herramental",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "requiere_kit",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "eficiencia_pct",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "palabras_clave",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "custom",
+   "tipo": "boolean",
+   "nullable": true
+  }
+ ],
+ "materials": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "wo_internal_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ensamble",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "componente_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "componente",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "descripcion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "unidad",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "requerido",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "emitido",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "pendiente",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "line_id",
+   "tipo": "text",
+   "nullable": true
+  }
+ ],
+ "machine_planning_overrides": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "machine_nombre",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "excluida",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "actualizado",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "inventory": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "item",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ubicacion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "disponible",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "fisico",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "comprometido",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "pickeado",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "en_transito",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "subcontracts": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "parte",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "tipo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "dias_habiles",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "activo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "codigo",
+   "tipo": "text",
+   "nullable": true
+  }
+ ],
+ "closed_work_order_summaries": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "summary",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "operation_plan_statuses": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "key",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "secuencia",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "ct",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "status",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "origin",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_completado",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_reapertura",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "calendar_exceptions": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "fecha",
+   "tipo": "date",
+   "nullable": true
+  },
+  {
+   "columna": "concepto",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "maquina",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "motivo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "activo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_inicio",
+   "tipo": "date",
+   "nullable": true
+  },
+  {
+   "columna": "hora_inicio",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_fin",
+   "tipo": "date",
+   "nullable": true
+  },
+  {
+   "columna": "hora_fin",
+   "tipo": "text",
+   "nullable": true
+  }
+ ],
+ "ot_types": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "nombre",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "activo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "selected_ots": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "posicion",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "added_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "ot_configurations": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "maquina",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "kit",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "kit_pendiente",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "tipo_subcontrato",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "dias_subcontrato",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "herramental",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "herramentales_extra",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "actualizado",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "sales_orders": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "folio",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "sales_order_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "cliente",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "cliente_id",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "fecha",
+   "tipo": "date",
+   "nullable": true
+  },
+  {
+   "columna": "estatus",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "aprobacion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "total",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "moneda",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "memo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "lineas",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "tools": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "parte",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "herramental",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "kit",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "tiempo_ajuste_herr",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "tiempo_ajuste_kit",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "activo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "codigo",
+   "tipo": "text",
+   "nullable": true
+  }
+ ],
+ "unconfirmed_work_orders": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "first_seen_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "last_seen_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "misses",
+   "tipo": "integer",
+   "nullable": true
+  }
+ ],
+ "operation_catalog": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "key",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ct",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "label",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "source",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "active",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "work_orders": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "wo_internal_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "articulo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "descripcion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "foto_url",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_inicio_ns",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_fin_ns",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_vencimiento",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "cantidad",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "estatus",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "cliente",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "cant_ensamblada",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "cant_pendiente",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "precio_promedio_venta",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "precio_ultima_venta",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "synced_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "app_state": [
+  {
+   "columna": "id",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "saved_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "synced_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "plan_start",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "horizon_days",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "report_week_start",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "report_filters",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "settings",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "plant",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "operation_catalog_warning",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "last_schedule",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "plan_snapshots": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "snapshot_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "operations",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "generated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "plan_start",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "version",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "usuario",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "change_summary",
+   "tipo": "jsonb",
+   "nullable": true
+  },
+  {
+   "columna": "published_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "publication_reason",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "locked_ots": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "added_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "article_configurations": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "articulo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "tipo_ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "tipo_trabajo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "precio_manual",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "actualizado",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "precio_ref_venta",
+   "tipo": "numeric",
+   "nullable": true
+  }
+ ],
+ "operations": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "operation_id",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "ot",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "secuencia",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "ct",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "descripcion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "operador",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "maquina",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "herramental",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "kit",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "cant_total",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "cant_pendiente",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "tiempo_ciclo",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "tiempo_setup",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "tiempo_prod",
+   "tipo": "numeric",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_inicio",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "hora_inicio",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "fecha_fin",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "hora_fin",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "tipo_insercion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "estatus",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "locked",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "auto_frozen",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "subcontract_type",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "subcontract_days",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "operators": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "nombre",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "activo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "minutos_capacidad",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "rendimiento_pct",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "categoria",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "nombre_real",
+   "tipo": "text",
+   "nullable": true
+  }
+ ],
+ "machines": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "nombre",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "activa",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ],
+ "items": [
+  {
+   "columna": "id",
+   "tipo": "uuid",
+   "nullable": true
+  },
+  {
+   "columna": "codigo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "descripcion",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "descripcion_compra",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "nombre_mostrado",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "tipo",
+   "tipo": "text",
+   "nullable": true
+  },
+  {
+   "columna": "clase",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "es_ensamblaje",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "inactivo",
+   "tipo": "boolean",
+   "nullable": true
+  },
+  {
+   "columna": "ultima_modificacion",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "revision",
+   "tipo": "integer",
+   "nullable": true
+  },
+  {
+   "columna": "created_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  },
+  {
+   "columna": "updated_at",
+   "tipo": "timestamp with time zone",
+   "nullable": true
+  }
+ ]
+}

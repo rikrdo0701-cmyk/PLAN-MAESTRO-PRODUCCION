@@ -33,10 +33,10 @@ const build = readFileSync(new URL("../scripts/build-appscript.mjs", import.meta
 /** Corre el modulo con un fetch falso y un localStorage de memoria. */
 /**
  * DOM de mentira. La primera version devolvia null de getElementById y el modulo
- * reventaba al anadir los escuchadores, o sea que el test测测 el stub y no el
- * codigo. Este devuelve un elemento perezoso y memoizado por id, que es lo que el
- * modulo necesita de verdad: createElement, innerHTML, addEventListener, value,
- * hidden, focus, style.display y appendChild.
+ * reventaba al anadir los escuchadores, o sea que lo que se estaba probando era
+ * el codigo real y no el stub. Este devuelve un elemento perezoso y memoizado
+ * por id, que es lo que el modulo necesita de verdad: createElement, innerHTML,
+ * addEventListener, value, hidden, focus, style.display y appendChild.
  */
 function domFalso() {
   const porId = new Map();
