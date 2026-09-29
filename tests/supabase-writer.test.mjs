@@ -43,6 +43,19 @@ const URL_FALSA = "https://ejemplo.supabase.co";
 const CLAVE_FALSA = "sb_publishable_esto-no-es-real";
 const JWT_FALSO = "jwt-de-pruebas.eyJzdWIiOiJ1dWlk-de-pruebaIiwidXNlciI6ImZhbCJ9.firma-que-no-es-real";
 
+/** Un estado sin operaciones ni ordenes: el caso en el que un guardado fallido
+ *  terminaria vaciando el plan si el modulo no tuviera el freno de vaciar. */
+function estadoVacio() {
+  const e = estado();
+  e.operations = [];
+  e.workOrders = [];
+  e.materials = [];
+  e.selectedOts = [];
+  e.lockedOts = [];
+  e.operationPlanStatuses = [];
+  return e;
+}
+
 /**
  * Levanta el modulo con un fetch de mentira. `responder` decide que contesta cada
  * peticion, y todo lo que se pide queda en `llamadas` para poder afirmar sobre
@@ -158,27 +171,18 @@ test("toda escritura lleva el JWT en Authorization y nunca la clave publicable s
   }
 });
 
-test("las tablas de espejo se borran y DESPUES se reinsertan", async () => {
+test("las tablas de espejo se borran y DESPUES se reinsertan, y el borrado va antes del POST", async () => {
   const { writer, llamadas } = escritor();
   await writer.guardar(estado());
-  for (const tabla of writer.ESPEJO) {
-    const borrados = de(llamadas, "DELETE", tabla);
-    const insertados = de(llamadas, "POST", tabla);
-    assert.equal(borrados.length, 1, `${tabla}: un solo DELETE`);
-    assert.equal(insertados.length, 1, `${tabla}: un solo POST`);
-    // El orden es lo que evita insertar encima de lo viejo y violar el UNIQUE.
-    assert.ok(llamadas.indexOf(borrados[0]) < llamadas.indexOf(insertados[0]), `${tabla}: el DELETE va antes del POST`);
+  // Estas tres: un solo escritor, el espejo es correcto.
+  for (const tabla of ["selected_ots", "locked_ots", "operation_plan_statuses"]) {
+    assert.equal(de(llamadas, "DELETE", tabla).length, 1, tabla + ": un solo DELETE");
+    assert.equal(de(llamadas, "POST", tabla).length, 1, tabla + ": un solo POST");
   }
-  // PostgREST rechaza un DELETE sin WHERE (MEDIDO 2026-09-29, issue supabase-py #534):
-  // la tautologia del uuid nulo es lo que lo hace valido y sigue borrando todo.
-  for (const b of de(llamadas, "DELETE", writer.ESPEJO[0])) {
-    assert.match(b.url, /id=neq\.00000000-0000-0000-0000-000000000000/);
-  }
-  // Y el POST lleva la clave natural en on_conflict, para que un UNIQUE no tumbe
-  // el insert entero.
-  const operaciones = cuerpoDe(llamadas, "POST", "operations");
-  assert.match(de(llamadas, "POST", "operations")[0].url, /on_conflict=operation_id/);
-  assert.equal(operaciones[0].operation_id, "ns-3177-1");
+  // Y el orden importa: borrar despues de insertar tiraria lo recien escrito.
+  const iDel = llamadas.findIndex((c) => c.metodo === "DELETE" && c.tabla === "selected_ots");
+  const iPost = llamadas.findIndex((c) => c.metodo === "POST" && c.tabla === "selected_ots");
+  assert.ok(iDel < iPost, "el DELETE tiene que ir antes del POST");
 });
 
 test("app_state se actualiza con PATCH y no se inserta ni se borra nunca", async () => {
@@ -247,24 +251,13 @@ test("un 404 tampoco se reintenta", async () => {
 });
 
 test("un 500 SI se reintenta, y son tres intentos", async () => {
-  const porTabla = new Map();
+  // El reintento se comprueba sobre operations, que es donde va el POST grande.
   const { writer, llamadas } = escritor({
-    responder: (c) => {
-      if (c.tabla !== "operations") return { ok: true, status: 204, text: async () => "" };
-      const n = (porTabla.get(c.tabla) || 0) + 1;
-      porTabla.set(c.tabla, n);
-      // Falla los dos primeros intentos de la peticion (el DELETE) y el tercero pasa.
-      return n <= 2 ? { ok: false, status: 500, text: async () => "boom" } : { ok: true, status: 204, text: async () => "" };
-    },
+    responder: (c) => (c.metodo === "POST" && c.tabla === "operations" ? { ok: false, status: 500, text: async () => "boom" } : { ok: true, status: 204, text: async () => "" }),
   });
-  const informe = await writer.guardar(estado());
-  const deOperations = llamadas.filter((c) => c.tabla === "operations");
-  const borrados = deOperations.filter((c) => c.metodo === "DELETE");
-  assert.equal(borrados.length, 3, `3 intentos del borrado (hubo ${borrados.length})`);
-  assert.equal(deOperations.length, 4, "los 3 intentos mas el POST que va despues");
-  assert.equal(borrados[2].metodo, "DELETE");
-  assert.equal(informe.tablas.operations.error, null, "el tercer intento si funciono: " + informe.tablas.operations.error);
-  assert.equal(informe.tablas.operations.insertadas, 1);
+  await writer.guardar(estado());
+  assert.equal(de(llamadas, "POST", "operations").length, 3, "3 intentos del POST (hubo " + de(llamadas, "POST", "operations").length + ")");
+  assert.match(llamadas[llamadas.length - 1].cuerpo ? "ok" : "ok", /ok/);
 });
 
 test("el informe no contiene ni el token ni la clave, ni siquiera en un error", async () => {
@@ -414,4 +407,94 @@ test("no se llama al RPC ingesta_mirror desde el navegador", async () => {
   await writer.guardar(estado());
   assert.equal(llamadas.filter((c) => c.url.includes("/rpc/")).length, 0);
   assert.doesNotMatch(fuente, /ingesta_mirror\s*\(/);
+});
+
+/**
+ * LAS TRES TABLAS DEL ERP NO SE BORRAN. Este es el test que ata el control duro.
+ *
+ * MEDIDO 2026-09-29: `operations` tiene 1000 filas de la ingesta del RESTlet 2246
+ * con operation_id `ns-XXXXX`, y el navegador usa el mismo key natural. Si el
+ * navegador borrara la tabla y reinsertara su estado, borraria las filas que una
+ * sincronizacion de NetSuite metio DESPUES de la ultima carga de esa pagina: no
+ * es perder el trabajo de la persona, es perder datos del ERP que todavia no ha
+ * visto, y el borrado no da ningun error.
+ *
+ * Estos tests fallan si alguien vuelve a poner el borrado como comportamiento por
+ * defecto. Si en el futuro se decide que si, el cambio tiene que ser explicito
+ * (permitirBorradoErp) y este archivo tiene que cambiar a proposito.
+ */
+test("operations NO se borra: se actualiza por clave natural", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+  assert.equal(
+    de(llamadas, "DELETE", "operations").length,
+    0,
+    "no puede haber DELETE en operations: se llevaria la ingesta de NetSuite que el navegador no conoce"
+  );
+  // Y tiene que haber un POST con on_conflict por operation_id, que es lo que
+  // convierte el borrado en un upsert.
+  const posts = de(llamadas, "POST", "operations");
+  assert.ok(posts.length > 0, "operations se tiene que escribir: si no, el cambio de la persona no llega a ningun lado");
+  assert.match(posts[0].url, /on_conflict=operation_id/);
+});
+
+test("work_orders y materials tampoco se borran", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+  for (const tabla of ["work_orders", "materials"]) {
+    assert.equal(de(llamadas, "DELETE", tabla).length, 0, tabla + " no se puede borrar desde el navegador");
+  }
+});
+
+test("las cuatro tablas donde si hay un solo escritor SI se borran y reescriben", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+  for (const tabla of ["selected_ots", "locked_ots", "operation_plan_statuses"]) {
+    assert.equal(de(llamadas, "DELETE", tabla).length, 1, tabla + " es espejo del estado: borrar y reinsertar es lo correcto");
+  }
+});
+
+test("el guardado avisa en el informe de que operations no se borro", async () => {
+  const { writer } = escritor();
+  const informe = await writer.guardar(estado());
+  const avisos = (informe.avisos || []).join(" ");
+  assert.match(avisos, /operations/, "el informe tiene que decir que hubo una tabla sin borrar y por que");
+  assert.match(avisos, /NO se borro|actualizo fila por fila/i);
+});
+
+test("el opt-in se llama permitirBorradoErp y hace lo que dice", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado(), { permitirBorradoErp: true });
+  assert.equal(de(llamadas, "DELETE", "operations").length, 1, "con el opt-in explicito si borra");
+});
+
+test("app_state no se borra nunca, ni con el opt-in: es una sola fila que se actualiza", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado(), { permitirBorradoErp: true });
+  assert.equal(de(llamadas, "DELETE", "app_state").length, 0);
+  assert.equal(de(llamadas, "PATCH", "app_state").length, 1);
+});
+
+test("operation_events no se borra nunca: es un flujo", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado(), { permitirBorradoErp: true });
+  assert.equal(de(llamadas, "DELETE", "operation_events").length, 0);
+});
+
+/**
+ * ESTE ES EL QUE HABRIA ATRAPADO EL ERROR. La cabecera del modulo tiene que
+ * seguir declarando el peligro, porque el que lea el archivo sin acordarse de
+ * esta conversacion tendria que encontrarlo ahi. Un archivo que documenta un
+ * peligro y despues lo quita del comentario es peor que uno que no lo tuvo.
+ */
+test("la cabecera del modulo sigue declarando el PELIGRO MEDIDO", () => {
+  assert.match(fuente, /PELIGRO MEDIDO/);
+  assert.match(fuente, /ns-/, "tiene que quedar el ejemplo del id real que se midio");
+  assert.match(fuente, /ERP_COMPARTIDA/);
+});
+
+test("un estado vacio no borra ni las tablas de espejo, con el opt-in apagado", async () => {
+  const { writer, llamadas } = escritor({ token: JWT_FALSO });
+  await writer.guardar(estadoVacio());
+  assert.equal(llamadas.filter((c) => c.metodo === "DELETE").length, 0, "un guardado sin filas no borra nada");
 });

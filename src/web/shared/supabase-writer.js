@@ -1,4 +1,36 @@
 /**
+ * PELIGRO MEDIDO, Y TODAVIA NO RESUELTO. LEER ANTES DE USAR ESTE MODULO.
+ *
+ * `operations`, `work_orders` y `materials` NO son solo el plan: hoy las escribe
+ * la ingesta del RESTlet 2246, y MEDIDO el 2026-09-29 hay 1000 filas en
+ * `operations` con operation_id de la forma `ns-29354`, que es el id de link de
+ * NetSuite (08-netsuite.js:1066 lo construye como 'ns-' + ID (link)). El mismo
+ * prefijo y el mismo key usa la web: 02-storage.js:830 saca el id con una expresion
+ * regular que empieza por ns- y sigue con digitos.
+ * O sea que el navegador y NetSuite comparten las mismas filas y las mismas
+ * claves, y por eso el modelo de espejo (borrar la tabla y reinsertar) es
+ * DESASTROSO en esas tres tablas, por una razon que no es la de la transaccion:
+ *
+ *   Si la persona tiene la pagina abierta desde ayer y mientras tanto corrio una
+ *   sincronizacion de NetSuite que metio 200 operaciones nuevas, su estado en el
+ *   navegador NO las tiene. Un borrar-todo seguido de insertar lo que tiene
+ *   borra esas 200 filas, que son mas nuevas que las que el navegador conoce.
+ *   No es perder el trabajo de la persona: es perder datos del ERP que ella
+ *   todavia no ha visto. Y no da ningun error, porque el borrado fue con exito.
+ *
+ * Las cuatro tablas donde el espejo SI es correcto, porque solo las escribe la
+ * persona y no hay un segundo escritor: `selected_ots`, `locked_ots`,
+ * `operation_plan_statuses` y `app_state`.
+ *
+ * Como se resuelve es una decision del usuario, no mia, y esta pendiente: para
+ * las tres del ERP lo correcto es un UPSERT por clave natural en vez de un
+ * borrado, y decidir que pasa con una operacion que la persona saca del plan (una
+ * marca, no un borrado de fila). Hasta que eso se decida, este modulo NO debe
+ * guardar en `operations`, `work_orders` ni `materials`, y el arranque tiene que
+ * decirlo en pantalla. La razon esta escrita tambien en RULE-SUP-024.
+ *
+ * ------------------------------------------------------------------
+ *
  * El plan se escribe en Supabase desde la pagina, con la sesion de la persona.
  * No por el puente de Apps Script.
  *
@@ -111,6 +143,15 @@
     locked_ots: "ot",
     operation_plan_statuses: "key",
   };
+
+  /**
+   * Las tres tablas que tienen UN SEGUNDO ESCRITOR: la ingesta del RESTlet 2246.
+   * MEDIDO 2026-09-29: `operations` tiene 1000 filas con operation_id `ns-XXXXX`,
+   * que es el id de link de NetSuite (08-netsuite.js:1066), y el navegador usa el
+   * mismo key (02-storage.js:830, ns- seguido de digitos). Por eso aqui NO se borra:
+   * se hace UPSERT por clave natural. Ver el PELIGRO MEDIDO de la cabecera.
+   */
+  const ERP_COMPARTIDA = { operations: true, work_orders: true, materials: true };
 
   // Ids de los eventos que ya salieron en ESTA pagina. Sirve para que un guardado
   // que se topa con el presupuesto no repita (y no vuelva a pagar) lo que ya
@@ -241,14 +282,20 @@
   /**
    * Espejo: borra las filas y reinserta las del estado. SIN transaccion: son dos
    * peticiones y no hay rollback (esta en la cabecera, y no se disimula).
+   *
+   * `borrar` es un parametro y NO un supuesto, porque en las tres tablas del ERP
+   * el borrado es un riesgo de perder datos: ver el PELIGRO MEDIDO de la cabecera.
+   * Ahi `escribirEspejo` se llama con borrar:false y el POST queda siendo un
+   * UPSERT por clave natural, que actualiza lo que la persona toco y no toca lo
+   * que el navegador no conoce.
    */
-  async function escribirEspejo(ctx, tabla, filas, vaciar) {
+  async function escribirEspejo(ctx, tabla, filas, vaciar, borrar) {
     if (!filas.length && !vaciar) {
       return { insertadas: 0, error: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
     }
     try {
-      await pedir(ctx.token, "DELETE", tabla, { condicion: "id=neq." + UUID_NULO });
-      if (!filas.length) return { insertadas: 0, error: null };
+      if (borrar) await pedir(ctx.token, "DELETE", tabla, { condicion: "id=neq." + UUID_NULO });
+      if (!filas.length) return { insertadas: filas.length, error: null, borradas: borrar ? 0 : 0 };
       await pedir(ctx.token, "POST", tabla, {
         cuerpo: filas,
         onConflict: CLAVE_NATURAL[tabla],
@@ -835,7 +882,22 @@
       else if (tabla === "selected_ots") filas = filasSelectedOts(datos);
       else if (tabla === "locked_ots") filas = filasLockedOts(datos);
       else filas = filasPlanStatuses(datos, revision);
-      informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar);
+      // Las tres del ERP se escriben SIN borrar mientras el usuario no lo pida
+      // explicitamente. Ver el PELIGRO MEDIDO de la cabecera: un borrado desde un
+      // navegador con estado viejo se lleva las filas que la persona todavia no
+      // ha visto, y no da ningun error. El opt-in se llama
+      // `permitirBorradoErp` justamente para que en el codigo se lea que es una
+      // decision y no un olvido.
+      const borrar = !ERP_COMPARTIDA[tabla] || opts.permitirBorradoErp === true;
+      if (!borrar) {
+        informe.avisos = informe.avisos || [];
+        informe.avisos.push(
+          tabla + " se actualizo fila por fila y NO se borro: las filas que el navegador no " +
+            "conoce (ingesta de NetSuite posterior a esta carga) se dejaron intactas. " +
+            "Una operacion que la persona haya quitado del plan NO se borra; queda el valor viejo."
+        );
+      }
+      informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar && borrar, borrar);
     }
 
     informe.tablas.operation_events = await escribirEventos(ctx, filasEventos(datos, actorDe(token)));
