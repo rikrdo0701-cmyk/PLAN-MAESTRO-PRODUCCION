@@ -46,6 +46,13 @@ jobs:
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
           printf '%s' "$CLASP_JSON" > .clasp.json
           node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); if (config.scriptId === process.env.PROTECTED_SCRIPT_ID) throw new Error('CLASP_JSON apunta al script protegido y el despliegue fue bloqueado'); if (config.scriptId !== process.env.EXPECTED_SCRIPT_ID) throw new Error('CLASP_JSON no apunta al script autorizado ' + process.env.EXPECTED_SCRIPT_ID); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
+      - name: Preservar supabase-config.gs del proyecto remoto
+        # La service role key vive en un archivo del proyecto de Apps Script, no
+        # en el repo. Este paso lo baja del remoto y lo pone en dist/ para que el
+        # push lo reenvie, con lo que la clave queda gestionada por el pipeline en
+        # vez de ser un archivo suelto que depende de que nadie lo toque. Si el
+        # remoto no lo tiene todavia, avisa y sigue: no hay nada que preservar.
+        run: node scripts/appsscript-preservar-config.mjs
       - name: Subir a Apps Script
         run: |
           set +e

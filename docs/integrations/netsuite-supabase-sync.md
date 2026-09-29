@@ -280,6 +280,40 @@ del Postgres en 5432, que además salió IPv6-only). La `service_role` key **no 
 de este repositorio** y no debe agregarse: vive solo en el script parameter del deployment. Si alguien
 la necesita para otra cosa, la obtiene del panel de Supabase y la pega en NetSuite, no en un commit.
 
+### 8.1 En Apps Script, la service key vive en un archivo del PROYECTO
+
+Del lado de Apps Script hay otro consumidor de la misma clave (la ingesta, RULE-SUP-018) y ahí **no**
+se puede usar un script parameter como en NetSuite: se lee desde
+`PP_config_()` (`src/server/19-appscript-ingesta-supabase.js`), que la toma de `supabase-config.gs`.
+
+Ese archivo se pega a mano en el editor de Apps Script. **No está en el repo y no se mete en el
+build, a propósito**:
+
+- si estuviera en `src/server/`, el build lo copiaría a `dist/` y el CI lo subiría en cada push, o
+  sea que la clave acabaría publicada en GitHub Pages;
+- si una plantilla con el valor de ejemplo se subiera alguna vez, un fallo de la API de Google sería
+  justo lo que la machacara, dejando la clave real como `TU_SERVICE_ROLE_KEY`.
+
+Lo que evita eso es `scripts/appscript-preservar-config.mjs`, un paso del workflow
+`deploy-appscript.yml` que corre **antes** del `clasp push`: baja `supabase-config.gs` del proyecto
+remoto y lo pone en `dist/` para que el push lo reenvíe. Así la clave la mantiene el pipeline y no
+depende de que nadie la toque.
+
+Medido el 2026-09-29:
+
+- `clasp push --force` **no borra** del remoto los archivos que no están en el directorio local
+  (`push.ts` solo llama a `files.getChangedFiles()` y sube lo que cambia; no hay `delete` en el
+  archivo, y `--force` es "sobrescribe el manifiesto"). El archivo ya sobrevivía solo; el paso lo deja
+  gestionado.
+- El proyecto remoto **aún no tiene** `supabase-config.gs`. La ingesta no correrá hasta pegarlo.
+- Si el remoto no se puede leer, el script **retira** cualquier `supabase-config.gs` que haya en
+  `dist/` en vez de subirlo, y avisa. Se puede seguir desplegando: el remoto no se toca.
+
+Guardas de `tests/supabase-config-supervivencia.test.mjs` (7): que el build no genere la plantilla,
+que el paso vaya antes del push y con el nombre de archivo correcto, y que el camino de "el remoto sí
+lo tiene" copie el archivo a `dist/` de verdad (con un gancho `PRESERVE_CONFIG_DESDE` que ningún
+workflow puede usar).
+
 ## 9. Pruebas
 
 `tests/restlet-supabase-sync.test.mjs`, 34 pruebas. El harness AMD captura la factoría e inyecta
