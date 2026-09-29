@@ -24,9 +24,9 @@ function PP_config_() {
     consumerSecret: p.getProperty('NS_CONSUMER_SECRET'),
     token: p.getProperty('NS_TOKEN'),
     tokenSecret: p.getProperty('NS_TOKEN_SECRET'),
-    supabaseUrl: 'https://xtgtfjcwxcoxvixholpj.supabase.co',
-    supabaseKey: 'TU_SERVICE_ROLE_KEY',
-    ubicacion: '1'
+    supabaseUrl: SUPABASE_URL,
+    supabaseKey: SUPABASE_KEY,
+    ubicacion: UBICACION
   };
 }
 
