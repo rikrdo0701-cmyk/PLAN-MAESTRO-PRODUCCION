@@ -427,7 +427,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -441,6 +441,7 @@ export async function buildProject() {
     read("src/web/inspection/inspection.css"),
     read("src/web/skills/IndexSkills.html"),
     read("src/web/shared/supabase-reader.js"),
+    read("src/web/shared/supabase-auth.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
@@ -456,7 +457,15 @@ export async function buildProject() {
   }
   const app = patchPlanningApp(appSource);
   const appRuntimeClient = patchPerformanceClient(performanceClient);
-  const runtimeClients = `${supabaseReader.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  // MEDIDO 2026-09-29: la pagina sigue arrancando por el puente, asi que la sesion
+  // no bloquea nada todavia. supabase-auth.js entra PRIMERO de los runtime clients
+  // para que, cuando exista, la pantalla de entrada este puesta antes de que la
+  // app pida nada. Va antes que el lector a proposito: el lector va a necesitar el
+  // token, y este modulo es quien lo tiene.
+  const supabaseAuth = supabaseAuthRaw
+    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
+    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,
