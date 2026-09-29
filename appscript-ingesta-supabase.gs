@@ -181,8 +181,8 @@ function leerOperaciones_(config) {
       cant_total: Math.round(total),
       cant_pendiente: Math.round(Math.max(0, total - realizada)),
       estatus: traducirEstado_(r.status),
-      fecha_inicio: r.startdatetime || null,
-      fecha_fin: r.enddate || null
+      fecha_inicio: isoFecha_(r.startdatetime),
+      fecha_fin: isoFecha_(r.enddate)
     };
   });
 }
@@ -190,10 +190,17 @@ function leerOperaciones_(config) {
 function leerMateriales_(config) {
   const sql = [
     'SELECT',
-    '  wo.id, wo.tranid, mainline_item.item, BUILTIN.DF(mainline_item.item),',
-    '  comp.id, comp.item, BUILTIN.DF(comp.item),',
-    '  COALESCE(ci.description, ci.purchasedescription, ci.displayname),',
-    '  BUILTIN.DF(comp.units), ABS(NVL(comp.quantity, 0)), ABS(NVL(comp.quantityshiprecv, 0))',
+    '  wo.id AS wo_internal_id,',
+    '  wo.tranid AS ot,',
+    '  mainline_item.item AS ensamble_id,',
+    '  BUILTIN.DF(mainline_item.item) AS ensamble,',
+    '  comp.id AS line_id,',
+    '  comp.item AS componente_id,',
+    '  BUILTIN.DF(comp.item) AS componente,',
+    '  COALESCE(ci.description, ci.purchasedescription, ci.displayname) AS descripcion,',
+    '  BUILTIN.DF(comp.units) AS unidad,',
+    '  ABS(NVL(comp.quantity, 0)) AS requerido,',
+    '  ABS(NVL(comp.quantityshiprecv, 0)) AS emitido',
     'FROM transaction wo',
     "JOIN transactionline mainline_item ON mainline_item.transaction = wo.id AND mainline_item.mainline = 'T'",
     "JOIN transactionline comp ON comp.transaction = wo.id AND comp.mainline = 'F' AND comp.item IS NOT NULL",
@@ -207,17 +214,17 @@ function leerMateriales_(config) {
   ].join('\n');
   const crudas = PP_suiteql_(sql, config);
   return crudas.map(function(r) {
-    const requerido = Math.abs(Number(r.ABS_NVL_comp_quantity_0) || 0);
-    const emitido = Math.abs(Number(r.ABS_NVL_comp_quantityshiprecv_0) || 0);
+    const requerido = Math.abs(Number(r.requerido) || 0);
+    const emitido = Math.abs(Number(r.emitido) || 0);
     return {
-      line_id: String(r.comp_id || ''),
-      ot: String(r.tranid || ''),
-      wo_internal_id: String(r.wo_id || ''),
-      ensamble: String(r.BUILTIN_DF_mainline_item_item || ''),
-      componente_id: String(r.comp_item || ''),
-      componente: String(r.BUILTIN_DF_comp_item || ''),
-      descripcion: String(r.COALESCE_ci_description_ci_purchasedescription_ci_displayname || ''),
-      unidad: String(r.BUILTIN_DF_comp_units || ''),
+      line_id: String(r.line_id || ''),
+      ot: String(r.ot || ''),
+      wo_internal_id: String(r.wo_internal_id || ''),
+      ensamble: String(r.ensamble || ''),
+      componente_id: String(r.componente_id || ''),
+      componente: String(r.componente || ''),
+      descripcion: String(r.descripcion || ''),
+      unidad: String(r.unidad || ''),
       requerido: Math.round(requerido),
       emitido: Math.round(emitido),
       pendiente: Math.round(Math.max(0, requerido - emitido))
@@ -268,21 +275,25 @@ function leerCentros_(config) {
 function leerInventario_(config) {
   const sql = [
     'SELECT',
-    '  ail.item, BUILTIN.DF(ail.item), ail.location, BUILTIN.DF(ail.location),',
-    '  ail.quantityavailable, ail.quantityonhand, ail.quantitycommitted, ail.quantityintransit',
+    '  BUILTIN.DF(ail.item) AS item,',
+    '  BUILTIN.DF(ail.location) AS ubicacion,',
+    '  ail.quantityavailable AS disponible,',
+    '  ail.quantityonhand AS fisico,',
+    '  ail.quantitycommitted AS comprometido,',
+    '  ail.quantityintransit AS en_transito',
     'FROM aggregateitemlocation ail',
     'ORDER BY ail.item, ail.location'
   ].join('\n');
   const crudas = PP_suiteql_(sql, config);
   return crudas.map(function(r) {
     return {
-      item: String(r.BUILTIN_DF_ail_item || ''),
-      ubicacion: String(r.BUILTIN_DF_ail_location || ''),
-      disponible: Number(r.quantityavailable) || 0,
-      fisico: Number(r.quantityonhand) || 0,
-      comprometido: Number(r.quantitycommitted) || 0,
+      item: String(r.item || ''),
+      ubicacion: String(r.ubicacion || ''),
+      disponible: Number(r.disponible) || 0,
+      fisico: Number(r.fisico) || 0,
+      comprometido: Number(r.comprometido) || 0,
       pickeado: 0,
-      en_transito: Number(r.quantityintransit) || 0
+      en_transito: Number(r.en_transito) || 0
     };
   });
 }
