@@ -9,6 +9,12 @@ on:
       - "src/web/**"
       - "scripts/build-appscript.mjs"
       - "scripts/check-project.mjs"
+      # La propia herramienta del despliegue. MEDIDO 2026-09-29: sin estos dos,
+      # un commit que los cambia no dispara nada, y la logica que decide que se
+      # preserva y que se borra puede quedar sin probarse contra el proyecto real
+      # hasta que haya otro cambio de codigo que la dispare.
+      - "scripts/appsscript-preservar-config.mjs"
+      - "scripts/verificar-deploy-appscript.mjs"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/deploy-appscript.yml"
