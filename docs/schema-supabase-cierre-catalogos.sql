@@ -31,11 +31,16 @@
 -- percent/100). Un booleano ahi no es un detalle de tipo: es un factor de
 -- planificacion perdido.
 --
--- COMO SE APLICA. Requiere SUPABASE_DB_PASSWORD (NO esta en el entorno de este
--- repo; por eso el archivo va sin aplicar y sin numero de migracion):
+-- COMO SE APLICA. Requiere SUPABASE_DB_PASSWORD. La contrasena NO se teclea en la
+-- linea de comando: psReadLine guarda historial de todo lo que se escribe y ahi
+-- se quedaria en texto plano. El envoltorio la pide en un prompt oculto, la pasa
+-- solo por la memoria del proceso hijo y la borra al terminar:
 --
---   $env:SUPABASE_DB_PASSWORD = '<password de postgres>'
---   node scripts/apply-sql-supabase.mjs docs/schema-supabase-cierre-catalogos.sql
+--   powershell -NoProfile -File scripts\aplicar-ddl-cierre.ps1
+--
+-- (equivale a poner SUPABASE_DB_PASSWORD en el entorno y correr
+-- scripts/apply-sql-supabase.mjs con este archivo, que sigue siendo la via si ya
+-- tenes la variable en el entorno.)
 --
 -- Es IDEMPOTENTE: todo es add column if not exists / create index if not exists,
 -- y la conversion de solapamiento fija 1 (el default documentado de la hoja).
