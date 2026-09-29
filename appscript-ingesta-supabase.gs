@@ -68,25 +68,37 @@ function PP_oauthEncode_(value) {
 
 function PP_suiteql_(sql, config) {
   const endpoint = 'https://' + config.accountId.toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-  const query = { limit: 1000, offset: 0 };
-  const url = endpoint + '?' + Object.keys(query).map(function(key) {
-    return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
-  }).join('&');
-  const res = UrlFetchApp.fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
-      'Prefer': 'transient'
-    },
-    payload: JSON.stringify({ q: sql }),
-    muteHttpExceptions: true
-  });
-  const json = JSON.parse(res.getContentText());
-  if (res.getResponseCode() !== 200) {
-    throw new Error('SuiteQL ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+  const todas = [];
+  let offset = 0;
+  const limite = 1000;
+  while (true) {
+    const query = { limit: limite, offset: offset };
+    const url = endpoint + '?' + Object.keys(query).map(function(key) {
+      return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
+    }).join('&');
+    const res = UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
+        'Prefer': 'transient'
+      },
+      payload: JSON.stringify({ q: sql }),
+      muteHttpExceptions: true
+    });
+    const json = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      throw new Error('SuiteQL ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+    }
+    const items = json.items || [];
+    for (let i = 0; i < items.length; i++) todas.push(items[i]);
+    if (items.length < limite) break;
+    offset += limite;
+    // NetSuite devuelve 404 cuando el offset se pasa del total. Es la forma
+    // de decir "no hay mas filas": se trata como fin de paginacion, no error.
+    if (res.getResponseCode() === 404) break;
   }
-  return json.items || [];
+  return todas;
 }
 
 // =============================================================================
@@ -156,10 +168,18 @@ function leerWorkorders_(config) {
 function leerOperaciones_(config) {
   const sql = [
     'SELECT',
-    '  mot.id, wo.tranid, mot.operationsequence, mot.manufacturingworkcenter,',
-    '  BUILTIN.DF(mot.manufacturingworkcenter), mot.inputquantity,',
-    '  NVL(mot.completedquantity, 0), mot.setuptime, NVL(mot.runrate, 0),',
-    '  mot.status, mot.startdatetime, mot.enddate',
+    '  mot.id AS id,',
+    '  wo.tranid AS ot,',
+    '  mot.operationsequence AS operationsequence,',
+    '  mot.manufacturingworkcenter AS manufacturingworkcenter,',
+    '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
+    '  mot.inputquantity AS inputquantity,',
+    '  NVL(mot.completedquantity, 0) AS completedquantity,',
+    '  mot.setuptime AS setuptime,',
+    '  NVL(mot.runrate, 0) AS runrate,',
+    '  mot.status AS status,',
+    '  mot.startdatetime AS startdatetime,',
+    '  mot.enddate AS enddate',
     'FROM manufacturingoperationtask mot',
     'JOIN transaction wo ON wo.id = mot.workorder',
     "WHERE wo.type = 'WorkOrd'",
@@ -174,10 +194,10 @@ function leerOperaciones_(config) {
     const realizada = Math.abs(Number(r.completedquantity) || 0);
     return {
       operation_id: 'ns-' + String(r.id),
-      ot: String(r.tranid || ''),
+      ot: String(r.ot || ''),
       secuencia: Number(r.operationsequence) || 0,
       ct: String(r.manufacturingworkcenter || ''),
-      descripcion: String(r.BUILTIN_DF_mot_manufacturingworkcenter || ''),
+      descripcion: String(r.ct_nombre || ''),
       cant_total: Math.round(total),
       cant_pendiente: Math.round(Math.max(0, total - realizada)),
       estatus: traducirEstado_(r.status),
@@ -189,7 +209,7 @@ function leerOperaciones_(config) {
 
 function leerMateriales_(config) {
   const sql = [
-    'SELECT',
+    'SELECT DISTINCT',
     '  wo.id AS wo_internal_id,',
     '  wo.tranid AS ot,',
     '  mainline_item.item AS ensamble_id,',
@@ -235,8 +255,14 @@ function leerMateriales_(config) {
 function leerItems_(config) {
   const sql = [
     'SELECT',
-    '  i.id, i.itemid, i.displayname, i.description, i.purchasedescription,',
-    '  i.itemtype, i.isinactive, i.lastmodifieddate',
+    '  i.id AS id,',
+    '  i.itemid AS itemid,',
+    '  i.displayname AS displayname,',
+    '  i.description AS description,',
+    '  i.purchasedescription AS purchasedescription,',
+    '  i.itemtype AS itemtype,',
+    '  i.isinactive AS isinactive,',
+    '  i.lastmodifieddate AS lastmodifieddate',
     'FROM item i',
     'ORDER BY i.itemid'
   ].join('\n');
@@ -301,8 +327,16 @@ function leerInventario_(config) {
 function leerOrdenesVenta_(config) {
   const sql = [
     'SELECT',
-    '  t.id, t.tranid, BUILTIN.DF(t.entity), t.entity, t.trandate,',
-    '  BUILTIN.DF(t.status), BUILTIN.DF(t.approvalstatus), t.foreigntotal, t.currency, NVL(t.memo, \'\')',
+    '  t.id AS id,',
+    '  t.tranid AS tranid,',
+    '  BUILTIN.DF(t.entity) AS entity_name,',
+    '  t.entity AS entity_id,',
+    '  t.trandate AS trandate,',
+    '  BUILTIN.DF(t.status) AS status,',
+    '  BUILTIN.DF(t.approvalstatus) AS approvalstatus,',
+    '  t.foreigntotal AS foreigntotal,',
+    '  t.currency AS currency,',
+    "  NVL(t.memo, '') AS memo",
     'FROM transaction t',
     "WHERE t.type = 'SalesOrd'",
     "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
@@ -315,11 +349,11 @@ function leerOrdenesVenta_(config) {
     return {
       folio: String(r.tranid || ''),
       sales_order_id: String(r.id || ''),
-      cliente: String(r.BUILTIN_DF_t_entity || ''),
-      cliente_id: Number(r.entity) || 0,
+      cliente: String(r.entity_name || ''),
+      cliente_id: Number(r.entity_id) || 0,
       fecha: isoFecha_(r.trandate),
-      estatus: String(r.BUILTIN_DF_t_status || ''),
-      aprobacion: String(r.BUILTIN_DF_t_approvalstatus || ''),
+      estatus: String(r.status || ''),
+      aprobacion: String(r.approvalstatus || ''),
       total: Number(r.foreigntotal) || 0,
       moneda: Number(r.currency) || 0,
       memo: String(r.memo || ''),
