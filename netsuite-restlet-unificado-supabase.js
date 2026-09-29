@@ -68,6 +68,10 @@ define(['N/query'], (query) => {
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%COMPLET%'",
+      // Solo la planta 1 (Planta MM del Llano). La ubicacion de la OT vive en la linea
+      // mainline (transactionline.location); 74 de 282 OTs abiertas son de la planta 2
+      // (V.Guerrero) y el app solo trabaja la 1 (decision del usuario 2026-09-29).
+      '  AND tl.location = 1',
       'ORDER BY t.tranid'
     ].join('\n');
     const rows = runSuiteQL_(sql);
@@ -125,6 +129,10 @@ define(['N/query'], (query) => {
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
       "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
+      // Mismo filtro de planta que workorders_: la OT es de la planta 1 si la linea
+      // mainline tiene location=1 (medido 2026-09-29: 72 OTs con operaciones son de la
+      // planta 2). EXISTS evita duplicar si hubiera mas de una mainline.
+      "  AND EXISTS (SELECT 1 FROM transactionline tl WHERE tl.transaction = wo.id AND tl.mainline = 'T' AND tl.location = 1)",
       'ORDER BY wo.id, mot.operationsequence, mot.id'
     ].join('\n');
     const rows = runSuiteQL_(sql);
@@ -198,6 +206,9 @@ define(['N/query'], (query) => {
       // real: se excluye para que no ensucie BOMs (medido 2026-09-29: 1930 de 2376
       // filas de materials eran ese componente, en 230 OTs).
       "  AND UPPER(BUILTIN.DF(comp.item)) <> 'COSTO 0 MANUFACTURA'",
+      // Mismo filtro de planta que workorders_: la ubicacion de la OT vive en la
+      // mainline (decision del usuario 2026-09-29: solo planta 1).
+      '  AND mainline_item.location = 1',
       'ORDER BY wo.tranid, comp.id'
     ].join('\n');
     const rows = runSuiteQL_(sql);

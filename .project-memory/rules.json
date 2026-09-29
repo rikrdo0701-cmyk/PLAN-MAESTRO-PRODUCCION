@@ -1822,6 +1822,15 @@
       "source": "queja del usuario 2026-09-29; medido con .openchamber/diag-workorders-descripcion.mjs (purchasedescription vacia, i.description = 'Codo 5\" x 90° Pintado', i.memo/i.softdescript/salesdescription dan 500) y .openchamber/diag-workorders-descripcion-aplicado.mjs (282 workorders con el nuevo COALESCE, 266 con texto real); netsuite-restlet-unificado-supabase.js workorders_ e items_",
       "domain": "supabase",
       "updated_at": "2026-09-29"
+    },
+    {
+      "rule_id": "RULE-SUP-013",
+      "name": "La ingesta solo trae OTs de la planta 1: filtro por transactionline.location = 1 en workorders, operaciones y materiales",
+      "status": "implementada",
+      "rule": "DECISION DEL USUARIO el 2026-09-29 (respuesta a la OT 3631 reportada como 'sale en el listado de workorders pero tiene ubicacion 2'). El app solo trabaja la Planta MM del Llano (ubicacion 1) y hasta entonces la ingesta empujaba todas las OTs abiertas sin distinguir planta: medido el 2026-09-29, de las 282 OTs abiertas, 74 (26 %) son de la planta 2 (V.Guerrero) — la ubicacion NO esta en `transaction` (tabla sin columna de location) sino en la linea mainline: `transactionline.location` con valores 1 (Planta MM del Llano), 2 (Planta V.Guerrero) y 3 (PLANTA). Los tres lectores del RESTlet 2246 atados a la OT filtran por planta 1: workorders_ con 'AND tl.location = 1' (su JOIN a transactionline mainline ya existe), materiales_ con 'AND mainline_item.location = 1' (JOIN mainline_item ya existe), operaciones_ con EXISTS en transactionline mainline (immune a mainlines duplicadas; SuiteQL lo acepta, medido). Verificado con los SQL exactos del RESTlet el 2026-09-29: 208 OTs en los tres lectores (antes 282), 0 restos de planta 2; la OT 3631 y la 271 quedan fuera. La ubicacion NO se guarda en Supabase (las tablas no tienen columna): el filtro vive SOLO en el SQL del RESTlet. items, machines, inventory y sales_orders no se tocan porque no estan atados a la OT. OJO para sondas de esta cuenta: la paginacion con offset se SOLAPA (la pagina 2000 repite desde el inicio) y el offset maximo es 2000; contar filas requiere dedupe por id o una sola pagina.",
+      "source": "decision del usuario 2026-09-29 (OT 3631 reportada con ubicacion 2); medido con .openchamber/diag-workorders-ubicacion.mjs (transactionline.location = 1/2/3; 74 OTs planta 2) y .openchamber/diag-workorders-ubicacion-aplicado.mjs (SQL exactos: 208 OTs, OT 3631 fuera); netsuite-restlet-unificado-supabase.js workorders_/operaciones_/materiales_",
+      "domain": "supabase",
+      "updated_at": "2026-09-29"
     }
   ]
 }
