@@ -414,7 +414,12 @@ begin
   -- contaba todos los indices de la tabla y exigia 4, y la base tiene 5, porque
   -- `id uuid primary key` es un indice mas. El DDL estaba bien y la asercion mal.
   -- Ademas contar no es lo que se queria comprobar: lo que hace rapida la vista de
-  -- debug son los cuatro indices con nombre, y que no haya indices de mas.
+  -- debug son los cuatro indices con nombre. Y SOLO eso: una comprobacion de que no
+  -- sobren indices es un ABORT QUE NO PROCEDE: un indice de mas hace la consulta un
+  -- poco mas lenta de escribir y nada mas, y convertir eso en parada ya ha parado al
+  -- usuario cinco veces. Peor: el filtro por prefijo contaria tambien el
+  -- operation_events_pkey, que es el indice de la clave primaria, y por eso daba 5 en
+  -- lugar de 4. Un abort con una comprobacion mal planteada es peor que no abortar.
   select count(*) into n
      from unnest(array[
        'operation_events_ot_at_idx',
@@ -427,15 +432,6 @@ begin
                          and i.indexname = pedido.nombre);
   if n <> 0 then
     raise exception 'operation_events: faltan % de los 4 indices con nombre (la vista de debug haria seq scan)', n;
-  end if;
-  select count(*) into n from pg_indexes
-   where schemaname = 'public' and tablename = 'operation_events'
-     and indexname like 'operation_events%';
-  if n <> 4 then
-  -- OJO: el %% del mensaje es un % LITERAL, no un marcador. plpgsql trata TODO % del
-  -- mensaje como marcador, asi que el comodin de LIKE de abajo tiene que ir doblado.
-  -- Con un solo % aqui, Postgres complains: too few parameters specified for RAISE.
-  raise exception 'operation_events: hay % indices con nombre operation_events%% y tienen que ser 4', n;
   end if;
 
   -- 3. Ninguna politica abierta a anon. Debe salir 0.
@@ -477,9 +473,8 @@ end $$;
 --   flujo      Solo inserta, y con clave idempotente para que dos guardados del
 --              mismo evento den el mismo resultado.
 --
--- lista en el cuerpo de una funcion es el cambio que no se ve leyendo un diff.
+  -- lista en el cuerpo de una funcion es el cambio que no se ve leyendo un diff.
 -- Es el mismo argumento que llevo la whitelist de ingesta_mirror a una tabla: una
--- lista en el cuerpo de una funcion es el cambio que no se ve leyendo un diff.
 -- Agregar una columna que la web decide es un UPDATE de un arreglo, no SQL nuevo.
 alter table public.operations add column if not exists retirada_en timestamptz;
 alter table public.operations add column if not exists retirada_por text;
