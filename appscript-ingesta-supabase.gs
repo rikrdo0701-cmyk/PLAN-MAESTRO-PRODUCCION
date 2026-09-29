@@ -107,6 +107,43 @@ function PP_restletPaginado_(script, deploy, body, config) {
 }
 
 // =============================================================================
+// SuiteQL (para centros de trabajo — entitygroup)
+// =============================================================================
+
+function PP_suiteql_(sql, config) {
+  const endpoint = 'https://' + config.accountId.toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+  const todas = [];
+  let offset = 0;
+  const limite = 1000;
+  while (true) {
+    const query = { limit: limite, offset: offset };
+    const url = endpoint + '?' + Object.keys(query).map(function(key) {
+      return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
+    }).join('&');
+    const res = UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
+        'Prefer': 'transient'
+      },
+      payload: JSON.stringify({ q: sql }),
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() === 404) break;
+    const json = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      throw new Error('SuiteQL ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+    }
+    const items = json.items || [];
+    for (let i = 0; i < items.length; i++) todas.push(items[i]);
+    if (items.length < limite) break;
+    offset += limite;
+  }
+  return todas;
+}
+
+// =============================================================================
 // Supabase (PostgREST)
 // =============================================================================
 
@@ -187,7 +224,9 @@ function leerWorkorders_(config) {
 }
 
 function leerOperaciones_(config) {
-  const filas = PP_restletPaginado_('1762', '17', {}, config);
+  // El RESTlet 1762 devuelve 280 filas sin parametros, pero 2350 con los correctos.
+  // El truco: pedir pageSize grande para que traiga todas en una sola pagina.
+  const filas = PP_restletPaginado_('1762', '17', { pageSize: 5000 }, config);
   return deduplicar_(filas.map(function(r) {
     const total = Math.abs(Number(r.qty_to_process) || 0);
     const realizada = Math.abs(Number(r.qty_completed) || 0);
