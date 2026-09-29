@@ -301,9 +301,11 @@ lectores de OT (`workorders_`, `operaciones_`, `materiales_`) filtran por la ubi
 mainline (`transactionline.location = 1`, Planta MM del Llano): `workorders_` y `materiales_` con
 `AND tl.location = 1` / `AND mainline_item.location = 1` (su JOIN mainline ya existe), `operaciones_`
 con `EXISTS (SELECT 1 FROM transactionline tl WHERE tl.transaction = wo.id AND tl.mainline = 'T'
-AND tl.location = 1)` (immune a mainlines duplicadas). Medido: de 282 OTs abiertas, 74 (26 %) eran de
-la planta 2 (V.Guerrero) y quedan fuera — p. ej. la OT 3631 (reportada por el usuario el 2026-09-29) y
-la 271. Resultado verificado con los SQL exactos del RESTlet: 208 OTs (y 208 para operaciones y
-materiales), 0 restos de la planta 2. La ubicación NO se guarda en Supabase (sin columna): el filtro
-vive solo en el SQL del RESTlet. `items`, `machines`, `inventory` y `sales_orders` no se tocan (no
-están atados a la OT). RULE-SUP-013.
+AND tl.location = 1)` (immune a mainlines duplicadas), e `inventario_` con `WHERE ail.location = 1`
+sobre `aggregateitemlocation` (pedido del usuario el mismo día: "también usa ubicación 1 en
+inventario"; el par item/location ya trae la ubicación como fila). Medido: de 282 OTs abiertas, 74
+(26 %) eran de la planta 2 (V.Guerrero) y quedan fuera — p. ej. la OT 3631 (reportada por el usuario
+el 2026-09-29) y la 271; inventario baja de ~2 400 a ~1 933 pares. Resultado verificado con los SQL
+exactos del RESTlet: 208 OTs (y 208 para operaciones y materiales), 0 restos de la planta 2. La
+ubicación NO se guarda en Supabase (sin columna): el filtro vive solo en el SQL del RESTlet.
+`items`, `machines` y `sales_orders` no se tocan (no están atados a la OT). RULE-SUP-013.

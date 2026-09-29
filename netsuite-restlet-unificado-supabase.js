@@ -303,6 +303,10 @@ define(['N/query'], (query) => {
       '  ail.quantitycommitted AS comprometido,',
       '  ail.quantityintransit AS en_transito',
       'FROM aggregateitemlocation ail',
+      // Misma decision de planta que workorders/operaciones/materiales (RULE-SUP-013):
+      // solo la ubicacion 1 (Planta MM del Llano). Verificado: de 2401 pares item/location,
+      // 2426 total en la corrida anterior; aqui el filtro deja solo la planta 1.
+      "WHERE ail.location = 1",
       'ORDER BY ail.item, ail.location'
     ].join('\n');
     const rows = runSuiteQL_(sql);
