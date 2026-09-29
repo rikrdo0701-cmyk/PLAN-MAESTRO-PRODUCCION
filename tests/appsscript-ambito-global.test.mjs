@@ -52,6 +52,37 @@ function funciones(txt) {
   return fuera;
 }
 
+/** Nombres declarados en el ambito global del archivo: funciones, const, let, var. */
+function declarados(txt) {
+  const fuera = new Set(funciones(txt));
+  for (const m of txt.matchAll(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm)) fuera.add(m[1]);
+  return fuera;
+}
+
+/** Identificadores que el archivo USA. Se quitan los que declara y los de objeto. */
+function identificadoresUsados(txt) {
+  const sinComentarios = txt
+    .split(/\r?\n/)
+    .map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? "" : l))
+    .join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+  const usados = new Set();
+  for (const m of sinComentarios.matchAll(/\b([A-Za-z_$][\w$]*)\b/g)) usados.add(m[1]);
+  return usados;
+}
+
+// Globals de Apps Script que no hay que declarar, y los que aporta el archivo de
+// credenciales que pega el usuario (supabase-config.gs), que no se despliega.
+const GLOBALS_APPS_SCRIPT = new Set([
+  "console", "JSON", "Math", "Date", "Object", "Array", "String", "Number", "Boolean", "RegExp", "Error", "Promise",
+  "Utilities", "PropertiesService", "ScriptApp", "UrlFetchApp", "SpreadsheetApp", "Logger", "Session", "CacheService",
+  "LockService", "HtmlService", "MailApp", "DriveApp", "JSON2", "encodeURIComponent", "decodeURIComponent", "isNaN", "parseInt", "parseFloat", "undefined",
+]);
+const GLOBALS_DE_CONFIG = new Set(["SUPABASE_URL", "SUPABASE_KEY", "UBICACION"]);
+// Palabras clave y nombres de la biblioteca estandar: no son declaraciones.
+const PALABRAS = new Set(["function", "const", "let", "var", "return", "if", "else", "for", "while", "of", "in", "new", "try", "catch", "finally", "throw", "typeof", "null", "undefined", "true", "false", "this", "delete", "void", "do", "switch", "case", "break", "continue", "default", "class", "extends", "yield", "await", "async", "instanceof"]);
+
 test("hay archivos que mirar", () => {
   assert.ok(archivos.length >= 19, `solo ${archivos.length} archivos en src/server/`);
 });
@@ -95,6 +126,40 @@ test("las copias duplicadas son de verdad el mismo punto de entrada, no dos serv
   assert.ok(
     archivos.indexOf("17-inspection-drawing-service.js") > archivos.indexOf("16-inspection-service.js"),
     "17- tiene que cargarse despues de 16- para que sea el que gana"
+  );
+});
+
+test("la ingesta no USA nada que este sin declarar", async () => {
+  // El bug que casi se sube a produccion. El archivo usaba RESTLET_URL,
+  // RESTLET_SCRIPT y RESTLET_DEPLOY sin declararlos, porque eran const del .gs de
+  // la raiz, que no se despliega. Referenciar un global inexistente NO es error de
+  // parse: el proyecto compila, el puente web responde, el workflow sale verde y
+  // solo revienta cuando alguien ejecuta ingesta(), que es la unica prueba que no
+  // se puede hacer desde aqui. Por eso se comprueba estaticamente.
+  const ingesta = await readFile(new URL("../src/server/19-appscript-ingesta-supabase.js", import.meta.url), "utf8");
+
+  // Lo declarado en cualquier archivo que SI se despliega.
+  const enProyecto = new Set();
+  for (const f of archivos) {
+    if (f === "19-appscript-ingesta-supabase.js") continue;
+    for (const n of declarados(await readFile(path.join(SERVER, f), "utf8"))) enProyecto.add(n);
+  }
+  const propios = declarados(ingesta);
+  const conocidos = new Set([...GLOBALS_APPS_SCRIPT, ...GLOBALS_DE_CONFIG, ...PALABRAS, ...enProyecto, ...propios]);
+
+  // Solo interesan los que parecen del proyecto: PP_*, o los de la ingesta. Los
+  // identificadores de propiedades (objeto.metodo) y los literales se filtran
+  // porque no son declaraciones.
+  const sospechosos = [...identificadoresUsados(ingesta)]
+    .filter((n) => !conocidos.has(n))
+    .filter((n) => /^PP_/.test(n) || ["ingesta", "deduplicar_", "RESTLET_URL", "RESTLET_SCRIPT", "RESTLET_DEPLOY"].includes(n))
+    .sort();
+
+  assert.deepEqual(
+    sospechosos,
+    [],
+    "identificadores usados y no declarados ni en src/server/ ni como global de Apps Script:\n" +
+      sospechosos.map((n) => `  ${n}`).join("\n")
   );
 });
 

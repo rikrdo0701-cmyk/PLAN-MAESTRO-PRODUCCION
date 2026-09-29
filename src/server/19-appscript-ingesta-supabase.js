@@ -58,6 +58,22 @@
  */
 
 // =============================================================================
+// El RESTlet unificado
+// =============================================================================
+
+// MEDIDO 2026-09-29: el archivo suelto de la raiz declaraba estos tres y el nuevo
+// los USA sin declararlos, porque se dio por hecho que venian de ahi. Con el .gs
+// de la raiz sin desplegar, ingesta() moria con "RESTLET_URL is not defined" en
+// tiempo de ejecucion, y nada lo delata antes: referenciar un global no declarado
+// NO es error de parse, el proyecto compila, el puente web funciona y el workflow
+// sale en verde. Solo revienta cuando alguien ejecuta ingesta(), que es justo lo
+// que no se puede probar desde aqui. Por eso hay un test que comprueba que no se
+// usa nada sin declarar.
+const RESTLET_URL = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
+const RESTLET_SCRIPT = '2246';
+const RESTLET_DEPLOY = '1';
+
+// =============================================================================
 // Configuracion — NS_* de las Script Properties + Supabase del archivo aparte
 // =============================================================================
 
