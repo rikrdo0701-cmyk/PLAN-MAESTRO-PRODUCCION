@@ -10818,6 +10818,10 @@ async function loadAppSheetIfAvailable(showMessage) {
       confirmStaleLocalRefresh: confirmLatestModificationRefresh,
     });
     appSheetAvailable = true;
+    // Lo que se cambio antes de que el puente estuviera listo se perdio (ver
+    // queueAppSheetSave). Aqui se recupera: se guardan los ambitos que quedaron
+    // marcados, no un "plan" por omision, para no perder el metodo correcto.
+    appSheetFlushPendingScopes();
     if (showMessage) showToast(`Hoja app cargada: ${state.operations.length} operaciones`);
     return true;
   } catch (error) {
@@ -13441,8 +13445,16 @@ function saveState(saveScope = "plan") {
 function queueAppSheetSave(saveScope = "plan") {
   const scope = String(saveScope || "plan").trim().toLowerCase();
   if (scope === "local" || scope === "ui") return;
-  if (!appSheetAvailable) return;
+  // MEDIDO 2026-09-29: esto va ANTES de mirar appSheetAvailable, y antes no. Con
+  // el puente todavia no disponible la funcion se devolvia aqui, sin marcar el
+  // ambito como sucio: el cambio no se guardaba, no se avisaba y no quedaba en
+  // cola. Se perdia entero. Pasado: la pagina tardo en cargar, el usuario anadio
+  // una maquina con la pagina a medio arrancar, el guardado se evaporo sin dejar
+  // rastro, el espejo de catalogos nunca corrio y la revision del plan se quedo
+  // en 4142 con savedAt 15:30. Ahora el ambito se marca siempre y lo vuelca
+  // appSheetFlushPendingScopes() cuando el puente queda disponible.
   appSheetMarkDirtyScope(scope);
+  if (!appSheetAvailable) return;
   if (operationStatusSavesInFlight) return;
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
@@ -13577,7 +13589,23 @@ async function saveAppSheet(showMessage) {
     appSheetReleaseSaveGate(saveGate);
     if (appSheetSavePending) {
       appSheetSavePending = false;
-      queueAppSheetSave();
+      // MEDIDO 2026-09-29: aqui se llamaba queueAppSheetSave() sin ambito, y su
+      // valor por omision es "plan", que se mete en appSheetDirtyScopes. Si lo
+      // pendiente era "catalogs", el conjunto quedaba {catalogs, plan} y
+      // appSheetSaveMethodForScopes caia en saveAppState en vez de
+      // saveCatalogState: saveAppState -> PP_writeState_ NO escribe las hojas de
+      // catalogo ni dispara el espejo, o sea que un cambio de catalogo reencolado
+      // por aqui se guardaba a medias sin avisar. Con los ambitos ya marcados,
+      // lo unico que hace falta es reprogramar el temporizador.
+      if (appSheetDirtyScopes.size) {
+        window.clearTimeout(appSheetSaveTimer);
+        appSheetSaveTimer = window.setTimeout(() => {
+          appSheetSaveTimer = null;
+          saveAppSheet(false);
+        }, 900);
+      } else {
+        queueAppSheetSave();
+      }
     }
   }
 }
@@ -13586,6 +13614,27 @@ function appSheetMarkDirtyScope(saveScope) {
   const scope = String(saveScope || "plan").trim().toLowerCase();
   if (scope === "local" || scope === "ui") return;
   appSheetDirtyScopes.add(scope || "plan");
+}
+
+/**
+ * Programa el guardado de los ambitos que quedaron marcados sucios mientras el
+ * puente no estaba disponible. No borra las marcas: las consume saveAppSheet con
+ * appSheetConsumeDirtyScopes, que es lo que decide el metodo (saveCatalogState,
+ * saveSkillState o saveAppState segun que ambitos sean).
+ *
+ * Devuelve si programo algo. Si no hay nada marcado NO programa: sin este if,
+ * cada carga de pagina escribiria el plan entero solo para subir la revision.
+ */
+function appSheetFlushPendingScopes() {
+  if (!appSheetAvailable) return false;
+  if (!appSheetDirtyScopes.size) return false;
+  if (appSheetSaveInFlight || operationStatusSavesInFlight) return false;
+  window.clearTimeout(appSheetSaveTimer);
+  appSheetSaveTimer = window.setTimeout(() => {
+    appSheetSaveTimer = null;
+    saveAppSheet(false);
+  }, 900);
+  return true;
 }
 
 function appSheetConsumeDirtyScopes() {
