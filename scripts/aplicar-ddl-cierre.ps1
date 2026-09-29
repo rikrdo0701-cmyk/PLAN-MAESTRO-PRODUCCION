@@ -61,9 +61,29 @@ if (-not $Si) {
   }
 }
 
-$seguro = Read-Host '  Password de postgres' -AsSecureString
+Write-Host ''
+Write-Host '  Escribe la contrasena y pulsa Enter.' -ForegroundColor Cyan
+Write-Host '  NO aparecera nada al teclear, ni asteriscos: es a proposito (no hace eco).' -ForegroundColor DarkGray
+Write-Host '  Si parece que no avanza, sigue escribiendo: esta esperando caracteres.' -ForegroundColor DarkGray
+Write-Host ''
+
+$seguro = Read-Host '  Contrasena' -AsSecureString
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($seguro)
 $clave = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+
+# Sin esto, una contrasena vacia (Enter sin teclear) llegaba al aplicador como
+# SUPABASE_DB_PASSWORD='' y el unico sintoma era "Falta SUPABASE_DB_PASSWORD",
+# que parece un fallo del script y no de quien lo ejecuto. Se comprueba aqui y
+# se dice cuantos caracteres llegaron: el largo no es un secreto, la clave si.
+if ([string]::IsNullOrWhiteSpace($clave)) {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) | Out-Null
+  Write-Host ''
+  Write-Host '  llego VACIA: no se escribio nada antes de pulsar Enter.' -ForegroundColor Yellow
+  Write-Host '  No se aplico nada. Vuelve a correrlo y teclea la contrasena.' -ForegroundColor Yellow
+  exit 3
+}
+$longitud = $clave.Length
+Write-Host "  recibida ($longitud caracteres). Conectando..." -ForegroundColor DarkGray
 
 try {
   # Solo para este proceso hijo. Nunca se escribe en disco.
