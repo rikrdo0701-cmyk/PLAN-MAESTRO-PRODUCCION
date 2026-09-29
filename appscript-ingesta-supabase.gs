@@ -1,19 +1,18 @@
 /**
  * Ingesta NetSuite -> Supabase desde Google Apps Script.
  *
- * Llama al endpoint SuiteQL de NetSuite (con OAuth 1.0a) y escribe en Supabase
- * (PostgREST). Se ejecuta cada 15 minutos, lunes a viernes, 7am-5pm.
+ * Usa los RESTlets existentes (1762, 1763, 1764, 1765, 1766, 1769) que ya
+ * funcionan en producción, en vez de escribir SQL nuevo.
  *
- * NO escribe en NetSuite: solo lee (SuiteQL SELECT) y escribe en Supabase.
+ * NO escribe en NetSuite: solo lee y escribe en Supabase.
  *
- * Configuracion: las credenciales van como constantes abajo (NS_CONFIG y
- * SUPABASE_CONFIG). Si algun dia hace falta rotarlas, se cambian aqui.
- *
- * Trigger: cada 15 minutos, lun-vie, 7am-5pm (se configura en Apps Script).
+ * Trigger: cada 15 minutos, lun-vie, 7am-5pm.
  */
 
+const RESTLET_URL = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
+
 // =============================================================================
-// Configuracion — NS_* de las Script Properties existentes, SUPABASE_* constantes
+// Configuracion — NS_* de las Script Properties existentes
 // =============================================================================
 
 function PP_config_() {
@@ -31,7 +30,7 @@ function PP_config_() {
 }
 
 // =============================================================================
-// OAuth 1.0a (mismo algoritmo que ya funciona en 08-netsuite.js)
+// OAuth 1.0a
 // =============================================================================
 
 function PP_oauthHeader_(method, endpoint, query, config) {
@@ -63,40 +62,44 @@ function PP_oauthEncode_(value) {
 }
 
 // =============================================================================
-// SuiteQL
+// Llamada generica a un RESTlet con paginacion
 // =============================================================================
 
-function PP_suiteql_(sql, config) {
-  const endpoint = 'https://' + config.accountId.toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+function PP_restlet_(script, deploy, body, config) {
+  const endpoint = RESTLET_URL;
+  const query = { script: script, deploy: deploy };
+  const url = endpoint + '?' + Object.keys(query).map(function(key) {
+    return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
+  }).join('&');
+  const res = UrlFetchApp.fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
+      'Prefer': 'transient'
+    },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true
+  });
+  const json = JSON.parse(res.getContentText());
+  if (res.getResponseCode() !== 200) {
+    throw new Error('RESTlet ' + script + ' ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+  }
+  return json;
+}
+
+function PP_restletPaginado_(script, deploy, body, config) {
   const todas = [];
-  let offset = 0;
-  const limite = 1000;
+  let pageIndex = 0;
+  const pageSize = body.pageSize || 1000;
   while (true) {
-    const query = { limit: limite, offset: offset };
-    const url = endpoint + '?' + Object.keys(query).map(function(key) {
-      return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
-    }).join('&');
-    const res = UrlFetchApp.fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
-        'Prefer': 'transient'
-      },
-      payload: JSON.stringify({ q: sql }),
-      muteHttpExceptions: true
-    });
-    const json = JSON.parse(res.getContentText());
-    if (res.getResponseCode() !== 200) {
-      throw new Error('SuiteQL ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
-    }
-    const items = json.items || [];
-    for (let i = 0; i < items.length; i++) todas.push(items[i]);
-    if (items.length < limite) break;
-    offset += limite;
-    // NetSuite devuelve 404 cuando el offset se pasa del total. Es la forma
-    // de decir "no hay mas filas": se trata como fin de paginacion, no error.
-    if (res.getResponseCode() === 404) break;
+    body.pageIndex = pageIndex;
+    body.pageSize = pageSize;
+    const json = PP_restlet_(script, deploy, body, config);
+    const rows = json.rows || [];
+    for (let i = 0; i < rows.length; i++) todas.push(rows[i]);
+    if (!json.hasMore) break;
+    pageIndex++;
   }
   return todas;
 }
@@ -127,239 +130,27 @@ function PP_supabaseUpsert_(tabla, filas, clave, config) {
 }
 
 // =============================================================================
-// Lectores (misma logica que el RESTlet, verificada contra el ERP real)
+// Utilidades
 // =============================================================================
 
-function leerWorkorders_(config) {
-  const sql = [
-    'SELECT DISTINCT',
-    '  t.id AS wo_internal_id,',
-    '  t.tranid AS ot,',
-    '  BUILTIN.DF(tl.item) AS articulo,',
-    '  COALESCE(i.description, i.purchasedescription, i.displayname) AS descripcion,',
-    '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
-    '  BUILTIN.DF(t.status) AS estatus,',
-    '  BUILTIN.DF(t.entity) AS cliente,',
-    '  t.startdate AS fecha_inicio,',
-    '  t.enddate AS fecha_fin',
-    'FROM transaction t',
-    "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
-    'LEFT JOIN item i ON i.id = tl.item',
-    "WHERE t.type = 'WorkOrd'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%COMPLET%'",
-    'ORDER BY t.tranid'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    return {
-      ot: String(r.ot || ''),
-      wo_internal_id: String(r.wo_internal_id || ''),
-      articulo: String(r.articulo || ''),
-      descripcion: String(r.descripcion || ''),
-      cantidad: Math.abs(Number(r.cantidad) || 0),
-      estatus: String(r.estatus || ''),
-      cliente: String(r.cliente || '')
-    };
-  });
+function isoFecha_(crudo) {
+  if (!crudo) return null;
+  const s = String(crudo).trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  return s;
 }
 
-function leerOperaciones_(config) {
-  const sql = [
-    'SELECT',
-    '  mot.id AS id,',
-    '  wo.tranid AS ot,',
-    '  mot.operationsequence AS operationsequence,',
-    '  mot.manufacturingworkcenter AS manufacturingworkcenter,',
-    '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
-    '  mot.inputquantity AS inputquantity,',
-    '  NVL(mot.completedquantity, 0) AS completedquantity,',
-    '  mot.setuptime AS setuptime,',
-    '  NVL(mot.runrate, 0) AS runrate,',
-    '  mot.status AS status,',
-    '  mot.startdatetime AS startdatetime,',
-    '  mot.enddate AS enddate',
-    'FROM manufacturingoperationtask mot',
-    'JOIN transaction wo ON wo.id = mot.workorder',
-    "WHERE wo.type = 'WorkOrd'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
-    'ORDER BY wo.id, mot.operationsequence, mot.id'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    const total = Math.abs(Number(r.inputquantity) || 0);
-    const realizada = Math.abs(Number(r.completedquantity) || 0);
-    return {
-      operation_id: 'ns-' + String(r.id),
-      ot: String(r.ot || ''),
-      secuencia: Number(r.operationsequence) || 0,
-      ct: String(r.manufacturingworkcenter || ''),
-      descripcion: String(r.ct_nombre || ''),
-      cant_total: Math.round(total),
-      cant_pendiente: Math.round(Math.max(0, total - realizada)),
-      estatus: traducirEstado_(r.status),
-      fecha_inicio: isoFecha_(r.startdatetime),
-      fecha_fin: isoFecha_(r.enddate)
-    };
+function deduplicar_(filas, claveFn) {
+  const vistos = {};
+  const out = [];
+  filas.forEach(function(f) {
+    const k = claveFn(f);
+    if (vistos[k]) return;
+    vistos[k] = true;
+    out.push(f);
   });
-}
-
-function leerMateriales_(config) {
-  const sql = [
-    'SELECT DISTINCT',
-    '  wo.id AS wo_internal_id,',
-    '  wo.tranid AS ot,',
-    '  mainline_item.item AS ensamble_id,',
-    '  BUILTIN.DF(mainline_item.item) AS ensamble,',
-    '  comp.id AS line_id,',
-    '  comp.item AS componente_id,',
-    '  BUILTIN.DF(comp.item) AS componente,',
-    '  COALESCE(ci.description, ci.purchasedescription, ci.displayname) AS descripcion,',
-    '  BUILTIN.DF(comp.units) AS unidad,',
-    '  ABS(NVL(comp.quantity, 0)) AS requerido,',
-    '  ABS(NVL(comp.quantityshiprecv, 0)) AS emitido',
-    'FROM transaction wo',
-    "JOIN transactionline mainline_item ON mainline_item.transaction = wo.id AND mainline_item.mainline = 'T'",
-    "JOIN transactionline comp ON comp.transaction = wo.id AND comp.mainline = 'F' AND comp.item IS NOT NULL",
-    'LEFT JOIN item ci ON ci.id = comp.item',
-    "WHERE wo.type = 'WorkOrd'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
-    "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
-    '  AND ABS(NVL(comp.quantity, 0)) > 0',
-    'ORDER BY wo.tranid, comp.id'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    const requerido = Math.abs(Number(r.requerido) || 0);
-    const emitido = Math.abs(Number(r.emitido) || 0);
-    return {
-      line_id: String(r.line_id || ''),
-      ot: String(r.ot || ''),
-      wo_internal_id: String(r.wo_internal_id || ''),
-      ensamble: String(r.ensamble || ''),
-      componente_id: String(r.componente_id || ''),
-      componente: String(r.componente || ''),
-      descripcion: String(r.descripcion || ''),
-      unidad: String(r.unidad || ''),
-      requerido: Math.round(requerido),
-      emitido: Math.round(emitido),
-      pendiente: Math.round(Math.max(0, requerido - emitido))
-    };
-  });
-}
-
-function leerItems_(config) {
-  const sql = [
-    'SELECT',
-    '  i.id AS id,',
-    '  i.itemid AS itemid,',
-    '  i.displayname AS displayname,',
-    '  i.description AS description,',
-    '  i.purchasedescription AS purchasedescription,',
-    '  i.itemtype AS itemtype,',
-    '  i.isinactive AS isinactive,',
-    '  i.lastmodifieddate AS lastmodifieddate',
-    'FROM item i',
-    'ORDER BY i.itemid'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    return {
-      codigo: String(r.itemid || ''),
-      descripcion: String(r.description || ''),
-      descripcion_compra: String(r.purchasedescription || ''),
-      nombre_mostrado: String(r.displayname || ''),
-      tipo: String(r.itemtype || ''),
-      es_ensamblaje: r.itemtype === 'Assembly',
-      inactivo: r.isinactive === 'T',
-      ultima_modificacion: isoFecha_(r.lastmodifieddate)
-    };
-  });
-}
-
-function leerCentros_(config) {
-  const sql = [
-    'SELECT',
-    '  eg.id, eg.groupname, eg.isinactive',
-    'FROM entitygroup eg',
-    "WHERE eg.ismanufacturingworkcenter = 'T'",
-    'ORDER BY eg.groupname'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    return {
-      nombre: String(r.groupname || ''),
-      activa: r.isinactive !== 'T'
-    };
-  });
-}
-
-function leerInventario_(config) {
-  const sql = [
-    'SELECT',
-    '  BUILTIN.DF(ail.item) AS item,',
-    '  BUILTIN.DF(ail.location) AS ubicacion,',
-    '  ail.quantityavailable AS disponible,',
-    '  ail.quantityonhand AS fisico,',
-    '  ail.quantitycommitted AS comprometido,',
-    '  ail.quantityintransit AS en_transito',
-    'FROM aggregateitemlocation ail',
-    'ORDER BY ail.item, ail.location'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    return {
-      item: String(r.item || ''),
-      ubicacion: String(r.ubicacion || ''),
-      disponible: Number(r.disponible) || 0,
-      fisico: Number(r.fisico) || 0,
-      comprometido: Number(r.comprometido) || 0,
-      pickeado: 0,
-      en_transito: Number(r.en_transito) || 0
-    };
-  });
-}
-
-function leerOrdenesVenta_(config) {
-  const sql = [
-    'SELECT',
-    '  t.id AS id,',
-    '  t.tranid AS tranid,',
-    '  BUILTIN.DF(t.entity) AS entity_name,',
-    '  t.entity AS entity_id,',
-    '  t.trandate AS trandate,',
-    '  BUILTIN.DF(t.status) AS status,',
-    '  BUILTIN.DF(t.approvalstatus) AS approvalstatus,',
-    '  t.foreigntotal AS foreigntotal,',
-    '  t.currency AS currency,',
-    "  NVL(t.memo, '') AS memo",
-    'FROM transaction t',
-    "WHERE t.type = 'SalesOrd'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
-    "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%FACTURAD%'",
-    'ORDER BY t.tranid'
-  ].join('\n');
-  const crudas = PP_suiteql_(sql, config);
-  return crudas.map(function(r) {
-    return {
-      folio: String(r.tranid || ''),
-      sales_order_id: String(r.id || ''),
-      cliente: String(r.entity_name || ''),
-      cliente_id: Number(r.entity_id) || 0,
-      fecha: isoFecha_(r.trandate),
-      estatus: String(r.status || ''),
-      aprobacion: String(r.approvalstatus || ''),
-      total: Number(r.foreigntotal) || 0,
-      moneda: Number(r.currency) || 0,
-      memo: String(r.memo || ''),
-      lineas: []
-    };
-  });
+  return out;
 }
 
 function traducirEstado_(crudo) {
@@ -374,26 +165,127 @@ function traducirEstado_(crudo) {
   return mapa[crudo] || crudo;
 }
 
-/** NetSuite devuelve fechas como dd/MM/yyyy o dd/MM/yyyy HH:mm:ss. Supabase espera ISO yyyy-MM-dd. */
-function isoFecha_(crudo) {
-  if (!crudo) return null;
-  const s = String(crudo).trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return m[3] + '-' + m[2] + '-' + m[1];
-  return s;
+// =============================================================================
+// Lectores — usan los RESTlets existentes
+// =============================================================================
+
+function leerWorkorders_(config) {
+  const filas = PP_restletPaginado_('1764', '1', { table: 'WO_LISTA', locationId: 1, onlyOpen: true }, config);
+  return filas.map(function(r) {
+    return {
+      ot: String(r.workorder_tranid || ''),
+      wo_internal_id: String(r.workorder_id || ''),
+      articulo: String(r.item_name || ''),
+      descripcion: String(r.description || ''),
+      cantidad: Number(r.qty_to_process) || 0,
+      estatus: String(r.status_op || ''),
+      cliente: String(r.entity || '')
+    };
+  });
 }
 
-/** Deduplica filas por clave natural (materiales e inventario vienen repetidos). */
-function deduplicar_(filas, claveFn) {
-  const vistos = {};
-  const out = [];
-  filas.forEach(function(f) {
-    const k = claveFn(f);
-    if (vistos[k]) return;
-    vistos[k] = true;
-    out.push(f);
+function leerOperaciones_(config) {
+  const filas = PP_restletPaginado_('1762', '17', {}, config);
+  return filas.map(function(r) {
+    const total = Math.abs(Number(r.qty_to_process) || 0);
+    const realizada = Math.abs(Number(r.qty_completed) || 0);
+    return {
+      operation_id: 'ns-' + String(r.workorder_id || ''),
+      ot: String(r.workorder_tranid || ''),
+      secuencia: Number(r.sequence) || 0,
+      ct: String(r.workcenter || ''),
+      descripcion: String(r.operation || ''),
+      cant_total: Math.round(total),
+      cant_pendiente: Math.round(Math.max(0, total - realizada)),
+      estatus: traducirEstado_(r.status_op),
+      fecha_inicio: isoFecha_(r.start_actual),
+      fecha_fin: isoFecha_(r.end_actual)
+    };
   });
-  return out;
+}
+
+function leerMateriales_(config) {
+  const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true }, config);
+  return deduplicar_(filas.map(function(r) {
+    return {
+      line_id: String(r.line_id || ''),
+      ot: String(r.workorder_tranid || ''),
+      wo_internal_id: String(r.workorder_id || ''),
+      ensamble: String(r.item_name || ''),
+      componente_id: String(r.componente_id || ''),
+      componente: String(r.componente || ''),
+      descripcion: String(r.descripcion || ''),
+      unidad: String(r.unidad || ''),
+      requerido: Number(r.requerido) || 0,
+      emitido: Number(r.emitido) || 0,
+      pendiente: Math.round(Math.max(0, (Number(r.requerido) || 0) - (Number(r.emitido) || 0)))
+    };
+  }), function(f) { return f.line_id; });
+}
+
+function leerItems_(config) {
+  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
+  const items = {};
+  filas.forEach(function(r) {
+    const id = String(r['Artículo ID Interno'] || '').trim();
+    if (!id) return;
+    items[id] = {
+      codigo: String(r['Artículo'] || ''),
+      descripcion: String(r['Descripción'] || ''),
+      descripcion_compra: String(r['Descripción compra'] || ''),
+      nombre_mostrado: String(r['Artículo'] || ''),
+      tipo: String(r['Tipo'] || ''),
+      es_ensamblaje: r['Tipo'] === 'Assembly',
+      inactivo: r['Inactivo'] === 'T',
+      ultima_modificacion: isoFecha_(r['Última modificación'])
+    };
+  });
+  return Object.values(items);
+}
+
+function leerCentros_(config) {
+  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
+  const centros = {};
+  filas.forEach(function(r) {
+    const nombre = String(r['Artículo'] || '').trim();
+    if (!nombre) return;
+    centros[nombre] = { nombre: nombre, activa: r['Inactivo'] !== 'T' };
+  });
+  return Object.values(centros);
+}
+
+function leerInventario_(config) {
+  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
+  return deduplicar_(filas.map(function(r) {
+    return {
+      item: String(r['Artículo'] || ''),
+      ubicacion: String(r['Ubicación'] || ''),
+      disponible: Number(r['Disponible']) || 0,
+      fisico: Number(r['Físico']) || 0,
+      comprometido: Number(r['Comprometido']) || 0,
+      pickeado: 0,
+      en_transito: Number(r['En tránsito']) || 0
+    };
+  }), function(f) { return f.item + '#' + f.ubicacion; });
+}
+
+function leerOrdenesVenta_(config) {
+  const filas = PP_restletPaginado_('1769', '1', {}, config);
+  return filas.map(function(r) {
+    return {
+      folio: String(r.folio || ''),
+      sales_order_id: String(r.sales_order_id || ''),
+      cliente: String(r.cliente || ''),
+      cliente_id: Number(r.cliente_id) || 0,
+      fecha: isoFecha_(r.fecha),
+      estatus: String(r.estatus || ''),
+      aprobacion: String(r.aprobacion || ''),
+      total: Number(r.total) || 0,
+      moneda: Number(r.moneda) || 0,
+      memo: String(r.memo || ''),
+      lineas: []
+    };
+  });
 }
 
 // =============================================================================
@@ -433,12 +325,6 @@ function ingesta() {
         console.log(a.nombre + ': columnas = ' + Object.keys(filas[0]).join(', '));
         console.log(a.nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));
       }
-      if (a.nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.line_id; });
-      if (a.nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
-      if (a.nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
-      if (filas.length !== a.lector(config).length) {
-        console.log(a.nombre + ': deduplicacion ' + a.lector(config).length + ' -> ' + filas.length);
-      }
       const r = PP_supabaseUpsert_(a.tabla, filas, a.clave, config);
       log.push(a.nombre + ': ' + r.escritas + ' filas');
       console.log(a.nombre + ': ' + r.escritas + ' escritas');
@@ -450,11 +336,3 @@ function ingesta() {
   console.log('Ingesta: ' + log.join(' | '));
   console.log('=== INGESTA END ===');
 }
-
-// =============================================================================
-// Trigger (se configura en Apps Script: Edit > Triggers > Add Trigger)
-//   Function: ingesta
-//   Event source: Time-driven
-//   Type: Minutes timer
-//   Interval: Every 15 minutes
-// =============================================================================
