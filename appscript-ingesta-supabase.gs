@@ -171,22 +171,25 @@ function traducirEstado_(crudo) {
 
 function leerWorkorders_(config) {
   const filas = PP_restletPaginado_('1764', '1', { table: 'WO_LISTA', locationId: 1, onlyOpen: true }, config);
-  return filas.map(function(r) {
+  if (filas.length) {
+    console.log('workorders: headers = ' + Object.keys(filas[0]).join(', '));
+  }
+  return deduplicar_(filas.map(function(r) {
     return {
-      ot: String(r.workorder_tranid || ''),
-      wo_internal_id: String(r.workorder_id || ''),
-      articulo: String(r.item_name || ''),
-      descripcion: String(r.description || ''),
-      cantidad: Number(r.qty_to_process) || 0,
-      estatus: String(r.status_op || ''),
-      cliente: String(r.entity || '')
+      ot: String(r['Orden de trabajo'] || r.workorder_tranid || ''),
+      wo_internal_id: String(r['ID (link)'] || r.workorder_id || ''),
+      articulo: String(r['Artículo'] || r.item_name || ''),
+      descripcion: String(r['Descripción'] || r.description || ''),
+      cantidad: Number(r['Cantidad a procesar'] || r.qty_to_process) || 0,
+      estatus: String(r['Estado'] || r.status_op || ''),
+      cliente: String(r['Cliente'] || r.entity || '')
     };
-  });
+  }), function(f) { return f.ot; });
 }
 
 function leerOperaciones_(config) {
   const filas = PP_restletPaginado_('1762', '17', {}, config);
-  return filas.map(function(r) {
+  return deduplicar_(filas.map(function(r) {
     const total = Math.abs(Number(r.qty_to_process) || 0);
     const realizada = Math.abs(Number(r.qty_completed) || 0);
     return {
@@ -201,11 +204,11 @@ function leerOperaciones_(config) {
       fecha_inicio: isoFecha_(r.start_actual),
       fecha_fin: isoFecha_(r.end_actual)
     };
-  });
+  }), function(f) { return f.operation_id; });
 }
 
 function leerMateriales_(config) {
-  const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true }, config);
+  const filas = PP_restletPaginado_('1763', '14', { locationId: 1, onlyOpen: true, pageSize: 200 }, config);
   return deduplicar_(filas.map(function(r) {
     return {
       line_id: String(r.line_id || ''),
