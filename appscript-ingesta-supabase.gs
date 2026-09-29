@@ -96,7 +96,9 @@ function PP_restletPaginado_(script, deploy, body, config) {
     body.pageIndex = pageIndex;
     body.pageSize = pageSize;
     const json = PP_restlet_(script, deploy, body, config);
-    const rows = json.rows || [];
+    // RESTlets 1762/1763/1764/1765 devuelven { rows, hasMore }
+    // RESTlet 1767 devuelve { results, hasMore }
+    const rows = json.rows || json.results || [];
     for (let i = 0; i < rows.length; i++) todas.push(rows[i]);
     if (!json.hasMore) break;
     pageIndex++;
@@ -246,12 +248,23 @@ function leerItems_(config) {
 }
 
 function leerCentros_(config) {
-  const filas = PP_restletPaginado_('1765', '1', { table: 'INV_PLANTAS', locationIds: [1, 2], includeZero: true, includeInactiveItems: false }, config);
+  // Los centros de trabajo son entitygroup con ismanufacturingworkcenter='T'.
+  // El RESTlet 1765 devuelve artículos, no centros. Usamos SuiteQL directo.
+  const sql = [
+    'SELECT',
+    '  eg.id AS id,',
+    '  eg.groupname AS nombre,',
+    '  eg.isinactive AS isinactive',
+    'FROM entitygroup eg',
+    "WHERE eg.ismanufacturingworkcenter = 'T'",
+    'ORDER BY eg.groupname'
+  ].join('\n');
+  const crudas = PP_suiteql_(sql, config);
   const centros = {};
-  filas.forEach(function(r) {
-    const nombre = String(r['Artículo'] || '').trim();
+  crudas.forEach(function(r) {
+    const nombre = String(r.nombre || '').trim();
     if (!nombre) return;
-    centros[nombre] = { nombre: nombre, activa: r['Inactivo'] !== 'T' };
+    centros[nombre] = { nombre: nombre, activa: r.isinactive !== 'T' };
   });
   return Object.values(centros);
 }
