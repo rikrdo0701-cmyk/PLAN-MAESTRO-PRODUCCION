@@ -56,21 +56,125 @@
  * (este modulo no tiene acceso a la base), asi que se queda lo que esta medido en
  * el resto del proyecto. Lo que NO se negocia es que sin JWT no se escribe.
  *
- * COMO SE ESCRIBE: POR TABLAS, Y SIN TRANSACCION. El mecanismo atomico de este
- * proyecto es el RPC public.ingesta_mirror, que borra e inserta DENTRO de una
- * transaccion. Ese RPC esta REVOCADO para el navegador a proposito: borra la
- * tabla que le digan, y una pagina que puede llamarlo puede vaciar el plan
- * (docs/schema-supabase-plan.sql, seccion 5; y RULE-SUP-021, que es la vez que
- * un uso de prueba borro dos tablas de produccion). Y aunque no estuviera
- * revocado, aqui no se puede crear uno: no hay acceso a la base de datos.
+ * COMO SE ESCRIBE HOY: UNA PETICION, O VARIAS. El DDL del plan define
+ * public.plan_guardar(p_payload, p_revision_esperada, p_actor) en
+ * docs/schema-supabase-plan.sql, y ESA es la via de verdad: una sola llamada a
+ * /rest/v1/rpc/plan_guardar con las nueve tablas del estado, y dentro una
+ * transaccion que se escribe entera o no se escribe. No es un detalle de forma:
+ * es la razon de que la funcion exista.
  *
- * POR CONSECUENCIA ESTO NO ES ATOMICO, Y NO SE DISIMULA. Para las tablas que son
- * espejo del estado completo (operations, work_orders, materials, selected_ots,
- * locked_ots, operation_plan_statuses) el patron es borrar y reinsertar, en dos
- * peticiones HTTP: `DELETE ...?id=neq.00000000-...` y despues el POST. Si el
- * proceso se muere entre las dos, la tabla queda VACIA. No hay rollback. La
- * transaccion de verdad necesita un RPC o una funcion de Postgres, y esa es la
- * tarea que queda pendiente y hay que hacer desde el panel de Supabase.
+ * POR QUE ESTA FUNCION Y NO public.ingesta_mirror, que ya existia. ingesta_mirror
+ * borra la tabla que le digan sin mirar quien llama, y por eso sigue REVOCADO
+ * para el navegador a proposito: una pagina que puede llamarlo puede vaciar el
+ * plan (docs/schema-supabase-plan.sql seccion 5, y RULE-SUP-021, que es la vez
+ * que un uso de prueba borro dos tablas de produccion). plan_guardar no borra
+ * nada: en operations, work_orders y materials solo hace UPDATE sobre filas que ya
+ * existen, y si la revision no coincide no escribe nada.
+ *
+ * EL DDL AUN NO ESTA APLICADO, Y ESO TIENE UN CAMINO. El 2026-09-29 la funcion
+ * esta escrita en docs/schema-supabase-plan.sql y SIN APLICAR, asi que la llamada
+ * devuelve 404 con PGRST202 (PostgREST no la encuentra en la cache del esquema).
+ * Eso NO es un fallo de red: es que todavia no se puede usar. El modulo lo
+ * distingue, lo dice con un aviso que la pagina tiene que mostrar, y se va por el
+ * CAMINO VIEJO. Un 404 no se reintenta, ni aqui ni en la funcion: repreguntarle a
+ * una base que no tiene la funcion es hacer esperar a la persona sin cambiar el
+ * resultado. Y no se repregunta en cada guardado, porque la respuesta no va a
+ * cambiar mientras la pagina siga abierta: se recuerda una vez y ya.
+ *
+ * POR QUE LA DEGRADACION ESTA EN LA CABECERA Y NO EN UNA CONSTANTE. Un modulo que
+ * se degrada en silencio parece que funciona: la pagina guardaria sin
+ * transaccion y nadie lo sabria, que es exactamente el estado de cosas que el
+ * DDL viene a arreglar. El aviso existe para que se vea, y el texto dice que
+ * falta aplicar el DDL.
+ *
+ * POR CONSECUENCIA, EL CAMINO VIEJO NO ES ATOMICO, Y NO SE DISIMULA. Son varias
+ * peticiones HTTP: para las tablas espejo, un `DELETE ...?id=neq.00000000-...` y
+ * despues el POST; para las del ERP, un UPSERT por clave natural sin borrar
+ * (ver el PELIGRO MEDIDO de mas arriba). Si el proceso se muere en medio, la tabla
+ * queda a medias y no hay rollback. Por eso el aviso lo dice en pantalla en vez de
+ * dejar que el guardado parezca bueno.
+ *
+ * ------------------------------------------------------------------
+ *
+ * DE DONDE SALE LA REVISION, Y POR QUE NO LA FABRICA ESTE MODULO. La revision es
+ * el numero de version del plan y la lleva la pagina en `state.revision`:
+ * src/web/planning/app.js:181 la declara en el estado inicial, app.js:1293 la
+ * normaliza a numero, y app.js:9124 es donde la pagina ya manda ESA misma
+ * revision al puente. El navegador no la aumenta: la comprueba. Viaja como
+ * p_revision_esperada, que es lo que la funcion compara contra la fila unica de
+ * app_state DENTRO de la transaccion, con un bloqueo de fila (`for update`,
+ * docs/schema-supabase-plan.sql:562). Si no coincide, la funcion no escribe nada
+ * y contesta ok false con conflicto CONFLICT_REVISION. Este modulo no fabrica una
+ * revision "nueva" para escribir: inventarla seria justo el fallo que la funcion
+ * existe para evitar, porque las dos paginas compararian la misma cifra y las dos
+ * pasarian.
+ *
+ * QUIEN INCREMENTA LA REVISION Y QUE HAY QUE HACER CON EL NUMERO QUE VUELVE. La
+ * funcion, y solo ella: app_state.revision = v_actual + 1 en la misma
+ * transaccion (docs/schema-supabase-plan.sql:701). El modulo NO escribe la
+ * revision en app_state y devuelve ese numero en `informe.revision` para que la
+ * pagina lo guarde en su estado. Si la pagina no lo guarda, el siguiente guardado
+ * manda la revision vieja y choca contra su propio guardado anterior, o sea que
+ * el numero no se queda dentro del modulo por comodidad: sale.
+ *
+ * NOTA HONESTA SOBRE LA COLUMNA `revision` DE LAS FILAS. Las filas de operations,
+ * work_orders, materials y operation_plan_statuses llevan su propia columna
+ * `revision`, y la funcion la escribe porque esta en la lista de columnas de
+ * plan_tabla_escritura. Ahi va la revision que la pagina tiene, o sea la
+ * anterior: en esas filas la columna va un guardado por detras de app_state. No
+ * se manda una revision inventada para taparlo, porque un numero inventado es
+ * peor que uno documentado. El arreglo es del lado del DDL (que reste la columna
+ * de la lista y la ponga la funcion con v_nueva) y queda anotado como pendiente.
+ *
+ * UN CONFLICTO NO ES UN FALLO DE RED, Y CONFUNDIRLOS HACE PERDER TRABAJO. Si la
+ * funcion contesta ok false con conflicto CONFLICT_REVISION, la llamada SALIO
+ * bien y la escritura no se hizo a proposito: otra persona, u otra pestana,
+ * guardo despues de que esta cargo, y seguir escribiendo seria pisar su trabajo.
+ * Reintentar sin recargar no lo arregla, porque la revision que manda esta pagina
+ * sigue siendo la vieja. Al reves, un 500 o un fallo de red SI se reintenta. El
+ * informe separa las dos cosas de forma que la pagina no pueda confundirlas:
+ *
+ *   informe.conflicto   esta SOLO en el conflicto de revision. Si existe, el
+ *                       guardado NO se escribio y hay que recargar antes de
+ *                       reintentar. Es el unico caso en el que reintentar sin
+ *                       recargar es un error.
+ *   informe.motivo      esta cuando la llamada fallo (red, 5xx, 401, 403). Solo en
+ *                       el transitorio tiene sentido reintentar, y el propio
+ *                       motivo lo dice: un 401 no mejora esperando.
+ *   informe.camino      "rpc" o "viejo": por donde se escribio de verdad.
+ *   informe.revision    la revision que hay en la base ahora: la nueva si se
+ *                       guardo, la que tiene la otra persona si hubo conflicto.
+ *
+ * El conflicto sale tambien en `informe.avisos`, que es lo que la pagina
+ * muestra: un aviso que diga "recarga", no un error generico.
+ *
+ * ------------------------------------------------------------------
+ *
+ * LAS COLUMNAS DE RETIRADA NO LAS MANDA EL NAVEGADOR. `retirada_en` y
+ * `retirada_por` (docs/schema-supabase-plan.sql:434-440) las pone la funcion, y
+ * por dos razones. La primera es que no estan en la lista de columnas escribibles
+ * de plan_tabla_escritura, asi que la funcion no las moveria ni aunque se
+ * mandaran. La segunda, que es la que importa, es que el navegador NO SABE quien
+ * retira: en el estado no existe ninguna lista de operaciones retiradas. La
+ * fuente real de que una operacion salio del plan es que su OT salio de
+ * `selected_ots`, y comparar la cola que hay con la que llega es lo que hace la
+ * funcion (docs/schema-supabase-plan.sql:590-599). Mandar esas columnas seria
+ * escribir un dato que el navegador no tiene.
+ *
+ * ------------------------------------------------------------------
+ *
+ * UN ESTADO VACIO NO ES "BORRA TODO", Y CON EL RPC TAMPOCO. La funcion sustituye
+ * las tres tablas donde la persona es la unica escritora con un `delete` y un
+ * `insert` SIN CONDICION (docs/schema-supabase-plan.sql:664): si la lista llega
+ * vacia, la tabla queda vacia. Un guardado que fallo al leer y llega con cero
+ * operaciones vaciaria el plan entero, y eso es peor que dejar el anterior
+ * (RULE-SUP-021). Por eso el freno se comprueba ANTES de llamar a la funcion y no
+ * despues: si alguna de esas tres llega vacia y la pagina no lo pidio con
+ * `vaciarSiEstaVacio`, no se llama a plan_guardar y se va por el camino viejo,
+ * que si sabe saltarse esa tabla. Quien sepa que el vacio es de verdad lo pide
+ * con `vaciarSiEstaVacio`, y entonces si se llama a la funcion. Las tres del ERP
+ * no entran en este freno: en la funcion son modo `actualiza`, o sea UPDATE y
+ * nunca DELETE, asi que una lista vacia ahi no toca nada.
  *
  * EL BORRADO LLEVA LA TAUTOLOGIA A PROPOSITO. PostgREST rechaza un DELETE sin
  * WHERE (MEDIDO 2026-09-29, issue supabase-py #534) y ningun id vale el uuid
@@ -127,6 +231,41 @@
   // El separador del log de la app (OP_LOG_SEPARATOR, app.js:13704).
   const SEPARADOR_LOG = " | ";
 
+  // El RPC del plan. La ruta va como dos trozos porque construirUrl() escapa el
+  // nombre de tabla y aqui la barra es parte de la ruta: /rpc/plan_guardar, no
+  // /rpc%2Fplan_guardar. La funcion esta en docs/schema-supabase-plan.sql, en la
+  // seccion que se llama plan_guardar.
+  const RUTA_RPC = "rpc/plan_guardar";
+  // El codigo con el que la funcion dice "la revision no es la que traias". No es
+  // un fallo: es una respuesta buena a una pregunta rara, y por eso viaja hasta
+  // el informe con su nombre.
+  const CONFLICTO_REVISION = "CONFLICT_REVISION";
+  // Con un solo POST el corte deja de ser de tiempo y pasa a ser de tamano. Sin
+  // tope, un plan con 1000 operaciones y tres entradas de log cada una mete 3000
+  // eventos en un cuerpo, y un cuerpo que no entra es un guardado que no se
+  // escribe. Se mandan primero los que NO han salido de esta pagina, que son los
+  // unicos que hay que escribir de verdad, y lo que no cabe se dice en el informe
+  // en vez de tragar.
+  const MAX_EVENTOS_POR_GUARDADO = 400;
+
+  /**
+   * Las NUEVE claves del payload de plan_guardar, con el nombre de la tabla en
+   * Supabase y no el del estado. Se declaran aqui y se usan tanto para armar el
+   * payload como para comprobarlo, para que anadir una tabla nueva sea un cambio
+   * en un arreglo y no un olvido en medio de un objeto.
+   */
+  const CLAVES_PAYLOAD = [
+    "operations",
+    "work_orders",
+    "materials",
+    "selected_ots",
+    "locked_ots",
+    "operation_plan_statuses",
+    "operation_events",
+    "plan_snapshots",
+    "app_state",
+  ];
+
   /**
    * Tablas que son ESPEJO del estado completo: se borran y se reescriben.
    * Cada una con la columna de su clave natural, que es la que usa on_conflict.
@@ -136,6 +275,13 @@
    * se manda, asi que cada fila entra con uuid nuevo y no puede chocar.
    */
   const ESPEJO = ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"];
+  /**
+   * Las TRES de las que plan_guardar hace `delete` y luego `insert` SIN CONDICION
+   * (docs/schema-supabase-plan.sql:664), o sea las unicas que un estado vacio
+   * puede dejar vacias. Las tres del ERP son modo `actualiza` (UPDATE y nada mas)
+   * y no necesitan freno: una lista vacia ahi no toca una sola fila.
+   */
+  const ESPEJO_QUE_SE_VACIA = ["selected_ots", "locked_ots", "operation_plan_statuses"];
   const CLAVE_NATURAL = {
     operations: "operation_id",
     materials: "ot,line_id",
@@ -158,6 +304,17 @@
   // esta escrito: el corte avanza de verdad en vez de estarse reenviando lo mismo.
   const eventosEnviados = new Set();
 
+  /**
+   * El detalle del 404 del RPC, o null mientras no se sepa. En cuanto se sabe que
+   * plan_guardar no existe, NO se vuelve a preguntar: la respuesta no va a cambiar
+   * mientras la pagina siga abierta, y repreguntar es un gasto que la persona
+   * paga en cada guardado. No es memoria del resultado de un guardado, es memoria
+   * de una caracteristica de la base, y por eso tiene su propio sitio y no se
+   * confunde con no reintentar un 5xx, que si se reintenta. Se reinicia con
+   * configure(), que es cuando de verdad puede haber cambiado algo.
+   */
+  let rpcAusente = null;
+
   // ---------------------------------------------------------------------------
   // Configuracion
   // ---------------------------------------------------------------------------
@@ -167,6 +324,9 @@
       if (patch.url != null) config.url = String(patch.url).replace(/\/+$/, "");
       if (patch.anonKey != null) config.anonKey = String(patch.anonKey);
     }
+    // Configurar de nuevo es la unica vez en que se vuelve a preguntar por el
+    // RPC: si la URL cambio, es otro proyecto y puede tener el DDL aplicado.
+    rpcAusente = null;
     return configActual();
   }
 
@@ -238,10 +398,15 @@
    * Una escritura a la Data API, con reintentos. Devuelve la respuesta si la
    * llamada salio; lanza con un mensaje que dice el status y el detalle de
    * PostgREST (que es donde esta la causa: columna que no existe, RLS, etc.).
+   *
+   * `opciones.destino` existe para el RPC: la ruta /rpc/plan_guardar lleva una
+   * barra que construirUrl() escaparia, y meterla en un parametro en vez de
+   * parchear el constructor mantiene las dos formas de escribir con el MISMO
+   * reintento, el mismo timeout y la misma regla de no reintentar.
    */
   async function pedir(token, metodo, tabla, opciones) {
     const opts = opciones || {};
-    const destino = construirUrl(tabla, opts);
+    const destino = opts.destino || construirUrl(tabla, opts);
     const cuerpo = opts.cuerpo === undefined ? undefined : JSON.stringify(opts.cuerpo);
     const cabecerasPeticion = cabeceras(token, opts.prefer);
     let ultimo = null;
@@ -701,6 +866,39 @@
     };
   }
 
+  /**
+   * app_state para plan_guardar: la MISMA fila sin `revision`.
+   *
+   * Por que sin revision: la funcion la incrementa y la escribe ella
+   * (docs/schema-supabase-plan.sql:701). Si el payload trajera una, el
+   * `jsonb_populate_recordset` la traeria a NULL y la columna se quedaria sin
+   * valor, porque en la sentencia de app_state la revision se pone a mano
+   * (v_nueva) y no desde el payload. Mandarla seria escribir un dato que la
+   * funcion va a pisar dos lineas despues.
+   */
+  function appStateRpc(state) {
+    const fila = filaAppState(state, null);
+    delete fila.revision;
+    return fila;
+  }
+
+  /**
+   * Cuantos eventos caben en ESTE guardado, y cuales. Solo los que NO han salido
+   * de esta pagina: son los unicos que hay que escribir de verdad, y meter los
+   * otros en el cuerpo solo lo hace mas grande, porque la funcion los ignora con
+   * on conflict do nothing. El corte se come, por tanto, lo pendiente y no lo que
+   * ya esta, y lo que no cabe sale en el siguiente guardado en vez de perderse.
+   *
+   * Recargar la pagina si que los vuelve a mandar todos, porque este conjunto es
+   * de la pagina y no de la base. No es un problema: la funcion los deduplica por
+   * id, y el id es determinista.
+   */
+  function repartoDeEventos(filas) {
+    const nuevos = (Array.isArray(filas) ? filas : []).filter((fila) => !eventosEnviados.has(fila.id));
+    const elegidas = nuevos.slice(0, MAX_EVENTOS_POR_GUARDADO);
+    return { filas: elegidas, omitidos: nuevos.length - elegidas.length };
+  }
+
   function filasSnapshots(lista) {
     const filas = [];
     const vistas = new Set();
@@ -720,6 +918,36 @@
         change_summary: jsonb(s.changeSummary, null),
         published_at: instante(s.publishedAt, ""),
         publication_reason: texto(s.publicationReason),
+      });
+    });
+    return filas;
+  }
+
+  /**
+   * plan_snapshots para plan_guardar, que es OTRO contrato y no una copia del de
+   * arriba. La funcion inserta solo tres columnas: snapshot_id, payload y
+   * created_at (docs/schema-supabase-plan.sql:688), con el snapshot entero dentro
+   * de la columna jsonb `payload`. Por eso el objeto de la pagina va tal cual: la
+   * forma de un borrador la decide la app y la funcion no la toca, y separarla en
+   * columnas seria escribir un DDL nuevo cada vez que el borrador tenga un campo
+   * mas.
+   *
+   * created_at se manda con el instante del snapshot para que recargar la pagina
+   * no cambie la hora de un borrador ya guardado, y con null cuando no hay ninguna
+   * fecha, que es lo que la funcion convierte en now().
+   */
+  function filasSnapshotsRpc(lista) {
+    const filas = [];
+    const vistas = new Set();
+    (Array.isArray(lista) ? lista : []).forEach((s) => {
+      if (!s || typeof s !== "object") return;
+      const snapshotId = texto(s.snapshotId || s.snapshot_id);
+      if (!snapshotId || vistas.has(snapshotId)) return;
+      vistas.add(snapshotId);
+      filas.push({
+        snapshot_id: snapshotId,
+        payload: s,
+        created_at: instante(s.generatedAt || s.publishedAt || s.createdAt, ""),
       });
     });
     return filas;
@@ -791,6 +1019,27 @@
     } catch { return "web"; }
   }
 
+  /**
+   * Los eventos tal como los espera plan_guardar: SIN `actor`.
+   *
+   * No es que el navegador no sepa quien es: lo sabe, es el mismo auth.uid() que
+   * sale del JWT, y va en p_actor. Es que la funcion es la que lo pone en cada
+   * fila (docs/schema-supabase-plan.sql:679, `actor` sale de v_actor y no del
+   * payload), o sea que mandarlo seria mandar un valor que se pisa. Y como el
+   * p_actor lo lee del JWT que ya esta en la cabecera, el dato no sale de aqui.
+   */
+  function eventosRpc(filas) {
+    return (Array.isArray(filas) ? filas : []).map((fila) => ({
+      id: fila.id,
+      operation_id: fila.operation_id,
+      ot: fila.ot,
+      ct: fila.ct,
+      secuencia: fila.secuencia,
+      kind: fila.kind,
+      payload: fila.payload,
+    }));
+  }
+
   // FNV-1a de 32 bits con cuatro semillas: 128 bits en total, repartidos con el
   // formato de un uuid (8-4-4-4-12) porque la columna `id` de operation_events es
   // uuid. 128 bits hace la collision practicamente nula para el volumen de un log.
@@ -817,9 +1066,12 @@
   // API
   // ---------------------------------------------------------------------------
 
-  function cerrar(informe, t0) {
+  function cerrar(informe, t0, ok) {
+    // `ok` explicito cuando la decision NO sale de las tablas: el RPC decide
+    // dentro de la transaccion, y un conflicto es un ok false con el guardado
+    // entero sin escribir, no una tabla con error.
+    informe.ok = ok === undefined ? Object.keys(informe.tablas).every((t) => !informe.tablas[t].error) : ok;
     informe.ms = Date.now() - t0;
-    informe.ok = Object.keys(informe.tablas).every((t) => !informe.tablas[t].error);
     return informe;
   }
 
@@ -833,23 +1085,233 @@
   }
 
   /**
+   * EL PAYLOAD DE plan_guardar: el estado mapeado, con las tablas de Supabase
+   * como claves de primer nivel. Siempre las nueve, aunque alguna vaya vacia: la
+   * funcion lee `p_payload -> 'tabla'`, y una clave que no esta llega como NULL,
+   * que no es lo mismo que una lista vacia.
+   */
+  function armarPayload(state, revision, opciones) {
+    const opts = opciones || {};
+    const eventos = repartoDeEventos(eventosRpc(filasEventos(state, null)));
+    return {
+      payload: {
+        operations: filasOperations(state, revision),
+        work_orders: filasWorkOrders(state, revision),
+        materials: filasMaterials(state, revision),
+        selected_ots: filasSelectedOts(state),
+        locked_ots: filasLockedOts(state),
+        operation_plan_statuses: filasPlanStatuses(state, revision),
+        operation_events: eventos.filas,
+        plan_snapshots: filasSnapshotsRpc(opts.snapshots),
+        app_state: appStateRpc(state),
+      },
+      eventos: eventos.filas,
+      eventosOmitidos: eventos.omitidos,
+    };
+  }
+
+  /**
+   * Se puede llamar a la funcion con este estado?
+   *
+   * El freno se mira el payload YA MAPEADO y no el estado en crudo, y no es
+   * purismo: el mapa descarta filas sin clave natural (una OT sin ot, un estado sin
+   * key). Una lista cruda con una fila inservible llegaria "con datos" al freno y
+   * vaciaria igual, que es justo lo que el freno evita.
+   *
+   * Las tres del ERP no se miran: en la funcion son modo `actualiza` (UPDATE y
+   * nada mas), asi que una lista vacia ahi no toca una sola fila.
+   */
+  function frenoDelRpc(payload, opciones) {
+    if ((opciones || {}).vaciarSiEstaVacio === true) return null;
+    const vacias = [];
+    ESPEJO_QUE_SE_VACIA.forEach((tabla) => {
+      if (!Array.isArray(payload[tabla]) || !payload[tabla].length) vacias.push(tabla);
+    });
+    if (!vacias.length) return null;
+    return "llego vacia y sin que nadie lo pidiera con vaciarSiEstaVacio: " + vacias.join(", ");
+  }
+
+  /**
+   * UNA SOLA PETICION, la que decide. Nunca llama a public.ingesta_mirror: ese RPC
+   * borra la tabla que le digan y sigue revocado para el navegador (ver la
+   * cabecera). Lo unico que se llama es plan_guardar, que no borra nada del ERP y
+   * compara la revision dentro de la transaccion.
+   *
+   * Devuelve {estado, ...} y el `estado` es lo que decide el camino:
+   *   ok        la funcion escribio y devolvio el informe.
+   *   conflicto la revision no era la que traiamos. NO se escribio nada.
+   *   ausente   404: la funcion no existe todavia. Se va por el camino viejo.
+   *   error     cualquier otra cosa. NO se degrada: caer al camino viejo
+   *              despues de un 500 seria escribir sin transaccion justo cuando la
+   *              base acaba de decir que le pasa algo, y encima sin saber si la
+   *              transaccion de la funcion llego a commitar.
+   */
+  async function guardarPorRpc(ctx, armado, revision, actor) {
+    let respuesta;
+    try {
+      respuesta = await pedir(ctx.token, "POST", RUTA_RPC, {
+        destino: config.url + "/rest/v1/" + RUTA_RPC,
+        cuerpo: { p_payload: armado.payload, p_revision_esperada: revision, p_actor: actor },
+      });
+    } catch (error) {
+      const status = error && error.status ? Number(error.status) : 0;
+      const detalle = sano((error && error.message) || error, ctx.secretos);
+      if (status === 404) return { estado: "ausente", detalle: detalle };
+      return { estado: "error", status: status, detalle: detalle };
+    }
+
+    let cuerpo = null;
+    try { cuerpo = await respuesta.json(); } catch { cuerpo = null; }
+    if (!cuerpo || typeof cuerpo !== "object" || Array.isArray(cuerpo)) {
+      return {
+        estado: "error",
+        status: respuesta.status,
+        detalle: "plan_guardar contesto HTTP " + respuesta.status + " sin el jsonb del informe: no se sabe si se guardo",
+      };
+    }
+    if (cuerpo.conflicto === CONFLICTO_REVISION) return { estado: "conflicto", cuerpo: cuerpo };
+    if (cuerpo.ok !== true) {
+      return {
+        estado: "error",
+        status: respuesta.status,
+        detalle: sano("plan_guardar contesto ok " + JSON.stringify(cuerpo), ctx.secretos),
+      };
+    }
+    return { estado: "ok", cuerpo: cuerpo };
+  }
+
+  /**
+   * El informe de la funcion, en la misma forma que el del camino viejo: por
+   * tabla, con el numero de filas y sin error. El `modo` que devuelve la funcion
+   * se copia tal cual (`actualiza`, `espejo`, `anexo`, `flujo`) porque es el dato
+   * que dice QUE se hizo, no solo cuantas filas.
+   *
+   * Lo que la funcion ademas reporta y no es una tabla (las marcas de retirada y
+   * las reintegraciones) se deja en `informe.marcas`, crudo. Perderlo seria tirar
+   * informacion que la base calculo: es la respuesta a "que paso con las OTs que
+   * salieron del plan".
+   */
+  function aplicarInformeDelRpc(informe, cuerpo) {
+    const tablas = cuerpo && cuerpo.tablas && typeof cuerpo.tablas === "object" ? cuerpo.tablas : {};
+    Object.keys(tablas).forEach((tabla) => {
+      const entrada = tablas[tabla] && typeof tablas[tabla] === "object" ? tablas[tabla] : {};
+      if (entrada.modo) {
+        informe.tablas[tabla] = { modo: texto(entrada.modo), insertadas: numero(entrada.filas, 0), error: null };
+      } else {
+        informe.marcas = informe.marcas || {};
+        informe.marcas[tabla] = entrada;
+      }
+    });
+    return informe;
+  }
+
+  function avisoDeAusencia(detalle) {
+    return "La escritura va por el camino viejo, SIN TRANSACCION, porque falta aplicar el DDL: " +
+      "plan_guardar no existe todavia en la base (" + (detalle || "404") + "). Se escribe tabla por " +
+      "tabla y, si algo falla en medio, el plan puede quedar a medias. Aplica el DDL del plan " +
+      "(docs/schema-supabase-plan.sql) en el panel de Supabase y esto se acaba. Esto no es un fallo " +
+      "de red: no se reintenta, porque una base sin la funcion no deja de estar sin ella.";
+  }
+
+  function avisoDeFreno(motivo) {
+    return "No se llamo a plan_guardar porque " + motivo + ". La funcion borra esas tablas antes de " +
+      "reinsertarlas, y un guardado que fallo al leer no puede vaciar el plan entero (RULE-SUP-021). " +
+      "Se fue por el camino viejo, que si respeta el freno. Si el vacio es de verdad, guardalo con " +
+      "vaciarSiEstaVacio.";
+  }
+
+  /**
+   * EL CAMINO VIEJO: varias peticiones, sin transaccion. Cada tabla por su cuenta,
+   * con los reintentos y el freno de "un estado vacio no borra la tabla". Se usa
+   * cuando el RPC no existe y cuando el freno del estado vacio impide llamarlo.
+   *
+   * Primero las filas y al FINAL app_state. La razon no es estetica: la revision
+   * es lo que la pagina lee para saber que version tiene, y si el guardado se parte
+   * a la mitad, dejarla atras hace que se note en vez de que parezca un guardado
+   * bueno con datos viejos.
+   */
+  async function guardarPorTablas(ctx, datos, opts, informe, t0, vaciar) {
+    const revision = Math.round(numero(datos.revision, 0));
+    for (const tabla of ESPEJO) {
+      let filas = [];
+      if (tabla === "operations") filas = filasOperations(datos, revision);
+      else if (tabla === "work_orders") filas = filasWorkOrders(datos, revision);
+      else if (tabla === "materials") filas = filasMaterials(datos, revision);
+      else if (tabla === "selected_ots") filas = filasSelectedOts(datos);
+      else if (tabla === "locked_ots") filas = filasLockedOts(datos);
+      else filas = filasPlanStatuses(datos, revision);
+      // Las tres del ERP se escriben SIN borrar mientras el usuario no lo pida
+      // explicitamente. Ver el PELIGRO MEDIDO de la cabecera: un borrado desde un
+      // navegador con estado viejo se lleva las filas que la persona todavia no
+      // ha visto, y no da ningun error. El opt-in se llama
+      // `permitirBorradoErp` justamente para que en el codigo se lea que es una
+      // decision y no un olvido.
+      const borrar = !ERP_COMPARTIDA[tabla] || opts.permitirBorradoErp === true;
+      if (!borrar) {
+        informe.avisos.push(
+          tabla + " se actualizo fila por fila y NO se borro: las filas que el navegador no " +
+            "conoce (ingesta de NetSuite posterior a esta carga) se dejaron intactas. " +
+            "Una operacion que la persona haya quitado del plan NO se borra; queda el valor viejo."
+        );
+      }
+      informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar && borrar, borrar);
+    }
+
+    informe.tablas.operation_events = await escribirEventos(ctx, filasEventos(datos, ctx.actor));
+
+    if (Array.isArray(opts.snapshots)) {
+      informe.tablas.plan_snapshots = await escribirAnexo(ctx, "plan_snapshots", filasSnapshots(opts.snapshots), "snapshot_id");
+    }
+
+    informe.tablas.app_state = await parchearAppState(ctx, filaAppState(datos, revision));
+    return cerrar(informe, t0);
+  }
+
+  /**
    * Escribe el estado del plan en Supabase y devuelve el informe.
    *
-   * El informe es {ok, tablas:{tabla:{insertadas,error}}, ms} y, si no se pudo
-   * ni empezar, un `motivo` con el por que. `insertadas` es el numero de filas
-   * que quedan escritas de esa tabla al terminar: con `Prefer: return=minimal`
-   * PostgREST no devuelve el cuerpo, asi que el numero es lo que se mando y no lo
-   * que la base acepto (eso solo se sabria con return=representation, pagando el
-   * doble de ancho de banda). Solo tiene sentido con `error` en null.
+   * El camino de verdad es UN POST a /rest/v1/rpc/plan_guardar (docs/schema-
+   * supabase-plan.sql), con las nueve tablas del estado y la revision de la
+   * pagina, y la transaccion la hace la funcion. Si el DDL no esta aplicado, el
+   * modulo lo detecta en el 404 y escribe por el camino viejo, avisando en
+   * pantalla; si el estado llega vacio, no llama a la funcion ni con el DDL
+   * aplicado, porque la funcion vaciaria las tablas de espejo.
+   *
+   * EL INFORME, Y QUE HAY QUE MIRAR EN EL:
+   *   ok          true si se escribio. Un ok false sin `conflicto` es un fallo de
+   *               la llamada; con `conflicto` NO se puede reintentar sin recargar.
+   *   camino      "rpc" o "viejo": por donde se escribio de verdad.
+   *   revision    la revision que hay en la base ahora. Con el RPC es la que
+   *               incremento la funcion, y la pagina tiene que guardarla en su
+   *               estado o el siguiente guardado choca contra si mismo.
+   *   conflicto   esta SOLO en el conflicto de revision: {codigo, revision_actual,
+   *               revision_esperada, mensaje}. Su presencia significa que NO se
+   *               escribio nada porque otra persona guardo antes.
+   *   motivo      por que fallo la llamada. Solo en el transitorio (red, 5xx, 429)
+   *               tiene sentido reintentar, y el motivo mismo lo dice.
+   *   tablas      por tabla, {modo?, insertadas, error}. `insertadas` en el
+   *               camino viejo es lo que se mando y no lo que la base acepto (con
+   *               return=minimal PostgREST no devuelve el cuerpo); en el RPC es el
+   *               numero que la funcion conto. Solo tiene sentido con error null.
+   *   marcas      lo que la funcion reporto y no es una tabla: las OTs que salieron
+   *               del plan y las que volvieron.
+   *   msRpc       los milisegundos que tardo la funcion, que no son los del
+   *               navegador: `ms` es el total, red incluida.
+   *   avisos      lineas para la persona. El aviso de conflicto y el de degradacion
+   *               van aqui, no solo en el motivo, porque son los dos que se
+   *               tienen que ver en pantalla.
    *
    * `opciones.vaciarSiEstaVacio` hace explicito el borrado de una tabla espejo
-   * cuyas filas salieron vacias. `opciones.snapshots` es la lista de
-   * plan_snapshots; si no se pasa, esa tabla no se toca.
+   * cuyas filas salieron vacias, y con el RPC ademas habilita la llamada.
+   * `opciones.snapshots` es la lista de plan_snapshots; si no se pasa, esa tabla no
+   * se toca. `opciones.permitirBorradoErp` solo aplica al camino viejo: la funcion
+   * declara las tres del ERP en modo `actualiza` y no puede borrarlas ni aunque se
+   * le pida.
    */
   async function guardar(state, opciones) {
     const opts = opciones || {};
     const t0 = Date.now();
-    const informe = { ok: true, tablas: {}, ms: 0 };
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: null };
     const datos = state && typeof state === "object" ? state : {};
     const vaciar = opts.vaciarSiEstaVacio === true;
 
@@ -868,46 +1330,107 @@
     // Los dos secretos que este modulo maneja. sano() los borra de cualquier
     // texto que vaya a salir en el informe, y no hay otro lugar donde se copien.
     const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+    // La revision se LEE del estado y no se fabrica. `state.revision` es el
+    // numero de version del plan que la pagina tiene (app.js:181 lo declara,
+    // app.js:1293 lo normaliza y app.js:9124 ya lo manda al puente), o sea la
+    // version desde la que esta persona esta trabajando. Este modulo no la sube:
+    // subirla aqui seria hacer que dos paginas comparen la misma cifra y las dos
+    // pasen, que es lo que la funcion existe para impedir.
     const revision = Math.round(numero(datos.revision, 0));
+    const actor = actorDe(token);
+    ctx.actor = actor;
 
-    // Primero las filas y al FINAL app_state. La razon no es estetica: la
-    // revision es lo que la pagina lee para saber que version tiene, y si el
-    // guardado se parte a la mitad, dejarla atras hace que se note en vez de que
-    // parezca un guardado bueno con datos viejos.
-    for (const tabla of ESPEJO) {
-      let filas = [];
-      if (tabla === "operations") filas = filasOperations(datos, revision);
-      else if (tabla === "work_orders") filas = filasWorkOrders(datos, revision);
-      else if (tabla === "materials") filas = filasMaterials(datos, revision);
-      else if (tabla === "selected_ots") filas = filasSelectedOts(datos);
-      else if (tabla === "locked_ots") filas = filasLockedOts(datos);
-      else filas = filasPlanStatuses(datos, revision);
-      // Las tres del ERP se escriben SIN borrar mientras el usuario no lo pida
-      // explicitamente. Ver el PELIGRO MEDIDO de la cabecera: un borrado desde un
-      // navegador con estado viejo se lleva las filas que la persona todavia no
-      // ha visto, y no da ningun error. El opt-in se llama
-      // `permitirBorradoErp` justamente para que en el codigo se lea que es una
-      // decision y no un olvido.
-      const borrar = !ERP_COMPARTIDA[tabla] || opts.permitirBorradoErp === true;
-      if (!borrar) {
-        informe.avisos = informe.avisos || [];
-        informe.avisos.push(
-          tabla + " se actualizo fila por fila y NO se borro: las filas que el navegador no " +
-            "conoce (ingesta de NetSuite posterior a esta carga) se dejaron intactas. " +
-            "Una operacion que la persona haya quitado del plan NO se borra; queda el valor viejo."
-        );
+    const armado = armarPayload(datos, revision, opts);
+    if (opts.permitirBorradoErp === true) {
+      // El opt-in es del camino viejo. En la funcion no puede existir: el DDL
+      // declara operations, work_orders y materials en modo `actualiza`, o sea
+      // UPDATE sobre filas que ya estan, y ahi no hay ni INSERT ni DELETE que
+      // habilitar. Decirlo es mejor que dejar que alguien crea que el opt-in
+      // ocurrio y no ocurrio.
+      informe.avisos.push(
+        "permitirBorradoErp no tiene efecto con plan_guardar: el DDL declara operations, work_orders y " +
+          "materials en modo actualiza, y ahi la funcion no puede borrar ni insertar ni aunque se le pida. " +
+          "Es la mejora: con la funcion, ese opt-in ya no es ni siquiera posible."
+      );
+    }
+
+    if (rpcAusente) {
+      // Ya se sabe que la funcion no esta. No se vuelve a preguntar: la respuesta
+      // no cambia mientras la pagina siga abierta.
+      informe.avisos.push(avisoDeAusencia(rpcAusente));
+    } else {
+      const freno = frenoDelRpc(armado.payload, opts);
+      if (freno) {
+        informe.avisos.push(avisoDeFreno(freno));
+      } else {
+        const rpc = await guardarPorRpc(ctx, armado, revision, actor);
+        informe.camino = "rpc";
+        if (rpc.estado === "ok") {
+          aplicarInformeDelRpc(informe, rpc.cuerpo);
+          // Los eventos que salieron se apuntan, y con eso el siguiente guardado
+          // no los vuelve a pagar. La funcion los ignora con on conflict do
+          // nothing, o sea que mandarlos dos veces no duplica nada.
+          armado.eventos.forEach((evento) => eventosEnviados.add(evento.id));
+          // El corte se dice aqui y no antes, porque solo existe en este camino:
+          // en el viejo el corte es de tiempo y lo cuenta escribirEventos(). Si no
+          // se avisa, el corte se traga un trozo del log sin que nadie lo sepa.
+          if (armado.eventosOmitidos > 0) {
+            informe.avisos.push(
+              "se omitieron " + armado.eventosOmitidos + " evento(s) del log: un guardado manda como " +
+                "mucho " + MAX_EVENTOS_POR_GUARDADO + " eventos por peticion. Los que no se mande salen " +
+                "en el siguiente guardado, con el mismo id, asi que la base no se queda sin ellos."
+            );
+          }
+          informe.revision = numero(rpc.cuerpo.revision, revision);
+          informe.actor = texto(rpc.cuerpo.actor) || actor;
+          informe.msRpc = numero(rpc.cuerpo.ms, 0);
+          return cerrar(informe, t0, true);
+        }
+        if (rpc.estado === "conflicto") {
+          const cuerpo = rpc.cuerpo;
+          // Un conflicto NO es un fallo de red. La llamada salio bien, la funcion
+          // NO escribio nada a proposito, y reintentar con la misma revision
+          // falla otra vez: hay que recargar. Por eso NO lleva `motivo` (que es el
+          // campo del fallo, el que si se reintenta) sino `conflicto`, y los dos
+          // son excluyentes: quien lea el informe no puede confundirlos.
+          informe.conflicto = {
+            codigo: CONFLICTO_REVISION,
+            revision_actual: numero(cuerpo.revision_actual, 0),
+            revision_esperada: numero(cuerpo.revision_esperada, revision),
+            mensaje: texto(cuerpo.mensaje) || "El plan cambio desde la ultima carga.",
+          };
+          informe.revision = informe.conflicto.revision_actual;
+          informe.avisos.push(
+            "NO se guardo nada: el plan cambio desde la ultima carga, asi que otra persona u otra " +
+              "pestana guardo antes. La base esta en la revision " + informe.conflicto.revision_actual +
+              " y esta pagina seguia en la " + informe.conflicto.revision_esperada + ". Tu cambio sigue " +
+              "aqui, en la pagina; lo que hay que recargar es la base. Recarga y vuelve a guardar: " +
+              "reintentar sin recargar vuelve a fallar igual. Esto no es un fallo de red."
+          );
+          return cerrar(informe, t0, false);
+        }
+        if (rpc.estado === "ausente") {
+          rpcAusente = rpc.detalle;
+          informe.avisos.push(avisoDeAusencia(rpc.detalle));
+        } else {
+          // Aqui NO se degrada. Un 401, un 403, un 5xx o un corte de red no son
+          // "el DDL no esta aplicado": son fallos, y caerse al camino viejo
+          // despues de uno seria escribir sin transaccion justo cuando la base
+          // esta fallando, sin saber si la transaccion llego a commitear.
+          const reintentable = !noReintentar(rpc.status);
+          informe.avisos.push("plan_guardar fallo y no se probo por el camino viejo: " + rpc.detalle);
+          return sinEscribir(informe, t0, "plan_guardar fallo (HTTP " + rpc.status + "): " + rpc.detalle +
+            ". No se probo el camino viejo a proposito: un fallo de la funcion no es un fallo del DDL, y " +
+            "escribir tabla por tabla con la base en ese estado deja el plan a medias. " +
+            (reintentable
+              ? "Es transitorio (red, 5xx, 429): se puede reintentar el guardado tal cual."
+              : "Un 401, un 403 o un 404 no mejoran esperando: hay que arreglar la sesion, no reintentar."));
+        }
       }
-      informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar && borrar, borrar);
     }
 
-    informe.tablas.operation_events = await escribirEventos(ctx, filasEventos(datos, actorDe(token)));
-
-    if (Array.isArray(opts.snapshots)) {
-      informe.tablas.plan_snapshots = await escribirAnexo(ctx, "plan_snapshots", filasSnapshots(opts.snapshots), "snapshot_id");
-    }
-
-    informe.tablas.app_state = await parchearAppState(ctx, filaAppState(datos, revision));
-    return cerrar(informe, t0);
+    informe.camino = "viejo";
+    return guardarPorTablas(ctx, datos, opts, informe, t0, vaciar);
   }
 
   root.PPSupabaseWriter = {
@@ -917,6 +1440,9 @@
     isConfigured: isConfigured,
     // Se exporta el mapeo para poder compararlo contra el esquema sin abrir la
     // red: es el mismo criterio que usa tests/supabase-reader-machines.test.mjs.
+    // Los tres con sufijo Rpc son la forma que espera plan_guardar, que para tres
+    // tablas no es la misma que la de la Data API: sin `revision` en app_state,
+    // sin `actor` en los eventos y con el snapshot entero dentro de `payload`.
     mapear: {
       operations: filasOperations,
       workOrders: filasWorkOrders,
@@ -927,8 +1453,17 @@
       appState: filaAppState,
       snapshots: filasSnapshots,
       events: filasEventos,
+      appStateRpc: appStateRpc,
+      snapshotsRpc: filasSnapshotsRpc,
+      eventsRpc: eventosRpc,
     },
+    // armpalo() devuelve el payload sin red, para poder comprobar las nueve claves
+    // y el freno del estado vacio contra el esquema sin abrir nada.
+    armpalo: armarPayload,
     ESPEJO: ESPEJO,
     CLAVE_NATURAL: CLAVE_NATURAL,
+    CLAVES_PAYLOAD: CLAVES_PAYLOAD,
+    // Si el RPC dio 404, se recuerda para no volver a preguntar en cada guardado.
+    rpcAusente: () => rpcAusente,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

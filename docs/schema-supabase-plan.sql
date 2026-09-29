@@ -434,6 +434,26 @@ end $$;
 alter table public.operations add column if not exists retirada_en timestamptz;
 alter table public.operations add column if not exists retirada_por text;
 
+-- plan_snapshots TIENE una columna que se parece y no sirve: `operations jsonb`.
+-- MEDIDO 2026-09-29: la tabla tiene id, snapshot_id, operations, generated_at,
+-- plan_start, version, usuario, change_summary, published_at,
+-- publication_reason y created_at. NO tiene `payload`, y la primera version de
+-- plan_guardar hacia insert into plan_snapshots (snapshot_id, payload, created_at).
+-- Eso no resuelve, y como la sentencia viene de jsonb_populate_recordset, no es un
+-- INSERT que se salte esa fila: se CAE la transaccion entera. O sea que un solo
+-- borrador habria roto TODOS los guardados, no solo los de borrador. Error mio,
+-- encontrado por el agente que escribio el escritor al usar el contrato.
+--
+-- Por que se AGREGA `payload` y no se amolda el insert a `operations`: un borrador
+-- sirve para RESTAURAR el plan, y para eso hacen falta las ordenes de trabajo, los
+-- materiales, los estados de operacion y las OTs seleccionadas, no solo las
+-- operaciones. Meterlo todo en la columna `operations` seria guardar media
+-- restauracion. Se agrega la columna y queda documentada.
+alter table public.plan_snapshots add column if not exists payload jsonb;
+
+comment on column public.plan_snapshots.payload is
+  'El estado completo del plan en el momento del borrador, para restaurarlo entero: operaciones, ordenes de trabajo, materiales, estados y OTs. La columna `operations` que ya existia es solo la lista de operaciones y no alcanza para restaurar.';
+
 comment on column public.operations.retirada_en is
   'Cuando esta operacion salio del plan por decision de una persona, no por NetSuite. MEDIDO 2026-09-29: no existe en el estado ninguna lista de operaciones retiradas (operationPlanStatuses es un objeto y removedOperations solo se calcula para el preview de restaurar, planning-workflow-core.js:1315), asi que la fuente real y persistida es selected_ots: si la OT sale de ahi, sus operaciones salen del plan, y eso la base lo sabe sola. Al volver la OT, la marca se borra.';
 comment on column public.operations.retirada_por is
@@ -468,22 +488,22 @@ insert into public.plan_tabla_escritura (tabla, modo, clave, columnas, nota) val
    array['num','parte','contenido','prioridad','fecha_req','comentario','tiempo_fallback','kit_pending',
          'secuencia','ct','operador','maquina','herramental','kit',
          'fecha_inicio','hora_inicio','fecha_fin','hora_fin',
-         'estatus','locked','auto_frozen','subcontract_type','subcontract_days','revision'],
-   'Solo decisiones de plan: cuando, donde, con que, en que orden. Los datos del ERP (descripcion, cantidades, tiempos, tipo_insercion) NO se tocan, y la fila tiene que existir: la pagina no crea operaciones.'),
+         'estatus','locked','auto_frozen','subcontract_type','subcontract_days'],
+   'Solo decisiones de plan: cuando, donde, con que, en que orden. Los datos del ERP (descripcion, cantidades, tiempos, tipo_insercion) NO se tocan, y la fila tiene que existir: la pagina no crea operaciones. `revision` NO esta en la lista a proposito: la pone la funcion con el numero nuevo. Si la mandara la pagina, cada fila quedaria con la revision que tenia la pagina y no con la que se guardo, que es un guardado por detras y hace que el cambio no se pueda atribuir a una revision.'),
   ('work_orders', 'actualiza', 'wo_internal_id',
    array['fecha_inicio_ns','fecha_fin_ns','fecha_vencimiento','due_date_override','precio_desde','precio_hasta',
-         'estatus','cant_ensamblada','cant_pendiente','revision','synced_at'],
-   'Lo que la pagina decide de una orden son las fechas. El articulo, la cantidad y el cliente son del ERP.'),
+         'estatus','cant_ensamblada','cant_pendiente','synced_at'],
+   'Lo que la pagina decide de una orden son las fechas. El articulo, la cantidad y el cliente son del ERP. `revision` la pone la funcion, no la pagina, por el mismo motivo que en operations.'),
   ('materials', 'actualiza', 'ot,line_id',
-   array['emitido','revision'],
-   'La pagina no decide componentes: solo que material se emitio.'),
+   array['emitido'],
+   'La pagina no decide componentes: solo que material se emitio. `revision` la pone la funcion, no la pagina.'),
   ('selected_ots', 'espejo', 'ot', array['ot','posicion'],
    'La persona es el unico escritor, y el orden manual importa, asi que va posicion.'),
   ('locked_ots', 'espejo', 'ot', array['ot'],
    'La persona es el unico escritor.'),
   ('operation_plan_statuses', 'espejo', 'key',
-   array['key','ot','secuencia','ct','status','origin','fecha_completado','fecha_reapertura','revision'],
-   'La persona es el unico escritor.'),
+   array['key','ot','secuencia','ct','status','origin','fecha_completado','fecha_reapertura'],
+   'La persona es el unico escritor. `revision` la pone la funcion.'),
   ('plan_snapshots', 'anexo', 'snapshot_id', null,
    'Historico de borradores: se agrega y nunca se borra.'),
   ('operation_events', 'flujo', 'id', null,
@@ -611,9 +631,13 @@ begin
 
     -- La lista de columnas sale de la tabla, no del payload. Por eso una columna
     -- que la web no declare queda con su valor anterior en vez de en NULL.
+    -- La revision la pone la funcion con v_nueva, no la pagina. Motivo: si la mandara el
+    -- navegador, cada fila quedaria con la revision que TENIA la pagina, que es un
+    -- guardado por detras, y no se podria atribuir un cambio a una revision concreta.
     v_asignar := (select string_agg(quote_ident(c) || ' = ex.' || quote_ident(c), ', ')
                     from unnest(v_cols) c
-                   where c not in ('operation_id','wo_internal_id','ot','line_id'));
+                   where c not in ('operation_id','wo_internal_id','ot','line_id'))
+                || ', revision = ' || v_nueva;
     if v_asignar is null then
       raise exception 'plan_guardar: % no tiene columnas escribibles', v_tabla
         using errcode = '23514';

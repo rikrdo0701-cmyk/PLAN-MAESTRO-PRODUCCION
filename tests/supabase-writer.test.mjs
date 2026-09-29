@@ -41,7 +41,62 @@ const fuente = await readFile(new URL("../src/web/shared/supabase-writer.js", im
 
 const URL_FALSA = "https://ejemplo.supabase.co";
 const CLAVE_FALSA = "sb_publishable_esto-no-es-real";
-const JWT_FALSO = "jwt-de-pruebas.eyJzdWIiOiJ1dWlk-de-pruebaIiwidXNlciI6ImZhbCJ9.firma-que-no-es-real";
+// Un JWT de mentira con la ESTRUCTURA real: cabecera.payload.firma, y el payload
+// es base64url valido, para que actorDe() pueda leer el `sub`. Ninguna de las tres
+// partes es una credencial: el token entero no existe en ningun sitio.
+const JWT_FALSO = "jwt-de-pruebas.eyJzdWIiOiJ1dWlkLWRlLXBydWViYSJ9.firma-que-no-es-real";
+
+/** Una respuesta de mentira con las cuatro cosas que el modulo le pregunta:
+ *  ok, status, text() para los errores y json() para el informe del RPC. */
+function contestando(status, cuerpo) {
+  const texto = typeof cuerpo === "string" ? cuerpo : JSON.stringify(cuerpo);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => texto,
+    json: async () => JSON.parse(texto),
+  };
+}
+
+/** LO QUE CONTESTA HOY LA BASE REAL, MEDIDO: plan_guardar no esta todavia, asi que
+ *  PostgREST responde 404 con PGRST202 (no la encuentra en la cache del esquema).
+ *  Este es el valor por defecto del simulacro y por eso los 25 tests que ya habia
+ *  siguen exercising el CAMINO VIEJO: no se les cambio lo que comprueban, se les
+ *  dio el mundo en el que estan. Los que quieren el RPC pasan rpc: "presente". */
+const RPC_AUSENTE = () => contestando(404, {
+  code: "PGRST202",
+  details: null,
+  hint: null,
+  message: "Could not find the function public.plan_guardar(p_payload, p_revision_esperada, p_actor) in the schema cache",
+});
+
+/** La respuesta buena de plan_guardar, con la forma EXACTA que declara el DDL
+ *  (docs/schema-supabase-plan.sql, el return de plan_guardar). */
+const RPC_OK = () => contestando(200, {
+  ok: true,
+  revision: 43,
+  actor: "uuid-de-prueba",
+  tablas: {
+    operations: { modo: "actualiza", filas: 1 },
+    work_orders: { modo: "actualiza", filas: 1 },
+    materials: { modo: "actualiza", filas: 1 },
+    selected_ots: { modo: "espejo", filas: 2 },
+    locked_ots: { modo: "espejo", filas: 1 },
+    operation_plan_statuses: { modo: "espejo", filas: 1 },
+    operation_events: { modo: "flujo", filas: 2 },
+    retiradas: { ots: ["3177"], operaciones: 4 },
+  },
+  ms: 31,
+});
+
+/** El DDL esta aplicado: el RPC existe. `respuesta` cambia lo que dice para poder
+ *  provocar un conflicto o un fallo sin reescribir el simulacro. */
+function rpcContestando(respuesta) {
+  return (registro) => {
+    if (String(registro.url).indexOf("/rest/v1/rpc/plan_guardar") === -1) return contestando(204, "");
+    return respuesta ? respuesta() : RPC_OK();
+  };
+}
 
 /** Un estado sin operaciones ni ordenes: el caso en el que un guardado fallido
  *  terminaria vaciando el plan si el modulo no tuviera el freno de vaciar. */
@@ -60,14 +115,22 @@ function estadoVacio() {
  * Levanta el modulo con un fetch de mentira. `responder` decide que contesta cada
  * peticion, y todo lo que se pide queda en `llamadas` para poder afirmar sobre
  * QUE se escribio, no solo sobre que devolvio el codigo.
+ *
+ * `rpc` es el estado del DDL en la base que estamos imitando: "ausente" (hoy, y
+ * por defecto) o "presente". Con "presente" el POST a /rest/v1/rpc/plan_guardar
+ * sale y hay que responder con rpcContestando().
  */
-function escritor({ token = JWT_FALSO, configurado = true, responder = null } = {}) {
+function escritor({ token = JWT_FALSO, configurado = true, responder = null, rpc = "ausente" } = {}) {
   const llamadas = [];
   const contexto = {
     console,
     AbortController, setTimeout, clearTimeout, Math, Date, JSON, Object, Array,
     Promise, String, Number, Boolean, Error, RegExp, Set, isFinite, parseInt,
     encodeURIComponent,
+    // El navegador tiene atob y actorDe() lo usa para leer el `sub` del JWT. En un
+    // contexto de vm no viene solo, asi que se declara: sin el, el modulo escribe
+    // "web" como actor y el token de la prueba no probaria nada.
+    atob,
     PPSupabaseAuth: { token: async () => token, configurado: true },
     PPSupabaseReader: { isConfigured: () => true, config: () => ({ url: URL_FALSA, anonKey: CLAVE_FALSA }) },
     fetch: async (destino, opciones) => {
@@ -80,8 +143,12 @@ function escritor({ token = JWT_FALSO, configurado = true, responder = null } = 
         tabla: decodeURIComponent(url.split("/rest/v1/")[1].split("?")[0]),
       };
       llamadas.push(registro);
+      // El 404 del RPC va ANTES del responder: es una respuesta de la BASE, no
+      // del Guardado, y un test que dice "este POST devuelve 500" no estaba
+      // hablando del RPC.
+      if (rpc === "ausente" && url.indexOf("/rest/v1/rpc/") !== -1) return RPC_AUSENTE();
       if (responder) return responder(registro, llamadas.length);
-      return { ok: true, status: 204, text: async () => "" };
+      return contestando(204, "");
     },
   };
   contexto.globalThis = contexto;
@@ -235,8 +302,10 @@ test("un 401 no se reintenta: sale en el primer intento y se dice", async () => 
     responder: (c) => ({ ok: false, status: 401, text: async () => JSON.stringify({ message: "JWT ausente" }) }),
   });
   const informe = await writer.guardar(estado());
-  // Sin reintentar, cada escritura se toca una vez: 6 espejos + 1 evento + app_state.
-  const esperadas = writer.ESPEJO.length + 2;
+  // Sin reintentar, cada escritura se toca una vez: el POST al RPC (que aqui da
+  // 404, porque el simulacro imita una base sin el DDL) + 6 espejos + 1 evento +
+  // app_state.
+  const esperadas = writer.ESPEJO.length + 3;
   assert.equal(llamadas.length, esperadas, `hubo ${llamadas.length} peticiones con un 401 y se esperaban ${esperadas}`);
   assert.equal(informe.ok, false);
   assert.match(informe.tablas.operations.error, /401/);
@@ -247,7 +316,9 @@ test("un 401 no se reintenta: sale en el primer intento y se dice", async () => 
 test("un 404 tampoco se reintenta", async () => {
   const { writer, llamadas } = escritor({ responder: () => ({ ok: false, status: 404, text: async () => "" }) });
   await writer.guardar(estado());
-  assert.equal(llamadas.length, writer.ESPEJO.length + 2);
+  // El del RPC tambien, que es lo que se comprueba aqui: una peticion al RPC y
+  // una a cada tabla, ninguna repetida.
+  assert.equal(llamadas.length, writer.ESPEJO.length + 3);
 });
 
 test("un 500 SI se reintenta, y son tres intentos", async () => {
@@ -403,10 +474,19 @@ test("no se llama al RPC ingesta_mirror desde el navegador", async () => {
   // proposito (docs/schema-supabase-plan.sql:335-339, RULE-SUP-021). Que este
   // modulo no lo llame es parte de la garantia de que la pagina no puede vaciar el
   // plan con una llamada.
+  //
+  // Con el RPC del plan (plan_guardar) esto YA NO es "ninguna llamada a /rpc/":
+  // es "la unica llamada a /rpc/ es a plan_guardar, y a ingesta_mirror no se llega
+  // ni por error". Por eso la comprobacion es por nombre y no por ruta.
   const { writer, llamadas } = escritor();
   await writer.guardar(estado());
-  assert.equal(llamadas.filter((c) => c.url.includes("/rpc/")).length, 0);
+  assert.equal(llamadas.filter((c) => c.url.includes("ingesta_mirror")).length, 0);
   assert.doesNotMatch(fuente, /ingesta_mirror\s*\(/);
+  // Y lo que si sale, cuando el DDL no esta, es a plan_guardar. Un 404, que es
+  // como se comprueba que la funcion existe.
+  const alRpc = llamadas.filter((c) => c.url.includes("/rpc/"));
+  assert.equal(alRpc.length, 1);
+  assert.match(alRpc[0].url, /\/rest\/v1\/rpc\/plan_guardar$/);
 });
 
 /**
@@ -497,4 +577,310 @@ test("un estado vacio no borra ni las tablas de espejo, con el opt-in apagado", 
   const { writer, llamadas } = escritor({ token: JWT_FALSO });
   await writer.guardar(estadoVacio());
   assert.equal(llamadas.filter((c) => c.metodo === "DELETE").length, 0, "un guardado sin filas no borra nada");
+});
+
+// ===========================================================================
+// EL CAMINO NUEVO: UN SOLO POST A /rest/v1/rpc/plan_guardar
+//
+// Los tests de arriba corren en una base SIN el DDL: el simulador responde 404
+// PGRST202, que es lo que contesta la base real de hoy, y por eso todos comprueban
+// el camino viejo. Los de aqui suben el DDL (rpc: "presente") y comprueban lo que
+// cambia: una sola peticion, el payload con las nueve claves, la revision de la
+// pagina, y que un conflicto se distinga de un fallo de red.
+// ===========================================================================
+
+test("con el DDL aplicado, el guardado entero es UN POST a /rest/v1/rpc/plan_guardar", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estado(), { snapshots: [{ snapshotId: "draft", operations: [] }] });
+  // Este es EL punto de la funcion: una peticion para el plan entero, no una por
+  // tabla. Si esto falla, el guardado se partio otra vez en varias piezas.
+  assert.equal(llamadas.length, 1, "una sola peticion: " + JSON.stringify(llamadas.map((c) => c.metodo + " " + c.url)));
+  assert.equal(llamadas[0].metodo, "POST");
+  // La ruta lleva la barra SIN escapar: /rest/v1/rpc/plan_guardar y no
+  // /rest/v1/rpc%2Fplan_guardar, que es lo que daria un nombre de tabla escapado.
+  assert.equal(llamadas[0].url, URL_FALSA + "/rest/v1/rpc/plan_guardar");
+  assert.equal(informe.ok, true);
+  assert.equal(informe.camino, "rpc");
+  // Y no hay ninguna escritura suelta: con la funcion no se toca la Data API.
+  assert.equal(de(llamadas, "POST", "operations").length, 0);
+  assert.equal(de(llamadas, "DELETE", "selected_ots").length, 0);
+  assert.equal(de(llamadas, "PATCH", "app_state").length, 0);
+});
+
+test("el payload trae las nueve claves, con el nombre de tabla de Supabase", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  await writer.guardar(estado(), { snapshots: [{ snapshotId: "draft", operations: [], generatedAt: "2026-09-29T18:00:00.000Z" }] });
+  const payload = llamadas[0].cuerpo.p_payload;
+  // El nombre de la TABLA, no el del estado: el estado llama workOrders y
+  // operationPlanStatuses, y la funcion lee 'work_orders'.
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "app_state",
+    "locked_ots",
+    "materials",
+    "operation_events",
+    "operation_plan_statuses",
+    "operations",
+    "plan_snapshots",
+    "selected_ots",
+    "work_orders",
+  ]);
+  // Y las nueve, aunque una vaya vacia: la funcion lee p_payload -> 'tabla', y
+  // una clave que no esta llega como NULL, que no es lo mismo que una lista vacia.
+  for (const clave of writer.CLAVES_PAYLOAD) assert.ok(clave in payload, "falta la clave " + clave);
+  // El mapeo de dentro es el de siempre: mismas columnas, mismos valores.
+  assert.equal(payload.operations[0].operation_id, "ns-3177-1");
+  assert.equal(payload.operations[0].kit, "K-1", "kit, no kitHerramental: el nombre de la columna, no el del estado");
+  assert.equal(payload.operations[0].fecha_inicio, "2026-09-29T08:00:00.000Z");
+  assert.equal(payload.work_orders[0].wo_internal_id, "3177");
+  assert.equal(payload.materials[0].line_id, "mat-1");
+  assert.deepEqual(payload.selected_ots, [{ ot: "3177", posicion: 0 }, { ot: "3631", posicion: 1 }]);
+  assert.deepEqual(payload.locked_ots, [{ ot: "3177" }]);
+  assert.equal(payload.operation_plan_statuses[0].key, "OP|3177|109|5464");
+  assert.equal(payload.app_state.plan_start, "2026-09-28");
+  assert.deepEqual(payload.app_state.settings, { toolChangeOperator: "AJUSTADOR" }, "los jsonb viajan como objeto");
+  assert.equal(payload.app_state.saved_at, "2026-09-29T18:00:00.000Z");
+});
+
+test("manda como p_revision_esperada la revision DEL ESTADO, y no una fabricada", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const e = estado();
+  e.revision = 42;
+  const informe = await writer.guardar(e);
+  // La revision es la que la pagina tiene en su estado (state.revision), la misma
+  // que ya manda al puente. Este modulo no la sube: subirla aqui seria hacer que
+  // dos paginas comparen la misma cifra y las dos pasen.
+  assert.equal(llamadas[0].cuerpo.p_revision_esperada, 42);
+  assert.equal(llamadas[0].cuerpo.p_revision_esperada, e.revision, "sale del estado, no de un contador propio");
+  // app_state NO lleva revision: la incrementa la funcion dentro de la transaccion.
+  assert.equal("revision" in llamadas[0].cuerpo.p_payload.app_state, false);
+  // Y el numero que devuelve sale en el informe, para que la pagina lo guarde: si
+  // no lo guarda, el siguiente guardado manda la vieja y choca consigo mismo.
+  assert.equal(informe.revision, 43);
+  assert.equal(informe.actor, "uuid-de-prueba", "el actor sale del JWT, en p_actor");
+
+  // Un estado sin revision manda 0, que es lo que hay en la fila unica de
+  // app_state cuando esta vacia (docs/schema-supabase-plan.sql:445).
+  const sinRevision = escritor({ rpc: "presente", responder: rpcContestando() });
+  await sinRevision.writer.guardar({ selectedOts: ["3177"], lockedOts: ["3177"], operationPlanStatuses: {} }, { vaciarSiEstaVacio: true });
+  assert.equal(sinRevision.llamadas[0].cuerpo.p_revision_esperada, 0);
+});
+
+test("un CONFLICT_REVISION se distingue de un error de red en el informe", async () => {
+  const { writer, llamadas } = escritor({
+    rpc: "presente",
+    responder: rpcContestando(() => contestando(200, {
+      ok: false,
+      conflicto: "CONFLICT_REVISION",
+      revision_actual: 44,
+      revision_esperada: 42,
+      mensaje: "El plan cambio desde la ultima carga. Recarga antes de guardar.",
+      ms: 4,
+    })),
+  });
+  const informe = await writer.guardar(estado());
+  assert.equal(informe.ok, false);
+  assert.equal(informe.camino, "rpc");
+  assert.equal(informe.conflicto.codigo, "CONFLICT_REVISION");
+  assert.equal(informe.conflicto.revision_actual, 44);
+  assert.equal(informe.conflicto.revision_esperada, 42);
+  // SIN motivo: `motivo` es el campo del fallo, el que SI se reintenta, y aqui
+  // reintentar sin recargar no arregla nada. Los dos campos son excluyentes y es
+  // justo esa exclusion la que evita que la pagina diga "reintenta" y tire el
+  // trabajo de la persona.
+  assert.equal("motivo" in informe, false, "un conflicto no es un motivo de fallo de red");
+  assert.equal(informe.revision, 44, "el informe dice que revision hay ahora en la base");
+  // Y sale en un aviso visible, que es lo que la pagina muestra.
+  const avisos = informe.avisos.join(" ");
+  assert.match(avisos, /NO se guardo nada/i);
+  assert.match(avisos, /Recarga/i);
+  assert.match(avisos, /no es un fallo de red/i);
+  // Ni una escritura por la puerta de atras: con la respuesta en ok false no se
+  // toca nada, y caer al camino viejo seria escribir justo lo que se perdio.
+  assert.equal(llamadas.length, 1);
+
+  // El error de red, en el mismo modulo, se ve distinto: sin `conflicto`, con
+  // `motivo`, y con los tres reintentos.
+  const red = escritor({ rpc: "presente", responder: rpcContestando(() => contestando(503, "service unavailable")) });
+  const fallo = await red.writer.guardar(estado());
+  assert.equal(fallo.ok, false);
+  assert.equal("conflicto" in fallo, false, "un 503 no es un conflicto: reintentar tiene sentido");
+  assert.match(fallo.motivo, /503/);
+  assert.match(fallo.motivo, /reintentar/i);
+  assert.equal(red.llamadas.length, 3, "un 503 SI se reintenta");
+});
+
+test("un 404 del RPC degrada con aviso, usa el camino viejo y NO se reintenta", async () => {
+  // El simulador por defecto imita la base de HOY: plan_guardar no existe todavia.
+  const { writer, llamadas } = escritor();
+  const informe = await writer.guardar(estado());
+  const alRpc = llamadas.filter((c) => c.url.includes("/rpc/"));
+  assert.equal(alRpc.length, 1, "una sola pregunta al RPC");
+  assert.equal(informe.camino, "viejo", "y se fue por el camino viejo");
+  // El aviso tiene que decir LO QUE esta pasando, porque es lo unico que separa
+  // "falta el DDL" de "se cayo la red": uno se arregla aplicando el DDL y el otro
+  // esperando, y tratarlos igual deja a la persona creyendo que guardo con
+  // transaccion cuando no.
+  const avisos = informe.avisos.join(" ");
+  assert.match(avisos, /falta aplicar el DDL/i);
+  assert.match(avisos, /camino viejo/i);
+  assert.match(avisos, /SIN TRANSACCION/i);
+  assert.match(avisos, /no es un fallo de red/i);
+  assert.match(avisos, /PGRST202/, "y el codigo que dio PostgREST, para no tener que adivinar");
+  // El camino viejo es el de siempre, con su freno: operations se actualiza y no
+  // se borra.
+  assert.equal(de(llamadas, "DELETE", "operations").length, 0);
+  assert.equal(de(llamadas, "POST", "operations").length, 1);
+
+  // Y no se vuelve a preguntar: la respuesta no va a cambiar mientras la pagina
+  // siga abierta, y repreguntar es un gasto en cada guardado.
+  const antes = llamadas.length;
+  const segundo = await writer.guardar(estado());
+  const nuevas = llamadas.slice(antes);
+  assert.equal(nuevas.filter((c) => c.url.includes("/rpc/")).length, 0, "ni una pregunta mas al RPC");
+  // El camino viejo entero: 3 borrados de las tablas de espejo, 6 UPSERT (una por
+  // tabla) y el PATCH de app_state. Los eventos ya estan y no se vuelven a pagar.
+  assert.equal(nuevas.filter((c) => c.metodo === "DELETE").length, 3);
+  assert.equal(nuevas.filter((c) => c.metodo === "POST").length, 6);
+  assert.equal(nuevas.filter((c) => c.metodo === "PATCH").length, 1);
+  assert.equal(segundo.camino, "viejo");
+  assert.match(segundo.avisos.join(" "), /falta aplicar el DDL/i, "y el aviso sigue saliendo en cada guardado");
+});
+
+test("un 401 del RPC no degrada al camino viejo: no es lo mismo que un 404", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando(() => contestando(401, JSON.stringify({ message: "JWT ausente" }))) });
+  const informe = await writer.guardar(estado());
+  // Caer al camino viejo con la sesion caida seria hacer seis peticiones que
+  // tambien van a fallar, y encima decir "sin transaccion" como si fuera el mismo
+  // problema que el DDL sin aplicar.
+  assert.equal(llamadas.length, 1, "ni una escritura por tablas");
+  assert.equal(informe.ok, false);
+  assert.match(informe.motivo, /401/);
+  assert.match(informe.motivo, /no mejoran esperando/i, "un 401 no se arregla esperando: hay que arreglar la sesion");
+  assert.doesNotMatch(informe.motivo, /reintentar el guardado/i);
+});
+
+test("el token no sale ni en la URL ni en el informe, tampoco por el RPC", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estado());
+  for (const c of llamadas) {
+    // El JWT va en la cabecera Authorization y en ningun otro sitio. En la URL
+    // acabaria en el log del proxy, en el historial y en un referer.
+    assert.doesNotMatch(c.url, /jwt-de-pruebas/, "el token viaja en la cabecera, nunca en la URL");
+    assert.doesNotMatch(c.url, new RegExp(CLAVE_FALSA), "la clave tampoco");
+    assert.equal(c.headers.Authorization, "Bearer " + JWT_FALSO);
+  }
+  const texto = JSON.stringify(informe);
+  assert.doesNotMatch(texto, /jwt-de-pruebas/);
+  assert.doesNotMatch(texto, new RegExp(CLAVE_FALSA));
+  assert.doesNotMatch(texto, /firma-que-no-es-real/);
+});
+
+test("retirada_en y retirada_por NO se mandan: esas columnas las pone la funcion", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  await writer.guardar(estado());
+  const payload = llamadas[0].cuerpo.p_payload;
+  for (const tabla of writer.CLAVES_PAYLOAD) {
+    const valor = payload[tabla];
+    const filas = Array.isArray(valor) ? valor : [valor];
+    for (const fila of filas) {
+      if (!fila || typeof fila !== "object") continue;
+      assert.equal("retirada_en" in fila, false, tabla + " no manda retirada_en");
+      assert.equal("retirada_por" in fila, false, tabla + " no manda retirada_por");
+    }
+  }
+  // Y no es que el dato este escondido: la fuente real de una retirada es que la
+  // OT salio de selected_ots, y comparar la cola de antes con la de despues lo
+  // hace la funcion (docs/schema-supabase-plan.sql:590-599). El navegador no
+  // tiene esa lista, asi que no puede escribirla aunque quisiera.
+  assert.doesNotMatch(fuente, /retirada_en\s*:/);
+  assert.doesNotMatch(fuente, /retirada_por\s*:/);
+});
+
+test("un estado vacio NO llama a plan_guardar aunque el DDL este aplicado, y no borra nada", async () => {
+  // La funcion sustituye selected_ots, locked_ots y operation_plan_statuses con un
+  // delete y un insert SIN CONDICION, asi que una lista vacia las deja vacias. Un
+  // guardado que fallo al leer no puede vaciar el plan entero (RULE-SUP-021), y
+  // con el RPC el freno tiene que ir ANTES de la llamada: alli no se puede saltar
+  // una tabla.
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estadoVacio());
+  assert.equal(llamadas.filter((c) => c.url.includes("/rpc/")).length, 0, "no se llama a la funcion con un estado vacio");
+  assert.equal(llamadas.filter((c) => c.metodo === "DELETE").length, 0, "y por el camino viejo tampoco se borra nada");
+  const avisos = informe.avisos.join(" ");
+  assert.match(avisos, /No se llamo a plan_guardar/i);
+  assert.match(avisos, /vaciarSiEstaVacio/, "y dice como se hace si el vacio es de verdad");
+});
+
+test("con vaciarSiEstaVacio si se llama a la funcion, porque el vacio es explicito", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  await writer.guardar(estadoVacio(), { vaciarSiEstaVacio: true });
+  assert.equal(llamadas.length, 1);
+  assert.match(llamadas[0].url, /plan_guardar$/);
+  assert.deepEqual(llamadas[0].cuerpo.p_payload.selected_ots, [], "las nueve claves van, vacias donde toca");
+  assert.deepEqual(llamadas[0].cuerpo.p_payload.locked_ots, []);
+});
+
+test("los eventos y los snapshots van con la forma que espera la funcion", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  await writer.guardar(estado(), {
+    snapshots: [{ snapshotId: "draft", operations: [{ id: "ns-3177-1" }], generatedAt: "2026-09-29T18:00:00.000Z", planStart: "2026-09-28" }],
+  });
+  const cuerpo = llamadas[0].cuerpo;
+  for (const evento of cuerpo.p_payload.operation_events) {
+    // El actor lo pone la funcion desde p_actor, no el navegador: mandarlo seria
+    // mandar un valor que se pisa.
+    assert.equal("actor" in evento, false);
+    assert.deepEqual(Object.keys(evento).sort(), ["ct", "id", "kind", "operation_id", "ot", "payload", "secuencia"]);
+  }
+  assert.equal(cuerpo.p_actor, "uuid-de-prueba", "el actor sale del sub del JWT, una vez, en p_actor");
+  // El snapshot va entero dentro de la columna jsonb, no partido en columnas: la
+  // forma de un borrador la decide la app (docs/schema-supabase-plan.sql:688).
+  const snap = cuerpo.p_payload.plan_snapshots[0];
+  assert.deepEqual(Object.keys(snap).sort(), ["created_at", "payload", "snapshot_id"]);
+  assert.equal(snap.snapshot_id, "draft");
+  assert.equal(snap.created_at, "2026-09-29T18:00:00.000Z");
+  assert.equal(snap.payload.operations.length, 1);
+});
+
+test("el informe del RPC trae las filas que conto la funcion, y la revision nueva", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estado());
+  assert.equal(informe.revision, 43, "la revision que incremento la funcion, para que la pagina la guarde");
+  assert.equal(informe.actor, "uuid-de-prueba");
+  // El modo es lo que dice QUE se hizo, no solo cuantas filas: con el DDL aplicado
+  // el borrado de las tres del ERP es imposible, y eso se ve aqui. Los objetos del
+  // informe se crean dentro del contexto de vm, asi que se comparan campo a campo
+  // en vez de con deepEqual, que ademas de la estructura mira el prototipo.
+  assert.equal(informe.tablas.operations.modo, "actualiza");
+  assert.equal(informe.tablas.operations.insertadas, 1);
+  assert.equal(informe.tablas.operations.error, null);
+  assert.equal(informe.tablas.selected_ots.modo, "espejo");
+  assert.equal(informe.tablas.selected_ots.insertadas, 2);
+  assert.equal(informe.tablas.operation_events.modo, "flujo");
+  assert.equal(informe.tablas.operation_events.insertadas, 2);
+  // Lo que la funcion reporta y no es una tabla (las OTs que salieron del plan) no
+  // se tira: es la respuesta a "que paso con lo que saque del plan".
+  assert.deepEqual(JSON.parse(JSON.stringify(informe.marcas.retiradas)), { ots: ["3177"], operaciones: 4 });
+});
+
+test("con el RPC, permitirBorradoErp no puede borrar nada: el DDL no lo permite", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estado(), { permitirBorradoErp: true });
+  assert.equal(llamadas.filter((c) => c.metodo === "DELETE").length, 0, "operations, work_orders y materials son modo actualiza: UPDATE y nada mas");
+  assert.match(informe.avisos.join(" "), /permitirBorradoErp no tiene efecto/i, "y se dice, para que nadie crea que ocurrio");
+});
+
+test("los eventos que no caben en una peticion se dejan para el siguiente guardado, y se dice", async () => {
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const grande = estado();
+  grande.operations = [];
+  for (let i = 0; i < 205; i += 1) {
+    grande.operations.push({ id: "ns-larga-" + i, ot: "3177", secuencia: i, ct: "5464", log: "MAQUINA_OT_APP | KIT_OT_APP" });
+  }
+  const informe = await writer.guardar(grande);
+  assert.equal(llamadas[0].cuerpo.p_payload.operation_events.length, 400, "el tope por peticion: un cuerpo que no entra es un plan que no se guarda");
+  assert.match(informe.avisos.join(" "), /se omitieron 10 evento/i, "y lo que se queda fuera se dice, no se traga");
+  // El corte avanza de verdad: lo que no se mande sale en el siguiente guardado.
+  await writer.guardar(grande);
+  assert.equal(llamadas[1].cuerpo.p_payload.operation_events.length, 10);
 });

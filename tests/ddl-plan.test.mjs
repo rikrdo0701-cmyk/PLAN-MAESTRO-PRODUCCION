@@ -354,3 +354,99 @@ test("la funcion declara que se deshace con raise, no que devuelve un ok falso",
   assert.match(cuerpo, /when others then/);
   assert.match(cuerpo, /raise;/);
 });
+
+test("plan_snapshots recibe la columna payload, y el motivo esta escrito", () => {
+  // ERROR MIO, CORREGIDO. MEDIDO 2026-09-29: plan_snapshots tiene id, snapshot_id,
+  // operations, generated_at, plan_start, version, usuario, change_summary,
+  // published_at, publication_reason y created_at. NO tiene `payload`, y la primera
+  // version de plan_guardar hacia
+  //   insert into plan_snapshots (snapshot_id, payload, created_at)
+  //   select snapshot_id, payload, ... from jsonb_populate_recordset(...)
+  // Eso no resuelve. Y como la sentencia viene de jsonb_populate_recordset, no es
+  // un INSERT que se salte esa fila y siga: se CAE LA TRANSACCION ENTERA. O sea que
+  // un solo borrador habria roto todos los guardados, no solo los de borrador. Lo
+  // encontro el agente que escribio el escritor, al usar el contrato que le di yo.
+  assert.match(ddl, /alter table public\.plan_snapshots add column if not exists payload jsonb/);
+  assert.match(ddl, /comment on column public\.plan_snapshots\.payload is/);
+  // Y el por que de agregar la columna en vez de amoldar el insert a `operations`:
+  // un borrador tiene que poder restaurar el plan entero, y `operations` es solo la
+  // lista de operaciones.
+  assert.match(ddl, /no alcanza para restaurar/);
+});
+
+test("la revision la pone la funcion, y el navegador no puede mandarla", () => {
+  // MEDIDO por el mismo agente: `revision` estaba en la lista de columnas escribibles
+  // de plan_tabla_escritura, con lo que cada fila quedaba con la revision que TENIA
+  // la pagina y no con la que se guardo. Eso es un guardado por detras, y hace que
+  // no se pueda atribuir un cambio a una revision concreta, que es justo para lo que
+  // sirve la revision.
+  const cuerpo = ddl.slice(ddl.indexOf("plan_guardar("), ddl.indexOf("comment on function public.plan_guardar"));
+  assert.match(
+    cuerpo,
+    /\|\| ', revision = ' \|\| v_nueva/,
+    "la funcion tiene que poner revision = v_nueva en las filas que actualiza"
+  );
+  // Y en las cuatro listas de columnas escribibles, `revision` NO puede estar.
+  for (const tabla of ["operations", "work_orders", "materials", "operation_plan_statuses"]) {
+    const desde = ddl.indexOf("('" + tabla + "', '");
+    const hasta = ddl.indexOf("),", desde);
+    const fila = ddl.slice(desde, hasta);
+    assert.ok(
+      !/'revision'/.test(fila),
+      tabla + ": `revision` no puede estar en la lista de lo que escribe la pagina, o cada fila queda un guardado por detras"
+    );
+  }
+});
+
+test("el DDL no nombra una columna que plan_snapshots no tiene", async () => {
+  // LA RED GENERAL DEL DDL, y la que habria atrapado lo de `payload` antes de que lo
+  // encontrara un agente. plan_guardar nombra columnas por su nombre en UN sitio: el
+  // update de app_state. Ahi un nombre equivocado no es un INSERT que se salta una
+  // fila, es una sentencia que no resuelve y tumba la transaccion entera.
+  //
+  // Las demas tablas llegan por jsonb_populate_recordset, que no necesita que el
+  // nombre exista en el texto, asi que ahi la red es la que trae el esquema medido
+  // (tests/supabase-reader-mapeo.test.mjs).
+  const esquema = JSON.parse(
+    await readFile(new URL("../docs/esquema-supabase-medido.json", import.meta.url), "utf8")
+  );
+  const reales = new Set((esquema.app_state || []).map((c) => c.columna));
+  assert.ok(reales.size > 0, "el esquema medido tiene que traer app_state, o este test no comprueba nada");
+
+  // El bloque exacto del update, para no arrastrar el resto de la funcion.
+  const iUpdate = ddl.indexOf("update public.app_state");
+  const iFin = ddl.indexOf("where id = 1", iUpdate);
+  assert.ok(iUpdate > 0 && iFin > iUpdate, "el update de app_state tiene que estar en el DDL");
+  const bloque = ddl.slice(iUpdate, iFin);
+
+  // Solo las columnas del LADO IZQUIERDO de cada asignacion, que es donde el nombre
+  // tiene que existir. El lado derecho es una expresion y no se comprueba.
+  const nombradas = new Set();
+  const iSet = bloque.indexOf("set");
+  assert.ok(iSet > 0, "el update de app_state tiene que tener un set");
+  for (const a of bloque.slice(iSet + 3).split(",")) {
+    const col = a.trim().split(/\s*=/)[0].trim();
+    if (/^[a-z_][a-z0-9_]*$/.test(col)) nombradas.add(col);
+  }
+  assert.ok(nombradas.size >= 10, "el update tiene que nombrar sus columnas, y se detectaron " + nombradas.size);
+
+  // Este DDL agrega columnas que todavia no estan, y hay que tenerlas en cuenta o el
+  // test falla por lo que el DDL va a hacer, no por lo que el DDL esta mal.
+  const agregadas = new Set();
+  for (const m of ddl.matchAll(/alter table public\.app_state add column if not exists (\w+)/g)) agregadas.add(m[1]);
+
+  const malas = [...nombradas].filter((c) => !reales.has(c) && !agregadas.has(c));
+  assert.deepEqual(
+    malas,
+    [],
+    "estas columnas no existen en app_state y el update no resolveria: " + malas.join(", ")
+  );
+
+  // Y el caso concreto que rompio todo: `payload` en plan_snapshots.
+  const colsPlanSnapshots = new Set((esquema.plan_snapshots || []).map((c) => c.columna));
+  assert.ok(
+    !colsPlanSnapshots.has("payload"),
+    "si el esquema medido ya trae payload, el DDL que la agrega es redundante y hay que quitarlo"
+  );
+  assert.match(ddl, /alter table public\.plan_snapshots add column if not exists payload jsonb/);
+});
