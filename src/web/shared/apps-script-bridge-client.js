@@ -7,6 +7,22 @@
   const READY_TIMEOUT_MS = 30000;
   const CALL_TIMEOUT_MS = 120000;
   const METHOD_TIMEOUT_MS = {
+    // MEDIDO 2026-09-29 abriendo la pagina de verdad en un navegador: getAppState AGOTA
+    // el tiempo generico de 120 s y la app se queda con el cache local, que en un
+    // navegador recien abierto esta vacio. La pagina aparece SIN operaciones, SIN OTs
+    // y SIN catalogo, y el unico aviso es un console.warn que nadie ve.
+    //
+    // Cuanto tarda de verdad, medido con el techo quitado: getAppState 11,3 s y
+    // getAppStateIfChanged 197 s en la misma corrida, o sea 3 min 17 s. Con eso, 120 s
+    // no es un margen corto: es menos que el peor caso que se ha visto. Se suben a
+    // 420 s, el mismo techo que ya usan los metodos de NetSuite.
+    //
+    // Esto NO arregla la lentitud, solo deja de cortar la llamada antes de que
+    // responda. La lentitud de fondo es de Apps Script: 74 llamadas al puente en una
+    // sola carga, cada una con arranque en frio. Lo que la quita de raiz es leer de
+    // Supabase, donde las mismas once tablas tardan 239 ms.
+    getAppState: 420000,
+    getAppStateIfChanged: 420000,
     publishDraftPlan: 360000,
     saveDraftSnapshot: 300000,
     restorePublishedPlanAsDraft: 300000,
