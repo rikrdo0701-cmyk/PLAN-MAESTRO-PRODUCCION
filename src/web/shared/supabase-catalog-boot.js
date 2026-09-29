@@ -138,11 +138,12 @@
    */
   async function correr() {
     const lector = root.PPSupabaseReader;
-    if (!lector || !lector.configured || !lector.configured()) {
+    if (!lector || typeof lector.isConfigured !== "function" || !lector.isConfigured()) {
       return { activo: false, motivo: "Supabase no configurado" };
     }
-    const url = (lector.config || {}).url || "";
-    const clave = (lector.config || {}).anonKey || "";
+    const conf = typeof lector.config === "function" ? lector.config() : (lector.config || {});
+    const url = String(conf.url || "").replace(/\/+$/, "");
+    const clave = String(conf.anonKey || "");
 
     const t0 = Date.now();
     let resultado = null;

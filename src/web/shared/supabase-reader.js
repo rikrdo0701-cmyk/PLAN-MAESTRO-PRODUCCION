@@ -414,6 +414,14 @@
 
   return {
     configure: configure,
+    // MEDIDO 2026-09-29: el modulo de arranque (supabase-catalog-boot.js) necesita
+    // saber si hay URL y clave, y hasta ahora no habia forma de preguntarselo: solo
+    // existia isConfigured(), que responde si/no pero no da los valores. El arranque
+    // lo resolvia inventandose un lector.configured() que no existia, con lo que
+    //_entero se daba por apagado y no se leia NADA de Supabase. Sin dar, la pantalla
+    // de entrada, los catalogos y el aviso de antiguedad dependian de una funcion
+    // que no existia.
+    config: function () { return { url: config.url, anonKey: config.anonKey }; },
     isConfigured: isConfigured,
     readTable: readTable,
     countTable: countTable,
