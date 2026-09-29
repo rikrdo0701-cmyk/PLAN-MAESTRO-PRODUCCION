@@ -270,7 +270,13 @@ on conflict (tabla) do update set nota = excluded.nota;
 -- estructura, asi que se separa del resto y se explica solo. La funcion anterior
 -- queda en ingest_mirror_v1 para poder volver atras si algo sale mal.
 
+-- Se suelta antes de crearla porque NO se puede cambiar el tipo de retorno de una
+-- funcion que ya existe, y la v1 existe desde que se aplico por primera vez. Es
+-- inocuo tirarla: su unico proposito es el mensaje de error que dice que la
+-- whitelist se movio de aqui a la tabla, o sea que no hace nada por si misma.
+drop function if exists public.ingesta_mirror_v1(text, jsonb);
 create or replace function public.ingesta_mirror_v1(text, jsonb)
+  returns jsonb
   language plpgsql
   security invoker
   set search_path = public
@@ -282,7 +288,13 @@ begin
 end;
 $$;
 
+-- MEDIDO 2026-09-29: esta funcion YA EXISTE en la base, asi que el `create or
+-- replace` tiene que coincidir con su tipo de retorno o falla con "cannot change
+-- return type of existing function". El cuerpo tiene un
+-- `return jsonb_build_object('ok', true, 'tabla', ..., 'insertadas', ...)`, asi que
+-- el tipo es jsonb y sale del codigo, no de una suposicion.
 create or replace function public.ingesta_mirror(p_tabla text, p_filas jsonb)
+  returns jsonb
   language plpgsql
   security invoker
   set search_path = public

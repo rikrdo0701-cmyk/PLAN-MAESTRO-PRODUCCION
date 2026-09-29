@@ -450,3 +450,71 @@ test("el DDL no nombra una columna que plan_snapshots no tiene", async () => {
   );
   assert.match(ddl, /alter table public\.plan_snapshots add column if not exists payload jsonb/);
 });
+
+test("NINGUNA funcion se crea sin declarar su tipo de retorno", () => {
+  // ERROR REAL, 2026-09-29. El usuario aplico el DDL y Postgres contesto
+  //   ERROR: function result type must be specified
+  // y el script se paro ahi. Las dos funciones de ingesta_mirror no declaraban
+  // RETURNS, que en PostgreSQL es obligatorio: la firma acaba en el `as $$` del cuerpo.
+  //
+  // Esto llevo 25 tests sin verlo, porque todos comprobaban estructura (que el archivo
+  // se divida en SQL, que los bloques $$ cierren, que los nombres de columna existan) y
+  // NINGUNO comprobaba que Postgres aceptara la sentencia. Un DDL puede estar
+  // estructuralmente perfecto y ser invalido, y gastarse la unica vez que el usuario
+  // escribe la contrasena. Por eso el recorrido es sobre la FIRMA: desde
+  // `create or replace function` hasta el `as $$`, que es donde acaba.
+  const re = /create or replace function\s+([\s\S]{0,500}?)as\s+\$\$/g;
+  const firmas = [];
+  let m;
+  while ((m = re.exec(ddl))) firmas.push(m[1]);
+  assert.ok(firmas.length >= 3, "se esperaban al menos 3 funciones y se hallaron " + firmas.length);
+  const sinReturns = firmas.filter((f) => !/\breturns\b/i.test(f));
+  assert.deepEqual(
+    sinReturns.map((f) => f.replace(/\s+/g, " ").trim().slice(0, 70)),
+    [],
+    "estas funciones no declaran RETURNS y Postgres las rechaza: function result type must be specified"
+  );
+});
+
+test("el tipo de retorno sale del CUERPO de la funcion, no de una suposicion", () => {
+  // ingesta_mirror tiene un `return jsonb_build_object(...)` explico: el tipo es jsonb y
+  // se lee del codigo. Un test que solo mirara la firma podria poner cualquier cosa
+  // despues y seguir en verde; este ata las dos cosas.
+  const cuerpo = ddl.slice(ddl.indexOf("create or replace function public.ingesta_mirror("));
+  const hasta = cuerpo.indexOf("$$", cuerpo.indexOf("$$") + 2);
+  const cuerpoReal = cuerpo.slice(0, hasta);
+  assert.match(cuerpoReal, /return jsonb_build_object\(/);
+  assert.match(cuerpoReal.slice(0, 200), /returns jsonb/);
+});
+
+test("ingesta_mirror_v1 se suelta antes de crearse, porque su tipo no se puede cambiar", () => {
+  // MEDIDO 2026-09-29: ingesta_mirror YA VIVE en la base, asi que su `create or replace`
+  // tiene que coincidir con el tipo de retorno que ya tiene. Para la v1 no se sabe cual
+  // era, y `create or replace` no cambia el tipo de retorno de una funcion existente:
+  // falla con "cannot change return type of existing function". Por eso lleva un
+  // `drop function if exists` antes, y es inocuo porque la v1, por definicion, no hace
+  // nada: su unico cuerpo es un raise con el aviso de que la whitelist se movio a la
+  // tabla.
+  // Ojo con cual de las dos apariciones del nombre se mira: la PRIMERA es la del propio
+  // `drop function if exists`, y un recorte que termina ahi acaba en "public." y nunca
+  // ve el nombre. Se apunta a la del `create`, que es donde empieza la declaracion.
+  const i = ddl.indexOf("create or replace function public.ingesta_mirror_v1");
+  const previo = ddl.slice(Math.max(0, i - 500), i);
+  assert.match(previo, /drop function if exists public\.ingesta_mirror_v1\(text, jsonb\)/);
+  // Y la v1 no puede devolver nada, porque no devuelve nada.
+  const cuerpo = ddl.slice(i);
+  const hasta = cuerpo.indexOf("$$", cuerpo.indexOf("$$") + 2);
+  assert.ok(!/return\s+/.test(cuerpo.slice(0, hasta)), "la v1 no debe tener return: su cuerpo es un raise");
+});
+
+test("el otro DDL pendiente, el del login, tampoco tiene funciones sin RETURNS", async () => {
+  // El login se aplica DESPUES, con otra pasada con la contrasena. Si tiene el mismo
+  // fallo, el usuario lo descubre tarde yhaving ya gastado la primera. Se comprueba
+  // aqui aunque todavia no se haya aplicado nunca.
+  const login = await readFile(new URL("../docs/schema-supabase-login-correo.sql", import.meta.url), "utf8");
+  const re = /create or replace function\s+([\s\S]{0,500}?)as\s+\$\$/g;
+  const sinReturns = [];
+  let m;
+  while ((m = re.exec(login))) if (!/\breturns\b/i.test(m[1])) sinReturns.push(m[1].replace(/\s+/g, " ").slice(0, 60));
+  assert.deepEqual(sinReturns, [], "el DDL del login tiene funciones sin RETURNS: " + sinReturns.join(" | "));
+});
