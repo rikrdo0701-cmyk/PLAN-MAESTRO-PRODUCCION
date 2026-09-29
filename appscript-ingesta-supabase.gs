@@ -6,6 +6,9 @@
  *
  * NO escribe en NetSuite: solo lee y escribe en Supabase.
  *
+ * MIRROR EXACTO: cada corrida BORRA cada tabla completa y reescribe lo que
+ * devuelve NetSuite, para que no queden filas de corridas anteriores.
+ *
  * Trigger: cada 15 minutos, lun-vie, 7am-5pm.
  */
 
@@ -93,6 +96,28 @@ function PP_restletUnificado_(accion, config) {
 // =============================================================================
 // Supabase (PostgREST)
 // =============================================================================
+
+function PP_supabaseBorrar_(tabla, config) {
+  // Borra TODAS las filas de la tabla (full refresh): la ingesta ahora reescribe
+  // cada tabla desde cero para que no queden datos antiguos de corridas previas.
+  // El filtro id=neq.<uuid-vacio> es una tautologia que PostgREST acepta para
+  // borrar todo, incluso si la tabla ya esta vacia.
+  const url = config.supabaseUrl + '/rest/v1/' + tabla + '?id=neq.00000000-0000-0000-0000-000000000000';
+  const res = UrlFetchApp.fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'apikey': config.supabaseKey,
+      'Authorization': 'Bearer ' + config.supabaseKey,
+      'Prefer': 'count=none'
+    },
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  if (code !== 200 && code !== 204) {
+    throw new Error('Supabase borrar ' + tabla + ' ' + code + ': ' + res.getContentText().slice(0, 300));
+  }
+  return true;
+}
 
 function PP_supabaseUpsert_(tabla, filas, clave, config) {
   if (!filas.length) return { escritas: 0 };
@@ -191,9 +216,12 @@ function ingesta() {
       if (nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
       if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
       if (nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
+      // Mirror exacto de NetSuite: borra la tabla completa y escribe lo nuevo,
+      // para que no queden filas de corridas anteriores.
+      PP_supabaseBorrar_(def.tabla, config);
       const r = PP_supabaseUpsert_(def.tabla, filas, def.clave, config);
-      log.push(nombre + ': ' + r.escritas + ' filas');
-      console.log(nombre + ': ' + r.escritas + ' escritas');
+      log.push(nombre + ': ' + r.escritas + ' filas (borrado+reescrito)');
+      console.log(nombre + ': ' + r.escritas + ' escritas (tabla reescrita completa)');
     } catch (e) {
       log.push(nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
       console.log(nombre + ': ERROR ' + String(e.message || e).slice(0, 200));

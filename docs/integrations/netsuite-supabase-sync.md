@@ -100,23 +100,30 @@ POST { accion, ids: {workorderIds, itemIds, salesOrderIds, workcenterIds}, folio
 Respuesta: `{ ok, accion, tabla, modoUsado, leidas, escritas, omitidas, conflictos[], batches,
 truncado, avisos[], degradaciones[] }`.
 
-## 5. Los dos modos de escritura
+## 5. Modo de escritura: MIRROR EXACTO (borrar + reescribir)
 
-**`comparar` (default).** Una llamada por fila: lee la fila previa (para saber su `revision` y para no
-reescribir lo que no cambió), y luego `PATCH ... WHERE <clave>=eq.<valor> AND revision=eq.<anterior>`.
-Si el `PATCH` devuelve 0 filas, alguien escribió en medio: se reporta como `conflicto` y **no se pisa**.
-Es la concurrencia optimista de §3.5 del plan, traducida a PostgREST.
+Desde el 2026-09-29 la ingesta no hace upsert incremental: **borra cada tabla completa y
+reescribe lo que NetSuite devuelve en esa corrida** (decisión del usuario: "que no se queden
+datos antiguos"). Las 7 tablas quedan como espejo exacto de las filas abiertas del ERP.
 
-**`upsert`.** Un `POST` por lote con `Prefer: resolution=merge-duplicates`. Es last-write-wins: no hay
-guarda de `revision`.
+El flujo corre en Google Apps Script (`appscript-ingesta-supabase.gs`, función `ingesta`):
+1. Una sola llamada al RESTlet unificado **2246** con `accion: 'todas'` (solo lectura).
+2. Por cada tabla: `DELETE ... WHERE id=neq.<uuid-vacio>` (borra todo; es el único writer,
+   la service role key de `supabase-config.gs`) y luego `POST` con `on_conflict=<clave>`.
 
-**La degradación se declara, nunca es silenciosa.** `MAX_FILAS_COMPARAR = 60` porque el gobierno de la
-cuenta es de 10,000 llamadas externas/día y `comparar` es una por fila. Pasado el tope el RESTlet
-cambia a `upsert` y lo dice en `degradaciones` y en `modoUsado`.
+Claves naturales (`on_conflict`):
+- `work_orders` → `ot`
+- `operations` → `operation_id` (`ns-<mot.id>`)
+- `materials` → `ot,line_id` (UNIQUE compuesto; `comp.id` es el número de línea *dentro* de
+  la OT y se repite entre OTs, medido el 2026-09-29)
+- `items` → `codigo`
+- `machines` → `nombre`
+- `inventory` → `item,ubicacion`
+- `sales_orders` → `folio`
 
-**El dedupe compara campos de negocio, no la fila entera.** `synced_at` está en `VOLATILES` a
-propósito: si entrara en la comparación, ninguna fila se saltaría nunca. Consecuencia asumida:
-`work_orders.synced_at` queda con la fecha del **último cambio real**, no de la última corrida.
+Sin guarda de `revision` ni modo `comparar`: el mirror semanal/quincenal convive con la
+concurrencia optimista de `app_state`/`plan_snapshots` (que son tablas de estado, no de
+ingesta), sin pisarse.
 
 **`dryRun` corre sin credenciales** y devuelve `clavesQueSeEscribirian` y `filasQueSeEscribirian`.
 Es la forma de verificar el mapeo contra el esquema antes de escribir: si aparece una columna que no
