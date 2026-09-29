@@ -154,6 +154,7 @@ test("respeta el dollar-quoting etiquetado ($tag$)", () => {
 // ---------------------------------------------------------------------------
 
 const ddl = await readFile(new URL("../docs/schema-supabase-cierre-catalogos.sql", import.meta.url), "utf8");
+const ddlLogin = await readFile(new URL("../docs/schema-supabase-login-correo.sql", import.meta.url), "utf8");
 
 test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL", () => {
   const partes = dividir(ddl);
@@ -204,4 +205,84 @@ test("las piezas que el DDL declara siguen enteras", () => {
   assert.ok(partes.some((p) => /^create table if not exists public\.machine_planning_overrides/m.test(p)));
   assert.ok(partes.some((p) => /enable row level security/.test(p)));
   assert.ok(partes.some((p) => /^grant execute on function public\.ingesta_mirror/m.test(p)));
+});
+
+
+// ---------------------------------------------------------------------------
+// El DDL del login con correo. MEDIDO 2026-09-29: este archivo tiene un bloque
+// \$\$ ... \$\$ con dos comprobaciones, y un ';' dentro de un comentario en la
+// cabecera ('o sea que sin sesion no se lee ni se escribe' lleva punto y coma
+// fuera de comillas, pero hay otros casos). Se comprueba aqui, antes de pedirle
+// al usuario la contrasena de postgres, porque un error de division se
+// descubre tarde y con la base de por medio.
+// ---------------------------------------------------------------------------
+
+test("el DDL del login se divide y cada fragmento empieza por una palabra de SQL", () => {
+  const partes = dividir(ddlLogin);
+  const malos = diagnosticoDeFragmentos(partes);
+  assert.deepEqual(malos, [], "fragmentos que no son SQL:\n" + malos.join("\n"));
+});
+
+test("el DDL del login mantiene el bloque \$\$ entero, sin partirlo", () => {
+  const partes = dividir(ddlLogin);
+  const conDolar = partes.filter((p) => p.includes("$$"));
+  assert.equal(conDolar.length, 1, `el bloque \$\$ debe quedar en UNA sentencia y hay ${conDolar.length}`);
+  assert.match(conDolar[0], /do \$\$/);
+  assert.match(conDolar[0], /QUEDAN POLITICAS lectura_web/);
+  // MEDIDO 2026-09-29: el divisor se COME el ';' final, o sea que el bloque llega a
+  // Postgres como "do $$ ... end $$" sin punto y coma. Postgres lo acepta (el ';'
+  // es opcional en una sentencia sola), asi que no es un fallo, pero el test tiene
+  // que reflejar lo que de verdad se manda y no lo que uno espera.
+  assert.match(conDolar[0], /end if;\s*end \$\$/, "el bloque do $$ tiene que cerrar entero");
+  assert.doesNotMatch(conDolar[0], /end \$\$\s*\n?\s*\w/, "detras del cierre no puede quedar texto de otro fragmento");
+
+  // Y el conteo, que es la red general: 18 drops + 18 lecturas + 11 escrituras
+  // + 3 revokes + 1 grant + 1 bloque do = 52. Este numero ya se rompio una vez
+  // (MEDIDO: mi conteo de 25 sentencias del DDL de cierre era suposicion, el real
+  // era 32), asi que se cuenta de verdad y no de memoria.
+  const total = dividir(ddlLogin).length;
+  assert.equal(total, 52, `el DDL del login tiene ${total} sentencias y se esperaban 52`);
+});
+
+test("el DDL del login cierra y abre cada politica en la misma sentencia", () => {
+  // Un drop policy sin el create que va detras deja la tabla sin politica de
+  // lectura: no es que se cierre, es que la siguiente linea puede reabrirla.
+  const partes = dividir(ddlLogin);
+  const drops = partes.filter((p) => /^drop policy/i.test(p.trim()) || /drop policy if exists/i.test(p));
+  // El nombre de la tabla aparece de dos formas: "alter table public.X drop policy"
+  // y "create policy ... on public.X". Se buscan las dos, no solo la segunda.
+  const tablaDe = (p) => (p.match(/alter table\s+(public\.\w+)\s+drop policy/i) || p.match(/on\s+(public\.\w+)/i) || [])[1];
+  const tablasConDrop = new Set(drops.map(tablaDe).filter(Boolean));
+  const tablasConCreate = new Set(partes.filter((p) => /create policy/i.test(p)).map(tablaDe).filter(Boolean));
+  for (const t of tablasConDrop) {
+    assert.ok(tablasConCreate.has(t), `se quita la politica de ${t} y no se pone ninguna en su lugar`);
+  }
+  assert.ok(tablasConDrop.size >= 18, `solo hay ${tablasConDrop.size} tablas con drop policy, se esperaban las 18`);
+});
+
+test("el DDL del login no abre escritura donde no debe", () => {
+  // Las 7 de ingesta y las 5 del estado del plan quedan solo para lectura. Es
+  // deliberado (RULE-SUP-022) y este test lo fija, porque abrirlo de golpe seria
+  // cambiar dos cosas el mismo dia.
+  const partes = dividir(ddlLogin);
+  const escrituras = partes.filter((p) => /create policy\s+"escritura_app"/i.test(p));
+  const tablas = escrituras.map((p) => (p.match(/on (public\.\w+)/i) || [])[1]).sort();
+  const esperadas = [
+    "public.article_configurations", "public.calendar_exceptions", "public.capabilities",
+    "public.machine_planning_overrides", "public.matrix", "public.operation_catalog",
+    "public.operators", "public.ot_configurations", "public.ot_types", "public.subcontracts",
+    "public.tools",
+  ].sort();
+  assert.deepEqual(tablas, esperadas);
+  for (const p of escrituras) {
+    assert.match(p, /with check \(true\)/i, "sin WITH CHECK, RLS filtra lo que se lee y no lo que se escribe");
+  }
+});
+
+test("el DDL del login revoca el RPC de espejo para los tres roles", () => {
+  const sql = ddlLogin;
+  for (const rol of ["anon", "authenticated", "public"]) {
+    assert.match(sql, new RegExp(`revoke execute on function public\\.ingesta_mirror\\(text, jsonb\\) from ${rol};`, "i"), `falta el revoke para ${rol}`);
+  }
+  assert.match(sql, /grant execute on function public\.ingesta_mirror\(text, jsonb\) to service_role;/i);
 });
