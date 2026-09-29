@@ -123,7 +123,7 @@ define(['N/query'], (query) => {
       rows: rows.map(r => ({
         workorder_id: String(r.workorder_id || ''),
         workorder_tranid: String(r.workorder_tranid || ''),
-        operation: String(r.operation || ''),
+        descripcion: String(r.operation || ''),
         sequence: Number(r.sequence) || 0,
         qty_to_process: Number(r.qty_to_process) || 0,
         status_op: String(r.status_op || ''),
@@ -299,9 +299,9 @@ define(['N/query'], (query) => {
       ok: true,
       headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar'],
       rows: rows.map(r => ({
-        internalid: String(r.internalid || ''),
-        fecha_captura: isoFecha_(r.fecha_captura),
-        orden: String(r.orden || ''),
+        sales_order_id: String(r.internalid || ''),
+        fecha: isoFecha_(r.fecha_captura),
+        folio: String(r.orden || ''),
         nombre_cliente: String(r.nombre_cliente || ''),
         fecha_embarque: isoFecha_(r.fecha_embarque),
         memo: String(r.comentarios || ''),
