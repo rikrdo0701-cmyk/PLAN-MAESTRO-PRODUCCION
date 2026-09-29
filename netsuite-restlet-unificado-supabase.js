@@ -327,5 +327,13 @@ define(['N/query'], (query) => {
     return String(v);
   }
 
+  function isoFecha_(crudo) {
+    if (!crudo) return '';
+    const s = String(crudo).trim();
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (m) return m[3] + '-' + m[2] + '-' + m[1];
+    return s;
+  }
+
   return { post };
 });
