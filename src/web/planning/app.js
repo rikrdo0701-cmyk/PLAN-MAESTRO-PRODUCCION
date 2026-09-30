@@ -504,7 +504,67 @@ function bindBacklogLoadMoreObserver() {
 let state = loadState();
 state.matrixSearch = "";
 let drag = null;
+// MEDIDO 2026-09-29 en el navegador (sitio estatico, sesion de Supabase): esta bandera
+// NO existia. app.js la leia (appSheetDisponible) y la escribia (saveAppSheet,
+// loadAppSheetIfAvailable, y las tres de performance-client) sin haberla declarado nunca:
+// el bundle es un <script> clasico con "use strict" arriba, asi que la LECTURA antes de
+// cualquier escritura lanza `ReferenceError: appSheetAvailable is not defined` y la
+// ESCRITURA tambien. El sintoma era que el guardado por debonce no llegaba a encolarse y
+// que la pagina no avisaba de nada. Se declara aqui, con su valor de arranque: false, que
+// es lo que el resto del archivo ya asumia ("el puente todavia no contesto").
 let appSheetAvailable = false;
+/**
+ * ESTOY DENTRO DEL RUNTIME DE Apps Script, y solo de ahi.
+ *
+ * POR QUE NO SE USA `isAppsScriptRuntime` PARA DECIDIR A DONDE SE ESCRIBE EL PLAN.
+ * MEDIDO 2026-09-29 en el sitio estatico: `window.isAppsScriptRuntime` NO es la funcion
+ * de app.js. Los dos instaladores la pisan: performance-client.js:113 la deja en
+ * `bridgeAvailable` (que es `PPAppsScriptBridge.isConfigured()`) y
+ * apps-script-bridge-client.js:204 la deja en `nativeRuntimeAvailable() || isConfigured()`.
+ * Con la URL del backend embebida en el build, las dos dan TRUE en GitHub Pages, donde
+ * `google` no existe. O sea: el predicado decia "hay un destino que es el puente" cuando
+ * lo unico que hay es un iframe que nadie ha abierto. Por eso el guardado del plan caia
+ * en la rama de Apps Script, que sube el estado por `callAppsScript` y NO sube catalogos.
+ *
+ * LO QUE SE PREGUNTA AQUI es otra cosa y tiene otra respuesta: `google.script.run` existe
+ * de verdad unicamente dentro de HtmlService.
+ *
+ * DECIDIDO 2026-09-30: el destino de la escritura es UNO SOLO, Supabase, tambien dentro
+ * de HtmlService. Asi que este predicado ya NO decide a donde se escribe el plan (esa rama
+ * se borro de `saveAppSheet`). Queda para lo que si distingue el runtime nativo del sitio
+ * estatico: preguntar a NetSuite por `google.script.run` en vez de por el iframe del puente.
+ * Afuera de HtmlService el iframe solo LEE, no escribe las Hojas.
+ */
+function enRuntimeAppsScript() {
+  const bridge = typeof PPAppsScriptBridge !== "undefined" ? PPAppsScriptBridge : null;
+  if (bridge && typeof bridge.nativeRuntimeAvailable === "function") {
+    return Boolean(bridge.nativeRuntimeAvailable());
+  }
+  return typeof google !== "undefined" && Boolean(google.script?.run);
+}
+/**
+ * `appSheetAvailable` decia "el puente de Apps Script contesto". MEDIDO 2026-09-29 en
+ * el sitio estatico eso es SIEMPRE falso: `loadAppSheetIfAvailable` pide
+ * `/api/plan-sheet`, que en GitHub Pages da 404, y lo deja en false para siempre. Y
+ * las tres puertas de guardado (`queueAppSheetSave`, `flushPlanSave` y
+ * `appSheetFlushPendingScopes`) se devolvian con ese false: en el sitio estatico no se
+ * guardaba NADA por debounce, y `flushPlanSave` —la que usa el traslado
+ * Backlog -> Planeado— devolvia false sin guardar. Los cambios de catalogo si pasaban
+ * porque addCalendarException llama a saveAppSheet directo, y por eso el fallo era
+ * invisible: unas cosas se guardaban y otras no.
+ *
+ * LO QUE SIGNIFICA AHORA. `appSheetAvailable` sigue siendo lo que dice del PUENTE, y
+ * esta funcion dice si hay ALGUN destino de guardado. En el runtime de Apps Script es
+ * el puente (que es quien sigue Reinventado en ese runtime); fuera de el, es Supabase,
+ * que es la fuente pedida. Con Supabase sin configurar en el build, esta devuelve
+ * false y se sigue sin guardar, que es lo honesto.
+ */
+function appSheetDisponible() {
+  if (enRuntimeAppsScript()) return appSheetAvailable;
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  return Boolean(writer && typeof writer.isConfigured === "function" && writer.isConfigured());
+}
+
 let appSheetSaveTimer = null;
 let appSheetSaveInFlight = false;
 let appSheetSavePending = false;
@@ -6590,13 +6650,9 @@ async function persistPlanSnapshot() {
     if (isAppsScriptRuntime()) {
       saved = await callAppsScript("saveDraftSnapshot", payload);
     } else {
-      const response = await fetch(PLAN_SNAPSHOTS_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      saved = await response.json();
+      const guardado = await guardarPlanEnSupabase({ snapshots: [payload] });
+      if (!guardado) throw new Error("No se pudo guardar la instantanea en Supabase");
+      saved = payload;
     }
     upsertPlanSnapshotRecord(saved, "BORRADOR");
     return saved;
@@ -9107,12 +9163,11 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
 
   renderPlanStatusChange();
   showToast(message);
-  if (!appSheetAvailable) {
+  if (!appSheetDisponible()) {
     affectedKeys.forEach(discardDetachedPlanStatusRows);
     return true;
   }
   try {
-    let saved;
     if (isAppsScriptRuntime()) {
       window.clearTimeout(appSheetSaveTimer);
       operationStatusSavesInFlight += 1;
@@ -9120,7 +9175,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
         const origin = planStatusOriginForSource();
         const bucket = origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin] || {};
         const savedStatuses = affectedKeys.map((itemKey) => bucket[itemKey]).filter(Boolean);
-        saved = await callAppsScript("saveOperationPlanStatus", {
+        const saved = await callAppsScript("saveOperationPlanStatus", {
           revision: Number(state.revision || 0),
           status: savedStatuses[0] || {},
           statuses: savedStatuses,
@@ -9136,7 +9191,7 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
       }
     } else {
       appSheetMarkDirtyScope("plan");
-      if (!await saveAppSheet(false)) throw new Error("No se pudo guardar el estado");
+      if (!await guardarPlanEnSupabase()) throw new Error("No se pudo guardar el estado");
     }
     affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
     affectedKeys.forEach(discardDetachedPlanStatusRows);
@@ -9490,35 +9545,30 @@ async function syncBacklogWorkOrders() {
     const smartSyncCounts = smartSync ? planningCore.finalizeSmartSyncSummary(smartSync, refreshResults) : null;
     nextState.smartSyncSummary = smartSyncCounts || {};
     nextState.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
-    const syncPayload = {
-      revision: Number(nextState.revision || 0),
-      workOrders: nextState.workOrders || [],
-      operations: nextState.operations || [],
-      operationPlanStatuses: nextState.operationPlanStatuses || {},
-      otConfigurations: nextState.otConfigurations || {},
-      planningConfigByOt: nextState.planningConfigByOt || {},
-      preparedPlanningByOt: nextState.preparedPlanningByOt || {},
-      selectedOts: nextState.selectedOts || [],
-      lockedOts: nextState.lockedOts || [],
-      expandedOts: nextState.expandedOts || [],
-      selectedOperationId: nextState.selectedOperationId || "",
-      closedWorkOrderSummaries: nextState.closedWorkOrderSummaries || {},
-      // Las marcas de por-confirmar viajan a la hoja. nextState ya paso por
-      // reconcileActiveWorkOrders (linea 9209), o sea que estas son las marcas FRESCAS de este
-      // sync, no las del anterior. Sin esto, la marca vivia solo en memoria y se perdia al
-      // recargar: la OT sin ficha se caia de la cola en el siguiente normalizeState.
-      unconfirmedWorkOrders: nextState.unconfirmedWorkOrders || {},
-      lastSchedule: nextState.lastSchedule || null,
-      syncedAt: nextState.syncedAt,
-      removedWorkOrderOts: Object.keys(nextState.closedWorkOrderSummaries || {}),
-    };
-    const saved = await callAppsScript("saveWorkOrderSyncState", syncPayload);
-    state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
-      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
-      nowIso,
-    );
-    state.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
-    state.revision = Number(saved?.revision || state.revision);
+    // DECIDIDO 2026-09-30 (pregunta al usuario): este estado se sube a SUPABASE, y por el
+    // mismo escritor que usa el resto de la pagina. Antes era
+    // `callAppsScript("saveWorkOrderSyncState", syncPayload)`, que escribia las Hojas: al
+    // terminar un sync, la cola, los bloqueos, las marcas de OT y la retencion de OTs
+    // cerradas vivian en la hoja y el plan en Supabase, o sea dos verdades que se separan
+    // en cuanto una de las dos se guarda. El payload ya no se arma a mano porque
+    // PPSupabaseWriter mapea el estado entero y escribe `unconfirmed_work_orders` y
+    // `closed_work_order_summaries` como anexo (ver filasUnconfirmedWorkOrders y
+    // filasClosedWorkOrderSummaries en supabase-writer.js).
+    //
+    // LO QUE SE SIGUE PIDIENDO POR EL PUENTE ES SOLO LA LECTURA DE NETSUITE:
+    // `fetchNetSuiteWorkOrdersLite` de mas arriba, y `getPlanningWorkOrderDataBatch` /
+    // `getPlanningWorkOrderData` cuando toca refrescar tiempos. NetSuite no tiene otra
+    // puerta: la unica fuente de las OTs es el backend de Apps Script.
+    //
+    // POR QUE SE APLICA `nextState` ANTES DE GUARDAR Y NO DESPUES. El estado que se sube
+    // tiene que ser el RECONCILIADO con las OTs que acaban de venir de NetSuite, no el que
+    // habia antes del sync: al revés se guardaria el estado viejo y el efecto del sync
+    // tardaria un guardado mas en aparecer. nextState ya paso por
+    // `reconcileActiveWorkOrders`, asi que sus marcas de por-confirmar son las FRESCAS de
+    // este sync; sin esto la marca vivia solo en memoria y se perdia al recargar, y una OT
+    // sin ficha se caia de la cola en el siguiente normalizeState.
+    state = nextState;
+    const persistido = await guardarSyncDeOrdenesTrabajoEnSupabase();
     state.smartSyncSummary = smartSyncCounts || {};
     state.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
     invalidateCurrentPlanOperationsCache();
@@ -9532,8 +9582,15 @@ async function syncBacklogWorkOrders() {
     // NetSuite: Error: Otro proceso esta actualizando el plan" en #planAlerts despues de un sync
     // exitoso por el boton.
     clearNetSuiteSyncAlert();
-    showToast(smartSyncCounts ? planningCore.smartSyncSummaryMessage(smartSyncCounts) : `${state.workOrders.length} OTs activas sincronizadas`, smartSyncCounts ? 6000 : undefined);
-    return { ok: true };
+    // CON EL GUARDADO FALLIDO NO SE DICE "OTs sincronizadas". Leerlas y no persistirlas es
+    // media sincronizacion: si el toast lo dijera, la persona recargaria y veria el estado
+    // viejo sin saber por que. El aviso de `guardarSyncDeOrdenesTrabajoEnSupabase` ya
+    // explico que las OTs se leyeron y que el estado no subio; `persistido` solo cambia lo
+    // que se devuelve para que el llamador pueda avisar (ensureNetSuiteWorkOrdersFresh).
+    if (persistido) {
+      showToast(smartSyncCounts ? planningCore.smartSyncSummaryMessage(smartSyncCounts) : `${state.workOrders.length} OTs activas sincronizadas`, smartSyncCounts ? 6000 : undefined);
+    }
+    return { ok: true, persistido: persistido };
   } catch (error) {
     showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
     return { ok: false, error };
@@ -9568,6 +9625,18 @@ async function ensureNetSuiteWorkOrdersFresh(options = {}) {
       : "datos de OTs sin sincronizar";
     showToast(`No se pudo verificar NetSuite antes de ${contextLabel}: ${detail}. Pulsa Sincronizar OTs y vuelve a intentar`, 9000);
     return { ok: false, refreshed: false, removedOts: [], reason: "sync-failed" };
+  }
+  // DECIDIDO 2026-09-30: leer sin guardar NO alcanza para generar o publicar. El sync se leyo
+  // bien de NetSuite pero el estado no subio, asi que lo que se va a generar sale de una cola
+  // que todavia no existe en la base: si la persona recarga, veria otro plan. Continuar
+  // ademas haria que "removedOts" fuera una lista de retiros que nadie mas puede ver.
+  if (result.persistido === false) {
+    showToast(
+      `Las OTs se leyeron pero el estado NO se guardo, asi que no se puede ${contextLabel} todavia. ` +
+      "Revisa la conexion y vuelve a intentar",
+      9000,
+    );
+    return { ok: false, refreshed: false, removedOts: [], reason: "sin-persistencia" };
   }
   const remaining = new Set((state.selectedOts || []).map((ot) => materialOtKey(ot)));
   const removedOts = selectedBefore.filter((entry) => !remaining.has(entry.key)).map((entry) => entry.ot);
@@ -9698,8 +9767,8 @@ async function syncNetSuiteTwoPhase(options = {}) {
     saveState("plan");
     render();
     if (options.persist !== false) {
-      const saved = await callAppsScript("savePlanningStateOptimized", createAppSheetPayload());
-      state.revision = Number(saved?.revision || state.revision);
+      const guardado = await guardarPlanEnSupabase();
+      if (!guardado) throw new Error("No se pudo guardar el estado");
     }
     return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: true });
   } catch (error) {
@@ -11047,6 +11116,69 @@ async function applyImported(imported, options = {}) {
   applyLocalDraftRemovalTombstones(locallyRemovedDraftOts);
   if (preservedLocalCapabilityConfig) restoreLocalCapabilityConfig(preservedLocalCapabilityConfig);
 }
+
+/**
+ * CAMPOS QUE applyImported NO SABE MAPEAR. Son los que el lector de Supabase si
+ * trae (supabase-reader.js, mapAppState y mapOtTypes) y que no estan en la lista
+ * de `if (imported.X) state.X = ...` de arriba. Se listan aqui, y no dentro de
+ * applyImported, porque no son parte de un "import" de la pagina: son metadatos de
+ * la fila unica de app_state y el catalogo de tipos de OT.
+ *
+ *   savedAt/syncedAt  la hora del ultimo guardado y de la ultima sincronizacion.
+ *                      Sin esto, la pagina no puede decir cuando se guardo.
+ *   reportFilters     el filtro con el que la persona abrio la ultima vez el
+ *                      informe (PERSONALIZAR). Sin esto, cada recarga lo pierde.
+ *   otTypes           el catalogo de tipos de OT. applyImported no lo mapea, y
+ *                      normalizeState (app.js:1411) lo rellena con los valores de
+ *                      muestra si llega vacio: o sea que sin ponerlo aqui, leer de
+ *                      Supabase devolveria la pagina a los tipos de ejemplo.
+ */
+/* PP-APPLY-DESDE-SUPABASE:INICIO */
+const CAMPOS_SIN_MAPEO = ["savedAt", "syncedAt", "reportFilters", "otTypes"];
+
+/**
+ * LA PUERTA DE ENTRADA DEL ESTADO QUE VIENE DE SUPABASE. Un solo lugar por donde
+ * el arranque de Supabase entra a la pagina, y lo mete por applyImported.
+ *
+ * POR QUE HACE FALTA UNA PUERTA Y NO ESCRIBIR `state` DESDE AFUERA. `state` es un
+ * `let` de primer nivel (app.js:504), o sea que vive en el entorno LEXICO global y
+ * NO es una propiedad de window: desde un modulo aparte, `window.state` es
+ * `undefined` y `window.state = ...` crearia un objeto que nadie mas mira. Se
+ * comprobo MEDIDO 2026-09-29 con este arranque: los catalogos se escribian en un
+ * objeto fantasma y la pagina seguia mostrando los valores de muestra.
+ *
+ * POR QUE ESTA Y NO UN `Object.assign` encima. applyImported es la funcion que ya
+ * sabe reconciliar (marcas de OT quitadas, ficha de las OT marcadas, precios,
+ * normalizacion). Por aqui se le pasa TODO lo leido, catalogs y plan juntos, y el
+ * orden queda en un sitio.
+ *
+ * `preserveLocalPlanning: false`, Y POR QUE. Con `true`, applyImported captura el
+ * borrador local (localStorage) y al final elige entre ese y el remoto con
+ * selectNewestCoherentDraft: con Supabase como fuente, el borrador de otra
+ * pestaña podria ganarle a la base y la pagina ensenaria un plan que la base no
+ * tiene. Con `false` lo que llega se aplica y punto. `preferRemotePlanning` se
+ * deja puesto por si alguien lo vuelve a activar: solo tiene efecto cuando
+ * preserveLocalPlanning es true.
+ *
+ * `excludedCapabilities` NO se inventa: el lector no la trae (no hay tabla), y
+ * applyImported, con preserveLocalPlanning en false, la pondria a `[]` (la linea
+ * que esta justo despues del bloque `hiddenCapabilities`). Se pasa la que hay para
+ * que la lectura de Supabase no borre una decision de la persona.
+ *
+ * Devuelve las claves que de verdad seapplied, para que quien llama lo diga.
+ */
+async function aplicarEstadoDesdeSupabase(imported) {
+  const entrada = imported && typeof imported === "object" ? Object.assign({}, imported) : {};
+  if (entrada.excludedCapabilities === undefined) entrada.excludedCapabilities = state.excludedCapabilities;
+  const aplicadas = Object.keys(entrada).filter((clave) => entrada[clave] !== undefined);
+  await applyImported(entrada, { preserveLocalPlanning: false, preferRemotePlanning: true });
+  for (const clave of CAMPOS_SIN_MAPEO) {
+    if (entrada[clave] !== undefined) state[clave] = entrada[clave];
+  }
+  render({ save: false });
+  return { aplicado: true, claves: aplicadas };
+}
+/* PP-APPLY-DESDE-SUPABASE:FIN */
 
 function applyLocalDraftRemovalTombstones(ots) {
   const removed = [...new Set((ots || []).map(materialOtKey).filter(Boolean))];
@@ -13454,7 +13586,7 @@ function queueAppSheetSave(saveScope = "plan") {
   // en 4142 con savedAt 15:30. Ahora el ambito se marca siempre y lo vuelca
   // appSheetFlushPendingScopes() cuando el puente queda disponible.
   appSheetMarkDirtyScope(scope);
-  if (!appSheetAvailable) return;
+  if (!appSheetDisponible()) return;
   if (operationStatusSavesInFlight) return;
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
@@ -13479,7 +13611,7 @@ async function flushPlanSave(saveScope = "plan") {
   const scope = String(saveScope || "plan").trim().toLowerCase();
   if (scope === "local" || scope === "ui") return false;
   appSheetMarkDirtyScope(scope);
-  if (!appSheetAvailable) return false;
+  if (!appSheetDisponible()) return false;
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     await appSheetWaitForIdle();
@@ -13523,6 +13655,197 @@ async function appSheetWaitForIdle() {
   if (appSheetSaveInFlight) await appSheetSaveCompletion;
 }
 
+/**
+ * POR QUE ESTA FUNCION Y NO `informe.motivo || "fallo desconocido"`.
+ *
+ * MEDIDO 2026-09-30 en el navegador: la pagina mostraba "No se pudo guardar el plan: fallo
+ * desconocido" mientras el escritor sabia EXACTAMENTE que pasa. Motivo medido: `cerrar()`
+ * (supabase-writer.js) deja `ok:false` cuando alguna tabla tiene `error`, y `motivo` solo se
+ * llena en `sinEscribir()`, o sea cuando no se hizo ninguna peticion. El camino viejo, que es
+ * el que tabla por tabla llena `informe.tablas[tabla].error`, NUNCA pone `motivo`. O sea que
+ * el mensaje que llegaba a la persona era el del camino que no tiene motivo, aplicado al
+ * camino que si lo tiene: "fallo desconocido" sobre un informe con
+ * `work_orders: HTTP 409 duplicate key ... work_orders_ot_key` dentro.
+ *
+ * Por eso se lee el error POR TABLA, que es donde el escritor lo deja, y se sube `motivo` si
+ * existe (el fallo de la llamada sigue siendo mas especifico que el de una tabla). El texto
+ * se acota porque va en un toast, pero no se inventa: sale del informe.
+ */
+function motivoDelInforme(informe) {
+  const motivo = informe && informe.motivo ? String(informe.motivo) : "";
+  if (motivo) return motivo.length > 220 ? motivo.slice(0, 217) + "..." : motivo;
+  const tablas = informe && informe.tablas && typeof informe.tablas === "object" ? informe.tablas : {};
+  const fallos = Object.keys(tablas)
+    .filter((tabla) => tablas[tabla] && tablas[tabla].error)
+    .map((tabla) => tabla + ": " + tablas[tabla].error);
+  if (!fallos.length) return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
+  const texto = fallos.join(" | ");
+  if (texto.length <= 220) return texto;
+  // Con muchas tablas que fallan, el nombre de la tabla es lo que hace falta para no perder:
+  // "work_orders: HTTP 409 ..." es accionable y "sin filas: no se borra la tabla" repetido
+  // cuatro veces no lo es. Se listan los nombres y se deja el detalle del primero.
+  return (
+    fallos.length + " tablas con error (" + fallos.map((f) => f.split(":")[0]).join(", ") +
+    "). El primero: " + (fallos[0].length > 190 ? fallos[0].slice(0, 187) + "..." : fallos[0])
+  );
+}
+
+/**
+ * Guarda el plan en Supabase con PPSupabaseWriter.guardar().
+ *
+ * Devuelve true si se escribio, false si no. En caso de conflicto de revision,
+ * muestra el aviso de recarga y devuelve false: reintentar sin recargar falla
+ * otra vez, porque la revision que manda esta pagina sigue siendo la vieja.
+ *
+ * `opciones` se pasa tal cual a guardar(): {snapshots} para guardar un
+ * snapshot de plan_snapshots, {vaciarSiEstaVacio} para el borrado explicito.
+ */
+async function guardarPlanEnSupabase(opciones = {}) {
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.guardar !== "function") {
+    showToast("Supabase no esta disponible en este build: no se puede guardar el plan");
+    return false;
+  }
+  let informe;
+  try {
+    informe = await writer.guardar(state, opciones);
+  } catch (error) {
+    showToast("No se pudo guardar el plan: " + (error && error.message ? error.message : error));
+    return false;
+  }
+  if (!informe) {
+    showToast("No se pudo guardar el plan: el escritor no devolvio informe");
+    return false;
+  }
+  // La revision se guarda en el estado para que el proximo guardado use la
+  // correcta. Si no se guarda, el siguiente guardado manda la revision vieja
+  // y choca contra su propio guardado anterior.
+  if (informe.revision != null) state.revision = Number(informe.revision);
+  if (informe.savedAt) state.savedAt = informe.savedAt;
+  if (informe.conflicto) {
+    // CONFLICT_REVISION: no se escribio nada. Hay que recargar antes de
+    // reintentar, no reintentar encima de otro guardado.
+    // DECIDIDO 2026-09-30: el conflicto se PUBLICA en `state._conflictoSupabase` para que
+    // el guardado de performance-client.js sepa que fallo por conflicto y no por red, y
+    // recargue el estado remoto desde Supabase (`reloadStateAfterConflict`, que antes
+    // preguntaba a las Hojas por `getAppState`). Antes eso se sabia por el texto del
+    // error de `callAppsScript`, que ya no existe en el camino de escritura.
+    state._conflictoSupabase = {
+      revisionActual: informe.conflicto.revision_actual ?? null,
+      revisionEsperada: informe.conflicto.revision_esperada ?? null,
+    };
+    showToast(
+      "El plan cambio desde la ultima carga. Recarga la pagina y vuelve a guardar. " +
+      "(revision " + (informe.conflicto.revision_actual || "?") + " en la base, " +
+      (informe.conflicto.revision_esperada || "?") + " en esta pagina)",
+      7000
+    );
+    return false;
+  }
+  delete state._conflictoSupabase;
+  if (!informe.ok) {
+    showToast("No se pudo guardar el plan: " + motivoDelInforme(informe), 9000);
+    return false;
+  }
+  if (Array.isArray(informe.avisos) && informe.avisos.length) {
+    informe.avisos.forEach((aviso) => showToast(aviso, 5000));
+  }
+  return true;
+}
+
+/**
+ * Sube a SUPABASE el estado que deja un sync de OTs, y avisa si no se pudo.
+ *
+ * DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura es UNO SOLO,
+ * Supabase, tambien dentro de HtmlService. Antes el sync escribia por
+ * `callAppsScript("saveWorkOrderSyncState")`, o sea las Hojas, y solo cuando se pulsaba
+ * Sincronizar OTs; la lectura de NetSuite sigue por el puente, que es la unica puerta que
+ * hay a NetSuite.
+ *
+ * POR QUE `guardarPlanEnSupabase` Y NO UNA ESCRITURA APARTE. `PPSupabaseWriter` mapea el
+ * estado entero y sube las siete tablas del plan mas `unconfirmed_work_orders` y
+ * `closed_work_order_summaries`, que son las dos que el sync necesita y que antes vivian
+ * solo en la hoja. Con esto, el sync y un guardado normal dejan el MISMO estado en el MISMO
+ * sitio: si el sync escribiera solo una rebanada, un guardado posterior se la pisaria.
+ *
+ * Devuelve `true` si se escribio. Si no se pudo, el toast y el aviso de conflicto ya los
+ * puso `guardarPlanEnSupabase`; aqui solo se dice que el sync queda sin persistir, porque
+ * el toast de "OTs sincronizadas" de abajo no debe salir cuando el estado no subio.
+ */
+async function guardarSyncDeOrdenesTrabajoEnSupabase() {
+  const guardado = await guardarPlanEnSupabase();
+  if (!guardado) {
+    showToast("Las OTs se leyeron, pero el estado NO se guardo: recarga y vuelve a sincronizar", 9000);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Guarda los CATALOGOS en Supabase: las seis tablas de la pestana Catalogos.
+ *
+ * POR QUE ESTE CAMINO Y NO EL DE LOS CATALOGOS DE ANTES. Antes, guardar un catalogo
+ * era `saveCatalogState()`, que escribe las hojas de Apps Script y dispara el
+ * espejo (16-supabase-catalogo.js). MEDIDO 2026-09-29 con la sesion de correo, RLS
+ * DEJA ESCRIBIR esas seis tablas (`for all to authenticated`), asi que el navegador
+ * puede escribirlas por su cuenta y no hace falta el puente para ningun catalogo.
+ *
+ * POR QUE SOLO CUANDO EL AMBITO LO PIDE. Se llama desde saveAppSheet, que recibe los
+ * ambitos sucios. Guardar los catalogos en cada guardado del plan seria subir cientos
+ * de filas que no cambiaron, en un plan que se guarda cada 900 ms. Solo se escriben
+ * si el ambito fue `catalogs` o `matrix`.
+ *
+ * `clavesLeidas` sale de PPCatalogApply.claves, que es lo que el arranque vio al
+ * leer. Sin eso el escritor sube lo que hay pero NO borra nada, y lo dice: borrar a
+ * ciegas se llevaria filas que la pagina todavia no conoce.
+ *
+ * Devuelve true si se escribio sin errores. Los avisos se muestran SIEMPRE, tambien
+ * en el camino bueno: el aviso de la pestana de Matriz no escrita es informacion que
+ * la persona necesita, no un fallo.
+ */
+async function guardarCatalogosEnSupabase(ambito) {
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.guardarCatalogos !== "function") {
+    showToast("Supabase no esta disponible en este build: los catalogos no se guardaron");
+    return false;
+  }
+  const apply = typeof PPCatalogApply !== "undefined" ? PPCatalogApply : null;
+  let informe;
+  try {
+    informe = await writer.guardarCatalogos(state, {
+      clavesLeidas: apply && apply.claves ? apply.claves : null,
+      ambito: ambito || "catalogs",
+    });
+  } catch (error) {
+    showToast("No se pudieron guardar los catalogos: " + (error && error.message ? error.message : error));
+    return false;
+  }
+  if (!informe) {
+    showToast("No se pudieron guardar los catalogos: el escritor no devolvio informe");
+    return false;
+  }
+  if (Array.isArray(informe.avisos) && informe.avisos.length) {
+    informe.avisos.forEach((aviso) => showToast(aviso, 6000));
+  }
+  if (!informe.ok) {
+    // El mismo criterio que el plan: `motivo` esta solo en el fallo de la llamada, y el error
+    // POR TABLA es donde queda el de una tabla que fallo. Ver `motivoDelInforme`.
+    showToast("No se pudieron guardar los catalogos: " + motivoDelInforme(informe), 9000);
+    return false;
+  }
+  return true;
+}
+
+/** Los ambitos de un guardado que son de CATALOGO (no del plan). */
+function ambitosDeCatalogo(scopes) {
+  const out = new Set();
+  (scopes || []).forEach((scope) => {
+    const s = String(scope || "").trim().toLowerCase();
+    if (s === "catalogs" || s === "matrix" || s === "ot-config" || s === "gantt") out.add(s);
+  });
+  return out;
+}
+
 async function saveAppSheet(showMessage) {
   const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-appsheet") : "";
   if (appSheetSaveInFlight) {
@@ -13539,21 +13862,33 @@ async function saveAppSheet(showMessage) {
   }
   const scopes = appSheetConsumeDirtyScopes();
   try {
-    if (isAppsScriptRuntime()) {
-      const method = appSheetSaveMethodForScopes(scopes);
-      const saved = await callAppsScript(method, createAppSheetPayload());
-      state.revision = Number(saved.revision || state.revision);
-      state.savedAt = saved.savedAt || state.savedAt;
-      if (saved.syncedAt) state.syncedAt = saved.syncedAt;
-      if (saved.plant) state.plant = saved.plant;
-      if (saved.invoicePriceWindow) state.invoicePriceWindow = saved.invoicePriceWindow;
-    } else {
-      const response = await fetch(APP_SHEET_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createAppSheetPayload()),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // MEDIDO 2026-09-29 en el sitio estatico: esta linea decia `isAppsScriptRuntime()`,
+    // que ahi da TRUE por el predicado mentiroso del puente (`bridgeAvailable`, en
+    // performance-client.js), y por eso caia en la rama de Apps Script: el plan se subia por
+    // `callAppsScript` a un iframe que nunca contesto y los CATALOGOS no se subian de ninguna
+    // manera.
+    //
+    // DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura del plan es
+    // UNO SOLO, Supabase, tambien DENTRO de HtmlService. Antes esta funcion bifurcaba por
+    // `enRuntimeAppsScript()` y la rama de HtmlScript se quedaba sin escribir los catalogos
+    // y sin tomar el `saved` que devuelve el escritor. Un destino unico quita esa
+    // diferencia por construccion: no hay rama que se pueda quedar a medias.
+    const guardado = await guardarPlanEnSupabase();
+    if (!guardado) throw new Error("No se pudo guardar en Supabase");
+    // Los CATALOGOS, en el mismo guardado y solo si el ambito lo pidio. Antes esto
+    // era `appSheetSaveMethodForScopes` -> saveCatalogState, que escribia las hojas
+    // de Apps Script; esa funcion se BORRO el 2026-09-30 (ver el comentario donde
+    // estaba): el ambito ya no elige un metodo del puente, elige si se suben catalogos.
+    // MEDIDO 2026-09-29, con la sesion de correo RLS deja escribir
+    // las seis tablas de catalogo, asi que van por Supabase y no por el puente.
+    // Se escriben DESPUES del plan y no antes: si el plan falla, no se suben
+    // catalogos de un guardado que no ocurrio.
+    const deCatalogo = ambitosDeCatalogo(scopes);
+    if (deCatalogo.size) {
+      // 'matrix' manda si aparece con 'catalogs': el aviso que da el escritor es el
+      // de la pestana de Matriz, que es lo que falta escribir.
+      const ambito = deCatalogo.has("matrix") ? "matrix" : [...deCatalogo][0];
+      await guardarCatalogosEnSupabase(ambito);
     }
     appSheetAvailable = true;
     delete state._pendingAddOt;
@@ -13562,7 +13897,9 @@ async function saveAppSheet(showMessage) {
     delete state._locallyAddedDraftOts;
     delete state._locallyEditedOtConfigurations;
     delete state._locallyEditedCapabilityConfig;
-    if (showMessage) showToast("Hoja app guardada");
+    // El texto del toast cambio con el destino, no por capricho: decir "hoja" cuando ya
+    // no se escribe ninguna hoja manda a la persona a buscar el cambio donde no esta.
+    if (showMessage) showToast("Plan guardado en Supabase");
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;
   } catch (error) {
@@ -13590,13 +13927,14 @@ async function saveAppSheet(showMessage) {
     if (appSheetSavePending) {
       appSheetSavePending = false;
       // MEDIDO 2026-09-29: aqui se llamaba queueAppSheetSave() sin ambito, y su
-      // valor por omision es "plan", que se mete en appSheetDirtyScopes. Si lo
-      // pendiente era "catalogs", el conjunto quedaba {catalogs, plan} y
-      // appSheetSaveMethodForScopes caia en saveAppState en vez de
+      // valor por omision es "plan", que se mete en appSheetDirtyScopes. Entonces el
+      // conjunto quedaba {catalogs, plan} y el metodo se elegia con
+      // appSheetSaveMethodForScopes, que caia en saveAppState en vez de
       // saveCatalogState: saveAppState -> PP_writeState_ NO escribe las hojas de
       // catalogo ni dispara el espejo, o sea que un cambio de catalogo reencolado
-      // por aqui se guardaba a medias sin avisar. Con los ambitos ya marcados,
-      // lo unico que hace falta es reprogramar el temporizador.
+      // por aqui se guardaba a medias sin avisar. Con los ambitos ya marcados, lo
+      // unico que hace falta es reprogramar el temporizador. (La eleccion de metodo
+      // ya no existe; hoy lo que sale de aqui son las filas de Supabase.)
       if (appSheetDirtyScopes.size) {
         window.clearTimeout(appSheetSaveTimer);
         appSheetSaveTimer = window.setTimeout(() => {
@@ -13626,7 +13964,7 @@ function appSheetMarkDirtyScope(saveScope) {
  * cada carga de pagina escribiria el plan entero solo para subir la revision.
  */
 function appSheetFlushPendingScopes() {
-  if (!appSheetAvailable) return false;
+  if (!appSheetDisponible()) return false;
   if (!appSheetDirtyScopes.size) return false;
   if (appSheetSaveInFlight || operationStatusSavesInFlight) return false;
   window.clearTimeout(appSheetSaveTimer);
@@ -13643,15 +13981,12 @@ function appSheetConsumeDirtyScopes() {
   return scopes;
 }
 
-function appSheetSaveMethodForScopes(scopes) {
-  const values = new Set(scopes || []);
-  const onlyCatalogs = values.size > 0 && [...values].every((scope) => scope === "catalogs");
-  const onlyMatrix = values.size > 0 && [...values].every((scope) => scope === "matrix");
-  let method = "saveAppState";
-  if (onlyCatalogs) method = "saveCatalogState";
-  if (onlyMatrix) method = "saveSkillState";
-  return method;
-}
+// SE BORRO appSheetSaveMethodForScopes, 2026-09-30. Devolvia el nombre del METODO DEL
+// PUENTE segun los ambitos sucios ("saveCatalogState" / "saveSkillState" / "saveAppState"),
+// que era lo unico que hacia: el destino de la escritura ya no se elige, se escribe siempre
+// por Supabase. Ahora el ambito decide SI se suben catalogos (`ambitosDeCatalogo`) y a que
+// escritor se lo pasan, no que metodo del puente se llama. Dejarla era dejar el vocabulario
+// del camino eliminado con una funcion viva al lado que devuelve sus nombres.
 
 function purgeClosedWorkOrderRetention() {
   state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(state, new Date().toISOString());

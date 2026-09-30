@@ -27,11 +27,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { sinComentarios } from "./helpers/sin-comentarios.mjs";
 
 const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 const storage = await readFile(new URL("../src/server/02-storage.js", import.meta.url), "utf8");
 const code = await readFile(new URL("../src/server/01-code.js", import.meta.url), "utf8");
 const coreSrc = await readFile(new URL("../src/web/planning/planning-workflow-core.js", import.meta.url), "utf8");
+// DECIDIDO 2026-09-30: el sync ya no guarda por `saveWorkOrderSyncState` (la fila
+// UNCONFIRMED_WORK_ORDERS de la hoja) sino por el escritor de Supabase. Los tests de la seccion 1
+// se migran al camino nuevo, y se leen el escritor y el lector porque el invariante quedo
+// repartido entre los tres: app.js decide QUE se sube, el escritor decide COMO se escribe y el
+// lector si vuelve.
+const writerSrc = await readFile(new URL("../src/web/shared/supabase-writer.js", import.meta.url), "utf8");
+const readerSrc = await readFile(new URL("../src/web/shared/supabase-reader.js", import.meta.url), "utf8");
 
 /** Saca una funcion por nombre del archivo real, con sus llaves balanceadas. */
 function extraer(src, nombre) {
@@ -83,22 +91,112 @@ const parseMarks = (v) =>
   correr("PP_parseUnconfirmedWorkOrderMarks_", PARSE_MARKS, { source: v, JSON }, "source");
 
 // ---------------------------------------------------------------------------------------------
-// 1. EL AGUJERO 1: la marca no viajava. Ahora tiene que viajar por el payload del sync y la hoja.
+// 1. EL AGUJERO 1: la marca no viaja. Ahora tiene que viajar en el estado que el sync sube.
 // ---------------------------------------------------------------------------------------------
+//
+// QUE SE MIGRO Y POR QUE. Antes el sync armaba un payload a mano con
+// `unconfirmedWorkOrders: nextState.unconfirmedWorkOrders || {}` y lo mandaba por
+// `callAppsScript("saveWorkOrderSyncState", ...)`, que escribia la fila
+// UNCONFIRMED_WORK_ORDERS de la hoja. Ese payload ya no existe: DECIDIDO 2026-09-30, el sync sube
+// el ESTADO con el mismo escritor que el resto de la pagina, y el escritor mapea
+// `state.unconfirmedWorkOrders` a la tabla `unconfirmed_work_orders`. Por eso las dos
+// aserciones de esta seccion ya no pueden buscar el payload: tienen que seguir la cadena
+// entera, que es lo que ahora puede romperse en cuatro puntos distintos.
 
-test("el payload del sync incluye las marcas de por-confirmar (si no, mueren en la recarga)", () => {
-  assert.match(app, /unconfirmedWorkOrders:\s*nextState\.unconfirmedWorkOrders \|\| \{\}/,
-    "el sync tiene que mandar las marcas al servidor, no solo guardarlas en memoria");
+test("sinComentarios: quita el // de una linea sin comerse el codigo de al lado", () => {
+  // Guarda de la herramienta que usa la asercion de abajo (esta vive en
+  // tests/helpers/sin-comentarios.mjs; su guarda se queda aqui porque el primer test que
+  // la uso fue este). Si la herramienta se comiera codigo, la asercion pasaria por la
+  // razon equivocada (no encontraria la llamada porque leyo menos archivo del que
+  // debia), y el error seria invisible hasta que otra cosa se rompiera.
+  const limpio = sinComentarios([
+    'const a = callAppsScript("x"); // callAppsScript("y")',
+    'const b = "https://ejemplo.supabase.co"; /* bloque */ const c = `t ${d} t`;',
+  ].join("\n"));
+  assert.match(limpio, /callAppsScript\("x"\)/, "el codigo de verdad se conserva");
+  assert.doesNotMatch(limpio, /callAppsScript\("y"\)/, "el comentario de linea se quita");
+  assert.match(limpio, /https:\/\/ejemplo\.supabase\.co/, "un // dentro de un string no es comentario");
+  assert.doesNotMatch(limpio, /bloque/, "y el de bloque tambien");
+  assert.match(limpio, /`t \$\{d\} t`/, "las plantillas sobreviven enteras");
+
+  // Ahi se mide la diferencia. Un `${ { a: 1 } }` con llaves internas: si el recorrido no las
+  // contara, la plantilla quedaria abierta y TODO lo de abajo pasaria por texto, con el `//`
+  // incluido. O sea que este caso es el que separa la herramienta de una que no sirve.
+  const conLlaves = sinComentarios('const d = `a ${ { x: 1 }.x } b`; // fuera\nconst e = 1;');
+  assert.match(conLlaves, /const e = 1;/, "el codigo que sigue a la plantilla se sigue leyendo");
+  assert.doesNotMatch(conLlaves, /fuera/, "y el comentario de despues se sigue quitando");
+
+  // Y el caso que mas rompio la primera version: una REGULAR con una comilla adentro. Un
+  // `/"` leido como comilla abre una cadena que no cierra nunca, y de ahi en adelante todo el
+  // archivo se lee como texto (con los comentarios adentro). Este es el `.replace(/"/g, ...)`
+  // de escapeHtml, que esta en app.js de verdad.
+  const conRegular = sinComentarios('const h = String(x).replace(/"/g, "&quot;");\n// fuera2\nconst i = 2;');
+  assert.match(conRegular, /const i = 2;/, "una regular con comilla no rompe el resto");
+  assert.doesNotMatch(conRegular, /fuera2/, "y el comentario de despues se sigue quitando");
+  // La division tampoco puede tomarse por regular, o se comeria el codigo de la derecha.
+  const conDivision = sinComentarios("const k = total / 2; // fuera3\nconst l = 3;");
+  assert.match(conDivision, /const k = total \/ 2;/, "la division sobrevive");
+  assert.match(conDivision, /const l = 3;/, "y el codigo de al lado tambien");
+  assert.doesNotMatch(conDivision, /fuera3/);
+});
+
+test("el sync sube el estado entero, y el escritor de ese estado trae las marcas", () => {
+  // Punto 1: el sync no se arma un payload propio, sube `state`. Un payload a mano seria una
+  // segunda verdad, que es exactamente el agujero que se cerro el 2026-09-26: la marca vivia en
+  // el payload y no en el estado, asi que cualquier otro guardado se la llevaba.
+  // El nombre sobrevive en COMENTARIOS (app.js explica que se quito), asi que la asercion mira
+  // el CODIGO, con los comentarios fuera: si no, daria un falso positivo y no probaria nada.
+  assert.doesNotMatch(sinComentarios(app), /callAppsScript\(\s*["']saveWorkOrderSyncState/,
+    "el sync ya no llama a un metodo del puente para guardar: se sube por Supabase");
+  assert.match(app, /const persistido = await guardarSyncDeOrdenesTrabajoEnSupabase\(\);/,
+    "el sync sube con el helper, que es el unico que avisa cuando la subida falla");
+  // Punto 2: el helper delega en el MISMO `guardarPlanEnSupabase` del guardado normal. Dos
+  // caminos de escritura son dos verdades que se separan en cuanto una de las dos falla.
+  assert.match(app, /async function guardarSyncDeOrdenesTrabajoEnSupabase\(\) \{[\s\S]{0,300}await guardarPlanEnSupabase\(\)/,
+    "el guardado del sync no puede tener su propio camino de escritura");
+  // Punto 3: y el escritor lee las marcas del estado, not de un campo propio.
+  assert.match(writerSrc, /function filasUnconfirmedWorkOrders\(state\) \{[\s\S]{0,400}state\.unconfirmedWorkOrders/,
+    "el escritor tiene que mapear las marcas del estado");
+});
+
+test("el ciclo se cierra: el lector trae las marcas de la tabla y applyImported las restaura", () => {
+  // Si el escritor sube pero el lector no trae, las marcas se acumulan en la base y no vuelven
+  // nunca a la pantalla. El sintoma es invisible (no hay error) y el contador `misses`, que es
+  // JUSTO lo que decide cuando una marca es real, se reinicia en cada recarga.
+  assert.match(readerSrc, /unconfirmed_work_orders/,
+    "el lector tiene que leer la tabla de marcas");
+  assert.match(readerSrc, /function mapUnconfirmedWorkOrders\(rows\)/,
+    "con un mapeo propio, por folio y no por el id de la fila");
+  assert.match(readerSrc, /unconfirmedWorkOrders: siSePudoLeer\(rows, "unconfirmed_work_orders", mapUnconfirmedWorkOrders\(/,
+    "y readCatalogs lo expone con la regla de las demas: undefined si la tabla cayo, {} si esta vacia");
+  assert.match(app, /state\.unconfirmedWorkOrders = mergeUnconfirmedWorkOrderMarks\(/,
+    "y applyImported las restaura al cargar");
 });
 
 test("las marcas se toman de nextState, que ya paso por el reconciliador", () => {
+  // ESTE ORDEN ES EL INVARIANTE, y no es cosmetico. `reconcileActiveWorkOrders` es quien
+  // RESUELVE las marcas: sube `misses` para la OT que sigue sin venir y borra la que NetSuite
+  // ya no manda. Si el estado se subiera ANTES del reconcile se guardaria el contador viejo, y
+  // la marca decidiria con evidencia de una lectura anterior.
   const iReconcile = app.indexOf("const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(");
-  const iPayload = app.indexOf("unconfirmedWorkOrders: nextState.unconfirmedWorkOrders || {}");
+  const iAplica = app.indexOf("state = nextState;", iReconcile);
+  const iSube = app.indexOf("const persistido = await guardarSyncDeOrdenesTrabajoEnSupabase();", iReconcile);
   assert.ok(iReconcile >= 0, "el sync arma un nextState reconciliado");
-  assert.ok(iPayload > iReconcile, "las marcas van DESPUES del reconcile, no de antes");
+  assert.ok(iAplica > iReconcile, "el estado se aplica DESPUES del reconcile");
+  assert.ok(iSube > iAplica, "y se sube DESPUES de aplicarlo: lo que sube es el reconciliado");
+  // Y lo que sube es `state`, no una copia: si se pasara otro objeto, la marca que acaba de
+  // resolver el reconciliador se quedaria solo en memoria.
+  assert.doesNotMatch(app.slice(iSube, iSube + 200), /nextState\./,
+    "el helper no recibe nextState: sube el estado global, que ya ES el reconciliado");
 });
 
 test("el servidor guarda la fila UNCONFIRMED_WORK_ORDERS y la devuelve al cargar", () => {
+  // DECIDIDO 2026-09-30: la web YA NO ESCRIBE AQUI. El sync sube a `unconfirmed_work_orders`
+  // por el escritor de Supabase, y la lectura tambien viene de ahi. Este test sigue probando el
+  // lado del servidor porque el codigo sigue vivo y expuesto: `saveWorkOrderSyncState` sigue
+  // declarado en 01-code.js:277 y permitido en Bridge.html:27, o sea que un cliente viejo (o una
+  // llamada directa) lo puede seguir usando, y si el servidor se rompiera ese cliente perderia
+  // las marcas en silencio. No debe leerse como "la pagina guarda en la hoja".
   assert.match(storage, /\['UNCONFIRMED_WORK_ORDERS',\s*PP_serializeUnconfirmedWorkOrderMarks_\(/,
     "la escritura en CONFIG tiene que existir");
   // Y el PUNTO DE LLAMADA, no solo que la funcion este bien. Probar la funcion sin probar quien

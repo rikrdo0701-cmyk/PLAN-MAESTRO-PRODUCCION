@@ -609,6 +609,11 @@ declare
   v_tabla text;
   v_sql text;
   v_asignar text;
+  v_escribibles text;
+  v_claves text[];
+  v_izq text;
+  v_der text;
+  v_where text;
   v_filas integer;
   v_actor text;
   v_entrantes text[];
@@ -679,20 +684,61 @@ begin
     -- La revision la pone la funcion con v_nueva, no la pagina. Motivo: si la mandara el
     -- navegador, cada fila quedaria con la revision que TENIA la pagina, que es un
     -- guardado por detras, y no se podria atribuir un cambio a una revision concreta.
-    v_asignar := (select string_agg(quote_ident(c) || ' = ex.' || quote_ident(c), ', ')
-                    from unnest(v_cols) c
-                   where c not in ('operation_id','wo_internal_id','ot','line_id'))
-                || ', revision = ' || v_nueva;
-    if v_asignar is null then
+    --
+    -- El agregado se mira ANTES de pegarle ', revision = ...'. Si se concatenara primero,
+    -- un NULL de string_agg se comeria la concatenacion y v_asignar valdria
+    -- ', revision = 3': no es null, el `if v_asignar is null` de abajo no se dispara nunca, y
+    -- lo que sale es un error de sintaxis de Postgres que no dice que le pasa a la regla.
+    v_escribibles := (select string_agg(quote_ident(c) || ' = ex.' || quote_ident(c), ', ')
+                        from unnest(v_cols) c
+                       where c not in ('operation_id','wo_internal_id','ot','line_id'));
+    if v_escribibles is null then
       raise exception 'plan_guardar: % no tiene columnas escribibles', v_tabla
         using errcode = '23514';
     end if;
+    v_asignar := v_escribibles || ', revision = ' || v_nueva;
 
+    -- MEDIDO 2026-09-30: LA SENTENCIA DE ARRIBA, TAL COMO ESTABA, NO SE PODIA EJECUTAR.
+    -- Era `where %s = any(array(select %s from ex))`, con la columna de la clave SIN
+    -- calificar en el lado de la tabla. `ex` sale de jsonb_populate_recordset de la MISMA
+    -- tabla, asi que trae todas sus columnas: en operations, `operation_id` existe en `t` y en
+    -- `ex`, y Postgres contesta 42702 `column reference "operation_id" is ambiguous`. Como el
+    -- ciclo empieza por operations, la funcion se caia en la primera tabla, con la
+    -- transaccion sin escribir NADA. Medido en el navegador el 2026-09-30: 13 de 13 llamadas
+    -- a /rest/v1/rpc/plan_guardar con HTTP 400 y ese codigo, o sea que NINGUN guardado de la
+    -- pagina llegaba a la base por el camino con transaccion.
+    --
+    -- El escritor acierta al no degradar a tabla por tabla cuando la FUNCION da error y no
+    -- 404, asi que el efecto en la pagina era que todos los guardados se perdian sin que
+    -- quedara nada escrito. Por eso esto no es un detalle de sintaxis: es la diferencia entre
+    -- guardar y no guardar.
+    --
+    -- Aqui la clave se califica de los dos lados con su alias, y una clave de mas de una
+    -- columna se compara como TUPLA: materials va por `ot,line_id`. Se deja de usar
+    -- `= any(array(...))` porque `array(select ot, line_id from ex)` arma un array de DOS
+    -- dimensiones, y `(a,b) = any(text[][])` no tiene operador: eso habria sido el error
+    -- siguiente, escondido por el 42702.
+    v_claves := string_to_array(v_clave, ',');
+    v_izq := (select string_agg('t.' || quote_ident(btrim(c)), ', ' order by n)
+                from unnest(v_claves) with ordinality as u(c, n));
+    v_der := (select string_agg('ex.' || quote_ident(btrim(c)), ', ' order by n)
+                from unnest(v_claves) with ordinality as u(c, n));
+    -- El predicado se arma aparte con un `if` y NO con una expresion `case ... end`. Motivo
+    -- medido 2026-09-30: un `case` de EXPRESION cierra con `end` pelado, no con `end case`, y
+    -- el verificador de estructura plpgsql de este repo (tests/ddl-plpgsql-estructura.test.mjs)
+    -- solo reconoce `end case`, asi que con el `case` marcaba el DDL bueno como descuadrado con
+    -- tres errores inventados. El `if`/`end if` si lo ve, y asi el DDL se puede revisar con el
+    -- verificador de verdad en vez de learned a ignorarlo: ver la limitacion 4 de su cabecera.
+    if array_length(v_claves, 1) > 1 then
+      v_where := format('(%s) = (%s)', v_izq, v_der);
+    else
+      v_where := format('%s = %s', v_izq, v_der);
+    end if;
     v_sql := format(
-      'with ex as (select * from jsonb_populate_recordset(null::public.%I, $1))
-       update public.%I t set %s from ex
-        where %s = any(array(select %s from ex))',
-      v_tabla, v_tabla, v_asignar, v_clave, v_clave
+      'update public.%I t set %s
+         from jsonb_populate_recordset(null::public.%I, $1) ex
+        where %s',
+      v_tabla, v_asignar, v_tabla, v_where
     );
     execute v_sql using (p_payload -> v_tabla);
     get diagnostics v_filas = row_count;

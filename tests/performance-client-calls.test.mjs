@@ -28,17 +28,47 @@ const manualFlowSource = [
     appSource.indexOf("function applyNetSuitePlanningPayload("),
   ),
 ].join("\n");
-const backlogSyncSource = appSource.slice(
-  appSource.indexOf("async function syncBacklogWorkOrders()"),
-  appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
-);
-const appSheetSaveFlowSource = appSource.slice(
-  appSource.indexOf("function saveState(saveScope = \"plan\")"),
-  appSource.indexOf("function purgeClosedWorkOrderRetention()"),
-);
+const backlogSyncSource = [
+  appSource.slice(
+    appSource.indexOf("async function syncBacklogWorkOrders()"),
+    appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
+  ),
+  // DECIDIDO 2026-09-30: el sync ya no escribe por `saveWorkOrderSyncState` del puente;
+  // sube el estado con el mismo escritor de Supabase que el resto de la pagina. La funcion
+  // REAL entra aqui a proposito (y no un doble): lo que se quiere comprobar es que el sync
+  // termine guardando en Supabase y avisando cuando no pudo, y eso vive en ella.
+  appSource.slice(
+    appSource.indexOf("async function guardarSyncDeOrdenesTrabajoEnSupabase() {"),
+    appSource.indexOf("async function guardarCatalogosEnSupabase("),
+  ),
+].join("\n");
+// El flujo de guardado del plan, con un hueco: NO entran las dos funciones que
+// escriben en Supabase (guardarPlanEnSupabase y guardarCatalogosEnSupabase). Entran
+// como parametros del arnes para poder observar a donde fue cada guardado. El hueco
+// es obligatorio, no una comodidad: en un cuerpo de Function() una declaracion
+// `function guardarPlanEnSupabase` TAPA el parametro del mismo nombre (el ambiente
+// de la funcion queda por fuera del de parametros), asi que con la real dentro el
+// doble del arnes no se usaria nunca. `ambitosDeCatalogo` si entra, y es real:
+// decide que ambitos van a catalogo y no toca nada de Supabase.
+const appSheetSaveFlowSource = [
+  appSource.slice(
+    appSource.indexOf("function saveState(saveScope = \"plan\")"),
+    appSource.indexOf("async function guardarPlanEnSupabase("),
+  ),
+  appSource.slice(
+    appSource.indexOf("/** Los ambitos de un guardado que son de CATALOGO"),
+    appSource.indexOf("function purgeClosedWorkOrderRetention()"),
+  ),
+].join("\n");
+// MEDIDO 2026-09-30: el corte va ANTES de `guardarPlanEnSupabase`, no antes de
+// `saveAppSheet`. `appSheetTryAcquireSaveGate` .. `saveAppSheet` engloba las tres funciones
+// que escriben en Supabase, y al instalarlas aqui TAPAN el doble del arnés: el sync
+// terminaba guardando contra el `guardarPlanEnSupabase` real, que sin `PPSupabaseWriter`
+// solo puede decir "Supabase no esta disponible" y devolver false. La compuerta son solo
+// estas cuatro funciones, asi que el corte no pierde nada de la compuerta.
 const appSheetGateSource = appSource.slice(
   appSource.indexOf("function appSheetTryAcquireSaveGate()"),
-  appSource.indexOf("async function saveAppSheet("),
+  appSource.indexOf("async function guardarPlanEnSupabase("),
 );
 const busyStateSource = appSource.slice(
   appSource.indexOf("function setPlanningControlBusy("),
@@ -158,11 +188,35 @@ function loadAppSheetSaveFlow(options = {}) {
   const calls = [];
   const gate = deferredPromise();
   const state = { revision: 1, selectedOts: [], workOrders: [], operations: [], materials: [], ...(options.state || {}) };
+  // Lo que el plan llevaba al destino en el momento del guardado. Antes lo llevaba
+  // `createAppSheetPayload`, que solo existe para el puente; ahora el que escribe es
+  // Supabase, asi que esto representa el estado tal cual en el momento del guardado.
+  const payloadDeEstado = () => ({ revision: state.revision, selectedOts: state.selectedOts, operations: state.operations });
+  let revisionGuardada = Number(state.revision || 0);
+  const guardarPlanEnSupabase = async (opciones = {}) => {
+    const payload = payloadDeEstado();
+    calls.push({ method: "guardarPlanEnSupabase", payload, opciones });
+    if (options.failSave) return false;
+    revisionGuardada += 1;
+    state.revision = revisionGuardada;
+    return true;
+  };
+  const guardarCatalogosEnSupabase = async (ambito) => {
+    calls.push({ method: "guardarCatalogosEnSupabase", payload: payloadDeEstado(), ambito });
+    if (options.failCatalogs) return false;
+    return true;
+  };
   const flow = Function(
     "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
     "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
     "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
-    "resolveSaveGate",
+    "resolveSaveGate", "appSheetDisponible", "guardarPlanEnSupabase", "guardarCatalogosEnSupabase",
+    // MEDIDO 2026-09-29 en el navegador: `isAppsScriptRuntime` miente en el sitio estatico
+    // (los dos instaladores lo dejan en "el puente esta configurado"), y por eso el guardado
+    // del plan se iba por callAppsScript. `enRuntimeAppsScript` es el predicado que responde
+    // la pregunta de verdad: google.script.run solo existe dentro de HtmlService. El cuerpo
+    // de este Function incluye saveAppSheet de app.js, que lo llama.
+    "enRuntimeAppsScript",
     `${appSheetSaveFlowSource}\nreturn {
       flushPlanSave,
       saveState,
@@ -182,15 +236,23 @@ function loadAppSheetSaveFlow(options = {}) {
       clearTimeout(id) { timers.delete(id); },
     },
     state, { setItem: () => {} }, "test",
-    true, false, false, null, new Set(), false, gate.promise, null, null, 0, () => true,
+    true, false, false, null, new Set(), false, gate.promise, null, null, 0,
+    () => options.appsScriptRuntime !== false,
     async (method, payload) => {
       calls.push({ method, payload });
       if (options.failSave) throw new Error(options.failSave);
       return { revision: 2 };
     },
-    () => ({ revision: state.revision, selectedOts: state.selectedOts, operations: state.operations }), () => {}, 60000,
+    payloadDeEstado, () => {}, 60000,
     () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
     () => gate.resolve(),
+    // `appSheetDisponible` es la puerta real de app.js (dice si hay ALGUN destino de
+    // guardado: el puente en Apps Script, Supabase fuera de el). Este arnes no monta
+    // ninguno de los dos y su escenario es "el destino esta disponible", asi que se le
+    // pasa la regla sola.
+    () => true,
+    guardarPlanEnSupabase, guardarCatalogosEnSupabase,
+    () => options.appsScriptRuntime !== false,
   );
   return {
     flow,
@@ -419,7 +481,7 @@ test("el traslado al plan se persiste de inmediato sin esperar el debounce", asy
   const saved = await fixture.flow.flushPlanSave("plan");
 
   assert.equal(saved, true);
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["saveAppState"]);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase"]);
   assert.deepEqual(fixture.calls[0].payload.selectedOts, ["100"]);
   // El debounce anterior quedo cancelado: no hay un segundo guardado programado.
   assert.deepEqual(fixture.flow.dirtyScopes, []);
@@ -440,7 +502,7 @@ test("el traslado al plan espera el guardado en curso y reintenta con la OT incl
   const saved = await flushed;
 
   assert.equal(saved, true);
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["saveAppState"]);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase"]);
   assert.deepEqual(fixture.calls[0].payload.selectedOts, ["100"]);
 });
 
@@ -452,6 +514,55 @@ test("el traslado al plan reporta el fallo del guardado sin confirmarlo como Gua
   assert.equal(saved, false);
   assert.equal(fixture.flow.inFlight, false);
   assert.deepEqual(fixture.flow.dirtyScopes, ["plan"]);
+});
+
+test("fuera de Apps Script, un ambito de catalogo sube el plan y LUEGO los catalogos", async () => {
+  // MEDIDO 2026-09-29: los catalogos se escriben por Supabase, no por el puente, y
+  // DESPUES del plan. El orden importa: si el plan falla, saveAppSheet lanza antes de
+  // llegar a los catalogos y no se sube nada de un guardado que no ocurrio.
+  const fixture = loadAppSheetSaveFlow({ state: { selectedOts: ["100"] }, appsScriptRuntime: false });
+
+  const saved = await fixture.flow.flushPlanSave("catalogs");
+
+  assert.equal(saved, true);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase", "guardarCatalogosEnSupabase"]);
+  assert.equal(fixture.calls[1].ambito, "catalogs");
+});
+
+test("un ambito de plan no sube catalogos, aunque se guarde mil veces", async () => {
+  const fixture = loadAppSheetSaveFlow({ state: { selectedOts: ["100"] }, appsScriptRuntime: false });
+
+  fixture.flow.saveState("plan");
+  const saved = await fixture.flow.flushPlanSave("plan");
+
+  assert.equal(saved, true);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase"]);
+});
+
+test("matrix manda sobre catalogs cuando los dos ambitos vienen juntos", async () => {
+  // El aviso que da el escritor para 'matrix' es el de la pestana de Matriz, que es
+  // justo lo que no se escribe: con 'catalogs' primero se mostraria el aviso de otra
+  // cosa y se taparia el que importa.
+  const fixture = loadAppSheetSaveFlow({ state: {}, appsScriptRuntime: false });
+  fixture.flow.saveState("matrix");
+  fixture.flow.saveState("catalogs");
+
+  const saved = await fixture.flow.flushPlanSave("matrix");
+
+  assert.equal(saved, true);
+  const deCatalogo = fixture.calls.filter((call) => call.method === "guardarCatalogosEnSupabase");
+  assert.deepEqual(deCatalogo.map((call) => call.ambito), ["matrix"]);
+});
+
+test("un fallo de los catalogos no da por fallido el guardado del plan", async () => {
+  const fixture = loadAppSheetSaveFlow({ state: {}, appsScriptRuntime: false, failCatalogs: "tabla bloqueada" });
+
+  const saved = await fixture.flow.flushPlanSave("catalogs");
+
+  // El aviso lo da guardarCatalogosEnSupabase; saveAppSheet no lo convierte en fallo
+  // del plan, que si se escribio.
+  assert.equal(saved, true);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase", "guardarCatalogosEnSupabase"]);
 });
 
 test("cancelar el dialogo de planeacion libera la tarjeta sin mostrar Error", async () => {
@@ -521,11 +632,25 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+/**
+ * Copia del estado para aserciones. `plain` es JSON crudo y revienta con una referencia
+ * ciclica; aqui lo que se copia es el estado de un arnes, que puede traer dobles de funcion,
+ * asi que un fallo de copia se devuelve como `null` en vez de tumbar el test.
+ */
+function copiaDeEstado(state) {
+  try {
+    return plain(state);
+  } catch (error) {
+    return null;
+  }
+}
+
 function loadClient(options = {}) {
   const storage = new Map();
   const toasts = [];
   const busyStates = [];
   const backlogBusyStates = [];
+  const callsSupabase = [];
   const state = {
     revision: 1,
     materials: [],
@@ -542,6 +667,13 @@ function loadClient(options = {}) {
     requestAnimationFrame: (callback) => { callback(); return 1; },
     PPAppsScriptBridge: {
       isConfigured: () => true,
+      // MEDIDO 2026-09-29 en el navegador: `isConfigured` dice "el puente esta configurado",
+      // que en el sitio estatico es cierto porque la URL del backend va embebida en el bundle.
+      // `nativeRuntimeAvailable` es el unico predicado que responde "estoy dentro de
+      // HtmlService", y es el que decide a donde se escribe el plan. Por defecto el arnes
+      // describe el runtime de Apps Script; `runtimeDeAppscript: false` describe el sitio
+      // estatico, donde el guardado optimized tiene que delegar en app.js (Supabase).
+      nativeRuntimeAvailable: () => options.runtimeDeAppscript !== false,
       ensureReady: async () => {},
       call: async (method, args) => options.callAppsScript?.(method, ...(args || [])),
     },
@@ -599,7 +731,26 @@ function loadClient(options = {}) {
       selectedJobPanel: null,
     },
     applyImported: (imported) => Object.assign(state, imported),
-    saveAppSheet: async () => false,
+    // DECIDIDO 2026-09-30: el guardado optimized SIEMPRE delega aqui, que es el
+    // `saveAppSheet` de app.js (el que sube el plan a Supabase y despues los catalogos).
+    // Antes solo delegaba FUERA de HtmlService y adentro armaba jobs de Hojas. Se anota el
+    // numero de delegaciones para poder verlo desde el test, y `guardarEspera` deja el
+    // guardado en vuelo para poder observar la compuerta.
+    saveAppSheet: async () => {
+      context.saveAppSheetDelegaciones = (context.saveAppSheetDelegaciones || 0) + 1;
+      // MEDIDO 2026-09-30: al delegar el guardado en app.js, la compuerta de guardado la
+      // toma el `saveAppSheet` REAL, no el optimized. El doble tiene que hacer lo mismo
+      // (tomar la compuerta, devolver false si no la hay, soltarla al final) o los tests de
+      // compuerta describen un mundo que no existe: el sync entraba a guardar en paralelo.
+      const gate = context.appSheetTryAcquireSaveGate();
+      if (!gate) return false;
+      try {
+        if (options.guardarEspera) await options.guardarEspera.promise;
+        return true;
+      } finally {
+        context.appSheetReleaseSaveGate(gate);
+      }
+    },
     queueAppSheetSave: () => {},
     appSheetMarkDirtyScope: (scope) => {
       const value = String(scope || "plan").trim().toLowerCase();
@@ -611,6 +762,12 @@ function loadClient(options = {}) {
       return scopes;
     },
     appSheetDirtyScopes: new Set(),
+    // MEDIDO 2026-09-29: `optimizedQueueAppSheetSave` pregunta `appSheetDisponible()`, no la
+    // bandera `appSheetAvailable` del puente. En el sitio estatico la bandera del puente no
+    // existe y la pregunta lanzaba ReferenceError en cada cambio de estado (ver el comentario
+    // de performance-client.js:575-583). Aqui se monta la puerta real de app.js con la misma
+    // respuesta que tendria el arnes: el puente disponible.
+    appSheetDisponible: () => true,
     appSheetAvailable: true,
     appSheetSaveInFlight: false,
     appSheetSavePending: false,
@@ -672,6 +829,29 @@ function loadClient(options = {}) {
     syncNetSuiteInBackground: (syncOptions) => context.syncWorkOrdersOnce(syncOptions),
     validateNetSuiteImportedData: () => {},
     invalidateCurrentPlanOperationsCache: () => options.invalidateCurrentPlanOperationsCache?.(),
+    // syncNetSuiteTwoPhase y persistPlanSnapshot guardan por Supabase, no por el
+    // puente (RULE-SUP-021). Sin este doble el ReferenceError se reporta como un
+    // fallo de sincronizacion y el test verdeeria por el motivo equivocado.
+    guardarPlanEnSupabase: async (opciones) => {
+      // Doble lo mas fiel posible del `guardarPlanEnSupabase` REAL de app.js: ese mapea el
+      // estado entero con PPSupabaseWriter, guarda la revision que le devuelven en el estado
+      // (para que el siguiente guardado no mande la vieja) y devuelve false si no pudo.
+      // El estado se copia al momento de la llamada, porque quien se guarda es el estado que
+      // hay ENTONCES, no el que quede despues.
+      callsSupabase.push({
+        method: "guardarPlanEnSupabase",
+        opciones,
+        estado: copiaDeEstado(context.state),
+      });
+      if (options.guardarFalla) return false;
+      if (options.guardarEspera) await options.guardarEspera.promise;
+      if (typeof options.revisionAlGuardar === "number") context.state.revision = options.revisionAlGuardar;
+      return true;
+    },
+    guardarCatalogosEnSupabase: async (ambito) => {
+      callsSupabase.push({ method: "guardarCatalogosEnSupabase", ambito });
+      return true;
+    },
     resetBacklogWindow: () => options.resetBacklogWindow?.(),
     applyNetSuitePlanningPayload: () => {},
     callAppsScript: (...args) => options.callAppsScript?.(...args),
@@ -706,7 +886,15 @@ function loadClient(options = {}) {
     vm.runInContext(selectedPriorityJobSource, context, { filename: "planning-selected-priority-job.js" });
     vm.runInContext(selectedJobOtSource, context, { filename: "planning-selected-job-ot.js" });
   }
-  return { context, state, toasts, busyStates, backlogBusyStates };
+  return {
+    context,
+    state,
+    toasts,
+    busyStates,
+    backlogBusyStates,
+    callsSupabase,
+    get saveAppSheetDelegaciones() { return context.saveAppSheetDelegaciones || 0; },
+  };
 }
 
 function loadPlanStatus(options = {}) {
@@ -806,6 +994,7 @@ const reportSource = options.reportOperations || state.operations;
     "sequenceSort", "opStart", "renderSubcontractReport", "renderReleaseReport", "planStatusOriginForSource", "statusesForPlanOrigin",
     "draftViewStatuses", "latestPublishedOriginId", "activePlanReportStatuses", "writePlanStatusByOrigin",
     "rollbackPlanStatusByOrigin", "shouldMutateDraftFromSource", "clearPendingPlanStatusSaveKeys",
+    "appSheetDisponible",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -839,6 +1028,9 @@ const reportSource = options.reportOperations || state.operations;
     (key, status) => { if (!state.operationPlanStatuses) state.operationPlanStatuses = {}; const row = { ...(status || {}), key, origin: "draft" }; state.operationPlanStatuses[key] = row; return row; },
     (key, previousStatus) => { if (previousStatus) state.operationPlanStatuses[key] = previousStatus; else delete state.operationPlanStatuses[key]; },
     () => true, () => {},
+    // La puerta real de app.js. Aqui el destino SI esta disponible (el arnes pasa
+    // appSheetAvailable = true), asi que se le pasa esa misma regla.
+    () => true,
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport, detailButtons,
@@ -2586,6 +2778,9 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
   const fixture = loadClient({
     installBacklogSync: true,
     installSaveGate: true,
+    // DECIDIDO 2026-09-30: el sync escribe en SUPABASE. El puente se queda con la lectura
+    // de NetSuite, que es la unica puerta que hay a NetSuite.
+    revisionAlGuardar: 2,
     state: {
       workOrders: [{ ot: "WO-CERRADA", item: "CERRADA" }],
       operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
@@ -2626,35 +2821,37 @@ test("la sincronizacion manual ligera usa el contrato completo y guarda una vez 
   });
   fixture.context.openPlanningDialog = async () => { dialogs += 1; return {}; };
 
-  await fixture.context.syncBacklogWorkOrders();
+  const informe = await fixture.context.syncBacklogWorkOrders();
 
   assert.deepEqual(timeouts, [180000]);
-  assert.equal(reconciliations, 2);
-  assert.equal(purges, 2);
+  // El estado se reconcilia y se depura UNA vez: antes se hacia dos porque el estado se
+  // guardaba con un payload a mano y despues se volvia a reconciliar sobre el estado viejo.
+  assert.equal(reconciliations, 1);
+  assert.equal(purges, 1);
   assert.equal(dialogs, 0);
-  assert.deepEqual(calls.map(([method]) => method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
-  assert.deepEqual(plain(calls[1][1]), {
-    revision: 1,
-    workOrders: [{ ot: "WO-ACTIVA", item: "ACTIVA" }],
-    operations: [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }],
-    operationPlanStatuses: {},
-    otConfigurations: {},
-    planningConfigByOt: {},
-    preparedPlanningByOt: {},
-    selectedOts: [],
-    lockedOts: [],
-    expandedOts: [],
-    selectedOperationId: "",
-    closedWorkOrderSummaries: { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } },
-    unconfirmedWorkOrders: { "WO-SIN-FICHA": { ot: "WO-SIN-FICHA", firstSeenAt: "2026-08-01T00:00:00.000Z", lastSeenAt: "2026-08-01T00:00:00.000Z", misses: 2 } },
-    lastSchedule: null,
-    syncedAt: "2026-08-01T00:00:00.000Z",
-    removedWorkOrderOts: ["WO-CERRADA"],
+  assert.deepEqual(calls.map(([method]) => method), ["fetchNetSuiteWorkOrdersLite"]);
+  assert.equal(fixture.callsSupabase.filter((c) => c.method === "guardarPlanEnSupabase").length, 1);
+  assert.equal(informe.persistido, true);
+  // Lo que se sube es el estado RECONCILIADO, con las marcas de OT y el resumen de las
+  // cerradas. Antes esto viajaba en el payload de `saveWorkOrderSyncState`; ahora viaja en
+  // el estado que mapea PPSupabaseWriter (filasUnconfirmedWorkOrders y
+  // filasClosedWorkOrderSummaries en supabase-writer.js).
+  const guardado = fixture.callsSupabase.find((c) => c.method === "guardarPlanEnSupabase");
+  assert.deepEqual(guardado.estado.workOrders, [{ ot: "WO-ACTIVA", item: "ACTIVA" }]);
+  assert.deepEqual(guardado.estado.operations, [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }]);
+  assert.deepEqual(guardado.estado.materials, []);
+  assert.deepEqual(guardado.estado.retentionPurged, true);
+  assert.deepEqual(guardado.estado.closedWorkOrderSummaries, { "WO-CERRADA": { ot: "WO-CERRADA", finalStatus: "CERRADA" } });
+  assert.deepEqual(guardado.estado.unconfirmedWorkOrders, {
+    "WO-SIN-FICHA": { ot: "WO-SIN-FICHA", firstSeenAt: "2026-08-01T00:00:00.000Z", lastSeenAt: "2026-08-01T00:00:00.000Z", misses: 2 },
   });
+  assert.equal(guardado.estado.syncedAt, "2026-08-01T00:00:00.000Z");
   assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-ACTIVA", item: "ACTIVA" }]);
   assert.deepEqual(plain(fixture.context.state.operations), [{ id: "done", ot: "WO-CERRADA", status: "COMPLETADA_PLAN" }]);
   assert.deepEqual(plain(fixture.context.state.materials), []);
   assert.equal(fixture.context.state.retentionPurged, true);
+  // La revision que devuelve el escritor se guarda en el estado, para que el siguiente
+  // guardado mande la correcta y no choque contra si mismo.
   assert.equal(fixture.context.state.revision, 2);
   assert.deepEqual(plain(renders), [{ save: false }]);
   assert.deepEqual(fixture.busyStates, []);
@@ -2776,10 +2973,13 @@ test("un timeout de sincronizacion conserva materiales y su cache de una lista l
   assert.equal(materialCalls, 1);
 });
 
-test("un fallo al guardar sincronizacion conserva materiales y su cache", async () => {
+test("un fallo al guardar sincronizacion conserva la cache de materiales y avisa que no subio", async () => {
   let materialCalls = 0;
   const fixture = loadClient({
     installBacklogSync: true,
+    // DECIDIDO 2026-09-30: el guardado del sync va a Supabase. El fallo se provoca ahi,
+    // no en un metodo del puente que ya no existe en este camino.
+    guardarFalla: true,
     state: { workOrders: [{ ot: "WO-1" }], materials: [] },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, materials: current.materials }),
     purgeClosedWorkOrderRetention: (current) => current,
@@ -2789,7 +2989,6 @@ test("un fallo al guardar sincronizacion conserva materiales y su cache", async 
         return { materials: [{ ot: "WO-1", component: "CONSERVAR" }] };
       }
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-2" }] };
-      if (method === "saveWorkOrderSyncState") throw new Error("sin permiso");
       return {};
     },
   });
@@ -2807,12 +3006,28 @@ test("un fallo al guardar sincronizacion conserva materiales y su cache", async 
   fixture.context.state.workOrders = [];
   const beforeFailure = plain(fixture.context.state);
 
-  await fixture.context.syncBacklogWorkOrders();
-  fixture.context.renderSelectedJobPanel();
-  await settleMicrotasks();
+  const informe = await fixture.context.syncBacklogWorkOrders();
 
-  assert.deepEqual(plain(fixture.context.state), beforeFailure);
+  assert.equal(informe.persistido, false, "las OTs se leyeron pero el estado no subio");
+  // Y la persona tiene que enterarse de que leer no es guardar: sin este aviso, el toast de
+  // "OTs sincronizadas" haria creer que el estado subio.
+  assert.ok(
+    fixture.toasts.some((t) => t.includes("NO se guardo")),
+    `esperaba el aviso de estado no guardado; hubo: ${JSON.stringify(fixture.toasts)}`,
+  );
+  // LO QUE ESTE TEST PROTEGE: la cache de materiales que se pidio bajo demanda NO se
+  // invalida por un fallo de guardado. Un guardado fallido no puede cobrarle a la persona
+  // una segunda consulta al servidor por una OT que sigue abierta. (Despues del sync la
+  // lista de OTs es OTRA, asi que pedir de nuevo para la OT nueva es lo correcto y no se
+  // comprueba aqui.)
   assert.equal(materialCalls, 1);
+  // Lo que el sync SI cambia, y es lo correcto: la lista de OTs es la que NetSuite acaba de
+  // decir. Antes estas no se aplicaban al fallar el guardado, porque la lectura se aplicaba
+  // DESPUES de guardar; con el estado aplicandose antes (para que sea el que se sube) la OT
+  // leida se conserva. Deshacerla seria mostrar una cola que NetSuite ya desmintio.
+  assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-2" }]);
+  // Y lo que la persona habia escrito sigue ahi: el sync no toca el resto del estado.
+  assert.equal(fixture.context.state.revision, beforeFailure.revision);
 });
 
 test("un timeout de sincronizacion manual no modifica ni guarda el estado", async () => {
@@ -2863,7 +3078,10 @@ test("la sincronizacion manual ignora un segundo clic mientras la consulta liger
   assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
   gate.resolve({ workOrders: [{ ot: "WO-ACTIVA" }] });
   await first;
-  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  // DECIDIDO 2026-09-30: lo que se guarda va a Supabase, no por un metodo del puente. Por eso
+  // la lista del puente no crece: solo se leyo de NetSuite.
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  assert.equal(fixture.callsSupabase.filter((c) => c.method === "guardarPlanEnSupabase").length, 1);
   assert.deepEqual(fixture.backlogBusyStates, [true, false]);
 });
 
@@ -2871,10 +3089,13 @@ test("la sincronizacion conserva una edicion local hecha mientras espera el guar
   const gate = deferredPromise();
   const fixture = loadClient({
     installBacklogSync: true,
+    // El guardado se demora: la edicion local tiene que sobrevivirlo.
+    guardarEspera: gate,
+    revisionAlGuardar: 2,
     state: { workOrders: [{ ot: "WO-CERRADA" }], settings: { local: "antes" } },
     callAppsScript: async (method) => {
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      return gate.promise;
+      return { revision: 2 };
     },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders, closedWorkOrderSummaries: {} }),
     purgeClosedWorkOrderRetention: (current) => current,
@@ -2883,7 +3104,7 @@ test("la sincronizacion conserva una edicion local hecha mientras espera el guar
   const sync = fixture.context.syncBacklogWorkOrders();
   await settleMicrotasks();
   fixture.context.state.settings = { local: "durante" };
-  gate.resolve({ revision: 2 });
+  gate.resolve();
   await sync;
 
   assert.equal(fixture.context.state.revision, 2);
@@ -2901,10 +3122,14 @@ test("la sincronizacion conserva closedDetectedAt al demorarse el guardado dedic
   const fixture = loadClient({
     installBacklogSync: true,
     Date: ControlledDate,
+    // DECIDIDO 2026-09-30: el guardado del sync va a Supabase y se demora. La deteccion del
+    // cierre tiene que quedar con LA HORA EN LA QUE SE DETECTO, no con la del guardado: si se
+    // recalculara al guardar, el reloj de la deteccion seria mentira.
+    guardarEspera: dedicated,
     state: { workOrders: [{ ot: "WO-CERRADA" }] },
     callAppsScript: async (method) => {
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      return dedicated.promise;
+      return { revision: 2 };
     },
     reconcileActiveWorkOrders: (current, workOrders, nowIso) => {
       detectionTimes.push(nowIso);
@@ -2915,45 +3140,94 @@ test("la sincronizacion conserva closedDetectedAt al demorarse el guardado dedic
 
   const sync = fixture.context.syncBacklogWorkOrders();
   await settleMicrotasks();
-  dedicated.resolve({ revision: 2 });
+  dedicated.resolve();
   await sync;
 
-  assert.equal(detectionTimes[0], detectionTimes[1]);
+  assert.equal(detectionTimes.length, 1, "se reconcilia una vez: la deteccion no se repite");
   assert.equal(fixture.context.state.closedWorkOrderSummaries["WO-CERRADA"].closedDetectedAt, detectionTimes[0]);
 });
 
-test("el sync espera el guardado optimizado instalado antes de tomar la compuerta", async () => {
-  const optimized = deferredPromise();
-  const dedicated = deferredPromise();
+test("el sync espera el guardado en curso antes de tomar la compuerta", async () => {
+  const guardado = deferredPromise();
   const calls = [];
   const fixture = loadClient({
     installBacklogSync: true,
     installSaveGate: true,
+    // DECIDIDO 2026-09-30: lo que se guarda durante el sync va a Supabase. El metodo del
+    // puente que se demoraba (`saveWorkOrderSyncState`) ya no existe en este camino.
+    guardarEspera: guardado,
     callAppsScript: async (method) => {
       calls.push(method);
-      if (method === "savePlanningStateOptimized") return optimized.promise;
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      if (method === "saveWorkOrderSyncState") return dedicated.promise;
       return { revision: 3 };
     },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
     purgeClosedWorkOrderRetention: (current) => current,
   });
-  fixture.context.window.requestIdleCallback = (callback) => { callback(); return 1; };
   fixture.context.appSheetDirtyScopes.add("plan");
   const normalSave = fixture.context.saveAppSheet(false);
   await settleMicrotasks();
 
   const sync = fixture.context.syncBacklogWorkOrders();
   await settleMicrotasks();
-  assert.deepEqual(calls, ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite"]);
+  // El sync llego a pedir las OTs pero NO puede tomar la compuerta: el guardado sigue en vuelo.
+  // Y lo que se guarda ya no es un job de Hojas: el unico metodo del puente es la lectura.
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  assert.equal(fixture.context.appSheetSaveInFlight, true);
 
-  optimized.resolve({ revision: 2 });
+  guardado.resolve();
   await normalSave;
   await settleMicrotasks();
-  assert.deepEqual(calls, ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
-  dedicated.resolve({ revision: 3 });
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  assert.ok(
+    fixture.callsSupabase.some((c) => c.method === "guardarPlanEnSupabase"),
+    "el sync dejo el estado en Supabase",
+  );
   await sync;
+});
+
+test("FUERA de Apps Script el guardado optimized delega en app.js y no toca el puente", async () => {
+  // MEDIDO 2026-09-29 en el navegador real (sitio estatico, sesion de Supabase): con
+  // `isAppsScriptRuntime()` dando TRUE por el predicado mentiroso del puente, el guardado
+  // optimized se saltaba originalSaveAppSheet (el de app.js, que sube el plan a Supabase y
+  // despues los catalogos) y entraba directo a `callAppsScript`, o sea a subir el plan por un
+  // iframe que en GitHub Pages no escribe las Hojas. El plan no se guardaba y los catalogos
+  // no se subian nunca. Este es el escenario que el navegador mostro y que faltaba cubrir.
+  const calls = [];
+  const fixture = loadClient({
+    runtimeDeAppscript: false,
+    callAppsScript: async (method, payload) => {
+      calls.push({ method, payload });
+      return { revision: 2 };
+    },
+  });
+
+  const resultado = await fixture.context.saveAppSheet(true);
+
+  assert.equal(resultado, true, "el guardado de app.js es el que decide el resultado");
+  assert.equal(fixture.saveAppSheetDelegaciones, 1, "tiene que delegar en el guardado de app.js");
+  assert.deepEqual(calls, [], "y no puede escribir por el puente: ahi es un iframe, no el runtime");
+});
+
+test("DENTRO de Apps Script el guardado optimized tambien va a Supabase", async () => {
+  // DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura es UNO SOLO,
+  // Supabase, tambien dentro de HtmlService. Antes este test fijaba lo contrario
+  // (`savePlanningStateOptimized` por el puente nativo) y con el los jobs de Hojas
+  // seguian vivos; ahora la rama que los armaba se retiro de performance-client.js.
+  const calls = [];
+  const fixture = loadClient({
+    runtimeDeAppscript: true,
+    callAppsScript: async (method, payload) => {
+      calls.push({ method, payload });
+      return { revision: 2 };
+    },
+  });
+
+  const resultado = await fixture.context.saveAppSheet(true);
+
+  assert.equal(resultado, true);
+  assert.equal(fixture.saveAppSheetDelegaciones, 1, "dentro de HtmlService tambien delega en app.js");
+  assert.deepEqual(calls, [], "y no escribe por el puente: el plan va a Supabase en los dos runtimes");
 });
 
 test("la limpieza inicial renderiza sin solicitar guardado remoto", () => {
@@ -2970,7 +3244,7 @@ test("la limpieza inicial renderiza sin solicitar guardado remoto", () => {
   assert.deepEqual(renders, [{ save: false }]);
 });
 
-test("la edicion pendiente antes y durante el sync optimizado se guarda despues del acuse", async () => {
+test("la edicion pendiente antes y durante el sync se guarda despues del acuse", async () => {
   const timers = new Map();
   const calls = [];
   const dedicated = deferredPromise();
@@ -2978,10 +3252,12 @@ test("la edicion pendiente antes y durante el sync optimizado se guarda despues 
   const fixture = loadClient({
     installBacklogSync: true,
     installSaveGate: true,
+    // DECIDIDO 2026-09-30: lo que se guarda durante el sync va a Supabase, y es ese
+    // guardado el que se demora esperando el acuse.
+    guardarEspera: dedicated,
     callAppsScript: async (method, payload) => {
       calls.push({ method, payload });
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      if (method === "saveWorkOrderSyncState") return dedicated.promise;
       return { revision: 3 };
     },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
@@ -3000,17 +3276,23 @@ test("la edicion pendiente antes y durante el sync optimizado se guarda despues 
   await settleMicrotasks();
   fixture.context.queueAppSheetSave("plan");
   await runTimers();
-  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite"]);
 
-  dedicated.resolve({ revision: 2 });
+  dedicated.resolve();
   await sync;
   await runTimers();
 
-  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "savePlanningStateOptimized"]);
-  assert.equal(calls[2].payload.revision, 2);
+  // DECIDIDO 2026-09-30: lo que se guarda despues del acuse va a Supabase, no por un job de
+  // Hojas. El unico metodo del puente en toda la secuencia es la lectura de OTs.
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite"]);
+  assert.ok(fixture.saveAppSheetDelegaciones >= 1, "y el plan se subio a Supabase");
+  assert.ok(
+    fixture.callsSupabase.some((c) => c.method === "guardarPlanEnSupabase"),
+    "y el sync subio su estado a Supabase",
+  );
 });
 
-test("un debounce optimizado completado no programa un guardado extra al sincronizar OTs", async () => {
+test("un debounce completado no programa un guardado extra al sincronizar OTs", async () => {
   const timers = new Map();
   const calls = [];
   let timerId = 0;
@@ -3020,7 +3302,6 @@ test("un debounce optimizado completado no programa un guardado extra al sincron
     callAppsScript: async (method, payload) => {
       calls.push({ method, payload });
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      if (method === "saveWorkOrderSyncState") return { revision: 3 };
       return { revision: 2 };
     },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
@@ -3036,24 +3317,33 @@ test("un debounce optimizado completado no programa un guardado extra al sincron
 
   fixture.context.queueAppSheetSave("plan");
   await runTimers();
+  const guardadosAntesDelSync = fixture.callsSupabase.filter((c) => c.method === "guardarPlanEnSupabase").length;
   await fixture.context.syncBacklogWorkOrders();
   await runTimers();
 
-  assert.deepEqual(calls.map((call) => call.method), ["savePlanningStateOptimized", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
-  assert.equal(calls[2].payload.revision, 2);
+  // El debounce ya habia guardado antes del sync, asi que al terminar el sync el unico
+  // guardado que queda es el del propio sync; no se anade uno extra de Hojas.
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite"]);
+  assert.equal(
+    fixture.callsSupabase.filter((c) => c.method === "guardarPlanEnSupabase").length,
+    guardadosAntesDelSync + 1,
+    "el sync guarda una vez en Supabase",
+  );
 });
 
-test("un fallo del sync libera la compuerta para el siguiente guardado optimizado", async () => {
+test("un fallo del sync libera la compuerta para el siguiente guardado", async () => {
   const timers = new Map();
   const calls = [];
   let timerId = 0;
+  // DECIDIDO 2026-09-30: el guardado del sync falla en SUPABASE, no por el puente: el
+  // metodo `saveWorkOrderSyncState` que antes se hacia fallar ya no existe en este camino.
   const fixture = loadClient({
     installBacklogSync: true,
     installSaveGate: true,
+    guardarFalla: true,
     callAppsScript: async (method) => {
       calls.push(method);
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      if (method === "saveWorkOrderSyncState") throw new Error("fallo dedicado");
       return { revision: 2 };
     },
     reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
@@ -3069,7 +3359,10 @@ test("un fallo del sync libera la compuerta para el siguiente guardado optimizad
   for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
   await settleMicrotasks();
 
-  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "savePlanningStateOptimized"]);
+  // El guardado posterior al fallo del sync ya no es un job de Hojas: el puente solo se
+  // vio para leer OTs, y el plan se sigue guardando por Supabase.
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  assert.ok(fixture.saveAppSheetDelegaciones >= 1, "y el plan se subio a Supabase");
 });
 
 test("solo el propietario puede liberar la compuerta de guardado", () => {
@@ -3097,10 +3390,41 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
       purgeClosedWorkOrderRetention: (current) => current,
     },
   };
+  // DECIDIDO 2026-09-30: el guardado del sync ya no es un metodo del puente. Ahora es
+  // `guardarPlanEnSupabase`, el MISMO que usa el guardado normal, y por eso este doble tiene
+  // que poder distinguir las dos llamadas: la primera (del sync) se demora en `dedicated`, y
+  // la segunda (el guardado normal que quedo pendiente) tiene que salir DESPUES del acuse.
+  // Antes se distinguian por el metodo del puente; ahora se distinguen por el orden y por
+  // `concurrent`, que se lee al ENTRAR, no al salir.
+  let guardadosSupabase = 0;
+  const guardarPlanEnSupabase = async () => {
+    guardadosSupabase += 1;
+    const habiaPendiente = dedicatedPending;
+    // La llamada se anota AL ENTRAR, no al salir: mientras el guardado del sync esta en vuelo
+    // ya esta pasando, y un test que lo mira al salir no podria distinguir "todavia no empezo"
+    // de "empezo y no ha vuelto".
+    calls.push({ method: "guardarPlanEnSupabase", payload: { revision: flow.state.revision }, concurrent: habiaPendiente });
+    if (guardadosSupabase === 1) {
+      dedicatedPending = true;
+      await dedicated.promise;
+      dedicatedPending = false;
+      // El escritor devuelve la revision nueva y el estado la guarda, para que el siguiente
+      // guardado mande la correcta.
+      flow.state.revision = 2;
+    }
+    return true;
+  };
   const flow = Function(
     "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
     "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
     "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
+    "appSheetDisponible", "guardarPlanEnSupabase", "guardarCatalogosEnSupabase",
+    // MEDIDO 2026-09-29 en el navegador: `isAppsScriptRuntime` miente en el sitio estatico
+    // (los dos instaladores lo dejan en "el puente esta configurado"), y por eso el guardado
+    // del plan se iba por callAppsScript. `enRuntimeAppsScript` es el predicado que responde
+    // la pregunta de verdad: google.script.run solo existe dentro de HtmlService. El cuerpo
+    // de este Function incluye saveAppSheet de app.js, que lo llama.
+    "enRuntimeAppsScript",
     `${appSheetSaveFlowSource}\n${backlogSyncSource}\nreturn {
       syncBacklogWorkOrders, saveState,
       get state() { return state; },
@@ -3118,6 +3442,10 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
     },
     () => ({ revision: flow?.state?.revision }), () => {}, 60000,
     () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
+    // La puerta real de app.js; aqui el destino esta disponible.
+    () => true,
+    guardarPlanEnSupabase, async () => true,
+    () => true,
   );
   const runTimers = async () => {
     for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
@@ -3129,19 +3457,27 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
   flow.saveState("plan");
   await runTimers();
 
-  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  // Lo unico que hay en vuelo es el guardado DEL SYNC: el guardado normal que la edicion
+  // encoló no salio, porque espera a que el sync suelte la compuerta.
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "guardarPlanEnSupabase"]);
+  assert.equal(calls[1].concurrent, false);
   dedicated.resolve({ revision: 2 });
   await sync;
   await runTimers();
 
-  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState", "saveAppState"]);
-  assert.equal(calls[2].concurrent, false);
+  assert.deepEqual(calls.map((call) => call.method), ["fetchNetSuiteWorkOrdersLite", "guardarPlanEnSupabase", "guardarPlanEnSupabase"]);
+  assert.equal(calls[2].concurrent, false, "el guardado normal no se solapo con el del sync");
+  // Con la revision que devolvio el guardado del sync, no la de antes del sync.
   assert.equal(calls[2].payload.revision, 2);
 });
 
-test("un rechazo del guardado dedicado no modifica el estado local", async () => {
+test("un fallo al guardar el sync no deshace la lectura de NetSuite ni el estado local", async () => {
   const fixture = loadClient({
     installBacklogSync: true,
+    // DECIDIDO 2026-09-30: el guardado del sync va a Supabase; el fallo se provoca ahi.
+    // Antes fallaba el metodo del puente (`saveWorkOrderSyncState`) y por eso el estado
+    // llegaba intacto: la lectura se aplicaba DESPUES de guardar, y el fallo la cancelaba.
+    guardarFalla: true,
     state: { workOrders: [{ ot: "WO-LOCAL" }], settings: { local: "conservar" } },
     callAppsScript: async (method) => {
       if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-REMOTA" }] };
@@ -3152,9 +3488,20 @@ test("un rechazo del guardado dedicado no modifica el estado local", async () =>
   });
   const before = plain(fixture.context.state);
 
-  await fixture.context.syncBacklogWorkOrders();
+  const informe = await fixture.context.syncBacklogWorkOrders();
 
-  assert.deepEqual(plain(fixture.context.state), before);
+  // LAS OTs QUE VINIERON DE NETSUITE NO SE TIRAN. El estado se aplica antes de guardar (por
+  // eso es el que se sube), y un fallo de escritura no es motivo para mostrar una cola vieja:
+  // la OT cerrada que NetSuite ya dio por cerrada volveria a la cola hasta el proximo sync.
+  assert.deepEqual(plain(fixture.context.state.workOrders), [{ ot: "WO-REMOTA" }]);
+  // Y lo que la persona escribio se conserva igual.
+  assert.deepEqual(plain(fixture.context.state.settings), before.settings);
+  // Lo que no se puede prometer es que quedara guardado, y se dice.
+  assert.equal(informe.persistido, false);
+  assert.ok(
+    fixture.toasts.some((message) => message.includes("NO se guardo")),
+    `esperaba el aviso de estado no guardado; hubo: ${JSON.stringify(fixture.toasts)}`,
+  );
 });
 
 test("EL SYNC DEL BOTON LIMPIA EL AVISO DE SINCRONIZACION CUANDO TERMINA BIEN", async () => {
@@ -3278,11 +3625,48 @@ test("generar plan con datos viejos dispara la sync ligera y reporta las OTs cer
 
   const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
 
-  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  // DECIDIDO 2026-09-30: el sync leyo de NetSuite por el puente y subio el estado a Supabase.
+  // El unico metodo del puente es la lectura.
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite"]);
+  assert.ok(
+    fixture.callsSupabase.some((call) => call.method === "guardarPlanEnSupabase"),
+    "el estado del sync subio a Supabase",
+  );
   assert.equal(result.ok, true);
   assert.equal(result.refreshed, true);
   assert.deepEqual(result.removedOts, ["WO-CERRADA"]);
   assert.deepEqual(fixture.context.state.selectedOts, ["WO-1"]);
+});
+
+test("generar o publicar aborta si el sync lee pero NO guarda: un plan sin persistir no se publica", async () => {
+  // DECIDIDO 2026-09-30. Leer de NetSuite y no subir el estado deja la pagina con una cola
+  // que la base no tiene. Generar el plan desde ahi produce algo que al recargar cambia, y la
+  // lista de OTs retiradas que devuelve el sync seria invisible para el resto. Con lo leido
+  // bien pero sin guardar, no se genera: se avisa y se deja reintentar.
+  const fixture = loadClient({
+    installBacklogSync: true,
+    guardarFalla: true,
+    state: { syncedAt: "2026-09-24T10:00:00.000Z", selectedOts: ["WO-1"] },
+    needsWorkOrderSyncBeforeSchedule: () => true,
+    reconcileActiveWorkOrders: (current, workOrders) => ({ ...current, workOrders }),
+    purgeClosedWorkOrderRetention: (current) => current,
+    callAppsScript: async (method) => {
+      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-1" }], syncedAt: "2026-09-25T12:00:00.000Z" };
+      return { revision: 2 };
+    },
+  });
+
+  const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "publish" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "sin-persistencia");
+  // El array viene del vm del arnes, asi que se compara por largo: assert.deepEqual lo
+  // declararia distinto por el prototipo aunque este vacio.
+  assert.equal(result.removedOts.length, 0, "no se reportan retiros que no quedaron guardados");
+  assert.ok(
+    fixture.toasts.some((message) => message.includes("el estado NO se guardo") && message.includes("publicar el plan")),
+    `esperaba el aviso de estado no guardado; hubo: ${JSON.stringify(fixture.toasts)}`,
+  );
 });
 
 test("generar o publicar aborta si la verificacion de frescura falla", async () => {
@@ -3329,7 +3713,13 @@ test("el limite de solicitudes de NetSuite se reintenta una vez y la sync ligera
   const result = await fixture.context.ensureNetSuiteWorkOrdersFresh({ maxAgeMs: 15 * 60 * 1000, context: "schedule" });
 
   assert.equal(result.ok, true, "el reintento debe recuperarse del limite transitorio");
-  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "fetchNetSuiteWorkOrdersLite", "saveWorkOrderSyncState"]);
+  // DECIDIDO 2026-09-30: dos lecturas de NetSuite por el puente y ni un metodo mas: lo que se
+  // guarda va a Supabase.
+  assert.deepEqual(calls, ["fetchNetSuiteWorkOrdersLite", "fetchNetSuiteWorkOrdersLite"]);
+  assert.ok(
+    fixture.callsSupabase.some((call) => call.method === "guardarPlanEnSupabase"),
+    "el estado del sync subio a Supabase",
+  );
   assert.ok(!fixture.toasts.some((message) => message.includes("No se pudo verificar NetSuite antes de generar el plan")));
 });
 

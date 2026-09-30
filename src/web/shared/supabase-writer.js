@@ -282,8 +282,25 @@
    * y no necesitan freno: una lista vacia ahi no toca una sola fila.
    */
   const ESPEJO_QUE_SE_VACIA = ["selected_ots", "locked_ots", "operation_plan_statuses"];
+
+  /**
+   * La clave con la que cada tabla hace UPSERT en el camino viejo (la Data API). Es la MISMA
+   * clave que declara `plan_tabla_escritura` en el DDL del plan, y por eso sale de ahi y no de
+   * lo que parezca natural: lo que el DDL indexa y lo que el navegador pone en `on_conflict`
+   * tienen que ser la misma lista de columnas o el UPSERT no resuelve.
+   *
+   * MEDIDO 2026-09-30: aqui faltaba `work_orders`. Sin entrada, `escribirEspejo` mandaba el
+   * POST SIN `on_conflict`, o sea un INSERT pelado, y la base contestaba
+   * `23505 duplicate key value violates unique constraint "work_orders_ot_key"` en 18 de 18
+   * guardados: las 222 ordenes de trabajo NUNCA se guardaron por el camino viejo, y como
+   * `cerrar()` mira los errores por tabla, ese 409 bajaba a `ok:false` y la pagina avisaba que
+   * no se guardo el plan. La clave es `wo_internal_id` y no `ot` porque es la que indexa el DDL
+   * (`work_orders_wo_internal_id_key`), y `ot` esta indexada aparte porque el RESTlet 2246
+   * tambien escribe estas filas.
+   */
   const CLAVE_NATURAL = {
     operations: "operation_id",
+    work_orders: "wo_internal_id",
     materials: "ot,line_id",
     selected_ots: "ot",
     locked_ots: "ot",
@@ -488,6 +505,322 @@
     } catch (error) {
       return { insertadas: 0, error: sano((error && error.message) || error, ctx.secretos) };
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CATALOGOS: lo que edita la persona en la pestana Catalogos
+  // ---------------------------------------------------------------------------
+  //
+  // QUE ES Y QUE NO ES. Estas seis tablas NO son un espejo del estado: son
+  // CATALOGOS, y el estado es la vista que de ellas tiene la pagina. Por eso aqui NO
+  // se borra la tabla entera y se reescribe (el modelo de las seis de plan_guardar):
+  // se hace UPSERT por clave natural de lo que hay en el estado, y se borran SOLO
+  // las filas cuya clave estaba en la ultima lectura y ya no esta en el estado, que
+  // es exactamente lo que la persona quito. La razon esta medida: `tools`,
+  // `subcontracts`, `calendar_exceptions`, `ot_configurations` y
+  // `article_configurations` los escribe TAMBIEN el espejo de las Hojas
+  // (16-supabase-catalogo.js), o sea que hay un segundo escritor y un borrado masivo
+  // desde un navegador con estado viejo se llevaria filas que la persona todavia no
+  // ha visto. Es el mismo peligro medido de la cabecera para operations/work_orders/
+  // materials, aqui con un escritor menos visible.
+  //
+  // POR QUE EL BORRADO NECESITA `clavesLeidas` Y NO PUEDE HACERSE SOLO. Para saber
+  // que fila hay que borrar hay que compararla con lo que se leyo AL ARRANCAR. Sin
+  // ese dato, "lo que no esta en el estado" incluye todo lo que la pagina todavia no
+  // conoce, y borrarlo seria perder filas. Por eso quien llama (supabase-catalog-
+  // apply.js) pasa `clavesLeidas`, que es lo que el lector vio, y sin ese argumento
+  // NO se borra nada: solo se sube lo que hay. Quitar sin guardar el estado previo es
+  // una operacion que no se puede hacer bien, y se dice con un aviso en vez de
+  // adivinar.
+  //
+  // LO QUE NO SE ESCRIBE, Y POR QUE. La pestana de Matriz (operators, capabilities,
+  // operation_catalog y matrix) NO se escribe desde aqui: su forma en el estado es
+  // indexada y con reglas derivadas (operationRules, capacityModes, cts), y mapearla
+  // entera al reves sin medir cada columna seria inventar el contrato. Se declara
+  // como no escrito y la pagina lo avisa, en vez de fingir que se guardo.
+  //
+  // MEDIDO 2026-09-29: con la sesion, RLS DEJA ESCRIBIR estas tablas. La sonda
+  // .openchamber/sonda-rls-escritura.mjs manda un DELETE con un filtro que no puede
+  // matchear nada y solo pregunta por el permiso: HTTP 204 en las 11 tablas de
+  // catalogo y en las del plan, o sea que hay politica de escritura para
+  // `authenticated`. Por eso la escritura desde el navegador es posible y no hace
+  // falta el puente para ningun catalogo.
+
+  /**
+   * Las seis tablas, su clave natural y el mapeo desde el estado. El mapeo es el
+   * INVERSO EXACTO de mapTools, mapSubcontracts, mapCalendar, mapOtConfigurations y
+   * mapArticleConfigurations en supabase-reader.js: si uno de los dos lados cambia un
+   * nombre, el otro tiene que cambiarlo en la misma TASK, porque un guardado y su
+   * lectura tienen que cerrar.
+   */
+  const CATALOGOS = [
+    {
+      tabla: "tools",
+      clave: "codigo",
+      mapear: function (state) {
+        return (Array.isArray(state.toolCatalog) ? state.toolCatalog : []).map(function (item) {
+          return {
+            codigo: texto(item.id),
+            parte: texto(item.part),
+            herramental: texto(item.herramental),
+            kit: texto(item.kitHerramental),
+            tiempo_ajuste_herr: Math.round(numero(item.toolSetupMinutes, 0)),
+            tiempo_ajuste_kit: Math.round(numero(item.kitSetupMinutes, 0)),
+            activo: booleano(item.active, true),
+          };
+        }).filter(function (fila) { return Boolean(fila.codigo); });
+      },
+    },
+    {
+      tabla: "subcontracts",
+      clave: "codigo",
+      mapear: function (state) {
+        return (Array.isArray(state.subcontracts) ? state.subcontracts : []).map(function (item) {
+          return {
+            codigo: texto(item.id),
+            parte: texto(item.part || "*") || "*",
+            tipo: texto(item.name),
+            dias_habiles: Math.round(numero(item.days, 3)) || 3,
+            activo: booleano(item.active, true),
+          };
+        }).filter(function (fila) { return Boolean(fila.codigo) && Boolean(fila.tipo); });
+      },
+    },
+    {
+      tabla: "calendar_exceptions",
+      // Clave NATURAL COMPUESTA: (fecha_inicio, concepto, maquina). No hay una
+      // columna sola, y el id de la tabla es un uuid que el estado no trae. Es la
+      // misma clave que usa el espejo (16-supabase-catalogo.js:181).
+      clave: "fecha_inicio,concepto,maquina",
+      mapear: function (state) {
+        return (Array.isArray(state.calendarExceptions) ? state.calendarExceptions : []).map(function (item) {
+          const inicio = texto(item.startDate);
+          const fin = texto(item.endDate) || inicio;
+          return {
+            // `fecha` es NOT NULL y parte del unique (fecha, concepto, maquina): se
+            // iguala al inicio de la ventana, que es lo que hace el espejo.
+            fecha: inicio || fin || "1970-01-01",
+            fecha_inicio: inicio || null,
+            hora_inicio: texto(item.start),
+            fecha_fin: fin || null,
+            hora_fin: texto(item.end),
+            concepto: texto(item.concepto || item.concept) || "GENERAL",
+            maquina: texto(item.machine),
+            motivo: texto(item.reason),
+            activo: booleano(item.active, true),
+          };
+        }).filter(function (fila) { return Boolean(fila.fecha_inicio); });
+      },
+    },
+    {
+      tabla: "ot_configurations",
+      clave: "ot",
+      mapear: function (state) {
+        const out = [];
+        Object.keys(state.otConfigurations && typeof state.otConfigurations === "object" ? state.otConfigurations : {}).forEach(function (k) {
+          const item = state.otConfigurations[k];
+          if (!item || typeof item !== "object") return;
+          const ot = texto(item.ot || k);
+          if (!ot) return;
+          out.push({
+            ot: ot,
+            maquina: texto(item.machine),
+            kit: texto(item.kitHerramental),
+            kit_pendiente: booleano(item.kitPending, false),
+            tipo_subcontrato: texto(item.subcontractType),
+            dias_subcontrato: Math.round(numero(item.subcontractDays, 0)),
+            herramental: texto(item.herramental),
+            // jsonb: SIEMPRE arreglo, nunca cadena. Una columna jsonb con texto que no
+            // es JSON revienta el INSERT de la tabla entera (ver jsonb()).
+            herramentales_extra: listaDeHerramentales(item.additionalHerramentales),
+            actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
+          });
+        });
+        return out;
+      },
+    },
+    {
+      tabla: "article_configurations",
+      clave: "articulo",
+      mapear: function (state) {
+        const out = [];
+        Object.keys(state.articleConfigurations && typeof state.articleConfigurations === "object" ? state.articleConfigurations : {}).forEach(function (k) {
+          const item = state.articleConfigurations[k];
+          if (!item || typeof item !== "object") return;
+          const articulo = texto(item.article || k).toUpperCase();
+          if (!articulo) return;
+          out.push({
+            articulo: articulo,
+            tipo_ot: texto(item.jobType).toUpperCase(),
+            tipo_trabajo: texto(item.planningType).toUpperCase(),
+            precio_manual: numero(item.manualUnitPrice, 0),
+            // precio_ref_venta NO se escribe: lo baja el sync con el precio de venta de
+            // NetSuite (RULE-REP-021) y es distinto del PRECIO_MANUAL que escribe una
+            // persona. Mandarlo seria pisar el dato del ERP con el de la pagina.
+            actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
+          });
+        });
+        return out;
+      },
+    },
+    {
+      tabla: "machine_planning_overrides",
+      clave: "machine_nombre",
+      // Una fila por maquina APARTADA, y solo esas: la tabla registra la decision de
+      // no agendar en una maquina (RULE-SUP-017). `machines` NO se escribe desde
+      // aqui porque la reescribe entera el RESTlet 2246 cada 15 minutos.
+      mapear: function (state) {
+        const out = [];
+        (Array.isArray(state.machines) ? state.machines : []).forEach(function (item) {
+          const nombre = texto(item.id);
+          if (!nombre) return;
+          if (item.excluded !== true) return;
+          out.push({ machine_nombre: nombre.toUpperCase(), excluida: true, actualizado: instante(new Date().toISOString()) });
+        });
+        return out;
+      },
+    },
+  ];
+
+  /** HERRAMENTALES_EXTRA_JSON: el estado trae un arreglo y la columna es jsonb. */
+  function listaDeHerramentales(valor) {
+    if (Array.isArray(valor)) {
+      const out = [];
+      const vistos = {};
+      valor.forEach(function (item) {
+        const t = texto(item);
+        if (!t || vistos[t]) return;
+        vistos[t] = true;
+        out.push(t);
+      });
+      return out;
+    }
+    return jsonb(valor, []);
+  }
+
+  /**
+   * El filtro de un DELETE por clave natural COMPUESTA, en el `and=(...)` que
+   * PostgREST entiende. Sin comillas porque los tres valores de la clave de
+   * calendar_exceptions son fecha, concepto y maquina: texto sin espacios ni
+   * comas, que es justo lo que se valida antes de armar el filtro.
+   */
+  function condicionDeClave(tabla, clave) {
+    if (tabla !== "calendar_exceptions") return clave + "=eq." + encodeURIComponent(clave);
+    const partes = String(clave).split("|");
+    if (partes.length !== 3) return null;
+    return "and=(fecha_inicio.eq." + encodeURIComponent(partes[0]) +
+      ",concepto.eq." + encodeURIComponent(partes[1]) +
+      ",maquina.eq." + encodeURIComponent(partes[2]) + ")";
+  }
+
+  /** La clave de la fila, tal como se guarda en `clavesLeidas`. */
+  function claveDeFila(def, fila) {
+    if (def.clave === "fecha_inicio,concepto,maquina") {
+      return [texto(fila.fecha_inicio), texto(fila.concepto), texto(fila.maquina)].join("|");
+    }
+    return texto(fila[def.clave]);
+  }
+
+  /**
+   * Lo que la pagina va a escribir. Devuelve tambien las claves: las nuevas y las
+   * que ya estaban, que es lo que permite distinguir "agrego" de "quito".
+   */
+  function armarCatalogos(state) {
+    const out = {};
+    CATALOGOS.forEach(function (def) {
+      let filas = [];
+      try { filas = def.mapear(state) || []; } catch (error) { filas = []; }
+      const claves = {};
+      filas.forEach(function (fila) {
+        const clave = claveDeFila(def, fila);
+        if (clave) claves[clave] = true;
+      });
+      out[def.tabla] = { definicion: def, filas: filas, claves: claves };
+    });
+    return out;
+  }
+
+  /**
+   * ESCRIBE LOS CATALOGOS. Devuelve el informe con la misma forma que el del plan
+   * (ok, tablas, avisos, ms) para que quien llama no tenga dos caminos distintos
+   * para leer un resultado.
+   *
+   * `opciones.clavesLeidas` es lo que el lector vio al arrancar: { tabla: [claves] }.
+   * Sin el, no se borra nada (ver el bloque de arriba).
+   */
+  async function guardarCatalogos(state, opciones) {
+    const opts = opciones || {};
+    const t0 = Date.now();
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: "catalogos" };
+    const datos = state && typeof state === "object" ? state : {};
+
+    if (!isConfigured()) {
+      return sinEscribir(informe, t0, "Supabase no esta configurado en este build: faltan la URL o la clave publicable");
+    }
+    const auth = root.PPSupabaseAuth;
+    if (!auth || typeof auth.token !== "function") {
+      return sinEscribir(informe, t0, "no esta PPSupabaseAuth: no hay quien pida el token de sesion");
+    }
+    const token = await auth.token();
+    if (!token) {
+      return sinEscribir(informe, t0, "no hay sesion de Supabase: entra con tu correo para poder guardar los catalogos. No se escribe nada");
+    }
+    const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+
+    const armado = armarCatalogos(datos);
+    for (const tabla of Object.keys(armado)) {
+      const parte = armado[tabla];
+      const def = parte.definicion;
+      // Subir lo que hay. Anexo, no espejo: nunca borra (ver el bloque de arriba).
+      informe.tablas[tabla] = await escribirAnexo(ctx, tabla, parte.filas, def.clave);
+
+      // Borrar lo que la persona quito, y solo eso.
+      const leidas = opts.clavesLeidas && opts.clavesLeidas[tabla];
+      if (!Array.isArray(leidas)) {
+        if (parte.filas.length) {
+          informe.avisos.push(
+            tabla + ": se.subieron " + parte.filas.length + " fila(s), pero NO se borro ninguna: esta pagina no " +
+            "tiene la lista de lo que se leyo al arrancar, y borrar a ciegas se llevaria filas que la persona " +
+            "todavia no ha visto. Quitar una fila del catalogo en esta carga no se refleja hasta recargar."
+          );
+        }
+        continue;
+      }
+      const fuera = leidas.filter(function (clave) { return !parte.claves[clave]; });
+      if (!fuera.length) continue;
+      // Una condicion por fila, y cada una con su propia peticion: un `or=(...)` con
+      // claves compuestas se pone ilegible rapido, y borrar de mas es el fallo caro.
+      let borradas = 0;
+      let error = null;
+      for (const clave of fuera) {
+        const cond = condicionDeClave(tabla, clave);
+        if (!cond) { error = "clave natural ilegible: " + recorte(clave, 60); continue; }
+        try {
+          await pedir(ctx.token, "DELETE", tabla, { condicion: cond });
+          borradas += 1;
+        } catch (e) {
+          error = sano((e && e.message) || e, ctx.secretos);
+          break;
+        }
+      }
+      const previo = informe.tablas[tabla];
+      informe.tablas[tabla] = {
+        insertadas: previo.insertadas,
+        borradas: borradas,
+        error: error || previo.error || null,
+      };
+    }
+
+    // Lo que NO se escribe, dicho. La pagina lo muestra: un "guardado" que se
+    // tragase la mitad de lo que se toco es peor que uno que avisa.
+    if (opts.ambito === "matrix") {
+      informe.avisos.push(
+        "La pestana de Matriz todavia NO se escribe en Supabase desde la pagina: operators, capabilities, " +
+        "operation_catalog y matrix siguen viniendo del espejo de las Hojas. El cambio se ve en esta pagina y " +
+        "no se pierde al recargar, pero todavia no es la fuente."
+      );
+    }
+    return cerrar(informe, t0);
   }
 
   /**
@@ -840,6 +1173,56 @@
         fecha_reapertura: instante(item.reopenedAt, ""),
         revision: revision,
       });
+    });
+    return filas;
+  }
+
+  /**
+   * unconfirmed_work_orders: las marcas de OT "por confirmar" (RULE-OT-051 capa 2).
+   *
+   * POR QUE SE SUBEN COMO ANEXO Y NO COMO ESPEJO. La columna `ot` es UNIQUE, asi que
+   * escribir por clave natural es idempotente y dos paginas no se pisan. Y NO se borra
+   * lo que la pagina ya no trae: una marca que esta en la base y no en esta pantalla
+   * puede ser de OT que esta cerrada en NetSuite y que la pagina todavia no sabe; si se
+   * borrara, se perderia el contador `misses` que es justamente lo que decide cuando la
+   * marca es real (ver mergeUnconfirmedWorkOrderMarks en app.js).
+   *
+   * `first_seen_at` y `last_seen_at` tienen default now() en el DDL, pero se mandan
+   * explicitas: el instante de cuando ESTA pagina vio la OT es el dato, no el de cuando
+   * se escribio la fila.
+   */
+  function filasUnconfirmedWorkOrders(state) {
+    const marcas = state && typeof state.unconfirmedWorkOrders === "object" ? state.unconfirmedWorkOrders : {};
+    const filas = [];
+    Object.keys(marcas).forEach((clave) => {
+      const marca = marcas[clave];
+      if (!marca || typeof marca !== "object") return;
+      const ot = texto(marca.ot !== undefined ? marca.ot : clave);
+      if (!ot) return;
+      filas.push({
+        ot: ot,
+        first_seen_at: instante(marca.firstSeenAt, ""),
+        last_seen_at: instante(marca.lastSeenAt, ""),
+        misses: Math.round(numero(marca.misses, 1)) || 1,
+      });
+    });
+    return filas;
+  }
+
+  /**
+   * closed_work_order_summaries: lo que se recuerda de una OT que se cerro (item, cantidad,
+   * cuando se detecto el cierre). La columna `summary` es jsonb y la forma la fija
+   * mergeClosedWorkOrderSummaries en app.js, que es quien la consume al volver a cargar.
+   */
+  function filasClosedWorkOrderSummaries(state) {
+    const resumenes = state && typeof state.closedWorkOrderSummaries === "object" ? state.closedWorkOrderSummaries : {};
+    const filas = [];
+    Object.keys(resumenes).forEach((clave) => {
+      const resumen = resumenes[clave];
+      if (!resumen || typeof resumen !== "object") return;
+      const ot = texto(resumen.ot !== undefined ? resumen.ot : clave);
+      if (!ot) return;
+      filas.push({ ot: ot, summary: jsonb(resumen, {}) });
     });
     return filas;
   }
@@ -1263,6 +1646,26 @@
       informe.tablas.plan_snapshots = await escribirAnexo(ctx, "plan_snapshots", filasSnapshots(opts.snapshots), "snapshot_id");
     }
 
+    // Las marcas de OT y el resumen de OTs cerradas. Se suben SIEMPRE, no solo con snapshots.
+    // DECIDIDO 2026-09-30: antes de esto, quien las persistia era
+    // `callAppsScript("saveWorkOrderSyncState")`, o sea las Hojas, y solo al pulsar
+    // Sincronizar OTs. Con el sync escribiendo a Supabase, si estas dos no se subieran aqui
+    // las marcas "por confirmar" (RULE-OT-051) y la retencion de OTs cerradas se quedarian
+    // solo en memoria: una recarga las perderia y una OT sin ficha se caeria de la cola.
+    // ANEXO y no espejo: nunca se borra una fila que la pagina ya no conoce (ver la cabecera).
+    informe.tablas.unconfirmed_work_orders = await escribirAnexo(
+      ctx,
+      "unconfirmed_work_orders",
+      filasUnconfirmedWorkOrders(datos),
+      "ot"
+    );
+    informe.tablas.closed_work_order_summaries = await escribirAnexo(
+      ctx,
+      "closed_work_order_summaries",
+      filasClosedWorkOrderSummaries(datos),
+      "ot"
+    );
+
     informe.tablas.app_state = await parchearAppState(ctx, filaAppState(datos, revision));
     return cerrar(informe, t0);
   }
@@ -1435,6 +1838,11 @@
 
   root.PPSupabaseWriter = {
     guardar: guardar,
+    guardarCatalogos: guardarCatalogos,
+    // armarCatalogos() sin red, para probar el mapeo y las claves contra el esquema
+    // sin abrir nada (mismo criterio que armarPayload para el plan).
+    armarCatalogos: armarCatalogos,
+    CATALOGOS: CATALOGOS,
     configure: configure,
     config: configActual,
     isConfigured: isConfigured,
@@ -1450,6 +1858,11 @@
       selectedOts: filasSelectedOts,
       lockedOts: filasLockedOts,
       operationPlanStatuses: filasPlanStatuses,
+      // DECIDIDO 2026-09-30: el sync de OTs escribe a Supabase, asi que las marcas de
+      // "por confirmar" (RULE-OT-051) y la retencion de OTs cerradas tienen que salir por
+      // aqui. Antes las persistia `saveWorkOrderSyncState` en las Hojas.
+      unconfirmedWorkOrders: filasUnconfirmedWorkOrders,
+      closedWorkOrderSummaries: filasClosedWorkOrderSummaries,
       appState: filaAppState,
       snapshots: filasSnapshots,
       events: filasEventos,

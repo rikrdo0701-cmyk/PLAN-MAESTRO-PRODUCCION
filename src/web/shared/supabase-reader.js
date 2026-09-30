@@ -61,6 +61,28 @@
     "work_orders", "operations", "items", "inventory", "sales_orders",
   ]);
 
+  // LAS CUATRO "DE PERSONA", que son lo que la pagina escribe y el puente ya no trae.
+  //
+  // MEDIDO 2026-09-29: sin estas, una pagina que arranca desde Supabase deja a la persona
+  // con la cola vacia (selected_ots), sin bloqueos (locked_ots), sin el historial de
+  // completar/reabrir (operation_plan_statuses) y con la ventana del plan y los ajustes
+  // (app_state) en los valores de muestra. No son un extra: son el estado de la persona.
+  //
+  // QUE NO SE LEE, Y POR QUE. `plan_snapshots` se queda fuera a proposito: son el
+  // HISTORIAL de planes publicados (RULE-OT-005) y la pagina los pide por su cuenta
+  // (loadPlanSnapshots, que hoy va al puente). Leerlos aqui y aplicarlos encima
+  // pisaria el borrador, que es justo lo que la pagina decide al cargar.
+  // DECIDIDO 2026-09-30: se suman `unconfirmed_work_orders` y `closed_work_order_summaries`.
+  // MEDIDO 2026-09-29, antes de esto: las leia NADIE. Quien las persistia era
+  // `callAppsScript("saveWorkOrderSyncState")`, o sea las Hojas, y solo al pulsar
+  // Sincronizar OTs. Con el sync escribiendo a Supabase, si tampoco se leen aqui, la marca
+  // "por confirmar" (RULE-OT-051) y la retencion de OTs cerradas se persistirian en una tabla
+  // que la pagina no consulta: el mismo dato escrito en un sitio y nunca releido.
+  const PERSON_TABLES = [
+    "app_state", "selected_ots", "locked_ots", "operation_plan_statuses",
+    "unconfirmed_work_orders", "closed_work_order_summaries",
+  ];
+
   // HUECOS DE MAPEO Supabase -> shape del estado, MEDIDOS 2026-09-29 contra el esquema REAL
   // desplegado (.openchamber/esquema-supabase.json, el OpenAPI que sirve PostgREST), tabla por
   // tabla y columna por columna. No contra el DDL objetivo: si algo solo existe en un DDL sin
@@ -130,12 +152,47 @@
     );
   }
 
-  function headers() {
+  // POR QUE ESTO ES ASYNC Y BUSCA EL JWT, Y NO SOLO LA CLAVE PUBLICABLE.
+  //
+  // MEDIDO 2026-09-29: con docs/schema-supabase-login-correo.sql aplicado, la clave
+  // publicable ya NO lee nada. Las 18 tablas de la pagina tienen `select to
+  // authenticated`, y con la clave sola la respuesta es HTTP 200 con CERO filas, que
+  // es el peor de los dos mundos: no es un error que se vea, es una pagina vacia.
+  // El rol lo trae el `Authorization: Bearer <JWT>`, que sale de PPSupabaseAuth.token()
+  // (renovado si toca) y que NUNCA se escribe en un archivo ni se imprime.
+  //
+  // SIN SESION NO HAY RESPUESTA, Y ESO SE DICE. Se manda la clave sola (lo que antes
+  // pasaba) y quien llama ve HTTP 200 con 0 filas; `sessionRequired` deja constancia
+  // para que el arranque pueda avisar en vez de pintar una pagina sin matriz que parece
+  // correcta. La escritura nunca cae aqui: esa va por PPSupabaseWriter, que si se
+  // niega a escribir sin token.
+  let avisadoSinSesion = false;
+
+  async function headers(options) {
+    const auth = root.PPSupabaseAuth;
+    let token = null;
+    if (auth && typeof auth.token === "function") {
+      try { token = await auth.token(); } catch (error) { token = null; }
+    }
+    if (token) {
+      avisadoSinSesion = false;
+      return {
+        apikey: config.anonKey,
+        Authorization: "Bearer " + token,
+        Accept: "application/json",
+      };
+    }
+    avisadoSinSesion = true;
     return {
       apikey: config.anonKey,
       Authorization: "Bearer " + config.anonKey,
       Accept: "application/json",
     };
+  }
+
+  /** Sin sesion, la Data API responde 200 con 0 filas. Esto lo dice sin mentir. */
+  function sessionRequired() {
+    return avisadoSinSesion;
   }
 
   function restUrl(table, options) {
@@ -153,7 +210,7 @@
 
   async function readTable(table, options) {
     if (!isConfigured()) throw new Error("Supabase sin configurar (faltan SUPABASE_URL/SUPABASE_ANON_KEY)");
-    const response = await root.fetch(restUrl(table, options), { headers: headers(), cache: "no-store" });
+    const response = await root.fetch(restUrl(table, options), { headers: await headers(), cache: "no-store" });
     if (!response.ok) throw new Error("Supabase " + table + ": HTTP " + response.status);
     return response.json();
   }
@@ -161,7 +218,7 @@
   async function countTable(table) {
     if (!isConfigured()) throw new Error("Supabase sin configurar");
     const response = await root.fetch(restUrl(table, { select: "id", limit: 1 }), {
-      headers: Object.assign(headers(), { Prefer: "count=exact" }),
+      headers: Object.assign(await headers(), { Prefer: "count=exact" }),
       cache: "no-store",
     });
     if (!response.ok) throw new Error("Supabase " + table + ": HTTP " + response.status);
@@ -658,6 +715,116 @@
     });
   }
 
+  // ---- las CUATRO tablas de la persona: el mapeo INVERSO exacto del escritor ----
+  //
+  // Cada fila de aqui sale de la que escribe PPSupabaseWriter (filasSelectedOts,
+  // filasLockedOts, filasPlanStatuses y filaAppState en supabase-writer.js), y el
+  // nombre del campo es el del estado, no el de la columna. Un mapeo que no sea el
+  // inverso exacto no es "un poco peor": es un estado que se guarda y se relee
+  // distinto, y eso no se nota hasta que la cola se desordena sola.
+
+  /**
+   * selected_ots -> la cola. `posicion` es NOT NULL y es el ORDEN MANUAL que puso la
+   * persona (RULE-OT-005, y el comentario del escritor): la app no vuelve a derivar el
+   * orden de las operaciones, asi que aquí se ordena por `posicion` y no por `ot`, que
+   * sería devolver la cola alfabética.
+   */
+  function mapSelectedOts(rows) {
+    return (rows || [])
+      .map(function (row, indice) {
+        return { ot: String(row.ot == null ? "" : row.ot).trim(), posicion: Number(row.posicion == null ? indice : row.posicion) };
+      })
+      .filter(function (item) { return Boolean(item.ot); })
+      .sort(function (a, b) { return a.posicion - b.posicion; })
+      .map(function (item) { return item.ot; });
+  }
+
+  /**
+   * locked_ots -> la lista de bloqueadas. Sin `posicion` en la tabla (el escritor no
+   * la manda), asi que el orden es el que vino, y el estado no lo usa: lo que importa
+   * es el conjunto.
+   */
+  function mapLockedOts(rows) {
+    const out = [];
+    const vistas = {};
+    (rows || []).forEach(function (row) {
+      const ot = String(row.ot == null ? "" : row.ot).trim();
+      if (!ot || vistas[ot]) return;
+      vistas[ot] = true;
+      out.push(ot);
+    });
+    return out;
+  }
+
+  /**
+   * operation_plan_statuses -> el OBJETO indexado por clave que espera
+   * normalizeOperationPlanStatuses (app.js:1739). Los nombres de campo del estado son
+   * `sequence`, `completedAt` y `reopenedAt`; los de la tabla son `secuencia`,
+   * `fecha_completado` y `fecha_reapertura`. `origin` se conserva tal cual, con su
+   * default del escritor ("draft"), porque es lo que decide si la fila pertenece al
+   * borrador o a un plan publicado (statusesForPlanOrigin, app.js:1955).
+   *
+   * `type` NO se inventa: la tabla no lo tiene y el estado lo normaliza a "OPERATION"
+   * cuando no viene (app.js:1747). Mandar un "TOOL_CHANGE" aqui seria afirmar que se
+   * sabe el tipo cuando la columna no lo guardo.
+   */
+  function mapPlanStatuses(rows) {
+    const out = {};
+    (rows || []).forEach(function (row) {
+      const key = String(row.key == null ? "" : row.key).trim();
+      if (!key || out[key]) return;
+      out[key] = {
+        key: key,
+        ot: String(row.ot == null ? "" : row.ot).trim(),
+        sequence: number(row.secuencia),
+        ct: String(row.ct == null ? "" : row.ct).trim(),
+        status: String(row.status == null ? "PENDIENTE" : row.status).trim() || "PENDIENTE",
+        origin: String(row.origin == null ? "draft" : row.origin).trim() || "draft",
+        completedAt: String(row.fecha_completado == null ? "" : row.fecha_completado).trim(),
+        reopenedAt: String(row.fecha_reapertura == null ? "" : row.fecha_reapertura).trim(),
+      };
+    });
+    return out;
+  }
+
+  /**
+   * app_state: la fila UNICA (id = 1, con check), y la ventana del plan con los ajustes.
+   * Devuelve null si no hay fila: es lo que la pagina写入 la primera vez, y "no hay
+   * fila" no es lo mismo que "hay una fila con todo vacio". Quien la aplique decide
+   * con eso, y no se inventa un estado de muestra.
+   *
+   * `last_schedule` es jsonb y ya llega como objeto; `settings`, `plant` y
+   * `report_filters` tambien. Se normalizan igual (jsonb()) para que el estado no
+   * cambie de forma segun si el dato venia de Postgres o de las Hojas, donde era
+   * texto.
+   */
+  function mapAppState(rows) {
+    const fila = (rows || [])[0];
+    if (!fila) return null;
+    return {
+      revision: number(fila.revision),
+      savedAt: String(fila.saved_at == null ? "" : fila.saved_at).trim(),
+      syncedAt: String(fila.synced_at == null ? "" : fila.synced_at).trim(),
+      planStart: String(fila.plan_start == null ? "" : fila.plan_start).trim(),
+      horizonDays: fila.horizon_days == null || fila.horizon_days === "" ? null : number(fila.horizon_days),
+      reportWeekStart: String(fila.report_week_start == null ? "" : fila.report_week_start).trim(),
+      reportFilters: objeto(fila.report_filters, {}),
+      settings: objeto(fila.settings, {}),
+      plant: objeto(fila.plant, {}),
+      operationCatalogWarning: String(fila.operation_catalog_warning == null ? "" : fila.operation_catalog_warning).trim(),
+      lastSchedule: objeto(fila.last_schedule, null),
+    };
+  }
+
+  /** jsonb que puede venir como objeto o como texto (asi lo guardaba la Hoja). */
+  function objeto(valor, porDefecto) {
+    if (valor === null || valor === undefined) return porDefecto;
+    if (typeof valor === "object") return valor;
+    const texto = String(valor).trim();
+    if (!texto) return porDefecto;
+    try { return JSON.parse(texto); } catch (error) { return porDefecto; }
+  }
+
   function mapMaterials(rows) {
     return (rows || []).map(function (row) {
       return {
@@ -702,6 +869,46 @@
     });
   }
 
+  /**
+   * unconfirmed_work_orders -> el objeto de marcas por folio que el estado espera
+   * (`state.unconfirmedWorkOrders`), que consume mergeUnconfirmedWorkOrderMarks en app.js.
+   *
+   * LA CLAVE ES EL FOLIO y no el id de la fila, porque la marca se identifica por OT: el id es
+   * un uuid que el estado nunca vio. Se devuelve un OBJETEO (no una lista) para que
+   * applyImported la pueda unir con las marcas locales sin mas trabajo.
+   */
+  function mapUnconfirmedWorkOrders(rows) {
+    const marcas = {};
+    (rows || []).forEach(function (row) {
+      const ot = String(row.ot == null ? "" : row.ot).trim();
+      if (!ot) return;
+      marcas[ot] = {
+        ot: ot,
+        firstSeenAt: String(row.first_seen_at == null ? "" : row.first_seen_at),
+        lastSeenAt: String(row.last_seen_at == null ? "" : row.last_seen_at),
+        misses: Math.max(1, Math.round(number(row.misses))),
+      };
+    });
+    return marcas;
+  }
+
+  /**
+   * closed_work_order_summaries -> `state.closedWorkOrderSummaries`, tambien por folio.
+   * La columna `summary` es jsonb y guarda lo que la pagina ya escribio, asi que se devuelve
+   * tal cual; si viniera como texto (la columna lo permite en otras tablas), se parsea.
+   */
+  function mapClosedWorkOrderSummaries(rows) {
+    const resumenes = {};
+    (rows || []).forEach(function (row) {
+      const ot = String(row.ot == null ? "" : row.ot).trim();
+      if (!ot) return;
+      const contenido = objeto(row.summary, null);
+      if (!contenido || typeof contenido !== "object") return;
+      resumenes[ot] = Object.assign({}, contenido, { ot: contenido.ot || ot });
+    });
+    return resumenes;
+  }
+
   // UNA TABLA QUE NO SE PUDO LEER NO ES UNA TABLA VACIA. Son dos hechos distintos y el que los
   // confundia perdia datos: si la lectura falla, la rebanada vuelve como undefined, que
   // supabase-catalog-apply.js descarta a proposito (undefined = 'el lector no trajo esto'), y
@@ -716,7 +923,12 @@
   // tabla caida: la reporta en errors para que el llamador decida el fallback.
   async function readCatalogs(options) {
     const opts = options || {};
-    const tables = opts.tables || READ_TABLES;
+    // Las de persona van SIEMPRE, sin opcion para dejarlas fuera: sin ellas la pagina
+    // arranca con la cola vacia y sin el historial de completar/reabrir, que es
+    // perder el estado de la persona, no un detalle de arranque. Ver PERSON_TABLES.
+    const tables = (opts.tables || READ_TABLES).concat(PERSON_TABLES.filter(function (t) {
+      return (opts.tables || READ_TABLES).indexOf(t) < 0;
+    }));
     const rows = {};
     const errors = {};
     await Promise.all(tables.map(async function (table) {
@@ -778,9 +990,24 @@
       source: "supabase",
       schemaVersion: "supabase-reader/1",
       catalogs: catalogs,
-      // operations: el plan. supabase-catalog-apply.js NO lo aplica a proposito (el plan
-      // sigue viniendo del puente); se mapea para que la sonda y el arranque puedan
-      // compararlo con el del puente, y las columnas que faltan estan en MAPPING_GAPS.
+      // LAS CUATRO DE PERSONA, con el mismo criterio que las rebanadas: undefined es
+      // 'el lector no trajo esto' (la tabla cayo) y un valor, aunque vacio, es 'no
+      // hay'. selectedOts/lockedOts son listas de OT y operationPlanStatuses el objeto
+      // por clave; appState es la fila unica o null si todavia no existe ninguna.
+      selectedOts: siSePudoLeer(rows, "selected_ots", mapSelectedOts(rows.selected_ots)),
+      lockedOts: siSePudoLeer(rows, "locked_ots", mapLockedOts(rows.locked_ots)),
+      operationPlanStatuses: siSePudoLeer(rows, "operation_plan_statuses", mapPlanStatuses(rows.operation_plan_statuses)),
+      appState: siSePudoLeer(rows, "app_state", mapAppState(rows.app_state)),
+      // Las marcas de OT y el resumen de las OTs cerradas (DECIDIDO 2026-09-30, con el sync
+      // escribiendo a Supabase). Los dos con el criterio de las de arriba: undefined si la
+      // tabla no se pudo leer, {} de verdad si se leyo vacia.
+      unconfirmedWorkOrders: siSePudoLeer(rows, "unconfirmed_work_orders", mapUnconfirmedWorkOrders(rows.unconfirmed_work_orders)),
+      closedWorkOrderSummaries: siSePudoLeer(rows, "closed_work_order_summaries", mapClosedWorkOrderSummaries(rows.closed_work_order_summaries)),
+      // operations: el plan. MEDIDO 2026-09-29: el arranque (supabase-catalog-apply.js)
+      // lo mete por aplicarEstadoDesdeSupabase -> applyImported, que es la funcion que
+      // reconcilia. Lo que NO se puede representar son las columnas ausentes, y estan
+      // en MAPPING_GAPS: leer de aqui deja el plan sin num, parte, contenido,
+      // prioridad, fechaReq ni log.
       operations: mapOperations(rows.operations),
       workOrders: mapWorkOrders(rows.work_orders),
       materials: mapMaterials(rows.materials),
@@ -807,6 +1034,8 @@
     // que no existia.
     config: function () { return { url: config.url, anonKey: config.anonKey }; },
     isConfigured: isConfigured,
+    sessionRequired: sessionRequired,
+    PERSON_TABLES: PERSON_TABLES,
     readTable: readTable,
     countTable: countTable,
     status: status,
@@ -825,6 +1054,15 @@
     mapOperations: mapOperations,
     mapSubcontracts: mapSubcontracts,
     mapWorkOrders: mapWorkOrders,
+    // Los cuatro inversos del escritor, para poder probarlos SIN red: la pareja
+    // mapear->mapear es la que demuestra que un guardado y su lectura se cierran.
+    mapSelectedOts: mapSelectedOts,
+    mapLockedOts: mapLockedOts,
+    mapPlanStatuses: mapPlanStatuses,
+    mapAppState: mapAppState,
+    // Los inversos de las dos tablas que se agregaron para el sync (DECIDIDO 2026-09-30).
+    mapUnconfirmedWorkOrders: mapUnconfirmedWorkOrders,
+    mapClosedWorkOrderSummaries: mapClosedWorkOrderSummaries,
     // La regla de las fechas se exporta para que se pueda probar SOLA, sobre un valor, sin
     // montar una lectura: es la parte del lector que mas dano hace si se cambia por error.
     partirFechaTexto: partirFechaTexto,

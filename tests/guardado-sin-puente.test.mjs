@@ -1,4 +1,4 @@
-// Un cambio hecho con la pagina todavia cargandose no puede perderse.
+﻿// Un cambio hecho con la pagina todavia cargandose no puede perderse.
 //
 // MEDIDO 2026-09-29. El usuario anadio una maquina en la pestana de catalogos y
 // aviso de que "GitHub se tardo en cargar la informacion". El guardado NO llego
@@ -13,10 +13,15 @@
 //
 //  2. Al terminar un guardado, el `finally` reencolaba con queueAppSheetSave() sin
 //     ambito. Su valor por omision es "plan", que se mete en appSheetDirtyScopes.
-//     Si lo pendiente era "catalogs", el conjunto quedaba {catalogs, plan} y
-//     appSheetSaveMethodForScopes caia en saveAppState en vez de saveCatalogState.
-//     Y saveAppState -> PP_writeState_ no escribe las hojas de catalogo ni dispara
-//     el espejo: el cambio se guardaba a medias sin decir nada.
+//     Si lo pendiente era "catalogs", el conjunto quedaba {catalogs, plan} y el
+//     metodo se elegia con appSheetSaveMethodForScopes, que caia en saveAppState en
+//     vez de saveCatalogState. Y saveAppState -> PP_writeState_ no escribe las hojas de
+//     catalogo ni dispara el espejo: el cambio se guardaba a medias sin decir nada.
+//
+//     ESTE DEFECTO SE REESCRIBIO EL 2026-09-30 en vez de quedar historico. La funcion
+//     que elegia el metodo del puente se borro (no hay metodo del puente que elegir), y
+//     los tests de mas abajo fijan el invariante que la reemplaza: el ambito decide SI se
+//     suben catalogos y con que escritor, no a donde se escribe el plan.
 //
 //  3. No habia nada que volcara lo pendiente cuando el puente quedaba disponible.
 //
@@ -27,6 +32,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { sinComentarios } from "./helpers/sin-comentarios.mjs";
 
 const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 
@@ -40,11 +46,12 @@ function bloque(desde, hasta) {
 }
 
 const FUENTES = [
+  bloque("function appSheetDisponible(", "let appSheetSaveTimer"),
   bloque("function queueAppSheetSave(", "/**"),
   bloque("function appSheetMarkDirtyScope(", "function appSheetConsumeDirtyScopes"),
   bloque("function appSheetFlushPendingScopes(", "function appSheetConsumeDirtyScopes"),
-  bloque("function appSheetConsumeDirtyScopes(", "function appSheetSaveMethodForScopes"),
-  bloque("function appSheetSaveMethodForScopes(", "function purgeClosedWorkOrderRetention"),
+  bloque("function appSheetConsumeDirtyScopes(", "function purgeClosedWorkOrderRetention"),
+  bloque("function ambitosDeCatalogo(", "async function saveAppSheet("),
 ].join("\n");
 
 /** Monta el contexto con el estado que describe el escenario. */
@@ -58,6 +65,21 @@ function escenario({ disponible = false, enVuelo = false, sucias = [] } = {}) {
     appSheetSaveTimer: null,
     operationStatusSavesInFlight: false,
     appSheetDirtyScopes: new Set(sucias),
+    // El escenario de este archivo es SIEMPRE "el puente de Apps Script", que es lo
+    // que se deja sin conectar. Por eso se monta como tal la puerta real de app.js
+    // (appSheetDisponible, que se extrae aqui arriba): sin el, la pagina guardaria
+    // igual porque Supabase este configurado, y estos scenarios dejarian de describir
+    // lo que describen.
+    isAppsScriptRuntime: () => true,
+    // MEDIDO 2026-09-29 en el navegador: `isAppsScriptRuntime` miente en el sitio estatico
+    // (los dos instaladores lo dejan en "el puente esta configurado"), y por eso el guardado
+    // del plan se iba por callAppsScript. `enRuntimeAppsScript` es el predicado que responde
+    // la pregunta de verdad: google.script.run solo existe dentro de HtmlService. El escenario
+    // de este archivo es "el puente de Apps Script", asi que aqui es true.
+    // MEDIDO 2026-09-29: el nombre lleva S mayuscula, como `isAppsScriptRuntime`. Con la
+    // minuscula el arnes montaba una global que app.js no pide y los tests fallaban con
+    // `ReferenceError: enRuntimeAppsScript is not defined`; el fallo NO era del codigo.
+    enRuntimeAppsScript: () => true,
     window: {
       clearTimeout: (t) => temporizadores.push(["clear", t]),
       setTimeout: (fn, ms) => {
@@ -104,22 +126,37 @@ test("al quedar disponible el puente, lo pendiente se guarda con SU ambito", () 
   // son iguales aunque tengan lo mismo. Se copia al realm del test con spread.
   const ambitos = [...ctx.appSheetConsumeDirtyScopes()];
   assert.deepEqual(ambitos, ["catalogs"]);
-  assert.equal(ctx.appSheetSaveMethodForScopes(ambitos), "saveCatalogState");
+  assert.deepEqual([...ctx.ambitosDeCatalogo(ambitos)], ["catalogs"], "y el ambito llega como ambito, sin que nadie lo convierta en metodo");
   assert.deepEqual([...guardados], [], "el setTimeout aun no se ha ejecutado");
 });
 
-test("el metodo se elige por el ambito: catalogs no cae en saveAppState", () => {
-  // Este es el defecto 2. Con "plan" metido por el reencolado del finally, el
-  // conjunto es {catalogs, plan} y el metodo se va a saveAppState, que no escribe
-  // las hojas de catalogo ni dispara el espejo.
+test("el ambito NO elige metodo del puente: elige si se suben catalogos", () => {
+  // Este es el defecto 2, ya reescrito. Antes el ambito se traducía a un METODO DEL
+  // PUENTE (saveAppState / saveCatalogState / saveSkillState) y "catalogs" con "plan"
+  // mezclados caian en saveAppState, que no sube catalogos. Hoy no hay metodo que elegir:
+  // el plan se sube siempre por el mismo escritor, y el ambito solo decide si encima
+  // se escriben catalogos. Por eso "catalogs" + "plan" YA NO es un caso peligroso.
   const { ctx } = escenario({ disponible: true });
   ctx.appSheetDirtyScopes.add("catalogs");
   ctx.appSheetDirtyScopes.add("plan");
-  assert.equal(ctx.appSheetSaveMethodForScopes([...ctx.appSheetDirtyScopes]), "saveAppState");
-  // Y el veto: sin "plan" de por omision, el ambito llega solo.
-  const limpio = escenario({ disponible: true });
-  limpio.ctx.appSheetDirtyScopes.add("catalogs");
-  assert.equal(limpio.ctx.appSheetSaveMethodForScopes(["catalogs"]), "saveCatalogState");
+  assert.deepEqual([...ctx.ambitosDeCatalogo(["catalogs", "plan"])], ["catalogs"],
+    "con plan mezclado los catalogos SI se suben: antes este era el fallo");
+  const soloPlan = escenario({ disponible: true });
+  soloPlan.ctx.appSheetDirtyScopes.add("plan");
+  assert.deepEqual([...soloPlan.ctx.ambitosDeCatalogo(["plan"])], [],
+    "un guardado que no toco catalogos no sube cientos de filas de catalogo");
+  // Y la funcion que traducía ambitos a metodos del puente no existe. Se fija con
+  // doesNotMatch y no borrando el test: si alguien la vuelve a pegar con su tabla de
+  // metodos, este es el que avisa.
+  assert.doesNotMatch(app, /function appSheetSaveMethodForScopes/,
+    "no hay eleccion de metodo del puente: el destino es uno solo");
+  // Y el guardado del plan no nombra ningun metodo del puente. El recorte va por el
+  // CUERPO de saveAppSheet y con los comentarios FUERA, porque los nombres borrados
+  // sobreviven en comentarios que los explican: buscarlos en el archivo crudo daria un
+  // falso positivo y la asercion no probaria nada.
+  const cuerpo = sinComentarios(bloque("async function saveAppSheet(", "function appSheetMarkDirtyScope"));
+  assert.doesNotMatch(cuerpo, /callAppsScript|PPAppsScriptBridge|saveCatalogState|saveSkillState|saveAppState|savePlanningStateOptimized/,
+    "el unico destino de saveAppSheet es Supabase: guardarPlanEnSupabase y guardarCatalogosEnSupabase");
 });
 
 test("el finally NO mete 'plan' de por omision al reencolar", () => {
@@ -143,7 +180,7 @@ test("el finally NO mete 'plan' de por omision al reencolar", () => {
   assert.match(
     cuerpo,
     /if \(appSheetDirtyScopes\.size\) \{[\s\S]*?saveAppSheet\(false\);[\s\S]*?\} else \{\s*queueAppSheetSave\(\);/,
-    "con ambitos marcados hay que reprogramar el temporizador, no reencolar con 'plan': reencolar con 'plan' mete \"plan\" en el conjunto y appSheetSaveMethodForScopes cae en saveAppState, que no escribe las hojas de catalogo ni dispara el espejo"
+    "con ambitos marcados hay que reprogramar el temporizador, no reencolar con 'plan': reencolar con 'plan' meta \"plan\" en el conjunto, y antes eso hacia que el metodo cayera en saveAppState, que no escribe las hojas de catalogo ni dispara el espejo"
   );
 });
 
@@ -166,4 +203,95 @@ test("los ambitos 'local' y 'ui' no se guardan en el servidor", () => {
   ctx.queueAppSheetSave("local");
   ctx.queueAppSheetSave("ui");
   assert.equal(ctx.appSheetDirtyScopes.size, 0, "estos ambitos son solo de la interfaz");
+});
+
+// ---------------------------------------------------------------------------
+// EL MOTIVO DEL FALLO DE GUARDADO
+// ---------------------------------------------------------------------------
+//
+// MEDIDO 2026-09-30 en el navegador: el toast decia "No se pudo guardar el plan: fallo
+// desconocido" mientras el escritor sabia la tabla y el error. Motivo medido: `cerrar()`
+// (supabase-writer.js) deja `ok:false` cuando alguna tabla de `informe.tablas` tiene `error`, y
+// `informe.motivo` solo se llena en `sinEscribir()`, o sea cuando NO se hizo ninguna peticion.
+// El camino viejo es el que llena el error por tabla y el que nunca pone `motivo`.
+//
+// O sea que el mensaje que se leia era el del camino sin motivo, aplicado al camino con
+// motivo. No era un fallo del guardado: era el toast escondiendo la respuesta que ya estaba
+// en el objeto que acababa de recibir.
+//
+// Estos tests extraen la funcion y la corren con informes reales del escritor, no
+// reimplementan la regla: un test que reimplementa el mensaje probaria el test.
+test("un ok false dice QUE tabla fallo y con que error, no 'fallo desconocido'", () => {
+  // El corte es por la SIGUIENTE FIRMA, no por el comentario que la abre: cortar en un
+  // `/**` deja la estrella y la barra sueltas en el bloque, y `vm` las lee como codigo y
+  // contesta SyntaxError. El error sale como "Invalid or unexpected token" en la linea 20 del
+  // bloque, que no dice nada de app.js, y es el sintoma de un corte mal puesto.
+  const cuerpo = bloque("function motivoDelInforme(", "async function guardarPlanEnSupabase(");
+  const ctx = { String, Object, Array, Number };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(cuerpo, ctx);
+
+  // El caso MEDIDO: el camino viejo, con work_orders en 23505 y el resto bien.
+  const delCaminoViejo = {
+    ok: false,
+    camino: "viejo",
+    // `motivo` vacio a proposito: asi es como llega de verdad.
+    tablas: {
+      operations: { insertadas: 1026, error: null },
+      work_orders: { insertadas: 0, error: 'HTTP 409: {"code":"23505","message":"duplicate key value violates unique constraint \\"work_orders_ot_key\\""}' },
+      materials: { insertadas: 361, error: null },
+      selected_ots: { insertadas: 15, error: null },
+    },
+  };
+  const dicho = ctx.motivoDelInforme(delCaminoViejo);
+  assert.match(dicho, /work_orders/, "tiene que decir QUE tabla fallo: " + dicho);
+  assert.match(dicho, /work_orders_ot_key/, "y con que error, que es lo que hace falta para arreglarlo: " + dicho);
+  assert.doesNotMatch(dicho, /fallo desconocido/,
+    "'fallo desconocido' es lo que se estaba mostrando con el informe en la mano");
+
+  // Un fallo de la LLAMADA manda sobre el de una tabla: `motivo` es mas especifico.
+  assert.equal(
+    ctx.motivoDelInforme({ ok: false, motivo: "no hay sesion de Supabase", tablas: { app_state: { error: "401" } } }),
+    "no hay sesion de Supabase"
+  );
+
+  // Y el caso sin informacion util: se dice que NO HAY MOTIVO, sin inventar uno. El texto
+  // exacto es "no dio motivo" y no "sin motivo", asi que la asercion va sobre lo que
+  // significa y no sobre una palabra suelta: cambiar la redaccion del mensaje no es un
+  // fallo, pero callar el motivo si.
+  assert.match(ctx.motivoDelInforme({ ok: false, tablas: {} }), /no dio motivo/i);
+  assert.match(ctx.motivoDelInforme({ ok: false }), /no dio motivo/i,
+    "un informe sin tablas tampoco puede decir 'fallo desconocido': se dice que no dio motivo");
+  assert.doesNotMatch(ctx.motivoDelInforme({ ok: false }), /fallo desconocido/);
+
+  // Con MUCHAS tablas que fallan, los nombres van todos y el detalle va al primero, que es
+  // el que identifica la peticion que hay que arreglar.
+  const muchas = { ok: false, tablas: {} };
+  for (const t of ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"]) {
+    muchas.tablas[t] = { error: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
+  }
+  const resumen = ctx.motivoDelInforme(muchas);
+  for (const t of ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"]) {
+    assert.ok(resumen.includes(t), "con seis tablas que fallan hay que nombrar las seis: falta " + t + " en " + resumen);
+  }
+  assert.match(resumen, /6 tablas con error/);
+  assert.match(resumen, /El primero/, "y se dice cual es el detalle completo");
+});
+
+test("los dos caminos de guardado usan el motivo del informe, no un texto fijo", () => {
+  // Si uno de los dos vuelve a `informe.motivo || "fallo desconocido"`, la persona vuelve a
+  // ver "fallo desconocido" con el motivo a mano. Se fija sobre el CODIGO de las dos, con
+  // comentarios fuera: el texto vive en comentarios que explican el defecto, asi que
+  // buscarlo en el crudo daria un falso positivo.
+  for (const [nombre, fin] of [
+    ["async function guardarPlanEnSupabase(", "function guardarSyncDeOrdenesTrabajoEnSupabase"],
+    ["async function guardarCatalogosEnSupabase(", "function appSheetMarkDirtyScope"],
+  ]) {
+    const cuerpo = sinComentarios(bloque(nombre, fin));
+    assert.ok(cuerpo.length > 0, "no se encontro el cuerpo de " + nombre);
+    assert.match(cuerpo, /motivoDelInforme\(informe\)/, nombre + " tiene que leer el motivo del informe");
+    assert.doesNotMatch(cuerpo, /fallo desconocido/,
+      nombre + ": volvio el texto fijo, que es lo que se vio MEDIDO 2026-09-30");
+  }
 });

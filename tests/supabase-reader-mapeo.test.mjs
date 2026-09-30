@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 
 const readerSource = await readFile(new URL("../src/web/shared/supabase-reader.js", import.meta.url), "utf8");
 
@@ -425,6 +426,117 @@ test("una tabla que NO se pudo leer no llega como vacia: llega como undefined", 
   const vacia = await catalogsDe({ tools: [], calendar_exceptions: [] }, ["tools", "calendar_exceptions"]);
   assert.deepEqual(vacia.catalogs.toolCatalog, [], "si se leyo y esta vacia, [] es informacion real");
   assert.deepEqual(vacia.catalogs.calendarExceptions, []);
+});
+
+// ---------------------------------------------------------------------------
+// LAS DOS TABLAS DEL SYNC: MARCAS DE OT Y RESUMEN DE LAS CERRADAS
+// ---------------------------------------------------------------------------
+//
+// QUE SE ROMPE SI NO SE LEEN. DECIDIDO 2026-09-30: el sync de OTs escribe a Supabase (no a
+// las Hojas, via `saveWorkOrderSyncState`). El escritor sube las dos tablas como anexo, pero
+// si el lector no las trae, el dato se escribe en un sitio que la pagina no consulta: la
+// marca "por confirmar" (RULE-OT-051) y la retencion de OTs cerradas se acumulan en la base
+// y no vuelven nunca a la pantalla. El sintoma es invisible — no hay error, solo un contador
+// `misses` que sube y una OT cerrada que se cuelga en la cola para siempre.
+
+test("unconfirmed_work_orders: la marca se lee por FOLIO, con su contador y sus dos instantes", async () => {
+  const leido = await catalogsDe({
+    unconfirmed_work_orders: [
+      { id: "uuid-1", ot: "WO-1", first_seen_at: "2026-08-01T00:00:00.000Z", last_seen_at: "2026-08-03T00:00:00.000Z", misses: 2 },
+    ],
+  }, ["unconfirmed_work_orders"]);
+
+  assert.deepEqual(copiar(leido.unconfirmedWorkOrders), {
+    "WO-1": { ot: "WO-1", firstSeenAt: "2026-08-01T00:00:00.000Z", lastSeenAt: "2026-08-03T00:00:00.000Z", misses: 2 },
+  });
+  // El `id` de la fila NO puede ser la clave: es un uuid que el estado nunca vio. Si se
+  // colara, mergeUnconfirmedWorkOrderMarks en app.js no encontraria la marca de la sesion.
+  assert.equal("uuid-1" in leido.unconfirmedWorkOrders, false);
+});
+
+test("unconfirmed_work_orders: una tabla leida y vacia es {} de verdad, y una caida es undefined", async () => {
+  const vacia = await catalogsDe({ unconfirmed_work_orders: [] }, ["unconfirmed_work_orders"]);
+  assert.deepEqual(copiar(vacia.unconfirmedWorkOrders), {}, "vacia de verdad: no hay ninguna OT por confirmar");
+
+  const caida = await catalogsDe({}, ["unconfirmed_work_orders"]);
+  assert.equal(caida.unconfirmedWorkOrders, undefined, "si la tabla cayo, no se pisa lo que habia");
+  assert.ok(caida.errors.unconfirmed_work_orders, "y el motivo queda en errors");
+});
+
+test("unconfirmed_work_orders: un misses que no es numero se guarda como 1, nunca como 0", async () => {
+  // misses=0 diria que la OT ya no falta, y la marca se resolveria sin evidencia. El piso es
+  // 1: una fila en esta tabla significa, por definicion, que la OT no vino.
+  const leido = await catalogsDe({
+    unconfirmed_work_orders: [{ ot: "WO-2", first_seen_at: "2026-08-01T00:00:00.000Z", last_seen_at: "2026-08-01T00:00:00.000Z", misses: 0 }],
+  }, ["unconfirmed_work_orders"]);
+  assert.equal(copiar(leido.unconfirmedWorkOrders)["WO-2"].misses, 1);
+});
+
+test("closed_work_order_summaries: el jsonb se devuelve como OBJETO por folio, no como texto", async () => {
+  const leido = await catalogsDe({
+    closed_work_order_summaries: [
+      { ot: "WO-9", summary: { finalStatus: "CERRADA", closedDetectedAt: "2026-08-05T00:00:00.000Z" } },
+    ],
+  }, ["closed_work_order_summaries"]);
+
+  assert.deepEqual(copiar(leido.closedWorkOrderSummaries), {
+    "WO-9": { finalStatus: "CERRADA", closedDetectedAt: "2026-08-05T00:00:00.000Z", ot: "WO-9" },
+  });
+  assert.equal(typeof leido.closedWorkOrderSummaries["WO-9"], "object");
+});
+
+test("closed_work_order_summaries: un summary vacio o ilegible NO crea una ficha fantasma", async () => {
+  // Una fila sin contenido no es un resumen. Si se aceptara, mergeClosedWorkOrderSummaries
+  // pondria una entrada {} para una OT y la pagina creeria que la OT tiene historial.
+  const leido = await catalogsDe({
+    closed_work_order_summaries: [
+      { ot: "WO-A", summary: null },
+      { ot: "WO-B", summary: "no es json" },
+      { ot: "WO-C", summary: { finalStatus: "CERRADA" } },
+    ],
+  }, ["closed_work_order_summaries"]);
+
+  assert.deepEqual(Object.keys(copiar(leido.closedWorkOrderSummaries)), ["WO-C"]);
+});
+
+test("las dos tablas del sync se leen SIEMPRE, sin depender de la lista de tablas", async () => {
+  // Son "de persona": sin ellas la pagina arranca sin las marcas de OT ni el historial de
+  // las cerradas. Se anaden solas a la lista de lectura, igual que las otras cuatro: por eso
+  // aqui se piden solo `tools` y las dos igual llegan (vacias, porque en la base no hay).
+  const leido = await catalogsDe(
+    { tools: [], unconfirmed_work_orders: [], closed_work_order_summaries: [] },
+    ["tools"],
+  );
+  assert.deepEqual(copiar(leido.unconfirmedWorkOrders), {});
+  assert.deepEqual(copiar(leido.closedWorkOrderSummaries), {});
+});
+
+// LA PAREJA mapear -> mapear. Es el unico test que demuestra que un guardado y su lectura se
+// CIERRAN: los dos mappers por separado pueden estar bien y aun asi no hablarse (por ejemplo
+// si uno guardara `firstSeenAt` y el otro leyera `first_seen_at`). Se monta el ESCRITOR
+// REAL junto al LECTOR REAL, sin red: `mapear` no abre nada.
+test("el ciclo de las marcas de OT se cierra: lo que el escritor manda, el lector lo devuelve igual", () => {
+  const writerSource = readFileSync(new URL("../src/web/shared/supabase-writer.js", import.meta.url), "utf8");
+  const contexto = { console, JSON, Object, Array, Promise, Date, String, Number, Boolean, Error, Math, isNaN };
+  contexto.globalThis = contexto;
+  vm.createContext(contexto);
+  vm.runInContext(writerSource, contexto, { filename: "supabase-writer.js" });
+  const writer = contexto.PPSupabaseWriter;
+
+  const estado = {
+    unconfirmedWorkOrders: {
+      "3177": { ot: "3177", firstSeenAt: "2026-09-20T10:00:00.000Z", lastSeenAt: "2026-09-29T17:50:00.000Z", misses: 3 },
+    },
+    closedWorkOrderSummaries: {
+      "3631": { ot: "3631", finalStatus: "CERRADA", closedDetectedAt: "2026-09-29T17:00:00.000Z" },
+    },
+  };
+
+  const marcas = writer.mapear.unconfirmedWorkOrders(estado);
+  assert.deepEqual(copiar(reader.mapUnconfirmedWorkOrders(marcas)), copiar(estado.unconfirmedWorkOrders));
+
+  const resumenes = writer.mapear.closedWorkOrderSummaries(estado);
+  assert.deepEqual(copiar(reader.mapClosedWorkOrderSummaries(resumenes)), copiar(estado.closedWorkOrderSummaries));
 });
 
 // ---------------------------------------------------------------------------

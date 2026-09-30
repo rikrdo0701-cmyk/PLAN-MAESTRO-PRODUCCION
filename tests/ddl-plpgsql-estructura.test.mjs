@@ -33,6 +33,18 @@ import path from "node:path";
  *   - `for update`, `for share` y `for no key update` son clausulas de bloqueo de fila
  *     de un SELECT, no bucles. La linea que mas conviene no romper en este archivo es
  *     justo un `for update`, porque es la que serializa los guardados.
+ *   - LIMITACION 4, MEDIDA 2026-09-30: un `case` de EXPRESION (no de sentencia) cierra con
+ *     `end` pelado, no con `end case`. Este verificador solo conoce `end case`, asi que un
+ *     `case when ... then ... else ... end` usado como valor le hace empujar el `end` de
+ *     mas sobre el `begin` o el `loop` de fuera y reporta tres descuadres inventados sobre
+ *     codigo bueno. Se comprobo en el DDL del plan: el UPDATE de las tres del ERP armaba el
+ *     predicado con un `case` y este test marco "quedan 3 cosas sin cerrar: begin > loop > case"
+ *     en un archivo que Postgres si acepta. Por eso en ese punto del DDL se usa `if`/`end if`,
+ *     que este verificador si ve. NO se "arreglo" el verificador para que acepte el `case`:
+ *     distinguir una expresion de una sentencia con el mismo `case` exige adivinar por el
+ *     contexto, y adivinar aqui abre la puerta a que un `end case` de verdad no se detecte.
+ *     Un verificador que senala codigo bueno entrena a silenciarlo igual que uno que deja
+ *     pasar codigo malo, asi que la limitacion se escribe y el DDL se acomoda a ella.
  */
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

@@ -233,7 +233,12 @@ test("operations, work_orders y materials SOLO se actualizan: nunca insert ni de
   // desde la pagina se llevaria las filas que una sincronizacion metio despues de
   // la ultima carga, y no daria ningun error. Por eso el modo es 'actualiza'.
   const bloque = ddl.slice(ddl.indexOf("LAS TRES DEL ERP"), ddl.indexOf("LAS MARCAS DE RETIRADA"));
-  assert.match(bloque, /update public\.%I t set %s from ex/);
+  // MEDIDO 2026-09-30: esta forma era `... set %s from ex` con un CTE `with ex as (...)`.
+  // Se cambio a `from jsonb_populate_recordset(...) ex` porque el CTE no dejaba distinguir
+  // `t.<columna>` de `ex.<columna>`, y sin esa distincion la clave de la que hangula el
+  // UPDATE quedaba AMBIGUA (42702). Ver el test de la ambiguedad, mas abajo, que es el que
+  // mide el SQL que sale de verdad.
+  assert.match(bloque, /update public\.%I t set %s[\s\S]{0,120}from jsonb_populate_recordset\(null::public\.%I, \$1\) ex/);
   assert.ok(
     !/delete from public\.%I/.test(bloque),
     "no puede haber DELETE en las tres del ERP: destruirian la ingesta de NetSuite que el navegador no conoce"
@@ -251,7 +256,12 @@ test("el update solo toca las columnas que la web decide, y eso sale de una tabl
   // El riesgo del otro lado: un update de fila completa pondria en NULL los datos
   // del ERP que el navegador no trae (descripcion, cantidades, tiempos). Perder
   // datos por no mandarlos es tan grave como perderlos por borrarlos.
-  assert.match(ddl, /v_asignar := \(select string_agg\(quote_ident\(c\)/);
+  // MEDIDO 2026-09-30: el agregado paso a una variable propia (`v_escribibles`) porque
+  // concatenarle la revision antes de mirar si salio NULL hacia a que el `if` jamas se
+  // disparara. Lo que importa aqui es que la lista siga saliendo de la TABLA y no de una
+  // lista escrita a mano en la funcion, y que se exclude lo que la web no decide.
+  assert.match(ddl, /v_escribibles := \(select string_agg\(quote_ident\(c\) \|\| ' = ex\.' \|\| quote_ident\(c\)/);
+  assert.match(ddl, /from unnest\(v_cols\) c\s*\n\s*where c not in \('operation_id','wo_internal_id','ot','line_id'\)/);
   assert.match(ddl, /create table if not exists public\.plan_tabla_escritura/);
   assert.match(ddl, /modo text not null check \(modo in \('actualiza','espejo','anexo','flujo'\)\)/);
   // Y las columnas del ERP tienen que estar EXCLUIDAS de la lista de la web.
@@ -309,6 +319,112 @@ test("las marcas de retirada salen de selected_ots, y no borran la operacion", (
   assert.match(bloque, /v_entrantes/);
   // El actor viene del JWT, no de lo que mande el navegador.
   assert.match(ddl, /v_actor := coalesce\(p_actor, 'desconocido'\)/);
+});
+
+// ---------------------------------------------------------------------------
+// EL UPDATE DE LAS TRES DEL ERP: LA AMBIGUEDAD DE LA CLAVE
+// ---------------------------------------------------------------------------
+//
+// MEDIDO 2026-09-30 en el navegador: /rest/v1/rpc/plan_guardar contestaba HTTP 400 con
+// `{"code":"42702","message":"column reference \"operation_id\" is ambiguous"}` en 13 de 13
+// llamadas. La funcion se caia en la primera tabla del ciclo (operations) con la transaccion
+// sin escribir NADA, y como el escritor no degrada a tabla por tabla cuando la FUNCION da
+// error y no 404, el efecto era que ningun guardado de la pagina llegaba a la base.
+//
+// LA CAUSA. Era `... from ex where %s = any(array(select %s from ex))`, con la columna de la
+// clave sin calificar en el lado de la tabla. `ex` sale de jsonb_populate_recordset de la
+// MISMA tabla, asi que trae todas sus columnas y la clave existe en `t` y en `ex`.
+//
+// QUE COMPRUEBA ESTE TEST Y POR QUE NO BASTA CON MIRAR EL TEXTO. Se simula el `format()` del
+// DDL con las tres claves REALES que declara `plan_tabla_escritura` y se mira el SQL que
+// sale, porque un aserto sobre la cadena del DDL pasaria igual con una clave mal calificada
+// en cualquier parte. Lo que importa es la propiedad: en el `where`, toda referencia a una
+// columna de la clave tiene que llevar el prefijo de su lado (`t.` o `ex.`).
+test("el UPDATE de plan_guardar califica la clave de los dos lados, y no la deja ambigua", () => {
+  // El DDL sin comentarios, por el motivo que ya esta escrito mas arriba en este archivo:
+  // la explicacion del arreglo NOMBRA la forma rota, asi que un detector que lee el archivo
+  // entero se marca su propia explicacion.
+  const codigo = ddl.split(/\r?\n/).filter((linea) => !/^\s*--/.test(linea)).join("\n");
+
+  // La forma rota no puede seguir ahi. Se busca la sentencia completa, no un fragmento,
+  // porque el arreglo cambio las dos mitas a la vez.
+  assert.ok(
+    !/where\s+%s\s*=\s*any\(array\(select\s+%s\s+from\s+ex\)\)/.test(codigo),
+    "volvio `where <clave> = any(array(select <clave> from ex))`: la columna de la clave sale sin calificar en el lado de la tabla y Postgres contesta 42702"
+  );
+  assert.ok(
+    !/with ex as \(select \* from jsonb_populate_recordset/.test(codigo),
+    "el CTE `ex` vuelve: sin el, el lado de la tabla y el lado del payload no se pueden calificar por separado"
+  );
+
+  // El `from` tiene que darle nombre a la fila del payload, y la clave se construye con los
+  // dos prefijos. Esto es lo que hace que la ambiguedad no pueda volver por otra via.
+  assert.match(codigo, /from jsonb_populate_recordset\(null::public\.%I, \$1\) ex/,
+    "el recordset del payload tiene que tener alias: sin alias no hay forma de decir `ex.<columna>`");
+  assert.match(codigo, /'t\.' \|\| quote_ident\(btrim\(c\)\)/,
+    "el lado de la tabla tiene que calificar su columna: sin `t.` la clave es ambigua");
+  assert.match(codigo, /'ex\.' \|\| quote_ident\(btrim\(c\)\)/,
+    "el lado del payload tiene que calificar su columna");
+  // El predicado se arma en su propia variable, y con `if`/`end if` y no con `case`: un
+  // `case` de EXPRESION cierra con `end` pelado y el verificador de estructura plpgsql lo
+  // tomaria por el cierre de otro bloque (limitacion 4 de su cabecera). Con `case` aqui, el
+  // verificador marca este DDL bueno como descuadrado, que es peor que no verificar.
+  assert.match(codigo, /v_where := format\('\(%s\) = \(%s\)', v_izq, v_der\)/,
+    "el predicado de la clave de dos columnas tiene que ser una tupla");
+  assert.match(codigo, /if array_length\(v_claves, 1\) > 1 then\s*\n\s*v_where :=/,
+    "el predicado se decide con un `if`, que el verificador si ve; un `case` de expresion no");
+  assert.ok(
+    !/case when array_length\(v_claves/.test(codigo),
+    "volvio el `case` de expresion: el verificador de plpgsql lo marca como descuadrado y entrena a ignorarlo"
+  );
+
+  // Y AHORA LA SIMULACION, que es la parte que de verdad prueba algo. Se ejecuta el mismo
+  // `format()` del DDL con las claves que el propio DDL declara, y se mira el SQL que sale.
+  const CLAVE_POR_TABLA = { operations: "operation_id", work_orders: "wo_internal_id", materials: "ot,line_id" };
+  for (const [tabla, clave] of Object.entries(CLAVE_POR_TABLA)) {
+    const columnas = clave.split(",").map((c) => c.trim());
+    const izq = columnas.map((c) => "t." + c).join(", ");
+    const der = columnas.map((c) => "ex." + c).join(", ");
+    const predicado = columnas.length > 1 ? `(${izq}) = (${der})` : `${izq} = ${der}`;
+    const sql =
+      "update public." + tabla + " t set \"fecha_inicio\" = ex.\"fecha_inicio\", revision = 43 " +
+      "from jsonb_populate_recordset(null::public." + tabla + ", $1) ex where " + predicado;
+
+    // La propiedad que importa: en el WHERE, ninguna referencia a la clave va suelta.
+    const where = sql.slice(sql.indexOf(" where ") + 7);
+    for (const columna of columnas) {
+      const suelta = new RegExp("(^|[^.\\w\"'])" + columna + "($|[^.\\w\"'])");
+      assert.ok(!suelta.test(where),
+        tabla + ": la clave " + columna + " aparece SIN calificar en el where: " + where);
+      assert.ok(where.includes("t." + columna), tabla + ": falta t." + columna + " en el where");
+      assert.ok(where.includes("ex." + columna), tabla + ": falta ex." + columna + " en el where");
+    }
+
+    // Y que la clave de dos columnas sea una TUPLA y no una lista: `(a, b) = (x, y)`. Con
+    // `= any(array(...))` sobre un array de dos dimensiones no hay operador, asi que
+    // materials era el error siguiente al 42702, solo que tapado por el.
+    if (columnas.length > 1) {
+      assert.ok(/^\(t\.[\w]+, t\.[\w]+\) = \(ex\.[\w]+, ex\.[\w]+\)$/.test(where),
+        "la clave de " + tabla + " tiene que compararse como tupla: " + where);
+      assert.ok(!/any\s*\(\s*array/i.test(where), tabla + ": no se usa any(array(...)) para la clave");
+    }
+  }
+});
+
+test("las columnas escribibles se miran ANTES de concatenar la revision, no despues", () => {
+  // El `if v_asignar is null` original no podia dispararse: v_asignar se armaba con
+  // `(select string_agg(...)) || ', revision = ' || v_nueva`, y en Postgres `NULL || texto`
+  // es texto. O sea que la comprobacion era verde siempre, y lo que salia era un error de
+  // sintaxis de Postgres que no decia que le pasaba a la regla de escritura.
+  const codigo = ddl.split(/\r?\n/).filter((linea) => !/^\s*--/.test(linea)).join("\n");
+  assert.match(codigo, /if v_escribibles is null then/,
+    "la comprobacion tiene que mirar el agregado, no la cadena ya concatenada");
+  assert.match(codigo, /v_asignar := v_escribibles \|\| ', revision = ' \|\| v_nueva/,
+    "la concatenacion va despues de la comprobacion");
+  assert.ok(
+    !/\|\| ', revision = ' \|\| v_nueva;\s*\n\s*if v_asignar is null then/.test(codigo),
+    "vuelve el `if v_asignar is null` sobre la cadena concatenada: eso nunca es null"
+  );
 });
 
 test("app_state recibe su fila id=1 antes de que plan_guardar la necesite", () => {

@@ -99,6 +99,21 @@
     return next;
   }
 
+  // MEDIDO 2026-09-29 en el navegador (sitio estatico, sesion de Supabase): esto NO responde
+  // "estoy en Apps Script", responde "el puente esta configurado", que en GitHub Pages es
+  // cierto porque la URL del backend va embebida en el bundle. O sea que
+  // `window.isAppsScriptRuntime()` da TRUE con `typeof google === "undefined"`. Con esa
+  // mentira, el guardado optimized de mas abajo se saltaba la funcion de app.js (que sube el
+  // plan a Supabase y despues los catalogos) y entraba directo a `callAppsScript`, o sea a
+  // subir el plan por el iframe: la escritura del plan se perdia y los catalogos no se
+  // subian nunca. `nativeRuntimeAvailable` es el unico predicado que responde la pregunta de
+  // verdad (`google.script.run` existe solo dentro de HtmlService) y se pregunta al puente
+  // porque es el modulo que lo define.
+  //
+  // LO QUE QUEDA DE ESA MEDICION, 2026-09-30: ya no se decide el destino de la escritura con
+  // este predicado. El destino es UNO SOLO, Supabase, y en `optimizedSaveAppSheet` se delega
+  // siempre en `saveAppSheet` de app.js. Este `bridgeAvailable` quedo para lo unico que si
+  // distingue los runtimes: si hay que preguntar a NetSuite, se usa el camino nativo.
   function bridgeAvailable() {
     return Boolean(root.PPAppsScriptBridge?.isConfigured?.());
   }
@@ -497,6 +512,26 @@
     return restored;
   }
 
+  /**
+   * EL ESTADO REMOTO QUE SE RECARGA TRAS UN CONFLICTO. DECIDIDO 2026-09-30: se lee de
+   * SUPABASE, no de las Hojas. Antes era `callAppsScript("getAppState")`, que en el sitio
+   * estatico va por el iframe y ademas devolvia el estado de una hoja que ya no es el
+   * destino de la escritura: recargar de ahi era recargar de un sitio al que esta pagina
+   * ya no escribe, o sea, consolidar contra el destino viejo.
+   *
+   * Se devuelve el objeto y lo mete `reloadStateAfterConflict` con UN solo
+   * `applyImported`: aplicar el mismo estado dos veces seria aplicarlo dos veces.
+   */
+  async function readRemoteStateForConflict() {
+    const reader = typeof PPSupabaseReader !== "undefined" ? PPSupabaseReader : null;
+    if (!reader || typeof reader.readCatalogs !== "function") {
+      throw new Error("Supabase no esta disponible para recargar el estado tras el conflicto");
+    }
+    const leido = await reader.readCatalogs();
+    const entrada = leido && typeof leido === "object" ? leido.appState : null;
+    return Object.assign({}, leido, entrada && typeof entrada === "object" ? entrada : {});
+  }
+
   async function reloadStateAfterConflict() {
     try {
       const localRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
@@ -504,7 +539,7 @@
       const localEditedOtConfigurations = (state._locallyEditedOtConfigurations || []).map(materialOtKey).filter(Boolean);
       const localOtConfigurations = state.otConfigurations && typeof state.otConfigurations === "object" ? clone(state.otConfigurations) : null;
       const localPrepared = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? clone(state.preparedPlanningByOt) : null;
-      const imported = await callAppsScript("getAppState");
+      const imported = await readRemoteStateForConflict();
       applyImported(imported, { preserveLocalPlanning: false });
       const reappliedDraftRemovals = applyLocalDraftRemovalTombstones(localRemovedDraftOts);
       const reappliedDraftAdditions = reapplyLocalAddedDraftOts(localAddedDraftOts, localPrepared);
@@ -555,7 +590,15 @@
     if (scope === "local" || scope === "ui") return;
     appSheetMarkDirtyScope(scope);
     if (operationStatusSavesInFlight) return;
-    if (!appSheetAvailable) return;
+    // MEDIDO 2026-09-29 en el navegador real (sitio estatico, sesion de Supabase):
+    // esta linea decia `if (!appSheetAvailable) return;` y `appSheetAvailable` es la
+    // bandera del PUENTE, que en el sitio estatico no existe: el readout lanzaba
+    // `ReferenceError: appSheetAvailable is not defined` en CADA cambio de estado que
+    // llegaba aqui, y el guardado por debounce no llegaba ni a encolarse. Los tests no
+    // lo cazaron porque el arnes de app.js declara `appSheetAvailable` a mano, que es
+    // justo lo que en el navegador no pasa. La bandera correcta es
+    // appSheetDisponible(): el puente en el runtime de Apps Script, Supabase fuera.
+    if (!appSheetDisponible()) return;
     if (appSheetSaveInFlight) {
       appSheetSavePending = true;
       return;
@@ -568,97 +611,88 @@
   };
 
   saveAppSheet = async function optimizedSaveAppSheet(showMessage) {
-    if (!isAppsScriptRuntime()) return originalSaveAppSheet(showMessage);
-    if (appSheetSaveInFlight) {
+    // DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura del plan es UNO
+    // SOLO, Supabase, tambien DENTRO de HtmlService. Por eso este optimized ya no arma jobs
+    // de Hojas: delega el guardado en `originalSaveAppSheet`, que es la funcion de app.js y
+    // la que sube el plan con `PPSupabaseWriter` y despues los catalogos por ambito. Lo que
+    // este modulo sigue aportando es el DEBOUNCE de `queueAppSheetSave` de arriba: sin el,
+    // cada pulsacion abriria un guardado.
+    //
+    // MEDIDO 2026-09-29 en el navegador real, y por que se llego aqui: la condicion que
+    // habia decia `isAppsScriptRuntime()`, que en el sitio estatico da TRUE porque la URL
+    // del backend va embebida (ver `bridgeAvailable`), y por eso el guardado se iba por
+    // `callAppsScript` en vez de por la funcion de app.js. Afuera de HtmlService no hay
+    // puente nativo: el iframe no escribe las Hojas, solo las lee. Y los jobs que quedaban
+    // debajo (`saveCatalogState` / `saveSkillState` / `savePlanningStateOptimized`) suben a
+    // las Hojas: eran el unico camino del modulo que escribia fuera de Supabase.
+    const guardado = await originalSaveAppSheet(showMessage);
+    if (guardado) return true;
+    // Las OTs que la persona acaba de agregar y que siguen sin guardar. El aviso las nombra
+    // porque no hay otra forma de saber que se perdieron si no se dijeran.
+    const pendingAdds = (Array.isArray(state._locallyAddedDraftOts) ? state._locallyAddedDraftOts : [])
+      .map((ot) => String(ot || "").trim())
+      .filter(Boolean);
+    if (!state._conflictoSupabase) {
+      // Fallo que NO es de conflicto (red, RLS, escritor caido). El guardado de app.js ya
+      // devuelto los ambitos sucios y el cache local ya conserva la cola, asi que aqui solo
+      // hace falta avisar y rearmar el reintento.
       appSheetSavePending = true;
-      if (showMessage) showToast("Guardado agregado a la fila");
-      return false;
-    }
-    if (!appSheetDirtyScopes.size && showMessage) appSheetMarkDirtyScope("plan");
-    if (!appSheetDirtyScopes.size) return true;
-
-    root.clearTimeout(appSheetSaveTimer);
-    root.clearTimeout(saveRetryTimer);
-    const saveGate = appSheetTryAcquireSaveGate();
-    if (!saveGate) {
-      appSheetSavePending = true;
-      return false;
-    }
-    const scopes = appSheetConsumeDirtyScopes();
-    const jobs = saveJobsForScopes(scopes);
-    document.body.dataset.saveStatus = "saving";
-
-    try {
-      for (const job of jobs) {
-        await waitForSaveIdle();
-        const payload = job.payload();
-        const saved = await callAppsScript(job.method, payload);
-        updateSaveAck(saved);
-      }
-      appSheetAvailable = true;
-      saveRetryAttempt = 0;
-      delete state._pendingAddOt;
-      delete state._pendingAddOtSnapshot;
-      delete state._locallyRemovedDraftOts;
-      delete state._locallyAddedDraftOts;
-      delete state._locallyEditedOtConfigurations;
-      scheduleLocalStorageFlush();
-      if (showMessage) showToast("Cambios guardados");
-      return true;
-    } catch (error) {
-      const conflict = /CONFLICT_REVISION/i.test(String(error?.message || error));
-      const pendingAdds = (Array.isArray(state._locallyAddedDraftOts) ? state._locallyAddedDraftOts : [])
-        .map((ot) => String(ot || "").trim())
-        .filter(Boolean);
-      if (conflict) {
-        const reloadResult = await reloadStateAfterConflict();
-        const reloaded = reloadResult.reloaded;
-        // Si la recarga no pudo aplicarse, el estado local sigue intacto: hay que
-        // conservar los ambitos que consumia este guardado y reintentar, nunca
-        // descartar el cambio en silencio.
-        if (!reloaded) scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
-        const keepDirty = !reloaded
-          || reloadResult.reappliedDraftRemovals > 0
-          || reloadResult.reappliedDraftAdditions > 0
-          || reloadResult.reappliedConfigurations > 0;
-        appSheetSavePending = keepDirty;
-        if (keepDirty) appSheetMarkDirtyScope("plan");
-        if (!reloaded) scheduleRetry();
-        scheduleLocalStorageFlush();
-        document.body.dataset.saveStatus = reloaded ? (keepDirty ? "pending" : "conflict") : "pending";
-        if (showMessage) showToast(reloaded
-          ? "Otro usuario guardo cambios; se recargo el estado vigente"
-          : "Conflicto de guardado; se reintentara en segundo plano", 4200);
-        else if (pendingAdds.length) {
-          showToast(`No se pudo guardar el plan (OT ${pendingAdds.join(", ")}); se reintentara en segundo plano`, 6000);
-        }
-        return false;
-      }
-      scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
-      if (isTransientSaveLockError(error)) console.info("Guardado en segundo plano esperando lock; se reintentara.");
-      else console.warn("Guardado en segundo plano pendiente; se reintentara:", error);
-      document.body.dataset.saveStatus = "pending";
-      // El cache local conserva la cola para que una recarga no borre lo no guardado.
+      if (!appSheetDirtyScopes.size) appSheetMarkDirtyScope("plan");
       scheduleLocalStorageFlush();
       scheduleRetry();
+      document.body.dataset.saveStatus = "pending";
+      rearmarDebounceDeGuardado();
       if (showMessage) showToast("Guardado pendiente; se reintentara en segundo plano", 4200);
       else if (pendingAdds.length) {
         showToast(`No se pudo guardar el plan (OT ${pendingAdds.join(", ")}); se reintentara en segundo plano`, 6000);
       }
       return false;
-    } finally {
-      appSheetReleaseSaveGate(saveGate);
-      if (document.body.dataset.saveStatus === "saving") document.body.dataset.saveStatus = "saved";
-      if (appSheetSavePending || appSheetDirtyScopes.size) {
-        appSheetSavePending = false;
-        root.clearTimeout(appSheetSaveTimer);
-        appSheetSaveTimer = root.setTimeout(() => {
-          appSheetSaveTimer = null;
-          saveAppSheet(false);
-        }, SAVE_DEBOUNCE_MS);
-      }
     }
+    // Un CONFLICT_REVISION no se arregla reintentando encima: la revision que manda esta
+    // pagina sigue siendo la vieja. Lo que se hace es recargar el estado remoto y reaplicar
+    // encima los cambios locales de la cola (OTs agregadas, quitadas y configuraciones
+    // editadas), que es lo que `reloadStateAfterConflict` deja reaplicado y marcado.
+    const reloadResult = await reloadStateAfterConflict();
+    const reloaded = reloadResult.reloaded;
+    // Si la recarga no pudo aplicarse, el estado local sigue intacto: hay que conservar
+    // los ambitos que consumia este guardado y reintentar, nunca descartar el cambio en
+    // silencio.
+    if (!reloaded) appSheetDirtyScopes.add("plan");
+    const keepDirty = !reloaded
+      || reloadResult.reappliedDraftRemovals > 0
+      || reloadResult.reappliedDraftAdditions > 0
+      || reloadResult.reappliedConfigurations > 0;
+    appSheetSavePending = keepDirty;
+    if (keepDirty) appSheetMarkDirtyScope("plan");
+    // El reintento con espera creciente es solo cuando NO se pudo recargar: si la recarga
+    // si funciono y reaplico cambios, el aviso es de conflicto resuelto y lo que hace falta
+    // es el rearmado del debounce de mas abajo.
+    if (!reloaded) scheduleRetry();
+    // Y se rearma el debounce, que es lo que hacia el finally del guardado por jobs: si
+    // queda algo sucio, tiene que haber un temporizador armedado o el reintento se pierde.
+    if (keepDirty) {
+      appSheetSavePending = false;
+      rearmarDebounceDeGuardado();
+    }
+    scheduleLocalStorageFlush();
+    document.body.dataset.saveStatus = reloaded ? (keepDirty ? "pending" : "conflict") : "pending";
+    if (showMessage) showToast(reloaded
+      ? "Otro usuario guardo cambios; se recargo el estado vigente"
+      : "Conflicto de guardado; se reintentara en segundo plano", 4200);
+    else if (pendingAdds.length) {
+      showToast(`No se pudo guardar el plan (OT ${pendingAdds.join(", ")}); se reintentara en segundo plano`, 6000);
+    }
+    return false;
   };
+
+  /** Rearma el temporizador de guardado por debounce, para no perder el reintento. */
+  function rearmarDebounceDeGuardado() {
+    root.clearTimeout(appSheetSaveTimer);
+    appSheetSaveTimer = root.setTimeout(() => {
+      appSheetSaveTimer = null;
+      saveAppSheet(false);
+    }, SAVE_DEBOUNCE_MS);
+  }
 
   function readUsableLocalStateCache(metadata = readMeta()) {
     try {

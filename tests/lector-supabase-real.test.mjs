@@ -26,7 +26,7 @@ const lector = readFileSync(new URL("../src/web/shared/supabase-reader.js", impo
 const boot = readFileSync(new URL("../src/web/shared/supabase-catalog-boot.js", import.meta.url), "utf8");
 
 /** Los dos modulos de verdad, con un fetch que registra a que URL se le pide. */
-function conLosModulosReales({ conCredenciales = true } = {}) {
+function conLosModulosReales({ conCredenciales = true, sesion = "buena" } = {}) {
   const pedidas = [];
   const ctx = {
     console: { log() {}, warn() {}, error() {} },
@@ -42,6 +42,12 @@ function conLosModulosReales({ conCredenciales = true } = {}) {
       createElement: () => ({ style: {}, appendChild() {}, addEventListener() {} }),
       head: { appendChild() {} }, body: { appendChild() {} },
     },
+    // MEDIDO 2026-09-29: el arranque real exige sesion ANTES de leer (si no, la
+    // Data API responde 200 con cero filas y la pagina creeria que la base esta
+    // vacia). Sin este doble, el arranque se apagaba con "sin sesion" y este test
+    // volvia a pasar sin haber pedido una sola tabla: el mismo falso verde que
+    // este archivo existe para cazar.
+    PPSupabaseAuth: sesion === "ninguna" ? null : { token: async () => (sesion === "caducada" ? Promise.reject(new Error("JWT expirado")) : "jwt-de-prueba") },
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
@@ -63,6 +69,25 @@ test("el lector REAL y el arranque REAL se entienden: la lectura ocurre", async 
   assert.equal(informe.activo, true, `el arranque se apago: ${informe.motivo || "sin motivo"}`);
   assert.ok(pedidas.length > 0, "no se pidio NINGUNA tabla: el arranque se apago antes de leer");
   assert.ok(pedidas.some((p) => p.includes("rest/v1/")), `las peticiones no son de la Data API: ${JSON.stringify(pedidas.slice(0, 3))}`);
+});
+
+test("sin sesion el arranque REAL no pide NINGUNA tabla, y lo dice", async () => {
+  // El otro falso verde: con el token del anon la Data API responde HTTP 200 con
+  // cero filas en las 22 tablas, y eso es indistinguible de una base vacia. Por eso
+  // el arranque pide sesion antes, y por eso esto se comprueba con los modulos REALES.
+  const { ctx, pedidas } = conLosModulosReales({ sesion: "ninguna" });
+  const informe = await ctx.PPCatalogBoot.correr();
+  assert.equal(informe.activo, false);
+  assert.match(String(informe.motivo), /sesion/);
+  assert.deepEqual(pedidas, [], "sin sesion no debe leer: la respuesta vacia pareceria una base vacia");
+});
+
+test("con una sesion caducada el arranque REAL tampoco lee", async () => {
+  const { ctx, pedidas } = conLosModulosReales({ sesion: "caducada" });
+  const informe = await ctx.PPCatalogBoot.correr();
+  assert.equal(informe.activo, false);
+  assert.match(String(informe.motivo), /sesion/);
+  assert.deepEqual(pedidas, []);
 });
 
 test("el lector real exporta lo que el arranque le pide, y se fija por nombre", () => {

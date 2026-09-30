@@ -86,6 +86,13 @@ function loadClient(options = {}) {
     requestAnimationFrame: (callback) => { callback(); return 1; },
     PPAppsScriptBridge: {
       isConfigured: () => true,
+      // MEDIDO 2026-09-29 en el navegador: `isConfigured` dice "el puente esta configurado",
+      // que en el sitio estatico es cierto porque la URL del backend va embebida en el bundle.
+      // `nativeRuntimeAvailable` es el unico predicado que responde "estoy dentro de
+      // HtmlService", y es el que decide a donde se escribe el plan. Por defecto el arnes
+      // describe el runtime de Apps Script; `runtimeDeAppscript: false` describe el sitio
+      // estatico, donde el guardado optimized tiene que delegar en app.js (Supabase).
+      nativeRuntimeAvailable: () => options.runtimeDeAppscript !== false,
       ensureReady: async () => {
         if (options.ensureReady) await options.ensureReady(context);
       },
@@ -132,7 +139,32 @@ function loadClient(options = {}) {
       Object.assign(state, structuredClone(imported));
       options.onApplyImported?.(state);
     },
-    saveAppSheet: async () => false,
+    // Doble del `saveAppSheet` REAL de app.js. Ese devuelve false cuando
+    // `guardarPlanEnSupabase` devuelve false, y un CONFLICT_REVISION deja su marca en
+    // `state._conflictoSupabase` (ver guardarPlanEnSupabase en app.js), que es la senal que
+    // usa el guardado optimized para saber que hay que recargar y reaplicar. Aqui se pone
+    // la marca salvo que el test diga que el fallo NO es de conflicto (`guardadoConConflicto:
+    // false`): asi el arnes no depende de que el test adivine el texto de un error que ya no
+    // existe, porque la escritura ya no pasa por `callAppsScript`.
+    saveAppSheet: async () => {
+      context.saveAppSheetLlamadas = (context.saveAppSheetLlamadas || 0) + 1;
+      // El `saveAppSheet` real de app.js consume los ambitos sucios al empezar el guardado.
+      context.appSheetConsumeDirtyScopes();
+      if (options.guardadoConConflicto !== false) {
+        state._conflictoSupabase = { revisionActual: 2, revisionEsperada: 1 };
+      }
+      return false;
+    },
+    // DECIDIDO 2026-09-30: la recarga tras un conflicto se lee de SUPABASE. Antes era
+    // `callAppsScript("getAppState")`, o sea las Hojas, que ya no son el destino de la
+    // escritura: recargar de ahi era consolidar contra el destino viejo.
+    PPSupabaseReader: {
+      readCatalogs: async () => {
+        const leido = options.supabaseReadCatalogs?.(remote) ?? remote;
+        if (leido instanceof Error) throw leido;
+        return structuredClone(leido);
+      },
+    },
     queueAppSheetSave: () => {},
     appSheetMarkDirtyScope: (scope) => context.appSheetDirtyScopes.add(scope),
     appSheetConsumeDirtyScopes: () => {
@@ -238,7 +270,11 @@ test("un conflicto recarga la coleccion remota y no reintenta el payload obsolet
   const saved = await fixture.context.saveAppSheet(false);
 
   assert.equal(saved, false);
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["saveSkillState", "getAppState"]);
+  // DECIDIDO 2026-09-30: el plan se escribe en Supabase y la recarga tras el conflicto
+  // se lee de Supabase, asi que en un conflicto con exito NO se toca el puente de Apps
+  // Script. Lo que se mira es que el estado remoto se aplico y que no se reintento el
+  // payload obsoleto (el aviso dice que recargue, no que reintente).
+  assert.deepEqual(fixture.calls.map((call) => call.method), []);
   assert.equal(fixture.state.revision, 2);
   assert.deepEqual(fixture.state.excludedCapabilities, ["5527::SOLDADURA"]);
   assert.equal(fixture.context.appSheetDirtyScopes.size, 0);
@@ -934,10 +970,10 @@ test("un conflicto que no puede recargar conserva el ambito sucio, avisa la OT y
       selectedOts: ["200", "300"],
       lockedOts: ["200", "300"],
     },
-    bridgeResults: {
-      savePlanningStateOptimized: new Error("CONFLICT_REVISION: revision 5"),
-      getAppState: new Error("red caida"),
-    },
+    // DECIDIDO 2026-09-30: el conflicto lo publica el escritor de Supabase y la recarga
+    // lee de Supabase. Antes los dos ventanas eran `callAppsScript`, asi que aqui lo que
+    // falla es la LECTURA de Supabase despues del conflicto.
+    supabaseReadCatalogs: () => new Error("red caida"),
   });
 
   const saved = await fixture.context.saveAppSheet(false);
@@ -945,7 +981,7 @@ test("un conflicto que no puede recargar conserva el ambito sucio, avisa la OT y
   assert.equal(saved, false);
   // La OT sigue en la cola local y el ambito "plan" no se descarta en silencio.
   assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
-  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["matrix", "plan"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
   // Un temporizador es el reintento con espera creciente y otro el rearmado del debounce.
   assert.equal(fixture.timers.length, 2);
   assert.deepEqual(fixture.toasts, ["No se pudo guardar el plan (OT 300); se reintentara en segundo plano"]);
@@ -960,9 +996,9 @@ test("un fallo de red en el guardado avisa la OT y conserva el cache local con l
       selectedOts: ["200", "300"],
       workOrders: [{ ot: "200" }, { ot: "300" }],
     },
-    bridgeResults: {
-      savePlanningStateOptimized: new Error("Otro proceso esta actualizando el plan"),
-    },
+    // El plan se guarda en Supabase: este fallo es del escritor, y NO es un conflicto de
+    // revision, asi que no se recarga nada: se conserva la cola y se reintenta.
+    guardadoConConflicto: false,
   });
   fixture.context.appSheetDirtyScopes.clear();
   fixture.context.appSheetMarkDirtyScope("plan");
@@ -989,8 +1025,12 @@ test("ocultar la pestana fuerza el guardado pendiente antes del debounce", async
   fixture.rootListeners.get("pagehide")();
   await settleMicrotasks();
 
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["savePlanningStateOptimized"]);
-  assert.deepEqual(JSON.parse(JSON.stringify(fixture.calls[0].args[0].selectedOts)), ["300"]);
+  // DECIDIDO 2026-09-30: al ocultar la pestana el guardado ya no es un job de Hojas, es el
+  // guardado de app.js (Supabase). Lo que se comprueba es que se lanza el guardado y que
+  // no se toca el puente de Apps Script.
+  assert.deepEqual(fixture.calls.map((call) => call.method), []);
+  assert.ok(fixture.context.saveAppSheetLlamadas >= 1, "y que el guardado se disparo");
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["300"]);
 });
 
 test("el cierre de pagina no duplica el guardado mientras hay uno en curso", async () => {

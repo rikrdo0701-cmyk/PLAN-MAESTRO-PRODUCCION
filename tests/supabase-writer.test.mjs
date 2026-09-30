@@ -273,6 +273,154 @@ test("app_state se actualiza con PATCH y no se inserta ni se borra nunca", async
   assert.equal(informe.tablas.app_state.error, null);
 });
 
+// ---------------------------------------------------------------------------
+// LA CLAVE DEL UPSERT DE CADA TABLA
+// ---------------------------------------------------------------------------
+//
+// POR QUE ESTE TEST. MEDIDO 2026-09-30 en el navegador, con las 222 ordenes de trabajo que
+// trae el sync de NetSuite: el POST a /rest/v1/work_orders contestaba
+// `23505 duplicate key value violates unique constraint "work_orders_ot_key"` en 18 de 18
+// guardados. La causa era que `CLAVE_NATURAL` no tenia entrada para `work_orders`, asi que
+// `escribirEspejo` mandaba el POST SIN `on_conflict`: un INSERT pelado contra una tabla que
+// ya tiene esas filas.
+//
+// POR QUE NO LO DETECTABA NINGUN TEST. Los tests del escritor usan un fetch de mentira que
+// contesta 204 a todo, y un 204 no se parece en nada a un 409: el modulo solo puede saber
+// que la clave esta mal por lo que DECIDE, no por lo que la base contesta. Por eso el test
+// afirma sobre la peticion que se arma (que `on_conflict` viaje y con que columnas), que es
+// lo unico que el codigo controla. Y la clave se contrasta con la del DDL, porque las dos
+// tienen que ser la misma: `plan_tabla_escritura` declara `wo_internal_id` para work_orders y
+// el indice unico que hace posible el UPSERT es `work_orders_wo_internal_id_key`.
+test("cada tabla del camino viejo manda on_conflict, y con la MISMA clave que declara el DDL", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+
+  // La clave que el DDL declara para cada tabla, escrita aqui a mano y no leida del
+  // fuente del escritor: un assert que compara el codigo consigo mismo no comprueba nada.
+  // Si alguien cambia una de las dos, este test tiene que romperse.
+  const CLAVE_DEL_DDL = {
+    operations: "operation_id",
+    work_orders: "wo_internal_id",
+    materials: "ot,line_id",
+    selected_ots: "ot",
+    locked_ots: "ot",
+    operation_plan_statuses: "key",
+  };
+  for (const tabla of Object.keys(CLAVE_DEL_DDL)) {
+    const enElCodigo = writer.CLAVE_NATURAL[tabla];
+    assert.equal(enElCodigo, CLAVE_DEL_DDL[tabla],
+      tabla + ": el escritor usa " + JSON.stringify(enElCodigo) + " y el DDL declara " + CLAVE_DEL_DDL[tabla]);
+  }
+
+  // Y lo que de verdad viaja en la URL. Sin esto, una clave que este bien escrita pero que
+  // no se pase a `pedir` seria un fallo igual de silencioso que no tenerla.
+  for (const [tabla, clave] of Object.entries(CLAVE_DEL_DDL)) {
+    const posts = de(llamadas, "POST", tabla);
+    assert.equal(posts.length, 1, tabla + ": se esperaba un POST y hubo " + posts.length);
+    assert.ok(posts[0].url.includes("on_conflict=" + encodeURIComponent(clave)),
+      tabla + ": el POST no lleva on_conflict=" + clave + " (url: " + posts[0].url + ")");
+    assert.ok(posts[0].headers.Prefer.includes("resolution=merge-duplicates"),
+      tabla + ": sin resolution=merge-duplicates el on_conflict no hace nada util");
+  }
+
+  // El caso que fallo de verdad, nombrado: sin esta clave, work_orders NO se guardaba nunca.
+  const wo = de(llamadas, "POST", "work_orders");
+  assert.ok(wo[0].url.includes("on_conflict=wo_internal_id"),
+    "work_orders es la tabla que dio 23505 en los 18 guardados: su clave tiene que estar en la URL");
+});
+
+// ---------------------------------------------------------------------------
+// LAS DOS TABLAS DEL SYNC: MARCAS DE OT Y RESUMEN DE LAS CERRADAS
+// ---------------------------------------------------------------------------
+//
+// QUE SE ESCRIBE AQUI Y POR QUE. DECIDIDO 2026-09-30: el sync de OTs ya no guarda por
+// `saveWorkOrderSyncState` (las Hojas) sino por este escritor. Lo que el sync tiene que
+// dejar behind son las marcas de OT "por confirmar" (RULE-OT-051) y el resumen de las OTs
+// cerradas. Si no se subieran, el sync apparentemente guardaria y en realidad perderia las
+// dos cosas: la OT sin ficha se caeria de la cola en el siguiente normalizeState, y el
+// contador `misses` — que es lo que decide si la marca es real — volveria a cero.
+
+test("unconfirmed_work_orders y closed_work_order_summaries se suben como ANEXO: upsert por folio, sin borrar", async () => {
+  const { writer, llamadas } = escritor();
+  const conMarcas = estado();
+  conMarcas.unconfirmedWorkOrders = {
+    "3177": { ot: "3177", firstSeenAt: "2026-09-20T10:00:00.000Z", lastSeenAt: "2026-09-29T17:50:00.000Z", misses: 3 },
+  };
+  conMarcas.closedWorkOrderSummaries = {
+    "3631": { ot: "3631", finalStatus: "CERRADA", closedDetectedAt: "2026-09-29T17:00:00.000Z" },
+  };
+
+  await writer.guardar(conMarcas);
+
+  // SIN BORRADO, y no por capricho: una marca que esta en la base y no en esta pantalla puede
+  // ser de una OT que NetSuite ya cerro y que la pagina todavia no sabe. Si se borrara, se
+  // perderia justamente el `misses` que acumulo.
+  assert.equal(de(llamadas, "DELETE", "unconfirmed_work_orders").length, 0, "las marcas nunca se borran");
+  assert.equal(de(llamadas, "DELETE", "closed_work_order_summaries").length, 0, "los resumenes nunca se borran");
+  // Y se escriben por clave natural, que es lo que las hace idempotentes: dos paginas que
+  // guardan la misma marca no se pisan ni duplican.
+  assert.match(de(llamadas, "POST", "unconfirmed_work_orders")[0].url, /on_conflict=ot/);
+  assert.match(de(llamadas, "POST", "closed_work_order_summaries")[0].url, /on_conflict=ot/);
+});
+
+test("unconfirmed_work_orders: la fila lleva el folio, los dos instantes y el contador", async () => {
+  const { writer, llamadas } = escritor();
+  const conMarcas = estado();
+  conMarcas.unconfirmedWorkOrders = {
+    "3177": { ot: "3177", firstSeenAt: "2026-09-20T10:00:00.000Z", lastSeenAt: "2026-09-29T17:50:00.000Z", misses: 3 },
+    // Sin `ot` dentro: la CLAVE del objeto es el folio. Si no se usara, esta marca se
+    // perderia en el piso, que es el peor sitio para perderla.
+    "3700": { firstSeenAt: "2026-09-21T10:00:00.000Z", lastSeenAt: "2026-09-21T10:00:00.000Z", misses: 1 },
+  };
+
+  await writer.guardar(conMarcas);
+
+  const cuerpo = cuerpoDe(llamadas, "POST", "unconfirmed_work_orders");
+  assert.equal(cuerpo.length, 2);
+  assert.deepEqual(cuerpo.find((f) => f.ot === "3177"), {
+    ot: "3177", first_seen_at: "2026-09-20T10:00:00.000Z", last_seen_at: "2026-09-29T17:50:00.000Z", misses: 3,
+  });
+  assert.equal(cuerpo.find((f) => f.ot === "3700").ot, "3700", "la clave del objeto es el folio");
+});
+
+test("unconfirmed_work_orders: un contador en cero o ausente se manda como 1, nunca como 0", async () => {
+  const { writer, llamadas } = escritor();
+  const conMarcas = estado();
+  conMarcas.unconfirmedWorkOrders = {
+    "1": { ot: "1", firstSeenAt: "2026-09-20T10:00:00.000Z", lastSeenAt: "2026-09-20T10:00:00.000Z", misses: 0 },
+    "2": { ot: "2", firstSeenAt: "2026-09-20T10:00:00.000Z", lastSeenAt: "2026-09-20T10:00:00.000Z" },
+  };
+
+  await writer.guardar(conMarcas);
+
+  // misses=0 en la base diria que la OT ya no falta, y la marca se resolveria sin evidencia.
+  // Una fila en esta tabla significa, por definicion, que la OT no vino.
+  const cuerpo = cuerpoDe(llamadas, "POST", "unconfirmed_work_orders");
+  assert.deepEqual(cuerpo.map((f) => f.misses), [1, 1]);
+});
+
+test("closed_work_order_summaries: el resumen viaja como OBJETO en la columna jsonb", async () => {
+  const { writer, llamadas } = escritor();
+  const conResumenes = estado();
+  conResumenes.closedWorkOrderSummaries = {
+    "3631": { ot: "3631", finalStatus: "CERRADA", closedDetectedAt: "2026-09-29T17:00:00.000Z" },
+  };
+
+  await writer.guardar(conResumenes);
+
+  const cuerpo = cuerpoDe(llamadas, "POST", "closed_work_order_summaries");
+  // Un jsonb con texto que no es JSON revienta el POST entero (RULE-SUP-021).
+  assert.equal(typeof cuerpo[0].summary, "object");
+  assert.deepEqual(cuerpo[0].summary, { ot: "3631", finalStatus: "CERRADA", closedDetectedAt: "2026-09-29T17:00:00.000Z" });
+});
+
+test("un estado sin marcas ni resumenes NO hace un POST vacio a las dos tablas", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+  assert.equal(de(llamadas, "POST", "unconfirmed_work_orders").length, 0);
+  assert.equal(de(llamadas, "POST", "closed_work_order_summaries").length, 0);
+});
+
 test("operation_events solo inserta, fila por fila, y nunca borra", async () => {
   const { writer, llamadas } = escritor();
   await writer.guardar(estado());
