@@ -304,6 +304,9 @@ declare
   v_permitida boolean;
   v_colnames text[];
   v_queried text;
+  v_cols        text[];   -- columnas a insertar: las del payload SIN las que pone la base
+  v_cols_i      text;     -- '"col1","col2"...' para el INSERT
+  v_cols_r      text;     -- 'r."col1",r."col2"...' para el SELECT
   v_insertadas integer := 0;
   v_borradas integer := 0;
 begin
@@ -346,23 +349,56 @@ begin
   execute format('delete from public.%I where id <> %L::uuid', v_tabla, '00000000-0000-0000-0000-000000000000');
   get diagnostics v_borradas = row_count;
 
-  -- CORREGIDO 2026-09-29. La version anterior de estas tres lineas era:
-  --   insert into public.%I
-  --   select (jsonb_populate_recordset(null::public.%I, p_filas)).*
-  --     from jsonb_array_elements(p_filas) as f;
-  -- sin el format() ni las comillas, o sea que Postgres parseaba public.%I como un
-  -- identificador y contestaba syntax error at or near "%". Y el
-  -- `from jsonb_array_elements` no solo sobraba: MULTIPLICABA las filas. En
-  -- PostgreSQL una funcion que devuelve un conjunto, puesta en la lista de
-  -- seleccion, se expande y se evalua UNA VEZ POR CADA FILA de las demas tablas del
-  -- FROM, asi que N filas de entrada daban N al cuadrado en el insert. Los dos
-  -- errores estaban en la misma sentencia y el de sintaxis tapaba al otro.
+  -- CORREGIDO 2026-09-30. Antes de esto el INSERT era
+  --   insert into public.%I select (jsonb_populate_recordset(null::public.%I, $1)).*
+  -- y fallaba en las 7 tablas con 23502 'null value in column "id"'. POR QUE, que es
+  -- lo que hay que entender para no volver a escribirlo asi.
+  --
+  -- El `.*` mete TODAS las columnas de la tabla, y jsonb_populate_recordset pone NULL
+  -- en cada columna que no venga en el JSON. O sea que id llegaba al INSERT como NULL
+  -- EXPLICITO, y un DEFAULT no lo salva: los defaults de columna solo se aplican
+  -- cuando la columna se OMITE del INSERT, no cuando se le pasa NULL. id es
+  -- uuid primary key (NOT NULL), asi que PostgreSQL rechazaba la fila entera.
+  --
+  -- Lo que rompia el espejo era ademas mas grande que el error: con el `.*` ninguna
+  -- fila llegaba a insertarse, y el DELETE de arriba ya habia corrido. Como todo va
+  -- en la misma transaccion, el rollback devolvia la tabla a como estaba (eso si
+  -- funciona), pero la ingesta llevaba horas fallando en las 7 tablas sin escribir
+  -- nada y sin quejarse de nada mas.
+  --
+  -- EL ARREGLO es el mismo de las otras dos copias del RPC (docs/rpc-ingesta-mirror.sql
+  -- y la seccion 7 de docs/schema-supabase-cierre-catalogos.sql): el INSERT NOMBRA las
+  -- columnas y saca de la lista las que genera la base (id, created_at, updated_at).
+  -- Asi id toma su default gen_random_uuid(), created_at/updated_at su now(), y las
+  -- columnas que el payload NO trae (revision, cant_ensamblada, precio_promedio_venta,
+  -- linea de sales_orders...) toman su default tambien, en vez de entrar como NULL.
   --
   -- p_filas viaja como parametro de EXECUTE y no dentro del texto del format(),
   -- para que un valor con comillas no pueda romper la sentencia montada.
+  --
+  -- Y el `from jsonb_array_elements(p_filas) as f` que tamben se quito en este
+  -- INSERT (MEDIDO 2026-09-29) no era sobra: en PostgreSQL una funcion que devuelve
+  -- un conjunto, puesta en la lista de seleccion, se expande y se evalua UNA VEZ POR
+  -- CADA FILA de las demas tablas del FROM, asi que N filas de entrada daban N al
+  -- cuadrado en el insert. Para leer el arreglo entero UNA vez, lo hace
+  -- jsonb_populate_recordset, que es lo que se usa arriba.
+  select coalesce(array_agg(c), '{}'::text[])
+    into v_cols
+    from jsonb_object_keys(p_filas -> 0) as c
+   where c not in ('id', 'created_at', 'updated_at');
+
+  if array_length(v_cols, 1) is null then
+    raise exception 'ingesta_mirror: el payload de % solo trae id/created_at/updated_at, no hay nada que insertar', v_tabla;
+  end if;
+
+  select string_agg(format('"%s"', c), ','),
+         string_agg(format('r."%s"', c), ',')
+    into v_cols_i, v_cols_r
+    from unnest(v_cols) as c;
+
   execute format(
-    'insert into public.%I select (jsonb_populate_recordset(null::public.%I, $1)).*',
-    v_tabla, v_tabla
+    'insert into public.%I (%s) select %s from jsonb_populate_recordset(null::public.%I, $1) as r',
+    v_tabla, v_cols_i, v_cols_r, v_tabla
   ) using p_filas;
   get diagnostics v_insertadas = row_count;
 

@@ -134,6 +134,41 @@ test("el RPC se queda en service_role: la pagina escribe por politicas, no por e
   assert.match(ddl, /grant execute on function public\.ingesta_mirror\(text, jsonb\) to service_role;/);
 });
 
+// MEDIDO 2026-09-30 en la ingesta real de produccion: las 7 tablas rechazadas con
+// 23502 'null value in column "id"'. La causa era el `select ... .*` del INSERT: mete
+// TODAS las columnas y jsonb_populate_recordset llena de NULL las que el payload no
+// trae, y un DEFAULT solo se aplica si la columna se OMITE del INSERT, no si se le
+// pasa NULL. id es uuid primary key, o sea NOT NULL, y ahi se caia.
+//
+// Este test afirma sobre el INSERT ARMADO, no sobre el codigo que lo produce, y por
+// eso se verifico por mutacion: volver a `.*` lo hace fallar.
+test("el INSERT del espejo NOMBRA las columnas: un .* mete id en NULL y viola el primary key", () => {
+  const crudo = ddl.slice(ddl.indexOf("create or replace function public.ingesta_mirror("),
+                          ddl.indexOf("revoke execute on function public.ingesta_mirror"));
+  assert.ok(crudo.length > 0, "no encontre el cuerpo de ingesta_mirror");
+
+  // Se quitan los comentarios `--` ANTES de afirmar. Sin esto el test se failsa a si
+  // mismo: el comentario que documenta el bug cita el SQL roto literal, y el test no
+  // distingue prosa de codigo. Un test que obliga a no explicar el bug seria un test
+  // que empuja a borrar la explicacion.
+  const sql = crudo.replace(/--[^\n]*/g, "");
+
+  // El sintoma: expandir con `.*` en el INSERT.
+  assert.doesNotMatch(sql, /\.\*/,
+    "el INSERT no puede terminar en .*: mete id en NULL y viola el primary key (23502)");
+
+  // El remedio: la lista de columnas se arma y se pasa al INSERT.
+  assert.match(sql, /insert into public\.%I \(%s\) select %s from jsonb_populate_recordset/,
+    "el INSERT tiene que nombrar las columnas: insert into tabla (%s) select %s from ...");
+  assert.match(sql, /into v_cols_i, v_cols_r/,
+    "las columnas del INSERT se tienen que construir en v_cols_i/v_cols_r");
+
+  // Y las que genera la base se sacan de esa lista, que es lo que hace que id tome
+  // su default en vez de llegar como NULL.
+  assert.match(sql, /c not in \('id', 'created_at', 'updated_at'\)/,
+    "id/created_at/updated_at las pone la base y no pueden entrar en el INSERT");
+});
+
 test("todas las politicas son para authenticated y con with check", () => {
   // Sin with check, RLS filtra lo que se lee y no lo que se escribe. Es la razon
   // de que el DDL anterior (schema-supabase-login-correo.sql) lo pusiera explicito
