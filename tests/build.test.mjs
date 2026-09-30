@@ -359,6 +359,39 @@ test("el bundle monta el reemplazo con el lector y el escritor ya puestos", asyn
   assert.ok(escritor < reemplazo, "el reemplazo se evaluaria sin escritor");
 });
 
+test("el puente no monta NINGUN iframe: no se descarga el script de Google", async () => {
+  // MEDIDO 2026-09-30 en la pagina real: la consola mostraba
+  //   script.google.com/macros/s/AKfy.../exec?app=bridge&v=2.51.0
+  // con `call` ya rechazando todo. La razon es que `ensureReady` seguia siendo `ensureBridge`
+  // y `loadAppStateInBackground` lo llamaba en cada arranque. O sea: el sitio ya no habia
+  // un camino de DATOS hacia Apps Script, pero todavia tenia una dependencia VIVA de Apps
+  // Script, que se descarga entera en cada carga de pagina. Sin este test, "deshabilitado"
+  // significaba solo "no contesta", y eso es distinto de "no existe".
+  const result = await buildProject();
+  for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+    const codigo = (await readFile(archivo, "utf8"))
+      .replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+    const nombre = path.basename(archivo);
+
+    // 1. La puerta no monta nada: tiene que RECHAZAR. Se aceptan las dos formas de
+    //    declararla en el objeto (`ensureReady:` y la abreviada `ensureReady,`), porque
+    //    este test no debe obligar a un estilo de escritura, solo a un comportamiento.
+    assert.match(codigo, /ensureReady\s*[:,][\s\S]{0,400}?MOTIVO|ensureReady\s*[:,][\s\S]{0,400}?deshabilitado/,
+      `${nombre}: ensureReady tiene que rechazar con el motivo del puente, no montar un iframe`);
+
+    // 2. Y el iframe no se crea en ningun lado por una llamada que si llegue a ejecutarse.
+    //    Se afirma sobre el nombre del elemento, no sobre la URL: la URL es configuracion y
+    //    puede cambiar; `#ppAppsScriptBridge` es el contrato.
+    assert.doesNotMatch(codigo, /ppAppsScriptBridge/,
+      `${nombre}: algo sigue creando el iframe del puente`);
+
+    // 3. La URL del web app no se navega. Con el iframe gone, cualquier postMessage ahi
+    //    seria un bug, no una llamada.
+    assert.doesNotMatch(codigo, /exec\?app=bridge/,
+      `${nombre}: el bundle sigueuanceando el web app de Apps Script`);
+  }
+});
+
 test("el build genera Apps Script y GitHub Pages", async () => {
   const result = await buildProject();
   assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"]);
@@ -497,20 +530,29 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
   assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
   assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;/);
-  // El reloj del puente debe quedar POR ENCIMA del presupuesto del cliente, porque el cliente
-  // reintenta una vez (2 intentos + 5 s). Si el puente cortara primero, el usuario veria el
-  // error del puente en lugar de "NetSuite no respondio en N segundos", que es el que dice
-  // cuantos milisegundos se espero.
+  // MEDIDO 2026-09-30: este bloque afirmaba que el presupuesto del PUENTE quedara por encima
+  // del del cliente (2 intentos + 5 s), porque si el puente cortara primero el usuario veria
+  // el error del puente en vez de "NetSuite no respondio en N segundos". MEDIDO entonces:
+  // getAppState tardaba 11,3 s y getAppStateIfChanged 197 s, y eran 74 llamadas al puente en
+  // una sola carga de pagina, cada una con arranque en frio. Ese era el problema de fondo.
+  //
+  // Con el puente deshabilitado (RULE-SUP-029) la RELACION ya no existe: no hay llamada que
+  // cortar, asi que no hay segundo reloj. El presupuesto del cliente es el unico, y la
+  // sincronizacion va a Supabase. Por eso lo que se afirma ahora es la AUSENCIA: si el
+  // cliente vuelve a traer presupuestos por metodo del "puente", es porque el iframe volvio.
   const backlogBudget = Number((pagesIndex.match(/NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = (\d+);/) || [])[1]);
   const bridgeClient = await readFile(new URL("../src/web/shared/apps-script-bridge-client.js", import.meta.url), "utf8");
-  for (const method of ["fetchNetSuiteWorkOrdersLite", "syncNetSuiteWorkOrdersLite"]) {
-    const bridgeBudget = Number((bridgeClient.match(new RegExp(`${method}: (\\d+)`)) || [])[1]);
-    assert.ok(bridgeBudget > 0, `el puente debe tener presupuesto propio para ${method}`);
-    assert.ok(
-      bridgeBudget >= backlogBudget * 2 + 5000,
-      `el puente (${bridgeBudget} ms) debe cubrir dos intentos del cliente (${backlogBudget * 2} ms) mas la espera de 5 s`,
-    );
-  }
+  // Se quitan los comentarios antes de afirmar: el comentario que explica por que se borro la
+  // maqueria del iframe la nombra, y un test que no distingue prosa de codigo obliga a borrar
+  // la explicacion para poder pasar.
+  const puenteCodigo = bridgeClient.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+  assert.doesNotMatch(puenteCodigo, /METHOD_TIMEOUT_MS|CALL_TIMEOUT_MS|READY_TIMEOUT_MS/,
+    "el puente no tiene presupuestos: no hay llamada que cronometrar");
+  assert.doesNotMatch(puenteCodigo, /postMessage|addEventListener\(\s*["']message["']/,
+    "el puente no habla por postMessage: no hay iframe al que hablarle");
+  assert.doesNotMatch(puenteCodigo, /createElement\(\s*["']iframe["']/,
+    "el puente no crea iframes");
+  assert.ok(backlogBudget > 0, "el cliente sigue teniendo su propio presupuesto de sincronizacion");
   // El limite de solicitudes de NetSuite es transitorio: la sync ligera reintenta una vez.
   assert.match(pagesIndex, /SSS_REQUEST_LIMIT_EXCEEDED[\s\S]{0,600}window\.setTimeout\(resolve, 5000\)/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);

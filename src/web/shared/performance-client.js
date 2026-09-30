@@ -828,7 +828,15 @@
       const selectedOperationId = state.selectedOperationId;
       let snapshotsRequest = null;
       try {
-        await root.PPAppsScriptBridge.ensureReady();
+        // MEDIDO 2026-09-30 en produccion: esto era `await root.PPAppsScriptBridge.ensureReady()`,
+        // que monta un iframe oculto contra el web app de Apps Script. Con el puente
+        // deshabilitado la llamada ya no hacia falta para NADA (no iba a llamar por el), pero
+        // seguia DESCARGANDO el script de Google en cada carga de pagina: se veia en la consola
+        // como script.google.com/macros/.../exec?app=bridge. Eso es una dependencia viva de
+        // Apps Script en un sitio que ya decidio que Supabase es la fuente, y ademas consume
+        // el ancho de banda de cada persona que abre la pagina. La puerta de escritura ya no
+        // la consulta: `appSheetDisponible()` de app.js pregunta por PPSupabaseWriter
+        // (RULE-SUP-029).
         snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
           console.warn("No se pudieron cargar los historicos:", error);
           return null;

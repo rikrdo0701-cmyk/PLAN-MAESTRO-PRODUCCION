@@ -826,25 +826,34 @@ async function maybeRestoreSavedDraftOnBoot() {
   }
 }
 
-// POR QUE EL PRESUPUESTO ESTA EN TIEMPO Y NO EN INTENTOS, Y POR QUE 180 s.
+// POR QUE EL PRESUPUESTO ESTA EN TIEMPO Y NO EN INTENTOS, Y POR QUE 240 s.
 //
 // Este reintento existe para esperar a que se libere netSuiteSyncInFlight, en la puerta de
-// maybeRestoreSavedDraftOnBoot. La llamada que lo mantiene ocupado es getAppState, y su tope es el
-// CALL_TIMEOUT_MS de 120 000 ms del puente (apps-script-bridge-client.js). Con el presupuesto
-// anterior de 15 intentos cada 2 500 ms, la cadena se agotaba a los 37,5 s: 82 s ANTES de que se
-// liberara el flag. Para entonces no quedaba ningun disparador vivo, y el unico que quedaba
-// dependia de que la sincronizacion resolviera, o sea de lo mismo que la estaba bloqueando. Es
-// decir: el rescate del borrador se agotaba justo en el escenario para el que existe, que es
-// cuando el servidor NO responde.
+// maybeRestoreSavedDraftOnBoot. Con el presupuesto anterior de 15 intentos cada 2 500 ms, la
+// cadena se agotaba a los 37,5 s, y para entonces no quedaba ningun disparador vivo: el unico
+// que quedaba dependia de que la sincronizacion resolviera, o sea de lo mismo que la estaba
+// bloqueando. Es decir, el rescate del borrador se agotaba justo en el escenario para el que
+// existe, que es cuando el servidor NO responde.
 //
-// 180 000 ms es 120 000 del timeout del puente + 60 000 de margen. El numero esta escrito a mano a
-// proposito (el CALL_TIMEOUT_MS vive en otro archivo y no se puede leer desde aqui), y esa es
-// justamente la debilidad: si el tope del puente se moviera, este presupuesto se quedaria corto
-// otra vez y en silencio. Por eso tests/plan-draft-boot-restore.test.mjs lee las DOS constantes y
-// falla si el presupuesto deja de durar mas que el timeout que espera. Si se cambia uno, hay que
-// cambiar el otro y el test lo dice.
+// MEDIDO 2026-09-30: el techo del que este rescate espera ya no es el CALL_TIMEOUT_MS del
+// puente (120 000 ms, apps-script-bridge-client.js), porque el puente quedo deshabilitado
+// (RULE-SUP-029). Ahora lo que puede tener ocupado al flag es el presupuesto del cliente,
+// NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180 000 ms, que esta en ESTE MISMO archivo, linea 18.
+//
+// POR QUE 240 000 y no 180 000, que es el numero que habia. Con el puente, el sync se cortaba
+// a los 120 s aunque el cliente pidiera 180, y por eso 180 s de presupuesto iban con margen.
+// Al quitar el puente el sync puede ocupar el flag los 180 s completos, y un presupuesto de
+// 180 s se agota EN EL MISMO INSTANTE en que se libera: exactamente el fallo que el parrafo
+// de arriba ya describio una vez, con la misma forma y por el mismo motivo. 180 000 + 60 000
+// de margen = 240 000, que ademas es multiplo del paso de 2 500, asi que el ultimo tramo
+// completo no se desperdicia.
+//
+// La debilidad anterior era que el numero estaba escrito a mano porque la constante que
+// compara vive en otro archivo y no se puede leer desde aqui. Ya no: las dos estan en este
+// archivo, y tests/plan-draft-boot-restore.test.mjs las lee y falla si el presupuesto deja
+// de durar mas que el timeout que espera.
 const DRAFT_BOOT_RESTORE_RETRY_MS = 2500;
-const DRAFT_BOOT_RESTORE_BUDGET_MS = 180000;
+const DRAFT_BOOT_RESTORE_BUDGET_MS = 240000;
 
 function scheduleDraftBootRestoreRetry() {
   const spent = Number(globalThis.__draftBootRestoreRetrySpentMs || 0);

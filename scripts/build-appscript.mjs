@@ -338,14 +338,17 @@ function planningHydrateLocalCache() {
 }
 
 function patchPerformanceClient(performanceClient) {
-  const startupMarker = `        await root.PPAppsScriptBridge.ensureReady();
-        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+  // MEDIDO 2026-09-30: este marcador incluia la linea ensureReady de PPAppsScriptBridge, que
+  // se quito de performance-client.js porque montaba el iframe del web app de Apps Script en
+  // cada carga de pagina. El marcador se ajusta al fuente REAL: si el build afirmara sobre una
+  // linea que ya no existe, el patch no aplicaria, el build lo diria, y el arranque desplegado
+  // seria el viejo, sin el rescate rapido del borrador.
+  const startupMarker = `        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
           console.warn("No se pudieron cargar los historicos:", error);
           return null;
         });
         const result = await loadInitialStateConditionally(resolveInitialLocalCache());`;
-  const startupReplacement = `        await root.PPAppsScriptBridge.ensureReady();
-        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+  const startupReplacement = `        snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
           console.warn("No se pudieron cargar los historicos:", error);
           return null;
         });

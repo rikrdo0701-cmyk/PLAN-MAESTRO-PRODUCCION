@@ -761,8 +761,19 @@ test("el cache local se lee una sola vez, ni al evaluar el modulo ni despues del
   assert.equal(stateReads(), 1, "una segunda carga no vuelve a leer el cache");
 });
 
-test("la validez de cache se captura antes de ensureReady y el sampleState escrito durante la espera no la invalida", async () => {
+test("la validez de cache se captura ANTES de esperar al remoto, y lo que se escriba durante la espera no la invalida", async () => {
+  // MEDIDO 2026-09-30: esta prueba se llamaba "la validez de cache se captura antes de
+  // ensureReady...", y su "espera" era el ensureReady del puente, que montaba un iframe. Con
+  // el puente deshabilitado (RULE-SUP-029) ese await ya no existe, asi que la espera paso a
+  // ser la lectura remota, que es el unico await real que queda entre decidir y preguntar.
+  //
+  // Y al moverla se vio que el fixture no hacia lo que decia: noponia `localState`, o sea que
+  // `readUsableLocalStateCache` no encontraba nada en la clave `test` y la cache nunca fue
+  // utilizable. El test pasaba por otra via, no por la que queria comprobar. Aqui ya se pone
+  // `localState` coherente, asi que la cache SI es utilizable y lo que se afirma es de verdad
+  // la captura anticipada.
   const storage = new Map([
+    ["test", coherentLocalState(12, { workOrders: [{ ot: "CACHE-WO" }] })],
     ["plan-produccion-performance-v2", coherentMetadata(12)],
   ]);
   const remoteState = {
@@ -777,18 +788,24 @@ test("la validez de cache se captura antes de ensureReady y el sampleState escri
       workOrders: [{ ot: "SAMPLE-WO" }],
     },
     storage,
-    ensureReady: async (context) => {
-      context.scheduleLocalStorageFlush();
-    },
     remote: remoteState,
     bridgeResults: {
-      getAppStateIfChanged: structuredClone(remoteState),
+      // La escritura durante la espera: mientras el remoto responde, alguien escribe un
+      // sampleState NUEVO en la clave del estado. Si la decision de "¿usable?" se tomara
+      // despues de este await, ese sampleState (sin la marca performanceCache) la
+      // invalidaria y la app bajaria el estado entero otra vez.
+      getAppStateIfChanged: (revision) => {
+        storage.set("test", JSON.stringify({ revision: 99, operations: [], workOrders: [] }));
+        assert.equal(revision, 12, "se le debe preguntar por la revision de la cache, no por la del sampleState");
+        return structuredClone(remoteState);
+      },
     },
   });
 
   await fixture.context.loadAppStateInBackground();
 
-  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"],
+    "la cache era utilizable: hay que preguntar por el cambio, no bajar el estado entero");
   assert.equal(fixture.state.revision, 13);
   assert.equal(fixture.state.operations[0].id, "remote-op");
 });

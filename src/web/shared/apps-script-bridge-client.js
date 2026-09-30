@@ -1,58 +1,40 @@
 (function initAppsScriptBridge(root) {
   "use strict";
 
-  const DEFAULT_WEB_APP_URL = "__PP_APPS_SCRIPT_WEB_APP_URL__";
-  const CLIENT_SOURCE = "pp-github-client";
-  const BRIDGE_SOURCE = "pp-appscript-bridge";
-  const READY_TIMEOUT_MS = 30000;
-  const CALL_TIMEOUT_MS = 120000;
-  const METHOD_TIMEOUT_MS = {
-    // MEDIDO 2026-09-29 abriendo la pagina de verdad en un navegador: getAppState AGOTA
-    // el tiempo generico de 120 s y la app se queda con el cache local, que en un
-    // navegador recien abierto esta vacio. La pagina aparece SIN operaciones, SIN OTs
-    // y SIN catalogo, y el unico aviso es un console.warn que nadie ve.
-    //
-    // Cuanto tarda de verdad, medido con el techo quitado: getAppState 11,3 s y
-    // getAppStateIfChanged 197 s en la misma corrida, o sea 3 min 17 s. Con eso, 120 s
-    // no es un margen corto: es menos que el peor caso que se ha visto. Se suben a
-    // 420 s, el mismo techo que ya usan los metodos de NetSuite.
-    //
-    // Esto NO arregla la lentitud, solo deja de cortar la llamada antes de que
-    // responda. La lentitud de fondo es de Apps Script: 74 llamadas al puente en una
-    // sola carga, cada una con arranque en frio. Lo que la quita de raiz es leer de
-    // Supabase, donde las mismas once tablas tardan 239 ms.
-    getAppState: 420000,
-    getAppStateIfChanged: 420000,
-    publishDraftPlan: 360000,
-    saveDraftSnapshot: 300000,
-    restorePublishedPlanAsDraft: 300000,
-    savePlanningStateOptimized: 180000,
-    saveAppState: 180000,
-    syncNetSuitePlanningData: 360000,
-    // La sincronizacion de OTs pagina el RESTlet 1766 REQ_FIFO y mide 43-73 s en produccion,
-    // mas hasta 17 s por peticion que sufra el limite de solicitudes (2+5+10 s de espera).
-    // Con el generico de 120 s el PUENTE cortaba antes que el cliente
-    // (NETSUITE_BACKLOG_SYNC_TIMEOUT_MS) y el mensaje que veia el usuario era el del puente en
-    // lugar del util. Estos dos metodos comparten el mismo fetch: 420 s cubren dos intentos del
-    // cliente (2 x 180 + 5 s) y el puente sigue siendo el reloj mas externo, de modo que el
-    // corte con mensaje accionable sea siempre el del cliente.
-    fetchNetSuiteWorkOrdersLite: 420000,
-    syncNetSuiteWorkOrdersLite: 420000,
-    // El cliente envuelve getPlanningWorkOrderDataBatch en NETSUITE_PLANNING_TIMEOUT_MS (15 s).
-    // Sin entrada propia hereda CALL_TIMEOUT_MS (120 s): el cliente aborta a los 15 s y el
-    // puente sigue esperando 120 s, tirando el trabajo del servidor. 20 s deja que el
-    // corte con mensaje accionable sea siempre el del cliente.
-    getPlanningWorkOrderDataBatch: 20000,
-  };
+  /**
+   * EL PUENTE DE APPS SCRIPT ESTA DESHABILITADO. NetSuite ya carga a Supabase y Supabase
+   * es la fuente; la app habla con Supabase por PPSupabaseReader, PPSupabaseWriter y
+   * PPSupabaseBridgeReplacement (RULE-SUP-029).
+   *
+   * POR QUE ESTE ARCHIVO SIGUE EXISTIENDO, siendo que ya no hace nada. Porque varios lugares
+   * leen `window.PPAppsScriptBridge.isConfigured` / `.nativeRuntimeAvailable` /
+   * `.getBackendUrl` para decidir COMO behaves, y borrarlos de golpe haria fallar la pagina
+   * con un TypeError en vez de con un motivo. Lo que hay aqui son solo las PUERTAS, y todas
+   * rechazan con un motivo que dice que mas.
+   *
+   * LO QUE SE BORRO, y por que no se puede volver a colar. Este archivo montaba un iframe
+   * oculto contra el web app de Apps Script y hablaba por postMessage. MEDIDO 2026-09-30 en
+   * la pagina real: con `call` ya rechazando todo, la consola seguia mostrando
+   *   script.google.com/macros/s/AKfy.../exec?app=bridge&v=2.51.0
+   * porque `ensureReady` seguia siendo `ensureBridge` y `loadAppStateInBackground` lo llamaba
+   * en cada arranque. O sea que el sitio ya no tenia un camino de DATOS hacia Apps Script,
+   * pero si una dependencia VIVA: se descargaba el script de Google entero en cada carga, y
+   * mientras ese codigo siga en el bundle, cualquier llamada futura a `ensureBridge` lo
+   * reactiva sin que nadie se entere. Por eso no se deja: la maqueria del iframe, los
+   * timeouts y el listener de `message` desaparecieron de verdad, no quedaron ahi.
+   *
+   * LO QUE SE GANO CON QUITARLO, que es el motivo de fondo y la cifra que hay que recordar.
+   * MEDIDO 2026-09-29 con el techo de tiempo quitado, en la misma corrida: getAppState tardaba
+   * 11,3 s y getAppStateIfChanged 197 s, o sea 3 minutos 17 segundos. Y no era una vez: eran
+   * 74 llamadas al puente en una sola carga de pagina, cada una con su arranque en frio. Los
+   * presupuestos por metodo (420 s para los lentos, 120 s generico) existian solo para no
+   * cortar esas respuestas antes de que llegaran: con getAppStateIfChanged en 197 s, 120 s no
+   * era un margen corto, era MENOS que el peor caso, y cortarlo producia una pagina vacia
+   * (0 operaciones, 0 OTs, 0 catalogo) con un unico rastro en un console.warn. Lo que lo quita
+   * de raiz no es un timeout mas alto: es que las mismas once tablas tardan 239 ms en Supabase.
+   */
 
-  let iframe = null;
-  let bridgeWindow = null;
-  let channel = "";
-  let readyPromise = null;
-  let resolveReady = null;
-  let rejectReady = null;
-  let sequence = 0;
-  const pending = new Map();
+  const DEFAULT_WEB_APP_URL = "__PP_APPS_SCRIPT_WEB_APP_URL__";
 
   function nativeRuntimeAvailable() {
     return typeof google !== "undefined" && Boolean(google.script && google.script.run);
@@ -63,108 +45,29 @@
     return override || DEFAULT_WEB_APP_URL;
   }
 
+  /**
+   * Que se lea `false` es lo HONESTO: no hay puente, y decir `true` porque la URL este
+   * embebida en el bundle fue exactamente lo que hacia que el sitio creyera que tenia
+   * backend (MEDIDO 2026-09-29: `isConfigured` decia "esta configurado" en el sitio
+   * estatico y por eso el guardado del plan se iba por el puente).
+   */
   function isConfigured() {
-    return nativeRuntimeAvailable() || /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec(?:[?#].*)?$/.test(configuredUrl());
+    return false;
   }
 
-  function bridgeUrl() {
-    const url = new URL(configuredUrl());
-    url.searchParams.set("app", "bridge");
-    // Solo cache-busting del iframe: el servidor NO lee este parametro (PP_isBridgeRequest_
-    // solo mira app=bridge). Debe coincidir con PP_APP_VERSION de src/server/01-code.js y
-    // con la version de package.json, que son el mismo numero en tres lugares (RULE-WEB-003).
-    url.searchParams.set("v", "2.51.0");
-    return url.toString();
+  const MOTIVO = "El puente de Apps Script esta deshabilitado: NetSuite ya carga a Supabase y la app lee y escribe en Supabase (RULE-SUP-029)";
+
+  async function call(method) {
+    return Promise.reject(new Error(`${MOTIVO}. Metodo: ${method}`));
   }
 
-  function randomChannel() {
-    if (root.crypto && typeof root.crypto.randomUUID === "function") return root.crypto.randomUUID();
-    return `pp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
-
-  function ensureBridge() {
-    if (nativeRuntimeAvailable()) return Promise.resolve();
-    if (!isConfigured()) return Promise.reject(new Error("La URL del backend de Apps Script no esta configurada"));
-    if (readyPromise) return readyPromise;
-
-    channel = randomChannel();
-    readyPromise = new Promise((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-
-    iframe = document.createElement("iframe");
-    iframe.id = "ppAppsScriptBridge";
-    iframe.title = "Conexion segura con Apps Script";
-    iframe.hidden = true;
-    iframe.setAttribute("aria-hidden", "true");
-    iframe.src = bridgeUrl();
-    iframe.addEventListener("error", () => {
-      rejectReady?.(new Error("No se pudo cargar el puente de Apps Script"));
-    }, { once: true });
-    (document.body || document.documentElement).appendChild(iframe);
-
-    const timer = root.setTimeout(() => {
-      rejectReady?.(new Error("Apps Script no respondio al iniciar la conexion"));
-    }, READY_TIMEOUT_MS);
-    readyPromise.then(() => root.clearTimeout(timer), () => root.clearTimeout(timer));
-    return readyPromise;
-  }
-
-  function postInit(targetWindow) {
-    const destination = targetWindow || bridgeWindow;
-    if (!destination) return;
-    destination.postMessage({
-      source: CLIENT_SOURCE,
-      type: "init",
-      channel,
-    }, "*");
-  }
-
-  function isTrustedBridgeOrigin(origin) {
-    try {
-      const host = new URL(origin).hostname;
-      return host === "script.google.com" || host.endsWith(".googleusercontent.com");
-    } catch (_) {
-      return false;
-    }
-  }
-
-  root.addEventListener("message", (event) => {
-    if (!iframe) return;
-    const message = event.data || {};
-    if (message.source !== BRIDGE_SOURCE) return;
-
-    if (message.type === "hello") {
-      if (!isTrustedBridgeOrigin(event.origin)) return;
-      bridgeWindow = event.source;
-      postInit(bridgeWindow);
-      return;
-    }
-
-    if (message.type === "ready" && message.channel === channel) {
-      resolveReady?.();
-      resolveReady = null;
-      rejectReady = null;
-      return;
-    }
-
-    if (message.type !== "result" || message.channel !== channel || !message.id) return;
-    const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    root.clearTimeout(request.timer);
-    if (message.ok) request.resolve(message.result);
-    else request.reject(new Error(message.error || "Error desconocido de Apps Script"));
-  });
-
-  async function call(method, args) {
-    return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
+  async function ensureReady() {
+    return Promise.reject(new Error(`${MOTIVO}. No se monta ningun iframe`));
   }
 
   root.PPAppsScriptBridge = {
     call,
-    ensureReady: ensureBridge,
+    ensureReady,
     isConfigured,
     nativeRuntimeAvailable,
     getBackendUrl: configuredUrl,
@@ -175,7 +78,7 @@
       return false;
     };
     root.callAppsScript = function(method, ...args) {
-      return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
+      return Promise.reject(new Error(`${MOTIVO}. Metodo: ${method}`));
     };
   }
 
