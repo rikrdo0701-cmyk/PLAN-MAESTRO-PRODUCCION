@@ -13696,6 +13696,17 @@ function motivoDelInforme(informe) {
     .filter((tabla) => tablas[tabla] && tablas[tabla].error)
     .map((tabla) => tabla + ": " + tablas[tabla].error);
   if (!fallos.length) return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
+
+  // MEDIDO 2026-09-30: cuando el fallo es "no unique or exclusion constraint matching the
+  // ON CONFLICT", el escritor deja una `nota` con lo que hay que hacer. Se sube la PRIMERA
+  // nota antes que el error crudo, porque el error dice que paso y la nota dice que hacer, y
+  // en un toast de 220 caracteres el "que hacer" es lo que se necesita. Sin esto se vio en
+  // produccion un 42P01 pelado, que exige saber de Postgres para saber por donde empezar.
+  const notas = Object.keys(tablas)
+    .filter((tabla) => tablas[tabla] && tablas[tabla].nota)
+    .map((tabla) => tablas[tabla].nota);
+  if (notas.length) return notas[0].length <= 220 ? notas[0] : notas[0].slice(0, 217) + "...";
+
   const texto = fallos.join(" | ");
   if (texto.length <= 220) return texto;
   // Con muchas tablas que fallan, el nombre de la tabla es lo que hace falta para no perder:

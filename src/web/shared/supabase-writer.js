@@ -507,7 +507,24 @@
       });
       return { insertadas: filas.length, error: null };
     } catch (error) {
-      return { insertadas: 0, error: sano((error && error.message) || error, ctx.secretos) };
+      const crudo = sano((error && error.message) || error, ctx.secretos);
+      // MEDIDO 2026-09-30 en produccion, 4 catalogos con HTTP 400 y este texto:
+      //   there is no unique or exclusion constraint matching the ON CONFLICT specification
+      // O sea: el on_conflict que mandamos no lo puede inferir la base. Las dos causas
+      // posibles, y las dos se arreglan con DDL, no con codigo: el indice no existe, o es
+      // un indice UNICO PARCIAL (PostgreSQL solo infiere indices sin predicado, y PostgREST
+      // no manda el predicado). Sin este texto, quien lo lee tiene que saber de Postgres
+      // para saber que hacer; con el, sabe que tiene que aplicar el DDL.
+      const sinRestriccion = /no unique or exclusion constraint matching the ON CONFLICT/i.test(crudo);
+      if (sinRestriccion) {
+        return {
+          insertadas: 0,
+          error: crudo,
+          nota: `a ${tabla} le falta un indice unico COMPLETO sobre (${onConflict}), o el que hay es parcial. `
+            + "Es un cambio de schema, no de la pagina: aplica docs/schema-supabase-cierre-catalogos.sql",
+        };
+      }
+      return { insertadas: 0, error: crudo };
     }
   }
 

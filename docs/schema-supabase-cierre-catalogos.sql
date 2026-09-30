@@ -105,13 +105,98 @@ alter table public.capabilities
 -- (las filas sembradas antes de esta migracion lo traian vacio).
 alter table public.tools
   add column if not exists codigo text not null default '';
-create unique index if not exists tools_codigo_uniq
-  on public.tools (codigo) where codigo <> '';
 
 alter table public.subcontracts
   add column if not exists codigo text not null default '';
-create unique index if not exists subcontracts_codigo_uniq
-  on public.subcontracts (codigo) where codigo <> '';
+
+-- MEDIDO 2026-09-30 en la pagina real, guardando los catalogos: 4 tablas con HTTP 400
+--   {"code":"42P01","message":"there is no unique or exclusion constraint matching
+--    the ON CONFLICT specification"}
+-- La primera era tools. Y la causa es el `where codigo <> ''` de los indices de mas abajo:
+-- un indice UNICO PARCIAL no lo puede inferir ON CONFLICT (columna). PostgreSQL solo
+-- infiere un indice sin predicado, o uno cuyo predicado se escriba EXACTAMENTE igual en la
+-- clausula, y PostgREST manda `on_conflict=codigo`, que no lleva predicado. O sea que el
+-- indice existia, se llamaba tools_codigo_uniq, y aun asi el INSERT con on_conflict fallaba.
+--
+-- POR QUE NO SE ARREGLA PONIENDO EL PREDICADO EN EL ESCRITOR. Se podria, con un
+-- `merge-duplicates` y una columna expression, pero eso obliga a que la columna del ON
+-- CONFLICT sea la expresion (`on coalesce(codigo,'')`) en vez del nombre, y entonces cada
+-- catalogo que se lea y se vuelva a mandar tiene que expresarse igual. Un indice unico
+-- COMPLETO es mas simple de razonar y es lo que la base puede usar sola.
+--
+-- POR QUE SE PUEDE HACER COMPLETO. El predicado existia porque las filas sembradas antes
+-- traian `codigo` vacio, y varias vacias rompen un indice unico. El escritor NUNCA manda
+-- `codigo` vacio (filtra `Boolean(fila.codigo)`), asi que de ahora en adelante no puede
+-- haber duplicados de verdad. Las filas viejas se numeran para que el indice se pueda
+-- crear, y eso es una decision medida, no un dato inventado: se prefijan con
+-- 'LEGADO-' + el id, que es unico por construccion, y el siguiente espejo de catalogos
+-- reescribe la tabla entera con el codigo real de la hoja.
+update public.tools
+   set codigo = 'LEGADO-' || id::text
+ where codigo is null or btrim(codigo) = '';
+
+update public.subcontracts
+   set codigo = 'LEGADO-' || id::text
+ where codigo is null or btrim(codigo) = '';
+
+-- EL DROP DE ABAJO NO ES OPCIONAL, Y ES LO QUE HACE QUE ESTA SECCION SIRVA DE ALGO.
+-- Los indices tools_codigo_uniq y subcontracts_codigo_uniq YA EXISTEN en la base: los creo
+-- la seccion 3 de este mismo archivo, como PARCIALES (con where codigo <> ''). Y un
+-- 'create unique index if not exists' sobre un nombre que ya existe NO HACE NADA: no
+-- reemplaza el indice, no lo convierte en completo, se va en silencio. Sin el drop, aplicar
+-- este archivo otra vez no arreglaria nada y el 42P01 seguiria igual, con el schema del repo
+-- diciendo una cosa y la base teniendo otra. Un DDL que parece arreglado y no lo esta es peor
+-- que uno que no existe, porque el que existe da por hecho que se aplico.
+drop index if exists public.tools_codigo_uniq;
+drop index if exists public.subcontracts_codigo_uniq;
+
+create unique index tools_codigo_uniq
+  on public.tools (codigo);
+
+create unique index subcontracts_codigo_uniq
+  on public.subcontracts (codigo);
+
+-- -----------------------------------------------------------------------------
+-- 3.b calendar_exceptions y ot_configurations: la clave que el escritor YA mandaba
+-- -----------------------------------------------------------------------------
+-- MEDIDO 2026-09-30, mismo lote: calendar_exceptions y ot_configurations tambien salieron
+-- con 42P01, y aqui la causa es mas simple: NO HABIA indice unico. El escritor manda
+-- on_conflict=fecha_inicio,concepto,maquina y on_conflict=ot desde antes, y en el
+-- schema no habia nada que los respaldara. Sin una restriccion unica, un guardado de
+-- catalogos NO es idempotente: cada guardado insertaria otra fila y la tabla creeria
+-- sin que nadie lo pidiera.
+--
+-- NULLS: en PostgreSQL un indice unico NO considera nulos iguales (NULL != NULL), asi que
+-- un `maquina` vacio o nuloaria la unicidad. Por eso la columna se normaliza a '' al
+-- escribir y el indice es sobre la columna, no sobre la expresion. El escritor ya manda
+-- concepto como texto ("" si no hay) y maquina como texto; el '' de esta pieza es la red
+-- para lo que venga de otro escritor.
+--
+-- ESTAS TABLAS NO SE BORRAN al guardar: son ANEXO, no espejo (ver el bloque de
+-- guardarCatalogos). Por eso la clave natural tiene que ser de verdad unica: es lo unico
+-- que impide que un guardado repetido duplique filas.
+create unique index if not exists calendar_exceptions_clave_uniq
+  on public.calendar_exceptions (fecha_inicio, concepto, maquina);
+
+create unique index if not exists ot_configurations_ot_uniq
+  on public.ot_configurations (ot);
+
+-- 3.c article_configurations y machine_planning_overrides.
+-- MEDIDO 2026-09-30: estas dos NO salieron en el 42P01 de produccion, pero al escribir el
+-- test que amarra el on_conflict del escritor con los indices del DDL aparecieron: el
+-- escritor manda on_conflict=articulo y on_conflict=machine_nombre desde antes, y en el
+-- schema del repo no habia indice declarado para ninguna de las dos. O la base real los tiene
+-- y el repo no lo sabe, o no los tiene y solo se salvan porque no hay filas que mandar.
+-- Ninguna de las dos se puede dar por buena sin mirarla.
+-- Son idempotentes: si el indice ya existe con otro nombre queda un segundo unico sobre las
+-- mismas columnas, que es inocuo. Si HUBIERA filas duplicadas el create falla y lo dice, que
+-- es lo que hace falta. La limpieza de duplicados NO se automatiza a proposito: borraria filas
+-- sin que nadie lo pidiera, que es el PELIGRO MEDIDO que ya se sufrio con ingesta_mirror.
+create unique index if not exists article_configurations_articulo_uniq
+  on public.article_configurations (articulo);
+
+create unique index if not exists machine_planning_overrides_machine_uniq
+  on public.machine_planning_overrides (machine_nombre);
 
 comment on column public.tools.codigo is
   'ID de la hoja HERRAMENTALES. Distinto de id (uuid interno).';
