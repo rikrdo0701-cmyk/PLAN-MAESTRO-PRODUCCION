@@ -113,6 +113,17 @@ function escenario({ guardar = null, esRuntimeDeAppsScript = false } = {}) {
       llamadas.push({ metodo: "callAppsScript", method, args });
       return { revision: 1, savedAt: "2026-01-01T00:00:00.000Z" };
     },
+    // PPSupabaseBridgeReplacement: el reemplazo del puente de Apps Script por Supabase.
+    // syncNetSuiteTwoPhase y persistOptimisticPlanStatus lo usan para leer de Supabase.
+    // saveOperationPlanStatus delega en el writer para que los tests de fallen puedan simular errores.
+    PPSupabaseBridgeReplacement: {
+      syncNetSuitePlanningData: async () => ({ operations: [], materials: [], source: "supabase" }),
+      saveOperationPlanStatus: async (payload) => {
+        const result = await writer.guardar(ctx.state, { operationPlanStatuses: payload.statuses });
+        if (result?.ok === false) throw new Error(result?.motivo || "No se pudo guardar");
+        return { revision: result?.revision || 1, savedAt: "2026-01-01T00:00:00.000Z" };
+      },
+    },
     appSheetTryAcquireSaveGate: () => ({}),
     appSheetReleaseSaveGate: () => true,
     appSheetMarkDirtyScope: () => {},

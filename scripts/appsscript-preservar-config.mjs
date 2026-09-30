@@ -44,7 +44,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = path.join(RAIZ, "dist");
+// MEDIDO 2026-09-30: los tests de la supervivencia (tests/supabase-config-supervivencia) tienen
+// que tocar el dist/ REAL, y por eso lo snapshoteaban y lo restauraban. Con la maquina ocupada
+// esa restauracion se cruzaba con la corrida y el test daba rojo sin que hubiera cambio:
+// un test que a veces falla por el reloj entrena a ignorar el rojo. Este es otro gancho de
+// PRUEBA, igual que PRESERVE_CONFIG_REMOTO_DIR mas abajo, y ningun workflow lo usa: en
+// produccion DIST sigue siendo dist/.
+const DIST = process.env.PRESERVE_CONFIG_DIST_DIR
+  ? path.resolve(process.env.PRESERVE_CONFIG_DIST_DIR)
+  : path.join(RAIZ, "dist");
 const TEMPORAL = path.join(RAIZ, ".clasp-preserve");
 
 const limpiarTemporal = () => rmSync(TEMPORAL, { recursive: true, force: true });

@@ -5303,7 +5303,7 @@ async function loadInspectionRouteCatalog(force = false) {
   inspectionRouteCatalogLoading = true;
   renderInspectionRouteCatalog();
   try {
-    const result = await callAppsScript("getInspectionDrawingRoutes", "");
+    const result = await PPSupabaseBridgeReplacement.getInspectionDrawingRoutes("");
     if (!result?.ok) throw new Error(result?.error || "No se pudieron cargar los tramos");
     inspectionRouteCatalogRows = window.InspectionCore.inspectionRouteRows(result.data || []);
     inspectionRouteCatalogReady = true;
@@ -5337,7 +5337,7 @@ async function editInspectionRouteCatalogRow(index) {
       errorElement.textContent = "";
       errorElement.hidden = true;
       try {
-        const result = await callAppsScript("saveInspectionLink", payload);
+        const result = await PPSupabaseBridgeReplacement.saveInspectionLink(payload);
         if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el tramo");
         const saved = { ...payload, ...(result.data || {}) };
         inspectionRouteCatalogRows = window.InspectionCore.applyInspectionRouteSave(inspectionRouteCatalogRows, row, saved);
@@ -6647,13 +6647,9 @@ async function persistPlanSnapshot() {
   }, new Date().toISOString());
   try {
     let saved;
-    if (isAppsScriptRuntime()) {
-      saved = await callAppsScript("saveDraftSnapshot", payload);
-    } else {
-      const guardado = await guardarPlanEnSupabase({ snapshots: [payload] });
-      if (!guardado) throw new Error("No se pudo guardar la instantanea en Supabase");
-      saved = payload;
-    }
+    const guardado = await guardarPlanEnSupabase({ snapshots: [payload] });
+    if (!guardado) throw new Error("No se pudo guardar la instantanea en Supabase");
+    saved = payload;
     upsertPlanSnapshotRecord(saved, "BORRADOR");
     return saved;
   } catch (error) {
@@ -6667,9 +6663,8 @@ async function persistPlanSnapshot() {
 }
 
 async function persistPlanAutoBackup(payload = null) {
-  if (!isAppsScriptRuntime()) return { ok: false, reason: "runtime-local", snapshotId: "" };
   try {
-    const saved = await callAppsScript("savePlanSnapshot", payload || buildPlanAutoBackupPayload());
+    const saved = await PPSupabaseBridgeReplacement.savePlanSnapshot(payload || buildPlanAutoBackupPayload());
     upsertPlanSnapshotRecord(saved, "RESPALDO");
     return Object.assign({ ok: true, kind: "RESPALDO" }, saved || {});
   } catch (error) {
@@ -6745,9 +6740,7 @@ async function publishCurrentPlan() {
     };
     const publishFold = draftViewStatuses();
     setPublishStatus("Publicando plan...", 40);
-    const result = isAppsScriptRuntime()
-      ? await callAppsScript("publishDraftPlan", payload)
-      : { ok: true, activeVersion: await persistPlanSnapshot() };
+    const result = { ok: true, activeVersion: await persistPlanSnapshot() };
     const active = result?.activeVersion || result;
     if (active?.snapshotId) {
       setPublishStatus("Guardando version publicada...", 75);
@@ -7273,7 +7266,7 @@ async function openRestoreDraftDialog() {
 async function refreshRestorePreviewData() {
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("fetchNetSuiteWorkOrdersLite"),
+      PPSupabaseBridgeReplacement.fetchNetSuiteWorkOrdersLite(),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     validateNetSuiteImportedData(payload, "workOrders");
@@ -7317,9 +7310,7 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
         };
       }
     }
-    const snapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    const snapshot = await PPSupabaseBridgeReplacement.getPlanSnapshot(snapshotId);
     const preview = window.PlanningWorkflowCore.reconcilePublishedPlan(snapshot, previewState);
     const summary = preview.summary;
     const confirmed = await openPlanningDialog({
@@ -7338,7 +7329,7 @@ async function previewDraftRestore(snapshotId, syncBeforeRestore) {
 
 async function confirmDraftRestore(snapshotId, previewState) {
   if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
-  const result = await callAppsScript("restorePublishedPlanAsDraft", snapshotId, previewState);
+  const result = await PPSupabaseBridgeReplacement.restorePublishedPlanAsDraft(snapshotId, previewState);
   if (!result?.state) throw new Error("El servidor no devolvio el borrador restaurado");
   state = result.state;
   normalizeState();
@@ -7366,9 +7357,7 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
   planSnapshotsLoading = true;
   renderPlanSnapshotSelect();
   try {
-    const snapshots = isAppsScriptRuntime()
-      ? await callAppsScript("listPlanSnapshots")
-      : await fetchJson(PLAN_SNAPSHOTS_API);
+    const snapshots = await PPSupabaseBridgeReplacement.listPlanSnapshots();
     planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
       .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     savePlanSnapshotsCache(planSnapshots);
@@ -7492,9 +7481,7 @@ async function fetchJson(url) {
 }
 
 async function fetchPlanSnapshot(snapshotId) {
-  return isAppsScriptRuntime()
-    ? await callAppsScript("getPlanSnapshotLight", snapshotId)
-    : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+  return PPSupabaseBridgeReplacement.getPlanSnapshotLight(snapshotId);
 }
 
 function selectedPlanSourceId() {
@@ -7798,7 +7785,7 @@ async function ensureInspectionWorkOrders(ots) {
       const item = queue.shift();
       if (!item) continue;
       try {
-        const result = await withTimeout(callAppsScript("getInspectionWorkOrder", item.ot), 60000);
+        const result = await withTimeout(PPSupabaseBridgeReplacement.getInspectionWorkOrder(item.ot), 60000);
         if (!result?.ok) {
           failed += 1;
           recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", result?.error || "respuesta invalida");
@@ -8421,12 +8408,12 @@ async function openOtDrawing(ot, part) {
   }
 
   try {
-    const result = await callAppsScript("getInspectionWorkOrderBundle", key);
+    const result = await PPSupabaseBridgeReplacement.getInspectionWorkOrderBundle(key);
     if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la OT");
     let drawing = drawingFromBundle(result.data);
     if (!drawing && partLabel) {
       try {
-        const routes = await callAppsScript("getInspectionDrawingRoutes", partLabel);
+        const routes = await PPSupabaseBridgeReplacement.getInspectionDrawingRoutes(partLabel);
         if (routes?.ok) drawing = drawingFromRouteRows(routes.data, partLabel);
       } catch (routeError) {
         // El bundle sigue siendo la fuente principal; el fallback es opcional.
@@ -9168,30 +9155,25 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
     return true;
   }
   try {
-    if (isAppsScriptRuntime()) {
-      window.clearTimeout(appSheetSaveTimer);
-      operationStatusSavesInFlight += 1;
-      try {
-        const origin = planStatusOriginForSource();
-        const bucket = origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin] || {};
-        const savedStatuses = affectedKeys.map((itemKey) => bucket[itemKey]).filter(Boolean);
-        const saved = await callAppsScript("saveOperationPlanStatus", {
-          revision: Number(state.revision || 0),
-          status: savedStatuses[0] || {},
-          statuses: savedStatuses,
-        });
-        state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
-        state.savedAt = saved?.savedAt || state.savedAt;
-        affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
-        affectedKeys.forEach(discardDetachedPlanStatusRows);
-        return true;
-      } finally {
-        operationStatusSavesInFlight -= 1;
-        if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
-      }
-    } else {
-      appSheetMarkDirtyScope("plan");
-      if (!await guardarPlanEnSupabase()) throw new Error("No se pudo guardar el estado");
+    window.clearTimeout(appSheetSaveTimer);
+    operationStatusSavesInFlight += 1;
+    try {
+      const origin = planStatusOriginForSource();
+      const bucket = origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin] || {};
+      const savedStatuses = affectedKeys.map((itemKey) => bucket[itemKey]).filter(Boolean);
+      const saved = await PPSupabaseBridgeReplacement.saveOperationPlanStatus({
+        revision: Number(state.revision || 0),
+        status: savedStatuses[0] || {},
+        statuses: savedStatuses,
+      });
+      state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
+      state.savedAt = saved?.savedAt || state.savedAt;
+      affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+      affectedKeys.forEach(discardDetachedPlanStatusRows);
+      return true;
+    } finally {
+      operationStatusSavesInFlight -= 1;
+      if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
     }
     affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
     affectedKeys.forEach(discardDetachedPlanStatusRows);
@@ -9515,7 +9497,7 @@ async function syncBacklogWorkOrders() {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         payload = await window.PlanningWorkflowCore.withTimeout(
-          callAppsScript("fetchNetSuiteWorkOrdersLite"),
+          PPSupabaseBridgeReplacement.fetchNetSuiteWorkOrdersLite(),
           NETSUITE_BACKLOG_SYNC_TIMEOUT_MS,
         );
         break;
@@ -9712,7 +9694,7 @@ async function refreshSmartSyncOtTimes(records) {
   // Una sola llamada batch para todas las OTs candidatas
   const ots = toRefresh.map(({ record }) => record.ot);
   const batchResult = await window.PlanningWorkflowCore.withTimeout(
-    callAppsScript("getPlanningWorkOrderDataBatch", ots),
+    PPSupabaseBridgeReplacement.getPlanningWorkOrderDataBatch(ots),
     NETSUITE_PLANNING_TIMEOUT_MS
   );
 
@@ -9760,7 +9742,7 @@ async function syncNetSuiteTwoPhase(options = {}) {
   setNetSuiteSyncPhaseLabel("Sincronizando operaciones...");
   try {
     const planningPayload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("syncNetSuitePlanningData"),
+      PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
       NETSUITE_PLANNING_TIMEOUT_MS * 24
     );
     applyNetSuitePlanningPayload(planningPayload);
@@ -10098,7 +10080,7 @@ async function confirmUnconfirmedWorkOrderClosures() {
   if (!pendientes.length) return { asked: 0 };
   let respuesta = null;
   try {
-    respuesta = await callAppsScript("confirmWorkOrderClosures", [pendientes.map((item) => item.ot || "").filter(Boolean)]);
+    respuesta = await PPSupabaseBridgeReplacement.confirmWorkOrderClosures(pendientes.map((item) => item.ot || "").filter(Boolean));
   } catch (error) {
     // Un fallo al preguntar NUNCA cierra una OT. Se deja todo como esta.
     state.lastWorkOrderClosureCheck = {
@@ -10142,33 +10124,13 @@ async function syncNetSuiteData(showMessage, options = {}) {
   setNetSuiteSyncState(true);
   const mode = options.mode === "full" ? "full" : "workOrders";
   try {
-    if (isAppsScriptRuntime()) {
-      const imported = mode === "full"
-        ? await callAppsScript("syncNetSuitePlant")
-        : await callAppsScript("syncNetSuiteWorkOrders");
-      validateNetSuiteImportedData(imported, mode);
-      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-      if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
-      // Pregunta a NetSuite, folio por folio, si las OTs que NO vinieron en el listado estan
-      // cerradas de verdad (RULE-OT-051). El listado del 1764 va con onlyOpen:true, asi que
-      // una OT cerrada no aparece: solo desaparece. Sin esta pregunta, "no vino" y "esta
-      // cerrada" serian lo mismo. Con ella, la OT se queda hasta que NetSuite lo diga.
-      await confirmUnconfirmedWorkOrderClosures();
-    } else {
-      // EN EL NAVEGADOR NO HAY JSON ESTATICO QUE TRAER, Y ESTA RAMA SIEMPRE FALLABA.
-      // fetchNetSuiteExercise() pide /api/netsuite-exercise y data/netsuite-exercise.json, y en
-      // GitHub Pages ambos responden 404 (medido el 2026-09-27: "Site not found" / "Page not
-      // found"; ningun archivo esta en el repo). O sea que syncNetSuiteData en el navegador estaba
-      // condenada a fallar, y el catch dejaba el aviso CRITICO de "Sincronizacion NetSuite" pegado
-      // para siempre, porque clearNetSuiteSyncAlert() solo estaba en la rama de Apps Script.
-      // La unica via real en el navegador es el puente: google.script.run lo simula el bridge
-      // (syncBacklogWorkOrders ya lo usa y llega al servidor).
-      const imported = mode === "full"
-        ? await callAppsScript("syncNetSuitePlant")
-        : await callAppsScript("syncNetSuiteWorkOrders");
-      validateNetSuiteImportedData(imported, mode);
-      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    }
+    const imported = mode === "full"
+      ? await PPSupabaseBridgeReplacement.syncNetSuitePlant()
+      : await PPSupabaseBridgeReplacement.syncNetSuiteWorkOrders();
+    validateNetSuiteImportedData(imported, mode);
+    await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+    if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
+    await confirmUnconfirmedWorkOrderClosures();
     persistReferencePricesFromSync();
     clearNetSuiteSyncAlert();
     if (showMessage) {
@@ -10490,14 +10452,13 @@ function ensureWorkOrderPlanningData(ot, options = {}) {
     return Promise.resolve({ ready: true, source: "cached" });
   }
   individualPlanningLoadCompleted.delete(key);
-  if (!isAppsScriptRuntime()) return Promise.resolve({ ready: false, error: "Apps Script no disponible" });
   if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
   const otSignature = individualPlanningOtSignature(key);
 
   const request = (async () => {
     try {
       const payload = await window.PlanningWorkflowCore.withTimeout(
-        callAppsScript("getPlanningWorkOrderData", ot),
+        PPSupabaseBridgeReplacement.getPlanningWorkOrderData(ot),
         INDIVIDUAL_PLANNING_TIMEOUT_MS,
       );
       if (!payload?.ok) return { ready: false, error: String(payload?.error || "No se pudieron cargar las operaciones") };
@@ -10573,10 +10534,6 @@ async function updateSelectedOtFromNetSuite(ot) {
     showToast("OT bloqueada: no se actualizan tiempos porque esta fija", 6000);
     return { ok: false, error: "OT bloqueada" };
   }
-  if (!isAppsScriptRuntime()) {
-    showToast("Apps Script no disponible para actualizar la OT", 6000);
-    return { ok: false, error: "Apps Script no disponible" };
-  }
   const button = document.querySelector(`[data-detail-ot-refresh="${CSS.escape(ot)}"]`);
   const previousLabel = button?.getAttribute("aria-label") || "";
   if (button) {
@@ -10588,7 +10545,7 @@ async function updateSelectedOtFromNetSuite(ot) {
   const before = otOperationsRouteTimesSignature(key);
   try {
     const payload = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("getPlanningWorkOrderData", ot),
+      PPSupabaseBridgeReplacement.getPlanningWorkOrderData(ot),
       INDIVIDUAL_PLANNING_TIMEOUT_MS,
     );
     if (!payload?.ok) {
@@ -10698,7 +10655,7 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
     // BATCH: una sola llamada al servidor para todas las OTs (incluso 1)
     if (label) label.textContent = `Actualizando ${refreshOts.length} OTs...`;
     const batchResult = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("getPlanningWorkOrderDataBatch", refreshOts),
+      PPSupabaseBridgeReplacement.getPlanningWorkOrderDataBatch(refreshOts),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     if (batchResult?.ok && Array.isArray(batchResult.data)) {
@@ -10735,7 +10692,7 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
     if (missingOts.length && failed > 0 && updatedOts.length === 0) {
       if (showMessage) showToast("No se pudo actualizar OT por OT; sincronizando el plan completo...");
       const imported = await window.PlanningWorkflowCore.withTimeout(
-        callAppsScript("syncNetSuitePlanningData"),
+        PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
         NETSUITE_PLANNING_TIMEOUT_MS
       );
       await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
@@ -10794,7 +10751,7 @@ async function syncPlanningDataForSelected(showMessage, ots) {
   try {
     if (showMessage) showToast("Cargando operaciones y materiales de NetSuite...");
     const imported = await window.PlanningWorkflowCore.withTimeout(
-      callAppsScript("syncNetSuitePlanningData"),
+      PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
       NETSUITE_PLANNING_TIMEOUT_MS
     );
     await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
@@ -10878,9 +10835,7 @@ async function fetchNetSuiteExercise() {
 
 async function loadAppSheetIfAvailable(showMessage) {
   try {
-    const imported = isAppsScriptRuntime()
-      ? await callAppsScript("getAppState")
-      : importJson(await fetchAppSheetText());
+    const imported = await PPSupabaseBridgeReplacement.getAppState();
     await applyImported(imported, {
       preserveLocalPlanning: true,
       preferRemotePlanning: true,
@@ -14016,16 +13971,11 @@ function createAppSheetPayload(source = state) {
 }
 
 function isAppsScriptRuntime() {
-  return typeof google !== "undefined" && Boolean(google.script?.run);
+  return false;
 }
 
 function callAppsScript(method, ...args) {
-  return new Promise((resolve, reject) => {
-    const runner = google.script.run
-      .withSuccessHandler(resolve)
-      .withFailureHandler((error) => reject(new Error(error?.message || String(error))));
-    runner[method](...args);
-  });
+  return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
 }
 
 function showToast(message, duration = 2200) {

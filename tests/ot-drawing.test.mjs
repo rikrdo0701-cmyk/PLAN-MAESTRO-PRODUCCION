@@ -23,6 +23,16 @@ function setup(bundleResolver) {
       calls.push({ method, args });
       return bundleResolver(method, ...args);
     },
+    PPSupabaseBridgeReplacement: {
+      getInspectionWorkOrderBundle: async (key) => {
+        calls.push({ method: "getInspectionWorkOrderBundle", args: [key] });
+        return bundleResolver("getInspectionWorkOrderBundle", key);
+      },
+      getInspectionDrawingRoutes: async (partLabel) => {
+        calls.push({ method: "getInspectionDrawingRoutes", args: [partLabel] });
+        return bundleResolver("getInspectionDrawingRoutes", partLabel);
+      },
+    },
   });
   vm.runInContext(drawingFunctions, context);
   vm.runInContext(

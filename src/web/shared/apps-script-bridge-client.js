@@ -159,37 +159,7 @@
   });
 
   async function call(method, args) {
-    if (nativeRuntimeAvailable()) {
-      return new Promise((resolve, reject) => {
-        const runner = google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler((error) => reject(new Error(error && error.message ? error.message : String(error))));
-        runner[method](...(Array.isArray(args) ? args : []));
-      });
-    }
-
-    await ensureBridge();
-    const id = `rpc-${Date.now()}-${++sequence}`;
-    return new Promise((resolve, reject) => {
-      if (!bridgeWindow) {
-        reject(new Error("El puente de Apps Script no esta disponible"));
-        return;
-      }
-      const timeoutMs = METHOD_TIMEOUT_MS[method] || CALL_TIMEOUT_MS;
-      const timer = root.setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`Tiempo agotado al ejecutar ${method}`));
-      }, timeoutMs);
-      pending.set(id, { resolve, reject, timer });
-      bridgeWindow.postMessage({
-        source: CLIENT_SOURCE,
-        type: "call",
-        channel,
-        id,
-        method,
-        args: Array.isArray(args) ? args : [],
-      }, "*");
-    });
+    return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
   }
 
   root.PPAppsScriptBridge = {
@@ -202,10 +172,10 @@
 
   function installGlobalAdapter() {
     root.isAppsScriptRuntime = function() {
-      return nativeRuntimeAvailable() || isConfigured();
+      return false;
     };
     root.callAppsScript = function(method, ...args) {
-      return call(method, args);
+      return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
     };
   }
 

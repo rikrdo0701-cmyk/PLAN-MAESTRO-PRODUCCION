@@ -33,10 +33,10 @@ function createNetSuiteSync({ runtime = true, failWith = null, workOrders = [{ o
   };
 
   const factory = Function(
-    "state", "netSuiteSyncInFlight", "isAppsScriptRuntime", "callAppsScript", "validateNetSuiteImportedData",
+    "state", "netSuiteSyncInFlight", "isAppsScriptRuntime", "callAppsScript", "PPSupabaseBridgeReplacement", "validateNetSuiteImportedData",
     "applyImported", "applyNetSuiteWorkOrdersPayload", "fetchNetSuiteExercise", "importJson",
     "persistReferencePricesFromSync", "clearNetSuiteSyncAlert", "setNetSuiteSyncAlert",
-    "setNetSuiteSyncState", "render", "showToast", "STATE_BOX", "confirmUnconfirmedWorkOrderClosures",
+    "setNetSuiteSyncState", "render", "showToast", "state_BOX", "confirmUnconfirmedWorkOrderClosures",
     `${syncNetSuiteDataSource}\nreturn { syncNetSuiteData, get inFlight() { return netSuiteSyncInFlight; } };`,
   );
 
@@ -47,6 +47,20 @@ function createNetSuiteSync({ runtime = true, failWith = null, workOrders = [{ o
     async () => {
       if (failWith) throw new Error(failWith);
       return { workOrders, syncedAt: "2026-09-25T15:00:00.000Z" };
+    },
+    {
+      syncNetSuiteWorkOrders: async () => {
+        if (failWith) throw new Error(failWith);
+        return { workOrders, syncedAt: "2026-09-25T15:00:00.000Z" };
+      },
+      syncNetSuitePlant: async () => {
+        if (failWith) throw new Error(failWith);
+        return { workOrders, syncedAt: "2026-09-25T15:00:00.000Z" };
+      },
+      confirmWorkOrderClosures: async () => {
+        context.closureChecks = (context.closureChecks || 0) + 1;
+        return { results: {}, asked: 0 };
+      },
     },
     () => {},
     async (imported) => { applied.push(imported); Object.assign(context.state, imported); },

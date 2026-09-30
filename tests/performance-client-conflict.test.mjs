@@ -76,6 +76,17 @@ function loadClient(options = {}) {
     getAppState: structuredClone(remote),
     ...(options.bridgeResults || {}),
   };
+  // MEDIDO 2026-09-30: el puente de Apps Script quedo deshabilitado porque NetSuite ya
+  // carga a Supabase (RULE-SUP-029). `performance-client.js` ahora lee por
+  // `PPSupabaseBridgeReplacement` en vez de `PPAppsScriptBridge.call`, asi que el doble
+  // tiene que dejar la misma traza: una entrada `{ method, args }` por llamada, con los
+  // argumentos en la posicion en que los recibia el metodo del puente.
+  const responder = async (method, args) => {
+    calls.push({ method, args });
+    const result = bridgeResults[method];
+    if (result instanceof Error) throw result;
+    return structuredClone(typeof result === "function" ? result(...args) : (result ?? {}));
+  };
   const root = {
     location: { hostname: "localhost" },
     setTimeout: (callback) => { timers.push(callback); return timers.length; },
@@ -104,10 +115,35 @@ function loadClient(options = {}) {
         return structuredClone(typeof result === "function" ? result(args) : (result ?? {}));
       },
     },
+    PPSupabaseBridgeReplacement: {
+      getAppStateIfChanged: (revision, opts) => responder("getAppStateIfChanged", [revision, opts]),
+      getAppState: () => responder("getAppState", []),
+      getMaterialsForOt: (ot, revision) => responder("getMaterialsForOt", [ot, revision]),
+      syncNetSuitePlanningData: async () => ({ operations: [], materials: [], source: "supabase" }),
+      syncNetSuitePlant: async () => ({ source: "supabase" }),
+      syncNetSuiteWorkOrders: async () => ({ workOrders: [], syncedAt: new Date().toISOString() }),
+      fetchNetSuiteWorkOrdersLite: async () => ({ workOrders: [], syncedAt: new Date().toISOString() }),
+      getPlanningWorkOrderData: async () => ({ ok: true, data: { operations: [], materials: [], workOrder: null } }),
+      getPlanningWorkOrderDataBatch: async () => ({ ok: true, data: [] }),
+      getInspectionWorkOrder: async () => ({ ok: true, data: { workOrder: { quantity: 0, builtQuantity: 0, pendingQuantity: 0, status: "" } } }),
+      getInspectionWorkOrderBundle: async () => ({ ok: true, data: { workOrder: null, materials: [], drawing: "" } }),
+      getInspectionDrawingRoutes: async () => ({ ok: true, data: [] }),
+      saveInspectionLink: async () => ({ ok: true, data: null }),
+      saveOperationPlanStatus: async (payload) => ({ revision: payload?.revision || 1, savedAt: new Date().toISOString() }),
+      savePlanSnapshot: async (payload) => ({ ...payload, snapshotId: payload?.snapshotId || "snap-test" }),
+      saveDraftSnapshot: async (payload) => ({ ...payload, snapshotId: payload?.snapshotId || "snap-test" }),
+      publishDraftPlan: async (payload) => ({ ok: true, activeVersion: { ...payload, snapshotId: payload?.snapshotId || "snap-test" } }),
+      getPlanSnapshot: async () => null,
+      getPlanSnapshotLight: async () => null,
+      listPlanSnapshots: async () => [],
+      restorePublishedPlanAsDraft: async () => ({ state: {} }),
+      confirmWorkOrderClosures: async () => ({ results: {}, asked: 0 }),
+    },
   };
   const context = {
     window: root,
     navigator: {},
+    PPSupabaseBridgeReplacement: root.PPSupabaseBridgeReplacement,
     document: {
       visibilityState: "visible",
       addEventListener: (type, listener) => { documentListeners.set(type, listener); },

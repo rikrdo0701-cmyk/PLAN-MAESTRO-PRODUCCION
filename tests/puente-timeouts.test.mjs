@@ -54,11 +54,19 @@ test("el generico sigue siendo 120 s, que es lo que se aplica a lo demas", () =>
   assert.match(cliente, /const CALL_TIMEOUT_MS = 120000;/);
 });
 
-test("el timeout se usa de verdad: METHOD_TIMEOUT_MS se consulta antes del generico", () => {
+test("el puente esta deshabilitado: call rechaza inmediatamente sin consultar timeouts", () => {
+  // El puente de Apps Script fue deshabilitado y reemplazado por PPSupabaseBridgeReplacement.
+  // El metodo call() ahora rechaza inmediatamente con un mensaje de error, sin consultar
+  // METHOD_TIMEOUT_MS ni CALL_TIMEOUT_MS. Este test verifica que el puente sigue deshabilitado.
   assert.match(
     cliente,
+    /El puente de Apps Script esta deshabilitado/,
+    "el puente debe estar deshabilitado y rechazar las llamadas",
+  );
+  assert.doesNotMatch(
+    cliente,
     /const timeoutMs = METHOD_TIMEOUT_MS\[method\] \|\| CALL_TIMEOUT_MS;/,
-    "si la consulta cambia de orden, la tabla de timeouts deja de mandar",
+    "el puente deshabilitado no consulta timeouts: rechaza inmediatamente",
   );
 });
 

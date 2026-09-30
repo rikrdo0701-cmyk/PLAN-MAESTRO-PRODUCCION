@@ -279,7 +279,7 @@ assert.match(dryRunSource, /totalMs/);
     planningApp.indexOf("async function generatePlanPdf("),
   );
   assert.match(publishImpl, /Verificando OTs en NetSuite\.\.\./);
-  assert.match(publishImpl, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" \}\)[\s\S]*if \(!publishFreshness\.ok\) return;[\s\S]*callAppsScript\("publishDraftPlan"/);
+  assert.match(publishImpl, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" \}\)[\s\S]*if \(!publishFreshness\.ok\) return;[\s\S]*persistPlanSnapshot\(\)/);
 });
 
 test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
@@ -295,6 +295,68 @@ test("todos los workflows usan acciones compatibles con Node.js 24", async () =>
   assert.match(workflows[2], /actions\/configure-pages@v6\b/);
   assert.match(workflows[2], /actions\/upload-pages-artifact@v5\b/);
   assert.match(workflows[2], /actions\/deploy-pages@v5\b/);
+});
+
+// MEDIDO 2026-09-30: al deshabilitar el puente se cambio el codigo de app.js y el de
+// performance-client.js, pero NO el shim `planningFetchSnapshotById` que el propio build
+// inyecta en el bundle. Ese shim se llevo 24 llamadas, y la que se le salvo de la lista
+// (`getPlanSnapshotLight`) se llevo la rama de `fetchJson(PLAN_SNAPSHOTS_API + ...)`,
+// que es la URL del web app de Apps Script: en GitHub Pages da 404. Los tests de
+// app.js NO lo pueden ver, porque el shim no vive en src/: se genera en el build. Por eso
+// el candado va aqui, sobre el bundle ya montado.
+test("el bundle montado NO hace ninguna llamada al puente de Apps Script", async () => {
+  const result = await buildProject();
+  const destinos = [
+    ...result.htmlFiles.map((f) => path.join(result.distDir, f)),
+    path.join(result.siteDir, "index.html"),
+    path.join(result.siteDir, "skills.html"),
+    path.join(result.siteDir, "operator.html"),
+  ];
+
+  for (const archivo of destinos) {
+    const txt = await readFile(archivo, "utf8");
+    // Se borran los comentarios antes de afirmar: el codigo explains el bug citando la
+    // llamada vieja, y un test que no distingue prosa de codigo obliga a borrar la
+    // explicacion. Lo que no se perdona es una llamada DE VERDAD.
+    const codigo = txt.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+    const llamadas = codigo.match(/callAppsScript\s*\(\s*["'`]/g) || [];
+    assert.deepEqual(llamadas, [], `${path.basename(archivo)}Todavia llama al puente: ${llamadas.length} llamada(s)`);
+  }
+});
+
+test("el puente queda deshabilitado, no solo esquivado", async () => {
+  // Que no haya llamadas no basta: si `call` volviera a hablar con el iframe, el proximo
+  // method que se agregue reventaria en produccion sin que nada se entere. Se afirma que
+  // la puerta RECHAZA, con un motivo que dice que mas.
+  const result = await buildProject();
+  for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+    const txt = await readFile(archivo, "utf8");
+    assert.match(txt, /El puente de Apps Script esta deshabilitado/,
+      `${path.basename(archivo)} deberia rechazar el puente con un motivo explicito`);
+    assert.match(txt, /PPSupabaseBridgeReplacement/,
+      `${path.basename(archivo)} deberia traer el reemplazo de Supabase`);
+  }
+});
+
+test("el bundle monta el reemplazo con el lector y el escritor ya puestos", async () => {
+  // POR QUE ESTE ORDEN Y NO OTRO. `supabase-bridge-replacement.js` agarra PPSupabaseReader
+  // y PPSupabaseWriter del global AL EVALUARSE (sus dos primeras lineas), no al llamar. Si
+  // el build lo montara antes que a ellos, en el navegador los tendria como undefined para
+  // siempre y TODAS las llamadas darian "PPSupabaseReader no esta disponible". El orden
+  // de los bloques <script> no es lo que se afirma aqui: lo que importa es que, DENTRO
+  // del bloque que los monta, el lector y el escritor esten antes que el reemplazo.
+  const result = await buildProject();
+  const index = await readFile(path.join(result.siteDir, "index.html"), "utf8");
+  const codigo = index.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+
+  const lector = codigo.indexOf("root.PPSupabaseReader =");
+  const escritor = codigo.indexOf("root.PPSupabaseWriter =");
+  const reemplazo = codigo.indexOf("root.PPSupabaseBridgeReplacement = api");
+  assert.ok(lector > 0, "el bundle no monta PPSupabaseReader");
+  assert.ok(escritor > 0, "el bundle no monta PPSupabaseWriter");
+  assert.ok(reemplazo > 0, "el bundle no monta PPSupabaseBridgeReplacement");
+  assert.ok(lector < reemplazo, "el reemplazo se evaluaria sin lector");
+  assert.ok(escritor < reemplazo, "el reemplazo se evaluaria sin escritor");
 });
 
 test("el build genera Apps Script y GitHub Pages", async () => {
@@ -467,7 +529,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /reemplaza el borrador[\s\S]*conserva un respaldo[\s\S]*publicado permanece intacto/i);
   assert.match(pagesIndex, /setPlanningActionsBusy\("restore", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("restore", false\)/);
-  assert.match(pagesIndex, /callAppsScript\("restorePublishedPlanAsDraft", snapshotId, previewState\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.restorePublishedPlanAsDraft\(snapshotId, previewState\)/);
   assert.match(pagesIndex, /reportSnapshot = null;[\s\S]*Borrador restaurado; revisa y genera nuevamente el plan/);
   const restoreOpenSource = pagesIndex.slice(pagesIndex.indexOf("async function openRestoreDraftDialog()"), pagesIndex.indexOf("async function previewDraftRestore("));
   const restorePreviewSource = pagesIndex.slice(pagesIndex.indexOf("async function previewDraftRestore("), pagesIndex.indexOf("async function confirmDraftRestore("));
@@ -478,7 +540,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   });
   assert.match(restorePreviewSource, /if \(outcome\?\.status !== "complete"\)[\s\S]*Continuar con datos cargados[\s\S]*if \(!continueWithLoaded\) return/);
   assert.doesNotMatch(restorePreviewSource, /outcome\?\.ready/);
-  assert.match(restoreReadOnlySyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
+  assert.match(restoreReadOnlySyncSource, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
   assert.doesNotMatch(restoreReadOnlySyncSource, /syncNetSuitePlanningData|saveState|savePlanningStateOptimized|persistPlanSnapshot|render\(/);
   assert.doesNotMatch(restorePreviewSource, /syncNetSuiteTwoPhase|syncNetSuitePlanningData|saveState/);
   assert.match(restorePreviewSource, /let previewState = createAppSheetPayload\(\);/);
@@ -494,9 +556,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
     pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
     pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
-  assert.match(backlogSyncSource, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
+  assert.match(backlogSyncSource, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
   assert.match(backlogSyncSource, /NETSUITE_BACKLOG_SYNC_TIMEOUT_MS/);
-  assert.match(backlogSyncSource, /callAppsScript\("saveWorkOrderSyncState", syncPayload\)/);
+  assert.match(backlogSyncSource, /guardarSyncDeOrdenesTrabajoEnSupabase\(\)/);
   assert.doesNotMatch(backlogSyncSource, /saveAppState|createAppSheetPayload\(nextState\)/);
   assert.doesNotMatch(backlogSyncSource, /openPlanningDialog|compareWorkOrderLite|applyConfirmedWorkOrderChanges|persistPlanSnapshot/);
   assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
@@ -632,10 +694,10 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
   assert.match(pagesIndex, /id="retryInspectionRouteCatalogBtn"[^>]*>Reintentar</);
-  assert.match(pagesIndex, /callAppsScript\("getInspectionDrawingRoutes", ""\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.getInspectionDrawingRoutes\(""\)/);
   assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
-  assert.match(pagesIndex, /callAppsScript\("saveInspectionLink", payload\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.saveInspectionLink\(payload\)/);
   const inspectionRouteEditorSource = pagesIndex.slice(
     pagesIndex.indexOf("async function editInspectionRouteCatalogRow("),
     pagesIndex.indexOf("function renderWeeklyReleaseTarget("),
@@ -670,7 +732,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
     pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)"),
     pagesIndex.indexOf("const originalLoadPlanSnapshots =", pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)")),
   );
-  assert.match(optimizedStartupSource, /callAppsScript\("getAppStateIfChanged", revision, \{ includeMaterials: false \}\)/);
+  assert.match(optimizedStartupSource, /PPSupabaseBridgeReplacement\.getAppStateIfChanged\(revision, \{ includeMaterials: false \}\)/);
   assert.match(optimizedStartupSource, /loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\)/);
   assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
   // La lectura de caché no se difiere con requestIdleCallback: diferirla corre contra el import
@@ -739,9 +801,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
   assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
   assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(options = \{\}\)/);
-  assert.match(pagesIndex, /callAppsScript\("fetchNetSuiteWorkOrdersLite"\)/);
-  assert.match(pagesIndex, /callAppsScript\("syncNetSuitePlanningData"\)/);
-  assert.match(pagesIndex, /callAppsScript\("saveDraftSnapshot", payload\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.syncNetSuitePlanningData\(\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.savePlanSnapshot\(/);
   assert.match(pagesIndex, /snapshotId: "draft"/);
   assert.match(pagesIndex, /if \(snapshotId === "draft"\) \{[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
@@ -1927,7 +1989,7 @@ test("completar una operacion usa guardado atomico y render parcial", async () =
     app.indexOf("function renderProductionReportTable(", app.indexOf("async function persistOptimisticPlanStatus(")),
   );
 
-  assert.match(persistence, /callAppsScript\("saveOperationPlanStatus"/);
+  assert.match(persistence, /PPSupabaseBridgeReplacement\.saveOperationPlanStatus/);
   assert.match(persistence, /const stateOperation = state\.operations\.find/);
   assert.match(persistence, /const reportOperation = reportOperationsSource\(\)\.find/);
   assert.match(persistence, /if \(stateOperation\) \{[\s\S]*operation\.needsReschedule = true/);
@@ -2481,7 +2543,8 @@ test("publicar plan guarda la nueva version directo, sin dialogo de motivo ni co
   assert.doesNotMatch(publish, /name="publication_reason"[\s\S]*required/);
   assert.doesNotMatch(publish, /Captura el motivo de la nueva version/);
   assert.doesNotMatch(publish, /compactVersionDiff\(/);
-  assert.match(publish, /callAppsScript\("publishDraftPlan", payload\)/);
+  assert.doesNotMatch(publish, /callAppsScript\("publishDraftPlan", payload\)/);
+  assert.doesNotMatch(publish, /PPSupabaseBridgeReplacement\.publishDraftPlan\(payload\)/);
 });
 
 test("bloquear/desbloquear OT no vuelve al render global y usa el indice operationsByOt", async () => {
@@ -2670,7 +2733,7 @@ test("el payload de guardado por puente no deep-clona el estado: el postMessage 
   assert.doesNotMatch(payloads, /operationPlanStatuses: clone\(/);
   assert.match(payloads, /operations: state\.operations \|\| \[\]/);
   assert.match(payloads, /operationPlanStatuses: state\.operationPlanStatuses \|\| \{\}/);
-  assert.match(bridgeClient, /bridgeWindow\.postMessage\(\{[\s\S]*?args: Array\.isArray\(args\) \? args : \[\],/);
+  assert.match(bridgeClient, /El puente de Apps Script esta deshabilitado/);
 
   const state = {
     operations: [{ id: "op-1", ot: "100", log: "PLAN" }],

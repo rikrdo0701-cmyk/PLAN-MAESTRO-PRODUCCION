@@ -208,7 +208,7 @@ function loadAppSheetSaveFlow(options = {}) {
   };
   const flow = Function(
     "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
-    "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
+    "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "PPSupabaseBridgeReplacement", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
     "setBacklogSyncInFlight", "validateNetSuiteImportedData", "invalidateCurrentPlanOperationsCache", "resetBacklogWindow", "render", "persistableState",
     "resolveSaveGate", "appSheetDisponible", "guardarPlanEnSupabase", "guardarCatalogosEnSupabase",
     // MEDIDO 2026-09-29 en el navegador: `isAppsScriptRuntime` miente en el sitio estatico
@@ -242,6 +242,12 @@ function loadAppSheetSaveFlow(options = {}) {
       calls.push({ method, payload });
       if (options.failSave) throw new Error(options.failSave);
       return { revision: 2 };
+    },
+    {
+      fetchNetSuiteWorkOrdersLite: async () => {
+        calls.push({ method: "fetchNetSuiteWorkOrdersLite", payload: null });
+        return { workOrders: [], syncedAt: new Date().toISOString() };
+      },
     },
     payloadDeEstado, () => {}, 60000,
     () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
@@ -824,7 +830,11 @@ function loadClient(options = {}) {
     render: (...args) => options.render?.(...args),
     purgeClosedWorkOrderRetention: () => {},
     applyInitialWorkspaceView: () => {},
-    syncNetSuiteData: (...args) => options.syncNetSuiteData(...args),
+    // MEDIDO 2026-09-30: el sync de arranque ya no esta compuerteado por
+    // `isAppsScriptRuntime()` (Supabase es la fuente y esta en los dos runtimes), asi que
+    // cualquier test que llegue al final del arranque lo dispara. Sin doble, se comia un
+    // TypeError diferido; con el doble, el sync es un no-op salvo que el test lo pida.
+    syncNetSuiteData: (...args) => (options.syncNetSuiteData?.(...args) ?? false),
     syncWorkOrdersOnce: (syncOptions = {}) => context.syncNetSuiteData(syncOptions.showMessage === true, { mode: "workOrders" }),
     syncNetSuiteInBackground: (syncOptions) => context.syncWorkOrdersOnce(syncOptions),
     validateNetSuiteImportedData: () => {},
@@ -855,6 +865,30 @@ function loadClient(options = {}) {
     resetBacklogWindow: () => options.resetBacklogWindow?.(),
     applyNetSuitePlanningPayload: () => {},
     callAppsScript: (...args) => options.callAppsScript?.(...args),
+    PPSupabaseBridgeReplacement: {
+      getAppStateIfChanged: (...args) => options.callAppsScript?.("getAppStateIfChanged", ...args),
+      getAppState: (...args) => options.callAppsScript?.("getAppState", ...args),
+      getMaterialsForOt: (...args) => options.callAppsScript?.("getMaterialsForOt", ...args),
+      syncNetSuitePlanningData: (...args) => options.callAppsScript?.("syncNetSuitePlanningData", ...args),
+      syncNetSuitePlant: (...args) => options.callAppsScript?.("syncNetSuitePlant", ...args),
+      syncNetSuiteWorkOrders: (...args) => options.callAppsScript?.("syncNetSuiteWorkOrders", ...args),
+      fetchNetSuiteWorkOrdersLite: (...args) => options.callAppsScript?.("fetchNetSuiteWorkOrdersLite", ...args),
+      getPlanningWorkOrderData: (...args) => options.callAppsScript?.("getPlanningWorkOrderData", ...args),
+      getPlanningWorkOrderDataBatch: (...args) => options.callAppsScript?.("getPlanningWorkOrderDataBatch", ...args),
+      getInspectionWorkOrder: (...args) => options.callAppsScript?.("getInspectionWorkOrder", ...args),
+      getInspectionWorkOrderBundle: (...args) => options.callAppsScript?.("getInspectionWorkOrderBundle", ...args),
+      getInspectionDrawingRoutes: (...args) => options.callAppsScript?.("getInspectionDrawingRoutes", ...args),
+      saveInspectionLink: (...args) => options.callAppsScript?.("saveInspectionLink", ...args),
+      saveOperationPlanStatus: (...args) => options.callAppsScript?.("saveOperationPlanStatus", ...args),
+      savePlanSnapshot: (...args) => options.callAppsScript?.("savePlanSnapshot", ...args),
+      saveDraftSnapshot: (...args) => options.callAppsScript?.("saveDraftSnapshot", ...args),
+      publishDraftPlan: (...args) => options.callAppsScript?.("publishDraftPlan", ...args),
+      getPlanSnapshot: (...args) => options.callAppsScript?.("getPlanSnapshot", ...args),
+      getPlanSnapshotLight: (...args) => options.callAppsScript?.("getPlanSnapshotLight", ...args),
+      listPlanSnapshots: (...args) => options.callAppsScript?.("listPlanSnapshots", ...args),
+      restorePublishedPlanAsDraft: (...args) => options.callAppsScript?.("restorePublishedPlanAsDraft", ...args),
+      confirmWorkOrderClosures: (...args) => options.callAppsScript?.("confirmWorkOrderClosures", ...args),
+    },
     createAppSheetPayload: (source) => options.createAppSheetPayload?.(source) ?? {},
     renderTop: () => {},
     renderPlanAlerts: () => {},
@@ -994,7 +1028,7 @@ const reportSource = options.reportOperations || state.operations;
     "sequenceSort", "opStart", "renderSubcontractReport", "renderReleaseReport", "planStatusOriginForSource", "statusesForPlanOrigin",
     "draftViewStatuses", "latestPublishedOriginId", "activePlanReportStatuses", "writePlanStatusByOrigin",
     "rollbackPlanStatusByOrigin", "shouldMutateDraftFromSource", "clearPendingPlanStatusSaveKeys",
-    "appSheetDisponible",
+    "appSheetDisponible", "PPSupabaseBridgeReplacement",
     `${planStatusSource}; return { bindPlanStatusActions, toggleOperationPlanStatus };`,
   )(
     state, els, {
@@ -1031,6 +1065,13 @@ const reportSource = options.reportOperations || state.operations;
     // La puerta real de app.js. Aqui el destino SI esta disponible (el arnes pasa
     // appSheetAvailable = true), asi que se le pasa esa misma regla.
     () => true,
+    // MEDIDO 2026-09-30: el puente de Apps Script quedo deshabilitado porque NetSuite ya
+    // carga a Supabase y Supabase es la fuente (RULE-SUP-029). app.js ya no llama a
+    // `callAppsScript("saveOperationPlanStatus")` sino a
+    // `PPSupabaseBridgeReplacement.saveOperationPlanStatus`, asi que el arnes inyecta esa
+    // puerta y la ata al mismo `options.callAppsScript` que usaba antes: el test sigue
+    // comprobando el MISMO comportamiento, no otro.
+    { saveOperationPlanStatus: (...args) => options.callAppsScript?.("saveOperationPlanStatus", ...args) },
   );
   return {
     api, buttons, state, reportRows, els, deferredWork, broadRenders, toasts, rerenderReport, detailButtons,
@@ -3414,6 +3455,15 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
     }
     return true;
   };
+  // El doble de la fuente remota. Antes interceptaba `callAppsScript`; con el puente
+  // deshabilitado lo comparten las dos puertas: la vieja (que ya no usa nadie en este
+  // arnes) y `PPSupabaseBridgeReplacement`, que es por donde app.js lee las OTs ahora.
+  const dupla = async (method, payload) => {
+    calls.push({ method, payload, concurrent: dedicatedPending });
+    if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
+    if (method === "saveWorkOrderSyncState") { dedicatedPending = true; const saved = await dedicated.promise; dedicatedPending = false; return saved; }
+    return { revision: 3 };
+  };
   const flow = Function(
     "window", "state", "localStorage", "STORAGE_KEY", "appSheetAvailable", "appSheetSaveInFlight", "appSheetSavePending", "appSheetSaveTimer", "appSheetDirtyScopes", "backlogSyncInFlight", "appSheetSaveCompletion", "resolveAppSheetSaveCompletion", "appSheetSaveOwner",
     "operationStatusSavesInFlight", "isAppsScriptRuntime", "callAppsScript", "createAppSheetPayload", "showToast", "NETSUITE_BACKLOG_SYNC_TIMEOUT_MS",
@@ -3425,6 +3475,10 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
     // la pregunta de verdad: google.script.run solo existe dentro de HtmlService. El cuerpo
     // de este Function incluye saveAppSheet de app.js, que lo llama.
     "enRuntimeAppsScript",
+    // MEDIDO 2026-09-30: el puente quedo deshabilitado. La lectura de OTs del sync ya no va
+    // por `callAppsScript("fetchNetSuiteWorkOrdersLite")` sino por
+    // `PPSupabaseBridgeReplacement.fetchNetSuiteWorkOrdersLite()`.
+    "PPSupabaseBridgeReplacement",
     `${appSheetSaveFlowSource}\n${backlogSyncSource}\nreturn {
       syncBacklogWorkOrders, saveState,
       get state() { return state; },
@@ -3434,18 +3488,15 @@ test("una edicion durante la sincronizacion espera el acuse antes del guardado n
   )(
     window, { revision: 1, workOrders: [{ ot: "WO-LOCAL" }], operations: [], materials: [] }, { setItem: () => {} }, "test",
     true, false, false, null, new Set(), false, Promise.resolve(), null, null, 0, () => true,
-    async (method, payload) => {
-      calls.push({ method, payload, concurrent: dedicatedPending });
-      if (method === "fetchNetSuiteWorkOrdersLite") return { workOrders: [{ ot: "WO-ACTIVA" }] };
-      if (method === "saveWorkOrderSyncState") { dedicatedPending = true; const saved = await dedicated.promise; dedicatedPending = false; return saved; }
-      return { revision: 3 };
-    },
+    dupla,
     () => ({ revision: flow?.state?.revision }), () => {}, 60000,
     () => {}, () => {}, () => {}, () => {}, () => {}, () => ({}),
     // La puerta real de app.js; aqui el destino esta disponible.
     () => true,
     guardarPlanEnSupabase, async () => true,
     () => true,
+    // La puerta de Supabase, atada al mismo doble que antes interceptaba el puente.
+    { fetchNetSuiteWorkOrdersLite: (...args) => dupla("fetchNetSuiteWorkOrdersLite", ...args) },
   );
   const runTimers = async () => {
     for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
@@ -3577,8 +3628,8 @@ test("LA RAMA DE NAVEGADOR DE syncNetSuiteData YA NO PIDE UN JSON ESTATICO QUE 4
   // loadAppSheetIfAvailable, que es otro camino. Antes la rama de navegador la llamaba y por eso
   // siempre recibia 404.
   assert.doesNotMatch(cuerpo, /await fetchNetSuiteExercise\(\)/, "la rama de navegador ya no la llama");
-  assert.match(cuerpo, /callAppsScript\("syncNetSuiteWorkOrders"\)/, "el modo workOrders va por el puente");
-  assert.match(cuerpo, /callAppsScript\("syncNetSuitePlant"\)/, "y el modo full tambien");
+  assert.match(cuerpo, /PPSupabaseBridgeReplacement\.syncNetSuiteWorkOrders\(\)/, "el modo workOrders va por Supabase");
+  assert.match(cuerpo, /PPSupabaseBridgeReplacement\.syncNetSuitePlant\(\)/, "y el modo full tambien");
   // Y el aviso se limpia en las DOS ramas, no solo en la de Apps Script.
   const limpieza = cuerpo.slice(cuerpo.indexOf("persistReferencePricesFromSync();"));
   assert.match(limpieza, /clearNetSuiteSyncAlert\(\)/, "y el aviso se limpia en la rama de navegador tambien");

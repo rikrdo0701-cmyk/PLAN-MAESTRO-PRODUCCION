@@ -199,9 +199,12 @@ function planningLoadSnapshotIntoState(snapshot) {
 
 async function planningFetchSnapshotById(snapshotId) {
   if (!snapshotId) return null;
-  return isAppsScriptRuntime()
-    ? await callAppsScript("getPlanSnapshotLight", snapshotId)
-    : await fetchJson(PLAN_SNAPSHOTS_API + "/" + encodeURIComponent(snapshotId));
+  // MEDIDO 2026-09-30: esto era isAppsScriptRuntime() ? callAppsScript("getPlanSnapshotLight", id)
+  // : fetchJson(PLAN_SNAPSHOTS_API + "/" + id). Las dos ramas estan muertas: el puente
+  // quedo deshabilitado y PLAN_SNAPSHOTS_API es la URL del web app de Apps Script, que
+  // en el sitio estatico da 404 (es el mismo 404 que ya se midio en syncNetSuiteData). El
+  // unico destino real es Supabase, asi que queda una sola rama (RULE-SUP-029).
+  return PPSupabaseBridgeReplacement.getPlanSnapshotLight(snapshotId);
 }
 
 async function restoreDraftPlanFromSharedState() {
@@ -427,7 +430,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw, supabaseBridgeReplacementRaw] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -446,6 +449,7 @@ export async function buildProject() {
     read("src/web/shared/supabase-catalog-apply.js"),
     read("src/web/shared/supabase-writer.js"),
     read("src/web/shared/supabase-event-log.js"),
+    read("src/web/shared/supabase-bridge-replacement.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
@@ -498,7 +502,7 @@ export async function buildProject() {
   // La vista de eventos no trae marcadores de configuracion: la URL y la clave las
   // pide al lector (un solo sitio las sabe) y el JWT a la sesion.
   const eventLog = eventLogRaw;
-  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${catalogWrite.trimEnd()}\n${eventLog.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${catalogWrite.trimEnd()}\n${supabaseBridgeReplacementRaw.trimEnd()}\n${eventLog.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,

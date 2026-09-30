@@ -115,13 +115,11 @@
   // siempre en `saveAppSheet` de app.js. Este `bridgeAvailable` quedo para lo unico que si
   // distingue los runtimes: si hay que preguntar a NetSuite, se usa el camino nativo.
   function bridgeAvailable() {
-    return Boolean(root.PPAppsScriptBridge?.isConfigured?.());
+    return false;
   }
 
   function bridgeCall(method, ...args) {
-    if (!root.PPAppsScriptBridge?.call) return Promise.reject(new Error("El puente con Apps Script no esta disponible"));
-    const mappedMethod = method === "syncNetSuiteWorkOrders" ? "syncNetSuiteWorkOrdersLite" : method;
-    return root.PPAppsScriptBridge.call(mappedMethod, args);
+    return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
   }
 
   function installPerformanceAdapters() {
@@ -733,8 +731,8 @@
     const localOtConfigurations = state.otConfigurations && typeof state.otConfigurations === "object" ? clone(state.otConfigurations) : null;
     const localPrepared = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? clone(state.preparedPlanningByOt) : null;
     const imported = revision > 0
-      ? await callAppsScript("getAppStateIfChanged", revision, { includeMaterials: false })
-      : await callAppsScript("getAppState");
+      ? await PPSupabaseBridgeReplacement.getAppStateIfChanged(revision, { includeMaterials: false })
+      : await PPSupabaseBridgeReplacement.getAppState();
     if (imported?.unchanged) {
       const currentRevision = Number(imported.revision || revision);
       deferredMaterials = localCache.deferredMaterials === true;
@@ -863,7 +861,14 @@
       render({ save: false });
       applyInitialWorkspaceView({ scrollToTop: false });
 
-      const bootSync = (isAppsScriptRuntime() && shouldRefreshNetSuite(loaded))
+      // MEDIDO 2026-09-30: esta compuerta era `isAppsScriptRuntime() && ...` porque el sync
+      // de arranque cruzaba el puente de Apps Script, y en el sitio estatico (donde
+      // `bridgeAvailable()` dice que no hay puente) el sync no pasaba. Con el puente
+      // deshabilitado NO se pierde: `syncNetSuiteData` de app.js ya lee
+      // `PPSupabaseBridgeReplacement.syncNetSuiteWorkOrders`, o sea de Supabase, que esta
+      // disponible en los dos runtimes. Supabase es la fuente (RULE-SUP-029), asi que la
+      // frescura del espejo se decide con `shouldRefreshNetSuite` y nada mas.
+      const bootSync = shouldRefreshNetSuite(loaded)
         ? syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 })
         : Promise.resolve(false);
       void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
@@ -971,7 +976,7 @@
     if (!key || !deferredMaterials || loadedMaterialOts.has(key)) return;
     if (materialRequests.has(key)) return materialRequests.get(key);
 
-    const request = callAppsScript("getMaterialsForOt", ot, state.revision || deferredRevision)
+    const request = PPSupabaseBridgeReplacement.getMaterialsForOt(ot, state.revision || deferredRevision)
       .then((result) => {
         if (result?.stale) {
           root.setTimeout(() => loadAppStateInBackground(), 0);

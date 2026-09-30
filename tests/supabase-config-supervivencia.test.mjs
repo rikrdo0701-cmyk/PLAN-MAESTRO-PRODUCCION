@@ -35,23 +35,33 @@ function archivosDe(dir, filtro) {
 }
 
 /** Corre la preservacion contra un directorio que hace de remoto. */
-function correr(remotoDir) {
+function correr(remotoDir, distDir) {
   return spawnSync(process.execPath, [SCRIPT], {
-    env: { ...process.env, PRESERVE_CONFIG_REMOTO_DIR: remotoDir },
+    env: { ...process.env, PRESERVE_CONFIG_REMOTO_DIR: remotoDir, PRESERVE_CONFIG_DIST_DIR: distDir },
     encoding: "utf8",
   });
 }
 
-/** Deja dist/ como estaba, pase lo que pase. */
-function conDistLimpio(fn) {
-  const antes = new Map();
-  for (const n of readdirSync(path.join(RAIZ, "dist"))) antes.set(n, readFileSync(path.join(RAIZ, "dist", n)));
-  try {
-    return fn();
-  } finally {
-    for (const n of readdirSync(path.join(RAIZ, "dist"))) if (!antes.has(n)) rmSync(path.join(RAIZ, "dist", n), { force: true });
-    for (const [n, t] of antes) writeFileSync(path.join(RAIZ, "dist", n), t);
-  }
+/**
+ * MEDIDO 2026-09-30: antes los tests jugaban con el dist/ REAL del repo, lo tomaban
+ * con `conDistLimpio` y lo restauraban en un `finally`. Con la maquina ocupada esa
+ * restauracion se cruzaba con la corrida y el test daba rojo sin que hubiera cambio
+ * (2 de 6 corridas completas de la suite, siempre en este archivo). Un test que a veces
+ * falla por el reloj entrena a ignorar el rojo, que es peor que no tenerlo. Ahora cada
+ * test trabaja sobre su propio dist/ de Arena: cero estado compartido, y el dist/ real
+ * no se toca ni por accidente.
+ */
+function arena(nombre) {
+  return path.join(RAIZ, ".openchamber", nombre);
+}
+
+/** Crea un dist/ de Arena con los archivos indicados y lo devuelve. */
+function distDePrueba(nombre, archivos = {}) {
+  const dir = arena(nombre);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  for (const [n, t] of Object.entries(archivos)) writeFileSync(path.join(dir, n), t, "utf8");
+  return dir;
 }
 
 test("el build NO pone ninguna plantilla de credenciales en dist/", () => {
@@ -97,9 +107,24 @@ test("el despliegue verifica el CONTENIDO del proyecto, no solo que la funcion e
 });
 
 test("ningun workflow usa el gancho de prueba", () => {
+  // MEDIDO 2026-09-30: hay DOS ganchos de prueba (el remoto y el dist/) y ninguno
+  // puede usarse en produccion. Si un workflow pasara PRESERVE_CONFIG_DIST_DIR,
+  // preservaria contra un dist/ de mentira y la clave real se perderia igual.
   for (const f of readdirSync(path.join(RAIZ, ".github", "workflows"))) {
     const yml = readFileSync(path.join(RAIZ, ".github", "workflows", f), "utf8");
     assert.doesNotMatch(yml, /PRESERVE_CONFIG_REMOTO_DIR/, `${f} usa el gancho de prueba en produccion`);
+    assert.doesNotMatch(yml, /PRESERVE_CONFIG_DIST_DIR/, `${f} usa el gancho de prueba en produccion`);
+  }
+});
+
+test("los ganchos de prueba no se pueden colar al bundle que se publica", () => {
+  // El gancho se decide por variable de entorno, asi que un bundle que lo lea hace
+  // exactamente lo que el test quiere pero en el sitio publico, donde cualquiera que
+  // abra la consola pone la variable. La condicion es que SOLO el script lo mire.
+  const codifiedos = archivosDe(path.join(RAIZ, "src"), (p) => /\.(js|gs|html)$/.test(p));
+  for (const p of codifiedos) {
+    const txt = readFileSync(p, "utf8");
+    assert.doesNotMatch(txt, /PRESERVE_CONFIG_(REMOTO|DIST)_DIR/, `${p} lee un gancho de prueba en el bundle publicado`);
   }
 });
 
@@ -107,6 +132,7 @@ test("un archivo con credenciales y otro nombre tambien se preserva", () => {
   // El caso medido: config.js, no supabase-config.gs. La primera version buscaba
   // por nombre, no encontro nada y el despliegue siguiente lo borro.
   const remoto = path.join(RAIZ, ".openchamber", "remoto-prueba");
+  const dist = distDePrueba("dist-prueba");
   rmSync(remoto, { recursive: true, force: true });
   mkdirSync(remoto, { recursive: true });
   const clave = [
@@ -117,30 +143,27 @@ test("un archivo con credenciales y otro nombre tambien se preserva", () => {
   writeFileSync(path.join(remoto, "config.js"), clave, "utf8");
   writeFileSync(path.join(remoto, "otro.js"), "function sinRelacion() { return 1; }\n", "utf8");
   try {
-    conDistLimpio(() => {
-      const r = correr(remoto);
-      assert.equal(r.status, 0, `salio ${r.status}: ${r.stderr}`);
-      const destino = path.join(RAIZ, "dist", "config.js");
-      assert.ok(existsSync(destino), "config.js no llego a dist/: el push lo borraria del proyecto");
-      assert.equal(readFileSync(destino, "utf8"), clave, "no llego identico");
-      assert.ok(existsSync(path.join(RAIZ, "dist", "otro.js")), "tambien hay que preservar lo que no lleva credenciales");
-      assert.match(r.stdout, /config\.js/);
-      assert.match(r.stdout, /credenciales/i);
-    });
+    const r = correr(remoto, dist);
+    assert.equal(r.status, 0, `salio ${r.status}: ${r.stderr}`);
+    const destino = path.join(dist, "config.js");
+    assert.ok(existsSync(destino), "config.js no llego a dist/: el push lo borraria del proyecto");
+    assert.equal(readFileSync(destino, "utf8"), clave, "no llego identico");
+    assert.ok(existsSync(path.join(dist, "otro.js")), "tambien hay que preservar lo que no lleva credenciales");
+    assert.match(r.stdout, /config\.js/);
+    assert.match(r.stdout, /credenciales/i);
+
     // Y con la clave de ejemplo tiene que avisar, no subirla sin decir nada.
-    // En otro bloque: la corrida anterior dejo los archivos en dist/, y entonces
-    // ya no cuentan como propios del remoto y no se preserva nada. Eso no es un
-    // fallo del script, pero hace que el aviso no salga y el test no lo ve.
-    rmSync(path.join(RAIZ, "dist", "config.js"), { force: true });
-    rmSync(path.join(RAIZ, "dist", "otro.js"), { force: true });
+    // Cada corrida usa un dist/ NUEVO: si se reusara el de arriba, los archivos ya
+    // estarian ahi y no contarian como propios del remoto, y el aviso no saldria.
+    const dist2 = distDePrueba("dist-prueba-2");
     writeFileSync(path.join(remoto, "config.js"), "const SUPABASE_KEY = 'TU_SERVICE_ROLE_KEY';\nconst UBICACION = '1';\n", "utf8");
-    conDistLimpio(() => {
-      const r2 = correr(remoto);
-      assert.equal(r2.status, 0, `salio ${r2.status}: ${r2.stderr}`);
-      assert.match(r2.stdout, /valor de ejemplo/, "con la clave de ejemplo tiene que avisar");
-    });
+    const r2 = correr(remoto, dist2);
+    assert.equal(r2.status, 0, `salio ${r2.status}: ${r2.stderr}`);
+    assert.match(r2.stdout, /valor de ejemplo/, "con la clave de ejemplo tiene que avisar");
   } finally {
     rmSync(remoto, { recursive: true, force: true });
+    rmSync(arena("dist-prueba"), { recursive: true, force: true });
+    rmSync(arena("dist-prueba-2"), { recursive: true, force: true });
   }
 });
 
@@ -149,21 +172,24 @@ test("sin archivo propio, no inventa ninguno", () => {
   // nuevo: si el script fabricara un archivo de credenciales de repuesto,
   // cualquier despliegue volveria a pisar la clave con el ejemplo.
   const remoto = path.join(RAIZ, ".openchamber", "remoto-vacio");
+  const dist = distDePrueba("dist-vacio", {
+    "Index.js": "function hola() { return 1; }\n",
+    "supabase-config.gs": "const SUPABASE_URL = 'https://ejemplo.supabase.co';\n",
+  });
   rmSync(remoto, { recursive: true, force: true });
   mkdirSync(remoto, { recursive: true });
-  for (const n of readdirSync(path.join(RAIZ, "dist"))) {
-    writeFileSync(path.join(remoto, n), readFileSync(path.join(RAIZ, "dist", n)));
+  for (const n of readdirSync(dist)) {
+    writeFileSync(path.join(remoto, n), readFileSync(path.join(dist, n)));
   }
   try {
-    conDistLimpio(() => {
-      const antes = readdirSync(path.join(RAIZ, "dist")).length;
-      const r = correr(remoto);
-      assert.equal(r.status, 0);
-      assert.equal(readdirSync(path.join(RAIZ, "dist")).length, antes, "aparecio un archivo que no venia del remoto");
-      assert.match(r.stdout, /nada que preservar/);
-    });
+    const antes = readdirSync(dist).length;
+    const r = correr(remoto, dist);
+    assert.equal(r.status, 0);
+    assert.equal(readdirSync(dist).length, antes, "aparecio un archivo que no venia del remoto");
+    assert.match(r.stdout, /nada que preservar/);
   } finally {
     rmSync(remoto, { recursive: true, force: true });
+    rmSync(arena("dist-vacio"), { recursive: true, force: true });
   }
 });
 
@@ -171,9 +197,14 @@ test("si no puede leer el remoto, CORTA el despliegue en vez de seguir", () => {
   // Antes hacia lo contrario: avisaba y continuaba, con lo que dist/ se quedaba
   // sin el archivo y el push siguiente lo eliminaba del proyecto. Perder la clave
   // por un fallo transitorio de la API de Google es el peor resultado posible.
-  const r = correr(path.join(RAIZ, ".openchamber", "no-existe-este-directorio"));
-  assert.equal(r.status, 1, "con el remoto ilegible tiene que salir con 1, no con 0");
-  assert.match(r.stderr, /CORTO el despliegue/);
+  const dist = distDePrueba("dist-ilegible");
+  try {
+    const r = correr(path.join(RAIZ, ".openchamber", "no-existe-este-directorio"), dist);
+    assert.equal(r.status, 1, "con el remoto ilegible tiene que salir con 1, no con 0");
+    assert.match(r.stderr, /CORTO el despliegue/);
+  } finally {
+    rmSync(arena("dist-ilegible"), { recursive: true, force: true });
+  }
 });
 
 test("la preservacion no trae claves ni imprime el contenido", () => {

@@ -31,7 +31,7 @@ function createInspectionFill({
 
   const factory = Function(
     // dependencias
-    "isAppsScriptRuntime", "materialOtKey", "callAppsScript", "withTimeout", "showToast",
+    "isAppsScriptRuntime", "materialOtKey", "callAppsScript", "PPSupabaseBridgeReplacement", "withTimeout", "showToast",
     "scheduleInspectionReRender", "inspectionFillOnHold", "console",
     `${source}\n${fillSource}\nreturn { ensureInspectionWorkOrders, recordInspectionWorkOrderFailure, inspectionWorkOrderFailureLines, cache: inspectionWorkOrderCache, attempted: inspectionWorkOrderFillAttempted, failures: inspectionWorkOrderFailures };`,
   );
@@ -44,6 +44,14 @@ function createInspectionFill({
       const responder = responses[String(ot || "").trim()];
       if (typeof responder === "function") return responder(ot);
       return responder ?? { ok: true, data: { workOrder: { quantity: 10, builtQuantity: 4, pendingQuantity: 6, status: "En curso" } } };
+    },
+    {
+      getInspectionWorkOrder: async (ot) => {
+        calls.push(`getInspectionWorkOrder:${ot}`);
+        const responder = responses[String(ot || "").trim()];
+        if (typeof responder === "function") return responder(ot);
+        return responder ?? { ok: true, data: { workOrder: { quantity: 10, builtQuantity: 4, pendingQuantity: 6, status: "En curso" } } };
+      },
     },
     async (promise) => promise,
     (message, duration) => { toasts.push({ message: String(message), duration }); },
