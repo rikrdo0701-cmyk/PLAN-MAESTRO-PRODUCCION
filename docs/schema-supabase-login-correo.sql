@@ -38,21 +38,87 @@
 --    RLS con authenticated: sin sesion no se ven, que es lo que pedia el
 --    usuario al poner una contraseña.
 -- ----------------------------------------------------------------------------
-alter table public.work_orders     drop policy if exists lectura_web;
-alter table public.operations     drop policy if exists lectura_web;
-alter table public.materials      drop policy if exists lectura_web;
-alter table public.items          drop policy if exists lectura_web;
-alter table public.machines       drop policy if exists lectura_web;
-alter table public.inventory      drop policy if exists lectura_web;
-alter table public.sales_orders   drop policy if exists lectura_web;
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'work_orders',
+    'operations',
+    'materials',
+    'items',
+    'machines',
+    'inventory',
+    'sales_orders',
+    'capabilities',
+    'operation_catalog',
+    'matrix',
+    'operators',
+    'ot_types',
+    'calendar_exceptions',
+    'article_configurations',
+    'ot_configurations',
+    'tools',
+    'subcontracts',
+    'machine_planning_overrides'
+  ] loop
+    if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t and policyname = 'lectura_web') then
+      execute format('drop policy lectura_web on public.%I', t);
+    end if;
+  end loop;
+end $$;
 
-create policy "lectura_app" on public.work_orders   for select to authenticated using (true);
-create policy "lectura_app" on public.operations   for select to authenticated using (true);
-create policy "lectura_app" on public.materials    for select to authenticated using (true);
-create policy "lectura_app" on public.items        for select to authenticated using (true);
-create policy "lectura_app" on public.machines     for select to authenticated using (true);
-create policy "lectura_app" on public.inventory    for select to authenticated using (true);
-create policy "lectura_app" on public.sales_orders for select to authenticated using (true);
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'work_orders',
+    'operations',
+    'materials',
+    'items',
+    'machines',
+    'inventory',
+    'sales_orders',
+    'capabilities',
+    'operation_catalog',
+    'matrix',
+    'operators',
+    'ot_types',
+    'calendar_exceptions',
+    'article_configurations',
+    'ot_configurations',
+    'tools',
+    'subcontracts',
+    'machine_planning_overrides'
+  ] loop
+    if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = t and policyname = 'lectura_app') then
+      execute format('create policy "lectura_app" on public.%I for select to authenticated using (true)', t);
+    end if;
+  end loop;
+end $$;
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'capabilities',
+    'operation_catalog',
+    'matrix',
+    'operators',
+    'ot_types',
+    'calendar_exceptions',
+    'article_configurations',
+    'ot_configurations',
+    'tools',
+    'subcontracts',
+    'machine_planning_overrides'
+  ] loop
+    if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = t and policyname = 'escritura_app') then
+      execute format('create policy "escritura_app" on public.%I for select to authenticated using (true)', t);
+    end if;
+  end loop;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 2. Los 11 catalogos: lectura Y escritura desde la pagina, con sesion.
@@ -60,29 +126,7 @@ create policy "lectura_app" on public.sales_orders for select to authenticated u
 --    antes que la escritura sin tocar dos veces, y queda escrito en el DDL que
 --    la escritura existe en vez de heredarse de una politica generica.
 -- ----------------------------------------------------------------------------
-alter table public.capabilities              drop policy if exists lectura_web;
-alter table public.operation_catalog         drop policy if exists lectura_web;
-alter table public.matrix                    drop policy if exists lectura_web;
-alter table public.operators                 drop policy if exists lectura_web;
-alter table public.ot_types                  drop policy if exists lectura_web;
-alter table public.calendar_exceptions       drop policy if exists lectura_web;
-alter table public.article_configurations    drop policy if exists lectura_web;
-alter table public.ot_configurations         drop policy if exists lectura_web;
-alter table public.tools                     drop policy if exists lectura_web;
-alter table public.subcontracts              drop policy if exists lectura_web;
-alter table public.machine_planning_overrides drop policy if exists lectura_web;
 
-create policy "lectura_app" on public.capabilities           for select to authenticated using (true);
-create policy "lectura_app" on public.operation_catalog      for select to authenticated using (true);
-create policy "lectura_app" on public.matrix                 for select to authenticated using (true);
-create policy "lectura_app" on public.operators              for select to authenticated using (true);
-create policy "lectura_app" on public.ot_types               for select to authenticated using (true);
-create policy "lectura_app" on public.calendar_exceptions    for select to authenticated using (true);
-create policy "lectura_app" on public.article_configurations for select to authenticated using (true);
-create policy "lectura_app" on public.ot_configurations      for select to authenticated using (true);
-create policy "lectura_app" on public.tools                  for select to authenticated using (true);
-create policy "lectura_app" on public.subcontracts           for select to authenticated using (true);
-create policy "lectura_app" on public.machine_planning_overrides for select to authenticated using (true);
 
 -- Escritura de catalogos. for all = insert, update y delete con la misma regla,
 -- que es lo que necesita un editor de catalogo: agrega, corrige y borra filas.
@@ -91,17 +135,6 @@ create policy "lectura_app" on public.machine_planning_overrides for select to a
 -- permitiria borrar filas que la propia politica de lectura dejaria ver. Con
 -- using (true) and with check (true) la condicion es explicita y no depende de
 -- que RLS rellene lo que falte.
-create policy "escritura_app" on public.capabilities           for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.operation_catalog      for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.matrix                 for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.operators              for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.ot_types               for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.calendar_exceptions    for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.article_configurations for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.ot_configurations      for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.tools                  for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.subcontracts           for all to authenticated using (true) with check (true);
-create policy "escritura_app" on public.machine_planning_overrides for all to authenticated using (true) with check (true);
 
 -- ----------------------------------------------------------------------------
 -- 3. Lo que el RESTlet escribe y la pagina todavia no: la page la lee con sesion
@@ -132,7 +165,7 @@ grant execute on function public.ingesta_mirror(text, jsonb) to service_role;
 do $$
 declare
   abierto text;
-  conSesion text;
+  conSesion integer;
 begin
   -- Debe salir VACIO: ninguna tabla puede seguir con una politica para anon.
   select string_agg(distinct tablename, ', ')
@@ -154,7 +187,7 @@ begin
        'capabilities', 'operation_catalog', 'matrix', 'operators', 'ot_types', 'calendar_exceptions',
        'article_configurations', 'ot_configurations', 'tools', 'subcontracts', 'machine_planning_overrides'
      )
-     and roles = array['authenticated'];
+     and roles = array['authenticated']::name[];
   if conSesion <> 18 then
     raise exception 'FALTAN POLITICAS lectura_app: hay %, se esperaban 18', conSesion;
   end if;

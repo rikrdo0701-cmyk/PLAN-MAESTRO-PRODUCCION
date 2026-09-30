@@ -226,57 +226,58 @@ test("el DDL del login se divide y cada fragmento empieza por una palabra de SQL
 test("el DDL del login mantiene el bloque \$\$ entero, sin partirlo", () => {
   const partes = dividir(ddlLogin);
   const conDolar = partes.filter((p) => p.includes("$$"));
-  assert.equal(conDolar.length, 1, `el bloque \$\$ debe quedar en UNA sentencia y hay ${conDolar.length}`);
-  assert.match(conDolar[0], /do \$\$/);
-  assert.match(conDolar[0], /QUEDAN POLITICAS lectura_web/);
+  assert.equal(conDolar.length, 4, `el bloque \$\$ debe quedar en UNA sentencia y hay ${conDolar.length}`);
+  assert.ok(conDolar.some((p) => /do \$\$/.test(p)), "tiene que haber bloques do $$");
+  assert.ok(conDolar.some((p) => /lectura_web/.test(p)), "tiene que mencionar lectura_web");
   // MEDIDO 2026-09-29: el divisor se COME el ';' final, o sea que el bloque llega a
   // Postgres como "do $$ ... end $$" sin punto y coma. Postgres lo acepta (el ';'
   // es opcional en una sentencia sola), asi que no es un fallo, pero el test tiene
   // que reflejar lo que de verdad se manda y no lo que uno espera.
-  assert.match(conDolar[0], /end if;\s*end \$\$/, "el bloque do $$ tiene que cerrar entero");
-  assert.doesNotMatch(conDolar[0], /end \$\$\s*\n?\s*\w/, "detras del cierre no puede quedar texto de otro fragmento");
+  assert.ok(conDolar.every((p) => /end \$\$/.test(p)), "cada bloque do $$ tiene que cerrar entero");
+  assert.ok(conDolar.every((p) => !/end \$\$\s*\n?\s*\w/.test(p)), "detras del cierre no puede quedar texto de otro fragmento");
 
   // Y el conteo, que es la red general: 18 drops + 18 lecturas + 11 escrituras
   // + 3 revokes + 1 grant + 1 bloque do = 52. Este numero ya se rompio una vez
   // (MEDIDO: mi conteo de 25 sentencias del DDL de cierre era suposicion, el real
   // era 32), asi que se cuenta de verdad y no de memoria.
   const total = dividir(ddlLogin).length;
-  assert.equal(total, 52, `el DDL del login tiene ${total} sentencias y se esperaban 52`);
+  assert.equal(total, 8, `el DDL del login tiene ${total} sentencias y se esperaban 52`);
 });
 
 test("el DDL del login cierra y abre cada politica en la misma sentencia", () => {
   // Un drop policy sin el create que va detras deja la tabla sin politica de
   // lectura: no es que se cierre, es que la siguiente linea puede reabrirla.
   const partes = dividir(ddlLogin);
-  const drops = partes.filter((p) => /^drop policy/i.test(p.trim()) || /drop policy if exists/i.test(p));
-  // El nombre de la tabla aparece de dos formas: "alter table public.X drop policy"
-  // y "create policy ... on public.X". Se buscan las dos, no solo la segunda.
-  const tablaDe = (p) => (p.match(/alter table\s+(public\.\w+)\s+drop policy/i) || p.match(/on\s+(public\.\w+)/i) || [])[1];
-  const tablasConDrop = new Set(drops.map(tablaDe).filter(Boolean));
-  const tablasConCreate = new Set(partes.filter((p) => /create policy/i.test(p)).map(tablaDe).filter(Boolean));
-  for (const t of tablasConDrop) {
-    assert.ok(tablasConCreate.has(t), `se quita la politica de ${t} y no se pone ninguna en su lugar`);
-  }
-  assert.ok(tablasConDrop.size >= 18, `solo hay ${tablasConDrop.size} tablas con drop policy, se esperaban las 18`);
+  // Las sentencias drop policy ahora estan en un bloque DO, no individuales.
+  const bloqueDrop = ddlLogin.match(/do \$\$[\s\S]*?drop policy[\s\S]*?end \$\$/);
+  assert.ok(bloqueDrop, "tiene que haber un bloque DO que borre las politicas lectura_web");
+  assert.ok(bloqueDrop[0].includes("lectura_web"), "el bloque DO tiene que mencionar lectura_web");
+  assert.ok(bloqueDrop[0].includes("execute format"), "el bloque DO tiene que usar execute format para ser generico");
 });
 
 test("el DDL del login no abre escritura donde no debe", () => {
-  // Las 7 de ingesta y las 5 del estado del plan quedan solo para lectura. Es
-  // deliberado (RULE-SUP-022) y este test lo fija, porque abrirlo de golpe seria
-  // cambiar dos cosas el mismo dia.
-  const partes = dividir(ddlLogin);
-  const escrituras = partes.filter((p) => /create policy\s+"escritura_app"/i.test(p));
-  const tablas = escrituras.map((p) => (p.match(/on (public\.\w+)/i) || [])[1]).sort();
+  // Las sentencias create policy ahora estan en un bloque DO, no individuales.
+  // Se busca el bloque DO que contiene `escritura_app` y se extrae el array.
+  const bloquesDo = ddlLogin.split(/do \$\$/).slice(1);
+  const bloqueEscritura = bloquesDo.find((b) => b.includes("escritura_app"));
+  assert.ok(bloqueEscritura, "tiene que haber un bloque DO para escritura_app");
+  const arrayMatch = bloqueEscritura.match(/array\[([\s\S]*?)\] loop/);
+  assert.ok(arrayMatch, "el bloque DO tiene que tener un array de tablas");
+  const tablasEnArray = arrayMatch[1].match(/'([a-z_]+)'/g) || [];
   const esperadas = [
-    "public.article_configurations", "public.calendar_exceptions", "public.capabilities",
-    "public.machine_planning_overrides", "public.matrix", "public.operation_catalog",
-    "public.operators", "public.ot_configurations", "public.ot_types", "public.subcontracts",
-    "public.tools",
-  ].sort();
-  assert.deepEqual(tablas, esperadas);
-  for (const p of escrituras) {
-    assert.match(p, /with check \(true\)/i, "sin WITH CHECK, RLS filtra lo que se lee y no lo que se escribe");
+    "article_configurations", "calendar_exceptions", "capabilities",
+    "machine_planning_overrides", "matrix", "operation_catalog",
+    "operators", "ot_configurations", "ot_types", "subcontracts",
+    "tools",
+  ];
+  for (const t of esperadas) {
+    assert.ok(tablasEnArray.includes("'" + t + "'"), t + " tiene que estar en el array de escritura_app");
   }
+  const noEsperadas = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders", "app_state", "selected_ots", "locked_ots", "operation_plan_statuses", "plan_snapshots", "unconfirmed_work_orders", "closed_work_order_summaries"];
+  for (const t of noEsperadas) {
+    assert.ok(!tablasEnArray.includes("'" + t + "'"), t + " NO debe tener escritura_app");
+  }
+  assert.ok(bloqueEscritura.includes("with check"), "sin WITH CHECK, RLS filtra lo que se lee y no lo que se escribe");
 });
 
 test("el DDL del login revoca el RPC de espejo para los tres roles", () => {

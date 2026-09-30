@@ -337,15 +337,10 @@ test("los indices unicos del upsert se comprueban por COLUMNAS, no contando", ()
   // Y la comprobacion final busca el indice por las columnas EXACTAS del on_conflict.
   // Las cinco van en el MISMO ORDEN que el on_conflict, porque Postgres infiere el
   // indice por esa lista y uno con las columnas invertidas no sirve.
-  for (const [tabla, cols] of [
-    ["operations", "array['operation_id']"],
-    ["work_orders", "array['wo_internal_id']"],
-    ["materials", "array['ot','line_id']"],
-    ["plan_snapshots", "array['snapshot_id']"],
-    ["operation_events", "array['id']"],
-  ]) {
-    assert.ok(ddl.includes(cols), "la comprobacion tiene que buscar el indice de " + tabla + " por sus columnas: " + cols);
-  }
+  // v_cols ahora es un array PLANO con las columnas separadas por coma, no text[][].
+  // Un array multidimensional exige que todas las sublistas tengan las mismas
+  // dimensiones, y aqui tengo de 1 y de 2 elementos, asi que Postgres lo rechaza.
+  assert.ok(ddl.includes("v_cols text[] := array['operation_id','wo_internal_id','ot,line_id','snapshot_id','id']"), "v_cols tiene que ser un array plano con las columnas separadas por coma");
   assert.ok(ddl.includes("v_tablas text[] := array['operations','work_orders','materials','plan_snapshots','operation_events']"));
   assert.match(ddl, /x\.indisunique/);
   assert.match(ddl, /sin indice unico para el upsert en: %/);

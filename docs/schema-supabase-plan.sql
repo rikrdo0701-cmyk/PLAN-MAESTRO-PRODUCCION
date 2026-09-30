@@ -840,13 +840,12 @@ begin
   --    el indice por esa lista y un indice con las columnas invertidas no sirve.
   declare
     v_tablas text[] := array['operations','work_orders','materials','plan_snapshots','operation_events'];
-    v_cols text[][] := array[
-      array['operation_id'],
-      array['wo_internal_id'],
-      array['ot','line_id'],
-      array['snapshot_id'],
-      array['id']
-    ];
+    -- Un array PLANO, con las columnas separadas por coma, y NO text[][]. Un array
+    -- multidimensional exige que todas las sublistas tengan las mismas dimensiones, y
+    -- aqui tengo de 1 y de 2 elementos, asi que Postgres lo rechaza con
+    -- "multidimensional arrays must have array expressions with matching dimensions".
+    -- Se parte con string_to_array en el momento de comparar.
+    v_cols text[] := array['operation_id','wo_internal_id','ot,line_id','snapshot_id','id'];
     v_falta text;
   begin
     for k in 1 .. array_length(v_tablas, 1) loop
@@ -858,10 +857,10 @@ begin
          where ns.nspname = 'public'
            and c.relname = v_tablas[k]
            and x.indisunique
-           and (select array_agg(a.attname order by u.ord)
+           and (select array_agg(a.attname::text order by u.ord)
                   from unnest(x.indkey) with ordinality as u(attnum, ord)
                   join pg_attribute a on a.attrelid = x.indrelid and a.attnum = u.attnum
-               ) = v_cols[k]
+               ) = string_to_array(v_cols[k], ',')
       ) then
         v_falta := coalesce(v_falta || ' ', '') || v_tablas[k];
       end if;
