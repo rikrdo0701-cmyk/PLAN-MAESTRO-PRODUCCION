@@ -178,6 +178,12 @@
 
     informe.catalogs = resultado.catalogs;
     informe.gaps = resultado.gaps || {};
+    // operations, workOrders y materials: el plan. El lector ya los mapea
+    // (mapOperations, mapWorkOrders, mapMaterials) y el apply los necesita para
+    // aplicarlos encima del estado. Sin esto el apply no puede hacer su trabajo.
+    informe.operations = resultado.operations;
+    informe.workOrders = resultado.workOrders;
+    informe.materials = resultado.materials;
     return informe;
   }
 

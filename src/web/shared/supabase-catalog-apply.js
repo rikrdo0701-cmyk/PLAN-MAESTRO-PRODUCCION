@@ -27,11 +27,14 @@
  * rescate: si en este tiempo no ha pasado nada, se aplica igual lo que haya
  * llegado. Peor con matriz de ayer que sin matriz y sin aviso.
  *
- * QUE APLICA Y QUE NO. Solo los catalogos. NO toca operations, work_orders ni
- * materials: el plan sigue viniendo del puente porque el esquema de Supabase no
- * tiene columnas para representarlo (MAPPING_GAPS en supabase-reader.js: a
- * operations le faltan num, parte, contenido, prioridad, fechaReq y log) y porque
- * su escritura necesita politicas que todavia no existen.
+ * QUE APLICA. Los catalogos Y el plan: operations, work_orders y materials.
+ * El DDL docs/schema-supabase-plan.sql esta APLICADO y las 11 columnas nuevas
+ * existen. El lector ya mapea las tres tablas (mapOperations, mapWorkOrders,
+ * mapMaterials en supabase-reader.js) y el boot las pasa en el informe.
+ *
+ * SI SUPABASE NO TRAE DATOS. Si el informe trae undefined (la tabla no se pudo
+ * leer), NO se toca lo que el puente ya trajo. Si trae un array vacio, se aplica:
+ * significa "no hay", que es informacion real.
  */
 (function (root) {
   "use strict";
@@ -86,6 +89,20 @@
 
     const r = aplicar(root.state || {}, normaliza(informe.catalogs));
     root.state = r.estado;
+    // El plan: operations, workOrders y materials. El boot ya los trae mapeados
+    // por el lector (mapOperations, mapWorkOrders, mapMaterials). Se aplican
+    // encima del estado del puente: Supabase es la fuente ahora.
+    //
+    // undefined se descarta a proposito: significa 'el lector no trajo esto', y
+    // sobrescribir con undefined borraria lo que el puente si habia traido. Un
+    // array VACIO si se aplica: significa 'no hay', que es informacion real.
+    let planAplicado = 0;
+    for (const clave of ["operations", "workOrders", "materials"]) {
+      const valor = informe[clave];
+      if (valor === undefined) continue;
+      root.state[clave] = valor;
+      planAplicado += 1;
+    }
     try {
       if (typeof render === "function") render({ save: false });
     } catch (error) {
@@ -94,7 +111,7 @@
       console.warn("Catalogos aplicados pero no se pudo pintar:", String((error && error.message) || error));
     }
     aplicado = true;
-    return { aplicado: true, claves: r.claves, ms: informe.ms, viejo: informe.viejo, vacias: informe.vacias };
+    return { aplicado: true, claves: r.claves, planAplicado, ms: informe.ms, viejo: informe.viejo, vacias: informe.vacias };
   }
 
   /** No se solapan dos lecturas: si ya hay una en marcha, se espera esa. */
