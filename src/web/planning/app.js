@@ -9500,8 +9500,12 @@ async function syncBacklogWorkOrders() {
   setBacklogSyncInFlight(true);
   let syncSaveGate = null;
   try {
-    // NetSuite rechaza puntas con 400 SSS_REQUEST_LIMIT_EXCEEDED (limite de solicitudes):
-    // es transitorio, se reintenta una vez a los 5 s antes de rendirse.
+    // MEDIDO 2026-09-30: esto reintentaba solo ante SSS_REQUEST_LIMIT_EXCEEDED, que es el
+    // 400 de limite de solicitudes de NETSUITE. Con el puente deshabilitado (RULE-SUP-029) la
+    // lectura va a Supabase, y ese codigo ya no puede llegar: el reintento estaba muerto y no
+    // cubria el limite que de verdad existe ahora, que es el de PostgREST (429, y el texto
+    // PGRST124 "Request rate limit reached"). Un reintento que solo mira el codigo del sistema
+    // que ya no esta es un reintento que no reintenta nada.
     let payload = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -9511,12 +9515,16 @@ async function syncBacklogWorkOrders() {
         );
         break;
       } catch (error) {
-        const rateLimited = String(error?.message || error || "").includes("SSS_REQUEST_LIMIT_EXCEEDED");
+        const texto = String(error?.message || error || "");
+        const rateLimited = texto.includes("SSS_REQUEST_LIMIT_EXCEEDED")
+          || texto.includes("PGRST124")
+          || texto.includes("rate limit")
+          || texto.includes("429");
         if (!rateLimited || attempt === 2) throw error;
         await new Promise((resolve) => window.setTimeout(resolve, 5000));
       }
     }
-    if (!payload) throw new Error("NetSuite no devolvio OTs tras el reintento");
+    if (!payload) throw new Error("La lectura de work_orders en Supabase no devolvio nada tras el reintento");
     validateNetSuiteImportedData(payload, "workOrders");
     const planningCore = window.PlanningWorkflowCore;
     const smartSync = planningCore?.classifySmartSyncChange
@@ -10168,13 +10176,28 @@ async function syncNetSuiteData(showMessage, options = {}) {
 function validateNetSuiteImportedData(imported, mode) {
   const workOrders = Array.isArray(imported?.workOrders) ? imported.workOrders : [];
   if (!workOrders.length) {
-    throw new Error("NetSuite no devolvio OTs para Planta MM del Llano. Revisa credenciales, permisos del deployment y ejecuta runProductionReadinessCheck({liveNetSuite:true}).");
+    // MEDIDO 2026-09-30 en la pagina real: este mensaje decia "Revisa credenciales, permisos
+    // del deployment y ejecuta runProductionReadinessCheck({liveNetSuite:true})", y ya no
+    // senala al lugar del fallo. La app no habla con NetSuite (RULE-SUP-029): lee la tabla
+    // work_orders de Supabase. Un mensaje que manda a revisar el deployment de Apps Script
+    // cuando el problema es una tabla vacia o una politica de RLS hace perder el rato en el
+    // sistema equivocado, y por encima tapa el motivo real, que es el que se pedia en
+    // RULE-SUP-027: que tabla fallo y con que error.
+    throw new Error(
+      "La tabla work_orders de Supabase vino vacia. Puede ser que la ingesta de NetSuite no haya corrido, "
+      + "o que las politicas RLS no dejen leerla. Revisa el conteo de work_orders y la sesion; no hay nada que "
+      + "revisar en Apps Script, porque la app ya no lo consulta.",
+    );
   }
   if (mode === "full") {
     const operations = Array.isArray(imported?.operations) ? imported.operations : [];
     const catalog = Array.isArray(imported?.operationCatalog) ? imported.operationCatalog : [];
     if (!operations.length || !catalog.length) {
-      throw new Error("NetSuite devolvio OTs pero no devolvio operaciones/catalogo. Revisa el RESTlet de operaciones de planta y permisos del token.");
+      throw new Error(
+        "Supabase devolvio OTs pero no devolvio operaciones/catalogo: la tabla "
+        + `${!operations.length ? "operations" : "operation_catalog"} de Supabase vino vacia. `
+        + "Revisa la ingesta y las politicas RLS de esa tabla.",
+      );
     }
   }
 }
