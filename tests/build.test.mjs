@@ -380,9 +380,12 @@ test("el puente no monta NINGUN iframe: no se descarga el script de Google", asy
       `${nombre}: ensureReady tiene que rechazar con el motivo del puente, no montar un iframe`);
 
     // 2. Y el iframe no se crea en ningun lado por una llamada que si llegue a ejecutarse.
-    //    Se afirma sobre el nombre del elemento, no sobre la URL: la URL es configuracion y
-    //    puede cambiar; `#ppAppsScriptBridge` es el contrato.
-    assert.doesNotMatch(codigo, /ppAppsScriptBridge/,
+    //    Se afirma sobre la CREACION del elemento, no sobre la mencion del objeto: el nombre
+    //    PPAppsScriptBridge sigue apareciendo legitimamente en `enRuntimeAppsScript` de app.js,
+    //    que lo consulta unicamente para preguntar por `google.script.run` (dentro de
+    //    HtmlService), no para leer ni escribir datos. Un test que prohibiera la mencion
+    //    obligaria a romper esa pregunta, que es buena.
+    assert.doesNotMatch(codigo, /createElement\(\s*["']iframe["']|\.id\s*=\s*["']ppAppsScriptBridge["']/,
       `${nombre}: algo sigue creando el iframe del puente`);
 
     // 3. La URL del web app no se navega. Con el iframe gone, cualquier postMessage ahi
@@ -623,9 +626,16 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
     builtStartupSource.indexOf("await restoreDraftPlanFromSharedState()") < builtStartupSource.indexOf("purgeClosedWorkOrderRetention()"),
     "la purga debe ejecutarse despues de restaurar el borrador compartido",
   );
-  const startupState = { operations: [] };
+  // MEDIDO 2026-09-30: este estado de prueba no tenia `workOrders`, y el arranque lo lee para
+  // decidir si el sync muestra mensaje (`state.workOrders.length === 0`). Antes no se notaba
+  // porque la llamada estaba dentro de un ternario con `isAppsScriptRuntime()`, que el arnes
+  // fijaba en false y hacia que la rama se cortara antes de evaluar el argumento. Al quitar la
+  // compuerta (RULE-SUP-029) el argumento se evalua siempre. El estado real de la app SI trae
+  // workOrders porque normalizeState() lo garantiza, asi que lo que faltaba era el fixture.
+  const startupState = { operations: [], workOrders: [] };
   let operationsSeenByPurge = [];
   const workspaceOptions = [];
+  let bootSyncCalls = 0;
   const generatedStartup = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "loadPlanSnapshots", "restoreDraftPlanFromSharedState",
     "purgeClosedWorkOrderRetention", "syncReportFiltersToPlanWeekOrToday", "saveState", "render", "applyInitialWorkspaceView",
@@ -635,9 +645,13 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
     startupState, async () => true, (callback) => callback(), async () => {},
     async () => { startupState.operations = [{ ot: "OT-CERRADA" }]; return true; },
     () => { operationsSeenByPurge = [...startupState.operations]; startupState.operations = []; },
-    () => {}, () => {}, () => {}, (options) => workspaceOptions.push(options), () => {}, () => false, () => {},
+    () => {}, () => {}, () => {}, (options) => workspaceOptions.push(options), () => {}, () => false,
+    () => { bootSyncCalls += 1; return Promise.resolve(true); },
   );
   await generatedStartup();
+  // Y el sync de arranque tiene que occurir: antes estaba compuerteado por isAppsScriptRuntime(),
+  // que el arnes fijaba en false, o sea que en el sitio estatico nunca se lanzaba.
+  assert.equal(bootSyncCalls, 1, "el arranque tiene que lanzar el sync de OTs: ya no hay puente que lo compuertree");
   assert.deepEqual(operationsSeenByPurge, [{ ot: "OT-CERRADA" }]);
   assert.deepEqual(workspaceOptions, [{ scrollToTop: false }]);
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);

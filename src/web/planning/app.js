@@ -682,6 +682,16 @@ function initializePlanningApp() {
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializePlanningApp, { once: true });
 else initializePlanningApp();
 
+// MEDIDO 2026-09-30 en la pagina real: el bootSync de esta funcion estaba compuerteado por
+// isAppsScriptRuntime(), que da false desde que el puente quedo deshabilitado (RULE-SUP-029).
+// O sea que el sync de arranque NO se lanzaba nunca en el sitio estatico: la pagina abria con
+// el estado cacheado y sin pedir OTs a Supabase. syncNetSuiteInBackground ya va a Supabase,
+// que esta en los dos runtimes, asi que la pregunta no tiene a que existir. El caso grave, el
+// que rompia Generar plan, esta en ensurePlanningDataLoaded mas abajo.
+//
+// NOTA PARA QUIEN TOQUE ESTA LINEA: scripts/build-appscript.mjs parchea este bloque por TEXTO
+// exacto, asi que el cuerpo tiene que quedar igual que el startupMarker de ahi, sin comentarios
+// en medio. La explicacion de arriba va aqui arriba, no entre las lineas del bloque.
 async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
     console.warn("No se pudieron cargar los historicos:", error);
@@ -698,9 +708,7 @@ async function loadAppStateInBackground() {
   saveState("ui");
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
-  const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
-    : Promise.resolve(false);
+  const bootSync = syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true });
   // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
   // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
   // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
@@ -7772,7 +7780,11 @@ function inspectionFillOnHold() {
 }
 
 async function ensureInspectionWorkOrders(ots) {
-  if (!isAppsScriptRuntime()) return;
+  // MEDIDO 2026-09-30: el `if (!isAppsScriptRuntime()) return;` de aqui hacia que la
+  // precarga de inspeccion no ocurriera nunca en el sitio estatico, porque da false desde que
+  // el puente quedo deshabilitado (RULE-SUP-029). La recarga de inspeccion va a Supabase, que
+  // esta en los dos runtimes, asi que la compuerta no tiene a que proteger nada. Lo que SI
+  // protege de verdad es inspectionFillOnHold, una linea mas abajo, y esa se queda.
   if (inspectionFillOnHold()) return;
   const candidates = (Array.isArray(ots) ? ots : [])
     .map((ot) => ({ ot: String(ot || "").trim(), key: materialOtKey(ot) }))
@@ -7966,7 +7978,13 @@ const closedPiecesBackfillAttempted = new Set();
 let closedPiecesBackfillRunning = false;
 
 async function backfillClosedPendingPiecesFromHistory(rows) {
-  if (closedPiecesBackfillRunning || !isAppsScriptRuntime()) return;
+  // MEDIDO 2026-09-30: aqui `!isAppsScriptRuntime()` hacia de guarda a guarda, y la segunda
+  // compuerta (que es la que evita el reentrada: closedPiecesBackfillRunning) impedia que la
+  // primera se notara. Da false desde que el puente quedo deshabilitado (RULE-SUP-029), o sea
+  // que el relleno de piezas pendientes de OTs cerradas no ocurria nunca en el sitio
+  // estatico. El historico se lee de Supabase, que esta en los dos runtimes. Se queda solo la
+  // guarda de reentrada, que es la que hace falta.
+  if (closedPiecesBackfillRunning) return;
   const openOts = new Set((state.workOrders || []).map((workOrder) => materialOtKey(workOrder?.ot)));
   const candidatesByKey = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -9699,10 +9717,12 @@ async function refreshSmartSyncOtTimes(records) {
   const toRefresh = candidates.slice(0, SMART_SYNC_TIME_REFRESH_LIMIT);
   if (!toRefresh.length) return results;
 
-  if (!isAppsScriptRuntime()) {
-    toRefresh.forEach(({ key }) => { results[key] = { changed: false, skipped: true }; });
-    return results;
-  }
+  // MEDIDO 2026-09-30: esta rama se tomaba SIEMPRE, porque `isAppsScriptRuntime()` da false
+  // desde que el puente quedo deshabilitado (RULE-SUP-029). O sea que el refresco de tiempos
+  // tras una sincronizacion inteligente no ocurria nunca en el sitio estatico: cada OT se
+  // marcaba `skipped` y los tiempos se quedaban como estaban. La lectura de tiempos va a
+  // Supabase, que esta en los dos runtimes, asi que la rama se borra y el refresco ocurre.
+  // El limite SMART_SYNC_TIME_REFRESH_LIMIT de arriba sigue mandando: eso si es un presupuesto.
 
   // Capturar firmas ANTES del batch merge
   const beforeByKey = new Map();
@@ -10653,12 +10673,22 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
       return true;
     });
   };
-  if (!isAppsScriptRuntime()) {
-    const current = availability();
-    const readyOts = usableOts(current);
-    const ready = readyOts.length > 0;
-    return { ready, source: ready ? "cached" : "none", readyOts, missingOts: current.missingOts, warning: "" };
-  }
+  // MEDIDO 2026-09-30 en la pagina real: esto era
+  //   if (!isAppsScriptRuntime()) { return { ready, source: "cached"|"none", missingOts } }
+  // y con el puente deshabilitado (RULE-SUP-029) `isAppsScriptRuntime()` da false, o sea
+  // que ESTA era la rama que se tomaba siempre. Y esa rama no sincroniza nada: solo mira
+  // lo que ya hay en state.operations y devuelve lo que falta. MEDIDO en produccion: el
+  // boton Generar plan daba
+  //   "No se genero el plan: falta sincronizar operaciones de OT 3331, 3385. Reintenta."
+  // con las OTs LEIDAS de Supabase y las operaciones nunca pedidas a Supabase. O sea: la
+  // pagina decia "reintenta" de algo que no se podia volver a intentar, porque el reintento
+  // es la misma rama.
+  //
+  // Antes esa compuerta si distinguia algo: dentro de HtmlService el estado ya venia de las
+  // Hojas y no habia nada que ir a buscar. Desde que la fuente es Supabase (esta disponible
+  // en los dos runtimes) la pregunta correcta no es "estoy en Apps Script" sino "lo que hay
+  // en memoria esta fresco", que es exactamente lo que responden availability() y
+  // refreshable mas abajo. Por eso la rama se borra y el resto de la funcion manda.
   const current = availability();
   const refreshable = [...(current.staleOts || []), ...(current.missingOts || [])]
     .filter((ot, index, list) => String(ot || "") && list.indexOf(ot) === index);

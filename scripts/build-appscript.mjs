@@ -59,6 +59,12 @@ function patchPlanningApp(app) {
   if (sharedStatePatched === patched) throw new Error("No se encontro la carga inicial del estado compartido");
   patched = sharedStatePatched;
 
+  // MEDIDO 2026-09-30: el marcador de abajo es copia LITERAL de app.js, y por eso no puede
+  // llevar comentarios propios: si se le anade uno, el texto deja de coincidir con el fuente,
+  // el patch no aplica y el throw de mas abajo lo dice. Por eso la razon de que la linea
+  // `const bootSync = ...` ya no este compuerteada por isAppsScriptRuntime() vive en app.js y
+  // en RULE-SUP-029, no aqui. Le pasa a cualquier parche por texto: el marcador es una
+  // fotografia del fuente, y se rompe en cuanto el fuente cambia.
   const startupMarker = `async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
     console.warn("No se pudieron cargar los historicos:", error);
@@ -75,9 +81,7 @@ function patchPlanningApp(app) {
   saveState("ui");
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
-  const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
-    : Promise.resolve(false);
+  const bootSync = syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true });
   // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
   // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
   // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
@@ -116,9 +120,7 @@ function patchPlanningApp(app) {
   render({ save: false });
   applyInitialWorkspaceView({ scrollToTop: false });
   if (restoredDraft) showToast("Se cargo el plan guardado desde Google Sheets");
-  const bootSync = isAppsScriptRuntime()
-    ? syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true })
-    : Promise.resolve(false);
+  const bootSync = syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true });
   // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
   // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
   // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de

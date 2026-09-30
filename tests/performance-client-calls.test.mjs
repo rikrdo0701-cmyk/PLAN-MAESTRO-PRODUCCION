@@ -1847,9 +1847,15 @@ test("la navegacion manual desplaza el espacio de trabajo al inicio", () => {
 });
 
 test("el arranque remoto conserva la OT de detalle y la operacion seleccionada", async () => {
-  const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada" };
+  // MEDIDO 2026-09-30: el arranque leia state.workOrders.length para decidir si el sync muestra
+  // mensaje, y este estado de prueba no traia workOrders. No se notaba porque la llamada estaba
+  // en la rama verdadera de un ternario con isAppsScriptRuntime(), que el arnes fijaba en false.
+  // Al quitar esa compuerta (RULE-SUP-029) el argumento se evalua siempre. El estado real de la
+  // app SI trae workOrders porque normalizeState() lo garantiza: lo que faltaba era el fixture.
+  const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada", workOrders: [] };
   const renderOptions = [];
   const workspaceOptions = [];
+  let bootSyncCalls = 0;
   const loadAppStateInBackground = Function(
     "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "syncReportFiltersToPlanWeekOrToday",
     "saveState", "render", "applyInitialWorkspaceView", "isAppsScriptRuntime", "syncNetSuiteInBackground",
@@ -1868,13 +1874,16 @@ test("el arranque remoto conserva la OT de detalle y la operacion seleccionada",
     (options) => renderOptions.push(options),
     (options) => workspaceOptions.push(options),
     () => false,
-    () => {},
+    () => { bootSyncCalls += 1; return Promise.resolve(true); },
     () => Promise.resolve(null),
     () => {},
   );
 
   await loadAppStateInBackground();
 
+  // El sync de arranque tiene que ocurrir. Antes lo compuerteaba isAppsScriptRuntime(), que en el
+  // sitio estatico da false, o sea que la pagina abria sin pedir OTs a Supabase nunca.
+  assert.equal(bootSyncCalls, 1, "el arranque tiene que lanzar el sync de OTs");
   assert.equal(state.selectedDetailOt, "2773");
   assert.equal(state.selectedOperationId, "duplicada");
   assert.deepEqual(renderOptions, [{ save: false }]);

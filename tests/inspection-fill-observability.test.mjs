@@ -156,12 +156,32 @@ test("el resumen de fallos deduplica el mismo error y ordena por folio", () => {
   );
 });
 
-test("sin runtime de Apps Script no se llama al puente ni se registra nada", async () => {
-  const harness = createInspectionFill({ runtime: false, responses: { 3483: rateLimited } });
+test("con una sincronizacion en curso la carga espera, y no registra nada", async () => {
+  // MEDIDO 2026-09-30: esta prueba se llamaba "sin runtime de Apps Script no se llama al
+  // puente ni se registra nada", y afirmaba sobre la guarda `if (!isAppsScriptRuntime()) return;`
+  // de ensureInspectionWorkOrders. Esa guarda impedia que la precarga de inspeccion ocurriera
+  // NUNCA en el sitio estatico, porque isAppsScriptRuntime() da false desde que el puente quedo
+  // deshabilitado (RULE-SUP-029). O sea: el test fijaba el bug, no la intencion.
+  //
+  // La intencion real es la que dice el comentario de al lado de la guarda: no saturar mientras
+  // corre una sincronizacion de OTs. Eso NO cambio, y es lo que se afirma aqui: con la
+  // sincronizacion en curso no se pregunta nada y no se registra nada, en cualquier runtime.
+  const harness = createInspectionFill({ onHold: () => true, responses: { 3483: rateLimited } });
 
   await harness.ensureInspectionWorkOrders(["3483"]);
 
   assert.deepEqual(harness.calls, []);
   assert.equal(harness.warnings.length, 0);
   assert.equal(harness.toasts.length, 0);
+  assert.equal(harness.failures.size, 0, "en espera no hay fallo que registrar: no se intento nada");
+});
+
+test("sin sincronizacion en curso la carga SI ocurre, porque va a Supabase y no al puente", async () => {
+  // El contrapunto del de arriba, para que el test no se lea como "esta funcion no hace nada".
+  const harness = createInspectionFill({ onHold: () => false, responses: { 3483: rateLimited } });
+
+  await harness.ensureInspectionWorkOrders(["3483"]);
+
+  assert.deepEqual(harness.calls, ["getInspectionWorkOrder:3483"]);
+  assert.equal(harness.failures.size, 1, "el fallo se registra: se pregunto y no vino");
 });
