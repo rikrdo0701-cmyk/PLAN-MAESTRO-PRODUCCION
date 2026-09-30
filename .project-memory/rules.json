@@ -1957,6 +1957,15 @@
       "source": "MEDIDO 2026-09-30 en el navegador real (toast \"fallo desconocido\" con el motivo a mano en el informe). src/web/planning/app.js (motivoDelInforme, guardarPlanEnSupabase, guardarCatalogosEnSupabase). src/web/shared/supabase-writer.js (cerrar, sinEscribir). tests/guardado-sin-puente.test.mjs (dos tests nuevos, verificados por mutacion).",
       "domain": "supabase",
       "updated_at": "2026-09-30"
+    },
+    {
+      "rule_id": "RULE-SUP-028",
+      "name": "rpcAusente se limpia en cada intento de guardado: el DDL puede haber sido aplicado despues de cargar la pagina",
+      "status": "active",
+      "rule": "MEDIDO 2026-09-30 en el navegador: el sync de OTs leia las OTs de NetSuite pero no escribia a Supabase. Causa: rpcAusente cacheaba un 404 permanentemente. Si el DDL se aplicaba despues de que la pagina cargaba, el writer seguia sin usar el RPC para siempre. ARREGLO: rpcAusente = null al inicio de cada guardar(). TEST: tests/supabase-writer.test.mjs, test 'un 404 del RPC degrada con aviso, usa el camino viejo y REINTENTA el RPC en el siguiente guardado'.",
+      "source": "MEDIDO 2026-09-30 en el navegador (sync sin escritura a Supabase). src/web/shared/supabase-writer.js (guardar, rpcAusente). tests/supabase-writer.test.mjs.",
+      "domain": "supabase",
+      "updated_at": "2026-09-30"
     }
   ]
 }

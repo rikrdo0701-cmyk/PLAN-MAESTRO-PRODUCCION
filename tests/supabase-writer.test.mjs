@@ -857,7 +857,7 @@ test("un CONFLICT_REVISION se distingue de un error de red en el informe", async
   assert.equal(red.llamadas.length, 3, "un 503 SI se reintenta");
 });
 
-test("un 404 del RPC degrada con aviso, usa el camino viejo y NO se reintenta", async () => {
+test("un 404 del RPC degrada con aviso, usa el camino viejo y REINTENTA el RPC en el siguiente guardado", async () => {
   // El simulador por defecto imita la base de HOY: plan_guardar no existe todavia.
   const { writer, llamadas } = escritor();
   const informe = await writer.guardar(estado());
@@ -879,18 +879,21 @@ test("un 404 del RPC degrada con aviso, usa el camino viejo y NO se reintenta", 
   assert.equal(de(llamadas, "DELETE", "operations").length, 0);
   assert.equal(de(llamadas, "POST", "operations").length, 1);
 
-  // Y no se vuelve a preguntar: la respuesta no va a cambiar mientras la pagina
-  // siga abierta, y repreguntar es un gasto en cada guardado.
+  // MEDIDO 2026-09-30: el cache de rpcAusente se limpia en CADA intento de guardado,
+  // porque el DDL puede haber sido aplicado entre guardados. Si se aplico, el siguiente
+  // guardado DEBE usar el RPC. Por eso se vuelve a preguntar.
   const antes = llamadas.length;
   const segundo = await writer.guardar(estado());
   const nuevas = llamadas.slice(antes);
-  assert.equal(nuevas.filter((c) => c.url.includes("/rpc/")).length, 0, "ni una pregunta mas al RPC");
+  const alRpc2 = nuevas.filter((c) => c.url.includes("/rpc/"));
+  assert.equal(alRpc2.length, 1, "SE vuelve a preguntar al RPC: el DDL puede haber sido aplicado");
+  assert.equal(segundo.camino, "viejo", "y como sigue sin DDL, va por el camino viejo");
   // El camino viejo entero: 3 borrados de las tablas de espejo, 6 UPSERT (una por
   // tabla) y el PATCH de app_state. Los eventos ya estan y no se vuelven a pagar.
+  // MAS la pregunta al RPC (POST a /rpc/plan_guardar), total POST = 1 RPC + 6 old-path = 7.
   assert.equal(nuevas.filter((c) => c.metodo === "DELETE").length, 3);
-  assert.equal(nuevas.filter((c) => c.metodo === "POST").length, 6);
+  assert.equal(nuevas.filter((c) => c.metodo === "POST").length, 7);
   assert.equal(nuevas.filter((c) => c.metodo === "PATCH").length, 1);
-  assert.equal(segundo.camino, "viejo");
   assert.match(segundo.avisos.join(" "), /falta aplicar el DDL/i, "y el aviso sigue saliendo en cada guardado");
 });
 

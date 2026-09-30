@@ -1757,9 +1757,13 @@
       );
     }
 
-    if (rpcAusente) {
-      // Ya se sabe que la funcion no esta. No se vuelve a preguntar: la respuesta
-      // no cambia mientras la pagina siga abierta.
+    // Limpiar el cache de rpcAusente en cada intento: la funcion puede haber sido
+    // creada/aplicada (DDL) desde el ultimo guardado. El cache permanente impedia
+    // detectar el DDL aplicado despues de que la pagina ya cargara.
+    rpcAusente = null;
+
+    if (false) { // nunca entra: el cache se limpia arriba
+      // Nunca se entra aqui porque lo limpiamos arriba. Se deja por seguridad.
       informe.avisos.push(avisoDeAusencia(rpcAusente));
     } else {
       const freno = frenoDelRpc(armado.payload, opts);

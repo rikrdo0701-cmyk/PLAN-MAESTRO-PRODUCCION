@@ -776,7 +776,8 @@ begin
       raise exception 'plan_guardar: % deberia ser espejo y esta en %', v_tabla, v_modo
         using errcode = '23514';
     end if;
-    execute format('delete from public.%I', v_tabla);
+    -- PostgREST bloquea DELETE sin WHERE. WHERE TRUE lo permite y borra todo.
+    execute format('delete from public.%I where true', v_tabla);
     v_sql := format(
       'insert into public.%I (%s) select %s from jsonb_populate_recordset(null::public.%I, $1)',
       v_tabla, array_to_string(v_cols, ', '), array_to_string(v_cols, ', '), v_tabla
