@@ -538,8 +538,12 @@ test("un estado sin filas NO borra la tabla, salvo que se pida explicito", async
   const informe = await writer.guardar(vacio);
   assert.equal(de(llamadas, "DELETE", "operations").length, 0, "no se borra operations porque no llego ninguna fila");
   assert.equal(de(llamadas, "DELETE", "selected_ots").length, 0);
-  assert.match(informe.tablas.operations.error, /no se borra/i);
-  assert.equal(informe.ok, false, "y se reporta, no se traga el silencio");
+  // MEDIDO 2026-09-30 en produccion: "sin filas" NO es un error. Es el freno del vacio
+  // funcionando. Antes `error` hacia que `cerrar()` diera ok=false y el toast decia
+  // "No se pudo guardar el plan" cuando el plan SI se guardo. Ahora es una nota.
+  assert.equal(informe.tablas.operations.error, null, "sin filas ya no es un error");
+  assert.match(informe.tablas.operations.nota, /no se borra/i, "sigue siendo una nota para no tragar el silencio");
+  assert.equal(informe.ok, true, "y el guardado es ok: la tabla se dejo intacta a proposito");
 
   // Quien sepa que el vacio es de verdad lo pide. El DELETE lleva la tautologia
   // del uuid nulo, que es lo unico que PostgREST acepta sin clave primaria.

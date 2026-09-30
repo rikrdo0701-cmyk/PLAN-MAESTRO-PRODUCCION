@@ -473,7 +473,11 @@
    */
   async function escribirEspejo(ctx, tabla, filas, vaciar, borrar) {
     if (!filas.length && !vaciar) {
-      return { insertadas: 0, error: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
+      // MEDIDO 2026-09-30 en produccion: esto NO es un error. Es el freno del vacio
+      // funcionando: la tabla se deja intacta a proposito. Pero `cerrar()` contaba
+      // cualquier `error` como ok=false, y el toast decia "No se pudo guardar el plan"
+      // cuando el plan SI se guardo. Ahora es una nota, no un error.
+      return { insertadas: 0, error: null, nota: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
     }
     try {
       if (borrar) await pedir(ctx.token, "DELETE", tabla, { condicion: "id=neq." + UUID_NULO });
