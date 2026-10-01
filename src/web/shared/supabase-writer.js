@@ -860,12 +860,31 @@
    * materials: la pagina NO decide que materiales tiene una OT. Escribe una sola columna,
    *   emitido, que es si el material salio. Las filas las pone la ingesta.
    */
+  /**
+   * Que se escribio en cada tabla del ERP, en UNA FRASE. MEDIDO 2026-09-30.
+   *
+   *   materials: la pagina solo marca que material se emitio. NO decide cuales son: la lista
+   *     la pone la ingesta de NetSuite, que es la segunda escritora. Por eso no se borra
+   *     nada: un borrado se llevaria los materiales que la ingesta metio despues de esta
+   *     carga, que son mas nuevos que lo que el navegador sabe.
+   *   work_orders: la pagina escribe las fechas y el precio de una orden. Articulo, cantidad
+   *     y cliente son del ERP.
+   *   operations: la pagina decide cuando, donde, con que y en que orden. Si una operacion
+   *     se quita del plan, su fila NO se borra: el valor viejo se queda, que es lo unico
+   *     seguro mientras haya dos escritores.
+   *
+   * POR QUE UNA FRASE Y NO UN PARRAFO. Un toast dice QUE PASO; el porque se queda aqui. El
+   * texto largo de la primera version salia cortado a media palabra, y el de materials
+   * ademas describia algo que no pasaba (decia de operaciones del plan en una tabla donde la
+   * pagina no decide componentes). Un aviso que no cabe no se lee, y uno que describe mal
+   * hace sospechar de algo que no esta pasando.
+   */
   function queSeEscribioDe(tabla) {
-    const base = tabla + " se actualizo fila por fila y NO se borro: ";
-    if (tabla === "materials") return base + "la pagina solo marca si un material se emitio; no decide cuales son. Las filas que la ingesta de NetSuite metio despues de esta carga se dejaron intactas.";
-    if (tabla === "work_orders") return base + "la pagina escribe las fechas y el precio de una orden; el articulo, la cantidad y el cliente son del ERP.";
-    return base + "las operaciones que la ingesta metio despues de esta carga se dejaron intactas. Una operacion que la persona haya quitado del plan NO se borra: queda el valor viejo, que es lo unico seguro mientras haya dos escritores.";
+    if (tabla === "materials") return "materials: solo se marco que material se emitio; la lista es de NetSuite";
+    if (tabla === "work_orders") return "work_orders: se actualizaron solo fechas y precio; el resto es de NetSuite";
+    return "operations: no se borro nada; la ingesta de NetSuite tambien escribe aqui";
   }
+
   function armarCatalogos(state) {
     const out = {};
     CATALOGOS.forEach(function (def) {
