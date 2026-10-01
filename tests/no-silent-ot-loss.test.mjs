@@ -94,7 +94,28 @@ const AUTORIZADAS = new Set([
   // _pendingAddOt, expandedOts...) cuando el payload excede el guard de 4 MB. Nunca toca
   // selectedOts/lockedOts/workOrders. Falso positivo del scanner linea por linea.
   "src/web/shared/performance-client.js :: trimLocalCachePayload()",
-]);
+
+  // MEDIDO 2026-09-30. La OT 3331 estaba en selected_ots sin estar en work_orders ni en
+  // operations: habia estado en NetSuite, la agregaron al plan, y luego dejo de existir. El
+  // espejo del RESTlet 2246 la quito de las otras dos tablas, pero selected_ots la conservo,
+  // porque esa tabla la escribe la pagina y nadie la limpia.
+  //
+  // Mientras esa fila estuviera ahi, el plan NO se podia generar nunca: generatePlan veia la
+  // OT en la cola, pedia sus operaciones, no las encontraba, y el toast pedia REINTENTAR, que
+  // no podia funcionar porque la OT no existia en NetSuite. Encima la OT no salia en la lista
+  // de Planeado / No planeado, porque esa lista exige ficha y el plan solo guarda el numero:
+  // el mensaje nominaba una OT que la persona no podia ver.
+  //
+  // POR QUE SE AUTORIZA AQUI Y NO POR LA VIA DE EVIDENCIA DE CIERRE (RULE-OT-051). Esa via
+  // es para cuando la OT se CERRO y hay que confirmarlo. Aqui no hay cierre que confirmar:
+  // la OT no esta en el ERP, y el espejo ya la quito de work_orders. Confirmar un cierre que
+  // no existe seria preguntarle a la persona por una OT que no ve, que es el mismo problema
+  // del mensaje viejo. Ademas el aviso NOMBRA la OT y dice que se quito, asi que no es
+  // silencioso: la persona sabe que su plan cambio y por que.
+  //
+  // Y el filtro conserva el resto: quita SOLO las OTs que no tienen ficha, que es lo unico
+  // que bloquea el plan.
+  "src/web/planning/app.js :: siguen()",]);
 
 async function jsFiles(sub) {
   const out = [];

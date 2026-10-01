@@ -5865,7 +5865,45 @@ const replannableOts = state.selectedOts.filter((ot) =>
     missingApt = missingAptOts(planningData);
   }
   if (missingApt.length) {
-    showToast(`No se genero el plan: falta sincronizar operaciones de OT ${missingApt.join(", ")}. Reintenta.`, 9000);
+    // MEDIDO 2026-09-30: esto decia "falta sincronizar operaciones de OT 3331. Reintenta."
+    // y para la OT 3331 el reintento NO PODIA funcionar: estaba en el plan pero no en
+    // work_orders ni en operations, o sea que ya no existia en NetSuite. Encima no salia en
+    // la lista de Planeado / No planeado, porque esa lista exige ficha, y el plan solo guarda
+    // el numero: el mensaje nominaba una OT que la persona no podia ver.
+    //
+    // Son dos cosas con dos acciones distintas, asi que se separan. Una OT sin ficha no se
+    // sincroniza: se quita del plan. Una OT con ficha pero sin operaciones, esa si se
+    // reintenta. En los dos casos se nombra la OT, que es lo que hace falta para actuar.
+    const conFicha = new Set((state.workOrders || []).map(function (wo) { return normalizeStatus(wo && wo.ot); }));
+    const noExisten = [];
+    const sinOperaciones = [];
+    missingApt.forEach(function (ot) {
+      const key = normalizeStatus(ot);
+      if (!key) return;
+      if (!conFicha.has(key)) noExisten.push(key);
+      else sinOperaciones.push(key);
+    });
+
+    // Quitar del plan las que el ERP ya no tiene. MEDIDO: 3331 estaba en selected_ots sin
+    // estar en work_orders, y era la unica de esas. Se quita de verdad porque mientras siga
+    // ahi el plan no se puede generar nunca, y no hay otra accion que lo desbloquee. El aviso
+    // lo dice, para que la persona sepa que se toco su plan.
+    if (noExisten.length) {
+      const siguen = (state.selectedOts || []).filter(function (ot) { return noExisten.indexOf(normalizeStatus(ot)) < 0; });
+      if (siguen.length !== (state.selectedOts || []).length) {
+        state.selectedOts = siguen;
+        queueAppSheetSave("plan");
+      }
+    }
+
+    const partes = [];
+    if (noExisten.length) {
+      partes.push("OT " + noExisten.join(", ") + " ya no esta en NetSuite y se quito del plan: no hay nada que sincronizar");
+    }
+    if (sinOperaciones.length) {
+      partes.push("falta sincronizar operaciones de OT " + sinOperaciones.join(", ") + " (reintenta)");
+    }
+    showToast("No se genero el plan: " + partes.join(". ") + ".", 9000);
     return;
   }
   const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
