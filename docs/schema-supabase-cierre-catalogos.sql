@@ -365,3 +365,90 @@ $$;
 
 revoke all on function public.ingesta_mirror(text, jsonb) from public;
 grant execute on function public.ingesta_mirror(text, jsonb) to service_role;
+
+-- =============================================================================
+-- 7. updated_at se pone solo. MEDIDO 2026-09-30 y APLICADO (8 de 8 tablas).
+--
+-- La pagina no puede saber si escribio una tabla si la marca no se mueve, y con un UPSERT
+-- de PostgREST la marca no se mueve: solo se tocan las columnas del payload, y los
+-- catalogos no mandan updated_at. MEDIDO: la alerta de datos viejos decia que operators
+-- llevaba 70 h sin escribirse, y la fila si se habia escrito.
+--
+-- Lo pone la BASE, no la pagina, para que marquen los dos escritores: la pagina y la ingesta
+-- del RESTlet 2246. Si lo mandara la pagina, la ingesta seguiria sin marcar.
+--
+-- machine_planning_overrides NO entra: no tiene updated_at, tiene actualizado. Queda
+-- fuera a proposito y no en silencio, porque su aviso de antiguedad tampoco funciona.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 6. updated_at se pone solo: sin esto, la pagina no puede saber que escribio
+-- -----------------------------------------------------------------------------
+-- MEDIDO 2026-09-30. La alerta de "Datos viejos en Supabase" decia que operators,
+-- subcontracts y matrix llevaban 70 h y 29 h sin escribirse. Se comprobo que NO era cierto:
+-- un UPSERT de PostgREST actualiza SOLO las columnas que van en el payload, y los catalogos no
+-- mandan updated_at, o sea que la fila se escribia y la columna no se movia. La alerta media
+-- bien y la pagina miente. Peor: es el caso de siempre, una alerta que dice algo falso
+-- entrena a ignorar las alertas.
+--
+-- POR QUE UN DISPARADOR Y NO QUE LA PAGINA MANDE updated_at. updated_at es asunto de la base,
+-- no del que escribe. Con el disparador lo marcan los DOS escritores: la pagina Y la ingesta
+-- del RESTlet 2246, sin que ninguno tenga que acordarse. Si lo manda la pagina, la ingesta
+-- sigue sin marcar, y el aviso volveria a mentir cada vez que los datos vinieran del ERP, que
+-- es justo cuando mas importa saberlo.
+--
+-- QUE NO HACE ESTE DISPARADOR. Solo actualiza la marca. No borra, no decide, no toca ninguna
+-- otra columna, y no cambia quien escribe cada tabla. Una fila que se inserta por primera vez
+-- NO lo dispara (es BEFORE UPDATE), y sus created_at y updated_at quedan con el now() del
+-- DEFAULT, que es lo correcto: una fila nueva es nueva, no editada.
+--
+-- El reloj es el de la base (now()), no el del navegador. Si lo mandara la pagina, un reloj
+-- mal puesto del navegador fecharia la fila en el pasado y la alerta volveria a mentir.
+create or replace function public.tocar_updated_at() returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+comment on function public.tocar_updated_at() is
+  'Marca updated_at en cada UPDATE. Existe porque un UPSERT de PostgREST solo toca las columnas del payload, y los catalogos no mandan updated_at: la fila se escribia y la marca no se movia, con lo que el aviso de datos viejos mentia. Lo pone la base para que manden los dos escritores, la pagina y la ingesta.';
+
+-- Uno por tabla. Se tiran antes porque CREATE TRIGGER no es IF NOT EXISTS, y porque si el
+-- nombre cambia hay que reemplazar el viejo, no acumular dos disparadores que escribirian la
+-- misma columna dos veces.
+drop trigger if exists trg_tocar_updated_at on public.operators;
+create trigger trg_tocar_updated_at before update on public.operators
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.capabilities;
+create trigger trg_tocar_updated_at before update on public.capabilities
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.matrix;
+create trigger trg_tocar_updated_at before update on public.matrix
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.tools;
+create trigger trg_tocar_updated_at before update on public.tools
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.subcontracts;
+create trigger trg_tocar_updated_at before update on public.subcontracts
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.calendar_exceptions;
+create trigger trg_tocar_updated_at before update on public.calendar_exceptions
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.ot_configurations;
+create trigger trg_tocar_updated_at before update on public.ot_configurations
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.article_configurations;
+create trigger trg_tocar_updated_at before update on public.article_configurations
+  for each row execute function public.tocar_updated_at();

@@ -201,7 +201,16 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
 
 test("el cuerpo de ingesta_mirror queda entero y bien cerrado en una sola sentencia", () => {
   const conCuerpo = dividir(ddl).filter((p) => /as \$\$/.test(p));
-  assert.equal(conCuerpo.length, 1, "debe haber exactamente un cuerpo $$: la funcion ingesta_mirror");
+  // MEDIDO 2026-09-30: esto decia "exactamente un cuerpo $", referringido a
+  // ingesta_mirror. Se agrego tocar_updated_at (el disparador que pone updated_at), asi que
+  // ahora hay DOS cuerpos y el numero fijo ya no describe lo que el archivo tiene. Se fija la
+  // LISTA de funciones con cuerpo, que es lo que importa: que esten las esperadas y solo
+  // ellas. Un numero magico que hay que subir cada vez que se agrega una funcion es una
+  // trampa, y mas aqui, donde el archivo se aplica entero a una base de produccion.
+  const esperadas = ["ingesta_mirror", "tocar_updated_at"];
+  const nombres = conCuerpo.map((p) => (p.match(/function\s+public\.(\w+)/) || [])[1]).filter(Boolean);
+  assert.deepEqual(nombres.sort(), esperadas.slice().sort(),
+    "los cuerpos $ del DDL tienen que ser exactamente las funciones esperadas, ni una mas ni una menos");
   const fn = conCuerpo[0];
   assert.match(fn, /language plpgsql/);
   assert.match(fn, /return jsonb_build_object/);
