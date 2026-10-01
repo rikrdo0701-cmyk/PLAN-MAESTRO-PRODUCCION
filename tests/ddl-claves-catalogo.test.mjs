@@ -76,11 +76,18 @@ test("el escritor manda una clave que EXISTE en la base, y el DDL solo declara l
   //     subcontracts, y solo por el drop+create que convierte el parcial en completo),
   //   - y el escritor manda claves que el DDL NO tiene que declarar, porque ya estan.
   const delEscritor = clavesDeCatalogos();
-  // MEDIDO 2026-09-30: son ocho. Los seis de los catalogos mas operators y matrix, que se
+  // MEDIDO 2026-09-30: eran ocho. Los seis de los catalogos mas operators y matrix, que se
   // agregaron ese dia porque la persona dijo que la matriz es MANUAL y tiene que guardarse en
   // Supabase. Los dos nuevos tampoco necesitan indice nuevo: la base ya tenia UNIQUE (nombre)
   // en operators y UNIQUE (capability_key, operator) en matrix.
-  assert.equal(delEscritor.length, 8, "esperaba los ocho catalogos con clave");
+  //
+  // MEDIDO 2026-10-01: son nueve. machine_catalog se sumo porque la persona dijo que el
+  // catalogo de maquinas es MANUAL (RULE-MAQ-004): antes vivia en machines, que escribia
+  // la ingesta de NetSuite cada 15 minutos y por eso no podia ser un manual. machine_catalog
+  // tampoco necesita indice NUEVO aqui, porque su propio DDL (docs/schema-machine-catalog.sql)
+  // crea machine_catalog_nombre_uniq al aplicarse. Este test mira el DDL de cierre, que es
+  // donde estan los indices que hay que COMPLETAR, no ese.
+  assert.equal(delEscritor.length, 9, "esperaba los nueve catalogos con clave");
 
   // Las dos que el DDL tiene que arreglar: indice PARCIAL, que ON CONFLICT no infiere.
   for (const tabla of ["tools", "subcontracts"]) {

@@ -46,11 +46,16 @@
   // tal cual. El resto del estado (cola, plan, snapshots) esta VACIO en Supabase: mientras no haya
   // escritor, esas siguen viniendo del puente. Ver readCatalogs().missing.
   const CATALOG_TABLES = [
-    "operators", "capabilities", "operation_catalog", "matrix", "machines",
+    "operators", "capabilities", "operation_catalog", "matrix",
+    // MEDIDO 2026-10-01, DECISION DEL USUARIO: el catalogo de maquinas es un dato
+    // MANUAL, no de ingesta. Antes vivia en `machines`, que el RESTlet 2246 escribia
+    // desde NetSuite cada 15 minutos; ahora vive en `machine_catalog`, que la pagina
+    // es la unica que escribe (guardarCatalogos). Ver docs/schema-machine-catalog.sql.
+    "machine_catalog",
     "ot_types", "subcontracts", "tools", "calendar_exceptions",
     "ot_configurations", "article_configurations", "materials",
-    // La decision de la planificacion de apartar una maquina. No va en `machines` porque
-    // esa tabla la reescribe entera el RESTlet 2246 cada 15 minutos (RULE-SUP-017).
+    // La decision de la planificacion de apartar una maquina. No va en `machine_catalog`
+    // porque esa tabla la escribe la pagina y el RESTlet no la toca (RULE-SUP-017).
     "machine_planning_overrides",
   ];
 
@@ -1048,7 +1053,11 @@
     // La rejilla completa, marcada y sin marcar. Para la vista de la matriz; el planificador
     // sigue leyendo matrix, que solo trae los habilitados.
     matrixFull: siSePudoLeer(rows, "matrix", mapMatrixFull(rows.matrix)),
-      machines: siSePudoLeer(rows, "machines", mapMachines(rows.machines, rows.machine_planning_overrides)),
+      // MEDIDO 2026-10-01, DECISION DEL USUARIO: el catalogo de maquinas sale de
+      // `machine_catalog` (manual, la pagina lo escribe), no de `machines` (ingesta de
+      // NetSuite). `machines` sigue existiendo y el RESTlet 2246 sigue escribiendola,
+      // pero ya no alimenta el catalogo que ve la pagina. Ver docs/schema-machine-catalog.sql.
+      machines: siSePudoLeer(rows, "machine_catalog", mapMachines(rows.machine_catalog, rows.machine_planning_overrides)),
       otTypes: siSePudoLeer(rows, "ot_types", mapOtTypes(rows.ot_types)),
       subcontracts: siSePudoLeer(rows, "subcontracts", mapSubcontracts(rows.subcontracts)),
       // Estas cuatro ya se PIDIAN y se leian (estan en CATALOG_TABLES) pero se descartaban

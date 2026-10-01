@@ -766,8 +766,8 @@
       tabla: "machine_planning_overrides",
       clave: "machine_nombre",
       // Una fila por maquina APARTADA, y solo esas: la tabla registra la decision de
-      // no agendar en una maquina (RULE-SUP-017). `machines` NO se escribe desde
-      // aqui porque la reescribe entera el RESTlet 2246 cada 15 minutos.
+      // no agendar en una maquina (RULE-SUP-017). `machine_catalog` NO se escribe
+      // desde aqui: la pagina es la unica escritora del catalogo (guardarCatalogos).
       mapear: function (state) {
         const out = [];
         (Array.isArray(state.machines) ? state.machines : []).forEach(function (item) {
@@ -777,6 +777,27 @@
           out.push({ machine_nombre: nombre.toUpperCase(), excluida: true, actualizado: instante(new Date().toISOString()) });
         });
         return out;
+      },
+    },
+    {
+      // MEDIDO 2026-10-01, DECISION DEL USUARIO: el catalogo de maquinas es un dato
+      // MANUAL. La pagina es la UNICA escritora de `machine_catalog` (guardarCatalogos),
+      // y la ingesta ya no lo escribe. Ver docs/schema-machine-catalog.sql.
+      //
+      // El mapeo es el INVERSO de mapMachines: state.machines sale de machine_catalog
+      // (supabase-reader.js), y aqui se devuelve cada maquina con su nombre y su
+      // bandera activa. Las apartadas (excluded) se apartan en
+      // machine_planning_overrides, no aqui: una cosa es el listado y otra es la
+      // decision de no agendar.
+      tabla: "machine_catalog",
+      clave: "nombre",
+      mapear: function (state) {
+        return (Array.isArray(state.machines) ? state.machines : []).map(function (item) {
+          return {
+            nombre: texto(item.id),
+            activa: booleano(item.active, true),
+          };
+        }).filter(function (fila) { return Boolean(fila.nombre); });
       },
     },
   ];

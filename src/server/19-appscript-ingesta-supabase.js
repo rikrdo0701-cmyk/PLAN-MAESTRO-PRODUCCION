@@ -287,6 +287,12 @@ function PP_ingesta_(forzado) {
     // solo el upsert y el dedupe descartaban materiales de otras OTs.
     materiales: { tabla: 'materials', clave: 'ot,line_id' },
     items: { tabla: 'items', clave: 'codigo' },
+    // MEDIDO 2026-10-01, DECISION DEL USUARIO: el catalogo de maquinas es un dato
+    // MANUAL. La pagina lee el catalogo de `machine_catalog` (la pagina lo escribe),
+    // no de `machines`. PERO la ingesta sigue escribiendo `machines`: el RESTlet 2246
+    // la escribe directamente en Supabase y la ingesta la escribe tambien, para que la
+    // tabla de NetSuite exista. Ya no alimenta el catalogo de la pagina, pero sigue
+    // siendo la tabla de NetSuite. Ver docs/schema-machine-catalog.sql.
     centros: { tabla: 'machines', clave: 'nombre' },
     inventario: { tabla: 'inventory', clave: 'item,ubicacion' },
     ordenes_venta: { tabla: 'sales_orders', clave: 'folio' }

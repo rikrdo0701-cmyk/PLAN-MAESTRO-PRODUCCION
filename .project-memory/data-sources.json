@@ -357,25 +357,35 @@
       "source_id": "SHEET-MAQUINAS",
       "type": "google_sheet",
       "name": "MAQUINAS",
-      "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID)",
+      "location/origin": "Workbook principal (PLANNING_SPREADSHEET_ID). MEDIDO 2026-10-01: alimenta la tabla manual `machine_catalog` (la pagina la escribe), no `machines`.",
       "columns": [
         "ID",
-        "ACTIVA"
+        "ACTIVA",
+        "MEDIDO 2026-10-01, DECISION DEL USUARIO: el catalogo de maquinas es un dato MANUAL. La hoja MAQUINAS alimenta `machine_catalog` (tabla manual, la pagina es la unica escritora via guardarCatalogos). ANTES alimentaba `machines`, que el RESTlet 2246 escribia desde NetSuite (entitygroup) cada 15 minutos; `machines` sigue existiendo y el RESTlet sigue escribiendola, pero ya no alimenta el catalogo que ve la pagina. Ver RULE-MAQ-004."
       ],
       "readers": [
-        "PP_readState_ (PP_mapMachine_)"
+        "PP_readState_ (PP_mapMachine_)",
+        "mapMachines (supabase-reader.js) -- mapea `machine_catalog` + `machine_planning_overrides` a state.machines. MEDIDO 2026-10-01: antes mapeaba `machines`; ahora mapea `machine_catalog`."
       ],
       "writers": [
         "PP_writeState_",
-        "PP_writeCatalogState_"
+        "PP_writeCatalogState_",
+        "guardarCatalogos (supabase-writer.js) -- escribe `machine_catalog` (la pagina es la unica escritora). MEDIDO 2026-10-01: antes `machines` la escribia el RESTlet 2246; ahora la pagina escribe `machine_catalog` y la ingesta ya no escribe el catalogo de maquinas."
       ],
       "rules": [
-        "RULE-MAQ-001"
+        "RULE-MAQ-001",
+        "RULE-MAQ-004",
+        "RULE-SUP-017"
       ],
       "status": "documented",
       "references": [
-        "src/server/02-storage.js"
-      ]
+        "src/server/02-storage.js",
+        "docs/schema-machine-catalog.sql",
+        "src/web/shared/supabase-reader.js",
+        "src/web/shared/supabase-writer.js",
+        "src/server/19-appscript-ingesta-supabase.js"
+      ],
+      "updated_at": "2026-10-01"
     },
     {
       "source_id": "SHEET-HERRAMENTALES",
