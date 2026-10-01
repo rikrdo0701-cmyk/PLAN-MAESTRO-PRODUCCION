@@ -731,6 +731,26 @@ summary:focus-visible,
 .priority-photo span { padding: 4px; color: var(--muted); font-size: 7px; line-height: 1.2; text-align: center; }
 .priority-photo.has-photo span { display: none; }
 .priority-photo:not(.has-photo) img { display: none; }
+/* Foto en el detalle de OT. Mismas reglas que .priority-photo y .queue-photo: el <span> "Sin
+   foto" se oculta cuando hay <img>, y la img se oculta cuando no hay foto. */
+.detail-photo {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-subtle);
+  flex: 0 0 auto;
+}
+.detail-photo img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.detail-photo span { padding: 4px; color: var(--muted); font-size: 7px; line-height: 1.2; text-align: center; }
+.detail-photo.has-photo span { display: none; }
+.detail-photo:not(.has-photo) img { display: none; }
+/* Foto que no cargo: la URL existia y el navegador la rechazo, que no es lo mismo que no tener foto. */
+.priority-photo.photo-broken, .queue-photo.photo-broken, .detail-photo.photo-broken { border-style: dashed; }
+.priority-photo.photo-broken span, .queue-photo.photo-broken span, .detail-photo.photo-broken span { color: var(--danger, #b3261e); }
 .priority-card-copy { min-width: 0; }
 .priority-card-copy strong { display: block; font-size: 13px; }
 .job-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 7px; min-width: 0; }

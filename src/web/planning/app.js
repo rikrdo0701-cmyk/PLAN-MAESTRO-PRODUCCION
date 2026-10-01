@@ -2174,9 +2174,75 @@ function normalizeOtDate(value) {
   return `${parsed.year}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
 }
 
+// ORIGEN DE LA FOTO, DOCUMENTADO. MEDIDO 2026-10-01 con grep sobre el repo: la foto_url que
+// acaba en work_orders sale de DOS fuentes y el orden lo decide el servidor.
+//
+//   1. GOOGLE DRIVE, que es la que se usa. src/server/09-photos.js:35 arma la URL como
+//      'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w400' y la busca por el
+//      nombre del ARTICULO (PP_photoLookupKeys_) dentro de la carpeta PHOTO_FOLDER_ID. Esa URL
+//      SI es una imagen y SI la pinta un <img>.
+//   2. NetSuite, el campo 'Foto URL' (08-netsuite.js:989), que solo se usa si Drive no dio nada.
+//
+// POR QUE ESTA FUNCION ES DISTINTA DE normalizeDrawingUrl. normalizeDrawingUrl (mas abajo en este
+// mismo archivo) resuelve DIBUJOS: PDFs en la red de Produccion2 que se abren con el protocolo
+// maldonado://, y por eso devuelve cosas que un <img> jamas puede pintar (maldonado://, file://,
+// UNC). Para una foto solo valen las cuatro formas de abajo, y las demas se rechazan en vez de
+// dejarse pintar un roto:
+//
+//   - la URL de thumbnail que arma el servidor, tal cual (es la forma que produce el 09-photos.js);
+//   - un https que venga de donde venga (la foto de NetSuite, o un link pegado a mano);
+//   - un id suelto de Drive o un /file/d/<id>/...: se traducen a THUMBNAIL, no a /view, porque
+//     /view es la pagina HTML del visor y un <img> que la pide da error. O sea que el error
+//     "llega la URL pero no carga" viene justo de ahi, y por eso la traduccion es a /thumbnail;
+//   - un data:image/, que es como viaja una foto pegada dentro de la propia base.
+//
+// Se rechaza http:// a proposito: la pagina se sirve por https y un <img> en http es contenido
+// mixto que el navegador bloquea. Y se rechaza javascript:, que es la inyeccion de la que esta
+// funcion existe.
+const DRIVE_THUMBNAIL = "https://drive.google.com/thumbnail?id=";
+const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{20,}$/;
+
 function safePhotoUrl(value) {
   const text = String(value || "").trim();
-  return /^(https:\/\/|data:image\/)/i.test(text) ? text : "";
+  if (!text) return "";
+  if (/^data:image\//i.test(text)) return text;
+  if (/^https:\/\//i.test(text)) {
+    // Un /file/d/<id>/view o /preview pegado como foto se traduce a thumbnail: /view y /preview
+    // son paginas HTML del visor, no imagenes, y por eso el <img> fallaba y la tarjeta caia al
+    // "Sin foto" con el dato presente. El id se saca de la misma forma que en la linea 35.
+    const drive = text.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+    if (drive) return DRIVE_THUMBNAIL + encodeURIComponent(drive[1]) + "&sz=w400";
+    return text;
+  }
+  // Id suelto de Drive: mismo criterio que usa normalizeDrawingUrl mas abajo,
+  // /^[A-Za-z0-9_-]{20,}$/, pero traducido al endpoint de IMAGEN y no al del visor.
+  if (DRIVE_FILE_ID.test(text)) return DRIVE_THUMBNAIL + encodeURIComponent(text) + "&sz=w400";
+  return "";
+}
+
+// POR QUE "Sin foto" NO BASTABA. MEDIDO 2026-10-01: las 175 tarjetas del Backlog mostraban el
+// mismo "Sin foto" para dos cosas opuestas, y no se podia saber cual era:
+//
+//   - la OT no tiene foto en la carpeta de Drive, o la que trae NetSuite no es una imagen; y
+//   - SI hay foto, la URL esta, y el <img> no la cargo (Drive denies, la red, contenido mixto).
+//
+// La segunda es un dato roto y la primera es un dato ausente, y se confondian en el mismo texto.
+// El <span> del recuadro distingue las dos: "Sin foto" cuando no hay URL, y "Foto no cargó" cuando
+// la URL existia y el navegador la rechazo. Los tres render (backlog, cola, detalle) pasan por
+// esta misma funcion para que no vuelvan a separarse.
+function bindPhotoFallback(root) {
+  root.querySelectorAll("[data-backlog-photo], [data-queue-photo], [data-detail-photo]").forEach((photo) => {
+    photo.addEventListener("error", () => {
+      const box = photo.parentElement;
+      if (!box) return;
+      box.classList.remove("has-photo");
+      // La clase va SIN tilde a proposito: es un selector CSS y no un texto para el usuario. El
+      // texto que el usuario lee va en el <span>, y ese si lleva la tilde.
+      box.classList.add("photo-broken");
+      const label = box.querySelector("span");
+      if (label) label.textContent = "Foto no cargó";
+    });
+  });
 }
 
 function materialValue(item, names) {
@@ -2503,8 +2569,11 @@ function renderPriorityList() {
     const actionStatus = individualPlanningActionStatus(job.ot);
     const actionFeedbackMessage = individualPlanningActionMessage(job.ot);
     const actionStatusLabel = individualPlanningActionStatusLabel(actionStatus, actionFeedbackMessage || individualPlanningUnavailableReason(job.ot));
-    const photoMarkup = job.photoUrl
-      ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
+    // Foto: sale de Google Drive (src/server/09-photos.js:35) o del campo Foto URL de NetSuite.
+    // safePhotoUrl es la unica puerta: deja pasar lo que un <img> puede pintar y rechaza lo demas.
+    const fotoUrl = safePhotoUrl(job.photoUrl);
+    const photoMarkup = fotoUrl
+      ? `<img loading="lazy" src="${escapeHtml(fotoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
     const card = document.createElement("article");
     card.className = `priority-card ${jobRiskCardClass(job)}${job.ot === selectedJobOt() ? " focused" : ""}${job.movable ? "" : " ineligible"}`;
@@ -2515,7 +2584,7 @@ function renderPriorityList() {
       <div class="priority-card-main">
         <button class="job-add" type="button"${job.movable ? "" : " disabled"} aria-label="Agregar OT ${escapeHtml(job.ot)} al plan" title="${job.movable ? "Agregar al plan" : `No disponible por estatus ${escapeHtml(job.status)}`}">+</button>
         <span class="drag-handle" aria-hidden="true">&#8942;&#8942;</span>
-        <div class="priority-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
+        <div class="priority-photo${fotoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
           <span class="job-action-status" aria-live="polite">${actionStatusLabel}</span>
@@ -2567,8 +2636,7 @@ function renderPriorityList() {
     });
     const dueDateInput = card.querySelector("[data-due-ot]");
     const addButton = card.querySelector(".job-add");
-    const photo = card.querySelector("[data-backlog-photo]");
-    if (photo) photo.addEventListener("error", () => photo.parentElement.classList.remove("has-photo"));
+    bindPhotoFallback(card);
     addButton.addEventListener("click", (event) => {
       event.stopPropagation();
       selectJob(job.ot, true);
@@ -2696,15 +2764,18 @@ if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt 
     const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
     const toolMini = jobToolMiniHtml(job);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
-    const photoMarkup = job.photoUrl
-      ? `<img loading="lazy" src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
+    // Foto: sale de Google Drive (src/server/09-photos.js:35) o del campo Foto URL de NetSuite.
+    // safePhotoUrl es la unica puerta: deja pasar lo que un <img> puede pintar y rechaza lo demas.
+    const fotoUrl = safePhotoUrl(job.photoUrl);
+    const photoMarkup = fotoUrl
+      ? `<img loading="lazy" src="${escapeHtml(fotoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
       : "";
     const positionLabel = job.programmed
       ? "Trabajo programado fijo"
       : (job.locked ? "Trabajo bloqueado" : "Trabajo planeado");
     return `
       <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" data-queue-sig="${escapeHtml(queueItemSignature(job))}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
-        <div class="queue-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
+        <div class="queue-photo${fotoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="queue-main">
           <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>${workOrderSyncWarningHtml(job.ot)}
           <div class="queue-article" title="Articulo ${escapeHtml(article)}"><span>Articulo</span><strong>${escapeHtml(article)}</strong></div>
@@ -2726,9 +2797,7 @@ if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt 
   }).join("");
   els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
 
-  els.priorityQueue.querySelectorAll("[data-queue-photo]").forEach((photo) => {
-    photo.addEventListener("error", () => photo.parentElement.classList.remove("has-photo"));
-  });
+  bindPhotoFallback(els.priorityQueue);
 
   els.priorityQueue.querySelectorAll("[data-queue-due-date]").forEach((input) => {
     input.addEventListener("click", (event) => event.stopPropagation());
@@ -4251,6 +4320,14 @@ function renderSelectedJobPanel() {
     </div>
   `).join("");
 
+  // La foto de la OT, con la MISMA puerta que las tarjetas (safePhotoUrl, que resuelve el origen
+  // de Drive documentado arriba). MEDIDO 2026-10-01: el detalle no tenia foto en ningun punto; las
+  // unicas dos que existian en toda la pagina eran la tarjeta del Backlog y la de la cola.
+  const detalleFoto = safePhotoUrl(job.photoUrl);
+  const detallePhotoMarkup = detalleFoto
+    ? `<img loading="lazy" src="${escapeHtml(detalleFoto)}" alt="Foto del articulo ${escapeHtml(job.parte || "SIN ARTICULO")}" data-detail-photo />`
+    : "";
+
   els.selectedJobPanel.innerHTML = `
     <article class="job-detail">
       <div class="job-detail-head">
@@ -4260,6 +4337,7 @@ function renderSelectedJobPanel() {
             <span title="${escapeHtml(job.parte || "SIN ARTICULO")}">${escapeHtml(job.parte || "SIN ARTICULO")}</span>
           </div>
         </div>
+        <div class="detail-photo${detalleFoto ? " has-photo" : ""}">${detallePhotoMarkup}<span>Sin foto</span></div>
         <div class="job-detail-actions">
           <span class="pill ${priorityClass(job.prioridad)}">${escapeHtml(priorityLabel(job.prioridad))}</span>
           <button class="icon-button detail-lock${job.locked ? " locked" : ""}" type="button" data-detail-lock="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
@@ -4400,6 +4478,7 @@ function renderSelectedJobPanel() {
     subcontractDaysInput.addEventListener("change", saveSubcontract);
   }
   bindPlanStatusActions(els.selectedJobPanel);
+  bindPhotoFallback(els.selectedJobPanel);
 }
 
 function ganttDayColumnWidth(day) {

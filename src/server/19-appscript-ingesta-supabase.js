@@ -304,6 +304,36 @@ function PP_ingesta_(forzado) {
       }
       let filas = accion.rows || [];
       console.log(nombre + ': ' + filas.length + ' filas recibidas');
+      // FOTOS DE GOOGLE DRIVE, Y POR QUE ESTA AQUI.
+      //
+      // MEDIDO 2026-10-01: la foto_url que la pagina muestra sale de GOOGLE DRIVE
+      // (09-photos.js:35 arma 'https://drive.google.com/thumbnail?id=<id>&sz=w400', buscado por el
+      // nombre del articulo dentro de la carpeta PHOTO_FOLDER_ID). MEDIDO tambien: la unica funcion
+      // que pegaba esa foto a las filas, PP_enrichWorkOrderPhotos_, tenia solo dos llamadores y los
+      // dos estaban en 08-netsuite.js:64 y :98, o sea en el camino del PUENTE de Apps Script, que
+      // la pagina ya no usa. Esta ingesta no la llamaba: escribia `accion.rows` tal cual, y el
+      // mirror se lleva la foto_url de NetSuite (que puede venir vacia) y nada de Drive. Por eso
+      // las tarjetas de la pagina decia "Sin foto" con el dato entero disponible en Drive.
+      //
+      // Va ANTES del mirror porque despues del mirror ya se escribieron las filas en la base y no
+      // hay punto de escritura. Solo para 'workorders': en materials u operations el articulo no es
+      // la clave de la foto y la columna foto_url ni existe.
+      if (nombre === 'workorders') {
+        try {
+          const fotos = PP_enrichPhotoRows_(filas);
+          filas = fotos.filas;
+          // Si Drive no esta configurado o no se pudo leer la carpeta, esto dice 0 y POR QUE, en
+          // vez de dejar que el 0 se vea solo en la pantalla. La foto no puede tumbar la ingesta:
+          // 199 filas de OTs validas valen mas que su foto.
+          log.push('fotos: ' + fotos.conFoto + ' de ' + filas.length + ' con foto de Drive'
+            + (fotos.carpeta ? '' : ' (PHOTO_FOLDER_ID NO esta configurado)')
+            + (fotos.conFoto ? '' : ' -- la carpeta de Drive no dio ninguna foto'));
+          console.log('fotos: ' + fotos.conFoto + '/' + filas.length + ' (carpeta=' + fotos.carpeta + ')');
+        } catch (error) {
+          log.push('fotos: no se pudieron pegar (' + String(error && error.message || error).slice(0, 120) + ')');
+          console.log('fotos: ERROR ' + String(error && error.message || error));
+        }
+      }
       if (filas.length) {
         console.log(nombre + ': columnas = ' + Object.keys(filas[0]).join(', '));
         console.log(nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));

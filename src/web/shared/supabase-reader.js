@@ -525,6 +525,17 @@
     }).filter(function (item) { return Boolean(item.id); });
   }
 
+  function mapMachinePlanningOverrides(rows) {
+    return (rows || []).map(function (row) {
+      const nombre = String(row.machine_nombre == null ? "" : row.machine_nombre).trim();
+      return {
+        machineName: nombre,
+        excluded: asBool(row.excluida, false),
+        // actualizado y created_at se ignoran en el estado del plan (solo logs)
+      };
+    }).filter(function (item) { return Boolean(item.machineName); });
+  }
+
   function mapOtTypes(rows) {
     return (rows || []).map(function (row) {
       return {
@@ -1047,6 +1058,10 @@
       calendarExceptions: siSePudoLeer(rows, "calendar_exceptions", mapCalendar(rows.calendar_exceptions)),
       otConfigurations: siSePudoLeer(rows, "ot_configurations", mapOtConfigurations(rows.ot_configurations)),
       articleConfigurations: siSePudoLeer(rows, "article_configurations", mapArticleConfigurations(rows.article_configurations)),
+      // machine_planning_overrides ya se usa para calcular `machines.active/excluded`
+      // (mapMachines recibe overrides). Se devuelve también mapeado para que el boot tenga
+      // TODOS los catálogos normalizados (no filas crudas), aunque la app no lo consuma directo.
+      machinePlanningOverrides: siSePudoLeer(rows, "machine_planning_overrides", mapMachinePlanningOverrides(rows.machine_planning_overrides)),
     };
     // undefined no se devuelve: supabase-catalog-apply.js lo descarta a proposito, y es lo
     // unico que NO pisa lo que el puente si trajo. Ver siSePudoLeer.
@@ -1132,6 +1147,7 @@
     // llegaba nunca desde Supabase. Es la misma clase de fallo que el disparador de updated_at
     // bien puesto y sin leer, y que sessionRequired: la pieza existe y nadie la conecta.
     mapMaterials: mapMaterials,
+    mapMachinePlanningOverrides: mapMachinePlanningOverrides,
     // Los cuatro inversos del escritor, para poder probarlos SIN red: la pareja
     // mapear->mapear es la que demuestra que un guardado y su lectura se cierran.
     mapSelectedOts: mapSelectedOts,

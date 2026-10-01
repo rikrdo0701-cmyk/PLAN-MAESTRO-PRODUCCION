@@ -238,6 +238,39 @@ test("toda escritura lleva el JWT en Authorization y nunca la clave publicable s
   }
 });
 
+// MEDIDO 2026-10-01. La foto_url de la OT la produce la INGESTA (src/server/09-photos.js,
+// PP_enrichPhotoRows_ -> https://drive.google.com/thumbnail?id=...&sz=w400) y la pagina no
+// tiene ningun control para ponerla: la unica foto que ve es la que leyo. Entonces el
+// `foto_url: texto(wo.photoUrl)` que estaba aqui era un ECO, y un eco es peligroso:
+//
+//   la pagina lee work_orders.foto_url -> lo pasa por safePhotoUrl (app.js) para pintar el <img>
+//   -> si esa foto_url no es una URL pintable (http, una ruta de red, un id viejo de Drive),
+//      safePhotoUrl devuelve "" y el estado se queda sin foto
+//   -> al guardar el plan, este `texto(wo.photoUrl)` escribe "" sobre la fila
+//   -> la foto de Drive de esa OT desaparece de la base y no vuelve hasta la siguiente ingesta.
+//
+// Eso es perder un dato por guardar el plan, en silencio, y es la misma regla por la que
+// machines NO se escribe desde la pagina: un solo escritor por tabla (RULE-SUP-010). Se vigila
+// la AUSENCIA de la columna en el POST, no la ausencia de la cadena "foto_url" en el codigo:
+// un comentario que explica el motivo tiene que poder mencionarla sin romper la prueba.
+test("la pagina NO escribe foto_url: la foto tiene un solo escritor, la ingesta", async () => {
+  const { writer, llamadas } = escritor();
+  await writer.guardar(estado());
+  const posts = llamadas.filter((c) => c.metodo === "POST" && c.tabla === "work_orders");
+  assert.ok(posts.length > 0, "hubo escrituras de work_orders que comprobar");
+  for (const p of posts) {
+    const filas = Array.isArray(p.cuerpo) ? p.cuerpo : [];
+    assert.ok(filas.length > 0, "work_orders se escribio sin filas: la prueba no estaria comprobando nada");
+    for (const fila of filas) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(fila, "foto_url"),
+        false,
+        "la pagina no manda foto_url: si lo manda, un guardado del plan borra la foto de Drive",
+      );
+    }
+  }
+});
+
 test("las tablas de espejo se borran y DESPUES se reinsertan, y el borrado va antes del POST", async () => {
   const { writer, llamadas } = escritor();
   await writer.guardar(estado());

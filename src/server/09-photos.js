@@ -48,6 +48,64 @@ function PP_photoLookupKeys_(value) {
   return [exact, clean].filter(function(key, index, values) { return key && values.indexOf(key) === index; });
 }
 
+// ADAPTADOR PARA LAS FILAS DEL RESTLET, Y POR QUE EXISTE.
+//
+// MEDIDO 2026-10-01: PP_enrichWorkOrderPhotos_ (arriba) es lo UNICO en todo el proyecto que pone
+// una URL de Google Drive en photoUrl, y tenia exactamente dos llamadores, los dos en
+// 08-netsuite.js:64 y :98 (PP_fetchNetSuitePlantData_ y PP_fetchNetSuiteWorkOrdersData_), que son
+// el camino del PUENTE de Apps Script. La pagina ya no lee de ahi: lee de Supabase.
+//
+// El camino vivo es 19-appscript-ingesta-supabase.js (PP_restletUnificado_ -> PP_supabaseMirror_)
+// y MEDIDO: no mencionaba ni esta funcion ni DriveApp en ninguna linea, o sea que escribia en
+// work_orders lo que devolvia el RESTlet tal cual. De ahi que la foto de Drive, que se construia
+// y se guardaba bien, no llegara nunca a la columna foto_url que es la que lee la pagina. Es la
+// misma clase de fallo que sessionRequired() y que el trigger de updated_at: la pieza existe,
+// funciona y esta probada por dentro, y nadie la conecta al camino que escribe.
+//
+// ESTE ADAPTADOR NO ADIVINA NINGUN NOMBRE. El shape de la fila del RESTlet sale de lo que el
+// LECTOR ya mapea de esa misma tabla (supabase-reader.js, mapWorkOrders): ot, articulo,
+// descripcion, cantidad, estatus, cliente, foto_url. Y el destino de la foto sale textual de la
+// linea 35 de este archivo. No hay ninguna regla de negocio nueva aqui.
+//
+// Acepta las dos escrituras (articulo/item, foto_url/photoUrl) porque las dos existen de verdad en
+// el codigo: la del RESTlet y la del shape del puente. No es tolerancia inventada para adivinar.
+function PP_enrichPhotoRows_(rows) {
+  const catalogo = PP_loadPhotoCatalog_();
+  let conFoto = 0;
+  let sinFoto = 0;
+  let yaTraia = 0;
+  const salida = (rows || []).map(function (row) {
+    if (!row || typeof row !== 'object') return row;
+    const antes = row.foto_url != null ? row.foto_url : (row.photoUrl != null ? row.photoUrl : '');
+    if (String(antes || '').trim()) {
+      // NetSuite ya trajo su foto: Drive es el respaldo, no el que manda.
+      yaTraia += 1;
+      conFoto += 1;
+      return row;
+    }
+    const articulo = row.articulo != null ? row.articulo : (row.item != null ? row.item : '');
+    const claves = PP_photoLookupKeys_(articulo);
+    let url = '';
+    for (let i = 0; i < claves.length && !url; i++) url = catalogo[claves[i]] || '';
+    if (!url) {
+      sinFoto += 1;
+      return row;
+    }
+    conFoto += 1;
+    return Object.assign({}, row, { foto_url: url });
+  });
+  // El conteo se DEVUELVE y no se loguea aqui: quien decide si esto es un aviso o un dato es la
+  // ingesta, que ya tiene su propio `log`. Un Logger.log() en un archivo compartido por dos
+  // caminos se pierde en uno de los dos.
+  return {
+    filas: salida,
+    conFoto: conFoto,
+    sinFoto: sinFoto,
+    yaTraia: yaTraia,
+    carpeta: PP_photoFolderId_()
+  };
+}
+
 function getPhotoSourceStatus() {
   const catalog = PP_loadPhotoCatalog_();
   return { ok: true, folderId: PP_photoFolderId_(), photos: Object.keys(catalog).length };

@@ -4,7 +4,14 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
-const appSource = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+// MEDIDO 2026-10-01 en Windows: los cortes de este archivo buscan marcadores con "\n" puro
+// (linea 32: "/**\n * Dispara la ingesta..."), y con el checkout de Windows app.js llega con
+// CRLF, o sea que indexOf daba -1, el corte salia VACIO, `correrIngestaPorBoton` no existia en el
+// arnes y el boton manual lanzaba ReferenceError. El sintoma era "el boton no sincroniza", que
+// no era lo que pasaba: lo que pasaba era que el arnes se comia media funcion. En Linux el
+// checkout trae LF y el fallo no aparece, o sea que era invisible fuera de la maquina del autor.
+// Se normaliza aqui una vez y todos los cortes por indice pasan a ser portables.
+const appSource = (await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const workflowCoreSource = await readFile(new URL("../src/web/planning/planning-workflow-core.js", import.meta.url), "utf8");
 
 /**
@@ -1399,9 +1406,17 @@ test("dos clics rapidos comparten guardado y deshabilitan controles de la misma 
   assert.deepEqual(fixture.buttons.map((button) => button.disabled), [false, false]);
 });
 
-test("las fotos de prioridad y cola usan carga diferida nativa", () => {
-  assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-backlog-photo/);
-  assert.match(appSource, /<img loading="lazy" src="\$\{escapeHtml\(job\.photoUrl\)\}"[^>]*data-queue-photo/);
+// MEDIDO 2026-10-01: este test fijaba el nombre de la variable del src (job.photoUrl). Cuando la
+// foto paso a salir por un normalizador, el candado dejo de matchear y el fallo se leia como
+// "la foto dejo de ser lazy", que no era lo que pasaba. Ahora comprueba lo que de verdad importa:
+// que los tres <img> de foto (backlog, cola y detalle) son lazy, y que ninguno pinta la URL CRUDA.
+test("las fotos de backlog, cola y detalle usan carga diferida y no la URL cruda", () => {
+  for (const marca of ["data-backlog-photo", "data-queue-photo", "data-detail-photo"]) {
+    assert.match(appSource, new RegExp(`<img loading="lazy" src="\\$\\{escapeHtml\\([A-Za-z0-9_]+\\)\\}"[^>]*${marca}`),
+      `${marca}: la imagen de foto tiene que seguir siendo lazy y con el src escapado`);
+  }
+  assert.doesNotMatch(appSource, /escapeHtml\(job\.photoUrl\)/,
+    "ningun render de foto puede pintar job.photoUrl sin normalizar: el URL crudo de Drive no carga");
 });
 
 test("seleccionar Borrador alinea Cargas con la semana realmente programada", async () => {

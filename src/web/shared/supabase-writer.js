@@ -1278,7 +1278,16 @@
         wo_internal_id: texto(wo.workOrderId),
         articulo: texto(wo.item),
         descripcion: texto(wo.description),
-        foto_url: texto(wo.photoUrl),
+        // foto_url NO se escribe desde aqui, por el mismo motivo por el que machines no se
+        // escribe (RULE-SUP-010, un solo escritor por tabla). MEDIDO 2026-10-01: la foto la
+        // produce la INGESTA (src/server/09-photos.js, PP_enrichPhotoRows_, la URL de Drive) y
+        // la unica pagina que pinta la foto es esta, que no tiene ningun control para ponerla.
+        // O sea que este `texto(wo.photoUrl)` era un eco: devolvia lo que la pagina acaba de
+        // LEER, y cuando la foto_url guardada no era una URL que safePhotoUrl acepta
+        // (http, una ruta de red, un id viejo) el eco no era la foto, era la CADENA VACIA, y
+        // el upsert la dejaba en ''. Con eso, guardar el plan borraba la foto de Drive de
+        // esas OTs y no regresaba hasta la siguiente ingesta, sin decir nada. El lector ya
+        // trae foto_url (supabase-reader.js, mapWorkOrders) y la pagina ya la muestra.
         // Estas tres son timestamptz y en el estado son fecha sin hora.
         fecha_inicio_ns: instante(wo.startDate, ""),
         fecha_fin_ns: instante(wo.endDate, ""),
