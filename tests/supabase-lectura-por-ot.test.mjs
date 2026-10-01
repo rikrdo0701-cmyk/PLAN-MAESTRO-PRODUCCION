@@ -36,7 +36,33 @@ import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 
 const readerSource = await readFile(new URL("../src/web/shared/supabase-reader.js", import.meta.url), "utf8");
-const reemplazo = await readFile(new URL("../src/web/shared/supabase-bridge-replacement.js", import.meta.url), "utf8");
+
+// Los cuatro archivos que de verdad leen del lector. MEDIDO 2026-10-01: el guard miraba SOLO el
+// reemplazo, y los otros tres (el arranque de catalogos, el de eventos y el de performance) tambien
+// lo llaman por alias. Si uno de ellos llama un metodo que no esta publicado, cae aqui y no en la
+// pagina. Se comprobaron con busqueda: hoy no falta ninguno, y el guard esta para el proximo.
+const CONSUMIDORES = [
+  { archivo: "supabase-bridge-replacement.js", alias: ["reader", "r"] },
+  { archivo: "supabase-catalog-boot.js", alias: ["lector", "reader"] },
+  { archivo: "supabase-event-log.js", alias: ["lector", "reader"] },
+  { archivo: "performance-client.js", alias: ["reader"] },
+];
+
+/** Quita los comentarios, para que un metodo nombrado en prosa no cuente como llamada. */
+function sinComentarios(texto) {
+  const sinBloque = texto.replace(/\/\*[\s\S]*?\*\//g, " ");
+  return sinBloque.split("\n")
+    .filter((linea) => !/^\s*(\/\/|\*)/.test(linea))
+    .map((linea) => {
+      const corte = linea.indexOf("//");
+      if (corte < 0) return linea;
+      // Un '//' DENTRO de un texto (una URL, por ejemplo) no abre un comentario: se cuenta el
+      // numero de comillas que hay antes y, si es par, el '//' estaba fuera de toda cadena.
+      const antes = linea.slice(0, corte);
+      return (antes.match(/["'`]|(?<!\\)"/g) || []).length % 2 === 0 ? linea.slice(0, corte) : linea;
+    })
+    .join("\n");
+}
 
 /** Levanta el LECTOR REAL y devuelve la API que la pagina ve en `PPSupabaseReader`. */
 function lector() {
@@ -65,15 +91,21 @@ test("mapMaterials esta PUBLICADA: sin esto getPlanningWorkOrderData tira TypeEr
   assert.equal(r[0].required, 4);
 });
 
-test("el reemplazo NO llama ninguna funcion que el lector no publique", () => {
+test("ninguno de los consumidores llama un metodo que el lector no publique", async () => {
   // MEDIDO: el fallo fue `r.mapMaterials is not a function`, o sea un metodo pedido y no
-  // publicado. Este recorre TODOS los `r.<metodo>` del reemplazo y los compara contra la API
-  // que la pagina ve de verdad, para que el siguiente metodo que se agregue sin publicar caiga
-  // aqui y no en produccion. No comprueba el texto del archivo: comprueba que el objeto exista.
-  const pedidas = [...new Set([...reemplazo.matchAll(/\br\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))];
-  const faltantes = pedidas.filter((m) => typeof reader[m] === "undefined");
-  assert.deepEqual(faltantes, [],
-    "el reemplazo llama metodos del lector que no estan en PPSupabaseReader: " + faltantes.join(", "));
+  // publicado. Este recorre los cuatro archivos que leen del lector y compara lo que llaman contra
+  // la API que la pagina ve de verdad. No comprueba el texto del lector: comprueba que el objeto
+  // exista, que es lo que se rompio.
+  const faltantes = [];
+  for (const consumidor of CONSUMIDORES) {
+    const fuente = sinComentarios(await readFile(new URL(`../src/web/shared/${consumidor.archivo}`, import.meta.url), "utf8"));
+    const patron = new RegExp(`\\b(?:${consumidor.alias.join("|")})\\.([A-Za-z_$][\\w$]*)`, "g");
+    for (const [, metodo] of fuente.matchAll(patron)) {
+      if (typeof reader[metodo] === "undefined") faltantes.push(`${consumidor.archivo}: ${metodo}`);
+    }
+  }
+  assert.deepEqual([...new Set(faltantes)], [],
+    "hay metodos del lector que se llaman y no estan publicados en PPSupabaseReader");
 });
 
 test("una OT de 500 piezas con las dos columnas en 0 NO se queda en pendiente 0", () => {
