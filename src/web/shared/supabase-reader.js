@@ -473,6 +473,29 @@
     return matrix;
   }
 
+  /**
+   * La matriz COMPLETA, con marcada y sin marcar. MEDIDO 2026-09-30: mapMatrix se come las
+   * filas con habilitado=false, o sea que el estado solo traia lo que SI. Y un no no se puede
+   * expresar como una AUSENCIA: la tabla guarda la pareja con un booleano, y con el borrado
+   * apagado (que existe porque el 2026-09-30 borro 76 filas de ot_configurations) la fila
+   * vieja se queda marcada para siempre. Por eso la vista necesita la rejilla entera, y poder
+   * escribir un false es lo que hace que DESMARCAR exista.
+   *
+   * NO se fusiona con mapMatrix a proposito: el planificador lee state.matrix y quiere solo los
+   * habilitados. Mezclarlos obligaria a revisar cada lectura del planificador, y un cambio de
+   * esa forma se lleva por delante la programacion entera.
+   */
+  function mapMatrixFull(rows) {
+    const out = [];
+    (rows || []).forEach(function (row) {
+      const key = normalizeCapabilityKey(row.capability_key);
+      const operator = String(row.operator == null ? "" : row.operator).trim();
+      if (!key || !operator) return;
+      out.push({ capabilityKey: key, operator: operator, habilitado: asBool(row.habilitado, true) });
+    });
+    return out;
+  }
+
   function machineKey(value) {
     // La union entre `machines` (nombre de NetSuite) y `machine_planning_overrides`
     // (machine_nombre) es por TEXTO, y el state normaliza a mayusculas
@@ -969,6 +992,9 @@
       cts: siSePudoLeer(rows, "capabilities", cts),
       operationCatalog: siSePudoLeer(rows, "operation_catalog", mapOperationCatalog(rows.operation_catalog)),
       matrix: siSePudoLeer(rows, "matrix", mapMatrix(rows.matrix)),
+    // La rejilla completa, marcada y sin marcar. Para la vista de la matriz; el planificador
+    // sigue leyendo matrix, que solo trae los habilitados.
+    matrixFull: siSePudoLeer(rows, "matrix", mapMatrixFull(rows.matrix)),
       machines: siSePudoLeer(rows, "machines", mapMachines(rows.machines, rows.machine_planning_overrides)),
       otTypes: siSePudoLeer(rows, "ot_types", mapOtTypes(rows.ot_types)),
       subcontracts: siSePudoLeer(rows, "subcontracts", mapSubcontracts(rows.subcontracts)),

@@ -703,6 +703,66 @@
       },
     },
     {
+      tabla: "operators",
+      // MEDIDO 2026-09-30 contra la base: clave unica nombre, 18 filas, con politica de
+      // escritura para authenticated. La base estaba preparada; faltaba el escritor.
+      clave: "nombre",
+      mapear: function (state) {
+        const nombres = Array.isArray(state.operators) ? state.operators : [];
+        const capacidad = state.operatorCapacity || {};
+        const rendimiento = state.operatorPerformance || {};
+        const perfiles = state.operatorProfiles || {};
+        return nombres.map(function (nombre) {
+          const n = texto(nombre);
+          if (!n) return null;
+          const perfil = perfiles[n] || {};
+          return {
+            nombre: n,
+            // nombre_real es el NOMBRE de la persona; el lector cae al OPERADOR cuando esta
+            // vacio, asi que se devuelve igual para no perder el nombre real.
+            nombre_real: texto(perfil.name) || n,
+            categoria: texto(perfil.category),
+            // activo: el estado.trae SOLO los activos, asi que la lista ES la lista de
+            // activos. Un operador que se desmarco no esta en state.operators y su fila se
+            // queda como estaba, que es lo correcto con el borrado apagado.
+            activo: true,
+            minutos_capacidad: Math.round(numero(capacidad[n], 2400)),
+            rendimiento_pct: Math.round(numero(rendimiento[n], 100)),
+          };
+        }).filter(Boolean);
+      },
+    },
+    {
+      tabla: "matrix",
+      // MEDIDO 2026-09-30 contra la base: clave unica (capability_key, operator), 97 filas.
+      //
+      // ESTA ES LA QUE HACE QUE DESMARCAR EXISTA. Se mapea matrixFull, que trae la rejilla
+      // COMPLETA (marcada y sin marcar), y no state.matrix, que solo trae las marcadas. Un no
+      // no se puede expresar como una ausencia: con el borrado apagado, mandar solo las
+      // marcadas dejaria las desmarcadas marcadas para siempre. Mandando false, no hace
+      // falta borrar nada nunca.
+      clave: "capability_key,operator",
+      mapear: function (state) {
+        const rejilla = Array.isArray(state.matrixFull) ? state.matrixFull : [];
+        const vistos = new Set();
+        return rejilla.map(function (celda) {
+          const key = texto(celda && celda.capabilityKey);
+          const operador = texto(celda && celda.operator);
+          if (!key || !operador) return null;
+          // Una pareja repetida se manda una vez. Sin esto, dos filas con la misma clave en el
+          // mismo POST darian 23505 y se perderia el guardado entero de la matriz.
+          const id = key + "|" + operador;
+          if (vistos.has(id)) return null;
+          vistos.add(id);
+          return {
+            capability_key: key,
+            operator: operador,
+            habilitado: Boolean(celda && celda.habilitado),
+          };
+        }).filter(Boolean);
+      },
+    },
+    {
       tabla: "machine_planning_overrides",
       clave: "machine_nombre",
       // Una fila por maquina APARTADA, y solo esas: la tabla registra la decision de
@@ -916,9 +976,12 @@
     // tragase la mitad de lo que se toco es peor que uno que avisa.
     if (opts.ambito === "matrix") {
       informe.avisos.push(
-        "La pestana de Matriz todavia NO se escribe en Supabase desde la pagina: operators, capabilities, " +
-        "operation_catalog y matrix siguen viniendo del espejo de las Hojas. El cambio se ve en esta pagina y " +
-        "no se pierde al recargar, pero todavia no es la fuente."
+        "La pestana de Matriz ya se escribe en Supabase: operators y matrix (la rejilla de casillas, " +
+        "marcada y sin marcar) van a la base y Supabase es la fuente de las dos. " +
+        "capabilities sigue SIN escribirse: el estado de la pagina tiene 9 de sus 15 columnas " +
+        "y faltan ct y operacion, que el lector no trae por capacidad, asi que escribirla " +
+        "mandaria esas dos vacias en 76 filas. operation_catalog es el listado de operaciones " +
+        "DE NETSUITE y no se toca desde la pagina: pisarlo seria pisar el ERP."
       );
     }
     return cerrar(informe, t0);

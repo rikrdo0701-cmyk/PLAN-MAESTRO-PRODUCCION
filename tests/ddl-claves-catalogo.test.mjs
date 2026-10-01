@@ -76,7 +76,11 @@ test("el escritor manda una clave que EXISTE en la base, y el DDL solo declara l
   //     subcontracts, y solo por el drop+create que convierte el parcial en completo),
   //   - y el escritor manda claves que el DDL NO tiene que declarar, porque ya estan.
   const delEscritor = clavesDeCatalogos();
-  assert.equal(delEscritor.length, 6, "esperaba los seis catalogos con clave");
+  // MEDIDO 2026-09-30: son ocho. Los seis de los catalogos mas operators y matrix, que se
+  // agregaron ese dia porque la persona dijo que la matriz es MANUAL y tiene que guardarse en
+  // Supabase. Los dos nuevos tampoco necesitan indice nuevo: la base ya tenia UNIQUE (nombre)
+  // en operators y UNIQUE (capability_key, operator) en matrix.
+  assert.equal(delEscritor.length, 8, "esperaba los ocho catalogos con clave");
 
   // Las dos que el DDL tiene que arreglar: indice PARCIAL, que ON CONFLICT no infiere.
   for (const tabla of ["tools", "subcontracts"]) {
@@ -89,7 +93,16 @@ test("el escritor manda una clave que EXISTE en la base, y el DDL solo declara l
 
   // Las cuatro que ya estaban: el DDL NO debe volver a declararlas. Un segundo indice unico
   // sobre las mismas columnas no deduplica mas nada, solo encarece los INSERT.
-  for (const tabla of ["calendar_exceptions", "ot_configurations", "article_configurations", "machine_planning_overrides"]) {
+  // MEDIDO 2026-09-30: se suman operators y matrix. Los seis indices que ya existian en la base
+  // se comprobaron uno por uno con un INSERT de prueba dentro de un begin/rollback:
+  //   calendar_exceptions_fecha_concepto_maquina_key  (fecha, concepto, maquina)
+  //   ot_configurations_ot_key                          (ot)
+  //   article_configurations_articulo_key               (articulo)
+  //   machine_planning_overrides_machine_nombre_key     (machine_nombre)
+  //   operators_nombre_key                              (nombre)
+  //   matrix_capability_key_operator_key                (capability_key, operator)
+  for (const tabla of ["calendar_exceptions", "ot_configurations", "article_configurations",
+                      "machine_planning_overrides", "operators", "matrix"]) {
     assert.doesNotMatch(sentencias, new RegExp(`create unique index[^;]*on public\\.${tabla}\\b`, "i"),
       `${tabla} ya tiene su indice unico en la base; volver a declararlo deja dos para lo mismo`);
   }
