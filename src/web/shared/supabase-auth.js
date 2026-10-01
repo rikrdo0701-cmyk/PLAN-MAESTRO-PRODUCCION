@@ -138,10 +138,28 @@
     return { ok: true, correo: sesion.correo };
   }
 
+  /**
+   * Recarga la pagina SI hay donde recargar. Que sea una funcion y no un `root.location.reload()`
+   * en linea es por el modulo de pruebas, que corre este archivo con un DOM de mentira y sin
+   * `location`: sin esta guarda el modulo revienta al entrar, en vez de fallar la prueba.
+   */
+  function recargar() {
+    try {
+      if (root.location && typeof root.location.reload === "function") root.location.reload();
+    } catch (error) {
+      console.warn("[pp-auth] no se pudo recargar tras cambiar la sesion:", String((error && error.message) || error));
+    }
+  }
+
   async function salir() {
     const sesion = leerSesion();
     guardarSesion(null);
     notificar(null);
+    // MEDIDO 2026-10-01: sin esto, al salir la pagina sigue mostrando el plan que ya no puede
+    // NI leer NI escribir, y el unico cambio visible es que vuelve el boton de entrar. Es el
+    // mismo defecto que al entrar, por el otro lado: la pantalla no refleja lo que la sesion
+    // permite. Un logout que no recarga deja datos en pantalla que ya no le pertenecen a nadie.
+    recargar();
     if (sesion && sesion.refresh_token) {
       // Best effort. Si la red falla, la sesion local ya esta limpia, que es lo
       // que importa: que esta pagina deje de poder escribir.
@@ -327,6 +345,26 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // el DOM mas de lo que hace falta.
     campoClave.value = "";
     pintar(leerSesion());
+
+    // MEDIDO 2026-10-01: ENTRAR NO RECARGABA LOS DATOS, y por eso la pagina se quedaba en ceros
+    // con la sesion puesta. La cadena, medida en la pagina real:
+    //   1. Al arrancar SIN sesion, la app lee work_orders, operations, materials y los catalogos
+    //      UNA vez. Sin token, la Data API responde 200 con 0 filas (RULE-SUP-037), y la pagina
+    //      pinta la app entera con ceros: "Backlog 0 OTs", "Planeado / No planeado 0 en el plan".
+    //   2. `pintar` quita el velo de entrada. A partir de aqui la pagina PARECE viva.
+    //   3. `notificar(sesion)` no tiene UN solo suscriptor: la API publica de este modulo no
+    //      expone onChange, y nadie lo busca en ningun otro archivo de src/web.
+    //   4. Nadie vuelve a leer. El resultado es una pagina con sesion valida que muestra los
+    //      ceros del arranque, sin velo y sin aviso. Es el peor de los dos casos: el dato falso
+    //      con la pagina presentable, que es cuando nadie va a mirar la consola.
+    //
+    // POR QUE RECARGAR Y NO UN onChange. Poner un onChange obligaria a poder volver a pedir
+    // entero el arranque, y ese arranque esta repartido: lectura de catalogos, sync de OTs, sync
+    // de operaciones, estado del plan y borradores. Cada uno con su propio camino, y el que se
+    // olvide se queda en cero igual, pero sin que se note. La recarga no se puede dejar a medias:
+    // lo que no se recarga, no se lee. Y no se pierde trabajo, porque el borrador esta en
+    // localStorage y el arranque lo restaura.
+    recargar();
   }
 
   if (root.document) {

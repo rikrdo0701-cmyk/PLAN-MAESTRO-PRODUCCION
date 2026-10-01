@@ -52,9 +52,14 @@ function domFalso() {
       title: "",
       type: "button",
       style: { display: "" },
-      addEventListener() {},
+      // MEDIDO 2026-10-01: esto era un no-op, o sea que el boton de ENTRAR no se podia pulsar
+      // desde una prueba y no habia forma de comprobar que entrar recarga la pagina. Se guardan
+      // los escuchadores para poder llamarlos a mano.
+      escuchadores: [],
+      addEventListener(n, f) { this.escuchadores.push([n, f]); },
       appendChild() {},
       focus() {},
+      pulsar() { this.escuchadores.filter(([n]) => n === "click").forEach(([, f]) => f()); },
     };
     porId.set(id, el);
     return el;
@@ -96,6 +101,10 @@ function correr({ url = "https://x.supabase.co", key = "sb_publishable_x", sesio
     dispatchEvent: () => true,
     document: domFalso(),
     CustomEvent: class { constructor(t, o) { this.type = t; Object.assign(this, o); } },
+    // MEDIDO 2026-10-01: hace falta un `location` que cuente recargas. `recargar()` en el
+    // modulo lo busca y lo usa solo si existe, asi que sin esto el modulo funciona pero la
+    // prueba no puede afirmar que la recarga pasara, que es justo lo que hay que comprobar.
+    location: { recargas: 0, reload() { this.recargas++; } },
   };
   ctx.globalThis = ctx;
   const fuente = auth
@@ -103,7 +112,17 @@ function correr({ url = "https://x.supabase.co", key = "sb_publishable_x", sesio
     .replace("__PP_SUPABASE_ANON_KEY__", key);
   vm.createContext(ctx);
   vm.runInContext(fuente, ctx);
-  return { ctx, almacen, llamadas, oyentes, dom: ctx.document };
+  return { ctx, almacen, llamadas, oyentes, dom: ctx.document, recargas: () => ctx.location.recargas };
+}
+
+/** Espera a que `cond` sea cierto, sin hangarse si nunca lo es. */
+async function esperar(cond, ms = 2000) {
+  const limite = Date.now() + ms;
+  while (Date.now() < limite) {
+    if (cond()) return true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return cond();
 }
 
 test("sin URL ni clave, el modulo dice que no esta configurado y no avisa por todos lados", () => {
@@ -226,4 +245,63 @@ test("el lector NO se modifica todavia: sigue siendo de solo lectura", () => {
   // si alguien mete un POST en el lector creyendo que ya es el escritor.
   const MetodosDeEscritura = [...reader.matchAll(/method:\s*"(POST|PUT|PATCH|DELETE)"/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(MetodosDeEscritura)], [], "el lector no debe escribir nada todavia");
+});
+
+// MEDIDO 2026-10-01, en la pagina real de produccion: "Backlog 0 OTs" y "Planeado / No planeado
+// 0 en el plan" con la sesion puesta y sin velo de entrada. La causa NO era la base (la ingesta
+// dio 199 work_orders y 2111 operations) ni el mapeo (mapWorkOrders no filtra filas): era que
+// entrar NO recarga.
+//
+// LA CADENA, porque cada paso es un par de lugares y el que falta es el que no se ve:
+//   1. Al arrancar sin sesion, la app lee work_orders/operations/materials y los catalogos una
+//      vez. Sin token la Data API responde 200 con 0 filas, y la pagina pinta ceros.
+//   2. `pintar` quita el velo: la pagina ya PARECE viva.
+//   3. `notificar(sesion)` no tiene un solo suscriptor, porque la API publica no expone onChange.
+//   4. Nadie vuelve a leer. Los ceros del paso 1 quedan en pantalla con sesion valida.
+//
+// Y POR QUE ESTAS DOS PRUEBAS Y NO UNA DE TEXTO. Una asercion que busque "recargar()" en el
+// archivo pasaria con que la palabra aparezca en un comentario, que es la quinta vez que ese
+// error cuesta una tarde en este proyecto. Estas dos pulsan el boton de verdad y cuentan
+// recargas, asi que si alguien quita la recarga y la deja escrita en un comentario, fallan.
+test("entrar por el boton RECARGA la pagina: sin eso se quedan los ceros del arranque", async () => {
+  const r = correr({
+    respuestas: { "grant_type=password": { ok: true, status: 200, cuerpo: { access_token: "jwt-1", refresh_token: "ref-1", expires_in: 3600, user: { email: "a@b.com" } } } },
+  });
+  r.dom.getElementById("pp-login-correo").value = "a@b.com";
+  r.dom.getElementById("pp-login-clave").value = "mi-clave";
+  assert.equal(r.recargas(), 0, "antes de entrar no se recarga nada");
+  r.dom.getElementById("pp-login-entrar").pulsar();
+  assert.ok(await esperar(() => r.recargas() === 1),
+    "entrar tiene que recargar UNA vez: es lo que hace que el arranque vuelva a leer con token");
+  assert.equal(r.recargas(), 1, "y no mas: recargar de mas pierde el borrador en memoria");
+});
+
+test("entrar MAL no recarga: un fallo no puede costar la pagina que ya estaba", async () => {
+  const r = correr({
+    respuestas: { "grant_type=password": { ok: false, status: 401, cuerpo: { error_description: "Invalid login credentials" } } },
+  });
+  r.dom.getElementById("pp-login-correo").value = "a@b.com";
+  r.dom.getElementById("pp-login-clave").value = "mal";
+  r.dom.getElementById("pp-login-entrar").pulsar();
+  await esperar(() => r.llamadas.length > 0);
+  await new Promise((r2) => setTimeout(r2, 60));
+  assert.equal(r.recargas(), 0, "con la contrasena mala se muestra el error y no se toca nada mas");
+});
+
+test("salir RECARGA tambien: si no, el plan que ya no se puede leer se queda en pantalla", async () => {
+  const r = correr({
+    sesionGuardada: { access_token: "jwt-1", refresh_token: "ref-1", expires_at: Date.now() + 3600_000, correo: "a@b.com" },
+    respuestas: { "grant_type=refresh_token": { ok: true, status: 200, cuerpo: { access_token: "jwt-2", refresh_token: "ref-1", expires_in: 3600 } } },
+  });
+  await r.ctx.PPSupabaseAuth.salir();
+  assert.equal(r.recargas(), 1, "salir tiene que recargar: el logout que no recarga deja datos visibles que ya no le pertenecen a la sesion");
+  assert.equal(r.almacen.has("pp_supabase_session"), false, "y la sesion local se borra igual");
+});
+
+test("el boton de ENTRAR sigue atado: si el id cambia, el modulo no revienta ni deja la pagina inservible", () => {
+  const r = correr({ respuestas: { "grant_type=password": { ok: true, status: 200, cuerpo: { access_token: "j", refresh_token: "r", expires_in: 3600 } } } });
+  assert.equal(typeof r.ctx.PPSupabaseAuth.entrar, "function");
+  // El stub de DOM devuelve un elemento perezoso por id, que es lo que hace el modulo. Si el
+  // modulo pidiera un id que el stub no sabe hacer, esto seria un TypeError.
+  assert.ok(r.dom.getElementById("pp-login-entrar"), "el boton tiene que existir en el DOM del modulo");
 });
