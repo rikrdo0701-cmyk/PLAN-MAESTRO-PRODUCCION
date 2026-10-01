@@ -199,6 +199,78 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
   }
 });
 
+// ---------------------------------------------------------------------------
+// LA FORMA QUE POSTGRES NO ACEPTA. MEDIDO 2026-10-01.
+//
+// MEDIDO: al aplicar docs/schema-machine-catalog.sql, la corrida devolvio
+//   ERROR: syntax error at or near "not"
+// y el archivo entero NO se aplico (Postgres se detiene en el primer error de un lote, asi
+// que ni la tabla ni la indice se crearon). La causa: `CREATE POLICY IF NOT EXISTS`.
+// PostgreSQL no tiene esa forma; el idempotente es DROP POLICY IF EXISTS + CREATE POLICY,
+// que es justo lo que hacen los otros DDL del repo (schema-supabase-cierre-catalogos.sql:
+// "drop policy de los DOS nombres antes del create").
+//
+// POR QUE HACE FALTA UNA PRUEBA Y NO BASTA CON ESCRIBIRLO BIEN. Este archivo se puede
+// dividir en sentencias, contar comentarios y validar que ninguna empieza por texto de
+// comentario: todo eso pasa con un `create policy if not exists`, porque el divisor no
+// valida la GRAMATICA, solo donde cortan los `;`. El error sale unicamente al ejecutarlo
+// contra una base, o sea en el momento en que alguien esta esperando que se aplique.
+test("ningun DDL usa 'create X if not exists' para una X que PostgreSQL no soporta", async () => {
+  // LAS FORMAS QUE NO EXISTEN. Todo lo de esta lista se escribio alguna vez creyendo que
+  // "if not exists" era universal, y PostgreSQL lo rechaza con un error de sintaxis:
+  const NO_SOPORTADAS = ["policy", "type", "trigger", "database", "extension", "schema",
+                         "aggregate", "operator", "rule", "server", "foreign", "conversion",
+                         "cast", "collation", "language", "publication", "statistics"];
+  // Las que SI existen, para que la lista de arriba no se lea como "nunca lleva if not exists":
+  // create table / create index / create extension si lo soportan.
+  const SI_SOPORTAN = ["table", "index", "extension", "materialized view"];
+
+  const { readdir } = await import("node:fs/promises");
+  const dir = new URL("../docs/", import.meta.url);
+  const archivos = (await readdir(dir)).filter((f) => f.endsWith(".sql"));
+  assert.ok(archivos.length >= 5, "no se encontraron los DDL del repo; el recorrido no esta mirando donde debe");
+
+  const malos = [];
+  for (const archivo of archivos) {
+    const crudo = await readFile(new URL(archivo, dir), "utf8");
+    // Se quitan los comentarios de linea ANTES de buscar: la propia nota que explica este
+    // error menciona la forma prohibida, y un detector que se lee a si mismo no dice nada.
+    const sql = crudo.replace(/--[^\n]*/g, "");
+    for (const palabra of NO_SOPORTADAS) {
+      if (SI_SOPORTAN.includes(palabra)) continue;
+      const re = new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?${palabra}\\s+if\\s+not\\s+exists\\b`, "gi");
+      let m;
+      while ((m = re.exec(sql)) !== null) {
+        malos.push(`${archivo}: ${m[0].replace(/\s+/g, " ")}`);
+      }
+    }
+  }
+  assert.deepEqual(malos, [],
+    "estas formas no existen en PostgreSQL y rompen el DDL entero (medido 2026-10-01: "
+    + "\"syntax error at or near not\"):\n" + malos.join("\n"));
+});
+
+test("machine_catalog crea sus politicas con DROP + CREATE, que si es idempotente", async () => {
+  // El DDL de machine_catalog tiene que dejar el estado ACTUAL de la base (RULE-SUP-037): si
+  // alguien cambio la politica a mano, aplicar el archivo la deja como dice el archivo y no
+  // se la salta en silencio. Eso obliga a DROP antes de CREATE, no a IF NOT EXISTS.
+  const ddl = await readFile(new URL("../docs/schema-machine-catalog.sql", import.meta.url), "utf8");
+  const sql = ddl.replace(/--[^\n]*/g, "");
+  assert.doesNotMatch(sql, /create\s+policy\s+if\s+not\s+exists/i);
+  // UNA por politica, no "alguna vez en el archivo": con dos politicas y un solo drop, la
+  // segunda queda con la definicion vieja si alguien la cambio a mano, y eso es exactamente
+  // el fallo que DROP+CREATE tiene que tapar (RULE-SUP-037).
+  for (const politica of ["machine_catalog_select_authenticated", "machine_catalog_write_authenticated"]) {
+    assert.match(sql, new RegExp(`drop policy if exists ${politica}\\b[\\s\\S]*?create policy ${politica}\\b`, "i"),
+      `la politica ${politica} tiene que ir con su drop policy if exists ANTES del create`);
+  }
+  // Y las dos politivas que hacen falta: leer (sesion) y escribir (sesion), nunca anon.
+  assert.match(sql, /create policy machine_catalog_select_authenticated[\s\S]*for select[\s\S]*to authenticated/i);
+  assert.match(sql, /create policy machine_catalog_write_authenticated[\s\S]*to authenticated/i);
+  assert.doesNotMatch(sql, /to anon/i,
+    "machine_catalog NO se abre a anon: con el bundle de Pages eso dejaria editar el catalogo sin entrar (RULE-SUP-015)");
+});
+
 test("el cuerpo de ingesta_mirror queda entero y bien cerrado en una sola sentencia", () => {
   const conCuerpo = dividir(ddl).filter((p) => /as \$\$/.test(p));
   // MEDIDO 2026-09-30: esto decia "exactamente un cuerpo $", referringido a

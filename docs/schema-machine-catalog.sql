@@ -57,17 +57,32 @@ create unique index if not exists machine_catalog_nombre_uniq
 -- ----------------------------------------------------------------------------
 alter table public.machine_catalog enable row level security;
 
--- Lectura: las tablas de catalogo se leen con la clave publicable (RULE-SUP-037).
-create policy if not exists "machine_catalog_select_authenticated"
+-- MEDIDO 2026-10-01: la primera version de este archivo decia `create policy if not exists`,
+-- y PostgreSQL lo rechaza: CREATE POLICY NO tiene forma IF NOT EXISTS. La corrida del
+-- 2026-10-01 lo devolvio tal cual: `ERROR: syntax error at or near "not"`. El DDL entero no
+-- se aplico (Postgres se detiene en el primer error de un lote), asi que la tabla tampoco.
+--
+-- El patron idempotente es el de los otros DDL del repo (schema-supabase-cierre-catalogos.sql:
+-- "drop policy de los DOS nombres antes del create"): DROP y CREATE, no IF NOT EXISTS. Asi
+-- tambien queda el estado ACTUAL de la base y no el que conocia cuando se escribio
+-- (RULE-SUP-037): si alguien cambio la politica a mano, aplicar este archivo la deja como
+-- dice aqui en vez de saltarsela en silencio.
+--
+-- Lectura: las tablas de catalogo se leen con sesion. `machines`, `operators` y `matrix` dan
+-- 0 filas con la clave publica y sin sesion (medido 2026-10-01), y machine_catalog debe
+-- comportarse igual: el catalogo de maquinas no es un dato publico.
+drop policy if exists lectura_web on public.machine_catalog;
+drop policy if exists machine_catalog_select_authenticated on public.machine_catalog;
+create policy machine_catalog_select_authenticated
   on public.machine_catalog for select
   to authenticated
   using (true);
 
--- Escritura: solo la service role (la pagina escribe con el JWT, que es
--- authenticated; pero el DDL de las demas tablas de catalogo ya le dio
--- escritura a authenticated, asi que aqui va igual para que guardarCatalogos
--- pueda insertar/borrar).
-create policy if not exists "machine_catalog_write_authenticated"
+-- Escritura: la pagina escribe con el JWT (authenticated), igual que las demas tablas de
+-- catalogo que ya tienen escritura para ese rol. NO se abre a anon: con el bundle de Pages
+-- alguien podria agregar o quitar maquinas sin entrar (RULE-SUP-015).
+drop policy if exists machine_catalog_write_authenticated on public.machine_catalog;
+create policy machine_catalog_write_authenticated
   on public.machine_catalog for all
   to authenticated
   using (true)
