@@ -117,6 +117,8 @@
       "workOrders[].averageSalePriceFrom | falta la columna precio_desde | la hoja ORDENES_TRABAJO tiene PRECIO_DESDE y el nombre no dice lo que es: no es un precio, es la FECHA desde la que vale el precio promedio de venta. MEDIDO 2026-09-29: app.js:1726 lo pasa por normalizeOtDate y 02-storage.js:2182 lo lee sin Number(), al lado de PRECIO_PROMEDIO_VENTA que si lleva Number(). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
       "workOrders[].averageSalePriceTo | falta la columna precio_hasta | la hoja tiene PRECIO_HASTA, la FECHA hasta la que vale ese precio promedio (misma medicion que en el anterior). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
       "workOrders[].startDate, endDate y dueDate | falta la FORMA de la columna fecha_inicio_ns | las tres son timestamptz y el estado espera el texto 'AAAA-MM-DD' de la hoja (PP_mapWorkOrder_, 02-storage.js:2179). Se resuelve con una REGLA, no con una columna: partir el ISO en UTC sin convertir de zona, y la hora (que el estado no tiene campo para estas tres) se descarta en vez de inventarse un lugar donde ponerla. La regla y su motivo estan en partirFechaTexto().",
+      "workOrders[].pendingQuantity | falta la FORMA de la columna cant_ensamblada | MEDIDO 2026-10-01 con sesion en la pagina real: las 175 OT del Backlog decian 'qty:0' y el detalle de la misma OT si mostraba la cantidad. La columna EXISTE y esta bien tipada ('integer not null default 0'); lo que falta es que alguien la escriba: MEDIDO, 'cant_ensamblada' NO aparece en NINGUN archivo de src/server/, o sea que la ingesta, que hace mirror de las filas del RESTlet tal cual, no la trae. El unico escritor (filasWorkOrders, supabase-writer.js:1290) escribe lo que viene del estado. El hueco NO es de esquema: es que la fuente no trae el dato y la tabla, con su default 0, no puede distinguir 'cero' de 'sin escribir'. mapWorkOrders lo resuelve con la regla que ya declaraba (cantidad - cant_ensamblada) y por eso el pendiente sale igual a la cantidad; mientras el RESTlet no la traiga, una OT en curso se vera como si no tuviera nada surtido.",
+      "workOrders[].pendingQuantity | falta la FORMA de la columna cant_pendiente | La misma medicion que la de cant_ensamblada y por el mismo motivo: la columna existe y no la escribe nadie. MEDIDO: 'cant_pendiente' NO aparece en NINGUN archivo de src/server/ y filasWorkOrders (supabase-writer.js:1291) escribe el 0 que le llega del estado. Antes de que existiera el arreglo, mapWorkOrders computaba 'cantidad - cant_ensamblada' solo cuando esta columna llegaba VACIA, y con 'not null default 0' nunca llega vacia: esa rama era codigo muerto y el pendiente salia 0 para todas las OT.",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -865,7 +867,40 @@
     return (rows || []).map(function (row) {
       const quantity = number(row.cantidad);
       const builtQuantity = number(row.cant_ensamblada);
-      const rawPending = String(row.cant_pendiente == null ? "" : row.cant_pendiente).trim();
+      const pendienteEscrito = number(row.cant_pendiente);
+      // MEDIDO 2026-10-01 en la pagina real, con sesion: las 175 OT del Backlog decían `qty:0`
+      // y las 10 de la cola igual, mientras el detalle de la OT sí enseña la cantidad. La
+      // cadena, y cada paso la conserva:
+      //
+      //   1. `work_orders.cant_pendiente` y `cant_ensamblada` son `integer not null default 0`.
+      //   2. MEDIDO: `cant_pendiente` y `cant_ensamblada` NO aparecen en NINGUN archivo de
+      //      `src/server/`, o sea que la ingesta (que hace mirror de las filas del RESTlet tal
+      //      cual) no las escribe. El unico escritor de la pagina (filasWorkOrders,
+      //      supabase-writer.js:1290-1291) escribe lo que viene del estado, o sea un 0.
+      //   3. Antes esta linea decia: `rawPending === "" ? cantidad - cant_ensamblada : ...`.
+      //      Con `not null default 0` la columna NUNCA llega vacia, asi que esa rama era CODIGO
+      //      MUERTO y el `else` ganaba siempre: pendingQuantity era 0 para todas.
+      //   4. Abajo, normalizeWorkOrders (app.js:1805) tiene el respaldo
+      //      `pendingQuantity ?? cantidad - ensamblada`, pero `??` solo cae en `null`/`undefined`,
+      //      no en 0. Un 0 lo bloquea igual que antes.
+      //   5. Y pendingPiecesForWorkOrder (app.js:13098) lo acepta porque
+      //      `Number.isFinite(Number(0))` es true.
+      //
+      // QUE HACE ESTA LINEA Y POR QUE NO ADIVINA. Un pendiente de 0 solo se cree cuando hay un
+      // pendiente escrito Y una ensamblada escrita: si assembled=0 y pending=0 juntos, lo unico
+      // que se sabe con certeza es que nadie ha escrito ninguna de las dos, y entonces la
+      // cantidad pendiente es la cantidad de la orden. `cantidad - cant_ensamblada` es la regla
+      // que el propio lector ya declaraba; lo que cambio es que por fin se puede aplicar, y con
+      // los datos de hoy sale `cantidad` porque ensamblada viene 0.
+      //
+      // Y SI HAY UN 0 DE VERDAD. Una OT completamente surtida tiene pending=0 con
+      // ensamblada=cantidad, o con ensamblada>0, y ahi el 0 se respeta: la rama de arriba solo
+      // se salta cuando las dos columnas son 0 a la vez. La consecuencia de equivocarse en este
+      // punto es una OT ya cerrada presenteada como pendiente, que es lo que se revisa a mano;
+      // la de antes era una OT de 500 piezas presenteada como 0, que es lo que se revisaba solo.
+      //
+      // DECIDIDO, no deducido: el hueco de `cant_ensamblada`/`cant_pendiente` se declara en
+      // MAPPING_GAPS.work_orders para que quede a la vista en vez de quedar absorbido aqui.
       // Las tres fechas usan la MISMA regla simetrica que las de operations: sin convertir de
       // zona. MEDIDO 2026-09-29: fecha_inicio_ns y fecha_fin_ns NULAS en 212/212, o sea que
       // solo llega fecha_vencimiento, y llega como fecha sin hora.
@@ -885,7 +920,14 @@
         description: row.descripcion, photoUrl: row.foto_url, startDate: inicio.fecha,
         endDate: fin.fecha, dueDate: vencimiento.fecha, dueDateOverride: "",
         quantity: quantity, status: row.estatus, customer: row.cliente, builtQuantity: builtQuantity,
-        pendingQuantity: rawPending === "" ? Math.max(0, quantity - builtQuantity) : Math.max(0, number(row.cant_pendiente)),
+        // Ver el comentario de `pendienteEscrito` arriba. En resumen: un 0 que no viene
+        // acompañado de avance no es evidencia de que no quede nada, y por eso la cantidad de la
+        // orden gana. Un 0 de verdad se respeta, y se distingue porque en ese caso
+        // cant_ensamblada trae el avance (el `|| cantidad` solo cubre la OT sin cantidad, donde
+        // el pendiente escrito es el unico dato que hay).
+        pendingQuantity: (pendienteEscrito > 0 || builtQuantity > 0)
+          ? Math.max(0, pendienteEscrito)
+          : Math.max(0, quantity),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
         lastSalePrice: number(row.precio_ultima_venta),
       };
@@ -1080,6 +1122,16 @@
     mapOperations: mapOperations,
     mapSubcontracts: mapSubcontracts,
     mapWorkOrders: mapWorkOrders,
+    // MEDIDO 2026-10-01: esta NO estaba exportada y el reemplazo la pide. mapMaterials existia
+    // (esta misma linea 851) y se usaba internamente en readCatalogs (linea ~1039), o sea que
+    // estaba escrita, probada por dentro y solo faltaba publicarla. El efecto fue que
+    // getPlanningWorkOrderData - el camino de la pagina que trae operaciones, materiales y
+    // ficha de UNA OT - tiraba `TypeError: r.mapMaterials is not a function` en cada llamada, y
+    // con ella caia TODA la carga por OT: MEDIDO en produccion, el toast de la tarjeta del
+    // Backlog decia literalmente "r.mapMaterials is not a function". La funcion de la OT no
+    // llegaba nunca desde Supabase. Es la misma clase de fallo que el disparador de updated_at
+    // bien puesto y sin leer, y que sessionRequired: la pieza existe y nadie la conecta.
+    mapMaterials: mapMaterials,
     // Los cuatro inversos del escritor, para poder probarlos SIN red: la pareja
     // mapear->mapear es la que demuestra que un guardado y su lectura se cierran.
     mapSelectedOts: mapSelectedOts,

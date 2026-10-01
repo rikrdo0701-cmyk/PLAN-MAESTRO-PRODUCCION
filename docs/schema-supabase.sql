@@ -356,7 +356,7 @@ begin
   loop
     execute format('alter table public.%I enable row level security', t);
     -- MEDIDO 2026-10-01: aqui decia `create policy "lectura_web" ... to anon`, o sea que reaplicar
-    -- este archivoABLIA 23 tablas a cualquiera que abriera la pagina, sin avisar. Desde el
+    -- este archivo ABIERTA 23 tablas a cualquiera que abriera la pagina, sin avisar. Desde el
     -- 2026-09-30 la lectura exige sesion (schema-supabase-login-correo.sql) y este bloque tiene que
     -- dejar ese mismo estado, no el anterior. Se borran los DOS nombres antes del create: si solo
     -- se borra el que va a crear, quedan las dos politicas y gana la ultima.
