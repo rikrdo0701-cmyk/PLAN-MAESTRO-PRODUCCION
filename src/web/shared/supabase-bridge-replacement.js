@@ -465,6 +465,28 @@
   }
 
   /**
+   * getAppStateRevision -> la revision del plan, y SOLO eso.
+   *
+   * MEDIDO 2026-09-30 en produccion. Existia porque el arranque tomaba la revision del MISMO
+   * payload que los catalogos, y readCatalogs() lee del orden de 39 tablas. Si una de esas
+   * da 404, cae la promesa entera, el arranque se queda con el cache local, y la pagina
+   * conserva una revision que nadie verifico: la base estaba en 2 y la pagina en 22, y todo
+   * guardado moria con CONFLICT_REVISION para siempre. El 22 venia de la columna revision de
+   * la tabla operations (maximo 22), que es la revision de la ingesta del RESTlet, un contador
+   * DISTINTO del del plan. Un residuo de la era de las Hojas.
+   *
+   * La revision del plan vive en app_state, que es una fila y una columna. Se lee aqui, sin
+   * tocar ninguna otra tabla, para que la revision sea correcta aunque los catalogos no lo
+   * sean. Que una tabla de catálogos decida en que revision esta el plan es la misma clase
+   * de error que la que se corrigio en RULE-SUP-031: una compuerta que no era la pregunta.
+   */
+  async function getAppStateRevision() {
+    const r = getReader();
+    const rows = await r.readTable("app_state", { limit: 1 });
+    const appState = r.mapAppState(rows);
+    return { revision: Number(appState?.revision || 0), savedAt: appState?.savedAt || "" };
+  }
+  /**
    * getAppStateIfChanged -> lee de Supabase y compara revision
    */
   async function getAppStateIfChanged(revision, options) {
@@ -516,6 +538,7 @@
     getPlanSnapshotLight,
     saveOperationPlanStatus,
     getAppState,
+    getAppStateRevision,
     getAppStateIfChanged,
     getMaterialsForOt,
   };

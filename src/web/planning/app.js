@@ -13694,7 +13694,12 @@ function motivoDelInforme(informe) {
   const tablas = informe && informe.tablas && typeof informe.tablas === "object" ? informe.tablas : {};
   const fallos = Object.keys(tablas)
     .filter((tabla) => tablas[tabla] && tablas[tabla].error)
-    .map((tabla) => tabla + ": " + tablas[tabla].error);
+    // MEDIDO 2026-09-30: se nombra el PASO, no solo la tabla. GuardarCatalogos hace dos
+    // escrituras por tabla (la subida de lo que hay y el borrado de lo que quitaste) y el
+    // toast decía la misma cosa para las dos. Con el paso enfrente, el error 42703
+    // "column ot_configurations.1905 does not exist" se lee como lo que es: un filtro de
+    // borrado mal armado, no un dato malo.
+    .map((tabla) => tabla + (tablas[tabla].paso ? " (" + tablas[tabla].paso + ")" : "") + ": " + tablas[tabla].error);
   if (!fallos.length) return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
 
   // MEDIDO 2026-09-30: cuando el fallo es "no unique or exclusion constraint matching the

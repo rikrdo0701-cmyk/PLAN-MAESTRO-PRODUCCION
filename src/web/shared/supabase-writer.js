@@ -737,21 +737,45 @@
    * calendar_exceptions son fecha, concepto y maquina: texto sin espacios ni
    * comas, que es justo lo que se valida antes de armar el filtro.
    */
-  function condicionDeClave(tabla, clave) {
-    if (tabla !== "calendar_exceptions") return clave + "=eq." + encodeURIComponent(clave);
-    const partes = String(clave).split("|");
-    if (partes.length !== 3) return null;
-    return "and=(fecha_inicio.eq." + encodeURIComponent(partes[0]) +
-      ",concepto.eq." + encodeURIComponent(partes[1]) +
-      ",maquina.eq." + encodeURIComponent(partes[2]) + ")";
+  function condicionDeClave(def, clave) {
+    // MEDIDO 2026-09-30 en produccion: esto era
+    //   if (tabla !== "calendar_exceptions") return clave + "=eq." + clave;
+    // o sea que usaba el VALOR de la clave como nombre de COLUMNA. Con la clave 1905
+    // generaba el filtro 1905=eq.1905 y Postgres contestaba 42703, column
+    // ot_configurations.1905 does not exist. El DELETE de lo que la persona quito no habia
+    // funcionado para ninguna tabla salvo calendar_exceptions, que tenia un caso especial.
+    //
+    // Ahora el nombre de la columna sale de def.clave partido por comas, y el valor de la
+    // clave partido por "|". No hay ningun nombre de columna escrito a mano, que es lo que
+    // dejo pasar el bug: al cambiar la clave de un catalogo, un caso especial con el nombre
+    // viejo queda colgando sin que nada lo avise.
+    const columnas = String((def && def.clave) || "").split(",").map((c) => c.trim()).filter(Boolean);
+    if (!columnas.length) return null;
+    const valores = String(clave == null ? "" : clave).split("|");
+    if (valores.length !== columnas.length) return null;
+    if (columnas.length === 1) return columnas[0] + "=eq." + encodeURIComponent(valores[0]);
+    return "and=(" + columnas.map((c, i) => c + ".eq." + encodeURIComponent(valores[i])).join(",") + ")";
   }
 
-  /** La clave de la fila, tal como se guarda en `clavesLeidas`. */
+  /** La clave de la fila, tal como se guarda en las claves que se leyeron al arrancar. */
   function claveDeFila(def, fila) {
-    if (def.clave === "fecha_inicio,concepto,maquina") {
-      return [texto(fila.fecha_inicio), texto(fila.concepto), texto(fila.maquina)].join("|");
-    }
-    return texto(fila[def.clave]);
+    // MEDIDO 2026-09-30: esto comparaba contra "fecha_inicio,concepto,maquina", la clave
+    // VIEJA de calendar_exceptions. Al cambiarla a "fecha,concepto,maquina" (la del indice
+    // real de la base, MEDIDO con un INSERT de prueba) el caso especial dejo de aplicar y la
+    // tabla cayo a fila["fecha,concepto,maquina"], que es undefined: sus claves salian
+    // vacias y sus DELETES salian como clave natural ilegible.
+    //
+    // Ahora sale de def.clave partido por comas, igual que condicionDeClave.
+    const columnas = String((def && def.clave) || "").split(",").map((c) => c.trim()).filter(Boolean);
+    if (!columnas.length) return "";
+    if (columnas.length === 1) return texto(fila[columnas[0]]);
+    const partes = columnas.map((c) => texto(fila[c]));
+    // Una clave compuesta con alguna parte vacia NO es una clave: es una fila que el
+    // navegador no ha terminado de llenar. Se devuelve cadena vacia para que la fila no
+    // entre en las claves y por lo tanto no se pueda borrar por una condicion a medias, que
+    // seria peor que no borrarla.
+    if (partes.some((p) => p === "")) return "";
+    return partes.join("|");
   }
 
   /**
@@ -826,7 +850,7 @@
       let borradas = 0;
       let error = null;
       for (const clave of fuera) {
-        const cond = condicionDeClave(tabla, clave);
+        const cond = condicionDeClave(def, clave);
         if (!cond) { error = "clave natural ilegible: " + recorte(clave, 60); continue; }
         try {
           await pedir(ctx.token, "DELETE", tabla, { condicion: cond });
@@ -837,10 +861,18 @@
         }
       }
       const previo = informe.tablas[tabla];
+      // MEDIDO 2026-09-30: esto era un solo campo, `error: error || previo.error`, que
+      // mezclaba el fallo del POST con el del DELETE. Con un 42P01 del POST tapado, el 42703
+      // del DELETE no se veia. Dos escrituras, un campo: el toast senalaba al sistema
+      // equivocado. Ahora los dos van por separado y el de arriba sigue siendo el primero que
+      // fallo, para que el toast no cambie de lo que ya se acostumbro la gente.
       informe.tablas[tabla] = {
         insertadas: previo.insertadas,
         borradas: borradas,
         error: error || previo.error || null,
+        errorPost: previo.error || null,
+        errorDelete: error || null,
+        paso: error ? "borrado de lo que quitaste" : (previo.error ? "subida de lo que hay" : null),
       };
     }
 

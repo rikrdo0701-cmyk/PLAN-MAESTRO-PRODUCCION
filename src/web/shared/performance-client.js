@@ -827,6 +827,25 @@
       const selectedDetailOt = state.selectedDetailOt;
       const selectedOperationId = state.selectedOperationId;
       let snapshotsRequest = null;
+      // LA REVISION, SOLA Y PRIMERO. MEDIDO 2026-09-30 en produccion: la pagina estaba en
+      // revision 22 y la base en 2, y NINGUN guardado pasaba (CONFLICT_REVISION para
+      // siempre). El 22 no venia de app_state: era residuo de localStorage de la era de las
+      // Hojas, y se conservaba porque el arranque tomaba la revision del MISMO payload que
+      // los catalogos. Como readCatalogs() lee del orden de 39 tablas y algunas dan 404, un
+      // fallo de catalogo se llevaba por delante la revision y dejaba la pagina con un numero
+      // que nadie habia verificado. app_state es una fila y una columna: se lee aparte, con
+      // su propio try. Si esa lectura falla, el arranque sigue como estaba; si funciona, la
+      // revision es la de la base aunque los catalogos fallen despues.
+      try {
+        const revisionRemota = await PPSupabaseBridgeReplacement.getAppStateRevision();
+        const revisionDeLaBase = Number((revisionRemota && revisionRemota.revision) || 0);
+        if (revisionDeLaBase > 0) {
+          state.revision = revisionDeLaBase;
+          if (revisionRemota && revisionRemota.savedAt) state.savedAt = revisionRemota.savedAt;
+        }
+      } catch (error) {
+        console.warn("No se pudo leer la revision de app_state; se sigue con la de la pagina:", error);
+      }
       try {
         // MEDIDO 2026-09-30 en produccion: esto era `await root.PPAppsScriptBridge.ensureReady()`,
         // que monta un iframe oculto contra el web app de Apps Script. Con el puente
