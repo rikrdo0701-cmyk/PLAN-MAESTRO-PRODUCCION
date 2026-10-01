@@ -1019,10 +1019,25 @@
         // un test que mide el largo de los avisos del escritor.
         //
         // EL CORTO DICE QUE SE GUARDARON DOS Y QUE NO SE GUARDAN OTRAS DOS. El por que de
-        // cada una esta arriba, en los comments de los catalogos: a capabilities le faltan
-        // dos columnas a la pagina (ct y operacion, y el lector no las trae por capacidad, asi
-        // que escribirla las mandaria vacias en 76 filas), y operation_catalog es el listado
-        // de operaciones DE NETSUITE, que si se escribiera pisaria el ERP con lo local.
+        // cada una esta arriba, en los comments de los catalogos.
+        //
+        // MEDIDO 2026-10-01, CORRECCION DE UN MOTIVO QUE ESTABA MAL. Este texto decia que
+        // "a capabilities le faltan dos columnas a la pagina (ct y operacion, y el lector no
+        // las trae por capacidad, asi que escribirla las mandaria vacias en 76 filas)". Es
+        // FALSO: mapCapabilities (supabase-reader.js) SI lee las dos columnas de la tabla.
+        // El motivo real es otro y es mas grave: PP_buildState_ (02-storage.js:480-493), que
+        // es el CONTRATO del estado, no guarda el CT por capacidad. Solo lo mete en una lista
+        // plana `state.cts` (sin decir a que clave pertenece) y guarda OPERACION como `label`
+        // DENTRO de customCapabilities, y solo cuando custom es true. O sea que la
+        // associacion clave -> ct se DESTRUYE al leer: despues de un viaje de ida y vuelta no
+        // hay forma de saber que CT le tocaba a cada capacidad, ni aunque el lector trajera la
+        // columna. Escribirla exigiria 76 filas a las que se les pondria un CT equivocado, que
+        // es peor que no escribirla: el plan asignaria maquinas por una capacidad ajena.
+        // Para cerrarlo habria que cambiar el CONTRATO del estado (guardar ct y operacion por
+        // clave) y todos los que lo consumen, no solo el escritor.
+        //
+        // Y operation_catalog es el listado de operaciones DE NETSUITE: si la pagina lo
+        // escribiera, pisaria el ERP con lo local.
         "Matriz: se guardaron operators y matrix. NO capabilities ni operation_catalog (de NetSuite)."
       );
     }

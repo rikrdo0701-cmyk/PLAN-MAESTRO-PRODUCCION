@@ -325,10 +325,20 @@ function PP_ingesta_(forzado) {
           // Si Drive no esta configurado o no se pudo leer la carpeta, esto dice 0 y POR QUE, en
           // vez de dejar que el 0 se vea solo en la pantalla. La foto no puede tumbar la ingesta:
           // 199 filas de OTs validas valen mas que su foto.
+          //
+          // MEDIDO 2026-10-01: "0 con foto" era una sola linea para TRES causas que piden tres
+          // acciones distintas, y con esa linea no se podia saber cual era. Ahora el por que se
+          // arma con los conteos del catalogo, que son lo que las separa:
+          //   - no hay `carpeta`  -> falta la Script Property PHOTO_FOLDER_ID.
+          //   - claves == 0       -> la carpeta no devolvio archivos: id equivocado, vacia, o sin
+          //                          permiso para esta cuenta de servicio.
+          //   - claves > 0, 0 con  -> el archivo NO se llama como el articulo. Van 3 nombres
+          //                          reales de archivo para compararlos sin abrir Drive.
           log.push('fotos: ' + fotos.conFoto + ' de ' + filas.length + ' con foto de Drive'
-            + (fotos.carpeta ? '' : ' (PHOTO_FOLDER_ID NO esta configurado)')
-            + (fotos.conFoto ? '' : ' -- la carpeta de Drive no dio ninguna foto'));
-          console.log('fotos: ' + fotos.conFoto + '/' + filas.length + ' (carpeta=' + fotos.carpeta + ')');
+            + PP_photoMotivoCero_(fotos));
+          console.log('fotos: ' + fotos.conFoto + '/' + filas.length
+            + ' (carpeta=' + fotos.carpeta + ' claves=' + fotos.claves
+            + ' archivos=' + fotos.archivos + ' carpetas=' + fotos.carpetas + ')');
         } catch (error) {
           log.push('fotos: no se pudieron pegar (' + String(error && error.message || error).slice(0, 120) + ')');
           console.log('fotos: ERROR ' + String(error && error.message || error));
