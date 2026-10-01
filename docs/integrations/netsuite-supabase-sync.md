@@ -383,3 +383,81 @@ el 2026-09-29) y la 271; inventario baja de ~2 400 a ~1 933 pares. Resultado ver
 exactos del RESTlet: 208 OTs (y 208 para operaciones y materiales), 0 restos de la planta 2. La
 ubicación NO se guarda en Supabase (sin columna): el filtro vive solo en el SQL del RESTlet.
 `items`, `machines` y `sales_orders` no se tocan (no están atados a la OT). RULE-SUP-013.
+
+## 10. Pedir una corrida: el activador y `doPost` (2026-09-30)
+
+Hasta el 2026-09-30 la única forma de que corriera la ingesta era el activador programado
+(Time-driven, cada 15 min, lun-vie 7:00-17:00). Un activador no se puede llamar por HTTP, así que
+la página no tenía ninguna forma de pedir una corrida: los botones **Sincronizar** y
+**Sincronizar OTs** releían Supabase y nada más. Un botón llamado Sincronizar que no sincroniza es
+peor que no tenerlo, porque releer Supabase *funciona* y el botón dice que sí.
+
+### La puerta
+
+`doPost(e)` en `src/server/19-appscript-ingesta-supabase.js`. Antes de existir, la URL del web app
+respondía `200` con `No se encontró la función de la secuencia de comandos: doPost` (ver
+`docs/APPS_SCRIPT_DEPLOYMENT_Y_BYPASS.md`, sección 8).
+
+```
+POST {web app}/exec
+Content-Type: text/plain;charset=utf-8
+
+{"accion":"ingesta","forzado":true}
+```
+
+- `text/plain` y **no** `application/json`: con `application/json` el navegador manda un preflight
+  OPTIONS que Apps Script no contesta y el fetch muere sin error legible. **RULE-SUP-035.**
+- El veredicto va en el JSON del cuerpo y **nunca** en `r.status`: un web app en `/exec` responde
+  `200` siempre. **RULE-SUP-034.**
+- `forzado` salta el filtro de horario. Antes era un `return` temprano *sin nada dentro*, o sea que
+  no se podía saltar: a las 20:00 el botón habría dicho «sincronizado» con las OTs viejas en
+  pantalla. El activador sigue pasando `forzado = false`.
+- `LockService` hace que dos clics seguidos no sean dos llamadas al RESTlet; la segunda recibe
+  `{ ok:false, motivo:"ocupada" }`.
+
+### Quién puede dispararla
+
+Solo quien lo nombra. `syncBacklogWorkOrders(options)` y `syncNetSuiteTwoPhase(options)` no
+disparan la ingesta salvo que el llamador escriba `{ dispararIngesta: true }`, y la comparación es
+`=== true` para que no se pueda heredar por error. **RULE-SUP-033.**
+
+Medido por qué el omisión es *no* disparar: `ensureNetSuiteWorkOrdersFresh`, la comprobación
+automática que corre antes de generar o publicar el plan cuando las OTs tienen más de 15 minutos,
+llama a `syncBacklogWorkOrders`. Con el omisión en `true`, **generar el plan gastaba una llamada al
+RESTlet y siete espejos cada 15 minutos, sin que nadie pulsara nada**. Releer es el fallo seguro.
+
+### Tres desenlaces, porque la ingesta puede fallar a medias
+
+`ingesta()` recorre las siete tablas con `try/catch` por tabla y sigue, así que una corrida puede
+escribir cinco y fallar en dos. **RULE-SUP-036.**
+
+| Caso | Qué hace el cliente |
+|---|---|
+| sin éxito | no sigue leyendo; el aviso nombra el motivo |
+| fallo a medias | **sigue leyendo** (las tablas escritas están más nuevas) y **no** dice «sincronizado»; el toast lleva la cuenta y el detalle por tabla va al panel de alertas |
+| sin veredicto | error de canal; `dispararIngesta` ya había lanzado |
+
+Un «sincronizado» en el toast significa que las siete tablas se escribieron. Para «¿estos DATOS son
+actuales?» la única marca que sirve es el `synced_at` global de `app_state`: con «última escritura»,
+una tabla donde la ingesta solo cambió una fila se ve fresca aunque las otras 2 110 sigan viejas.
+
+### El botón no escribe
+
+La página no habla con NetSuite (RULE-SUP-030) y sigue sin hacerlo. El escritor de las siete tablas
+sigue siendo **uno solo**, el RESTlet. Lo que el botón hace es *pedir que corra* y después releer de
+Supabase.
+
+### Verificación sin gastar una llamada
+
+Un POST con una acción desconocida prueba que `doPost` está desplegado sin sincronizar nada,
+porque el servidor contesta `accion_desconocida` antes de tocar el cerrojo o NetSuite. MEDIDO
+2026-09-30 contra el despliegue `AKfycbzom44…B5Q @483`:
+
+```text
+r.status: 200  (siempre 200 en /exec: no dice nada)
+content-type: application/json; charset=utf-8
+{"ok":false,"ejecutada":false,"motivo":"accion_desconocida", ...}
+VEREDICTO: doPost ESTA desplegado y leyendo el cuerpo
+```
+
+Guards: `tests/disparar-ingesta.test.mjs` (11).

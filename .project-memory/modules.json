@@ -124,9 +124,11 @@
         "src/server/17-inspection-drawing-service.js",
         "src/server/18-planning-work-order-service.js",
         "src/web/bridge/Bridge.html",
-        "docs/superpowers/plans/2026-08-29-planner-generation-5min.md"
+        "docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
+        "src/server/19-appscript-ingesta-supabase.js",
+        "src/web/shared/apps-script-ingesta-trigger.js"
       ],
-      "purpose": "Aplicación: backend Apps Script (19 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md. El plan docs/superpowers/plans/2026-08-29-planner-generation-5min.md documenta una propuesta por fases para reducir schedulePlan a ~5 min sin degradar calidad, con baseline dry-run y validaciones. El arranque del frontend se controla desde shared/performance-client.js (boot real) + parches de scripts/build-appscript.mjs; ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md. 18-planning-work-order-service.js expone getPlanningWorkOrderDataBatch(ots[]): batch endpoint que resuelve IDs y operaciones de N OTs en 2 consultas SuiteQL + 1 fetchAll al restlet 2244, reduciendo N llamadas google.script.run a 1. Bridge.html lo registra en ALLOWED_METHODS. ensurePlanningDataLoaded (app.js) lo usa cuando refreshOts.length > 1 con fallback a llamadas individuales.",
+      "purpose": "Aplicación: backend Apps Script (20 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md. El plan docs/superpowers/plans/2026-08-29-planner-generation-5min.md documenta una propuesta por fases para reducir schedulePlan a ~5 min sin degradar calidad, con baseline dry-run y validaciones. El arranque del frontend se controla desde shared/performance-client.js (boot real) + parches de scripts/build-appscript.mjs; ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md. 18-planning-work-order-service.js expone getPlanningWorkOrderDataBatch(ots[]): batch endpoint que resuelve IDs y operaciones de N OTs en 2 consultas SuiteQL + 1 fetchAll al restlet 2244, reduciendo N llamadas google.script.run a 1. Bridge.html lo registra en ALLOWED_METHODS. ensurePlanningDataLoaded (app.js) lo usa cuando refreshOts.length > 1 con fallback a llamadas individuales. LA INGESTA A MANO, MEDIDO 2026-09-30: 19-appscript-ingesta-supabase.js tiene doPost(e), que es la UNICA forma de pedir una corrida de ingesta desde la pagina; antes solo existia ingesta(), que es el activador programado y no se puede llamar por HTTP. doPost devuelve el veredicto en el JSON del cuerpo y NO en el status, porque un web app en /exec responde 200 SIEMPRE (RULE-SUP-034), y usa LockService para que dos clics no sean dos llamadas al RESTlet. Del lado del cliente, web/shared/apps-script-ingesta-trigger.js hace el POST: va como text/plain porque application/json dispara un preflight que Apps Script no contesta (RULE-SUP-035), y decide seguir o no segun tres desenlaces porque la ingesta puede escribir cinco de sus siete tablas y fallar en dos (RULE-SUP-036). Quien dispara la ingesta tiene que NOMBRARLO (RULE-SUP-033): la comprobacion automatica que corre antes de generar el plan relee Supabase y no gasta una llamada al RESTlet.",
       "rules": [
         "RULE-OT-006",
         "RULE-OT-007",
@@ -157,7 +159,11 @@
         "RULE-BAL-013",
         "RULE-BAL-014",
         "RULE-PUB-001",
-        "RULE-REP-004"
+        "RULE-REP-004",
+        "RULE-SUP-033",
+        "RULE-SUP-034",
+        "RULE-SUP-035",
+        "RULE-SUP-036"
       ],
       "data_sources": [
         "SHEET-CONFIG",
@@ -220,8 +226,8 @@
       "purpose": "Suite de pruebas node --test (875 pruebas) que cubre motor de planeación, workflow, storage, catálogo NetSuite, matrix, rendimiento, inspección y build. La optimización del motor a ~5 min debe agregar/regresar pruebas descritas en docs/superpowers/plans/2026-08-29-planner-generation-5min.md: keep-best-on-timeout, estrategias acotadas, caches, Top 2-3 con fallback, busy intervals y local search. tests/restlet-supabase-sync.test.mjs (30, nuevo) cubre la ingesta NetSuite -> Supabase con un harness AMD que inyecta N/query, N/https, N/runtime, N/log y N/record falsos: verifica QUE SE ESCRIBE (URL, metodo, cabeceras, Prefer, cuerpo) sin tocar la red. Mapeo de las 7 tablas, cadena de cant_ensamblada desde record:built (y que con el record disponible NO se consulten transaction.built y compañía, que en esta cuenta son un 400), dedupe, guarda de revision, choque reportado sin pisar, degradacion a upsert declarada, que ninguna columna interna viaje en el cuerpo, que la service_role no se imprima, que ninguna fecha salga en un formato que Postgres no acepte (dd/MM/aaaa real, incluido el caso dia<=12 que antes se guardaba corrida), que el SQL no lleve clausulas de paginacion, que NINGUN SQL lleve un '//' dentro del texto (SuiteQL responde 400 Failed to parse SQL), que el nombre del centro de operaciones salga de BUILTIN.DF(mot.manufacturingworkcenter) y NO de un JOIN a la tabla manufacturingworkcenter (que no existe en esta cuenta: 400 Tipo de busqueda no valida), que el CT sea el id interno del centro, que los cuatro estados reales de mot.status (NOTSTART, PROGRESS, COMPLETE, CLOSED) se traduzcan y ninguno se escriba crudo, y que todo SQL use alias que existen en su FROM/JOIN. Los fixtures usan el formato REAL de SuiteQL (fechas dd/MM/aaaa, centros '10OTD : DOBLEZ DE TUBERIA' con id 5459, estado PROGRESS), no el que se asumia.",
       "rules": [],
       "data_sources": [],
-      "updated_at": "2026-09-28T00:00:00-06:00"
+      "updated_at": "2026-09-30T00:00:00-06:00"
     }
   ],
-  "updated_at": "2026-09-28T00:00:00-06:00"
+  "updated_at": "2026-09-30T00:00:00-06:00"
 }

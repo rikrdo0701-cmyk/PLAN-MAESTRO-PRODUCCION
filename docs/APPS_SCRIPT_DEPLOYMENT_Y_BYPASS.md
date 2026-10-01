@@ -346,6 +346,45 @@ Corrección:
 
 - Editar la implementación existente y seleccionar `Nueva versión`.
 
+### El deployment no tiene `doPost`: responde 200 y es HTML
+
+Este caso es el que casi se confunde con un fallo de NetSuite, así que va aparte.
+
+Síntoma medido el 2026-09-30:
+
+```text
+r.status: 200
+content-type: text/html
+No se encontró la función de la secuencia de comandos: doPost
+```
+
+Causa: `clasp push` subió el archivo pero la implementación web sigue en la versión anterior.
+**El status no dice nada**: un web app en `/exec` responde `200` siempre, tenga o no la función, y
+por eso un despliegue viejo no se puede distinguir por el código HTTP.
+
+Consecuencia práctica: si se reporta como «falló la sincronización», se manda a revisar NetSuite
+cuando el problema es que hay que desplegar. `src/web/shared/apps-script-ingesta-trigger.js` tiene
+`esFaltaDeDoPost()` y su propio mensaje por esto.
+
+Cómo comprobarlo sin gastar una llamada al RESTlet: un POST con una acción desconocida. El
+servidor contesta `{"ok":false,"motivo":"accion_desconocida"}` **antes** de tocar el cerrojo o
+NetSuite, así que prueba que `doPost` existe sin sincronizar nada:
+
+```js
+await fetch(URL_EXEC, {
+  method: "POST",
+  // text/plain, NO application/json: con application/json el navegador manda un preflight
+  // que Apps Script no contesta y el fetch muere sin error legible (RULE-SUP-035).
+  headers: { "Content-Type": "text/plain;charset=utf-8" },
+  body: JSON.stringify({ accion: "prueba-de-existencia" }),
+});
+```
+
+Y el orden en que hay que leer la respuesta (RULE-SUP-034): si el cuerpo es JSON, el veredicto es
+`json.ok` y el motivo está en `json.motivo`; si es HTML con `doPost`, es un deployment viejo;
+cualquier otra cosa es un error de canal y hay que mostrar el texto crudo, porque un error sin
+texto no se puede diagnosticar.
+
 ### Bridge no disponible
 
 Síntomas posibles:
