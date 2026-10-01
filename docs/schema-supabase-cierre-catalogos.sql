@@ -266,12 +266,22 @@ comment on table public.machine_planning_overrides is
 comment on column public.machine_planning_overrides.machine_nombre is
   'Nombre de la maquina, el mismo texto que machines.nombre y que la hoja MAQUINAS guarda en ID. Se compara normalizado (trim + upper) porque el state normaliza a mayusculas.';
 
--- RLS: igual que las demas, SOLO lectura para anon. Quien escribe es Apps Script con la
--- service role key, que se salta RLS. A `anon` no se le da escritura ni aqui ni en
--- ninguna otra tabla (RULE-SUP-015): la clave publicable va en el bundle publico de Pages.
+-- RLS: igual que las demas, pero SOLO para quien entro con correo. Quien escribe es Apps Script
+-- con la service role key, que se salta RLS. A `anon` no se le da escritura ni aqui ni en ninguna
+-- otra tabla (RULE-SUP-015), y desde el 2026-09-30 tampoco LECTURA: la pagina exige sesion
+-- (schema-supabase-login-correo.sql).
+--
+-- MEDIDO 2026-10-01: esta linea decia `create policy "lectura_web" ... to anon`, que es lo que
+-- hacia el DDL de login. Los DDL se pisan: este se aplico el 2026-09-30, DESPUES del de login, y
+-- le devolvio a anon la lectura de la tabla. MEDIDO con la publicable y sin sesion: esta tabla
+-- devolvia sus 8 filas y las otras 24 devolvian 0. RLS si seguia habilitado, o sea que solo se
+-- abrio LEER.(drop policy de los DOS nombres antes del create, igual que schema-supabase-plan.sql:
+-- si solo se borra el que va a crear, reaplicar este archivo tras el de login deja las dos
+-- politicas y gana la que se creo despues.)
 alter table public.machine_planning_overrides enable row level security;
 drop policy if exists lectura_web on public.machine_planning_overrides;
-create policy "lectura_web" on public.machine_planning_overrides for select to anon using (true);
+drop policy if exists lectura_app on public.machine_planning_overrides;
+create policy "lectura_app" on public.machine_planning_overrides for select to authenticated using (true);
 
 -- -----------------------------------------------------------------------------
 -- 7. El espejo: admision de las tablas de catalogo en la whitelist de ingesta_mirror

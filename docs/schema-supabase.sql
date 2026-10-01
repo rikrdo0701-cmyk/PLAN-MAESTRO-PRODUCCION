@@ -355,7 +355,15 @@ begin
   ]
   loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('create policy "lectura_web" on public.%I for select to anon using (true)', t);
+    -- MEDIDO 2026-10-01: aqui decia `create policy "lectura_web" ... to anon`, o sea que reaplicar
+    -- este archivoABLIA 23 tablas a cualquiera que abriera la pagina, sin avisar. Desde el
+    -- 2026-09-30 la lectura exige sesion (schema-supabase-login-correo.sql) y este bloque tiene que
+    -- dejar ese mismo estado, no el anterior. Se borran los DOS nombres antes del create: si solo
+    -- se borra el que va a crear, quedan las dos politicas y gana la ultima.
+    execute format('drop policy if exists lectura_web on public.%I', t);
+    execute format('drop policy if exists lectura_app on public.%I', t);
+    execute format(
+      'create policy lectura_app on public.%I for select to authenticated using (true)', t);
   end loop;
 end
 $$;

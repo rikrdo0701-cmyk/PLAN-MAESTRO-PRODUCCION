@@ -206,7 +206,14 @@ begin
   foreach t in array array['items','inventory','sales_orders']
   loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('create policy "lectura_web" on public.%I for select to anon using (true)', t);
+    -- MEDIDO 2026-10-01: aqui decia `create policy "lectura_web" ... to anon`, o sea ABRIR estas
+    -- tres tablas a cualquiera que abriera la pagina. El DDL de login (2026-09-30) las cerro para
+    -- `authenticated`, y como este archivo se aplico antes, el error solo se ve si se reaplica: por
+    -- eso este bloque tiene que dejar el mismo estado que el de login, no uno mas viejo.
+    execute format('drop policy if exists lectura_web on public.%I', t);
+    execute format('drop policy if exists lectura_app on public.%I', t);
+    execute format(
+      'create policy lectura_app on public.%I for select to authenticated using (true)', t);
   end loop;
 end
 $$;

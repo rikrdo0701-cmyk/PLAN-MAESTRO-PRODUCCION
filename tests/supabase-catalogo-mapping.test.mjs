@@ -237,7 +237,15 @@ test("el DDL de cierre crea el override con RLS de solo lectura y en la whitelis
   assert.match(ddlCierre, /excluida\s+boolean not null default false/);
   // Escritura para anon, ni aqui ni en ninguna otra tabla.
   assert.match(ddlCierre, /alter table public\.machine_planning_overrides enable row level security/);
-  assert.match(ddlCierre, /create policy "lectura_web" on public\.machine_planning_overrides for select to anon using \(true\)/);
+  // MEDIDO 2026-10-01: esta asercion FUJABA el defecto, no lo cazaba. Fijaba que el DDL de cierre
+// abriera machine_planning_overrides a anon, que es justo lo que el DDL de login habia cerrado, y
+// como se aplico despues, la abrio otra vez: medido con la publicable y sin sesion, esa tabla
+// devolvia sus 8 filas y las otras 24 devolvian 0. Un test que afirma el defecto lo convierte en
+// requisito, y despues ya no hay forma de que la suite avise.
+assert.match(ddlCierre, /create policy "lectura_app" on public\.machine_planning_overrides for select to authenticated using \(true\)/,
+  "machine_planning_overrides se lee solo con sesion, como las demas");
+assert.match(ddlCierre, /drop policy if exists lectura_app on public\.machine_planning_overrides/,
+  "y se borran los dos nombres: si no, reaplicar el DDL de cierre tras el de login deja las dos politicas");
   assert.equal(/for (insert|update|delete)/i.test(ddlCierre), false, "el DDL no debe abrir escritura a anon");
   // Y el RPC puede espejarla.
   assert.match(ddlCierre, /'ot_configurations','article_configurations',\s*\n\s*'machine_planning_overrides'\)/);

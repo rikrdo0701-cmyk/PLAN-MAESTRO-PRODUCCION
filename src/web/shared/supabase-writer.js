@@ -1253,6 +1253,11 @@
         comentario: texto(op.comentario),
         tiempo_fallback: numero(op.tiempoFallback, 0),
         kit_pending: booleano(op.kitPending, false),
+        // Columnas nuevas del plan: completado, tipo, precio, clasificacion
+        completado: booleano(op.completado, false),
+        tipo: texto(op.tipo),
+        precio: numero(op.precio, 0),
+        clasificacion: texto(op.clasificacion),
         revision: revision,
       });
     });
