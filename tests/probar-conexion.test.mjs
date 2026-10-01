@@ -72,6 +72,67 @@ test("el detector explica las DOS causas, no solo una", () => {
   assert.match(src, /6543/);
 });
 
+test("el cierre cuenta solo las formas que LLEGARON a verificar la contrasena", () => {
+  // MEDIDO 2026-09-30, primera corrida real. El cierre decia, con cuatro fallos de TRES tipos
+  // distintos: "el pooler acepto las cuatro y las cuatro dijeron password authentication
+  // failed, o sea que llego a donde se verifica". Eso era FALSO. Los cuatro errores fueron:
+  //
+  //   session     5432  user=postgres       -> (ENOIDENTIFIER) no tenant identifier provided
+  //   session     5432  user=postgres.<ref> -> password authentication failed
+  //   transaction 6543  user=postgres.<ref> -> password authentication failed
+  //   directa db.<ref>:5432                 -> getaddrinfo ENOTFOUND
+  //
+  // Solo DOS fueron de contrasena. Y el primero dice algo CONTRADICTORIO de lo que el cierre
+  // afirmaba: el pooler NO acepto esa forma porque exige el tenant en el usuario, lo cual
+  // confirma que la forma que usa apply-sql-supabase.mjs (postgres.<ref>) es la CORRECTA.
+  // Con el texto anterior, alguien iba a "arreglar" el formato del usuario, que ya estaba bien.
+  // Un diagnostico que afirma mas de lo que sabe hace perder el rato en el sistema equivocado.
+  assert.match(src, /no tenant identifier provided/i, "falta reconocer el error de tenant del pooler");
+  assert.match(src, /ENOTFOUND|ENODATA/, "falta reconocer que el host no resuelve");
+  assert.match(src, /clasificar\(/, "el cierre tiene que apoyarse en la clasificacion");
+  assert.match(src, /formasQueVerificaronLaContrasena/,
+    "el cierre tiene que contar solo las que llegaron a verificar");
+  assert.doesNotMatch(src, /acepto las cuatro|las cuatro dijeron/i,
+    "el cierre no puede afirmar que todas las formas Fallaron con el mismo error");
+  // Y las dos que no aplican tienen que estar marcadas como tales, no como fallos: contarlas
+  // como fallos de contrasena es justamente el error que se esta corrigiendo.
+  assert.match(src, /noAplica/, "las formas que no aplican tienen que marcarse aparte");  assert.match(src, /no dicen NADA de la contrasena|NADA de la contrasena/,
+    "tiene que decir que esas formas no dicen nada de la contrasena");
+
+  // Se afirma sobre el archivo entero, sin stripper de comentarios. Antes el comentario de
+  // arriba citaba el texto viejo de la conclusion y el test tenia que distinguir prosa de
+  // codigo para no fallar por algo bien escrito; el stripper no era confiable y hacia fallar
+  // el test por el comentario de la cabecera. Se reescribio el comentario en vez de arreglar
+  // el stripper: la explicacion sigue diciendo lo mismo, sin la cita literal.
+  assert.doesNotMatch(src, /acepto las cuatro|las cuatro dijeron|NINGUNA COMBINACION FUNCIONO/i,
+    "el cierre no puede afirmar que todas las formas fallaron con el mismo error");
+});
+
+test("el detector avisa de un largo IMPLAUSIBLE antes de hacer nada", () => {
+  // MEDIDO 2026-09-30: la contrasena que se probo tenia 127 caracteres. Un password de base de
+  // Supabase no llega a eso: lo que estaba en la variable era otra cosa. Notarlo es MAS BARATO
+  // que cuatro conexiones fallidas, y mas claro que el error que sale de ellas.
+  assert.match(src, /LARGO_IMPLAUSIBLE/);
+  assert.match(src, /IMPLAUSIBLE/);
+  assert.match(src, /access token|JWT/i, "hay que decir QUE es lo que suele estar en su lugar");
+  assert.match(src, /postgresql:\/\/postgres:/,
+    "hay que decir que se copia solo la parte de la contrasena, no la cadena entera");
+});
+
+test("cada declaracion se usa y cada uso se declara", () => {
+  // Un typo mio dejo el cierre entero sin funcionar: la declaracion era "llegaronAVerificar" y
+  // los usos "lleganAVerificar", y el script imprimia TODO el diagnostico y luego moria con
+  // ReferenceError en la CONCLUSION, que es justo la parte que el detector existe para dar. Un
+  // detector que muere al dar su veredicto es peor que uno que no existe, porque alguien lo
+  // corre, ve la mitad de la respuesta, y cree que ya sabe.
+  assert.doesNotMatch(src, /lleg\w+nAVerificar/,
+    "quedaron dos formas parecidas de un mismo identificador: declaracion y usos no coinciden");
+  const decl = src.match(/const formasQueVerificaronLaContrasena = /g) || [];
+  assert.equal(decl.length, 1, "se esperaba una sola declaracion de formasQueVerificaronLaContrasena");
+  const usos = (src.match(/formasQueVerificaronLaContrasena/g) || []).length;
+  assert.ok(usos >= 4, "la variable se declara y se usa en la conclusion y en su detalle");
+});
+
 test("el detector avisa que el certificado del pooler no valida", () => {
   // MEDIDO 2026-09-30: la aplicacion imprimio "self-signed certificate in certificate chain"
   // y reintento SIN verificar. El canal va cifrado; lo que no se verifica es quien esta al
