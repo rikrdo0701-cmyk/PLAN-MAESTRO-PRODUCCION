@@ -94,23 +94,54 @@
   }
 
   /**
-   * Antiguedad de lo leido, desde el created_at de la propia tabla. Sin esto, una
-   * tabla con datos de hace dos dias y una de hace un minuto se ven igual.
+   * Que columna de fecha usar para la antiguedad, y por que no es created_at.
+   *
+   * MEDIDO 2026-09-30: esto pedia created_at, y los catalogos se escriben con UPSERT, que no
+   * toca created_at. O sea que la antiguedad media el primer insert de la historia de la tabla
+   * y no la ultima escritura: operatorm se escribio hace minutos y su aviso seguia diciendo
+   * 70 h. El disparador de updated_at (public.tocar_updated_at) ya estaba puesto y probado, y
+   * no servia de nada porque nadie leia la columna. Un arreglo correcto al que no le falta el
+   * LECTOR es lo mas dificil de notar, porque el codigo que escribe esta bien.
+   *
+   * El orden: updated_at si existe, luego actualizado (machine_planning_overrides usaba esa),
+   * y created_at solo como ultimo recurso, para una tabla que no tenga ninguna de las dos.
+   */
+  const COLUMNA_DE_ANTIGUEDAD = ["updated_at", "actualizado", "created_at"];
+
+  /**
+   * Antiguedad de lo leido: cuando se escribio por ULTIMA VEZ. Sin esto, una tabla con
+   * datos de hace dos dias y una de hace un minuto se ven igual.
+   *
+   * Se prueban las columnas en orden y se usa la primera que la tabla tenga. No se puede
+   * hacer en una sola consulta porque no todas las tablas tienen las tres, y pedir una que no
+   * existe es un 400 que no dice nada.
    */
   async function antiguedadDe(url, clave, table, token) {
+    // Una peticion por columna, y se para en la primera que la tabla tenga. El
+    // `order=...&limit=1` con la columna correcta es lo que da la escritura mas reciente.
+    for (const columna of COLUMNA_DE_ANTIGUEDAD) {
+      const info = await antiguedadConColumna(url, clave, table, columna, token);
+      if (info) return info;
+    }
+    return null;
+  }
+
+  async function antiguedadConColumna(url, clave, table, columna, token) {
     const control = new AbortController();
     const t = root.setTimeout(() => control.abort(), TIMEOUT_POR_INTENTO_MS);
     try {
-      const r = await fetch(`${url}/rest/v1/${table}?select=created_at&order=created_at.desc&limit=1`, {
+      const r = await fetch(`${url}/rest/v1/${table}?select=${columna}&order=${columna}.desc&limit=1`, {
         // El token va con la clave, igual que en la lectura: la politica es
         // `select to authenticated` y sin el no se ve ni una fila.
         headers: { apikey: clave, Authorization: "Bearer " + (token || clave), "cache-control": "no-cache" },
         cache: "no-store",
         signal: control.signal,
       });
-      if (!r.ok) return null;
+      // Una columna que la tabla no tiene es un 400. No es un fallo: es que esta tabla usa
       const j = await r.json();
-      const iso = Array.isArray(j) && j[0] && j[0].created_at ? String(j[0].created_at) : "";
+      if (!r.ok) return null;
+      const fila = Array.isArray(j) ? j[0] : null;
+      const iso = fila && fila[columna] ? String(fila[columna]) : "";
       if (!iso) return null;
       const minutos = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
       return { minutos, iso };

@@ -452,3 +452,20 @@ create trigger trg_tocar_updated_at before update on public.ot_configurations
 drop trigger if exists trg_tocar_updated_at on public.article_configurations;
 create trigger trg_tocar_updated_at before update on public.article_configurations
   for each row execute function public.tocar_updated_at();
+
+-- machine_planning_overrides. MEDIDO 2026-09-30, APLICADO y verificado con una escritura
+-- real: updated_at se movio y actualizado NO. Es la unica de las nueve que no tenia la
+-- columna, y por eso su aviso de antiguedad no podia funcionar. Se le da la misma regla
+-- que las otras ocho en vez de un disparador propio sobre actualizado: actualizado solo la
+-- mueve quien la mande en el payload, y el UPSERT de la pagina no la manda, o sea que con
+-- actualizado la tabla se veria vieja siempre que solo la escribiera la pagina. Con el
+-- disparador se mueven los dos escritores.
+alter table public.machine_planning_overrides
+  add column if not exists updated_at timestamptz not null default now();
+
+comment on column public.machine_planning_overrides.updated_at is
+  'Ultima escritura, puesta por el disparador trg_tocar_updated_at. Se anade ademas de actualizado porque un UPSERT no mueve actualizado si el escritor no lo manda, y el aviso de antiguedad lee esta.';
+
+drop trigger if exists trg_tocar_updated_at on public.machine_planning_overrides;
+create trigger trg_tocar_updated_at before update on public.machine_planning_overrides
+  for each row execute function public.tocar_updated_at();

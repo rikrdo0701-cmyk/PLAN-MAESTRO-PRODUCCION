@@ -22,20 +22,20 @@ test("el DDL declara la funcion que pone updated_at, y el cuerpo $$ esta cerrado
     "la marca tiene que ponerla la base con now(), no el navegador");
 });
 
-test("el disparador esta en las ocho tablas que tienen updated_at, y en esas", () => {
-  // MEDIDO 2026-09-30: 8 de 9. machine_planning_overrides NO tiene updated_at, tiene
-  // actualizado, y por eso queda FUERA. Y queda fuera a proposito, no en silencio: su aviso
-  // de antiguedad tampoco funciona, y eso es un dato que la persona tiene que ver.
+test("el disparador esta en las nueve tablas de catalogo", () => {
+  // MEDIDO 2026-09-30. Eran 8, porque machine_planning_overrides no tenia updated_at: tenia
+  // actualizado. Se le anadio la columna y el disparador ese mismo dia, verificado con una
+  // escritura real (updated_at se movio, actualizado NO, y el UPDATE fue valor = valor).
+  //
+  // POR QUE updated_at Y NO UN DISPARADOR SOBRE actualizado. actualizado solo la mueve quien
+  // la mande en el payload, y el UPSERT de la pagina no la manda. O sea que con actualizado la
+  // tabla se veria vieja siempre que solo la escribiera la pagina, que es el caso normal. Con
+  // el disparador se mueven los dos escritores, que es lo que un aviso de antiguedad necesita.
   const disparadores = [...ddl.matchAll(/create trigger trg_tocar_updated_at before update on public\.(\w+)/g)].map((m) => m[1]);
-  const esperadas = ["article_configurations", "calendar_exceptions", "capabilities", "matrix",
-    "operators", "ot_configurations", "subcontracts", "tools"];
+  const esperadas = ["article_configurations", "calendar_exceptions", "capabilities",
+    "machine_planning_overrides", "matrix", "operators", "ot_configurations", "subcontracts", "tools"];
   assert.deepEqual(disparadores.slice().sort(), esperadas.slice().sort(),
-    "los disparadores tienen que ser exactamente las ocho tablas con updated_at");
-  assert.ok(!disparadores.includes("machine_planning_overrides"),
-    "machine_planning_overrides no tiene updated_at: no puede llevar este disparador");
-  // Y el motivo tiene que estar escrito, para que nadie lo "arregle" anadiendo uno que falla.
-  assert.match(ddl, /machine_planning_overrides NO entra/,
-    "el archivo tiene que decir por que esa tabla queda fuera");
+    "los disparadores tienen que ser exactamente las nueve tablas de catalogo, ni una mas ni una menos");
 });
 
 test("cada disparador se TIRA antes de crearse", () => {
