@@ -609,10 +609,22 @@
     },
     {
       tabla: "calendar_exceptions",
-      // Clave NATURAL COMPUESTA: (fecha_inicio, concepto, maquina). No hay una
-      // columna sola, y el id de la tabla es un uuid que el estado no trae. Es la
-      // misma clave que usa el espejo (16-supabase-catalogo.js:181).
-      clave: "fecha_inicio,concepto,maquina",
+      // MEDIDO 2026-09-30 contra la base real, con un INSERT de prueba dentro de un
+      // begin/rollback (no se escribio nada):
+      //   on_conflict (fecha_inicio, concepto, maquina) -> ERROR 42P01
+      //   on_conflict (fecha,        concepto, maquina) -> ok
+      // El indice que YA existe es calendar_exceptions_fecha_concepto_maquina_key, sobre
+      // (fecha, concepto, maquina). O sea que el problema nunca fue que faltara el indice,
+      // que es lo que suponia el DDL de este repo: es que la clave que mandaba aqui era la
+      // columna equivocada. `fecha` es NOT NULL y el espejo la pone igual a `fecha_inicio`,
+      // asi que los dos valores coinciden fila por fila y el indice sobre `fecha` deduplica
+      // exactamente lo mismo.
+      //
+      // Se corrige el ESCRITOR y no la base, al reves de lo que se penso. Agregar un indice
+      // sobre (fecha_inicio, concepto, maquina) habria dejado DOS indices unicos para lo
+      // mismo, y el segundo se llenaria de NULL, que en PostgreSQL no se consideran iguales
+      // entre si (NULL != NULL), o sea que no habria deduplicado nada.
+      clave: "fecha,concepto,maquina",
       mapear: function (state) {
         return (Array.isArray(state.calendarExceptions) ? state.calendarExceptions : []).map(function (item) {
           const inicio = texto(item.startDate);

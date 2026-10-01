@@ -157,47 +157,37 @@ create unique index subcontracts_codigo_uniq
   on public.subcontracts (codigo);
 
 -- -----------------------------------------------------------------------------
--- 3.b calendar_exceptions y ot_configurations: la clave que el escritor YA mandaba
--- -----------------------------------------------------------------------------
--- MEDIDO 2026-09-30, mismo lote: calendar_exceptions y ot_configurations tambien salieron
--- con 42P01, y aqui la causa es mas simple: NO HABIA indice unico. El escritor manda
--- on_conflict=fecha_inicio,concepto,maquina y on_conflict=ot desde antes, y en el
--- schema no habia nada que los respaldara. Sin una restriccion unica, un guardado de
--- catalogos NO es idempotente: cada guardado insertaria otra fila y la tabla creeria
--- sin que nadie lo pidiera.
+-- 3.b calendar_exceptions, ot_configurations, article_configurations y
+--     machine_planning_overrides: NO NECESITAN NADA. MEDIDO 2026-09-30 contra la base real,
+-- con un INSERT de prueba dentro de un begin/rollback (no se escribio nada):
 --
--- NULLS: en PostgreSQL un indice unico NO considera nulos iguales (NULL != NULL), asi que
--- un `maquina` vacio o nuloaria la unicidad. Por eso la columna se normaliza a '' al
--- escribir y el indice es sobre la columna, no sobre la expresion. El escritor ya manda
--- concepto como texto ("" si no hay) y maquina como texto; el '' de esta pieza es la red
--- para lo que venga de otro escritor.
+--   on_conflict (codigo)          en tools                -> ERROR (el indice es PARCIAL)
+--   on_conflict (codigo)          en subcontracts         -> ERROR (el indice es PARCIAL)
+--   on_conflict (fecha_inicio, concepto, maquina)          -> ERROR (columna equivocada)
+--   on_conflict (fecha,        concepto, maquina)          -> ok
+--   on_conflict (ot)            en ot_configurations      -> ok
+--   on_conflict (articulo)      en article_configurations -> ok
 --
--- ESTAS TABLAS NO SE BORRAN al guardar: son ANEXO, no espejo (ver el bloque de
--- guardarCatalogos). Por eso la clave natural tiene que ser de verdad unica: es lo unico
--- que impide que un guardado repetido duplique filas.
-create unique index if not exists calendar_exceptions_clave_uniq
-  on public.calendar_exceptions (fecha_inicio, concepto, maquina);
-
-create unique index if not exists ot_configurations_ot_uniq
-  on public.ot_configurations (ot);
-
--- 3.c article_configurations y machine_planning_overrides.
--- MEDIDO 2026-09-30: estas dos NO salieron en el 42P01 de produccion, pero al escribir el
--- test que amarra el on_conflict del escritor con los indices del DDL aparecieron: el
--- escritor manda on_conflict=articulo y on_conflict=machine_nombre desde antes, y en el
--- schema del repo no habia indice declarado para ninguna de las dos. O la base real los tiene
--- y el repo no lo sabe, o no los tiene y solo se salvan porque no hay filas que mandar.
--- Ninguna de las dos se puede dar por buena sin mirarla.
--- Son idempotentes: si el indice ya existe con otro nombre queda un segundo unico sobre las
--- mismas columnas, que es inocuo. Si HUBIERA filas duplicadas el create falla y lo dice, que
--- es lo que hace falta. La limpieza de duplicados NO se automatiza a proposito: borraria filas
--- sin que nadie lo pidiera, que es el PELIGRO MEDIDO que ya se sufrio con ingesta_mirror.
-create unique index if not exists article_configurations_articulo_uniq
-  on public.article_configurations (articulo);
-
-create unique index if not exists machine_planning_overrides_machine_uniq
-  on public.machine_planning_overrides (machine_nombre);
-
+-- Los cuatro indices de esas tablas YA EXISTEN y son COMPLETOS:
+--   calendar_exceptions_fecha_concepto_maquina_key  (fecha, concepto, maquina)
+--   ot_configurations_ot_key                          (ot)
+--   article_configurations_articulo_key               (articulo)
+--   machine_planning_overrides_machine_nombre_key     (machine_nombre)
+--
+-- La version anterior de este archivo declaraba los cuatro con create unique index, creyendo
+-- que faltaban. Eso habria dejado DOS indices unicos sobre las mismas columnas en cada
+-- tabla, que es ruido que no deduplica nada. Y en calendar_exceptions habria sido peor: el
+-- indice nuevo era sobre (fecha_inicio, concepto, maquina), con fecha_inicio NULLABLE, y en
+-- PostgreSQL los NULL no se consideran iguales entre si, o sea que NULL != NULL y el indice
+-- no Impone unicidad sobre las filas con fecha_inicio nula. Se habria hecho LOOKING correct
+-- sin deduplicar nada.
+--
+-- Y el problema de calendar_exceptions era del ESCRITOR, no de la base: mandaba
+-- on_conflict=(fecha_inicio,concepto,maquina) cuando el indice es sobre (fecha, concepto,
+-- maquina). Esta nota se queda porque el error de produccion (42P01) es el mismo para un
+-- indice parcial y para una columna equivocada, y esa ambiguedad es la que hizo perder dos
+-- rondas de diagnostico: el nombre del indice no dice si es parcial, y el mensaje de
+-- Postgres no dice cual columna no cuadra.
 comment on column public.tools.codigo is
   'ID de la hoja HERRAMENTALES. Distinto de id (uuid interno).';
 comment on column public.subcontracts.codigo is

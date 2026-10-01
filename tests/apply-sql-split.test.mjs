@@ -163,10 +163,14 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
   // 32 sentencias, todas SQL de verdad. La version que no entendia comentarios
   // daba 37: las 5 de mas eran texto de comentario que|reportaba como errores de
   // sintaxis, y habian escondido los errores de verdad del DDL.
-  // MEDIDO 2026-09-30: el conteo subio de 32 a 40 por las 8 sentencias que arreglan el 42P01
-  // de los catalogos: 2 update que desatascan el codigo vacio, 2 drop de los indices PARCIALES
-  // (que habia que tirar, porque con if not exists el create no los reemplaza) y 4 create
-  // unique index nuevos.
+  // MEDIDO 2026-09-30: el conteo fue 32 -> 40 -> 36, y el recorrido dice mas que
+  // el numero. Subio a 40 con las 8 sentencias del 42P01: 2 update que desatascan el codigo
+  // vacio, 2 drop de los indices PARCIALES (que habia que tirar, porque con if not exists el
+  // create no los reemplaza) y 4 create unique index. Y bajo a 36 al quitar esos 4 create,
+  // porque MEDIDO contra la base real los cuatro indices YA EXISTIAN y eran completos: se
+  //  habian creado a mano, fuera de estos archivos. Declararlos era meter un segundo indice
+  // unico sobre las mismas columnas, que no deduplica nada. El piso quedo en 36 con la lista
+  // de las 4 que SI tienen que estar.
   //
   // Y la cuenta EXACTA se cambia por un PISO. Un numero magico que hay que subir cada vez que
   // se agrega un CREATE INDEX es una trampa: la proxima vez que se agregue algo bien, alguien
@@ -174,9 +178,13 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
   // un texto de comentario no se cuente como sentencia, y eso lo dice la comprobacion de
   // arriba (cada fragmento tiene que empezar por una palabra de SQL). El piso, mas las ocho
   // sentencias que tienen que existir una por una, cubren el resto.
-  assert.ok(partes.length >= 40, `el DDL de cierre deberia tener al menos 40 sentencias y tiene ${partes.length}`);
+  assert.ok(partes.length >= 36, `el DDL de cierre deberia tener al menos 36 sentencias y tiene ${partes.length}`);
 
-  // Las ocho del arreglo del 42P01, una por una. Si alguien quita un drop pensando que
+  // Las SEIS del arreglo del 42P01, una por una. MEDIDO 2026-09-30 contra la base real: la
+  // lista decia ocho, y dos se quitaron porque sus indices YA EXISTEN y son completos
+  // (probado con un INSERT dentro de un begin/rollback). El bug de calendar_exceptions
+  // era del ESCRITOR, que mandaba fecha_inicio en vez de fecha.
+  // Si alguien quita un drop pensando que
   // sobra, el indice parcial se queda, el 42P01 vuelve, y el DDL del repo sigue mintiendo.
   const aplanado = partes.join("\n").replace(/\s+/g, " ");
   for (const trozo of [
@@ -186,8 +194,6 @@ test("el DDL de cierre se divide y cada fragmento empieza por una palabra de SQL
     "drop index if exists public.subcontracts_codigo_uniq",
     "create unique index tools_codigo_uniq on public.tools (codigo)",
     "create unique index subcontracts_codigo_uniq on public.subcontracts (codigo)",
-    "create unique index if not exists calendar_exceptions_clave_uniq",
-    "create unique index if not exists ot_configurations_ot_uniq",
   ]) {
     assert.ok(aplanado.includes(trozo), `falta la sentencia del arreglo del 42P01: ${trozo}`);
   }

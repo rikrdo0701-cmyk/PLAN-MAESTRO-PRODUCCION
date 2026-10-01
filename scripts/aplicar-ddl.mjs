@@ -95,6 +95,38 @@ async function sql(consulta) {
   return datos;
 }
 
+/**
+ * El divisor de sentencias de apply-sql-supabase.mjs, SIN ejecutar ese archivo.
+ *
+ * POR QUE NO SE HACE import. MEDIDO 2026-09-30: importarlo corrio el archivo entero, que
+ * conecta a la base con SUPABASE_DB_PASSWORD y sale con process.exit(1) si no la encuentra.
+ * O sea que abortaba este script antes de aplicar nada, y decia 'Falta SUPABASE_DB_PASSWORD'
+ * en un script que no la necesita: usa un access token.
+ *
+ * SE RECUERDA POR QUE SE USA EL MISMO DIVISOR Y NO UNO NUEVO: tiene que entender
+ * comentarios, literales y dollar-quoting. Un segundo divisor parecido seria un segundo juego
+ * de reglas que puede partir un cuerpo $ por la mitad, y el cuerpo de ingesta_mirror es
+ * exactamente eso. Uno solo, con sus 19 tests, usado por los dos scripts.
+ */
+function obtenerDivisor() {
+  const fuente = readFileSync(new URL("./apply-sql-supabase.mjs", import.meta.url), "utf8");
+  const desde = fuente.indexOf("export function dividir(");
+  if (desde < 0) throw new Error("no se encontro la funcion dividir en apply-sql-supabase.mjs");
+  const hasta = fuente.indexOf("\n  return partes;", desde);
+  if (hasta < 0) throw new Error("no se pudo localizar el final de dividir");
+  // MEDIDO 2026-09-30: el corte tiene que INCLUIR la llave de cierre. Con indexOf("\n}") como
+  // limite exclusivo, el cuerpo salia terminado en `return partes;` y new Function tiraba
+  // "Unexpected token ')'". Un error de sintaxis en un recorte de texto dice muy poco de donde
+  // viene, asi que el recorte se hace explicito y se comprueba con una asercion.
+  const corte = fuente.indexOf("\n}", hasta);
+  if (corte < 0) throw new Error("no se encontro la llave de cierre de dividir");
+  const cuerpo = fuente.slice(desde, corte + 2);
+  const limpio = cuerpo.replace("export function dividir", "function dividir");
+  if (!/^\s*function dividir[\s\S]*\}\s*$/.test(limpio)) {
+    throw new Error("el recorte de dividir no quedo balanceado; no se aplica nada");
+  }
+  return { dividir: new Function(limpio + "; return dividir;")() };
+}
 const caja = (t) => console.log(`\n=== ${t} ${"=".repeat(Math.max(0, 62 - t.length))}`);
 
 async function verificarAcceso() {
@@ -217,21 +249,7 @@ try {
   }
 
   caja("APLICANDO " + archivoDdl);
-  const { dividir } = await import("./apply-sql-supabase.mjs").catch(() => ({ dividir: null }));
-  if (!dividir) {
-    console.error("No se pudo reutilizar el divisor de apply-sql-supabase.mjs; se usa el DDL entero en una transaccion.");
-    const sqlTotal = readFileSync(archivoDdl, "utf8");
-    try {
-      const r = await sql(sqlTotal);
-      console.log("OK: el archivo completo se aplico en una sola transaccion.");
-      console.log(JSON.stringify(r).slice(0, 300));
-      process.exit(0);
-    } catch (error) {
-      console.error("FALLO: " + error.message);
-      process.exit(1);
-    }
-  }
-
+  const { dividir } = obtenerDivisor();
   const partes = dividir(readFileSync(archivoDdl, "utf8"));
   console.log(`${partes.length} sentencias\n`);
   let ok = 0;
