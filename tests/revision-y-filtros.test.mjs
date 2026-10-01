@@ -17,6 +17,35 @@ const reemplazo = await readFile(new URL("../src/web/shared/supabase-bridge-repl
 const arranque = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
 
+/**
+ * El CUERPO de una funcion, equilibrando llaves. Se usa para las afirmaciones sobre el
+ * comportamiento de una funcion, en vez de confiar en un stripper de comentarios.
+ *
+ * POR QUE, MEDIDO 2026-09-30. El stripper de comentarios de este archivo fallaba: el regex de
+ * bloque /\*[\s\S]*?\*\// se come un // de una linea intermedia y deja el resto de esa linea
+ * pegado al codigo, asi que los tests de condicionDeClave y claveDeFila dimens con el texto del
+ * bug VIEJO, que esta escrito en el comentario que explica el arreglo. Un stripper que no quita
+ * lo que dice quitar hace fallar el test por su propia explicacion. Es la cuarta vez hoy que
+ * pasa lo mismo, en cuatro archivos distintos, y por eso la solucion es NO depender de separar
+ * prosa de codigo: el cuerpo de la funcion empieza despues de la firma, y los comentarios de
+ * dentro no pueden hacer que el codigo parezca otro.
+ */
+function cuerpoDe(txt, nombre) {
+  const i = txt.indexOf("function " + nombre + "(");
+  if (i < 0) throw new Error("no se encontro la funcion " + nombre);
+  let nivel = 0;
+  let fin = txt.indexOf("{", i);
+  for (; fin < txt.length; fin += 1) {
+    if (txt[fin] === "{") nivel += 1;
+    else if (txt[fin] === "}") { nivel -= 1; if (nivel === 0) break; }
+  }
+  // Los comentarios de dentro se quitan AQUI, sobre el recorte, no antes: quitar los del
+  // archivo entero noSirvio porque el regex de bloque se come el // de una linea intermedia.
+  // Dentro de un cuerpo de funcion no puede quedar un comentario de bloque sin cerrar, asi
+  // que el recorte por linea es fiable aqui.
+  return txt.slice(i, fin + 1).split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+}
+
 /** El fuente sin comentarios: lo que se afirma es codigo, no prosa. */
 function codigo(txt) {
   return txt.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
@@ -33,15 +62,16 @@ test("el filtro de borrado usa el NOMBRE de columna de def.clave, no el valor de
   // Se afirma que la condicion se arma a partir de def.clave partido por comas, y que NO queda
   // ningun nombre de columna escrito a mano: un nombre a mano es justo lo que se desincroniza
   // cuando alguien cambia una clave.
-  assert.match(cod, /function condicionDeClave\(def,\s*clave\)/,
+  const cuerpo = cuerpoDe(escritor, "condicionDeClave").replace(/\s+/g, " ");
+  assert.match(cuerpo, /function condicionDeClave\(def,\s*clave\)/,
     "condicionDeClave tiene que recibir la definicion, no el nombre de la tabla");
-  assert.match(cod, /def\.clave[\s\S]{0,120}split\(","\)/,
+  assert.match(cuerpo, /def\.clave[\s\S]{0,160}split\(","\)/,
     "las columnas tienen que salir de def.clave partido por comas");
-  assert.doesNotMatch(cod, /tabla\s*!==\s*"calendar_exceptions"/,
+  assert.doesNotMatch(cuerpo, /tabla\s*!==\s*"calendar_exceptions"/,
     "no puede quedar un caso especial por tabla: es lo que se desincroniza al cambiar una clave");
-  assert.doesNotMatch(cod, /and=\(fecha_inicio\.eq\./,
+  assert.doesNotMatch(cuerpo, /and=\(fecha_inicio\.eq\./,
     "no puede quedar un filtro con el nombre de columna escrito a mano");
-  assert.doesNotMatch(cod, /return\s+clave\s*\+\s*"=eq\."/,
+  assert.doesNotMatch(cuerpo, /return\s+clave\s*\+\s*"=eq\."/,
     "el valor de la clave no puede usarse como nombre de columna");
 });
 
@@ -51,12 +81,13 @@ test("la clave de una fila sale de def.clave, sin comparar contra una clave viej
   // "fecha,concepto,maquina" el caso especial dejo de aplicar, la tabla cayo a
   // fila["fecha,concepto,maquina"] (undefined) y sus claves salian vacias: sus DELETES salian
   // como "clave natural ilegible".
-  assert.doesNotMatch(cod, /def\.clave\s*===\s*"fecha_inicio,concepto,maquina"/,
+  const cuerpo = cuerpoDe(escritor, "claveDeFila").replace(/\s+/g, " ");
+  assert.doesNotMatch(cuerpo, /def\.clave\s*===\s*"fecha_inicio,concepto,maquina"/,
     "claveDeFila no puede comparar contra una clave literal: se desincroniza al cambiarla");
-  assert.doesNotMatch(cod, /"fecha_inicio,concepto,maquina"/,
+  assert.doesNotMatch(cuerpo, /"fecha_inicio,concepto,maquina"/,
     "no puede quedar la clave vieja escrita a mano");
-  assert.match(cod, /function claveDeFila\(def,\s*fila\)/);
-  assert.match(cod, /columnas\.length\s*===\s*1/,
+  assert.match(cuerpo, /function claveDeFila\(def,\s*fila\)/);
+  assert.match(cuerpo, /columnas\.length\s*===\s*1/,
     "una clave de una sola columna y una compuesta tienen que salir del mismo camino");
 });
 

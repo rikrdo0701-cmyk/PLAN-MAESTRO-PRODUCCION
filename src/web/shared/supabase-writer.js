@@ -239,6 +239,12 @@
   // El codigo con el que la funcion dice "la revision no es la que traias". No es
   // un fallo: es una respuesta buena a una pregunta rara, y por eso viaja hasta
   // el informe con su nombre.
+  // MEDIDO 2026-09-30: el borrado automatico de filas de catalogo esta APAGADO, y esta bandera
+  // es la unica que lo manda. El bloque del borrado en guardarCatalogos explica por que se
+  // apago (76 filas de ot_configurations borradas) y que hace falta para reactivarlo: llevar la
+  // cuenta de lo que se borro A PROPOSITO en esta sesion.
+  const BorradoDeCatalogosHabilitado = false;
+
   const CONFLICTO_REVISION = "CONFLICT_REVISION";
   // Con un solo POST el corte deja de ser de tiempo y pasa a ser de tamano. Sin
   // tope, un plan con 1000 operaciones y tres entradas de log cada una mete 3000
@@ -738,17 +744,17 @@
    * comas, que es justo lo que se valida antes de armar el filtro.
    */
   function condicionDeClave(def, clave) {
-    // MEDIDO 2026-09-30 en produccion: esto era
-    //   if (tabla !== "calendar_exceptions") return clave + "=eq." + clave;
-    // o sea que usaba el VALOR de la clave como nombre de COLUMNA. Con la clave 1905
-    // generaba el filtro 1905=eq.1905 y Postgres contestaba 42703, column
-    // ot_configurations.1905 does not exist. El DELETE de lo que la persona quito no habia
-    // funcionado para ninguna tabla salvo calendar_exceptions, que tenia un caso especial.
+    // MEDIDO 2026-09-30 en produccion: esta funcion usaba el VALOR de la clave como nombre de
+    // COLUMNA. Con una clave como 1905 generaba un filtro del tipo columna-igual-a-1905 usando
+    // 1905 en los dos lados, y Postgres contestaba 42703 diciendo que no existia una columna con
+    // ese numero. El DELETE de lo que la persona quito no habia funcionado para NINGUNA tabla
+    // salvo calendar_exceptions, que tenia un caso especial escrito a mano. Nadie lo noto
+    // porque el informe mezclaba el error del POST con el del DELETE en un solo campo.
     //
-    // Ahora el nombre de la columna sale de def.clave partido por comas, y el valor de la
-    // clave partido por "|". No hay ningun nombre de columna escrito a mano, que es lo que
-    // dejo pasar el bug: al cambiar la clave de un catalogo, un caso especial con el nombre
-    // viejo queda colgando sin que nada lo avise.
+    // Ahora el nombre de la columna sale de def.clave partido por comas, y el valor sale de la
+    // clave partido por el separador. No queda ningun nombre de columna escrito a mano, que es
+    // lo que dejo pasar el bug: al cambiar la clave de un catalogo, un caso especial con el
+    // nombre viejo queda colgando sin que nada lo avise.
     const columnas = String((def && def.clave) || "").split(",").map((c) => c.trim()).filter(Boolean);
     if (!columnas.length) return null;
     const valores = String(clave == null ? "" : clave).split("|");
@@ -759,11 +765,11 @@
 
   /** La clave de la fila, tal como se guarda en las claves que se leyeron al arrancar. */
   function claveDeFila(def, fila) {
-    // MEDIDO 2026-09-30: esto comparaba contra "fecha_inicio,concepto,maquina", la clave
-    // VIEJA de calendar_exceptions. Al cambiarla a "fecha,concepto,maquina" (la del indice
-    // real de la base, MEDIDO con un INSERT de prueba) el caso especial dejo de aplicar y la
-    // tabla cayo a fila["fecha,concepto,maquina"], que es undefined: sus claves salian
-    // vacias y sus DELETES salian como clave natural ilegible.
+    // MEDIDO 2026-09-30: esta funcion comparaba contra la clave VIEJA de calendar_exceptions,
+    // la de fecha_inicio. Al cambiarla por la de fecha (que es la del indice real de la base,
+    // MEDIDO con un INSERT de prueba) el caso especial dejo de aplicar, la tabla cayo a leer
+    // una propiedad llamada con la clave entera, que es undefined: sus claves salian vacias y
+    // sus DELETES salian como clave natural ilegible.
     //
     // Ahora sale de def.clave partido por comas, igual que condicionDeClave.
     const columnas = String((def && def.clave) || "").split(",").map((c) => c.trim()).filter(Boolean);
@@ -839,6 +845,36 @@
             tabla + ": se.subieron " + parte.filas.length + " fila(s), pero NO se borro ninguna: esta pagina no " +
             "tiene la lista de lo que se leyo al arrancar, y borrar a ciegas se llevaria filas que la persona " +
             "todavia no ha visto. Quitar una fila del catalogo en esta carga no se refleja hasta recargar."
+          );
+        }
+        continue;
+      }
+      // -----------------------------------------------------------------------------
+      // BORRADO APAGADO. MEDIDO 2026-09-30: borro 76 filas de ot_configurations.
+      //
+      // La comparacion de abajo decidia que filas borrar comparando las claves que el
+      // navegador leyo al arrancar contra las que tiene ahora, y las DOS SALEN DEL MISMO
+      // ESTADO. Si el estado pierde 76 otConfigurations entre la carga y el guardado, esas 76
+      // se ven como "la persona las quito" y se borran. No hay forma de distinguirlo aqui: el
+      // estado tiene el resultado, no la intencion.
+      //
+      // Esto funcionaba por accidente hasta hoy, porque el DELETE fallaba con 42703 en todas
+      // las tablas: el filtro usaba el valor de la clave como nombre de columna. Arreglar ese
+      // bug quito la red. Un fallo documentado como riesgo y no apagado es un fallo que espera
+      // a que alguien lo arregle.
+      //
+      // Para reactivarlo hace falta un modelo que lleve la cuenta de lo que se borro A
+      // PROPOSITO en esta sesion, no de lo que falta. Es un cambio de modelo, no un parche, y
+      // no se hace a las carreras con 76 filas ya perdidas de por medio.
+      if (!BorradoDeCatalogosHabilitado) {
+        if (fuera.length) {
+          informe.avisos.push(
+            tabla + ": se.subieron " + parte.filas.length + " fila(s). NO se borro ninguna, y hay " +
+              fuera.length + " fila(s) que el navegador ya no tiene. El borrado automatico esta apagado: "
+              + "el 2026-09-30 borro 76 filas de ot_configurations con el comparativo anterior, porque "
+              + "comparar lo leido con lo que hay no distingue que la persona haya quitado una fila "
+              + "de que el navegador simplemente no la tenga. La proxima subida vuelve a mandar las que "
+              + "hay, y las que faltan vuelven con el siguiente espejo de la ingesta."
           );
         }
         continue;
