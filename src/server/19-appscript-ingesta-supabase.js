@@ -228,8 +228,31 @@ function PP_borraTriggerIngesta_() {
 // Punto de entrada
 // =============================================================================
 
+/**
+ * El punto de entrada del ACTIVADOR. NO lleva filtro de horario forzado: un disparo manual
+ * en este camino seria identico al de las 15 minutos.
+ */
 function ingesta() {
-  console.log('=== INGESTA START ===');
+  return PP_ingesta_(false);
+}
+
+/**
+ * El cuerpo de la ingesta. `forzado` salta el filtro de horario laboral.
+ *
+ * MEDIDO 2026-09-30: el filtro era un `return` sin nada, dentro de la funcion, y por eso no se
+ * podia saltar. La consecuencia seria: el boton Sincronizar de la pagina dispara la ingesta a
+ * las 20:00, ingesta() ve que no es hora laborable, `return` sin devolver nada, doPost responde
+ * 200 con un cuerpo vacio y la pagina se diria "sincronizado". O sea: un exito FALSO, con el
+ * toast mintiendo y las OTs viejas en pantalla sin que nada lo diga. Por eso el filtro es un
+ * parametro y no un return: la corrida manual va marcada como forzada y el log lo dice, y la
+ * corrida del activador sigue respetando el horario de siempre.
+ *
+ * MEDIDO 2026-09-30 (lo otro): el cuerpo de este return tambien era `undefined`, o sea que
+ * el activador no podia reportar nada de su propia corrida. Ahora devuelve un objeto con las
+ * filas por tabla y los errores, que es lo que la pagina necesita para no mentir.
+ */
+function PP_ingesta_(forzado) {
+  console.log('=== INGESTA START ===' + (forzado ? ' (FORZADA, desde la pagina)' : ''));
   const config = PP_config_();
   PP_verificaConfigIngesta_(config);
   console.log('Config OK. Account: ' + config.accountId);
@@ -238,9 +261,9 @@ function ingesta() {
   const dia = ahora.getDay();
   const hora = ahora.getHours();
   console.log('Hora: ' + ahora.toISOString() + ' (dia=' + dia + ', hora=' + hora + ')');
-  if (dia === 0 || dia === 6 || hora < 7 || hora >= 17) {
+  if (!forzado && (dia === 0 || dia === 6 || hora < 7 || hora >= 17)) {
     console.log('Fuera de horario laboral. Saliendo.');
-    return;
+    return { ok: true, ejecutada: false, motivo: 'fuera_de_horario', filas: {}, errores: [], log: [] };
   }
 
   // Una sola llamada al RESTlet unificado
@@ -252,6 +275,8 @@ function ingesta() {
 
   const acciones = respuesta.acciones;
   const log = [];
+  const filas = {};
+  const errores = [];
 
   // Mapeo de accion -> tabla, clave natural, y funcion de transformacion
   const TABLAS = {
@@ -271,7 +296,9 @@ function ingesta() {
     try {
       const accion = acciones[nombre];
       if (!accion || !accion.ok) {
-        log.push(nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 100));
+        const msg = nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 100);
+        log.push(msg);
+        errores.push(msg);
         console.log(nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 200));
         continue;
       }
@@ -290,13 +317,147 @@ function ingesta() {
       // nuevo en una sola transacción, para que no queden filas de corridas
       // anteriores ni ventanas con la tabla vacía.
       const r = PP_supabaseMirror_(def.tabla, filas, config);
+      filas[def.tabla] = r.escritas;
       log.push(nombre + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
       console.log(nombre + ': ' + r.escritas + ' escritas / ' + r.borradas + ' borradas (mirror atomico)');
     } catch (e) {
-      log.push(nombre + ': ERROR ' + String(e.message || e).slice(0, 100));
+      const msg = nombre + ': ERROR ' + String(e.message || e).slice(0, 100);
+      log.push(msg);
+      errores.push(msg);
       console.log(nombre + ': ERROR ' + String(e.message || e).slice(0, 200));
     }
   }
   console.log('Ingesta: ' + log.join(' | '));
   console.log('=== INGESTA END ===');
+  // ok:false si AL MENOS una tabla fallo. La corrida del ACTIVADOR tambien lo trae y no lo mira:
+  // antes escribia el error en el log y seguia, y eso se conserva. Lo que cambia es que quien
+  // la pidio (la pagina) ahora puede enterarse de una sincronizacion a medias en vez de leer
+  // "sincronizado" sobre una tabla que no se toco.
+  return { ok: errores.length === 0, ejecutada: true, filas: filas, errores: errores, log: log };
+}
+
+
+// =============================================================================
+// La puerta que la pagina usa para disparar la ingesta
+// =============================================================================
+
+/**
+ * doPost: la pagina dispara la ingesta por aqui. No existia antes de 2026-09-30, y MEDIDO el
+ * error que devolvia la URL del web app sin esta funcion:
+ *
+ *   "No se encontro la funcion de la secuencia de comandos: doPost"
+ *
+ * en una pagina HTML de Google, no en JSON. Ese es el caso que el cliente de la pagina tiene que
+ * reconocer aparte: si lo tratara como un error generico, diria "no se pudo sincronizar" y
+ * apuntaria a NetSuite, cuando el problema es que el proyecto de Apps Script esta en la version
+ * de antes. Por eso el mensaje esta aqui y no en el cliente.
+ *
+ * QUE NO HACE ESTA PUERTA, Y POR QUE. No lee nada de NetSuite para la pagina y no devuelve
+ * datos: la ingesta escribe en Supabase y la pagina lee de Supabase (RULE-SUP-029). Esta puerta
+ * solo ORDENA la corrida. Lo que la pagina lee despues sale de las tablas de Supabase por el
+ * lector de siempre, o sea que el boton Sincronizar quedaria leyendo lo que ya esta en la base
+ * aunque el despliegue viejo siga sirviendo.
+ *
+ * EL CUERPO LLEGA COMO TEXTO PLANO, A PROPOSITO. Si se manda `Content-Type: application/json`,
+ * el navegador manda primero un OPTIONS (preflight) porque JSON no es un "simple request", y
+ * Apps Script no responde al preflight con las cabeceras CORS: el fetch muere en el navegador y
+ * no hay error que leer porque nunca hubo respuesta. Con `text/plain` no hay preflight y la
+ * peticion sale. Por eso el body es JSON COMO TEXTO y aqui se parsea a mano. MEDIDO: es la
+ * unica forma de que un POST a un web app de Apps Script funcione desde el navegador.
+ *
+ * LO QUE ESTA EXPUESTO, DICHO. Esta URL es la MISMA que ya estaba publicada en el bundle
+ * (build-appscript.mjs) y su deployment es `ANYONE_ANONYMOUS` + `USER_DEPLOYING`, o sea que
+ * cualquiera que tenga la URL puede pedir una corrida: una llamada al RESTlet. No se le pone
+ * secreto porque no hay forma de ocultarlo sin escribirlo en el repo, que esta prohibido, y
+ * porque el puente que se deshabilito el 2026-09-30 exponia 24 metodos sin ninguno. Lo que si
+ * se pone es un cerrojo: LockService, para que dos peticiones simultaneas no hagan dos
+ * llamadas al RESTlet. La segunda recibe un motivo dicho, no un error generico.
+ *
+* LO QUE NO PUEDE HACER ESTA RESPUESTA, Y POR QUE IMPORTA. Un web app en /exec NO admite
+ * codigo de estado: ContentService responde siempre 200, y lo unico que produce un 4xx/5xx de
+ * verdad es una excepcion sin capturar, que llega como una pagina HTML de error de Google sin
+ * texto util. O sea que el cliente NO PUEDE mirar r.ok para saber si la ingesta fallo: siempre
+ * va a dar verde. Tiene que leer el campo `ok` del JSON, y por eso ese campo va primero y en
+ * todas las salidas, incluida la excepcion. Un cliente que se fie de r.ok se tragaria un fallo
+ * de Supabase como una sincronizacion buena.
+ */
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(1000)) {
+      return PP_jsonIngesta_({ ok: false, ejecutada: false, motivo: 'ocupada', mensaje: 'Ya hay una ingesta corriendo' });
+    }
+  } catch (error) {
+    return PP_jsonIngesta_({ ok: false, ejecutada: false, motivo: 'sin_cerrojo', mensaje: String(error && error.message || error) });
+  }
+
+  let cuerpo = {};
+  try {
+    // Con text/plain el cuerpo llega crudo en postData.contents. Con form-data estaria en
+    // e.parameter, y con json en postData.contents tambien: se aceptan los dos para que un
+    // cambio en el cliente no se convierta en un cuerpo vacio que se lee como accion desconocida.
+    const crudo = e && e.postData && e.postData.contents ? String(e.postData.contents) : '';
+    if (crudo) {
+      try {
+        cuerpo = JSON.parse(crudo);
+      } catch (error) {
+        return PP_jsonIngesta_({ ok: false, ejecutada: false, motivo: 'cuerpo_invalido', mensaje: 'El cuerpo no es JSON' });
+      }
+    }
+    const accion = String(cuerpo.accion || 'ingesta').trim().toLowerCase();
+    if (accion !== 'ingesta') {
+      // Un nombre de accion desconocido se rechaza DICHO. Sin esto, caeria en la pagina de
+      // error de Google, que no dice ni que se pidio ni por que.
+      return PP_jsonIngesta_({ ok: false, ejecutada: false, motivo: 'accion_desconocida', accion: accion, mensaje: 'Accion no soportada: ' + accion });
+    }
+    const inicio = new Date().toISOString();
+    const resultado = PP_ingesta_(cuerpo.forzado === true) || {};
+    const salida = {};
+    salida.ok = resultado.ok === true;
+    salida.ejecutada = resultado.ejecutada === true;
+    salida.accion = accion;
+    salida.motivo = resultado.motivo || '';
+    salida.filas = resultado.filas || {};
+    salida.errores = resultado.errores || [];
+    salida.log = resultado.log || [];
+    salida.inicio = inicio;
+    salida.fin = new Date().toISOString();
+    return PP_jsonIngesta_(salida);
+  } catch (error) {
+    // El mensaje del error SI viaja en el cuerpo. Sin esto, la pagina solo podria decir
+    // "no se pudo sincronizar", que es el aviso que no senala el lugar del fallo (RULE-SUP-027).
+    return PP_jsonIngesta_({
+      ok: false,
+      ejecutada: false,
+      accion: String(cuerpo && cuerpo.accion || 'ingesta'),
+      motivo: 'error',
+      mensaje: String(error && error.message || error).slice(0, 400),
+      filas: {},
+      errores: [String(error && error.message || error).slice(0, 100)],
+      log: [],
+      fin: new Date().toISOString()
+    });
+  } finally {
+    try { lock.releaseLock(); } catch (error) { /* ya estaba soltado */ }
+  }
+}
+
+/**
+ * Respuesta JSON de la ingesta. Google sirve ContentService con `Access-Control-Allow-Origin: *`,
+ * que es lo que deja que el navegador la lea; si se montara una respuesta a mano habria que poner
+ * esa cabecera y no se puede desde un web app normal.
+ *
+ * MEDIDO 2026-09-30: esta se llamaba `PP_json_`, y YA HABIA OTRA CON ESE NOMBRE en
+ * 16-supabase-catalogo.js: `PP_json_(valor, porDefecto)`, que devuelve un texto json validado
+ * con respaldo y la usa el catalogo de herramientas. En Apps Script una funcion repetida gana
+ * la ULTIMA que carga, y 19 va despues de 16, o sea que esta la tapaba y
+ * `PP_json_(r.HERRAMENTALES_EXTRA_JSON, '[]')` devolvia un ContentService donde el catalogo
+ * esperaba una cadena. El rename no es por gusto del nombre: es porque el proyecto tiene una
+ * regla de una sola definicion por nombre y aqui se estaba rompiendo en silencio. Lo detecto el
+ * test de funciones duplicadas de src/server/, que existe justo para esto.
+ */
+function PP_jsonIngesta_(datos) {
+  return ContentService
+    .createTextOutput(JSON.stringify(datos))
+    .setMimeType(ContentService.MimeType.JSON);
 }

@@ -23,6 +23,15 @@ const manualFlowSource = [
     appSource.indexOf("async function loadNetSuiteExercise()"),
     appSource.indexOf("function formatReportDuration("),
   ),
+  // MEDIDO 2026-09-30: syncNetSuiteTwoPhase llama a correrIngestaPorBoton, que vive ANTES de
+  // syncBacklogWorkOrders, o sea fuera del tramo que se cortaba. Sin este trozo el boton
+  // manual lanzaba ReferenceError en el primer await, el finally de loadNetSuiteExercise
+  // soltaba el bloqueo y `planningActionsBusy` llegaba a "" en vez de "sync": el arnes
+  // reportaba que el boton no sincroniza, cuando lo que faltaba era una funcion en el corte.
+  appSource.slice(
+    appSource.indexOf("/**\n * Dispara la ingesta y dice si se puede seguir leyendo de Supabase."),
+    appSource.indexOf("async function syncBacklogWorkOrders("),
+  ),
   appSource.slice(
     appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
     appSource.indexOf("function applyNetSuitePlanningPayload("),
@@ -30,7 +39,7 @@ const manualFlowSource = [
 ].join("\n");
 const backlogSyncSource = [
   appSource.slice(
-    appSource.indexOf("async function syncBacklogWorkOrders()"),
+    appSource.indexOf("async function syncBacklogWorkOrders(options = {})"),
     appSource.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   ),
   // DECIDIDO 2026-09-30: el sync ya no escribe por `saveWorkOrderSyncState` del puente;
@@ -696,6 +705,17 @@ function loadClient(options = {}) {
     },
     PlannerCore: {
       isSpecialSubcontractCapability: (capability) => String(capability?.ct) === "6462" || /SUBCONTRATO/i.test(String(capability?.label || "")),
+    },
+    // MEDIDO 2026-09-30: este stub va en root, NO en context, y esa diferencia es el fallo
+    // entero. root es el `window` de este arnes (`window: root` de dos lineas mas abajo) y
+    // correrIngestaPorBoton pide el modulo por `window.PPIngestaTrigger`. Con el stub en
+    // context existia y no se veia: urlDeIngesta() daba undefined, la ingesta se salia sin
+    // correr, el boton manual salia por el aviso de "este build no trae la URL" y las
+    // pruebas del boton, que median un reread, median un boton apagado.
+    PPIngestaTrigger: {
+      urlDeIngesta: () => "https://script.google.com/macros/s/AKfyPRUEBA/exec",
+      dispararIngesta: async () => (options.ingesta?.() ?? { ok: true, ejecutada: true, filas: {}, errores: [], totalFilas: 0 }),
+      TIEMPO_MAXIMO_MS: 330000,
     },
   };
   const context = {

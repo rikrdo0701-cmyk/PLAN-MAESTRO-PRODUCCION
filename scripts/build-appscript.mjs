@@ -435,7 +435,7 @@ export async function buildProject() {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw, supabaseBridgeReplacementRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw, supabaseBridgeReplacementRaw, ingestaTriggerRaw] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -455,6 +455,7 @@ export async function buildProject() {
     read("src/web/shared/supabase-writer.js"),
     read("src/web/shared/supabase-event-log.js"),
     read("src/web/shared/supabase-bridge-replacement.js"),
+    read("src/web/shared/apps-script-ingesta-trigger.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
@@ -507,7 +508,12 @@ export async function buildProject() {
   // La vista de eventos no trae marcadores de configuracion: la URL y la clave las
   // pide al lector (un solo sitio las sabe) y el JWT a la sesion.
   const eventLog = eventLogRaw;
-  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${catalogWrite.trimEnd()}\n${supabaseBridgeReplacementRaw.trimEnd()}\n${eventLog.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
+  // El disparador de la ingesta entra entre el reemplazo del puente y el registro de eventos.
+  // MEDIDO 2026-09-30: sin esto los botones Sincronizar y Sincronizar OTs siguen funcionando y
+  // NO hacen nada nuevo, porque el boton no puede pedir la ingesta si PPIngestaTrigger no esta
+  // en el bundle. No es un fallo visible: el boton sigue leyendo Supabase y sigue "sincronizando".
+  const ingestaTrigger = ingestaTriggerRaw;
+  const runtimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogBoot.trimEnd()}\n${catalogApply.trimEnd()}\n${catalogWrite.trimEnd()}\n${supabaseBridgeReplacementRaw.trimEnd()}\n${ingestaTrigger.trimEnd()}\n${eventLog.trimEnd()}\n${appRuntimeClient.trimEnd()}\n${fluidClient.trimEnd()}`;
 
   const appsScriptIndex = renderPlanningPage(
     template,

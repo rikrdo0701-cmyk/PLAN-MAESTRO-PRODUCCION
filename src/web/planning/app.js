@@ -1127,7 +1127,11 @@ function bindEvents() {
     renderMatrix();
     els.matrixSearchInput.focus();
   });
-  els.syncBacklogOtsBtn.addEventListener("click", syncBacklogWorkOrders);
+  // La funcion NO se engancha directa: el click se pasaria como argumento y
+  // `options.dispararIngesta !== false` daria true por casualidad, no por decision. Con el
+  // envoltorio, el boton dice que dispara la ingesta y la comprobacion automatica de arriba
+  // dice que no.
+  els.syncBacklogOtsBtn.addEventListener("click", () => syncBacklogWorkOrders({ dispararIngesta: true }));
   els.statusFilter.addEventListener("change", () => {
     resetBacklogWindow();
     renderPriorityList();
@@ -9535,7 +9539,8 @@ async function loadNetSuiteExercise() {
 }
 
 async function loadNetSuiteExerciseImpl() {
-  const outcome = await syncNetSuiteTwoPhase();
+  // Este es el boton "Sincronizar": el unico sitio del codigo que pide la ingesta antes de leer.
+  const outcome = await syncNetSuiteTwoPhase({ dispararIngesta: true });
   showToast(outcome.message, outcome.status === "complete" ? 3500 : 9000);
   return outcome;
 }
@@ -9549,13 +9554,101 @@ function formatReportDuration(minutes) {
   return `${seconds} s`;
 }
 
-async function syncBacklogWorkOrders() {
+/**
+ * Dispara la ingesta y dice si se puede seguir leyendo de Supabase.
+ *
+ * QUE DEVUELVE Y POR QUE NO ES UN SIMPLE O SI. Un fallo de la ingesta NO siempre impide seguir:
+ * si la corrida llego a escribirse en parte, las tablas que si se escribieron estan mas
+ * nuevas que las que habia antes, y tirar la lectura entera dejaria a la persona con datos mas
+ * viejos de los que tenia. Lo que NO se puede es decir "sincronizado". Por eso se distinguen
+ * tres casos y el que se avisa es el que no toco nada o fallo entero:
+ *   - sin exito       -> no se sigue, y el aviso dice el motivo
+ *   - fallo a medias  -> se sigue leyendo (puede estar mas fresco) y el aviso nombra las tablas
+ *   - sin veredicto   -> error de canal, y dispararIngesta ya habria lanzado
+ *
+ * MEDIDO 2026-09-30: el caso de "fallo a medias" es real, no teorico. ingesta() recorre las
+ * siete tablas en un bucle con try/catch por tabla y sigue; o sea que un RESTlet que responde
+ * con cinco acciones bien y dos vacias escribe cinco tablas y deja dos con lo de la corrida
+ * anterior. Si eso se tratara como fallo total, la persona se queda viendo datos viejos que
+ * el espejo SI habia actualizado, y pensara que la ingesta no corrio. Si se tratara como
+ * exito, el toast diria que se sincronizo con dos tablas sin tocar. Ninguna de las dos es
+ * cierta: hay que decirlo.
+ */
+async function correrIngestaPorBoton() {
+  const url = window.PPIngestaTrigger?.urlDeIngesta?.();
+  if (!url) {
+    showToast("Este build no trae la URL de Apps Script: no se puede pedir la ingesta");
+    return { seguir: false, resultado: null };
+  }
+  setNetSuiteSyncPhaseLabel("Actualizando desde NetSuite...");
+  let resultado;
+  try {
+    // Sin timeout propio: lo aplica PPIngestaTrigger con su AbortController, que es quien
+    // conoce el techo del web app de Apps Script (6 min) y por que el suyo va por debajo.
+    // MEDIDO 2026-09-30: aqui hubo un tiempo propio, y era el mismo numero en dos archivos:
+    // uno aqui, que no lo usaba mas que para pasarlo, y el otro en el modulo, que es el que
+    // lo aplica. Ademas rompia el arnes de pruebas, que corta las funciones de app.js y no
+    // tiene las constantes de arriba. Un solo numero, en el sitio que lo usa.
+    resultado = await window.PPIngestaTrigger.dispararIngesta();
+  } catch (error) {
+    // Un error de CANAL (sin URL, timeout, respuesta que no es JSON, despliegue viejo sin
+    // doPost). Aqui no hay ninguna escritura de la que presume, asi que no se sigue leyendo.
+    showToast(String(error.message || error), 9000);
+    return { seguir: false, resultado: null };
+  }
+  if (resultado.ok) return { seguir: true, resultado };
+  if (resultado.ejecutada) {
+    // MEDIDO 2026-09-30: este toast llevaba las siete tablas con sus conteos
+    // ("Ingesta a medias: work_orders 199, operations 2111, materials 328, items 328,
+    // machines 202, inventory 48137, sales_orders 1234. Las demas no se tocaron") y eso son 121
+    // caracteres: se cortaba a media palabra, por TERCERA vez en dos dias y con el mismo
+    // motivo. El toast lleva la cuenta; las tablas y el error de cada una van al panel de
+    // alertas (#planAlerts), que es donde cabe el detalle y donde el aviso se queda hasta que
+    // se va. Un aviso que se corta es peor que no tener aviso, porque la persona ve que fallo
+    // algo y no que.
+    const tocadas = resultado.filas || {};
+    const bien = Object.keys(tocadas).length;
+    const mal = resultado.errores.length;
+    const detalle = Object.keys(tocadas).map((tabla) => `${tabla}: ${tocadas[tabla]} filas`).join(" | ")
+      + (mal ? " | SIN TOCAR: " + resultado.errores.join(" | ") : "");
+    setNetSuiteSyncAlert("Ingesta a medias: escribieron " + bien + " tablas y " + mal + " fallaron. " + detalle);
+    render({ saveScope: "ui" });
+    showToast(`Ingesta a medias: ${bien} tablas al dia, ${mal} sin tocar`, 9000);
+    return { seguir: true, resultado };
+  }
+  showToast(resultado.mensaje || "La ingesta no corrio", 9000);
+  return { seguir: false, resultado };
+}
+
+/**
+ * Sincronizar OTs. `dispararIngesta` es lo que separa el boton de la comprobacion automatica:
+ * el boton pide que NetSuite escriba en Supabase y despues relee; la comprobacion automatica
+ * solo relee.
+ *
+ * MEDIDO 2026-09-30: la comprobacion automatica (ensureNetSuiteWorkOrdersFresh, la que corre
+  * antes de generar o publicar el plan) llama a esta misma funcion.
+ *
+ * EL OMISION ES NO DISPARAR, Y ESO ES LO IMPORTANTE. Con el omision en true, cualquier llamador
+ * NUEVO de esta funcion gastaba una llamada al RESTlet y siete espejos a Supabase sin haberla
+ * pedido: con true, GENERAR EL PLAN las gastaba cada vez que las OTs tenian mas de 15 minutos
+ * (una sorpresa mayor que el dato viejo que evita, y que ocurre sin que nadie pulse nada), y
+ * las pruebas que la llamaban sin argumentos se colgaban esperando una ingesta que no hay que
+ * pedir. Aqui el fallo seguro es releer, que es lo que hacia esta funcion antes de que existiera
+ * la ingesta a mano. Gastar una llamada al RESTlet tiene que ser una decision NOMBRADA, y la
+ * unica que la nombra es el boton.
+ */
+async function syncBacklogWorkOrders(options = {}) {
+  const dispararIngesta = options.dispararIngesta === true;
   if (backlogSyncInFlight) {
     return showToast("La sincronizacion de OTs ya esta en curso");
   }
   setBacklogSyncInFlight(true);
   let syncSaveGate = null;
   try {
+    if (dispararIngesta) {
+      const ingesta = await correrIngestaPorBoton();
+      if (!ingesta.seguir) return { ok: false, error: ingesta.resultado || new Error("La ingesta no corrio"), ingesta: ingesta.resultado };
+    }
     // MEDIDO 2026-09-30: esto reintentaba solo ante SSS_REQUEST_LIMIT_EXCEEDED, que es el
     // 400 de limite de solicitudes de NETSUITE. Con el puente deshabilitado (RULE-SUP-029) la
     // lectura va a Supabase, y ese codigo ya no puede llegar: el reintento estaba muerto y no
@@ -9673,7 +9766,15 @@ async function ensureNetSuiteWorkOrdersFresh(options = {}) {
     return { ok: false, refreshed: false, removedOts: [], reason: "busy" };
   }
   const selectedBefore = (state.selectedOts || []).map((ot) => ({ ot, key: materialOtKey(ot) }));
-  const result = await syncBacklogWorkOrders();
+  // MEDIDO 2026-09-30: se escribe dispararIngesta:false AUNQUE sea el valor por omision, y eso
+  // es a proposito. Esta es la COMPROBACION AUTOMATICA que corre antes de generar o publicar
+  // cuando las OTs tienen mas de NETSUITE_WORKORDER_FRESH_MS (15 min). Lo que tiene que hacer es
+  // RELER; disparar la ingesta aqui gastaria una llamada al RESTlet y siete espejos cada 15
+  // minutos, sin que nadie pulse nada, y tardaria minutos en arrancar. La razon de escribirlo
+  // aun siendo el omision es que este es el sitio donde alguien va a mirar cuando pregunte por
+  // que generar el plan no trae datos frescos, y la respuesta tiene que estar a la vista y no
+  // en la firma de una funcion que esta mas arriba.
+  const result = await syncBacklogWorkOrders({ dispararIngesta: false });
   if (result?.ok !== true) {
     const detail = result?.error
       ? String(result.error.message || result.error)
@@ -9806,6 +9907,27 @@ async function refreshSmartSyncOtTimes(records) {
 }
 
 async function syncNetSuiteTwoPhase(options = {}) {
+  // La ingesta va PRIMERO y no entre las dos fases. MEDIDO 2026-09-30: este era el boton
+  // "Sincronizar" y lo que hacia era releer Supabase dos veces (OTs y despues operaciones) sin
+  // que NetSuite escribiera nada, o sea que el boton no sincronizaba: hacia un reread. Pedir la
+  // ingesta antes de la primera lectura es lo que hace que lo que se lee despues sea nuevo, y no
+  // lo que ya estaba.
+  //
+  // Y va antes de la fase de OTs y no entre las dos porque leer OTs y despues hacer que la
+  // ingesta escriba operaciones deja la pantalla con OTs viejas y operaciones nuevas, que es
+  // exactamente el estado que hace que un plan se vea al dia y no lo este. Si la ingesta no
+  // puede seguir, no se lee ninguna de las dos.
+  // Igual que en syncBacklogWorkOrders, el omision es NO disparar: la decision de gastar el
+  // RESTlet se nombra donde se toma, que es el boton, y no se hereda por haber llamado a esta
+  // funcion. Ver el comentario de alli, que es el mismo problema.
+  const ingesta = options.dispararIngesta === true ? await correrIngestaPorBoton() : null;
+  if (ingesta && !ingesta.seguir) {
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(
+      { ok: false, error: ingesta.resultado || new Error("La ingesta no corrio") },
+      null,
+    );
+  }
+
   setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
   const workOrdersLoaded = await syncWorkOrdersOnce({ showMessage: false, manual: true });
   if (!workOrdersLoaded) {

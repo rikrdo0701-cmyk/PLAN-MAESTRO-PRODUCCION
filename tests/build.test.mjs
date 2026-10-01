@@ -531,7 +531,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
   assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
   assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
-  assert.match(pagesIndex, /async function syncBacklogWorkOrders\(\)/);
+  assert.match(pagesIndex, /async function syncBacklogWorkOrders\(options = \{\}\)/);
   assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;/);
   // MEDIDO 2026-09-30: este bloque afirmaba que el presupuesto del PUENTE quedara por encima
   // del del cliente (2 intentos + 5 s), porque si el puente cortara primero el usuario veria
@@ -598,7 +598,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
   assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
   const backlogSyncSource = pagesIndex.slice(
-    pagesIndex.indexOf("async function syncBacklogWorkOrders()"),
+    pagesIndex.indexOf("async function syncBacklogWorkOrders(options = {})"),
     pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
   );
   assert.match(backlogSyncSource, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
@@ -1026,7 +1026,7 @@ test("el detalle de OT incluye el boton Actualizar OT bloqueado cuando la OT est
 
 test("la sincronizacion ligera clasifica cambios, refresca tiempos y resume sin helpers prohibidos", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
-  const start = app.indexOf("async function syncBacklogWorkOrders()");
+  const start = app.indexOf("async function syncBacklogWorkOrders(options = {})");
   const end = app.indexOf("async function syncNetSuiteTwoPhase(options = {})");
   const source = app.slice(start, end);
   assert.match(source, /classifySmartSyncChange\(state, payload\.workOrders\)/);
@@ -1537,7 +1537,7 @@ test("el backlog conserva el foco de fecha visible y reinicia al cambiar el data
   const importedStart = app.indexOf("function applyImported(imported, options = {})");
   const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
   const applyImported = app.slice(importedStart, importedEnd);
-  const backlogSyncStart = app.indexOf("async function syncBacklogWorkOrders()");
+  const backlogSyncStart = app.indexOf("async function syncBacklogWorkOrders(options = {})");
   const backlogSyncEnd = app.indexOf("async function syncNetSuiteTwoPhase(", backlogSyncStart);
   const syncBacklog = app.slice(backlogSyncStart, backlogSyncEnd);
   const twoPhaseStart = backlogSyncEnd;
