@@ -77,13 +77,14 @@ test("operation_catalog NO se escribe: es el listado de operaciones de NetSuite"
   // (RULE-REP-021: el precio de venta lo baja el sync, no la pagina).
   assert.doesNotMatch(escritor, /tabla:\s*"operation_catalog"/,
     "operation_catalog no puede estar en el catalogo que escribe la pagina");
-  // Y el aviso tiene que decirlo, para que la persona sepa que es a proposito. Se afirman
-  // las dos mitades por separado porque el texto esta partido en varios literales pegados
-  // con +, y buscar la frase entera daria un fallo que no dice nada del texto.
-  assert.match(escritor, /operation_catalog es el listado de operaciones/,
-    "el aviso tiene que decir que operation_catalog es el listado de operaciones");
-  assert.match(escritor, /DE NETSUITE y no se toca desde la pagina/,
-    "y que viene de NetSuite y no se toca desde la pagina");
+  // MEDIDO 2026-09-30: el aviso se acorto a UNA FRASE porque el texto largo (~470
+  // caracteres) no cabia en un toast de 360px y salia cortado por abajo, sin final.
+  // Ahora el aviso dice que operation_catalog es de NetSuite, y el "y que no se toca"
+  // esta en el codigo, que es donde lo lee quien tenga que arreglarlo.
+  assert.match(escritor, /operation_catalog \(de NetSuite\)/,
+    "el aviso tiene que decir que operation_catalog es de NetSuite");
+  assert.match(escritor, /pisaria el ERP/,
+    "y el motivo de no tocarla (pisaria el ERP) tiene que estar escrito en el codigo");
 });
 
 test("capabilities NO se escribe, y el aviso dice por que", () => {
@@ -92,8 +93,8 @@ test("capabilities NO se escribe, y el aviso dice por que", () => {
   // esas dos vacias en 76 filas. Es la misma clase de perdida que las 76 de ot_configurations.
   assert.doesNotMatch(escritor, /tabla:\s*"capabilities"/,
     "capabilities no se puede escribir todavia: se perderian ct y operacion");
-  assert.match(escritor, /capabilities sigue SIN escribirse/,
+  assert.match(escritor, /NO capabilities/,
     "y el aviso tiene que decirlo, no callar lo que no se guarda");
-  assert.match(escritor, /faltan ct y operacion/,
-    "el aviso tiene que nombrar las dos columnas que faltan, no decir 'no se guarda' a secas");
+  assert.match(escritor, /ct y operacion/,
+    "las dos columnas que le faltan a la pagina tienen que estar escritas en el codigo");
 });

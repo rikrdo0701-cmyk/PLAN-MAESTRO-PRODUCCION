@@ -1013,12 +1013,17 @@
     // tragase la mitad de lo que se toco es peor que uno que avisa.
     if (opts.ambito === "matrix") {
       informe.avisos.push(
-        "La pestana de Matriz ya se escribe en Supabase: operators y matrix (la rejilla de casillas, " +
-        "marcada y sin marcar) van a la base y Supabase es la fuente de las dos. " +
-        "capabilities sigue SIN escribirse: el estado de la pagina tiene 9 de sus 15 columnas " +
-        "y faltan ct y operacion, que el lector no trae por capacidad, asi que escribirla " +
-        "mandaria esas dos vacias en 76 filas. operation_catalog es el listado de operaciones " +
-        "DE NETSUITE y no se toca desde la pagina: pisarlo seria pisar el ERP."
+        // MEDIDO 2026-09-30: esto eran ~470 caracteres y el toast tiene max-width: 360px con
+        // font-size: 11px: salia cortado por abajo y sin final. Es el MISMO fallo que el de los
+        // avisos del ERP, y lo cometi dos veces porque no habia un candado que lo midiera. Hay
+        // un test que mide el largo de los avisos del escritor.
+        //
+        // EL CORTO DICE QUE SE GUARDARON DOS Y QUE NO SE GUARDAN OTRAS DOS. El por que de
+        // cada una esta arriba, en los comments de los catalogos: a capabilities le faltan
+        // dos columnas a la pagina (ct y operacion, y el lector no las trae por capacidad, asi
+        // que escribirla las mandaria vacias en 76 filas), y operation_catalog es el listado
+        // de operaciones DE NETSUITE, que si se escribiera pisaria el ERP con lo local.
+        "Matriz: se guardaron operators y matrix. NO capabilities ni operation_catalog (de NetSuite)."
       );
     }
     return cerrar(informe, t0);
