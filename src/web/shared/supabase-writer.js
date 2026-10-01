@@ -866,6 +866,7 @@
       // Para reactivarlo hace falta un modelo que lleve la cuenta de lo que se borro A
       // PROPOSITO en esta sesion, no de lo que falta. Es un cambio de modelo, no un parche, y
       // no se hace a las carreras con 76 filas ya perdidas de por medio.
+      const fuera = leidas.filter(function (clave) { return !parte.claves[clave]; });
       if (!BorradoDeCatalogosHabilitado) {
         if (fuera.length) {
           informe.avisos.push(
@@ -879,7 +880,6 @@
         }
         continue;
       }
-      const fuera = leidas.filter(function (clave) { return !parte.claves[clave]; });
       if (!fuera.length) continue;
       // Una condicion por fila, y cada una con su propia peticion: un `or=(...)` con
       // claves compuestas se pone ilegible rapido, y borrar de mas es el fallo caro.
