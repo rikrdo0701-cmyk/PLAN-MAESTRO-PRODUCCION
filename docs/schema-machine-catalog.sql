@@ -99,6 +99,42 @@ from public.machines m
 on conflict (nombre) do nothing;
 
 -- ----------------------------------------------------------------------------
+-- 3.b COPIA DE machine_planning_overrides, pedida por la persona el 2026-10-01.
+--
+-- MEDIDO 2026-10-01 contra la base real, con la clave publica (esa tabla si es legible sin
+-- sesion): sus 8 filas son  42, 188, 113, 40, 39, 209, 90, 211  y TODAS con excluida = false.
+--
+-- LAS DOS COSAS QUE HAY QUE SABER ANTES DE CORRER ESTA COPIA.
+--
+-- (a) LAS 8 TIENEN excluida = false, O SEA QUE HOY NO APARTAN NADA. El lector solo trata
+--     true como apartada (supabase-reader.js, mapMachines: excluded = apartadas[key] === true),
+--     y el escritor solo escribe filas con excluida = true (supabase-writer.js: si
+--     item.excluded !== true, return). O sea que estas filas no las puso el codigo actual y no
+--     estan surtiendo ningun efecto. Copiarlas al catalogo no las hace apartar.
+--
+-- (b) ES PROBABLEMENTE UN NO-OP. Los 8 nombres son IDs de maquina de NetSuite (209, 42, 39...)
+--     que vinieron de la tabla `machines`, y la migracion de arriba ya los copio a
+--     `machine_catalog`. Con ON CONFLICT DO NOTHING esta sentencia no cambia nada si es que ya
+--     estaban: por eso es segura correrla las veces que haga falta.
+--
+-- POR QUE activa = true Y NO excluida. En el catalogo `activa` significa que la maquina existe y
+-- se puede agendar; que no se agende es la DECISION de la planificacion, y esa vive en
+-- `machine_planning_overrides` (RULE-SUP-017: la planificacion solo puede apartar). Poner
+-- activa = false aqui seria decir "esta maquina no existe", que es otra cosa: `machines.activa`
+-- es la que dice si NetSuite la da de baja, y esa se respeta con el coalesce de arriba.
+--
+-- POR QUE EL NOMBRE SE NORMALIZA. La tabla del override guarda el nombre en MAYUSCULAS
+-- (el escritor hace texto(item.id).toUpperCase()) y `machine_catalog` lo guarda tal cual. Si
+-- algun dia las dos tuvieran mayusculas distintas serian dos maquinas para el motor, y el
+-- apartar una no apartaria la otra. Aqui se copia el nombre SIN tocar, porque en esta tabla los
+-- ocho son solo digitos y las dos formas coinciden.
+-- ----------------------------------------------------------------------------
+insert into public.machine_catalog (nombre, activa)
+select o.machine_nombre, true
+from public.machine_planning_overrides o
+on conflict (nombre) do nothing;
+
+-- ----------------------------------------------------------------------------
 -- 4. DISPARADOR de updated_at: mismo patron que las otras tablas de catalogo.
 -- ----------------------------------------------------------------------------
 create or replace function public.pp_set_updated_at()
