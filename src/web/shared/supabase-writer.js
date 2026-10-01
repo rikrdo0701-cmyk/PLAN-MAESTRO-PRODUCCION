@@ -848,6 +848,24 @@
    * Lo que la pagina va a escribir. Devuelve tambien las claves: las nuevas y las
    * que ya estaban, que es lo que permite distinguir "agrego" de "quito".
    */
+  /**
+   * Que escribe la pagina en cada tabla del ERP, y por que no se borra. MEDIDO 2026-09-30:
+   * esto era un solo texto para las tres, y para materials no era cierto.
+   *
+   * operations: la pagina decide cuando, donde, con que y en que orden. Si una operacion se
+   *   quita del plan, su fila NO se borra, porque la ingesta de NetSuite es la segunda
+   *   escritora y el borrado se llevaria tambien las que la persona todavia no ha visto.
+   * work_orders: la pagina escribe las fechas y el precio. Articulo, cantidad y cliente son
+   *   del ERP.
+   * materials: la pagina NO decide que materiales tiene una OT. Escribe una sola columna,
+   *   emitido, que es si el material salio. Las filas las pone la ingesta.
+   */
+  function queSeEscribioDe(tabla) {
+    const base = tabla + " se actualizo fila por fila y NO se borro: ";
+    if (tabla === "materials") return base + "la pagina solo marca si un material se emitio; no decide cuales son. Las filas que la ingesta de NetSuite metio despues de esta carga se dejaron intactas.";
+    if (tabla === "work_orders") return base + "la pagina escribe las fechas y el precio de una orden; el articulo, la cantidad y el cliente son del ERP.";
+    return base + "las operaciones que la ingesta metio despues de esta carga se dejaron intactas. Una operacion que la persona haya quitado del plan NO se borra: queda el valor viejo, que es lo unico seguro mientras haya dos escritores.";
+  }
   function armarCatalogos(state) {
     const out = {};
     CATALOGOS.forEach(function (def) {
@@ -1795,11 +1813,14 @@
       // decision y no un olvido.
       const borrar = !ERP_COMPARTIDA[tabla] || opts.permitirBorradoErp === true;
       if (!borrar) {
-        informe.avisos.push(
-          tabla + " se actualizo fila por fila y NO se borro: las filas que el navegador no " +
-            "conoce (ingesta de NetSuite posterior a esta carga) se dejaron intactas. " +
-            "Una operacion que la persona haya quitado del plan NO se borra; queda el valor viejo."
-        );
+        // MEDIDO 2026-09-30: este texto era UNO para operations, work_orders y materials, y
+        // para materials era FALSO. Decia "Una operacion que la persona haya quitado del plan
+        // NO se borra", pero de materials la pagina escribe UNA columna, emitido (lo dice
+        // plan_tabla_escritura: la pagina no decide componentes, solo que material se emitio).
+        // No hay operaciones de plan en esa tabla, y quitar un material no es una decision de
+        // la pagina. Un aviso que describe mal lo que la pagina controla hace que la persona
+        // sospeche de algo que no esta pasando.
+        informe.avisos.push(queSeEscribioDe(tabla));
       }
       informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar && borrar, borrar);
     }
