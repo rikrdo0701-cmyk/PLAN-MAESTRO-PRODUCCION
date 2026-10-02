@@ -111,9 +111,22 @@ function fotosConDrive(catalogo, folderId, arbol, opciones) {
     },
     Logger: { log: (msg) => { leidas.logs = (leidas.logs || []).concat([msg]); } },
   };
+  // MEDIDO 2026-10-02: PP_DEFAULT_PHOTO_FOLDER_ID ya NO esta vacio (el usuario paso el id real de
+  // la carpeta de Drive), o sea que "sin carpeta configurada" ya no se consigue con un folderId ""
+  // en el reloj de mentira: la propiedad vacia cae al default y el catalogo se llena igual. Para que
+  // estas pruebas sigan midiendo LO QUE MEDIAN — que sin carpeta NO se inventa una foto y que el
+  // cero diga que falta la configuracion — el default se borra del fuente antes de correr el
+  // modulo, que es exactamente el estado de un despliegue sin la constante. Sin esta bandera, las
+  // dos pruebas mas importantes de la cadena de la foto se quedarian en verde sin probar nada.
+  const fuente = (opciones && opciones.sinDefault)
+    ? fotos.replace(/const\s+PP_DEFAULT_PHOTO_FOLDER_ID\s*=\s*[^;]+;/, "const PP_DEFAULT_PHOTO_FOLDER_ID = '';")
+    : fotos;
+  // `usarDefaultReal` deja el default como esta en el repo (la carpeta 1J529...). Se usa para
+  // comprobar que la foto se encuentra SIN Script Property, que es como va a funcionar el
+  // despliegue real ahora que el id del usuario quedo como default.
   contexto.globalThis = contexto;
   createContext(contexto);
-  runInContext(fotos, contexto, { filename: "09-photos.js" });
+  runInContext(fuente, contexto, { filename: "09-photos.js" });
   // Se sube el ADAPTADOR, no PP_enrichWorkOrderPhotos_: este ultimo solo entiende el shape del
   // puente ({ item, photoUrl }) y por eso no le sirve a la ingesta, que recibe { articulo, foto_url }).
   return { enrich: contexto.PP_enrichPhotoRows_, status: contexto.getPhotoSourceStatus, motivo: contexto.PP_photoMotivoCero_, ctx: contexto, catalogo: leidas };
@@ -148,12 +161,40 @@ test("el adaptador NO pisa una foto que ya viene de NetSuite", () => {
 });
 
 test("sin PHOTO_FOLDER_ID la foto se queda vacia y NO se inventa", () => {
-  const { enrich } = fotosConDrive(CARPETA, "");
+  // `sinDefault` es obligatorio aca: con el default real puesto (carpeta 1J529...), una propiedad
+  // vacia NO es "sin carpeta", es "usa el default". Ver la nota de fotosConDrive.
+  const { enrich } = fotosConDrive(CARPETA, "", null, { sinDefault: true });
   const r = enrich([{ ot: "2121", articulo: "20241152", foto_url: "" }]);
   assert.equal(r.filas[0].foto_url, "",
     "sin carpeta configurada el resultado es la foto vacia, no una URL inventada");
   assert.equal(r.sinFoto, 1);
   assert.equal(r.carpeta, "", "y el adaptador avisa que no hay carpeta, para que el 0 tenga un porque");
+});
+
+// LA CARPETA REAL, COMO DEFAULT. MEDIDO 2026-10-02: el usuario confirmo que la biblioteca de fotos
+// esta en Drive y que cada archivo se llama como su articulo. El id de esa carpeta quedo como
+// PP_DEFAULT_PHOTO_FOLDER_ID en 09-photos.js, asi que la foto se enlaza sin tocar Script Properties.
+// Estas dos pruebas vigilan que el default siga ahi y que NO pise lo que la Script Property dice:
+// la propiedad es la fuente de verdad cuando existe, y el default es el respaldo.
+test("sin Script Property la carpeta del default se usa: la foto se encuentra sola", () => {
+  const { enrich } = fotosConDrive(CARPETA, "", null, { usarDefaultReal: true });
+  assert.match(fotos, /const\s+PP_DEFAULT_PHOTO_FOLDER_ID\s*=\s*'1J529pwn9DMoldXdO2bdR2LAhtIysAyvY'/,
+    "la carpeta de Drive del usuario es el default, para que la foto funcione sin configuracion");
+  assert.match(enrich([{ ot: "2121", articulo: "20241152", foto_url: "" }]).filas[0].foto_url || "",
+    /FILEID-20241152/, "y con el default puesto el articulo SI encuentra su foto");
+});
+
+test("la Script Property manda sobre el default: si dice otra carpeta, se lee ESA", () => {
+  // La propiedad gana, y se nota en QUE CARPETA se leyo. El reloj de Drive de mentira no distingue
+  // una carpeta de otra, asi que el arbol que se devuelve es el de la carpeta de la propiedad: si
+  // el default ganara, el catalogo seria el de 1J529... y no habria forma de notarlo.
+  const { enrich, status } = fotosConDrive({}, "FOLDER-OTRA", {
+    archivos: [{ nombre: "OT 2121 TUBO.jpg", id: "ID-OTRA-CARPETA" }],
+  });
+  assert.equal(status().folderId, "FOLDER-OTRA",
+    "la propiedad es la fuente de verdad; el default solo entra cuando no hay propiedad");
+  assert.equal(enrich([{ ot: "2121", articulo: "20241152", foto_url: "" }]).filas[0].foto_url, "",
+    "y lo que hay en ESA carpeta es lo que se busca: aqui no esta 20241152");
 });
 
 test("la ingesta Enriquece work_orders ANTES del mirror, y lo dice", () => {
@@ -244,7 +285,7 @@ test("la foto se encuentra con cualquier extension de imagen, no solo jpg y png"
 // que piden tres acciones distintas, y con ese texto no habia forma de saber cual era. Estas tres
 // pruebas son las que hacen que el cero deje de ser un cero mudo.
 test("un cero dice SI FALTA LA CARPETA, y no dice que la carpeta se leyo vacia", () => {
-  const { enrich, ctx } = fotosConDrive(CARPETA, "");
+  const { enrich, ctx } = fotosConDrive(CARPETA, "", null, { sinDefault: true });
   const r = enrich([{ ot: "2121", articulo: "20241152", foto_url: "" }]);
   const motivo = ctx.PP_photoMotivoCero_(r);
   assert.match(motivo, /PHOTO_FOLDER_ID NO esta configurado/,
