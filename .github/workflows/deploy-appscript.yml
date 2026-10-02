@@ -69,8 +69,16 @@ jobs:
             exit 1
           fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          # MEDIDO 2026-10-02, POR QUE ESTAS DOS LINEAS. CLASP_JSON es un SECRETO y este paso
+          # SOBRESCRIBE .clasp.json entero, a proposito: el scriptId no puede cambiarse desde el
+          # repo, y por eso se valida contra EXPECTED_SCRIPT_ID. El efecto secundario es que ese
+          # overwrite se lleva por delante el deploymentId, que vive en el repo. MEDIDO: sin esto
+          # el pipeline se caia en "no trae deploymentId" y no desplegaba NADA.
+          # O sea que el identificador del deployment es lo unico que el repo aporta ahi. Se lee
+          # ANTES de sobrescribir y se vuelve a poner despues.
+          repo_deployment_id=$(node -p "require('./.clasp.json').deploymentId || ''")
           printf '%s' "$CLASP_JSON" > .clasp.json
-          node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); if (config.scriptId === process.env.PROTECTED_SCRIPT_ID) throw new Error('CLASP_JSON apunta al script protegido y el despliegue fue bloqueado'); if (config.scriptId !== process.env.EXPECTED_SCRIPT_ID) throw new Error('CLASP_JSON no apunta al script autorizado ' + process.env.EXPECTED_SCRIPT_ID); config.rootDir = 'dist'; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
+          REPO_DEPLOYMENT_ID="$repo_deployment_id" node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); if (config.scriptId === process.env.PROTECTED_SCRIPT_ID) throw new Error('CLASP_JSON apunta al script protegido y el despliegue fue bloqueado'); if (config.scriptId !== process.env.EXPECTED_SCRIPT_ID) throw new Error('CLASP_JSON no apunta al script autorizado ' + process.env.EXPECTED_SCRIPT_ID); config.rootDir = 'dist'; if (process.env.REPO_DEPLOYMENT_ID) config.deploymentId = process.env.REPO_DEPLOYMENT_ID; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
       - name: Preservar los archivos que el pipeline no publica
         # MEDIDO 2026-09-29: este paso se llamaba por supabase-config.gs y no
         # preservaba nada, porque el archivo del usuario se llamaba config.js y luego

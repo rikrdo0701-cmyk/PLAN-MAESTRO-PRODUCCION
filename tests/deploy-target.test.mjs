@@ -78,3 +78,25 @@ test("el workflow lee el MISMO deployment de .clasp.json, no uno escrito a mano"
   assert.match(workflow, /id: destino[\s\S]{0,900}steps\.destino/,
     "OJO CON EL ORDEN: el paso que LEE el destino tiene que estar antes del que lo USA, porque en GitHub Actions `steps.x` no existe hasta que x corrio. Si se invierten, ${{ steps.destino.outputs.deployment_id }} llega vacio y el deploy se cae");
 });
+
+test("CLASP_JSON no se lleva por delante el deploymentId al sobrescribir .clasp.json", () => {
+  // MEDIDO 2026-10-02, y lo que rompio DE VERDAD. El paso "Configurar clasp" escribe el secreto
+  // CLASP_JSON encima de .clasp.json, a proposito: el scriptId no puede cambiarse desde el repo y
+  // por eso se valida contra EXPECTED_SCRIPT_ID. Ese overwrite se lleva el deploymentId, que es
+  // lo unico que el repo aporta ahi, y el pipeline se cayo en el guard de "no trae deploymentId"
+  // SIN DESPLEGAR NADA. El sintoma es el peor de los posibles en un despliegue: no falla el codigo,
+  // falla el despliegue, y el log culpa a un campo que en el repo si estaba.
+  //
+  // Por eso el valor se lee ANTES del printf y se vuelve a poner despues. Si alguien quita el
+  // REPO_DEPLOYMENT_ID, esta prueba se pone roja.
+  const desde = workflow.indexOf("~/.clasprc.json");
+  const paso = workflow.slice(desde, workflow.indexOf("\n", workflow.indexOf("REPO_DEPLOYMENT_ID", desde)) + 1);
+  assert.match(paso, /repo_deployment_id=\$\(node -p "require\('\.\/\.clasp\.json'\)\.deploymentId/,
+    "el deploymentId del repo se lee ANTES de que el secreto sobrescriba el archivo");
+  assert.match(paso, /printf '%s' "\$CLASP_JSON" > \.clasp\.json/,
+    "y el secreto se escribe DESPUES de leerlo, que es el orden que hace que sirva de algo");
+  assert.match(paso, /config\.deploymentId = process\.env\.REPO_DEPLOYMENT_ID/,
+    "y se vuelve a poner en el archivo ya sobrescrito: sin esto el pipeline se queda sin deployment");
+  assert.match(paso, /if \(process\.env\.REPO_DEPLOYMENT_ID\)/,
+    "con guarda: si el repo no trae el campo, se respeta el del secreto en vez de inventar uno");
+});
