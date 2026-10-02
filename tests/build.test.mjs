@@ -905,7 +905,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.syncNetSuitePlanningData\(\)/);
   assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.savePlanSnapshot\(/);
   assert.match(pagesIndex, /snapshotId: "draft"/);
-  assert.match(pagesIndex, /if \(snapshotId === "draft"\) \{[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
+  assert.match(pagesIndex, /if \(snapshotId === "draft"\) \{[\s\S]*const liveDraft = currentDraftReportSnapshot\(\);[\s\S]*if \(liveDraft.operations\.length\) \{[\s\S]*reportSnapshot = liveDraft;[\s\S]*\} else \{[\s\S]*reportSnapshot = await loadPlanSnapshotById\(saved\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*\}[\s\S]*\}/);
   assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
   assert.match(pagesIndex, /id="jobToolInput"/);
   assert.match(pagesIndex, /data-add-job-tool/);
@@ -956,8 +956,8 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(publishingService, /snapshotId: 'draft'[\s\S]*backupId: backupId[\s\S]*summary:/);
   assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
   assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
-  assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*renderReports\(\);/);
-  assert.match(pagesIndex, /reportSnapshot = currentDraftReportSnapshot\(\);[\s\S]*loadSnapshot = null;[\s\S]*syncDraftLoadWeek\(\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);/);
+  assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*const liveDraft = currentDraftReportSnapshot\(\);/);
+  assert.match(pagesIndex, /loadSnapshot = null;[\s\S]*syncDraftLoadWeek\(\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);[\s\S]*renderSaturation\(\);/);
   assert.match(pagesIndex, /loadSnapshot = reportSnapshot;[\s\S]*syncLoadWeekFromPlanSource\(reportSnapshot\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);/);
   assert.match(pagesIndex, /async function loadSelectedLoadPlan\(snapshotId\) \{\s*await loadSelectedPlanSnapshot\(snapshotId\);\s*\}/);
   assert.match(pagesIndex, /function renderLoadSourceSelect\(\) \{[\s\S]*syncPlanSourceSelect\(els\.loadPlanSelect\);[\s\S]*els\.loadModeSelect\.value = loadMode;/);

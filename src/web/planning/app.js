@@ -7568,7 +7568,19 @@ async function loadSelectedPlanSnapshot(selectedSnapshotId) {
   planSourceLoadVersion += 1;
   if (snapshotId === "draft") {
     syncDraftReportWeek();
-    reportSnapshot = currentDraftReportSnapshot();
+    const liveDraft = currentDraftReportSnapshot();
+    if (liveDraft.operations.length) {
+      reportSnapshot = liveDraft;
+    } else {
+      const week = state.planStart || state.reportWeekStart;
+      const saved = planSnapshots.find((s) => s.snapshotId === "draft" && s.operations > 0 &&
+        (s.weekStart || s.planStart) === week);
+      if (saved) {
+        reportSnapshot = await loadPlanSnapshotById(saved.snapshotId, { render: false, silent: true });
+      } else {
+        reportSnapshot = liveDraft;
+      }
+    }
     loadSnapshot = null;
     syncDraftLoadWeek();
     renderReports();
@@ -7609,6 +7621,10 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
     };
     loadSnapshot = reportSnapshot;
     const firstStart = reportSnapshot.operations.map(opStart).filter(Boolean).sort((a, b) => a - b)[0];
+    const planStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
+    if (planStart) {
+      state.planStart = planStart;
+    }
     const reportStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
 if (reportStart) {
       state.reportWeekStart = normalizeWeekStartValue(reportStart);

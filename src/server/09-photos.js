@@ -1,4 +1,4 @@
-const PP_DEFAULT_PHOTO_FOLDER_ID = ''; // Configure PHOTO_FOLDER_ID in Script Properties.
+const PP_DEFAULT_PHOTO_FOLDER_ID = '1J529pwn9DMoldXdO2bdR2LAhtIysAyvY'; // MEDIDO 2026-10-01: carpeta real de fotos; el usuario confirma que los archivos llevan el nombre del articulo.
 const PP_PHOTO_CACHE_SECONDS = 600;
 
 // MEDIDO 2026-10-01, con la carpeta real de fotos (1J529pwn9DMoldXdO2bdR2LAhtIysAyvY) y el
