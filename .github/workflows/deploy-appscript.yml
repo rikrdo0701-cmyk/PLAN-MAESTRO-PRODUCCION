@@ -89,9 +89,23 @@ jobs:
             echo "::error title=clasp push::$reason"
             exit "$status"
           fi
+      - name: Leer el deployment destino
+        id: destino
+        # MEDIDO 2026-10-02: el identificador SE LEE DE .clasp.json, no se repite aqui. Estaba
+        # escrito en los dos lados y nadie los comparaba: si se cambia en uno, el push a main
+        # despliega a un deployment y `npm run deploy` a otro, y la pagina (que usa la URL
+        # horneada en el bundle) se queda en el viejo sin que nada lo diga.
+        run: |
+          deployment_id=$(node -p "require('./.clasp.json').deploymentId || ''")
+          if [ -z "$deployment_id" ]; then
+            echo "::error title=deployment::.clasp.json no trae deploymentId: no se sabe que deployment actualizar"
+            exit 1
+          fi
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+          echo "Deployment destino: $deployment_id"
       - name: Actualizar implementacion web
         env:
-          APPS_SCRIPT_DEPLOYMENT_ID: AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ steps.destino.outputs.deployment_id }}
         run: npx --yes @google/clasp deploy --deploymentId "$APPS_SCRIPT_DEPLOYMENT_ID" --description "GitHub $GITHUB_SHA"
       - name: Verificar que el proyecto quedo igual que dist/
         # MEDIDO 2026-09-29: dos despliegues seguidos dijeron "Pushed 26 files" con

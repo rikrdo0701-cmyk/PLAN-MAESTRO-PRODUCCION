@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { createContext, runInContext } from "node:vm";
 
 const leer = (p) => readFile(new URL("../" + p, import.meta.url), "utf8").then((s) => s.replace(/\r\n/g, "\n"));
 
@@ -250,4 +251,121 @@ test("un corte de tiempo DICE lo que paso, no solo 'no se pudo'", () => {
     "el techo del POST es del modulo, que lo aplica; app.js no repite el numero");
   assert.match(gate, /Number\(opciones\.timeoutMs\) > 0/,
     "y el modulo sigue aceptando un timeout propio para quien lo necesite, con ese como omision");
+});
+
+// =============================================================================
+// MEDIDO 2026-10-02: EL ACTIVADOR DE 15 MIN NO DISPARA, Y NO HABIA NADA QUE LO DIJERA.
+// =============================================================================
+//
+// LO QUE PASÃ“. Entre las 07:00 y las 17:00 de un viernes (America/Monterrey, UTC-6) el activador
+// de la ingesta debio dispararse unas 21 veces. MEDIDO en Supabase: work_orders seguia con la
+// escritura del 2026-10-01T05:40:21Z, o sea que no habia corrido ninguna. Y `clasp push` sube
+// CODIGO pero NO crea activadores (son del proyecto, no del archivo), asi que la unica forma de
+// saber si el activador estaba puesto era adivinarlo.
+//
+// QUE HACE ESTE TEST. getTriggerStatus() es SOLO LECTURA de ScriptApp.getProjectTriggers(): no
+// crea ni borra nada, que para eso estan PP_creaTriggerIngesta_ y PP_borraTriggerIngesta_. Se
+// prueba con un arnes que revienta si alguien llama a newTrigger o deleteTrigger, porque una
+// lectura que termina creando un activador no es una lectura: seria la segunda forma de arreglar
+// el sintoma sin querer y volveria a fallar en silencio.
+//
+// LO QUE NO PUEDE DECIR. Apps Script NO expone la proxima ejecucion de un activador de reloj, asi
+// que el metodo no la inventa. Por eso estas pruebas tampoco la esperan.
+const bridgeHtml = await leer("src/web/bridge/Bridge.html");
+
+// El reloj va de mentira a proposito: getDay() y getHours() del proceso de test salen de la zona
+// de la MAQUINA, no de la del script, y una prueba que depende de eso pasa en un huso y falla en
+// otro. Se fija el dia y la hora que se quieren probar y se dice cual es.
+function relojFalso(dia, hora) {
+  return class {
+    constructor() { this._dia = dia; this._hora = hora; }
+    getDay() { return this._dia; }
+    getHours() { return this._hora; }
+    toISOString() { return "2026-10-02T00:00:00Z (reloj de mentira: dia " + this._dia + ", hora " + this._hora + ")"; }
+  };
+}
+
+function estadoTrigger(activadores, dia, hora) {
+  const ctx = createContext({
+    console,
+    JSON,
+    Date: relojFalso(dia, hora),
+    ScriptApp: {
+      getProjectTriggers: () => activadores,
+      newTrigger: () => { throw new Error("getTriggerStatus NO puede crear activadores"); },
+      deleteTrigger: () => { throw new Error("getTriggerStatus NO puede borrar activadores"); }
+    },
+    Session: { getScriptTimeZone: () => "America/Monterrey" },
+    PP_INGESTA_CADA_MINUTOS_: 15,
+  });
+  const cuerpo = server.slice(server.indexOf("function getTriggerStatus() {"),
+                             server.indexOf("/** Borra los activadores de la ingesta."));
+  runInContext(cuerpo, ctx);
+  return ctx.getTriggerStatus();
+}
+
+function triggerDeIngesta(uid) {
+  return { getHandlerFunction: () => "ingesta", getEventType: () => "CLOCK", getUniqueId: () => uid };
+}
+
+// dia 5 = viernes, 6 = sabado, 0 = domingo (getDay() de JavaScript).
+test("el estado del activador dice que NO esta, y no se calla un 0", () => {
+  // Viernes a las 10:00 de la zona del script.
+  const r = estadoTrigger([], 5, 10);
+  assert.equal(r.deIngesta, 0);
+  assert.equal(r.dentroDeHorario, true, "un viernes a las 10:00 SI esta en horario, asi que el 0 no es por horario");
+  assert.match(r.veredicto, /NO hay activador de ingesta/);
+  assert.match(r.veredicto, /PP_creaTriggerIngesta_/, "y dice QUE EJECUTAR: un 0 sin nombre no se corrige");
+});
+
+test("un activador de mas se reporta como sobra, no se deja pasar", () => {
+  // MEDIDO el riesgo: PP_creaTriggerIngesta_ borra los previos antes de crear, pero si alguien lo
+  // creo de otra forma quedan dos y la ingesta corre el doble cada 15 minutos.
+  const r = estadoTrigger([triggerDeIngesta("uid-1"), triggerDeIngesta("uid-2")], 5, 10);
+  assert.equal(r.deIngesta, 2);
+  assert.match(r.veredicto, /sobran 1/);
+});
+
+test("el activador puesto se reconoce, y la lectura NO crea ni borra nada", () => {
+  // El arnes revienta si getTriggerStatus llama a newTrigger o deleteTrigger, asi que llegar aqui
+  // ya prueba que no escribe. Esto fija ademas el texto del caso bueno, que es el que se va a leer
+  // en produccion cuando el diagnostico diga que el problema NO es que falte el activador.
+  const r = estadoTrigger([triggerDeIngesta("uid-1")], 5, 10);
+  assert.equal(r.deIngesta, 1);
+  assert.match(r.veredicto, /esta instalado/);
+  assert.match(r.veredicto, /NO es que falte/, "y descarta la causa, para que se vaya a buscar a otro lado");
+  assert.equal(r.cadaMinutos, 15);
+  assert.equal(r.zona, "America/Monterrey");
+});
+
+test("fuera de horario lo dice, para que el cero de la madrugada no se lea como falla", () => {
+  // MEDIDO antes: la ultima escritura fue un jueves a las 22:47 LOCALES, o sea fuera de horario,
+  // forzada a mano. Sin esto, mirar un domingo y ver que no escribio no dice nada.
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 6, 10).dentroDeHorario, false, "sabado");
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 0, 10).dentroDeHorario, false, "domingo");
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 5, 5).dentroDeHorario, false, "5:00 de la manana");
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 5, 17).dentroDeHorario, false, "17:00 ya salio (hora >= 17)");
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 5, 7).dentroDeHorario, true, "7:00 entra");
+  assert.equal(estadoTrigger([triggerDeIngesta("u")], 5, 16).dentroDeHorario, true, "16:00 sigue dentro");
+});
+
+test("dentroDeHorario usa EL MISMO criterio que la ingesta, no una segunda regla", () => {
+  // Si estas dos reglas se separan, el diagnostico y el comportamiento mienten por turnos. Se fija
+  // el texto de la condicion real de PP_ingesta_ y se compara.
+  assert.match(server, /if \(!forzado && \(dia === 0 \|\| dia === 6 \|\| hora < 7 \|\| hora >= 17\)\)/,
+    "el criterio de horario de la ingesta es este; si cambia, tiene que cambiar tambien el diagnostico");
+  assert.match(server, /const dentro = dia !== 0 && dia !== 6 && hora >= 7 && hora < 17;/,
+    "y getTriggerStatus tiene que repetirlo EXACTAMENTE, no aproximado");
+});
+
+test("la lectura esta en la lista blanca del puente y no inventa la proxima ejecucion", () => {
+  // MEDIDO: el puente es el unico camino por el que un metodo del servidor llega a la pagina. Un
+  // metodo que no este en la lista responde 'no permitido', que es indistinguible de que no exista.
+  assert.match(bridgeHtml, /getTriggerStatus: true/);
+  const cuerpo = server.slice(server.indexOf("function getTriggerStatus() {"),
+                              server.indexOf("/** Borra los activadores de la ingesta."));
+  assert.ok(!/newTrigger|deleteTrigger/.test(cuerpo),
+    "getTriggerStatus no puede crear ni borrar activadores: para eso estan PP_creaTriggerIngesta_ y PP_borraTriggerIngesta_, que se ejecutan a mano");
+  assert.ok(!/getNextRunTime/.test(cuerpo),
+    "y no puede inventar la proxima ejecucion: Apps Script no la expone para los activadores de reloj");
 });

@@ -455,7 +455,17 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.doesNotMatch(serviceWorker, /plan-maestro-v2\.41\.4/);
   assert.match(pagesIndex, /script\.google\.com\/macros\/s\/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q\/exec/);
   assert.doesNotMatch(pagesIndex, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
-  assert.match(appScriptWorkflow, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
+// MEDIDO 2026-10-02: antes el workflow tenia el identificador escrito a mano y esta linea lo
+  // fijaba. Eso era lo que permitia que el push a main y `npm run deploy` acabaran en deployments
+  // distintos sin que nada lo dijera: cada uno abria el suyo y la pagina, que habla con la URL
+  // horneada en el bundle, se quedaba en el viejo. Ahora el workflow lo LEE de .clasp.json, asi que
+  // lo que se comprueba es que lo lea, no que lo repita. Que el bundle de dos lineas mas arriba
+  // traiga la URL correcta es lo que demuestra que la lectura sirvio.
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/,
+    "el workflow NO puede repetir el identificador: si cambia en un lado, el push a main y npm run deploy despliegan a lugares distintos");
+  assert.match(appScriptWorkflow, /require\('\.\/\.clasp\.json'\)\.deploymentId/,
+    "lo lee de .clasp.json, igual que el build y que el deploy local");
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
   assert.doesNotMatch(appScriptWorkflow, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
   assert.match(pagesIndex, /manifest\.webmanifest/);
   assert.match(pagesIndex, /serviceWorker\.register/);

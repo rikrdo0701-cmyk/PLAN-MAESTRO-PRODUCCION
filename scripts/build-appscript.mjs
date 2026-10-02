@@ -7,7 +7,22 @@ import { execFileSync } from "node:child_process";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(projectRoot, "dist");
 const siteDir = path.join(projectRoot, "site");
-const appsScriptWebAppUrl = "https://script.google.com/macros/s/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/exec";
+
+// MEDIDO 2026-10-02: LA URL DEL DEPLOYMENT SE LEE DE .clasp.json, NO SE ESCRIBE AQUI.
+//
+// La URL estaba escrita en tres lugares distintos —este archivo, el workflow de Apps Script y el
+// editor de Apps Script— y nadie comparaba las copias. Eso es lo que hace que un `clasp deploy`
+// sin `--deploymentId` pase inadvertido: sube el codigo, dice "Deployed" y abre un deployment
+// NUEVO, mientras la pagina sigue hablando con el viejo, que es el que esta horneado aqui. El
+// sintoma es "no se arregla nada" y no dice de donde viene.
+//
+// Que el build falle si falta el campo es a proposito: un bundle con la URL vacia se sube igual y
+// el error aparece en la pagina del usuario, no aqui.
+const claspConfig = JSON.parse(await readFile(path.join(projectRoot, ".clasp.json"), "utf8"));
+if (!claspConfig.deploymentId) {
+  throw new Error(".clasp.json no trae deploymentId: no se sabe que URL hornear en el bundle.");
+}
+const appsScriptWebAppUrl = `https://script.google.com/macros/s/${claspConfig.deploymentId}/exec`;
 
 async function read(relativePath) {
   const content = await readFile(path.join(projectRoot, relativePath), "utf8");

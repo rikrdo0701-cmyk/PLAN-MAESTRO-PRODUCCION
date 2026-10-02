@@ -70,6 +70,11 @@
     publishDraftPlan: true,
     getDeploymentStatus: true,
     getPhotoSourceStatus: true,
+    // MEDIDO 2026-10-02: SOLO LECTURA de ScriptApp.getProjectTriggers(). No crea ni borra
+    // activadores (para eso estan PP_creaTriggerIngesta_ y PP_borraTriggerIngesta_, que se
+    // ejecutan a mano). Entra porque `clasp push` sube codigo y NO crea activadores, asi que
+    // la unica forma de saber si el de la ingesta estaba puesto era adivinarlo.
+    getTriggerStatus: true,
     PP_getActiveOperatorPlan: true,
     PP_completeOperation: true,
     PP_registerSubassemblyPicking: true,

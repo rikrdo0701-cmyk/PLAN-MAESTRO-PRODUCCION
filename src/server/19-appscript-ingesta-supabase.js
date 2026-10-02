@@ -245,6 +245,56 @@ function PP_creaTriggerIngesta_() {
     '. El filtro de horario lo hace ingesta(): lunes a viernes, 7:00 a 17:00.';
 }
 
+/**
+ * DICE SI EL ACTIVADOR ESTA INSTALADO. Solo lectura: llama a ScriptApp.getProjectTriggers() y
+ * no crea ni borra nada.
+ *
+ * MEDIDO 2026-10-02, POR QUE ESTA FUNCION EXISTE. El sintoma era doble y la mitad no se podia
+ * mirar: la ingesta no corria sola. `clasp push` sube el CODIGO pero NO crea activadores, porque
+ * son del proyecto y no del archivo; sin una lectura de ellos, la unica manera de saber si el
+ * activador estaba puesto era adivinar. MEDIDO que no lo esta: entre las 07:00 y las 17:00 de un
+ * viernes ( America/Monterrey, UTC-6 ) debieron dispararse unas 21 veces y work_orders seguia con
+ * la escritura del 2026-10-01T05:40:21Z, o sea que no habia corrido ninguna.
+ *
+ * POR QUE DICE LO QUE DICE Y NO MAS. Apps Script NO expone la proxima ejecucion de un activador de
+ * reloj, asi que aqui no se inventa ese dato: `getNextRunTime` no existe. Lo que este metodo
+ * responde es 'esta instalado y con que frecuencia', que es justo lo que faltaba. Si la respuesta
+ * es que si esta puesto y aun asi no escribe, el culpable pasa a ser la entrega (cuota, zona, o el
+ * filtro de horario) y eso se mide en otro lado.
+ *
+ * `dentroDeHorario` usa EL MISMO criterio que PP_ingesta_ (linea 292: domingo o sabado fuera, y
+ * hora < 7 o >= 17 fuera), para que el que pregunta no tenga que recalcularlo y comparar dos
+ * reglas distintas.
+ */
+function getTriggerStatus() {
+  const ahora = new Date();
+  const dia = ahora.getDay();
+  const hora = ahora.getHours();
+  const todos = ScriptApp.getProjectTriggers();
+  const activadores = todos.map(function(t) {
+    return { handler: t.getHandlerFunction(), tipo: t.getEventType(), uid: t.getUniqueId() };
+  });
+  const deIngesta = activadores.filter(function(a) { return a.handler === 'ingesta'; });
+  const dentro = dia !== 0 && dia !== 6 && hora >= 7 && hora < 17;
+  return {
+    ahora: ahora.toISOString(),
+    zona: Session.getScriptTimeZone(),
+    dia: dia,
+    hora: hora,
+    dentroDeHorario: dentro,
+    cadaMinutos: PP_INGESTA_CADA_MINUTOS_,
+    activadores: activadores,
+    deIngesta: deIngesta.length,
+    // Lo que hay que hacer, dicho en una linea, porque un 0 sin nombre no se corrige.
+    veredicto: deIngesta.length === 0
+      ? 'NO hay activador de ingesta: ejecuta PP_creaTriggerIngesta_() a mano desde el editor.'
+      : (deIngesta.length > 1
+        ? 'HAY ' + deIngesta.length + ' activadores de ingesta (sobran ' + (deIngesta.length - 1) +
+          '): ejecuta PP_creaTriggerIngesta_() para dejar uno solo.'
+        : 'El activador de ingesta esta instalado. Si aun asi no escribe, el problema NO es que falte.')
+  };
+}
+
 /** Borra los activadores de la ingesta. Para deshacer PP_creaTriggerIngesta_(). */
 function PP_borraTriggerIngesta_() {
   const t = ScriptApp.getProjectTriggers().filter(function(x) { return x.getHandlerFunction() === 'ingesta'; });
