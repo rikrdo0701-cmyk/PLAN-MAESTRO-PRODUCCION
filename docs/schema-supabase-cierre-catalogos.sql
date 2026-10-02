@@ -286,6 +286,22 @@ create policy "lectura_app" on public.machine_planning_overrides for select to a
 -- -----------------------------------------------------------------------------
 -- 7. El espejo: admision de las tablas de catalogo en la whitelist de ingesta_mirror
 -- -----------------------------------------------------------------------------
+-- !!! SUPERADO EL 2026-10-01. ESTA SECCION ESTA PRESENTE PERO NO DEBE APLICARSE. !!!
+-- Esta seccion fue la que MATO la version del RPC que leia la tabla. MEDIDO: el
+-- orden real de aplicacion fue (1) docs/schema-supabase-plan.sql, que dejo
+-- public.ingesta_mirror leyendo public.ingesta_mirror_whitelist, y (2) ESTE
+-- archivo, aplicado despues el 2026-09-29, que volvio a definir el mismo RPC con
+-- una lista de 17 tablas metida en el cuerpo. `create or replace` no avisa que
+-- pisa una version, asi que el paso 2 borro el paso 1 sin dejar rastro. Se
+-- manifesto el 2026-10-01 con la migracion de la hoja `Tramos`: el importador
+-- devolvio 'tabla no permitida: inspection_routes' con la fila ya presente en la
+-- whitelist, que es el sintoma exacto de "la fila esta bien y la funcion ni la
+-- mira".
+--
+-- LA COPIA CANONICA ES docs/rpc-ingesta-mirror.sql. Si vas a cambiar el RPC, cambiala
+-- alla. Aplicar este archivo tal cual devuelve el RPC a la lista en el cuerpo.
+-- No borres esta seccion: deja el registro de lo que paso.
+--
 -- El RPC es SECURITY INVOKER y solo service_role puede ejecutarlo (revoke de
 -- PUBLIC al final), asi que ampliar la whitelist NO abre escritura a anon: el
 -- rol que escribe sigue siendo el Apps Script. La razon de la whitelist es que

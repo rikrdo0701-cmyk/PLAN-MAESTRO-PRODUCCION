@@ -76,6 +76,10 @@ alter table public.operations add column if not exists fecha_req text;
 alter table public.operations add column if not exists comentario text;
 alter table public.operations add column if not exists tiempo_fallback numeric;
 alter table public.operations add column if not exists kit_pending boolean not null default false;
+alter table public.operations add column if not exists completado boolean not null default false;
+alter table public.operations add column if not exists tipo text;
+alter table public.operations add column if not exists precio numeric;
+alter table public.operations add column if not exists clasificacion text;
 
 alter table public.work_orders add column if not exists due_date_override text;
 alter table public.work_orders add column if not exists precio_desde text;
@@ -85,7 +89,11 @@ comment on column public.operations.num is 'Numero de secuencia tal como lo mues
 comment on column public.operations.prioridad is 'Texto: la app acepta numero o palabra (ALTO/BAJO) y la convierte con normalizePriority';
 comment on column public.operations.fecha_req is 'Fecha de necesidad como texto, igual que plan_start. Puede no ser una fecha';
 comment on column public.operations.tiempo_fallback is 'Minutos de tiempo alternativo cuando la capacidad no es finita';
-comment on column public.work_orders.due_date_override is 'Fecha de entrega ajustada a mano; vacio = la de NetSuite manda';
+comment on column public.operations.kit_pending is 'Indica si el kit esta pendiente por obtener';
+comment on column public.operations.completado is 'Indica si la operacion ha sido completada (true) o no completada (false)';
+comment on column public.operations.tipo is 'Tipo o clasificacion de la operacion (ej. doblado, corte, etc.)';
+comment on column public.operations.precio is 'Precio unitario o total de la operacion';
+comment on column public.operations.clasificacion is 'Clasificacion adicional de la operacion';
 
 -- ============================================================================
 -- 2. EL REGISTRO DE EVENTOS (el `log` de cada operacion).
@@ -293,6 +301,21 @@ $$;
 -- return type of existing function". El cuerpo tiene un
 -- `return jsonb_build_object('ok', true, 'tabla', ..., 'insertadas', ...)`, asi que
 -- el tipo es jsonb y sale del codigo, no de una suposicion.
+--
+-- !!! COPIA SUPERADA EL 2026-10-01, Y SU PERMITO ES APLICARLA. NO APLIQUES ESTA
+-- DEFINICION: CAMBIARIA DOS COSAS QUE HOY FUNCIONAN.
+-- MEDIDO el 2026-10-01 comparando este texto contra el cuerpo que devuelve
+-- pg_get_functiondef en el proyecto real:
+--   (1) NO TIENE la rama `if jsonb_array_length(p_filas) > 0`. Con `p_filas = []`
+--       cae en `array_length(v_cols, 1) is null` y REVIENTA, en vez de borrar la
+--       tabla y devolver `insertadas: 0, ok: true`. Para un espejo, "el origen ya
+--       no tiene filas" es un estado legitimo; asi, un origen vacio deja la tabla
+--       con los datos viejos y nadie sabe por que.
+--   (2) Cambia los mensajes de error de las columnas y del payload.
+-- Los dos arreglos de 2026-09-30 (INSERT que nombra columnas, DELETE tautologico)
+-- SI estan aqui, asi que la version es mas nueva en eso y mas vieja en lo otro.
+-- La COPIA CANONICA es docs/rpc-ingesta-mirror.sql, que es el cuerpo desplegado
+-- con la whitelist movida a la tabla. Si cambias el RPC, cambiala alla.
 create or replace function public.ingesta_mirror(p_tabla text, p_filas jsonb)
   returns jsonb
   language plpgsql

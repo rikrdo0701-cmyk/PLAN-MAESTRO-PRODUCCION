@@ -67,6 +67,24 @@ if (!pagesIndex.includes("PPSupabaseReader")) {
 if (pagesIndex.includes("__PP_SUPABASE_URL__") || pagesIndex.includes("__PP_SUPABASE_ANON_KEY__")) {
   throw new Error("El build no reemplazo los marcadores de configuracion de Supabase");
 }
+
+// QUE FALTA ESTA COMPROBACION, Y POR QUE. MEDIDO 2026-10-01: `npm run push` (que es
+// `check && clasp push`) se corrio SIN SUPABASE_URL ni SUPABASE_ANON_KEY en el entorno.
+// build-appscript.mjs:464-465 sustituyo los marcadores con "", el build paso todas las
+// comprobaciones de arriba (un marcador VACIO no contiene el marcador, asi que la de la
+// linea 67 no lo ve) y se subieron 26 archivos a Apps Script con el lector de Supabase
+// apagado: `const DEFAULT_ANON_KEY = ""` -> `configurado === false` en supabase-auth.js:45
+// -> sin login, sin JWT, y con las politicas RLS `to authenticated` no se lee NADA.
+// Para la pagina de inspeccion eso no es una degradacion: el puente de Apps Script ya no
+// esta (se borro el `call`), asi que no hay plan B.
+//
+// O sea: el build puede quedar SIN credenciales sin que nada se queje. Eso se dice aqui,
+// en el gate que corre antes de cada push, y no en un comentario que nadie lee.
+const credencialesVacias = [];
+for (const [nombre, texto] of [["dist/Index.html", index], ["site/index.html", pagesIndex]]) {
+  if (/DEFAULT_ANON_KEY\s*=\s*""/.test(texto)) credencialesVacias.push(`${nombre}: DEFAULT_ANON_KEY vacio`);
+  if (/DEFAULT_URL\s*=\s*""/.test(texto)) credencialesVacias.push(`${nombre}: DEFAULT_URL vacio`);
+}
 for (const skills of [distSkills, pagesSkills]) {
   if (!skills.includes("PPAppsScriptBridge")) throw new Error("skills.html no contiene el cliente del puente remoto");
   if (!skills.includes("getAppState")) throw new Error("skills.html no contiene carga del estado");
@@ -92,6 +110,23 @@ const ruleWarnings = await verifyRuleOverlaps(rules);
 const size = (await stat(path.join(distDir, "Index.html"))).size;
 console.log(`Validacion correcta. Index.html: ${Math.round(size / 1024)} KiB; Apps Script: ${files.length} archivos; Pages listo. Suite ${suite.passed}/${suite.total}.`);
 for (const warning of ruleWarnings) console.log(`aviso: ${warning}`);
+if (credencialesVacias.length) {
+  // Aviso, no error: `npm run build` a secas es legitimo (solo genera artefactos), y romper
+  // `npm run check` obligaria a tener credenciales para cualquier otra comprobacion. Lo que NO
+  // puede es ser silencioso: este texto nombra la credencial que falta y el costo de subirlo.
+  console.log("");
+  console.log("AVISO: el build salio SIN credenciales de Supabase. El lector queda APAGADO.");
+  for (const falta of credencialesVacias) console.log(`  - ${falta}`);
+  console.log("  supabase-auth.js isConfigured() da false: no hay login, no hay JWT, y con RLS");
+  console.log("  `to authenticated` no se lee ninguna tabla. La pagina de inspeccion no tiene");
+  console.log("  puente de Apps Script, asi que se queda vacia sin avisar.");
+  console.log("");
+  console.log("  Antes de `clasp push` o `clasp deploy`, exportar en ESTA consola:");
+  console.log("    $env:SUPABASE_URL = 'https://xtgtfjcwxcoxvixholpj.supabase.co'");
+  console.log("    $env:SUPABASE_ANON_KEY = 'sb_publishable_...'");
+  console.log("  y volver a correr. La clave publishable es publica: va en el JavaScript del cliente.");
+  console.log("");
+}
 
 function runTestSuite() {
   // --test-reporter=tap es explicito: el reporter por defecto (spec) cambia entre versiones de

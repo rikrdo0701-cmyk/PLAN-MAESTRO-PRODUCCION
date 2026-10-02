@@ -47,10 +47,18 @@
 --                    para ordenar y auditar; NULO cuando la celda no era fecha, y
 --                    NULO no se rellena de inventado.
 --
--- COMO SE APLICA. Requiere SUPABASE_DB_PASSWORD. El envoltorio la pide en un
--- prompt oculto y la pasa solo por memoria:
+-- COMO SE APLICA. Por la Management API, que es la via que hay disponible:
+-- SUPABASE_DB_PASSWORD no esta en el entorno. El guion pide un access token
+-- (sbp_..., el que genera el panel en Account > Access Tokens) y lo pasa solo por
+-- memoria:
 --
---   powershell -NoProfile -File scripts\apply-sql-supabase.ps1
+--   $env:SUPABASE_ACCESS_TOKEN = (Get-Clipboard -Raw).Trim()
+--   node scripts\aplicar-ddl.mjs docs\schema-inspection-routes.sql
+--   Remove-Item Env:\SUPABASE_ACCESS_TOKEN
+--
+-- MEDIDO 2026-10-01: APLICADO, 20 de 20 sentencias, y verificado con la clave
+-- publicable (GET /rest/v1/inspection_routes devuelve 200 [] sin sesion, o sea
+-- que la tabla existe, esta expuesta y RLS le niega el anon).
 --
 -- Es IDEMPOTENTE: create table if not exists + create index if not exists, y
 -- `on conflict ... do nothing` en la parte de datos. CREAR LA TABLA NO MUEVE LOS
@@ -142,10 +150,21 @@ create policy inspection_routes_write_authenticated
 -- 3. ingestion_mirror: admitir la tabla para el importador.
 --
 -- POR QUE ESTA TABLA Y NO LA LISTA DEL CUERPO. La funcion public.ingesta_mirror
--- valida p_tabla contra public.ingesta_mirror_whitelist, que es una TABLA
--- (docs/schema-supabase-plan.sql:233 y :324), no contra un array metido en el
--- cuerpo. Por eso agregar una tabla es insertar una fila y no reescribir la
--- funcion: la version que aun tiene la lista en el cuerpo es ingesta_mirror_v1.
+-- valida p_tabla contra public.ingesta_mirror_whitelist, que es una TABLA, no
+-- contra un array metido en el cuerpo. Por eso agregar una tabla es insertar una
+-- fila y no reescribir la funcion.
+--
+-- MEDIDO 2026-10-01, Y CORRIGE UN COMENTARIO ANTERIOR DE ESTE MISMO ARCHIVO: la
+-- version que TIENE la lista en el cuerpo es public.ingesta_mirror, NO
+-- ingestion_mirror_v1. La v1 es un tombstone que solo hace raise (dice que use
+-- ingesta_mirror). Esa confusion costo una corrida entera del importador: el
+-- INSERT de esta fila SI se aplico y la fila esta en la whitelist, pero la funcion
+-- desplegada seguia con sus 17 tablas en el cuerpo, asi que contesto
+--   ingesta_mirror 400 {"code":"P0001","message":"ingesta_mirror: tabla no permitida: inspection_routes"}
+-- La fila estaba bien; la funcion ni la miraba. Se verifico con
+-- pg_get_functiondef sobre el proyecto real, no leyendo este archivo.
+-- La COPIA CANONICA del RPC es docs/rpc-ingesta-mirror.sql; hay otras dos
+-- superadas, marcadas como tales en su propio encabezado.
 --
 -- OJO CON LO QUE ES ESTE RPC. Es BORRA-E-INSERTA. El importador lo usa UNA vez
 -- para volcar la hoja; si se corre DESPUES de que la pagina empiece a editar

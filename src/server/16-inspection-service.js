@@ -361,9 +361,18 @@ function PP_Inspection_routeIndex_() {
  *
  * QUE PASA CON LA HOJA DESPUES. Nada: no la borra ni la bloquea. Queda congelada
  * como respaldo, y si alguien la edita a mano la pagina no lo va a ver.
+ *
+ * POR QUE EL RESULTADO SE ESCRIBE EN EL LOG, Y NO SOLO DEVUELTO. MEDIDO 2026-10-01:
+ * la primera corrida desde el editor salio con el registro de ejecucion VACIO, dos
+ * lineas de "Aviso" y nada mas. No era exito: PP_Inspection_result_ (linea 7) se
+ * traga la excepcion y la devuelve como {ok:false, error}, el console.log de abajo
+ * esta DESPUES del espejo, o sea que nunca corrio, y el desplegable del editor no
+ * muestra el valor de retorno. O sea que un fallo en una migracion que borra e
+ * inserta se ve exactamente igual a una que no hizo nada. Por eso las DOS salidas
+ * se escriben en el log: el log es lo unico que el que corre la ve.
  */
 function PP_migrarTramosASupabase_() {
-  return PP_Inspection_result_(function () {
+  var resultado = PP_Inspection_result_(function () {
     if (typeof PP_supabaseLee_ !== 'function') {
       throw new Error('No hay lector de Supabase en este proyecto (PP_supabaseLee_ no existe). '
         + 'Verifica que 16-supabase-catalogo.js esté desplegado.');
@@ -403,7 +412,39 @@ function PP_migrarTramosASupabase_() {
       destino: 'inspection_routes'
     };
   });
+  // Las dos ramas, siempre. Ver el comentario de arriba: sin esto el editor dice
+  // "Se completo la ejecucion" y no dice si se escribieron 300 filas o ninguna.
+  if (resultado && resultado.ok) {
+    console.log('MIGRACION OK: ' + JSON.stringify(resultado.data));
+  } else {
+    console.log('MIGRACION FALLIDO: ' + (resultado && resultado.error ? resultado.error : 'sin mensaje de error'));
+  }
+  return resultado;
 }
+
+// ---------------------------------------------------------------------------
+// SIN ENVOLTORIO PUBLICO, Y POR QUE.
+// ---------------------------------------------------------------------------
+// MEDIDO 2026-10-01: para correr esta migracion hizo falta un envoltorio SIN `_` al
+// final, porque el desplegable de funciones del editor de Apps Script no lista las que
+// lo llevan (el proyecto tiene 319 funciones de primer nivel, 252 con `_`, y el
+// importador es de las 252). Se SACO el mismo dia que la migracion termino, medido:
+// 2006 filas escritas,
+// 27 repetidas descartadas por clave laxa.
+//
+// NO SE VUELVE A PONER. El web app esta desplegado con `access: ANYONE_ANONYMOUS`
+// (appsscript.json, y lo comprueba scripts/check-project.mjs), o sea que
+// `google.script.run` alcanza a CUALQUIER funcion global que NO termine en `_`.
+// Con este envoltorio en el proyecto, cualquiera con el script ID podia correr una
+// BORRA-E-INSERTA sobre `inspection_routes` y devolver el catalogo de tramos al
+// estado de la hoja, perdiendo todo lo capturado. El nombre con `_` NO es un
+// detalle de estilo: ES el control de acceso.
+//
+// SI HACE FALTA CORRERLA OTRA VEZ, NO SE REPUBLICA. Es BORRA-E-INSERTA: repetirla
+// descarta lo que se haya capturado en la pagina desde la migracion. Lo que se
+// hace en ese caso es correrla desde una sesion con permisos de edicion por otro
+// camino, o comentar temporalmente el `_` del nombre, correrla, y descomentar.
+// ---------------------------------------------------------------------------
 
 /**
  * La hoja YA deduplicada por clave laxa, con el instante de cada fila.
