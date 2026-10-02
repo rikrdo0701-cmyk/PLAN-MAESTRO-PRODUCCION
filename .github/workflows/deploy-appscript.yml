@@ -30,6 +30,25 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # MEDIDO 2026-10-02: ESTE WORKFLOW NO TENIA LAS CREDENCIALES Y POR ESO SUBIA UNA PAGINA CON
+      # EL LECTOR APAGADO. `deploy-pages.yml:37-38` si las declara; aqui no habia nada, asi que el
+      # `npm run check` de la linea 38 construia `dist/Index.html` con `DEFAULT_ANON_KEY = ""`, y ese
+      # dist es EXACTAMENTE lo que sube el `clasp push --force` de mas abajo. O sea: el frontend de
+      # GitHub Pages salia con el lector encendido y la copia de Apps Script del mismo Index.html
+      # salia con el lector apagado, sin que nada lo dijera.
+      #
+      # El aviso de `scripts/check-project.mjs` ("el build salio SIN credenciales... el lector queda
+      # APAGADO") es un AVISO, no un error: sale con codigo 0 y el pipeline sigue en verde. Asi que
+      # esto no se rompe solo, se publica solo. Es el incidente del 2026-10-01 que ya esta
+      # documentado en la cabecera de ese archivo, repetirido por el lado de Apps Script.
+      #
+      # Son las MISMAS variables de repositorio que ya usa Pages, y a proposito no son secretos: la
+      # clave publishable va dentro del bundle publico de todos modos. La service role key no esta
+      # aqui y no debe estar nunca: vive en `config.js`, dentro del proyecto de Apps Script, y la
+      # preserva `scripts/appsscript-preservar-config.mjs`.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

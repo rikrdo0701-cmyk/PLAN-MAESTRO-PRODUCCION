@@ -1,0 +1,28 @@
+# MEDIDO 2026-10-02: `appsscript.json` TIENE QUE SALIR CON LF, Y NO ES COSMETICO.
+#
+# `core.autocrlf = true` en esta maquina y ningun `.gitattributes` hasta ahora. Ese par hace que git
+# guarde `appsscript.json` en el indice con LF (`i/lf`) y lo SAQUE del checkout con CRLF (`w/crlf`).
+# El resultado medido:
+#
+#   repo / dist/appsscript.json  220 bytes, 10 CR, sha 8C89210184089544
+#   remoto (bajado con clasp pull) 210 bytes,  0 CR, sha 6D0CE0B2245D6095
+#
+# Mismo contenido, 10 bytes de diferencia, que es exactamente el numero de saltos de linea del
+# archivo. Y `clasp push` compara BYTES, sin normalizar: por eso preguntaba
+# "Manifest file has been updated. Do you want to push and overwrite?" en TODOS los push.
+#
+# POR QUE CONTESTAR CUALQUIERA DE LAS DOS RESPUESTAS ARREGLA NADA. Con `N`, clasp dice
+# "Skipping push." y NO sube nada: no se salta el manifiesto, se salta el push entero. Con `Y`,
+# sube el archivo con CRLF, Apps Script lo reescribe con LF al guardarlo, y la diferencia vuelve a
+# aparecer en el siguiente push. Es un ciclo, no un aviso.
+#
+# POR QUE SOLO ESTE ARCHIVO Y NO `* text=auto`. Los 26 archivos que se suben a Apps Script tambien
+# salen con CRLF del checkout, y ahi no hay problema: `scripts/verificar-deploy-appscript.mjs:40`
+# normaliza `\r\n` a `\n` antes de comparar, que es por lo que la verificacion byte a byte del
+# pipeline esta en verde. clasp NO normaliza, y al manifiesto es al unico que le pregunta. Se toca
+# el que esta roto y no se tocan los veinte que funcionan.
+#
+# `text eol=lf` y no solo `text`: `text` normaliza al entrar al indice pero deja la salida al criterio
+# de `core.autocrlf`, que en Windows es CRLF. Con `eol=lf` el archivo sale con LF en TODA maquina,
+# que es lo que hace que los 210 bytes del repo sean los 210 bytes del remoto.
+appsscript.json text eol=lf
