@@ -80,10 +80,28 @@ if (pagesIndex.includes("__PP_SUPABASE_URL__") || pagesIndex.includes("__PP_SUPA
 //
 // O sea: el build puede quedar SIN credenciales sin que nada se queje. Eso se dice aqui,
 // en el gate que corre antes de cada push, y no en un comentario que nadie lee.
+//
+// MEDIDO 2026-10-02, EL AGUJERO QUE QUEDABA EN ESTE MISMO GATE: una credencial VACIA se
+// detecta, una credencial COPIADA DEL EJEMPLO no. Pegando la linea de ayuda tal cual,
+// `$env:SUPABASE_ANON_KEY = '<sb_publishable_...>'`, el build paso las 1365 pruebas y
+// "Validacion correcta", y el bundle salio con `const DEFAULT_ANON_KEY =
+// "<sb_publishable_...>"`. Eso es peor que vacio: vacio apaga el lector y el aviso lo dice;
+// un placeholder lo ENCIENDE (isConfigured() da true, porque es un string no vacio), el
+// lector sale a pedir las 24 tablas y vuelve con 401 en todas, y la pagina se queda sin datos
+// sin que ningun cartel diga por que. El texto de ejemplo del aviso de este mismo archivo es
+// el que se copio, o sea que el aviso se estaba contradiciendo a si mismo.
+// Un placeholder se reconoce por los tres puntos y por los angulos: `...` y `sb_publishable_`.
+// Se mira el BUNDLE y no el entorno, porque el bundle es lo que se publica.
+const CREDENCIAL_EJEMPLO = /(\.\.\.|<\s*sb_|sb_publishable_\.\.\.|<tu_|TU_SERVICE_ROLE)/i;
 const credencialesVacias = [];
+const credencialesEjemplo = [];
 for (const [nombre, texto] of [["dist/Index.html", index], ["site/index.html", pagesIndex]]) {
-  if (/DEFAULT_ANON_KEY\s*=\s*""/.test(texto)) credencialesVacias.push(`${nombre}: DEFAULT_ANON_KEY vacio`);
-  if (/DEFAULT_URL\s*=\s*""/.test(texto)) credencialesVacias.push(`${nombre}: DEFAULT_URL vacio`);
+  for (const [etiqueta, patron] of [["DEFAULT_ANON_KEY", /DEFAULT_ANON_KEY\s*=\s*"([^"]*)"/], ["DEFAULT_URL", /DEFAULT_URL\s*=\s*"([^"]*)"/]]) {
+    const valor = (texto.match(patron) || [])[1];
+    if (valor == null) continue;
+    if (CREDENCIAL_EJEMPLO.test(valor)) credencialesEjemplo.push(`${nombre}: ${etiqueta} es el TEXTO DE EJEMPLO ("${valor}"), no una clave`);
+    else if (!valor.trim()) credencialesVacias.push(`${nombre}: ${etiqueta} vacio`);
+  }
 }
 for (const skills of [distSkills, pagesSkills]) {
   if (!skills.includes("PPAppsScriptBridge")) throw new Error("skills.html no contiene el cliente del puente remoto");
@@ -126,6 +144,16 @@ if (credencialesVacias.length) {
   console.log("    $env:SUPABASE_ANON_KEY = 'sb_publishable_...'");
   console.log("  y volver a correr. La clave publishable es publica: va en el JavaScript del cliente.");
   console.log("");
+}
+if (credencialesEjemplo.length) {
+  // Esto SI es error y no aviso, y la diferencia con el caso de arriba es la que importa: una
+  // credencial vacia APAGA el lector (isConfigured() false) y la pagina avisa; un placeholder lo
+  // ENCIENDE con una clave que no existe, o sea que el lector sale a pedir las 24 tablas y vuelve
+  // con 401 en todas. Fallar es mejor que publicar un bundle que parece configurado y no lo esta.
+  throw new Error("El build se llevo el TEXTO DE EJEMPLO de una credencial de Supabase, no la credencial:\n  - "
+    + credencialesEjemplo.join("\n  - ")
+    + "\nEl lector queda ENCENDIDO con una clave invalida: sale a leer y vuelve 401 en todo, sin aviso."
+    + "\nExporta la clave publishable real de Supabase (Settings > API Keys) y vuelve a correr.");
 }
 
 function runTestSuite() {
