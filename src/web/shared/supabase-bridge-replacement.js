@@ -777,7 +777,107 @@
   }
 
   /**
-   * getPlanSnapshot -> lee de plan_snapshots
+   * EL PAYLOAD DE UNA FILA, COMO OBJETO, SEA LO QUE LLEGUE.
+   *
+   * MEDIDO 2026-10-02, Y POR QUE ESTA SEPARADO DEL RESTO. `plan_snapshots.payload` es
+   * `jsonb`: PostgREST lo devuelve YA parseado y `readTable` hace `response.json()` sin
+   * tocar nada, o sea que a esta funcion le llega un OBJETO. El codigo de antes hacia
+   * `JSON.parse(row.payload || "{}")` en las tres lecturas, y con un objeto eso es
+   * `JSON.parse("[object Object]")`: lanza, el `catch` devuelve la fila CRUDA, con
+   * `snapshot_id` y `generated_at` en vez de `snapshotId` y `generatedAt`.
+   *
+   * MEDIDO en la base, con lo que hace ese fallo: la fila existe y esta completa
+   * (`snapshot_id='draft'`, 101603 bytes, 129 operaciones, `status='BORRADOR'`,
+   * `generatedAt='2026-10-02T01:38:40.191Z'`, `planStart='2026-09-28'`) y no se podia
+   * leer. En cascada, porque TODO lo que consume la lista lee camelCase:
+   * `publishedPlanSnapshots` filtra por `snapshot.snapshotId !== "draft"` y no lo
+   * reconoce; `planSourceOptionsMarkup` le pone `id: undefined` y
+   * `operationalPlanOptions` descarta lo que no sea PUBLICADO, o sea que el selector de
+   * planes guardados salia VACIO; y `loadPlanSnapshotById` se llamaba con `undefined`, se
+   * iba por `getPlanSnapshotLight` y salia antes de hacer nada. El plan se ve al
+   * recargar porque viene de `operations` y `selected_ots`, no del borrador.
+   *
+   * POR QUE ACEPTAR TAMBIEN TEXTO. `plan_guardar` inserta el objeto que le mandan tal
+   * cual (`insert ... select ... from jsonb_populate_recordset`), o sea que si alguien
+   * manda un string sigue siendo un payload valido y hay que leerlo. Un jsonb no llega
+   * nunca como texto por la red, pero esta funcion no debe depender de eso.
+   *
+   * Un arreglo que no comingle "si es objeto" con "si es texto" NO lo habria detectado
+   * nadie: la pagina seguiria enseñando el borrador bien y volveria a callarse sin
+   * error ni aviso en el proximo despliegue. Por eso las dos formas tienen test.
+   */
+  function planSnapshotPayload(row) {
+    const crudo = row == null ? null : row.payload;
+    if (crudo == null || crudo === "") return {};
+    if (typeof crudo === "string") {
+      try {
+        const parseado = JSON.parse(crudo);
+        return parseado && typeof parseado === "object" && !Array.isArray(parseado) ? parseado : {};
+      } catch {
+        return {};
+      }
+    }
+    return typeof crudo === "object" && !Array.isArray(crudo) ? crudo : {};
+  }
+
+  function planSnapshotTexto(...candidatos) {
+    for (const candidato of candidatos) {
+      if (candidato == null) continue;
+      const texto = typeof candidato === "string" ? candidato.trim() : "";
+      if (texto) return texto;
+    }
+    return "";
+  }
+
+  /**
+   * LA FILA CON LOS NOMBRES QUE USA LA PAGINA. La fila cruda no sirve: sus columnas son
+   * de PostgreSQL (`snapshot_id`, `generated_at`, `published_at`) y todo el codigo de la
+   * pagina las lee en camelCase.
+   *
+   * DE DONDE SALE CADA COSA, Y POR QUE. `snapshotId` sale de `snapshot_id`, que es la
+   * clave y lo unico NOT NULL UNIQUE: el `payload` lo trae tambien, pero medido 0.2 el
+   * `status` sale del `payload` y no de la fila, porque en la fila `status` NO EXISTE
+   * (medido: `select=status` responde 400 42703) y su equivalente es `published_at`.
+   * `generatedAt` cae a `created_at` cuando el payload no trae el suyo, porque
+   * `plan_guardar` solo NOMBRA `snapshot_id`, `payload` y `created_at` en su insert, y
+   * `created_at` es el unico instante que si se escribe. `version` se queda en "" si no
+   * hay ninguno: la pagina lo lee con `Number(snapshot.version || 1)`, y un 0 inventado
+   * seria peor que un vacio.
+   *
+   * `operacionesComoNumero` es la razon de existir de la version ligera: la pagina usa
+   * `Number(draftMeta.operations || 0) <= 0` para decidir si hay borrador
+   * (app.js:757) y `${s.operations || 0} ops` para etiquetarlo (app.js:6968). Con el
+   * ARRAY de 129 operaciones, `Number([...])` da NaN, y `NaN <= 0` es falso: el guarda
+   * pasaba por accidente y la etiqueta imprimia la lista joined. El conteo va en la
+   * lista y el ARRAY en la lectura de una instantanea, que es donde lo necesita
+   * `loadPlanSnapshotById`.
+   */
+  function planSnapshotFromRow(row, opciones = {}) {
+    const payload = planSnapshotPayload(row);
+    const fila = row || {};
+    const operaciones = Array.isArray(payload.operations) ? payload.operations : [];
+    const base = {
+      ...payload,
+      snapshotId: planSnapshotTexto(fila.snapshot_id, payload.snapshotId, opciones.snapshotId),
+      status: planSnapshotTexto(payload.status, payload.planStatus),
+      generatedAt: planSnapshotTexto(payload.generatedAt, fila.generated_at, fila.created_at),
+      planStart: planSnapshotTexto(payload.planStart, fila.plan_start),
+      weekStart: planSnapshotTexto(payload.weekStart, payload.planStart, fila.plan_start),
+      publishedAt: planSnapshotTexto(payload.publishedAt, fila.published_at),
+      publicationReason: planSnapshotTexto(payload.publicationReason, fila.publication_reason),
+      changeSummary: payload.changeSummary != null ? payload.changeSummary : (fila.change_summary != null ? fila.change_summary : null),
+      usuario: planSnapshotTexto(payload.usuario, fila.usuario),
+      operations: opciones.operacionesComoNumero === false ? operaciones : operaciones.length,
+    };
+    if (base.version == null || base.version === "") {
+      base.version = planSnapshotTexto(payload.version, fila.version) || "";
+    }
+    return base;
+  }
+
+  /**
+   * getPlanSnapshot -> lee de plan_snapshots, con el estado ENTERO (lo usa
+   * restorePublishedPlanAsDraft, que lo devuelve como `state`).
    */
   async function getPlanSnapshot(snapshotId) {
     const r = getReader();
@@ -787,12 +887,7 @@
       filters: { snapshot_id: id },
     });
     if (!rows.length) return null;
-    const row = rows[0];
-    try {
-      return JSON.parse(row.payload || "{}");
-    } catch {
-      return row;
-    }
+    return planSnapshotFromRow(rows[0], { snapshotId: id, operacionesComoNumero: false });
   }
 
   /**
@@ -811,24 +906,31 @@
   }
 
   /**
-   * listPlanSnapshots -> lee de plan_snapshots
+   * listPlanSnapshots -> lee de plan_snapshots y devuelve SOLO METADATOS.
+   *
+   * POR QUE METADATOS Y NO EL PAYLOAD. El codigo que consume la lista (el selector de
+   * planes, `restoreDraftCandidateSnapshots`, `lastScheduleGeneratedAt`, la etiqueta de
+   * "ops") solo necesita identificador, fecha, semana y conteo. Ademas esa lista se
+   * guarda en `localStorage` con `savePlanSnapshotsCache`, y un payload por instantanea
+   * son 101603 bytes MEDIDOS: con unas cuantas, la cuota de 5 MB se llena sola. El
+   * estado completo se pide cuando se abre una, con `getPlanSnapshotLight`.
+   *
+   * `order` por `created_at` y no por `generated_at`: medido, la fila del borrador tiene
+   * `generated_at` en NULL porque `plan_guardar` solo NOMBRA `snapshot_id`, `payload` y
+   * `created_at`. Ordenar por una columna que es NULL siempre deja el orden en manos
+   * del servidor, y en este caso el orden util es el de escritura.
    */
   async function listPlanSnapshots() {
     const r = getReader();
     const rows = await r.readTable("plan_snapshots", {
-      order: "generated_at.desc",
+      order: "created_at.desc",
     });
-    return (rows || []).map((row) => {
-      try {
-        return JSON.parse(row.payload || "{}");
-      } catch {
-        return row;
-      }
-    });
+    return (rows || []).map((row) => planSnapshotFromRow(row));
   }
 
   /**
-   * getPlanSnapshotLight -> lee de plan_snapshots (version ligera)
+   * getPlanSnapshotLight -> lee UNA instantanea con su lista de operaciones, que es lo
+   * que necesita `loadPlanSnapshotById` para pintar el plan de esa semana.
    */
   async function getPlanSnapshotLight(snapshotId) {
     const r = getReader();
@@ -838,20 +940,7 @@
       filters: { snapshot_id: id },
     });
     if (!rows.length) return null;
-    const row = rows[0];
-    try {
-      const parsed = JSON.parse(row.payload || "{}");
-      return {
-        snapshotId: parsed.snapshotId || id,
-        version: parsed.version,
-        planStart: parsed.planStart,
-        status: parsed.status,
-        generatedAt: parsed.generatedAt,
-        operations: parsed.operations || [],
-      };
-    } catch {
-      return row;
-    }
+    return planSnapshotFromRow(rows[0], { snapshotId: id, operacionesComoNumero: false });
   }
 
   /**
@@ -972,5 +1061,11 @@
     getAppStateRevision,
     getAppStateIfChanged,
     getMaterialsForOt,
+    // Las dos puras de `plan_snapshots`, para probarlas SIN base. El fallo que corrige
+    // `planSnapshotPayload` era SILENCIOSO: la pagina seguía funcionando y el borrador
+    // no aparecía, sin error ni aviso. Una funcion que solo falla en red no se puede
+    // cubrir con un test que no abra Supabase.
+    planSnapshotPayload,
+    planSnapshotFromRow,
   };
 });
