@@ -174,7 +174,28 @@ function PP_enrichPhotoRows_(rows) {
     for (let i = 0; i < claves.length && !url; i++) url = catalogo[claves[i]] || '';
     if (!url) {
       sinFoto += 1;
-      return row;
+      // MEDIDO 2026-10-02: AQUI SE ROMPIA EL ESPEJO DE work_orders, Y NO POR LA FOTO.
+      //
+      // Postgres responds {"code":"23502", ...} a esta ingesta y el log lo decia con la foto ya
+      // resuelta ("fotos: 64 de 213 con foto de Drive"), o sea que el emparejamiento funcionaba y
+      // las 64 fotos se perdian en la transaccion revertida del espejo.
+      //
+      // POR QUE. La columna es `foto_url text not null default ''` (docs/schema-supabase.sql:175), y
+      // un default NO ayuda aqui: PostgREST arma el INSERT con la UNION de las claves que aparecen
+      // en el arreglo y las filas que no traen una clave caen en NULL, no en el default. Antes de
+      // esta funcion el payload no traia la clave foto_url en NINGUNA fila, asi que no entraba en la
+      // union, no se nombraba en el INSERT y el default la llenaba. En cuanto esta funcion le puso
+      // la clave a las 64 filas que SI tienen foto, la clave entro en la union y las otras 149
+      // llegaron como NULL contra una columna NOT NULL: 23502, y el espejo entero (borre + insercion)
+      // se revierte. Por eso work_orders era la unica de las 7 tablas que no se escribia, y por eso
+      // no habia ninguna foto en la pagina.
+      //
+      // EL ARREGLO es que TODA fila salga con la clave, con '' cuando no hay foto, que es
+      // exactamente lo que la columna declara. Y no es una tolerancia inventada: '' es el valor de
+      // la columna, 'Sin foto' es lo que la pagina ya dibuja cuando llega vacia, y la funcion
+      // hermana PP_enrichWorkOrderPhotos_ (linea 38) YA hacia esto con photoUrl. La asimetria entre
+      // las dos funciones era el defecto.
+      return Object.assign({}, row, { foto_url: '' });
     }
     conFoto += 1;
     return Object.assign({}, row, { foto_url: url });

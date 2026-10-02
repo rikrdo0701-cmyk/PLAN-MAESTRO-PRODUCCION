@@ -149,6 +149,34 @@ function PP_restletUnificado_(accion, config) {
 // Supabase (PostgREST)
 // =============================================================================
 
+// MEDIDO 2026-10-02: POR QUE ESTE AYUDANTE EXISTE. El error del RPC se cortaba con
+// res.getContentText().slice(0, 300), y un 23502 salia MUDO. Postgres responde a una violacion NOT
+// NULL con el cuerpo siguiente:
+//
+//   {"code":"23502","details":"Failing row contains (4e97d1...","hint":null,
+//    "message":"null value in column \"foto_url\" of relation \"work_orders\" violates not-null ..."}
+//
+// El campo que DICE LA COLUMNA es 'message', y va AL FINAL: antes de el viene 'details', que es la
+// fila repetida y ocupa cientos de caracteres. O sea que el corte se comia exactamente la parte util
+// y conservaba la que no dice nada. La consecuencia fue que el diagnostico dio "algo fallo con 23502"
+// durante una TAsk entera sin poder nombrar la columna, y hubo que deducirla del DDL.
+//
+// Este ayudante lee 'message' cuando el cuerpo es JSON de PostgREST y, si no lo es, devuelve el
+// FINAL del texto en vez del principio: en un error de Postgres y de PostgREST lo que dice que
+// paso esta al final casi siempre.
+function PP_errorPostgREST_(res) {
+  const texto = String(res.getContentText() || '');
+  try {
+    const j = JSON.parse(texto);
+    const partes = [];
+    if (j.code) partes.push('codigo ' + j.code);
+    if (j.message) partes.push(j.message);
+    if (j.hint) partes.push('pista: ' + j.hint);
+    if (partes.length) return partes.join(' | ');
+  } catch (error) {}
+  return texto.length > 300 ? '...' + texto.slice(-300) : texto;
+}
+
 function PP_supabaseMirror_(tabla, filas, config) {
   // MIRROR ATOMICO via el RPC public.ingesta_mirror (docs/rpc-ingesta-mirror.sql):
   // borra todas las filas e inserta las nuevas DENTRO de una sola transaccion de
@@ -168,7 +196,7 @@ function PP_supabaseMirror_(tabla, filas, config) {
   });
   const code = res.getResponseCode();
   if (code !== 200) {
-    throw new Error('Supabase rpc ingesta_mirror ' + tabla + ' ' + code + ': ' + res.getContentText().slice(0, 300));
+    throw new Error('Supabase rpc ingesta_mirror ' + tabla + ' ' + code + ': ' + PP_errorPostgREST_(res));
   }
   const r = JSON.parse(res.getContentText());
   return { escritas: r.insertadas || 0, borradas: r.borradas || 0 };

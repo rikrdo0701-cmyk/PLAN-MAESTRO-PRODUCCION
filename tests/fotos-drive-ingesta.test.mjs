@@ -403,3 +403,108 @@ test("los conteos del catalogo SOBREVIVEN a la cache: el segundo cero tambien di
     "y el cero de los minutos 11 sigue diciendo COMO SE LLAMAN los archivos, no solo que hay 0");
   assert.match(segunda.motivo(dos), /3 claves/, "y cuantas claves habia, no un 0 seco");
 });
+// =============================================================================
+// MEDIDO 2026-10-02: EL ESPEJO DE work_orders SE ROMPIA CON 23502 Y LAS 64 FOTOS SE IBAN CON EL.
+// =============================================================================
+//
+// LO QUE PASÓ, CON NUMEROS. La ingesta forzada en produccion devolvio:
+//
+//   fotos: 64 de 213 con foto de Drive
+//   workorders: ERROR Supabase rpc ingesta_mirror work_orders 400: {"code":"23502", ...}
+//
+// O sea que el emparejamiento con Drive FUNCIONABA (64 de 213) y el espejo entero se revirtio, con
+// las 64 fotos dentro. work_orders fue la unica de las 7 tablas que no se escribio, y por eso la
+// pagina seguia diciendo "Sin foto" con el dato entero disponible.
+//
+// LA CAUSA. `foto_url text not null default ''` (docs/schema-supabase.sql:175). Un default NO
+// protege aca, y esta es la parte que hay que tener clara: PostgREST arma el INSERT con la UNION de
+// las claves que aparecen en el arreglo, y para las filas a las que les falta una clave pone NULL, no
+// el default de la columna. Antes de que existiera el adaptador, el payload no traia la clave
+// foto_url en NINGUNA fila, entonces no entraba en la union, no se nominaba en el INSERT y el
+// default llenaba las 213. En cuanto el adaptador le puso la clave a las 64 filas que SI tienen
+// foto, la clave entro en la union y las otras 149 llegaron como NULL contra una NOT NULL.
+//
+// LAS TRES PRUEBAS SIGUIENTES. La primera dice que TODA fila sale con la clave. La segunda reproduce
+// el caso exacto del fallo: un payload donde el RESTlet ni siquiera manda la clave. La tercera dice
+// que la funcion hermana, que ya lo hacia bien, no se puede volver a desalinear. Verificadas por
+// mutacion: revertir cualquiera de las dos ramas del adaptador las hace fallar.
+test("el adaptador le pone la clave foto_url a TODA fila, tambien a la que no tiene foto", () => {
+  const { enrich } = fotosConDrive(CARPETA, "FOLDER-1");
+  const entra = [
+    { ot: "2121", articulo: "20241152" },                 // tiene foto en Drive
+    { ot: "2122", articulo: "NO EXISTE EN DRIVE" },       // no tiene foto
+  ];
+  const r = enrich(entra);
+  assert.equal(r.conFoto, 1);
+  assert.equal(r.sinFoto, 1);
+  // La asercion que importa no es el valor: es que "foto_url" SEA PROPIA en las dos filas. Con la
+  // columna NOT NULL, una fila sin la clave es la fila que tumba el espejo con 23502.
+  for (const fila of r.filas) {
+    assert.ok(Object.prototype.hasOwnProperty.call(fila, "foto_url"),
+      `la fila ${fila.ot} tiene que salir con la clave foto_url, aunque no tenga foto`);
+    assert.equal(typeof fila.foto_url, "string",
+      `la foto_url de la fila ${fila.ot} tiene que ser texto: null es lo que rompe el espejo`);
+  }
+});
+
+test("una fila sin foto sale con '' y no con la clave ausente: el caso exacto del 23502", () => {
+  const { enrich } = fotosConDrive(CARPETA, "FOLDER-1");
+  // Asi es como se manifesto: el RESTlet NO manda la clave foto_url en las filas sin foto, y el
+  // adaptador se la ponia solo en las que casaban. El resultado era un payload mezcla, y PostgREST
+  // le ponia NULL a las que no casaban.
+  const r = enrich([{ ot: "2122", articulo: "NO EXISTE EN DRIVE" }]);
+  assert.equal(r.filas[0].foto_url, "",
+    "sin foto el valor es '', que es lo que declara la columna, no la ausencia de la clave");
+  assert.equal(r.sinFoto, 1);
+});
+
+test("las dos funciones de enriquecimiento se portan igual: la que ya existia no se desalinea", () => {
+  // PP_enrichWorkOrderPhotos_ (09-photos.js:38) ya asignaba photoUrl SIEMPRE, con '' cuando no
+  // habia. La asimetria entre las dos funciones era el defecto, asi que esta prueba la fija: si
+  // alguien "simplifica" la hermana para que se parezca en la forma a la otra, la afirmacion falla.
+  assert.match(fotos, /return Object\.assign\(\{\}, workOrder, \{ photoUrl: photoUrl \}\);/,
+    "PP_enrichWorkOrderPhotos_ tiene que asignar photoUrl en todas las filas, sin condicion");
+  const conFotoYSin = fotos.slice(
+    fotos.indexOf("function PP_enrichWorkOrderPhotos_"),
+    fotos.indexOf("function PP_loadPhotoCatalog_"));
+  assert.ok(!/if \([^)]*photoUrl[^)]*\)\s*return workOrder\s*;?\s*\}\s*\n?\s*return workOrder;/.test(conFotoYSin),
+    "y no puede devolver la fila sin tocar cuando la foto ya viene, porque el espejo necesita uniformidad");
+});
+
+// EL ERROR DEL RPC, Y POR QUE SE CORTA AL FINAL. MEDIDO 2026-10-02: el mensaje se armaba con
+// getContentText().slice(0, 300) y un 23502 salia mudo, porque en el cuerpo de Postgres el campo
+// que dice la COLUMNA es 'message' y va despues de 'details', que es la fila repetida. Estas dos
+// pruebas fijan que el ayudante lee 'message'.
+function errorPostgREST(texto) {
+  const ctx = createContext({ JSON, String, console });
+  // El recorte se toma tal cual, SIN envolverlo en otra function: envolverlo declaraba el mismo
+  // nombre dos veces y la de adentro tapaba a la de afuera, asi que la prueba recibia undefined y
+  // fallaba por el arnes, no por el codigo que queria vigilar.
+  runInContext(server.slice(
+    server.indexOf("function PP_errorPostgREST_(res) {"),
+    server.indexOf("function PP_supabaseMirror_(")), ctx);
+  return ctx.PP_errorPostgREST_({ getContentText: () => texto });
+}
+
+test("el error del espejo nombra la columna: se lee el 'message' de Postgres, no el 'details'", () => {
+  const real = JSON.stringify({
+    code: "23502",
+    details: "Failing row contains (4e97d1a0-0000-0000-0000-000000000000,2121,20241152," + "x".repeat(400) + ")",
+    hint: null,
+    message: 'null value in column "foto_url" of relation "work_orders" violates not-null constraint "work_orders_foto_url_not_null"',
+  });
+  const salida = errorPostgREST(real);
+  assert.match(salida, /23502/, "el codigo de Postgres se conserva");
+  assert.match(salida, /column "foto_url"/,
+    "el nombre de la columna tiene que salir: es lo unico que dice que arreglar, y con el slice(0,300) quedaba cortada");
+  assert.ok(!salida.includes("Failing row contains"),
+    "y el 'details', que es la fila repetida, no se gasta el espacio del mensaje");
+});
+
+test("si el cuerpo no es JSON, el error devuelve el FINAL del texto, no el principio", () => {
+  const largo = "A".repeat(400) + "COLUMN_QUE_FALTA_Al_final";
+  const salida = errorPostgREST(largo);
+  assert.ok(salida.includes("COLUMN_QUE_FALTA_Al_final"),
+    "en un error de Postgres lo que dice que paso esta al final casi siempre");
+  assert.ok(salida.startsWith("..."), "y se marca que se recorto, para que nadie crea que es el texto entero");
+});
