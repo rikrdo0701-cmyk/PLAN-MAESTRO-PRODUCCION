@@ -22,6 +22,20 @@ const testFiles = (await readdir(path.join(root, "tests")))
   .map((name) => path.join(root, "tests", name));
 if (!testFiles.length) throw new Error("No hay pruebas en tests/ (*.test.mjs)");
 
+// MEDIDO 2026-10-02: LA SUITE CORRE ANTES DEL BUILD, Y POR QUE EL ORDEN ESTA ASI. Las pruebas de
+// `build.test.mjs` llaman a `buildProject()`, que escribe en los MISMOS `dist/` y `site/` que este
+// gate despues lee. Con el orden viejo (build, suite, leer) lo que se comprobaba no era el build
+// de la consola sino el ULTIMO build que hizo una prueba: la puerta de credenciales abria o cerraba
+// segun como hubiera montado el bundle la ultima prueba que se ejecuto, no segun las variables de
+// entorno ni el portapapeles de quien lanzo el `npm run check`. Medido: con el portapapeles lleno de
+// texto de ejemplo (o sea, credenciales vacias de verdad) el aviso NO salio, porque la ultima prueba
+// habia montado el bundle con una clave de prueba.
+//
+// Con el orden de ahora las pruebas siguen montando bundles, pero el build de este archivo va
+// DESPUES y deja en `dist/` y `site/` lo que se va a desplegar. Que la suite falle corta antes de
+// construir, que es lo que se quiere: no tiene sentido generar artefactos de un commit que no pasa.
+const suite = runTestSuite();
+
 const { distDir, siteDir } = await buildProject();
 const files = await readdir(distDir);
 const required = ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html", "appsscript.json"];
@@ -35,8 +49,6 @@ for (const file of files.filter((name) => name.endsWith(".js"))) {
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/apps-script-bridge-client.js")], { stdio: "inherit" });
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/performance-client.js")], { stdio: "inherit" });
 execFileSync(process.execPath, ["--check", path.join(root, "src/web/shared/supabase-reader.js")], { stdio: "inherit" });
-
-const suite = runTestSuite();
 
 const [index, bridge, pagesIndex, distSkills, pagesSkills] = await Promise.all([
   readFile(path.join(distDir, "Index.html"), "utf8"),
@@ -139,10 +151,24 @@ if (credencialesVacias.length) {
   console.log("  `to authenticated` no se lee ninguna tabla. La pagina de inspeccion no tiene");
   console.log("  puente de Apps Script, asi que se queda vacia sin avisar.");
   console.log("");
-  console.log("  Antes de `clasp push` o `clasp deploy`, exportar en ESTA consola:");
-  console.log("    $env:SUPABASE_URL = 'https://xtgtfjcwxcoxvixholpj.supabase.co'");
-  console.log("    $env:SUPABASE_ANON_KEY = 'sb_publishable_...'");
-  console.log("  y volver a correr. La clave publishable es publica: va en el JavaScript del cliente.");
+  // MEDIDO 2026-10-02: este bloque ofrece las lineas para exportar, pero lo que se pegaba era el
+  // TEXTO DE EJEMPLO de la segunda, que es exactamente el fallo que rompio el build ese dia. Por eso
+  // el atajo del PORTAPAPELES va PRIMERO en el texto (una copia y a construir) y el ejemplo de la
+  // clave ya no se escribe: la linea de abajo va con el marcador `<pegar-aqui>`, que el filtro de
+  // forma del build rechaza, para que el ejemplo no se pueda pegar por descuido.
+  console.log("  Antes de `clasp push` o `clasp deploy`, hay dos caminos:");
+  console.log("");
+  console.log("  1) PORTAPAPELES (lo mas corto). En Supabase > Settings > API Keys, copia la Project");
+  console.log("     URL y la Publishable key (las dos, o la pagina entera) y vuelve a correr. El");
+  console.log("     build las toma de ahi, la variable de entorno gana si existe, y el valor nunca se");
+  console.log("     imprime. Y no se copie tal cual el texto de ejemplo de abajo: el filtro de forma");
+  console.log("     del build lo rechaza.");
+  console.log("");
+  console.log("  2) VARIABLES DE ENTORNO, si prefieres dejarlas fijas para esta consola:");
+  console.log("     $env:SUPABASE_URL = 'https://xtgtfjcwxcoxvixholpj.supabase.co'");
+  console.log("     $env:SUPABASE_ANON_KEY = '<pegar-aqui-la-publishable-key>'");
+  console.log("");
+  console.log("  La clave publishable es publica: va en el JavaScript del cliente. La `secret` no.");
   console.log("");
 }
 if (credencialesEjemplo.length) {
@@ -153,7 +179,8 @@ if (credencialesEjemplo.length) {
   throw new Error("El build se llevo el TEXTO DE EJEMPLO de una credencial de Supabase, no la credencial:\n  - "
     + credencialesEjemplo.join("\n  - ")
     + "\nEl lector queda ENCENDIDO con una clave invalida: sale a leer y vuelve 401 en todo, sin aviso."
-    + "\nExporta la clave publishable real de Supabase (Settings > API Keys) y vuelve a correr.");
+    + "\nCopia la Publishable key REAL de Supabase (Settings > API Keys) al PORTAPAPELES y vuelve a"
+    + "\ncorrer, o exporta SUPABASE_ANON_KEY con la clave real. No se copie el texto de ejemplo.");
 }
 
 function runTestSuite() {

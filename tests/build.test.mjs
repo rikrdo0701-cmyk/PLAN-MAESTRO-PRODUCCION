@@ -3,7 +3,16 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { buildProject } from "../scripts/build-appscript.mjs";
+import { buildProject, resolverCredencialesSupabase } from "../scripts/build-appscript.mjs";
+
+// MEDIDO 2026-10-02: TODAS las llamadas a `buildProject()` de este archivo pasan
+// `{ portapapeles: [] }`. No es cosmetico. El build resuelve las credenciales de Supabase del
+// entorno y, si no las hay, del PORTAPAPELES (build-appscript.mjs, "LA CREDENCIAL DEL
+// PORTAPAPELES"). Sin ese argumento estas pruebas montaban el bundle con lo que hubiera copiado
+// quien las estuviera corriendo: el mismo `npm test` salia con credenciales unas veces y sin ellas
+// otras, y las de credenciales no se podian ni escribir, porque el resultado dependia de un estado
+// externo. Con `[]` el bundle sale sin credenciales, que es exactamente el caso que hay que probar.
+const SIN_PORTAPAPELES = { portapapeles: [] };
 
 test("la identidad del detalle es UI local y no se envia al estado compartido", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
@@ -305,7 +314,7 @@ test("todos los workflows usan acciones compatibles con Node.js 24", async () =>
 // app.js NO lo pueden ver, porque el shim no vive en src/: se genera en el build. Por eso
 // el candado va aqui, sobre el bundle ya montado.
 test("el bundle montado NO hace ninguna llamada al puente de Apps Script", async () => {
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   const destinos = [
     ...result.htmlFiles.map((f) => path.join(result.distDir, f)),
     path.join(result.siteDir, "index.html"),
@@ -328,7 +337,7 @@ test("el puente queda deshabilitado, no solo esquivado", async () => {
   // Que no haya llamadas no basta: si `call` volviera a hablar con el iframe, el proximo
   // method que se agregue reventaria en produccion sin que nada se entere. Se afirma que
   // la puerta RECHAZA, con un motivo que dice que mas.
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
     const txt = await readFile(archivo, "utf8");
     assert.match(txt, /El puente de Apps Script esta deshabilitado/,
@@ -345,7 +354,7 @@ test("el bundle monta el reemplazo con el lector y el escritor ya puestos", asyn
   // siempre y TODAS las llamadas darian "PPSupabaseReader no esta disponible". El orden
   // de los bloques <script> no es lo que se afirma aqui: lo que importa es que, DENTRO
   // del bloque que los monta, el lector y el escritor esten antes que el reemplazo.
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   const index = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const codigo = index.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
 
@@ -367,7 +376,7 @@ test("el puente no monta NINGUN iframe: no se descarga el script de Google", asy
   // un camino de DATOS hacia Apps Script, pero todavia tenia una dependencia VIVA de Apps
   // Script, que se descarga entera en cada carga de pagina. Sin este test, "deshabilitado"
   // significaba solo "no contesta", y eso es distinto de "no existe".
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
     const codigo = (await readFile(archivo, "utf8"))
       .replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
@@ -396,7 +405,7 @@ test("el puente no monta NINGUN iframe: no se descarga el script de Google", asy
 });
 
 test("el build genera Apps Script y GitHub Pages", async () => {
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"]);
   assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
@@ -2768,7 +2777,7 @@ test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae e
 });
 
 test("skills.html se publica conectado al bridge con resaltado de operaciones sin operador", async () => {
-  const result = await buildProject();
+  const result = await buildProject(SIN_PORTAPAPELES);
   const skills = await readFile(path.join(result.siteDir, "skills.html"), "utf8");
   const distSkills = await readFile(path.join(result.distDir, "IndexSkills.html"), "utf8");
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
@@ -2891,4 +2900,209 @@ test("el payload de guardado por puente no deep-clona el estado: el postMessage 
   const matrix = api.matrixSavePayload();
   assert.equal(matrix.operations, state.operations);
   assert.deepEqual(JSON.parse(JSON.stringify(matrix.operators)), state.operators);
+});
+
+// ============================================================================
+// LA CREDENCIAL DE SUPABASE: DE DONDE SALE Y QUE NO PUEDE SALIR
+// MEDIDO 2026-10-02. Que se lea del portapapeles no es un detalle de comodidad: es la diferencia
+// entre pegar la clave y pegar el EJEMPLO. La primera vez que se intento, la linea
+// `$env:SUPABASE_ANON_KEY = '<sb_publishable_...>'` de ejemplo del aviso se copio tal cual, el build
+// paso las 1365 pruebas y "Validacion correcta", y salio un bundle con
+// `DEFAULT_ANON_KEY = "<sb_publishable_...>"`: el lector ENCENDIDO (isConfigured() da true porque
+// es un string no vacio) saliendo a pedir las 24 tablas y volviendo 401 en todas, sin ningun aviso.
+// Estos tests fijan las tres reglas que evitan que eso vuelva: el entorno gana, el portapapeles se
+// lee entero y por FORMA, y lo que no tiene forma de credencial no se publica.
+// ============================================================================
+
+// El entorno se limpia y se restaura porque estas pruebas no pueden depender de que la consola que
+// las corre tenga (o no tenga) las variables exportadas: el caso que importa es "no hay variable".
+function sinCredencialesEnElEntorno(ejecutar) {
+  const antes = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  try {
+    return ejecutar();
+  } finally {
+    if (antes.url === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = antes.url;
+    if (antes.key === undefined) delete process.env.SUPABASE_ANON_KEY;
+    else process.env.SUPABASE_ANON_KEY = antes.key;
+  }
+}
+
+const URL_REAL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+const CLAVE_REAL = "sb_publishable_abcdef0123456789abcdef";
+
+test("la variable de entorno gana sobre el portapapeles, y no al reves", () => {
+  sinCredencialesEnElEntorno(() => {
+    process.env.SUPABASE_URL = URL_REAL;
+    process.env.SUPABASE_ANON_KEY = CLAVE_REAL;
+    const desdePortapapeles = resolverCredencialesSupabase({
+      portapapeles: ["https://otro-proyecto.supabase.co", "sb_publishable_del_portapapeles_000"],
+    });
+    // El orden importa por un motivo concreto: si el portapapeles llegara a ganarle, un
+    // `npm run check` en una consola que no exporto nada meteria una clave vieja que alguien
+    // copio hace tres dias, y el aviso del gate no diria nada porque para el build si hay credencial.
+    assert.equal(desdePortapapeles.url.valor, URL_REAL);
+    assert.equal(desdePortapapeles.anonKey.valor, CLAVE_REAL);
+    assert.match(desdePortapapeles.url.origen, /variable de entorno SUPABASE_URL/);
+    assert.match(desdePortapapeles.anonKey.origen, /variable de entorno SUPABASE_ANON_KEY/);
+  });
+});
+
+test("una sola copia con las dos credenciales resuelve las dos", () => {
+  sinCredencialesEnElEntorno(() => {
+    // El caso real: en el panel de API Keys hay URL y clave. Copiar las dos lineas y construir UNA
+    // vez. Antes, cuando solo se leia la primera linea, habia que copiar, construir, copiar y
+    // volver a construir, y en el medio un bundle salia con la URL y sin la clave.
+    const dos = resolverCredencialesSupabase({ portapapeles: [URL_REAL, CLAVE_REAL] });
+    assert.equal(dos.url.valor, URL_REAL);
+    assert.equal(dos.anonKey.valor, CLAVE_REAL);
+    assert.equal(dos.url.origen, "portapapeles");
+    assert.equal(dos.anonKey.origen, "portapapeles");
+
+    // Y al reves, que tambien es como se copia segun de donde este el bloque en la pagina.
+    const alRevez = resolverCredencialesSupabase({ portapapeles: [CLAVE_REAL, URL_REAL] });
+    assert.equal(alRevez.url.valor, URL_REAL);
+    assert.equal(alRevez.anonKey.valor, CLAVE_REAL);
+  });
+});
+
+test("copiar la pagina de API Keys entera no cuela texto de interfaz como credencial", () => {
+  sinCredencialesEnElEntorno(() => {
+    // MEDIDO 2026-10-02: la URL tenia filtro de forma y por eso no pasaba; la CLAVE no tenia
+    // ninguno, y con el portapapeles la primera linea que no era un ejemplo ganaba. Copiando la
+    // pagina entera, la clave del bundle llego a ser literalmente la palabra "supabase".
+    const pagina = resolverCredencialesSupabase({
+      portapapeles: [
+        "supabase",
+        "API Keys",
+        "Project URL",
+        URL_REAL,
+        "anon public",
+        "Publishable key",
+        CLAVE_REAL,
+        "secret key",
+      ],
+    });
+    assert.equal(pagina.url.valor, URL_REAL);
+    assert.equal(pagina.anonKey.valor, CLAVE_REAL, "la clave del panel no debe caer en 'supabase' ni en 'Project URL'");
+  });
+});
+
+test("el texto de ejemplo del aviso y las claves que no son de la API no se toman", () => {
+  sinCredencialesEnElEntorno(() => {
+    // El caso que rompio el build: la linea DE EJEMPLO del propio aviso. Con la variable de
+    // entorno esto no pasaba porque el nombre de la variable era la llave; del portapapeles puede
+    // llegar cualquier cosa, y este texto es el mas probable de todos porque es lo que el propio
+    // proyecto le pide al usuario que copie.
+    const ejemplo = resolverCredencialesSupabase({ portapapeles: ["<sb_publishable_...>", URL_REAL] });
+    assert.equal(ejemplo.anonKey.valor, "", "el texto de ejemplo se colaria como credencial");
+    assert.equal(ejemplo.anonKey.vacia ?? true, true);
+    assert.equal(ejemplo.url.valor, URL_REAL, "una credencial sucia no puede tumbar a la otra");
+
+    // Y lo que no tiene forma de clave: ni el portapapeles ni un ejemplo, solo texto.
+    const texto = resolverCredencialesSupabase({ portapapeles: ["Settings > API Keys", "copiar", "anon"] });
+    assert.equal(texto.url.valor, "");
+    assert.equal(texto.anonKey.valor, "");
+
+    // Una clave de servicio (sb_secret_) NO es la credencial del cliente: el bundle es publico, y
+    // RLS es lo unico entre esa clave y los datos. Por eso se rechaza por forma y no por valor.
+    const secreto = resolverCredencialesSupabase({ portapapeles: [URL_REAL, "sb_secret_abcdef0123456789abcdef"] });
+    assert.equal(secreto.anonKey.valor, "", "una secret key jamas debe entrar en el bundle del cliente");
+
+    // Una URL que no es de Supabase tampoco: el filtro es de forma de proyecto, no "algo que
+    // empiece por https".
+    const otraUrl = resolverCredencialesSupabase({ portapapeles: ["https://mi-servidor.example.com/api"] });
+    assert.equal(otraUrl.url.valor, "");
+  });
+});
+
+test("portapapeles: [] deja el build sin credenciales sin volver a preguntar al portapapeles", () => {
+  sinCredencialesEnElEntorno(() => {
+    // Que `[]` sea un caso valido y no un "no me pases nada" es lo que hace falta para que las
+    // pruebas sean hermeticas: si `[]` cayera en la lectura real, estas pruebas volverian a
+    // depender de lo que tenga copiado quien las corre.
+    const vacio = resolverCredencialesSupabase({ portapapeles: [] });
+    assert.equal(vacio.url.valor, "");
+    assert.equal(vacio.anonKey.valor, "");
+    assert.equal(vacio.url.origen, "ninguno");
+    assert.equal(vacio.anonKey.origen, "ninguno");
+  });
+});
+
+test("el bundle sale con la credencial del portapapeles en los TRES modulos que la llevan", async () => {
+  const antes = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  try {
+    const result = await buildProject({ portapapeles: [URL_REAL, CLAVE_REAL] });
+    const destinos = [
+      path.join(result.distDir, "Index.html"),
+      path.join(result.siteDir, "index.html"),
+      path.join(result.siteDir, "skills.html"),
+      path.join(result.siteDir, "operator.html"),
+    ];
+    // MEDIDO 2026-10-02: solo DOS de esos cuatro archivos montan los clientes. `skills.html` y
+    // `operator.html` van por su propia plantilla (skillsSource e IndexOperator.html) y no llevan
+    // lector ni escritor. La primera version de esta prueba exigia las credenciales en los cuatro y
+    // fallaba con "aparecio 0" en skills.html, o sea que estaba pidiendo una credencial en una
+    // pagina que no la usa.
+    const conClientes = [
+      path.join(result.distDir, "Index.html"),
+      path.join(result.siteDir, "index.html"),
+    ];
+    // MEDIDO 2026-10-02: son TRES, no cuatro. `catalog-boot` no lleva marcador: pide url y clave a
+    // `PPSupabaseReader.config()` (supabase-catalog-boot.js:200), o sea que hereda la credencial. La
+    // primera version de esta prueba decia cuatro, asi que ademas de fallar estaba affirmando una
+    // regla del build que no existe; el conteo se usa para que un cliente que se quede con el
+    // marcador o con "" salga con nombre y todo.
+    for (const archivo of conClientes) {
+      const txt = await readFile(archivo, "utf8");
+      const urls = txt.match(/https:\/\/xtgtfjcwxcoxvixholpj\.supabase\.co/g) || [];
+      const claves = txt.match(/sb_publishable_abcdef0123456789abcdef/g) || [];
+      assert.equal(urls.length, 3, `${path.basename(archivo)}: la URL debe aparecer en lector, auth y escritor (3 veces), aparecio ${urls.length}`);
+      assert.equal(claves.length, 3, `${path.basename(archivo)}: la clave debe aparecer en lector, auth y escritor (3 veces), aparecio ${claves.length}`);
+      assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/);
+      // catalog-boot tiene que seguir TOMANDO la config del lector. Si algum dia le ponen su
+      // propio marcador, el conteo de arriba no lo nota, pero esta linea si: seria una quinta
+      // fuente de credencial, y de las que se contradicen solas.
+      assert.match(txt, /PPSupabaseReader[\s\S]{0,400}?\bconfig\(\)|\bconfig\(\)[\s\S]{0,200}?PPSupabaseReader/);
+    }
+    // En las cuatro, en cambio, no puede quedar ni un marcador sin reemplazar: publicar una pagina
+    // con `__PP_SUPABASE_ANON_KEY__` metido en el JavaScript es publicar algo roto.
+    for (const archivo of destinos) {
+      const txt = await readFile(archivo, "utf8");
+      assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/, `${path.basename(archivo)} quedo con un marcador de credencial sin reemplazar`);
+    }
+    // Y el build dice DE DONDE salio, sin imprimir el valor.
+    assert.deepEqual(result.credenciales, [
+      { nombre: "SUPABASE_URL", origen: "portapapeles", vacia: false },
+      { nombre: "SUPABASE_ANON_KEY", origen: "portapapeles", vacia: false },
+    ]);
+    assert.doesNotMatch(JSON.stringify(result.credenciales), new RegExp(CLAVE_REAL));
+  } finally {
+    if (antes.url === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = antes.url;
+    if (antes.key === undefined) delete process.env.SUPABASE_ANON_KEY;
+    else process.env.SUPABASE_ANON_KEY = antes.key;
+  }
+});
+
+test("el aviso de credenciales dice que hay portapapeles y que el texto de ejemplo NO sirve", async () => {
+  // El aviso de check-project.mjs es lo primero que lee quien no sabe que falta la clave, y el
+  // 2026-10-02 se demostro que su propio texto de ejemplo se puede copiar por error. Si el aviso no
+  // dice que existe el atajo del portapapeles, el unico camino que ofrece es teclear, o sea volver
+  // al problema. Y si vuelve a poner una clave de ejemplo en el texto, tiene que decir que no se
+  // copie tal cual.
+  const check = await readFile(new URL("../scripts/check-project.mjs", import.meta.url), "utf8");
+  const bloqueDelAviso = check.slice(check.indexOf("AVISO: el build salio SIN credenciales"));
+  assert.match(bloqueDelAviso, /PORTAPAPELES|portapapeles/);
+  assert.match(bloqueDelAviso, /no (se )?(copie|copie|tome|tomes) tal cual/i);
 });

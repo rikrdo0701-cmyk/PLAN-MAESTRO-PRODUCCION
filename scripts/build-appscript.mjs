@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(projectRoot, "dist");
@@ -11,6 +12,103 @@ const appsScriptWebAppUrl = "https://script.google.com/macros/s/AKfycbzom44gOrh7
 async function read(relativePath) {
   const content = await readFile(path.join(projectRoot, relativePath), "utf8");
   return content.replace(/\r\n/g, "\n");
+}
+
+// LA CREDENCIAL DEL PORTAPAPELES, Y POR QUE EXISTE.
+//
+// MEDIDO 2026-10-02: el problema de siempre no es que falte la clave, es pegarla. La clave
+// publishable vive en el panel de Supabase, se copia de ahi y se teclea en la consola; y lo que
+// pasa al teclearla es lo que se vio: se pega la linea DE EJEMPLO del aviso, el build pasa las
+// 1365 pruebas y "Validacion correcta", y sale un bundle con `DEFAULT_ANON_KEY =
+// "<sb_publishable_...>"`, o sea el lector encendido con una clave que no existe y 401 en todo.
+// Pegar la clave REAL es lo unico que hay que hacer, y por eso se acepta del portapapeles.
+//
+// ORDEN, Y POR QUE ESTE. 1) la variable de entorno, porque es la explicita y es la que usan CI y
+// los despliegues. 2) el portapapeles, que es el atajo local. Nunca al reves: si el portapapeles
+// llegara a ganarle a la variable, un `npm run check` de otra consola meteria una clave vieja sin
+// que nadie lo pidiera.
+//
+// LO QUE NO HACE. No adivina el valor: si no hay variable y el portapapeles no trae una clave que
+// se parezca a una, se deja vacio como antes, y avisa el gate de check-project.mjs. No escribe la
+// clave en ningun archivo: solo la lee para los reemplazos de los marcadores, que es lo unico que
+// el bundle necesita. Y no imprime la clave: dice DE DONDE salio, nunca el valor.
+const CREDENCIAL_EJEMPLO = /(\.\.\.|<\s*sb_|sb_publishable_\.\.\.|<tu_|TU_SERVICE_ROLE|service_role)/i;
+const ESQUEMA_SUPABASE = /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i;
+// MEDIDO 2026-10-02: con el portapapeles se corrigio un agujero que el entorno no tenia. Ahi la
+// credencial venia de una variable con nombre, o sea que la llave era el dato. Del portapapeles
+// puede venir CUALQUIER linea, y medido: una pagina de API Keys copiada entera trae lineas como
+// "supabase" o "Project URL", y la primera que no era un ejemplo se colaba como clave. Medido de
+// verdad: la clave del bundle quedo siendo la palabra "supabase". Con el filtro de FORMA de la URL
+// eso no pasaba; con la clave, que no tenia filtro, si. Un filtro de forma, no de validez: decide
+// si PARECE una clave de la API de Supabase, no si sirve.
+const FORMA_CLAVE = /^(sb_publishable_[A-Za-z0-9_-]{10,}|sb_anon_[A-Za-z0-9_-]{10,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})$/;
+
+function leerPortapapeles() {
+  // MEDIDO 2026-10-02: el portapapeles no se lee con un modulo de Node (no hay API nativa) sino
+  // con Get-Clipboard de PowerShell, que es lo que hay en Windows. Se usa `-Raw` para no perder el
+  // texto si el portapapeles tiene saltos de linea.
+  //
+  // SE DEVUELVEN TODAS LAS LINEAS, no solo la primera, y eso es lo que hace util el atajo: la URL y
+  // la clave son DOS valores y con una sola copia tienen que salir los dos. Copiar las dos lineas
+  // (o la pagina entera del panel de API Keys) y copiar-pegar UNA vez es el caso real; quedarse con
+  // la primera linea obligaba a copiar, construir, copiar y volver a construir.
+  try {
+    const salida = execFileSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard -Raw"],
+      { encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return String(salida || "").split(/\r?\n/).map((linea) => linea.trim()).filter(Boolean);
+  } catch (error) {
+    // Sin portapapeles no hay nada que hacer: el build sigue como antes, con las variables de
+    // entorno. Un error aqui jamas puede tumbar el build, porque un build sin credenciales es un
+    // build legitimo (solo genera artefactos) y el aviso lo dice despues.
+    return [];
+  }
+}
+
+// Una credencial "de verdad" para este proposito: la URL tiene que ser la forma de un proyecto de
+// Supabase, y la clave tiene que ser la de la API. El filtro es de FORMA, no de valor: no decide si
+// la clave sirve, solo si es el texto de ejemplo que Rompio el build el 2026-10-02.
+function credencialParecida(valor, tipo) {
+  const texto = String(valor || "").trim();
+  if (!texto || CREDENCIAL_EJEMPLO.test(texto)) return "";
+  if (tipo === "url") return ESQUEMA_SUPABASE.test(texto) ? texto.replace(/\/+$/, "") : "";
+  if (tipo === "anon") return FORMA_CLAVE.test(texto) ? texto : "";
+  return texto;
+}
+
+function resolverCredencial(nombreVariable, tipo, lineas) {
+  const delEntorno = credencialParecida(process.env[nombreVariable], tipo);
+  if (delEntorno) return { valor: delEntorno, origen: `variable de entorno ${nombreVariable}` };
+  // Se recorre el portapapeles ENTERO, no solo la primera linea, y se toma la primera linea que
+  // tenga LA FORMA de esta credencial. Asi una sola copia con las dos sirve para las dos, y una
+  // pagina copiada entera (que trae la URL, la clave y un monton de texto de la interfaz) tambien:
+  // lo que no tiene la forma de una credencial se descarta solo.
+  for (const linea of lineas) {
+    const delPortapapeles = credencialParecida(linea, tipo);
+    if (delPortapapeles) return { valor: delPortapapeles, origen: "portapapeles" };
+  }
+  return { valor: "", origen: "ninguno" };
+}
+
+// MEDIDO 2026-10-02: el portapapeles se lee UNA SOLA VEZ y se reparte entre las dos credenciales.
+// Leerlo por credencial significaba dos llamadas a PowerShell, y ademas dos ventanas de 5s de
+// espera si el portapapeles esta bloqueado por otra app.
+// `opciones.portapapeles` INYECTA las lineas y evita llamar a PowerShell. MEDIDO 2026-10-02: sin
+// esto las pruebas del build heredaban el portapapeles de quien las estuviera corriendo, o sea que
+// el mismo `npm test` montaba el bundle con credenciales unas veces y sin ellas otras, y no habia
+// forma de probar el filtro de forma. Se comprueba con `hasOwnProperty` y no con un `|| []` a
+// proposito: `portapapeles: []` (bundle sin credenciales) tiene que ser un caso VALIDO, no un
+// "no me pases nada" que acabe leyendo el portapapeles de verdad.
+export function resolverCredencialesSupabase(opciones = {}) {
+  const lineas = Object.prototype.hasOwnProperty.call(opciones, "portapapeles")
+    ? opciones.portapapeles
+    : leerPortapapeles();
+  return {
+    url: resolverCredencial("SUPABASE_URL", "url", lineas),
+    anonKey: resolverCredencial("SUPABASE_ANON_KEY", "anon", lineas),
+  };
 }
 
 function renderPlanningPage(template, styles, inspectionStyles, backendBridge, plannerCore, workflowCore, inspectionCore, app, inspectionApp, performanceClient, generatedComment, pwaHead = "") {
@@ -425,7 +523,9 @@ function patchPerformanceClient(performanceClient) {
   return unchangedPatched;
 }
 
-export async function buildProject() {
+// MEDIDO 2026-10-02: `opciones.portapapeles` existe para que las pruebas no dependan del
+// portapapeles de quien las corre. Ver `resolverCredencialesSupabase`.
+export async function buildProject(opciones = {}) {
   await Promise.all([
     rm(distDir, { recursive: true, force: true }),
     rm(siteDir, { recursive: true, force: true }),
@@ -458,11 +558,20 @@ export async function buildProject() {
     read("src/web/shared/apps-script-ingesta-trigger.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
-  // La URL y la clave PUBLICABLE (cliente) de Supabase vienen del entorno del build, nunca del repo.
-  // Sin ellas, el lector queda apagado (isConfigured() false) y la pagina sigue por el puente.
+  // La URL y la clave PUBLICABLE (cliente) de Supabase nunca estan en el repo. Se resuelven UNA sola
+  // vez aqui (variable de entorno, y si no hay, portapapeles) y de ahi salen los cuatro clientes que
+  // las necesitan, y MEDIDO 2026-10-02 son TRES modulos, no cuatro: lector, auth y escritor.
+  // `catalog-boot` NO lleva marcador: pide la url y la clave a `PPSupabaseReader.config()`
+  // (supabase-catalog-boot.js:200), o sea que hereda la credencial en vez de duplicarla. Por eso las
+  // sustituciones son cuatro (dos marcadores x tres modulos) pero el bundle trae la URL y la clave
+  // tres veces cada una, y ese conteo es el que la prueba cuenta. Sin ellas el lector queda apagado
+  // (isConfigured() false) y el aviso de check-project.mjs lo dice.
+  const credenciales = resolverCredencialesSupabase(opciones);
+  const supabaseUrl = credenciales.url;
+  const supabaseAnonKey = credenciales.anonKey;
   const supabaseReader = supabaseReaderRaw
-    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
-    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+    .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
+    .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
   let skillsHtml = skillsSource
     .replace("{{BRIDGE_CLIENT}}", () => backendBridge.trimEnd())
     .replace("{{PLANNER_CORE}}", () => plannerCore.trimEnd());
@@ -477,8 +586,8 @@ export async function buildProject() {
   // app pida nada. Va antes que el lector a proposito: el lector va a necesitar el
   // token, y este modulo es quien lo tiene.
   const supabaseAuth = supabaseAuthRaw
-    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
-    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+    .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
+    .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
   // Orden de los runtime clients, y por que es este:
   //   auth  -> pantalla de entrada y token
   //   reader-> sabe leer de Supabase
@@ -494,8 +603,8 @@ export async function buildProject() {
   // inicial para recuperar el borrador'. Envolver applyImported no depende de ese
   // texto, y la vista de eventos tampoco: se engancha al hash y al DOM.
   const catalogBoot = catalogBootRaw
-    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
-    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+    .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
+    .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
   const catalogApply = catalogApplyRaw;
   // El escritor entra DESPUES de reader y boot, y antes del registro de eventos: usa el
   // token de supabase-auth y la url de supabase-reader, y el registro lee lo que el
@@ -503,8 +612,8 @@ export async function buildProject() {
   // ninguna pagina lo puede llamar, que es la forma de tener codigo muerto que
   // parece funcionar.
   const catalogWrite = supabaseWriterRaw
-    .replace("__PP_SUPABASE_URL__", String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""))
-    .replace("__PP_SUPABASE_ANON_KEY__", String(process.env.SUPABASE_ANON_KEY || ""));
+    .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
+    .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
   // La vista de eventos no trae marcadores de configuracion: la URL y la clave las
   // pide al lector (un solo sitio las sabe) y el JWT a la sesion.
   const eventLog = eventLogRaw;
@@ -611,6 +720,14 @@ self.addEventListener("fetch", (event) => {
     serverFiles,
     htmlFiles: ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"],
     pagesFiles: ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"],
+    // MEDIDO 2026-10-02: el build dice DE DONDE salio cada credencial al terminar, porque el aviso
+    // de check-project.mjs dice si falto una, y sin esto la unica forma de saber si el bundle va
+    // con la clave del portapapeles o con una variable vieja de otra consola es abrir el HTML.
+    // Los VALORES no se imprimen, solo el origen.
+    credenciales: [
+      { nombre: "SUPABASE_URL", origen: supabaseUrl.origen, vacia: !supabaseUrl.valor },
+      { nombre: "SUPABASE_ANON_KEY", origen: supabaseAnonKey.origen, vacia: !supabaseAnonKey.valor },
+    ],
   };
 }
 
@@ -619,4 +736,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   console.log(`Apps Script generado en ${result.distDir}`);
   console.log(`GitHub Pages generado en ${result.siteDir}`);
   console.log(`${result.serverFiles.length} archivos de servidor, ${result.htmlFiles.length} vistas Apps Script y ${result.pagesFiles.length} paginas estaticas.`);
+for (const credencial of result.credenciales) {
+    console.log(`  ${credencial.nombre}: ${credencial.vacia ? "SIN CREDENCIAL (lector apagado)" : credencial.origen}`);
+  }
 }
