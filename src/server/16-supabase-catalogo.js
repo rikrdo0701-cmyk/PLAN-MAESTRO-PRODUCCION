@@ -404,6 +404,59 @@ function PP_supabaseMirrorCatalogo_(tabla, filas, config) {
 }
 
 // -----------------------------------------------------------------------------
+// LECTURA de una tabla de Supabase (GET). El espejo de arriba escribe; ESTE es el
+// primer lector que tiene Apps Script, y existe por una sola tabla:
+// `inspection_routes`, el catalogo de tramos de inspeccion migrado desde la hoja
+// `Tramos` (ver docs/schema-inspection-routes.sql).
+//
+// MEDIDO 2026-10-01: hasta aqui no habia NINGUN GET a /rest/v1 en src/server/.
+// Los dos unicos usos de Supabase desde Apps Script eran el RPC de espejo
+// (16-supabase-catalogo.js:387) y la ingesta (19-appscript-ingesta-supabase.js:158),
+// los dos POST. Los catalogos se leian de Drive y el plan de la web, y la pagina
+// leia de Supabase en el navegador. Por eso esta funcion no es "un helper mas":
+// es la puerta que hace que Apps Script pueda LEER un catalogo que ya no esta en
+// una hoja.
+//
+// POR QUE service role Y NO LA CLAVE PUBLICABLE. Esta es la credencial de servidor
+// (SUPABASE_KEY de supabase-config.gs), la misma que usa el espejo. Con la clave
+// publicable y sin sesion la Data API responde HTTP 200 con CERO filas
+// (supabase-reader.js:162-175), o sea que un forget de credencial se veria como
+// "el catalogo esta vacio" y no como un error. Con service role el 401 y el 403
+// se ven, que es lo que hace falta cuando lo que se abrio mal es la credencial.
+//
+// QUE NO HACE, A PROPOSITO. No pagina: el llamador decide el limite, y por que
+// sea explicito en el codigo de quien llama y no aqui. No reintenta: un 401, un
+// 403 y un 404 no mejoran esperando, y un reintento convierte un fallo
+// instantaneo en un guardado lento con la misma respuesta final.
+// -----------------------------------------------------------------------------
+function PP_supabaseLee_(tabla, opciones) {
+  var config = PP_supabaseCatalogoConfig_();
+  if (!config) throw new Error('Supabase sin configuracion (SUPABASE_URL/SUPABASE_KEY)');
+  var opts = opciones || {};
+  var partes = ['select=' + encodeURIComponent(opts.select || '*')];
+  if (opts.order) partes.push('order=' + encodeURIComponent(opts.order));
+  if (opts.limit != null) partes.push('limit=' + encodeURIComponent(String(opts.limit)));
+  var url = config.url + '/rest/v1/' + encodeURIComponent(tabla) + '?' + partes.join('&');
+  var res = UrlFetchApp.fetch(url, {
+    method: 'GET',
+    headers: {
+      apikey: config.key,
+      Authorization: 'Bearer ' + config.key,
+      Accept: 'application/json'
+    },
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var texto = res.getContentText();
+  if (code !== 200) {
+    throw new Error('Supabase ' + tabla + ' HTTP ' + code + ': ' + texto.slice(0, 300));
+  }
+  if (!texto) return [];
+  var datos = JSON.parse(texto);
+  return Object.prototype.toString.call(datos) === '[object Array]' ? datos : [datos];
+}
+
+// -----------------------------------------------------------------------------
 // Conversiones de celda
 // -----------------------------------------------------------------------------
 

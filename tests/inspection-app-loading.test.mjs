@@ -36,6 +36,18 @@ function createElement(id) {
   };
 }
 
+/**
+ * MEDIDO 2026-10-01: el harness ya NO expone `PPAppsScriptBridge`. Antes si, y la app
+ * pedia las cuatro funciones de la hoja de inspeccion (`getInspectionWorkOrders`,
+ * `getInspectionWorkOrderBundle`, `getInspectionHistory`, `recordInspectionPrint`) por
+ * `call(...)`, o sea por Apps Script, que esta deshabilitado (RULE-SUP-029). Con el
+ * puente en el harness, estos tests pasaban mientras la pagina en produccion no podia
+ * ni hacer la lista de OTs: el mock era mas fiel que el codigo.
+ *
+ * Ahora el harness expone `PPSupabaseBridgeReplacement`, que es la unica fuente de
+ * datos, y `callBackend` sigue recibiendo el nombre del metodo como primer argumento
+ * para que los asserts de este archivo no cambien.
+ */
 function createHarness(callBackend, now = { value: 0 }) {
   const elements = new Map();
   const byId = (id) => {
@@ -58,7 +70,14 @@ function createHarness(callBackend, now = { value: 0 }) {
   const window = {
     document,
     location: { hash: "" },
-    PPAppsScriptBridge: { call: callBackend },
+    PPSupabaseBridgeReplacement: Object.fromEntries(
+      [
+        "getInspectionWorkOrders",
+        "getInspectionWorkOrderBundle",
+        "getInspectionHistory",
+        "recordInspectionPrint",
+      ].map((metodo) => [metodo, (...args) => callBackend(metodo, args)]),
+    ),
     InspectionCore: {
       initialOperationSelection: (operations) => Object.fromEntries(operations.map((operation, index) => [operation.id || operation.code || String(index), true])),
       inspectionMaterials: (materials) => materials,

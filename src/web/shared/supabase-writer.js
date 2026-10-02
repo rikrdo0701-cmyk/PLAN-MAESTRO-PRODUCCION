@@ -1065,6 +1065,299 @@
     return cerrar(informe, t0);
   }
 
+  // ---------------------------------------------------------------------------
+  // EL TRAMO DE INSPECCION: UNA fila, un solo escritor
+  // ---------------------------------------------------------------------------
+  //
+  // QUE ES Y POR QUE NO ESTA EN `CATALOGOS`. `inspection_routes` es el catalogo de
+  // tramos de inspeccion, migrado de la hoja `Tramos` del libro
+  // INSPECTION_SPREADSHEET_ID (docs/schema-inspection-routes.sql). MEDIDO
+  // 2026-10-01: antes de migrar, la pagina lo leia de `materials` (que es tabla DEL
+  // ERP) y por ahi no hay columna de tramo, y lo guardaba tambien en `materials`
+  // (`dibujo: route`), o sea que un tramo de inspeccion terminaba en una columna de
+  // dibujo de materiales que el RESTlet 2246 sobreescribe cada 15 minutos. No era
+  // un problema de sincronizacion: el dato no estaba donde se guardaba.
+  //
+  // POR QUE UNA FUNCION SUELTA Y NO UNA ENTRADA DE CATALOGOS. Los catalogos se
+  // guardan con guardarCatalogos(state), que es un ESPEJO del estado del plan
+  // entero, y `inspection_routes` no es parte de ese estado (PP_buildState_ no tiene
+  // un campo de tramos). Meterlo en CATALOGOS obligaria a meter los tramos en el
+  // estado, y eso es cambiar un contrato que consume el planificador entero para
+  // algo que solo usa la pestana de inspeccion. Ademas el guardado de un tramo es
+  // de UNA fila: la persona edita un tramo y le da Guardar. Un espejo por cada
+  // guardado de tramo no cabe.
+  //
+  // EL ESCRITOR. Esta funcion. Y solo esta. Antes de migrar habia dos escritores
+  // peleando por el mismo dato (esta pagina y `saveInspectionLink` de Apps Script,
+  // que escribia la hoja) y el que perdia se enteraba al imprimir, no al guardar.
+  // `saveInspectionLink` de Apps Script ahora se niega con un mensaje que dice
+  // donde esta (16-inspection-service.js).
+  //
+  // QUE DEVUELVE. `{ ok, fila, avisos, ms }` con `fila` YAGUARDADO (la fila que
+  // quedo en la base, no la que se pidio): quien llama la pinta en la tabla
+  // despues de guardar, y si se pinta la que se pidio y el servidor normalizo
+  // algo, la tabla y la base se separan hasta la recarga.
+  //
+  // LO QUE NO HACE, A PROPOSITO. No borra. No hay accion de "borrar tramo" en la
+  // pagina y anadirla seria meter un DELETE desde un navegador contra una tabla que
+  // se puede reponer con una importacion, sin la garantia de que se estea
+  // borrando lo que la persona cree. Para dejar de usar un tramo se le borra el
+  // texto, que es lo que se puede deshacer.
+  async function guardarInspectionRoute(fila, opciones) {
+    const opts = opciones || {};
+    const t0 = Date.now();
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: "inspection_routes", fila: null };
+    if (!isConfigured()) {
+      return sinEscribir(informe, t0, "Supabase no esta configurado en este build: faltan la URL o la clave publicable");
+    }
+    const auth = root.PPSupabaseAuth;
+    if (!auth || typeof auth.token !== "function") {
+      return sinEscribir(informe, t0, "no esta PPSupabaseAuth: no hay quien pida el token de sesion");
+    }
+    const token = await auth.token();
+    if (!token) {
+      return sinEscribir(informe, t0, "no hay sesion de Supabase: entra con tu correo para poder guardar el tramo. No se escribe nada");
+    }
+
+    const articulo = texto(fila && fila.articulo);
+    const material = texto(fila && fila.material);
+    if (!articulo) {
+      return sinEscribir(informe, t0, "el tramo necesita el articulo: sin el no hay clave y no se puede guardar");
+    }
+    const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+
+    // La clave se calcula AQUI, no se acepta del que llama. Es la misma regla que
+    // aplica el servidor (PP_normalizeKey_ en 02-storage.js:2419 y
+    // PP_Inspection_routeKey_ en 16-inspection-service.js): trim, mayusculas, sin
+    // acentos y espacios como "_". Si la calculara el que llama, dos paginas con
+    // distinta normalizacion meterian dos filas por el mismo tramo, y el indice
+    // unico de `clave` no las podria de-duplicar porque estarian en claves
+    // distintas. Aceptarla seria cambiar la identidad del dato desde la pagina.
+    const clave = normalizeKey(articulo) + "|" + normalizeKey(material);
+    const cuerpo = {
+      clave: clave,
+      articulo: articulo,
+      material: material,
+      tramo: texto(fila && fila.tramo).slice(0, 100),
+      // `actualizado` es lo que la tabla de Catalogos muestra y en la hoja era una
+      // celda de TEXTO. Se escribe con el mismo formato que usaba la hoja
+      // (dd/MM/yyyy HH:mm:ss) para que la columna siga siendo la misma clase de dato
+      // y no se cambie lo que se ve sin que nadie lo pidiera.
+      actualizado: texto(fila && fila.actualizado) || momentoDeGuardado(),
+    };
+    // `dibujo` SOLO si viene en la llamada. La razon: el dialogo de la pagina edita
+    // el TRAMO, no el dibujo. Con `dibujo: payload.dibujo || ""` en el cuerpo, cada
+    // guardado de tramo borraria el dibujo de esa fila, y el dibujo es justamente el
+    // dato que no se esta editando. Un guardado parcial que no manda la columna no
+    // la toca (PostgREST manda un UPDATE con las columnas del cuerpo).
+    if (fila && Object.prototype.hasOwnProperty.call(fila, "dibujo")) {
+      cuerpo.dibujo = texto(fila.dibujo).slice(0, 1000);
+    }
+
+    try {
+      const respuesta = await pedir(token, "POST", "inspection_routes", {
+        cuerpo: cuerpo,
+        onConflict: "clave",
+        prefer: "resolution=merge-duplicates,return=representation",
+      });
+      let guardada = null;
+      try {
+        const cuerpoRespuesta = await respuesta.json();
+        if (Array.isArray(cuerpoRespuesta) && cuerpoRespuesta.length) guardada = cuerpoRespuesta[0];
+      } catch (error) {
+        // return=representation es una cortesia: si el cuerpo no se puede leer, lo
+        // que importa es que la escritura SALIO, y eso ya se sabe por el status.
+      }
+      informe.tablas.inspection_routes = { insertadas: 1, error: null };
+      informe.fila = guardada || cuerpo;
+    } catch (error) {
+      const crudo = sano((error && error.message) || error, ctx.secretos);
+      informe.ok = false;
+      informe.tablas.inspection_routes = { insertadas: 0, error: crudo };
+      // MEDIDO 2026-09-30 en la escritura de catalogos, con este texto de PostgREST:
+      //   there is no unique or exclusion constraint matching the ON CONFLICT specification
+      // O sea que la tabla NO esta con el DDL aplicado (o el indice unico sobre
+      // `clave` se creo como indice PARCIAL, que PostgreSQL no infiere). Es un cambio
+      // de esquema y no de la pagina, asi que el aviso lo dice con el archivo que lo
+      // arregla en vez de dejar que quien lo lea tenga que saber de Postgres.
+      if (/no unique or exclusion constraint matching the ON CONFLICT/i.test(crudo)) {
+        informe.avisos.push(
+          "a inspection_routes le falta el indice unico sobre (clave), o el que hay es parcial. "
+          + "Es un cambio de schema, no de la pagina: aplica docs/schema-inspection-routes.sql"
+        );
+      }
+    }
+    return cerrar(informe, t0);
+  }
+
+  /** La fecha que la hoja ponia en `Ultima modificacion`, en el mismo formato. */
+  function momentoDeGuardado() {
+    const ahora = new Date();
+    const dos = function (n) { return String(n).padStart(2, "0"); };
+    return dos(ahora.getDate()) + "/" + dos(ahora.getMonth() + 1) + "/" + ahora.getFullYear()
+      + " " + dos(ahora.getHours()) + ":" + dos(ahora.getMinutes()) + ":" + dos(ahora.getSeconds());
+  }
+
+  // ---------------------------------------------------------------------------
+  //
+  // EL HISTORIAL DE IMPRESIONES. Es OTRA tabla (`inspection_history`,
+  // docs/schema-inspection-history.sql) y otro escritor, y NO se mezcla con el de
+  // arriba a proposito: `inspection_routes` es el CATALOGO de tramos (una fila por
+  // articulo+material, se edita a mano, se actualiza) y esta es el HISTORIAL (una fila
+  // por impresion, la escribe la pagina sola, NUNCA se actualiza). Un historial que se
+  // actualiza no es un historial.
+  //
+  // POR QUE EXISTE. MEDIDO 2026-10-01: `recordInspectionPrint` de Apps Script
+  // escribia la hoja `HISTORIAL_IMPRESION_INSPEC` por el puente, que esta
+  // deshabilitado (RULE-SUP-029). La impresion salia igual, porque la app trata el
+  // registro como no bloqueante y pregunta ""Imprimir de todos modos?"", pero no
+  // quedaba registro en ningun sitio. No era un historial en otro lugar: era un
+  // historial SIN LUGAR, y nadie se enteraba.
+  //
+  // LO QUE ESCRIBE, COLUMNA POR COLUMNA, Y DE DONDE SALE CADA UNA. Las doce de la
+  // hoja `HISTORIAL_IMPRESION_INSPEC`, en el mismo orden (la declaracion de esas
+  // columnas esta en PP_Inspection_historySheet_, 16-inspection-service.js:666) y con
+  // el mapeo que hacia `recordInspectionPrint` (16-inspection-service.js:689):
+  //
+  //   fecha_hora            <- `momentoDeGuardado()`, el MISMO formato de la hoja
+  //   ot                    <- payload.wo
+  //   articulo              <- payload.article, 200
+  //   cantidad              <- payload.quantity, numerico
+  //   estado_trabajo        <- payload.status, 80
+  //   semaforo              <- payload.semaphore, 40
+  //   alertas               <- payload.alerts unidos con " | "
+  //   materiales_pendientes <- "material: cantidad" unidos con " | "
+  //   materiales_deficit    <- "material: deficit" unidos con " | "
+  //   sin_dibujo            <- "SI" / "NO"
+  //   falta_tramo           <- "SI" / "NO"
+  //   detalle               <- payload.detail + las operaciones, como objeto
+  //
+  // Los TRES de texto unido se guardan como texto y no se parten en tablas hijas: la
+  // hoja guardaba una linea por impresion y una persona la leia; partirla en tres
+  // seria cambiar el dato y el modo de leerlo sin que nadie lo pidiera. El `SI`/`NO`
+  // tambien es texto y no boolean por lo mismo (lo que se leia antes era `SI`; el
+  // lector acepta las dos formas, ver mapInspectionHistory).
+  //
+  // EL POST ES UN INSERT Y SIEMPRE. No hay `on_conflict` y no hay indice UNIQUE: dos
+  // impresiones de la misma OT en el mismo segundo son DOS impresiones, y un
+  // `merge-duplicates` sobre (ot, fecha_hora) se comeria la segunda. Por eso esta tabla
+  // NO esta en la whitelist de `ingesta_mirror`, que es borra-e-inserta (RULE-SUP-021).
+  //
+  // `fecha_hora` Y `printed_at`, LAS DOS. La primera es el texto que la pagina ve, con
+  // el formato de la hoja; la segunda es el instante, para ordenar y para auditar. Es el
+  // mismo criterio que `actualizado` / `actualizado_at` de los tramos (RULE-INS-001), y
+  // por la misma razon: un dato de texto libre que se muestra no se convierte, y el
+  // instante se agrega aparte. Las dos salen del MISMO reloj de la misma llamada, asi
+  // que no pueden discrepar.
+  //
+  // SI NO HAY SESION, NO SE ESCRIBE. Igual que `guardarInspectionRoute`: sin token no
+  // hay con quien hablar con RLS, y un historial a medias es peor que un historial que
+  // no esta, porque el que falta se puede volver a registrar y el que quedo sin fila no
+  // se sabe. La app avisa y deja imprimir (el registro nunca fue bloqueante).
+  //
+  // QUE DEVUELVE. `{ ok, fila, avisos, ms }` con `fila` YAGUARDADO, como el escritor de
+  // arriba: quien llama (printInspection) solo necesita `ok`, pero el mismo contrato en
+  // las dos escrituras hace que no haya que recordar cual de las dos devuelve que.
+  async function guardarInspectionPrint(fila, opciones) {
+    const opts = opciones || {};
+    const t0 = Date.now();
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: "inspection_history", fila: null };
+    if (!isConfigured()) {
+      return sinEscribir(informe, t0, "Supabase no esta configurado en este build: faltan la URL o la clave publicable");
+    }
+    const auth = root.PPSupabaseAuth;
+    if (!auth || typeof auth.token !== "function") {
+      return sinEscribir(informe, t0, "no esta PPSupabaseAuth: no hay quien pida el token de sesion");
+    }
+    const token = await auth.token();
+    if (!token) {
+      return sinEscribir(informe, t0, "no hay sesion de Supabase: entra con tu correo para que la impresion quede registrada");
+    }
+
+    // El folio se acepta en los dos juegos de nombres porque el payload sale de
+    // `printInspection` (que manda `wo`) y el que se lee en el historial acepta `ot`
+    // o `FOLIO`. Se elige UNO para escribir: la columna es `ot`.
+    const folio = texto(fila && (fila.wo || fila.ot || fila.OT || fila.folio));
+    if (!folio) {
+      return sinEscribir(informe, t0, "la impresion necesita el folio de la OT: sin el no se sabe de que OT es");
+    }
+
+    // El texto de una lista de "material: cantidad", con el separador de la hoja.
+    const lista = function (items, valorDe) {
+      return (Array.isArray(items) ? items : []).map(function (item) {
+        return texto(item && (item.material || item.componente || item.MATERIAL)) + ":" + texto(valorDe(item));
+      }).filter(function (linea) { return linea.charAt(0) !== ":"; }).join(" | ");
+    };
+    const cuerpo = {
+      ot: folio.slice(0, 80),
+      fecha_hora: texto(fila && fila.fecha_hora) || momentoDeGuardado(),
+      articulo: texto(fila && (fila.articulo || fila.ARTICULO || fila.article)).slice(0, 200),
+      cantidad: numero(fila && (fila.cantidad !== undefined ? fila.cantidad : fila.quantity)),
+      estado_trabajo: texto(fila && (fila.estado_trabajo || fila.estadoTrabajo || fila.ESTADO_TRABAJO || fila.status)).slice(0, 80),
+      semaforo: texto(fila && (fila.semaforo || fila.semaphore || fila.SEMAFORO)).slice(0, 40),
+      // `alertas` y `alerts` son la MISMA lista con dos nombres, y solo uno de los dos
+      // llega de la pagina. MEDIDO 2026-10-01 con este test: `printInspection`
+      // (inspection-app.js) manda la propiedad en ingles, `alerts`, porque asi la
+      // nombraba el payload viejo de `recordInspectionPrint` de Apps Script; el
+      // escritor la leia como `alertas`, que es el nombre de la COLUMNA y el de la
+      // hoja. Con solo uno de los dos, la columna salia VACIA en todas las
+      // impresiones y el historial no decia que habia alertas. Se aceptan los dos
+      // nombres porque el dato entra de la pagina (ingles) o de una fila vieja
+      // (hoja, espanol) y no hay forma de saber de donde viene cada llamada.
+      alertas: (Array.isArray(fila && (fila.alertas || fila.alerts))
+        ? (fila.alertas || fila.alerts) : [])
+        .map(function (a) { return texto(a); }).filter(Boolean).join(" | "),
+      materiales_pendientes: lista(fila && (fila.materiales_pendientes || fila.pendingMaterials),
+        function (item) { return item && (item.quantity !== undefined ? item.quantity : item.cantidad); }).slice(0, 2000),
+      materiales_deficit: lista(fila && (fila.materiales_deficit || fila.deficitMaterials),
+        function (item) { return item && item.deficit; }).slice(0, 2000),
+      sin_dibujo: (fila && (fila.sin_dibujo || fila.sinDibujo || fila.withoutDrawing)) ? "SI" : "NO",
+      falta_tramo: (fila && (fila.falta_tramo || fila.faltaTramo || fila.missingRoutes)) ? "SI" : "NO",
+      // El detalle es un OBJETO en jsonb, no el texto de la hoja. El servidor hacia
+      // `JSON.stringify(detail)` porque la celda era de texto; aqui el tipo lo lleva
+      // la columna, y mandar el texto seria escribir un json dentro de un json.
+      detalle: (function () {
+        const base = fila && fila.detalle && typeof fila.detalle === "object" ? fila.detalle : (fila && fila.detail && typeof fila.detail === "object" ? fila.detail : {});
+        const operaciones = (Array.isArray(fila && fila.operations) ? fila.operations : [])
+          .map(function (value) { return texto(value); }).filter(Boolean);
+        return Object.assign({}, base, { operations: operaciones });
+      })(),
+    };
+
+    const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+    try {
+      const respuesta = await pedir(token, "POST", "inspection_history", {
+        cuerpo: cuerpo,
+        prefer: "return=representation",
+      });
+      let guardada = null;
+      try {
+        const cuerpoRespuesta = await respuesta.json();
+        if (Array.isArray(cuerpoRespuesta) && cuerpoRespuesta.length) guardada = cuerpoRespuesta[0];
+      } catch (error) {
+        // return=representation es una cortesia: si el cuerpo no se puede leer, lo que
+        // importa es que la escritura SALIO, y eso ya lo dice el status.
+      }
+      informe.tablas.inspection_history = { insertadas: 1, error: null };
+      informe.fila = guardada || cuerpo;
+    } catch (error) {
+      const crudo = sano((error && error.message) || error, ctx.secretos);
+      informe.ok = false;
+      informe.tablas.inspection_history = { insertadas: 0, error: crudo };
+      // MEDIDO 2026-10-01: sin esta tabla, PostgREST responde 404 con
+      // "Could not find the table 'public.inspection_history' in the schema cache",
+      // que no dice de donde sale el problema. El aviso nombra el archivo que lo
+      // arregla, igual que el de `inspection_routes` con el ON CONFLICT.
+      if (/Could not find the table|schema cache|PGRST205/i.test(crudo)) {
+        informe.avisos.push(
+          "no existe la tabla inspection_history. Es un cambio de schema, no de la pagina: "
+          + "aplica docs/schema-inspection-history.sql"
+        );
+      }
+    }
+    return cerrar(informe, t0);
+  }
+
   /**
    * app_state tiene UNA fila (id integer, check id = 1): se ACTUALIZA, no se
    * inserta. Un POST crearia una fila que el check del DDL no deja crear, y un
@@ -1128,6 +1421,25 @@
   // ---------------------------------------------------------------------------
 
   function texto(valor) { return String(valor == null ? "" : valor).trim(); }
+
+  /**
+   * La MISMA normalizacion del servidor y del lector, copiada de proposito:
+   *   PP_normalizeKey_            src/server/02-storage.js:2419
+   *   normalizeKey                src/web/shared/supabase-reader.js:252
+   * trim + mayusculas + sin acentos + espacios como "_".
+   *
+   * POR QUE COPIADA Y NO IMPORTADA. El escritor no importa al lector (el lector es
+   * solo lectura y no debe arrastrar dependencias de escritura), y en el navegador
+   * plano los dos son scripts sueltos sin modulos. Copiar tres lineas con el
+   * nombre del origen al lado es lo que hace que un cambio en una de las tres se
+   * note en la revision: si en cambio se llama al del lector, el escritor deja de
+   * escribir en cuanto el lector se apaga por no tener sesion, que es un fallo de
+   * escritura disfrazado de lectura.
+   */
+  function normalizeKey(valor) {
+    return String(valor == null ? "" : valor).trim().toUpperCase().normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_");
+  }
 
   function numero(valor, porDefecto) {
     const defecto = porDefecto === undefined ? 0 : porDefecto;
@@ -2102,6 +2414,20 @@
   root.PPSupabaseWriter = {
     guardar: guardar,
     guardarCatalogos: guardarCatalogos,
+    // MEDIDO 2026-10-01: el UNICO escritor de `inspection_routes` (tramos de
+    // inspeccion). No entra por guardarCatalogos porque esa funcion es un espejo
+    // del estado del plan y los tramos no son parte de ese estado; y no esta en
+    // `CATALOGOS` por lo mismo. El dialogo de tramo y la tabla de Catalogos
+    // guardan por aqui, y nada mas.
+    guardarInspectionRoute: guardarInspectionRoute,
+    // MEDIDO 2026-10-01: el UNICO escritor de `inspection_history`. Aparte de
+    // guardarInspectionRoute a proposito: esa actualiza la fila del CATALOGO de
+    // tramos y esta INSERTA una fila nueva por impresion, que es lo unico que hace
+    // que un historial sea un historial. `printInspection` (inspection-app.js) es su
+    // unico consumidor, y registra aunque la impresion se cancele en el dialogo del
+    // navegador: es el momento en que la hoja de impresion ya se dio por buena.
+    guardarInspectionPrint: guardarInspectionPrint,
+    normalizeKey: normalizeKey,
     // armarCatalogos() sin red, para probar el mapeo y las claves contra el esquema
     // sin abrir nada (mismo criterio que armarPayload para el plan).
     armarCatalogos: armarCatalogos,

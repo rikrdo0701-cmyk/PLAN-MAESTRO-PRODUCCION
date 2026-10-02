@@ -1,13 +1,11 @@
-function PP_Inspection_routeLooseKey_(value) {
-  return String(value == null ? '' : value)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Za-z0-9]/g, '')
-    .toUpperCase();
-}
-
-function PP_Inspection_cleanDrawing_(value) {
-  return PP_Inspection_text_(value, 1000).replace(/^['"]+|['"]+$/g, '').trim();
-}
+// MEDIDO 2026-10-01: PP_Inspection_routeLooseKey_ y PP_Inspection_cleanDrawing_ se
+// movieron a 16-inspection-service.js. Este archivo las usaba y las declaraba, y
+// con la migracion del catalogo a Supabase el indice se arma en 16
+// (PP_Inspection_routeIndexFrom_): dejarlas aqui obligaba al servicio base a
+// depender del de dibujo. Declarar la misma funcion en los dos archivos no rompe
+// nada en JavaScript (gana la ultima que carga) y por eso es peor: una se puede
+// corregir y el comportamiento no cambiar. El test de funciones duplicadas de
+// src/server/ es el que lo atrapa.
 
 function getInspectionWorkOrderBundle(wo, options) {
   return PP_Inspection_result_(function() {
@@ -45,6 +43,36 @@ function getInspectionWorkOrderBundle(wo, options) {
   });
 }
 
+/**
+ * EL INDICE DE TRAMOS, con los tres niveles de emparejamiento.
+ *
+ * MEDIDO 2026-10-01: antes armaba el indice LEYENDO LA HOJA `Tramos`. Ahora las
+ * filas salen de `inspection_routes` en Supabase (PP_Inspection_routeIndexConFuente_,
+ * 16-inspection-service.js) y lo unico que cambia aqui es de donde vienen: los tres
+ * niveles de busqueda son los mismos de antes y por eso el resultado de la hoja de
+ * impresion no se mueve.
+ *
+ * LOS TRES NIVELES, Y POR QUE HAY TRES. (1) `articulo|material` con
+ * PP_normalizeKey_ es la clave de la fila, la que esta indexada. (2) El mismo par
+ * con la clave laxa, que ademas quita la puntuacion: sin este, un material escrito
+ * "MP-1" y otro "MP 1" no se encontrarian y el tramo salia vacio en silencio.
+ * (3) `articulo|` con material vacio es el DIBUJO A NIVEL DE OT, que en la hoja es
+ * una fila mas y no un caso aparte, y `byMaterialDrawing` es el ultimo recurso:
+ * el dibujo guardado contra la materia prima, para cuando el material de la OT no
+ * tiene fila propia.
+ *
+ * `rows` es lo que ve la tabla de Catálogos, y sale de `rowsByKey` (nivel 1) para
+ * NO salir duplicado: una fila que esta en los tres niveles es un tramo, no tres.
+ *
+ * LA CACHE, Y POR QUE SIGUE VALIENDO. 15 minutos (PP_INSPECTION_ROUTE_INDEX_CACHE_TTL_SECONDS).
+ * Antes era correcta porque la hoja no cambiaba sola; ahora la cambia la pagina, y
+ * por eso el guardado desde la pagina NO la invalida (la cache es de Apps Script y
+ * la escritura va por la Data API). El TTL corto es lo que acota el peor caso: un
+ * tramo guardado en otra pestana se ve aqui hasta 15 minutos despues. No se bajo
+ * el TTL porque el nombre de la OT se arma con esto en cada impresion, que es
+ * donde si se paga la latencia. La importacion PP_migrarTramosASupabase_ si
+ * invalida, porque ahi el cambio es de las 400 filas y no de una.
+ */
 function PP_Inspection_routeIndexV2_() {
   const cache = PP_Inspection_routeIndexCache_();
   if (cache) {
@@ -52,39 +80,30 @@ function PP_Inspection_routeIndexV2_() {
       const cached = cache.get(PP_INSPECTION_ROUTE_INDEX_CACHE_KEY);
       if (cached) return JSON.parse(cached);
     } catch (error) {
-      // La cache es opcional; continuar con la hoja Tramos.
+      // La cache es opcional; continuar con la fuente de verdad.
     }
   }
-  const sheet = PP_Inspection_sheet_(PP_INSPECTION_ROUTES_SHEET, ['Articulo', 'Materia prima', 'Tramo', 'DIBUJO', 'Ultima modificacion']);
-  const index = { rows: [], byMaterialDrawing: {} };
+  const lectura = PP_Inspection_routeIndexConFuente_();
+  const index = { rows: [], byMaterialDrawing: {}, fuente: lectura.fuente, aviso: lectura.aviso };
   const rowsByKey = {};
-  PP_readRows_(sheet).forEach(function(row) {
-    const article = PP_Inspection_text_(PP_Inspection_value_(row, ['Articulo', 'Artículo', 'bf', 'ARTICULO']));
-    const material = PP_Inspection_text_(PP_Inspection_value_(row, ['Materia prima', 'Material', 'MATERIAL']));
-    if (!article) return;
-    const item = {
-      ARTICULO: article,
-      MATERIAL: material,
-      TRAMO: PP_Inspection_text_(PP_Inspection_value_(row, ['Tramo', 'TRAMO'])),
-      DIBUJO: PP_Inspection_cleanDrawing_(PP_Inspection_value_(row, ['DIBUJO', 'Dibujo', 'URL_DIBUJO'])),
-      ACTUALIZADO: PP_Inspection_value_(row, ['Ultima modificacion', 'Última modificación', 'ACTUALIZADO'])
-    };
-    const articleKey = PP_normalizeKey_(article);
-    const materialKey = PP_normalizeKey_(material);
-    const looseArticle = PP_Inspection_routeLooseKey_(article);
-    const looseMaterial = PP_Inspection_routeLooseKey_(material);
+  Object.keys(lectura.index).forEach(function (clave) {
+    const item = lectura.index[clave];
+    const articleKey = PP_normalizeKey_(item.ARTICULO);
+    const materialKey = PP_normalizeKey_(item.MATERIAL);
+    const looseArticle = PP_Inspection_routeLooseKey_(item.ARTICULO);
+    const looseMaterial = PP_Inspection_routeLooseKey_(item.MATERIAL);
     index[articleKey + '|' + materialKey] = item;
     index[looseArticle + '|' + looseMaterial] = item;
-    if (!material && item.DIBUJO) {
+    if (!item.MATERIAL && item.DIBUJO) {
       index[articleKey + '|'] = item;
       index[looseArticle + '|'] = item;
     }
-    if (material && item.DIBUJO && !index.byMaterialDrawing[looseMaterial]) {
+    if (item.MATERIAL && item.DIBUJO && !index.byMaterialDrawing[looseMaterial]) {
       index.byMaterialDrawing[looseMaterial] = item;
     }
     rowsByKey[articleKey + '|' + materialKey] = item;
   });
-  index.rows = Object.keys(rowsByKey).map(function(key) { return rowsByKey[key]; });
+  index.rows = Object.keys(rowsByKey).map(function (key) { return rowsByKey[key]; });
   if (cache) {
     try {
       cache.put(PP_INSPECTION_ROUTE_INDEX_CACHE_KEY, JSON.stringify(index), PP_INSPECTION_ROUTE_INDEX_CACHE_TTL_SECONDS);
@@ -161,7 +180,14 @@ function getInspectionWorkOrder(wo) {
         status: PP_Inspection_text_(PP_Inspection_value_(workOrder, ['estatus', 'status', 'Estado'])),
         revision: PP_Inspection_text_(PP_Inspection_value_(workOrder, ['Revision', 'revision', 'bomRevision'])) || 'A',
         drawing: drawingFallback },
-      materials: materials, operations: operations
+      materials: materials, operations: operations,
+      // MEDIDO 2026-10-01: los tramos salen de inspection_routes (Supabase) y la
+      // hoja `Tramos` es el plan B. Cuando se usa el plan B el tramo y el dibujo de
+      // esta OT pueden NO ser lo que esta guardado, y sin esto la impresion sale
+      // igual de bien y con el dato viejo. Viaja en la respuesta para que la pagina
+      // lo pueda decir en vez de imprimir un dato sin saberlo.
+      routesFuente: routes.fuente || 'supabase',
+      routesAviso: routes.aviso || ''
     };
   });
 }
@@ -170,7 +196,12 @@ function getInspectionDrawingRoutes(article) {
   return PP_Inspection_result_(function() {
     const key = PP_normalizeKey_(article);
     const loose = PP_Inspection_routeLooseKey_(article);
-    return PP_Inspection_routeIndexV2_().rows.filter(function(row) {
+    const index = PP_Inspection_routeIndexV2_();
+    // El contrato de esta funcion es una lista y no se cambia (Bridge.html y las
+    // pruebas dependen de eso), asi que el aviso del plan B no cabe en el valor de
+    // retorno: se deja en el log, que es donde se mira cuando el listado sale raro.
+    if (index.aviso) console.log('getInspectionDrawingRoutes: ' + index.aviso);
+    return index.rows.filter(function(row) {
       return !key || PP_normalizeKey_(row.ARTICULO) === key || PP_Inspection_routeLooseKey_(row.ARTICULO) === loose;
     });
   });

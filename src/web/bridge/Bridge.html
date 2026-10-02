@@ -34,9 +34,29 @@
     getInspectionWorkOrderBundle: true,
     getPlanningWorkOrderData: true,
     getPlanningWorkOrderDataBatch: true,
+    // MEDIDO 2026-10-01 (RULE-INS-001): saveInspectionLink SE QUEDA en la lista a
+    // proposito, y la razon es lo que hace la lista, no la funcion.
+    //
+    // QUITA de la lista lo que NO esta en la allowlist. Eso esta bien para una
+    // funcion que no debe existir. saveInspectionLink SI existe, pero ya no
+    // escribe: el catalogo de tramos se migro de la hoja `Tramos` a la tabla
+    // inspection_routes de Supabase y el unico escritor es la pagina
+    // (PPSupabaseWriter.guardarInspectionRoute). Si se quitara de aqui, quien
+    // llegara por el puente -- la pagina vieja de /exec, un enlace guardado, un
+    // script de pruebas -- recibiria 'function not found', que no dice ni que
+    // paso ni donde esta ahora. Con la funcion en su sitio, el error dice las dos
+    // cosas, y con la Allowlist puesta no puede hacer nada: no escribe.
+    //
+    // O sea que la lista aqui no es la de 'lo que funciona', es la de 'lo que
+    // responde'. Eso solo tiene sentido para una funcion que se niega.
     saveInspectionLink: true,
     getInspectionHistory: true,
     recordInspectionPrint: true,
+    // getInspectionDrawingRoutes SI lee: ahora arma su indice sobre las filas de
+    // inspection_routes (PP_Inspection_routeIndexV2_ en
+    // src/server/17-inspection-drawing-service.js) y cae a la hoja CONGELADA si
+    // Supabase no responde. Su contrato sigue siendo una lista, asi que el aviso
+    // del plan B va al log, no en el valor de retorno.
     getInspectionDrawingRoutes: true,
     listPlanSnapshots: true,
     getPlanSnapshot: true,

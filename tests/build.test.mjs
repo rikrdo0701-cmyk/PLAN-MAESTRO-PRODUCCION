@@ -742,10 +742,37 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /--inspection-print-scale/);
   assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
-  assert.match(pagesIndex, /call\("getInspectionWorkOrderBundle", task\.wo/);
-  assert.doesNotMatch(pagesIndex, /call\("getInspectionWorkOrder", wo\)/);
-  assert.doesNotMatch(pagesIndex, /call\("getInspectionDrawingRoutes"/);
-  assert.doesNotMatch(pagesIndex, /call\("getInspectionHistory"/);
+  // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
+  // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
+  // Apps Script. El puente esta deshabilitado (RULE-SUP-029) y las tres llamadas no
+  // tenían a quien responder: la pestana de inspeccion abria sin lista de OTs. Ahora
+  // salen por `llamar`, que es el reemplazo del puente, y el `call` ni existe en el
+  // archivo. El `doesNotMatch` de `PPAppsScriptBridge` es lo que protege esto: si alguien
+  // reintroduce el puente, no vuelve a entrar en silencio.
+  //
+  // LAS ASERCIONES DE `call(` VAN SOBRE EL TROZO DE `inspection-app.js`, NO SOBRE LA
+  // PAGINA ENTERA. El texto `call("getInspectionWorkOrders")` aparece legitimamente en un
+  // comentario de `supabase-bridge-replacement.js` (el que explica por que existia esa
+  // funcion), y `pagesIndex` lo contiene entero. Buscar en la pagina entera hacia fallar
+  // un test por un comentario, que es la forma mas rapida de que alguien borre la
+  // proteccion.
+  const inspectionAppSource = pagesIndex.slice(
+    pagesIndex.indexOf("(function inspectionAppFactory"),
+    pagesIndex.indexOf("root.InspectionApp = {"),
+  );
+  assert.ok(inspectionAppSource.length > 0, "no se encontro el modulo de la app de inspeccion en la pagina generada");
+  assert.match(inspectionAppSource, /llamar\("getInspectionWorkOrderBundle", task\.wo/);
+  assert.match(inspectionAppSource, /llamar\("getInspectionWorkOrders"\)/);
+  assert.match(inspectionAppSource, /llamar\("recordInspectionPrint", \{/);
+  assert.match(inspectionAppSource, /llamar\("getInspectionHistory", folio\)/);
+  for (const metodoViego of ["getInspectionWorkOrder", "getInspectionDrawingRoutes", "getInspectionHistory", "getInspectionWorkOrderBundle", "getInspectionWorkOrders", "recordInspectionPrint"]) {
+    assert.doesNotMatch(inspectionAppSource, new RegExp(`\\bcall\\("${metodoViego}"`), `la app de inspeccion vuelve a pedir ${metodoViego} por el puente de Apps Script`);
+  }
+  assert.doesNotMatch(inspectionAppSource, /PPAppsScriptBridge/);
+  // MEDIDO 2026-10-01: el historial distingue "no pude leer" de "no hay ninguna
+  // impresion". Con la tabla sin aplicar, sin esto la tarjeta decia "Total: 0" como si
+  // nadie hubiera impreso nunca.
+  assert.match(inspectionAppSource, /No se pudo leer el historial de impresiones/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
   assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
@@ -763,6 +790,23 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(inspectionRouteEditorSource, /InspectionCore\.applyInspectionRouteSave\(/);
   assert.match(inspectionRouteEditorSource, /errorElement\.hidden = false;[\s\S]*return false;/);
   assert.doesNotMatch(inspectionRouteEditorSource, /while \(true\)/);
+  // MEDIDO 2026-10-01 (RULE-INS-001). La fila con material VACIO de inspection_routes
+  // es el DIBUJO A NIVEL DE ORDEN DE TRABAJO, no un tramo a medio llenar. Tres cosas
+  // tienen que ser ciertas en el build, y las tres se-afirman sobre el TEXTO porque
+  // el dialogo depende de un <dialog> nativo que no se puede abrir en node:
+  //   1. la tabla lo DICE, para que una celda vacia no se lea como dato faltante;
+  //   2. el dialogo no ofrece un campo de Tramo para esa fila, porque el tramo de esa
+  //      fila no se consulta nunca (se busca por la clave `articulo + '|'`);
+  //   3. el submit de esa fila NO escribe. Un tramo vacio ahi seria un ok:true que
+  //      cambia una fila sin que nadie lo pidiera, que es el fallo silencioso mas
+  //      pequeno que hay: el unico rastro es una fila distinta a como estaba.
+  assert.match(pagesIndex, /\(dibujo de la OT\)/);
+  assert.match(inspectionRouteEditorSource, /confirmLabel: row\.material \? "Guardar tramo" : "Cerrar"/);
+  assert.match(inspectionRouteEditorSource, /submit: async \(values\) => \{\s*if \(!row\.material\) return true;/);
+  // Y la rama SIN material tiene que existir, no solo faltar el campo: sin el, el
+  // dialogo se abriria vacio y el boton diria "Cerrar" sobre nada.
+  assert.match(inspectionRouteEditorSource, /body: row\.material\s*\?[\s\S]*:\s*`[\s\S]*Dibujo de la OT|body: row\.material\s*\?[\s\S]*:\s*`[\s\S]*dibujo de la OT, sin material/);
+  assert.match(pagesIndex, /\.planning-muted \{ color: var\(--muted\); font-style: italic; \}/);
   assert.match(pagesIndex, /planningDialogConfirm\.disabled = true;[\s\S]*await submit\(values\)/);
   assert.match(pagesIndex, /state\.detail = bundle\.detail;[\s\S]*renderDetail\(\);[\s\S]*renderHistory\(bundle\.history/);
   assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);

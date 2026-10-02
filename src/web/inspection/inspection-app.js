@@ -15,7 +15,83 @@
   let selectionToken = 0;
   const byId = (id) => document.getElementById(id);
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
-  const call = (method, ...args) => root.PPAppsScriptBridge?.call(method, args) || Promise.reject(new Error("Backend no disponible"));
+  // MEDIDO 2026-10-01: antes aqui habia una flecha que llamaba al cliente del puente de
+  // Apps Script (`root.PPAppsScript…`, el `src/web/shared/apps-script-bridge-client.js`) y
+  // era la UNICA salida de esta pagina al backend: si no respondia, rechazaba con un
+  // unico mensaje, "Backend no disponible", que no decia si faltaba la red, la sesion o
+  // un build viejo. Se borro en vez de dejarla sin usar porque un puente muerto que sigue
+  // en el archivo es una puerta que la proxima persona vuelve a abrir. Las tres llamadas
+  // que la usaban ya salen por `llamar` (abajo), que es el unico camino que queda y que
+  // pone el nombre del metodo en el error.
+
+  /**
+   * MEDIDO 2026-10-01: TODO lo que esta pagina pide al backend sale por aqui.
+   *
+   * POR QUE NO SE USA `call`. `call` es el puente de Apps Script, y el puente esta
+   * deshabilitado (RULE-SUP-029): devuelve una promesa rechazada con "Backend no
+   * disponible". La pagina se quedaba sin lista de OTs, sin detalle y sin historial, sin
+   * un error que dijera por que. Estas cuatro llamadas (`getInspectionWorkOrders`,
+   * `getInspectionWorkOrderBundle`, `getInspectionHistory` y `recordInspectionPrint`) ya
+   * estan en `PPSupabaseBridgeReplacement`, que es la unica fuente de datos.
+   *
+   * POR QUE `llamar` Y NO LLAMAR DIRECTO AL REEMPLAZO. Un fallo tiene que decir QUE
+   * falta. Si el build no trae el reemplazo, la excepcion que sube dice que falta el
+   * modulo y que la tabla donde deberia estar el dato; si el build lo trae pero le falta
+   * una funcion, lo dice el nombre de la funcion. Un "Backend no disponible" obligaba a
+   * abrir el codigo para saber si era la red, la sesion o un build viejo.
+   *
+   * QUE DEVUELVE. La excepcion, no un `{ok:false}`: las tres lecturas de este archivo
+   * ya manejan su propio error (`loadList` y `loadDetail` lo suben a `reportError`, que
+   * lo pinta en la tarjeta de estado) y `printInspection` tiene su propio `catch` con el
+   * confirm de "¿Imprimir de todos modos?". El `{ok:false}` lo reservamos para cuando el
+   * backend responde y la respuesta dice que no, que es otra cosa.
+   */
+  const llamar = (metodo, ...args) => {
+    const reemplazo = root.PPSupabaseBridgeReplacement;
+    if (!reemplazo) {
+      return Promise.reject(new Error(
+        `No se puede pedir ${metodo}: este build no trae PPSupabaseBridgeReplacement, que es de donde salen `
+        + "los datos de la hoja de inspeccion. El puente de Apps Script ya no los da."
+      ));
+    }
+    const fn = reemplazo[metodo];
+    if (typeof fn !== "function") {
+      return Promise.reject(new Error(
+        `No se puede pedir ${metodo}: PPSupabaseBridgeReplacement no lo tiene en este build.`
+      ));
+    }
+    return Promise.resolve(fn.apply(reemplazo, args));
+  };
+
+  /**
+   * MEDIDO 2026-10-01: guarda UN tramo de inspeccion en Supabase (`inspection_routes`).
+   *
+   * POR QUE ESTA EN SU PROPIA FUNCION Y NO SE USA `call` DIRECTO. El camino viejo
+   * era `call("saveInspectionLink", ...)`, que salia por el puente de Apps Script a
+   * la hoja `Tramos`. Con la migracion el unico escritor es la pagina (con su
+   * sesion), y meter el nombre de la tabla y el chequeo de disponibilidad aqui
+   * deja el por que escrito en un solo lugar, en vez de repetirlo en cada llamada.
+   *
+   * QUE DEVUELVE, Y POR QUE NO ES LA EXCEPCION. `{ ok, data }` / `{ ok:false, error }`,
+   * igual que el resto del reemplazo del puente: quien llama (submitLinkEdits) ya
+   * sabe leer las dos formas y las muestra en el dialogo. Tirar la excepcion
+   * obligaria a try/catch en cada punto de llamada.
+   *
+   * LO QUE PASA SI NO HAY REEMPLAZO DEL PUENTE. Se lanza con un mensaje que dice
+   * QUE FALTA, no "Backend no disponible": el fallo real no es que Apps Script no
+   * responda, es que el build no trae el escritor de la tabla. Un mensaje que dice
+   * la causa hace que no haya que buscar.
+   */
+  const guardarTramo = (payload) => {
+    const reemplazo = root.PPSupabaseBridgeReplacement;
+    if (!reemplazo || typeof reemplazo.saveInspectionLink !== "function") {
+      return Promise.reject(new Error(
+        "No se puede guardar el tramo: este build no trae PPSupabaseBridgeReplacement, que es quien escribe "
+        + "inspection_routes. El puente de Apps Script ya no escribe esa tabla."
+      ));
+    }
+    return reemplazo.saveInspectionLink(payload);
+  };
   const numberValue = (value) => {
     const number = Number(String(value ?? "").replace(/,/g, ""));
     return Number.isFinite(number) ? number : 0;
@@ -42,7 +118,7 @@
     renderJobStatus("Cargando WOs abiertas...");
     let result;
     try {
-      result = await call("getInspectionWorkOrders");
+      result = await llamar("getInspectionWorkOrders");
     } catch (error) {
       if (version !== loadListVersion) return;
       throw error;
@@ -102,8 +178,8 @@
     task.started = true;
     activeBundleRequests += 1;
     const backendRequest = task.forceRefresh
-      ? call("getInspectionWorkOrderBundle", task.wo, { forceRefresh: true })
-      : call("getInspectionWorkOrderBundle", task.wo);
+      ? llamar("getInspectionWorkOrderBundle", task.wo, { forceRefresh: true })
+      : llamar("getInspectionWorkOrderBundle", task.wo);
     Promise.resolve(backendRequest).then((result) => {
       if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la WO");
       if (bundleRequestVersions.get(task.wo) === task.version) bundleCache.set(task.wo, { data: result.data, cachedAt: Date.now() });
@@ -239,7 +315,21 @@
     ];
     byId("inspectionPrintCheck").innerHTML = `<header class="inspection-check-head"><strong>Semáforo de impresión</strong><span class="inspection-check-pill ${diagnostic.status}">${diagnostic.label}</span></header><div class="inspection-check-list">${checks.map(([label, status, value]) => `<div class="inspection-check-row ${status}"><strong>${label}</strong><span>${escape(value)}</span></div>`).join("")}</div>`;
   }
+  /**
+   * MEDIDO 2026-10-01, POR QUE `ok: false` SE PINTA Y NO SE CUENTA COMO CERO.
+   * Con la tabla `inspection_history` todavia sin aplicar (docs/schema-inspection-history.sql),
+   * la lectura falla, y sin este `if` el bloque de abajo caia en su rama normal: `entries`
+   * vacio, `count` 0, y la tarjeta decia "Total: 0 / Ultima impresion: -" como si nadie
+   * hubiera impreso nunca. MEDIDO en las demas tablas de este mismo proyecto: sin sesion
+   * la Data API responde HTTP 200 con CERO filas, o sea que "no pude leer" y "no hay
+   * ninguna" se ven IGUALES si no se distingue. Aqui se distinguen: la tarjeta dice que
+   * no se pudo leer y por que, que es un dato; "0 impresiones" es otro dato.
+   */
   function renderHistory(history, job) {
+    if (history && history.ok === false) {
+      byId("inspectionHistory").innerHTML = `<div class="inspection-history-error"><strong>No se pudo leer el historial de impresiones.</strong> ${escape(history.error || "Sin detalle del error")}</div>`;
+      return;
+    }
     const data = history?.ok ? history.data : history;
     const entries = Array.isArray(data) ? data : (data?.history || data?.historial || []);
     const latest = entries[0] || {};
@@ -247,6 +337,28 @@
     const folio = latest.FOLIO || latest.folio || latest.OT || latest.wo || job?.wo || "-";
     const count = data?.count ?? data?.conteo ?? entries.length;
     byId("inspectionHistory").innerHTML = `<div><strong>Total:</strong> ${count}</div><div><strong>Última impresión:</strong> ${escape(printedAt)}</div><div><strong>Folio/fecha:</strong> ${escape(folio)} · ${escape(printedAt)}</div>`;
+  }
+  /**
+   * MEDIDO 2026-10-01: releer SOLO el historial despues de imprimir, y no el bundle
+   * entero. Sin esto, la tarjeta de al lado seguia diciendo la impresion anterior
+   * hasta que se recargaba la OT (el bundle esta en `bundleCache`, 5 minutos), y el
+   * registro acababa de hacerse: la pagina contradecía a la base.
+   *
+   * `getInspectionHistory` es una lectura de UNA tabla, contra el bundle completo que son
+   * `work_orders` + `materials` + `operations` + `inventory` + `inspection_routes` +
+   * `inspection_history`. Despues de imprimir solo se cambio una de las seis, y recargar
+   * las otras cinco para ver una fila es trabajo de red que no cambia nada de lo que se
+   * muestra.
+   *
+   * POR QUE NO SE Lanza EL ERROR. Un fallo aqui no puede impedir imprimir: la
+   * impresion ya se confirmo y `root.print()` va justo despues. Se deja pintar el
+   * error que traiga `renderHistory` y ya.
+   */
+  async function refrescarHistorial() {
+    const folio = String(state.detail?.workOrder?.wo || "").trim();
+    if (!folio) return;
+    const history = await llamar("getInspectionHistory", folio);
+    renderHistory(history, state.detail?.workOrder);
   }
   function cleanDrawingInput(value) {
     const text = String(value ?? "").trim();
@@ -433,7 +545,22 @@
       if (saveButton) saveButton.disabled = true;
       setLinkDialogMessage("Guardando cambios...", "");
       for (const item of changes) {
-        const result = await call("saveInspectionLink", { article: job.article, material: item.material.material, route: item.route, drawing: item.drawing });
+        // MEDIDO 2026-10-01: esto iba por `call("saveInspectionLink")`, o sea por el
+        // puente de Apps Script, y de ahi salia a la hoja `Tramos`. El catalogo de
+        // tramos se migro a la tabla `inspection_routes` (docs/schema-inspection-routes.sql)
+        // y el unico escritor es la pagina, con su sesion. Por eso aqui NO hay plan B
+        // por el puente: `saveInspectionLink` de Apps Script ahora se niega con un
+        // mensaje que dice donde esta (16-inspection-service.js), asi que un plan B
+        // seria un segundo escritor sobre el mismo dato — el que perdiera se enteraria
+        // al imprimir, no al guardar.
+        //
+        // QUE SE MANDA. `drawing` SI viaja, y a proposito, porque este dialogo edita
+        // el dibujo DEL MATERIAL y no solo el tramo: el dibujo de un material vive en
+        // la columna `dibujo` de su propia fila de `inspection_routes`, y es la misma
+        // fila que guarda el tramo. Por eso en el dialogo de la pestana de Catalogos
+        // (que solo edita el tramo) el dibujo NO se manda, y aqui si: son dos
+        // formularios distintos sobre la misma fila.
+        const result = await guardarTramo({ article: job.article, material: item.material.material, route: item.route, drawing: item.drawing });
         if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el vínculo");
         item.material.route = item.route;
         item.material.drawing = item.drawing;
@@ -517,7 +644,7 @@
     if (diagnostic.alerts.length && !root.confirm(`Antes de imprimir revisa: ${diagnostic.alerts.join(", ")}. ¿Quieres continuar y registrar la impresión?`)) return;
     const operations = root.InspectionCore.printableOperations(state.detail.operations || [], state.selection);
     try {
-      const result = await call("recordInspectionPrint", {
+      const result = await llamar("recordInspectionPrint", {
         wo: state.detail.workOrder.wo,
         article: state.detail.workOrder.article,
         quantity: state.detail.workOrder.quantity,
@@ -532,6 +659,7 @@
         detail: { materials: diagnostic.materials.map((material) => ({ material: material.material || "", pending: material.required ?? "", issued: material.issued ?? "", available: material.available || 0, deficitNeto: material.deficitNeto || material.netDeficit || 0 })) }
       });
       if (!result?.ok && !root.confirm(`No se pudo guardar el historial: ${result?.error || "Error desconocido"}. ¿Imprimir de todos modos?`)) return;
+      if (result?.ok) await refrescarHistorial();
     } catch (error) {
       if (!root.confirm(`No se pudo guardar el historial: ${error.message}. ¿Imprimir de todos modos?`)) return;
     }

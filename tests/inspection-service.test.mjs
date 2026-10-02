@@ -58,64 +58,50 @@ test("normaliza Tramos sin reescribir ni desalinear columnas existentes", () => 
   assert.deepEqual(rows[1].slice(0, 3), ["COMP UADA A", "MP00086", "102 MM"]);
 });
 
-test("guarda tramo y dibujo por nombre de columna aunque el orden sea distinto", () => {
-  const rows = [["Tramo", "Articulo", "DIBUJO", "Materia prima", "Ultima modificacion"], ["Anterior", "COMP UADA A", "viejo.pdf", "MP00086", "ayer"]];
-  const sheet = {
-    getDataRange: () => ({ getValues: () => rows.map((row) => row.slice()) }),
-    getRange: (row, column, rowCount, columnCount) => ({
-      setValue: (value) => { rows[row - 1][column - 1] = value; },
-      setValues: (values) => values.forEach((valueRow, offset) => { rows[row - 1 + offset].splice(column - 1, columnCount, ...valueRow); })
-    }),
-    appendRow: (row) => rows.push(row),
-    getLastRow: () => rows.length
-  };
+/**
+ * MEDIDO 2026-10-01: la escritura del tramo salio de Apps Script. El catalogo de
+ * tramos se migro de la hoja `Tramos` a la tabla `inspection_routes`
+ * (docs/schema-inspection-routes.sql) y el unico escritor es la pagina, con su
+ * sesion, por PPSupabaseWriter.guardarInspectionRoute.
+ *
+ * LO QUE SE PROBABA AQUI ES QUE Apps Script YA NO ESCRIBE, y que se dice POR QUE.
+ * Un `saveInspectionLink` que se dejara de escribir sin explicacion seria un fallo
+ * silencioso del tipo mas caro: el tramo parece guardado, el toast dice "Cambios
+ * guardados" y al imprimir sale el valor viejo. Que se NIEGUE, y que el mensaje
+ * nombre la tabla y la funcion nueva, convierte eso en algo que se ve en pantalla
+ * y dice que hacer.
+ *
+ * Las dos propiedades que el escritor de la hoja tenia ("si no mandas dibujo, el
+ * dibujo vigente no se toca" y "si mandas dibujo vacio, se limpia") no se
+ * perdieron: las garantiza ahora el escritor de la pagina, y estan probadas ALLI,
+ * en tests/supabase-writer-inspection-routes.test.mjs, contra el cuerpo que se
+ * manda a la Data API. No se dejan aqui porque el MECANISMO cambio, y un test que
+ * siga pidiendo que la hoja conserve el drawing estaria probando que una hoja que
+ * ya no recibe escrituras lo conserva.
+ */
+test("saveInspectionLink ya no escribe y dice donde esta el escritor", () => {
   const context = loadService();
-  context.PP_Inspection_sheet_ = () => sheet;
-  const result = context.saveInspectionLink({ article: "COMP UADA A", material: "MP00086", route: "102 MM", drawing: "nuevo.pdf" });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(rows[1].slice(0, 4), ["102 MM", "COMP UADA A", "nuevo.pdf", "MP00086"]);
-});
-
-test("preserva el dibujo vigente cuando el payload guarda solo el tramo", () => {
-  const rows = [["Articulo", "Materia prima", "Tramo", "DIBUJO", "Ultima modificacion"], ["A-100", "MP-1", "600 mm", "dibujo-b.pdf", "ayer"]];
-  const sheet = {
-    getDataRange: () => ({ getValues: () => rows.map((row) => row.slice()) }),
-    getRange: (row, column) => ({
-      setValue: (value) => { rows[row - 1][column - 1] = value; }
-    }),
-    appendRow: (row) => rows.push(row),
-    getLastRow: () => rows.length
-  };
-  const context = loadService();
-  context.PP_Inspection_sheet_ = () => sheet;
-
   const result = context.saveInspectionLink({ article: "A-100", material: "MP-1", route: "650 mm" });
 
-  assert.equal(result.ok, true);
-  assert.equal(rows[1][2], "650 mm");
-  assert.equal(rows[1][3], "dibujo-b.pdf");
-  assert.equal(result.data.drawing, "dibujo-b.pdf");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /inspection_routes/);
+  assert.match(result.error, /guardarInspectionRoute/);
 });
 
-test("permite limpiar el dibujo cuando el payload incluye una cadena vacia", () => {
-  const rows = [["Articulo", "Materia prima", "Tramo", "DIBUJO", "Ultima modificacion"], ["A-100", "MP-1", "600 mm", "dibujo-b.pdf", "ayer"]];
-  const sheet = {
-    getDataRange: () => ({ getValues: () => rows.map((row) => row.slice()) }),
-    getRange: (row, column) => ({
-      setValue: (value) => { rows[row - 1][column - 1] = value; }
-    }),
-    appendRow: (row) => rows.push(row),
-    getLastRow: () => rows.length
-  };
+/**
+ * Y la hoja NO se abre. El punto no es el mensaje (ya lo prueba el de arriba) sino
+ * que el rechazo ocurre ANTES de tocar Drive: si la negacion llegara despues de
+ * resolver la hoja, un descuido futuro volveria a escribir en la hoja congelada y
+ * no habria quien lo notara.
+ */
+test("la negacion de saveInspectionLink no llega a abrir la hoja Tramos", () => {
+  let abrios = 0;
   const context = loadService();
-  context.PP_Inspection_sheet_ = () => sheet;
+  context.PP_Inspection_sheet_ = () => { abrios += 1; throw new Error("no deberia abrir la hoja"); };
 
-  const result = context.saveInspectionLink({ article: "A-100", material: "MP-1", route: "650 mm", drawing: "" });
+  context.saveInspectionLink({ article: "A-100", material: "MP-1", route: "650 mm" });
 
-  assert.equal(result.ok, true);
-  assert.equal(rows[1][3], "");
-  assert.equal(result.data.drawing, "");
+  assert.equal(abrios, 0);
 });
 
 test("lista todo el catalogo de tramos sin filtro y conserva dibujo", () => {

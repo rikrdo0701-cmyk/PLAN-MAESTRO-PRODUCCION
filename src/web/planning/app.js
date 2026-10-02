@@ -5380,7 +5380,7 @@ function renderInspectionRouteCatalog() {
   els.retryInspectionRouteCatalogBtn.disabled = inspectionRouteCatalogLoading;
   let body = visibleRows.map((row, index) => `<tr>
     <td>${escapeHtml(row.article)}</td>
-    <td>${escapeHtml(row.material)}</td>
+    <td>${escapeHtml(row.material) || '<span class="planning-muted">(dibujo de la OT)</span>'}</td>
     <td>${escapeHtml(row.route || "")}</td>
     <td>${escapeHtml(row.updated || "")}</td>
     <td><button class="button small" type="button" data-edit-inspection-route="${index}">Editar</button></td>
@@ -5421,16 +5421,40 @@ async function editInspectionRouteCatalogRow(index) {
   const row = inspectionRouteCatalogVisibleRows()[index];
   if (!row) return;
   await openPlanningDialog({
-    title: "Editar tramo",
-    summary: `${row.article} · ${row.material}`,
-    body: `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
+    title: row.material ? "Editar tramo" : "Editar dibujo de la OT",
+    // MEDIDO 2026-10-01 (RULE-INS-001): la fila con material VACIO no es un tramo a
+    // medio llenar, es el dibujo a NIVEL DE ORDEN DE TRABAJO. Si el dialogo se titula
+    // "Editar tramo" sobre esa fila, el titulo dice una cosa y la fila es otra, y
+    // la primera vez que alguien lo ve piensa que la tabla esta mal.
+    summary: row.material ? `${row.article} · ${row.material}` : `${row.article} · dibujo de la OT (sin material)`,
+    // MEDIDO 2026-10-01 (RULE-INS-001): en la fila con material VACIO NO se ofrece
+    // un campo de Tramo, porque el tramo de esa fila no se consulta nunca: es el
+    // DIBUJO A NIVEL DE ORDEN DE TRABAJO, que se busca por la clave `articulo + '|'`
+    // (PP_Inspection_articleDrawingMatchV2_). Ofrecerlo seria pedir un dato que se
+    // guarda y no vuelve a usarse, y el que lo escribiera no tendria manera de saber
+    // que no sirvio para nada. El dibujo de esa fila se edita en la hoja de
+    // inspeccion, que si lo manda; aqui se dice eso en vez de mostrar un campo.
+    body: row.material
+      ? `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
       <div class="planning-requirement-fields inspection-route-dialog-fields">
         <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
         <label>Material<input type="text" name="inspection_material" value="${escapeHtml(row.material)}" readonly></label>
         <label>Tramo<input type="text" name="inspection_route" value="${escapeHtml(row.route)}" autofocus></label>
-      </div>`,
-    confirmLabel: "Guardar tramo",
+      </div>`
+      : `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
+      <div class="planning-requirement-fields inspection-route-dialog-fields">
+        <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
+        <label>Material<input type="text" value="(dibujo de la OT, sin material)" readonly></label>
+        <label>Dibujo<input type="text" value="${escapeHtml(row.drawing)}" readonly></label>
+      </div>
+      <p class="planning-inline-warning">Esta fila es el DIBUJO DEL ARTÍCULO COMPLETO, no un tramo de material. Se usa cuando la hoja de inspección se imprime sin dibujo de conjunto. El dibujo se cambia en la hoja de inspección, no aquí.</p>`,
+    // Y el boton NO dice "Guardar" en la fila del dibujo, y el submit NO escribe.
+    // Escribir un tramo vacio en esa fila seria un PUT con un dato que no se consulta,
+    // y la tabla devolveria ok: true: el mas pequeno de los fallos silenciosos que
+    // existen, porque el unico rastro es una fila que cambio sin que nadie lo pidiera.
+    confirmLabel: row.material ? "Guardar tramo" : "Cerrar",
     submit: async (values) => {
+      if (!row.material) return true;
       const attemptedRoute = String(values.inspection_route || "");
       const payload = window.InspectionCore.inspectionRouteSavePayload(row, attemptedRoute);
       const errorElement = els.planningDialogBody.querySelector("#inspectionRouteDialogError");

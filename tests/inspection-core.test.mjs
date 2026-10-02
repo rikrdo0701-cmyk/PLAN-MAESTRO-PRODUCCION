@@ -64,16 +64,40 @@ test("normaliza, ordena y filtra las filas del catalogo de tramos", () => {
     { ARTICULO: "B-200", MATERIAL: "MP-2", TRAMO: "420 mm", DIBUJO: "b.pdf", ACTUALIZADO: "02/07/2026" },
     { article: "A-100", material: "TUBO 1", route: "650 mm", drawing: "a.pdf", updated: "01/07/2026" },
     { article: "", material: "SIN ARTICULO" },
-    { article: "C-300", material: "" }
+    // MEDIDO 2026-10-01 (RULE-INS-001): esta fila SE QUEDA. Con el material vacio es
+    // el DIBUJO A NIVEL DE ORDEN DE TRABAJO, la que usa
+    // PP_Inspection_articleDrawingMatchV2_ para el articulo entero. Antes se
+    // descartaba porque `inspectionRouteRows` exigia material, y eso no biteba
+    // mientras la fuente sea `materials` (donde el componente siempre viene) pero
+    // si con `inspection_routes`, que si tiene la fila. Descartarla seria quitarle
+    // a la pagina el dibujo del conjunto.
+    { article: "C-300", material: "", drawing: "c300-completo.pdf" }
   ]);
 
   assert.deepEqual(structuredClone(rows), [
     { article: "A-100", material: "TUBO 1", route: "650 mm", drawing: "a.pdf", updated: "01/07/2026" },
-    { article: "B-200", material: "MP-2", route: "420 mm", drawing: "b.pdf", updated: "02/07/2026" }
+    { article: "B-200", material: "MP-2", route: "420 mm", drawing: "b.pdf", updated: "02/07/2026" },
+    { article: "C-300", material: "", route: "", drawing: "c300-completo.pdf", updated: "" }
   ]);
   assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "mp-2")).map((row) => row.material), ["MP-2"]);
   assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "a-100")).map((row) => row.article), ["A-100"]);
   assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "")), structuredClone(rows));
+});
+
+/**
+ * Y el filtro de busqueda tambien tiene que encontrar la fila del dibujo por
+ * ARTICULO, no solo por material. Con el material vacio, un search por "tube" (que
+ * es como se busca en la pestana) tiene que devolverla igual: si no, la unica fila
+ * que se puede ver en la tabla es la que se ve sin buscar, y alguien que busca
+ * para saber si el dibujo del articulo existe concludes que no existe.
+ */
+test("el filtro del catalogo encuentra la fila del dibujo por su articulo", () => {
+  const rows = core.inspectionRouteRows([
+    { article: "C-300", material: "", drawing: "c300-completo.pdf" }
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(structuredClone(core.filterInspectionRouteRows(rows, "c-300")).map((row) => row.drawing), ["c300-completo.pdf"]);
 });
 
 test("prepara el guardado route-only del catalogo sin enviar dibujo cacheado", () => {

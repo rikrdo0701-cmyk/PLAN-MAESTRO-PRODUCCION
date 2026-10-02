@@ -2064,6 +2064,11 @@ tr:last-child td { border-bottom: 0; }
 .planning-error { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--red); background: #fff4f4; color: #70262e; }
 .planning-error ul { margin: 0; padding-left: 18px; }
 .planning-error li + li { margin-top: 7px; }
+/* Etiqueta de una celda que esta vacia a PROPOSITO, no sin dato. MEDIDO
+   2026-10-01 (RULE-INS-001): la fila con material vacio de `inspection_routes` es
+   el DIBUJO A NIVEL DE ORDEN DE TRABAJO, y sin esto se ve como una fila a medio
+   llenar. El tono muted es el que ya usan .topbar p y .plan-alert span. */
+.planning-muted { color: var(--muted); font-style: italic; }
 .planning-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: #f7f9fa; }
 
 .toast {

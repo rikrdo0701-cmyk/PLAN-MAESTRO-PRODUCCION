@@ -40,6 +40,20 @@
     "materials", "matrix", "operation_catalog", "operation_plan_statuses", "operations",
     "operators", "ot_configurations", "ot_types", "plan_snapshots", "sales_orders",
     "selected_ots", "subcontracts", "tools", "unconfirmed_work_orders", "work_orders",
+    // MEDIDO 2026-10-01: el catalogo de tramos de inspeccion se migro de la hoja
+    // `Tramos` del libro INSPECTION_SPREADSHEET_ID a esta tabla (ver
+    // docs/schema-inspection-routes.sql). Antes la pagina lo leia de `materials`,
+    // que es tabla DEL ERP y no tiene columna de tramo: lo que se veia en la tabla
+    // de Catalogos no eran los tramos. No esta en CATALOG_TABLES porque NO es parte
+    // del estado del plan: se lee suelta, con readInspectionRoutes().
+    "inspection_routes",
+    // MEDIDO 2026-10-01: el historial de IMPRESIONES de la hoja de inspeccion. Antes
+    // vivia en la hoja `HISTORIAL_IMPRESION_INSPEC` y se leia por el puente de Apps
+    // Script, que esta deshabilitado (RULE-SUP-029), o sea que no tenia destino
+    // (docs/schema-inspection-history.sql). NO es lo mismo que `inspection_routes`:
+    // esa es el CATALOGO de tramos (una fila por articulo+material, se edita a mano) y
+    // esta es el HISTORIAL (una fila por impresion, la escribe la pagina sola).
+    "inspection_history",
   ];
 
   // TABLAS DE LA FASE 3. Las que traen datos frescos (refresh 2026-09-29T04:08) y se pueden leer
@@ -124,6 +138,7 @@
       "workOrders[].startDate, endDate y dueDate | falta la FORMA de la columna fecha_inicio_ns | las tres son timestamptz y el estado espera el texto 'AAAA-MM-DD' de la hoja (PP_mapWorkOrder_, 02-storage.js:2179). Se resuelve con una REGLA, no con una columna: partir el ISO en UTC sin convertir de zona, y la hora (que el estado no tiene campo para estas tres) se descarta en vez de inventarse un lugar donde ponerla. La regla y su motivo estan en partirFechaTexto().",
       "workOrders[].pendingQuantity | falta la FORMA de la columna cant_ensamblada | MEDIDO 2026-10-01 con sesion en la pagina real: las 175 OT del Backlog decian 'qty:0' y el detalle de la misma OT si mostraba la cantidad. La columna EXISTE y esta bien tipada ('integer not null default 0'); lo que falta es que alguien la escriba: MEDIDO, 'cant_ensamblada' NO aparece en NINGUN archivo de src/server/, o sea que la ingesta, que hace mirror de las filas del RESTlet tal cual, no la trae. El unico escritor (filasWorkOrders, supabase-writer.js:1290) escribe lo que viene del estado. El hueco NO es de esquema: es que la fuente no trae el dato y la tabla, con su default 0, no puede distinguir 'cero' de 'sin escribir'. mapWorkOrders lo resuelve con la regla que ya declaraba (cantidad - cant_ensamblada) y por eso el pendiente sale igual a la cantidad; mientras el RESTlet no la traiga, una OT en curso se vera como si no tuviera nada surtido.",
       "workOrders[].pendingQuantity | falta la FORMA de la columna cant_pendiente | La misma medicion que la de cant_ensamblada y por el mismo motivo: la columna existe y no la escribe nadie. MEDIDO: 'cant_pendiente' NO aparece en NINGUN archivo de src/server/ y filasWorkOrders (supabase-writer.js:1291) escribe el 0 que le llega del estado. Antes de que existiera el arreglo, mapWorkOrders computaba 'cantidad - cant_ensamblada' solo cuando esta columna llegaba VACIA, y con 'not null default 0' nunca llega vacia: esa rama era codigo muerto y el pendiente salia 0 para todas las OT.",
+      "workOrders[].revision | falta la FORMA de la columna revision | MEDIDO 2026-10-01: la columna existe y esta bien tipada, pero lo que guarda NO es lo que el estado pide. filasWorkOrders (supabase-writer.js:1645) escribe ahi la REVISION DEL PLAN, que es un contador de guardado, mientras que la hoja de inspeccion usa este campo en la celda REV, que quiere la revision del BOM de NetSuite ('Revision'/'bomRevision' en PP_getInspectionWorkOrder, 16-inspection-service.js:181). Son dos cosas distintas en la misma columna y no hay forma de saber cual esta sin preguntar a quien la escribio. Se deja '' y la hoja imprime 'A', que es lo que se imprimia cuando NetSuite no traia revision. Poner el numero del plan en una celda REV seria affirmar una revision de ingenieria que nadie dio.",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -222,16 +237,27 @@
     return response.json();
   }
 
-  async function countTable(table) {
+  /**
+   * El numero TOTAL de filas que calzan, del encabezado `content-range`.
+   *
+   * `opciones` acepta lo mismo que `readTable` y se le pasa entero. Se agrego el
+   * 2026-10-01 porque el historial de impresiones necesita DOS lecturas de la misma
+   * tabla: las 5 ultimas de una OT (para la lista) y el total de esa OT (para el
+   * "Total: N" y para numerar las entradas al reves, como hacia la hoja). Sin el
+   * filtro, un `countTable("inspection_history")` contaria las impresiones de TODAS
+   * las ordenes, y un historial mostraria el numero de impresiones de la planta como
+   * si fueran de esa OT.
+   */
+  async function countTable(table, options) {
     if (!isConfigured()) throw new Error("Supabase sin configurar");
-    const response = await root.fetch(restUrl(table, { select: "id", limit: 1 }), {
+    const respuesta = await root.fetch(restUrl(table, Object.assign({ select: "id", limit: 1 }, options || {})), {
       headers: Object.assign(await headers(), { Prefer: "count=exact" }),
       cache: "no-store",
     });
-    if (!response.ok) throw new Error("Supabase " + table + ": HTTP " + response.status);
-    const range = response.headers.get("content-range") || "";
+    if (!respuesta.ok) throw new Error("Supabase " + table + ": HTTP " + respuesta.status);
+    const range = respuesta.headers.get("content-range") || "";
     const total = range.split("/")[1];
-    return total === undefined ? null : Number(total);
+    return total === undefined || total === "*" ? null : Number(total);
   }
 
   async function status() {
@@ -539,6 +565,235 @@
         // actualizado y created_at se ignoran en el estado del plan (solo logs)
       };
     }).filter(function (item) { return Boolean(item.machineName); });
+  }
+
+  // EL CATALOGO DE TRAMOS DE INSPECCION (tabla `inspection_routes`).
+  //
+  // MEDIDO 2026-10-01: antes la pagina leia los tramos de `materials`, que es tabla
+  // DEL ERP (la escribe el RESTlet 2246 cada 15 minutos) y NO tiene columna de
+  // tramo. La tabla de Catalogos por eso mostraba `dibujo || foto_url` de los
+  // materiales como si fuera el tramo, y la columna Tramo salia vacia siempre. No
+  // era una lectura incompleta: era una lectura de la tabla equivocada. Los datos
+  // de verdad estaban en la hoja `Tramos`, y ahora estan en `inspection_routes`
+  // (docs/schema-inspection-routes.sql), con la pagina como unica escritora.
+  //
+  // POR QUE NO ENTRA EN `state`. El estado del plan (PP_buildState_, 02-storage.js)
+  // no tiene un campo de tramos y agregarlo seria cambiar un contrato que el
+  // planificador entero consume para algo que solo usa la pestana de inspeccion.
+  // Por eso esta tabla NO esta en CATALOG_TABLES ni en READ_TABLES: se lee
+  // suelta con readInspectionRoutes(), que es lo que consume el reemplazo del
+  // puente. SUMARLA a READ_TABLES solo pagaria una llamada en cada arranque y en
+  // cada status() para un dato que casi nadie mira.
+  //
+  // LOS NOMBRES DE LOS CAMPOS. Se devuelven con los dos aliases que el nucleo de
+  // inspeccion ya acepta (inspection-core.js:39-52): article/ARTICULO,
+  // material/MATERIAL, route/TRAMO, drawing/DIBUJO, updated/ACTUALIZADO. El nucleo
+  // es el que decide cual de los dos leer; los dos se mandan para que cambiar de
+  // fuente no obliga a tocarlo y porque elApps Script usa los nombres en
+  // mayusculas (ARTICULO/MATERIAL/TRAMO/DIBUJO/ACTUALIZADO) y son los mismos datos.
+  //
+  // LA DIBUJO NO SE FILTRA ACA. `dibujo` puede venir vacio a proposito: la fila con
+  // material VACIO es el dibujo a nivel de orden de trabajo (que es como lo usa
+  // PP_Inspection_articleDrawingMatchV2_). Tirar las filas sin dibujo aca
+  // borraria ese caso, que es una fila mas y no un dato incompleto.
+  function mapInspectionRoutes(rows) {
+    return (rows || []).map(function (row) {
+      const articulo = String(row.articulo == null ? "" : row.articulo).trim();
+      const material = String(row.material == null ? "" : row.material).trim();
+      const tramo = String(row.tramo == null ? "" : row.tramo).trim();
+      const dibujo = String(row.dibujo == null ? "" : row.dibujo).trim();
+      const actualizado = String(row.actualizado == null ? "" : row.actualizado).trim();
+      return {
+        clave: String(row.clave == null ? "" : row.clave).trim() || normalizeKey(articulo) + "|" + normalizeKey(material),
+        articulo: articulo,
+        ARTICULO: articulo,
+        article: articulo,
+        material: material,
+        MATERIAL: material,
+        tramo: tramo,
+        TRAMO: tramo,
+        route: tramo,
+        dibujo: dibujo,
+        DIBUJO: dibujo,
+        drawing: dibujo,
+        // `actualizado` es TEXTO y no una fecha: en la hoja `Ultima modificacion`
+        // era una celda de texto (Utilities.formatDate, pero sin tipificar) y
+        // convertirla aqui cambiaria lo que la tabla de Catalogos muestra. El
+        // instante parseado, cuando se pudo, viene aparte en `actualizadoAt`.
+        actualizado: actualizado,
+        ACTUALIZADO: actualizado,
+        updated: actualizado,
+        actualizadoAt: row.actualizado_at == null ? "" : String(row.actualizado_at),
+      };
+    }).filter(function (item) { return Boolean(item.articulo); });
+  }
+
+  /**
+   * Lee el catalogo de tramos entero y lo devuelve mapeado.
+   *
+   * POR QUE ENTERO Y NO POR ARTICULO. La tabla son unas 400 filas: una pagina de
+   * PostgREST traeria el mismo numero de bytes con el filtro puesto, sin el
+   * `&offset` que obliga a paginar, y el filtro en memoria es el mismo que ya
+   * usaba la hoja. El filtro por articulo lo aplica quien llama
+   * (getInspectionDrawingRoutes del reemplazo del puente).
+   *
+   * EL ORDEN. Por `articulo` y no por `actualizado`: `actualizado` es texto y
+   * ordenarlo como texto daria "01/02/2026" antes que "15/12/2025". El nucleo de
+   * inspeccion reordena con localeCompare es, asi que el orden de aqui es solo el
+   * de la red; se deja el que si es un orden.
+   */
+  async function readInspectionRoutes() {
+    const rows = await readTable("inspection_routes", {
+      select: "clave,articulo,material,tramo,dibujo,actualizado,actualizado_at",
+      order: "articulo.asc",
+    });
+    return mapInspectionRoutes(rows);
+  }
+
+  /**
+   * CUANTAS IMPRESIONES MUESTRA LA PAGINA, Y POR QUE SON CINCO Y NO MAS.
+   * La hoja no limitaba: `getInspectionHistory` hacia `rows.slice(-5).reverse()`, o
+   * sea que las ultimas cinco y en orden inverso (la mas reciente primero). El 5 es
+   * un dato de la lectura, no una decision que se pueda cambiar aqui sin que se note
+   * en la hoja de impresion, asi que se conserva.
+   */
+  const INSPECTION_HISTORY_ULTIMAS = 5;
+
+  /**
+   * Una fila de `inspection_history`, con los nombres de la hoja Y los que usa la
+   * pagina.
+   *
+   * POR QUE LOS DOS JUEGOS DE NOMBRES. `renderHistory` (inspection-app.js:272) lee
+   * `latest.FECHA_HORA || latest.fechaHora || latest.printedAt` y `latest.FOLIO ||
+   * latest.folio || latest.OT || latest.wo`: ya aceptaba los dos porque antes el dato
+   * podia venir de Apps Script (mayusculas, como las columnas de la hoja) o de otro
+   * lugar. Mandar solo uno obliga a elegir cual de los dos programas se decide, y el
+   * que no se mande se ve como celda vacia. Los nombres en espanol son los de la
+   * tabla y los demas son los que el nucleo de inspeccion ya tenia.
+   *
+   * `fecha_hora` es TEXTO (dd/MM/yyyy HH:mm:ss, como en la hoja) y por eso se copia
+   * tal cual a `fechaHora`, `FECHA_HORA` y `printedAt`. El instante con tipo viaja
+   * aparte en `printedAtIso`, que es lo que se usa para ORDENAR: ordenar por el texto
+   * pondria "01/02/2026" antes que "15/12/2025". Es el mismo criterio que
+   * `actualizado` / `actualizadoAt` de los tramos (RULE-INS-001).
+   *
+   * `detalle` se pasa como objeto. Viene de una columna `jsonb`, asi que PostgREST ya
+   * la devuelve parseada; si algun dia se escribiera como texto (una fila sembrada a
+   * mano, por ejemplo) se intenta el parseo en vez de devolver la cadena, para que
+   * quien lea no tenga que preguntar de que tipo es.
+   */
+  function mapInspectionHistory(rows) {
+    return (rows || []).map(function (row) {
+      const folio = String(row.ot == null ? "" : row.ot).trim();
+      const fechaHora = String(row.fecha_hora == null ? "" : row.fecha_hora).trim();
+      const articulo = String(row.articulo == null ? "" : row.articulo).trim();
+      const estadoTrabajo = String(row.estado_trabajo == null ? "" : row.estado_trabajo).trim();
+      const semaforo = String(row.semaforo == null ? "" : row.semaforo).trim();
+      const alertas = String(row.alertas == null ? "" : row.alertas).trim();
+      const pendientes = String(row.materiales_pendientes == null ? "" : row.materiales_pendientes).trim();
+      const deficit = String(row.materiales_deficit == null ? "" : row.materiales_deficit).trim();
+      const sinDibujo = String(row.sin_dibujo == null ? "" : row.sin_dibujo).trim();
+      const faltaTramo = String(row.falta_tramo == null ? "" : row.falta_tramo).trim();
+      return {
+        ot: folio,
+        OT: folio,
+        wo: folio,
+        folio: folio,
+        FOLIO: folio,
+        fechaHora: fechaHora,
+        FECHA_HORA: fechaHora,
+        printedAt: fechaHora,
+        printedAtIso: row.printed_at == null ? "" : String(row.printed_at),
+        articulo: articulo,
+        ARTICULO: articulo,
+        cantidad: number(row.cantidad),
+        CANTIDAD: number(row.cantidad),
+        estadoTrabajo: estadoTrabajo,
+        ESTADO_TRABAJO: estadoTrabajo,
+        semaforo: semaforo,
+        SEMAFORO: semaforo,
+        alertas: alertas,
+        ALERTAS: alertas,
+        materialesPendientes: pendientes,
+        MATERIALES_PENDIENTES: pendientes,
+        materialesDeficit: deficit,
+        MATERIALES_DEFICIT: deficit,
+        // 'SI' / 'NO' como texto, igual que en la hoja. `sinDibujoEs` es la forma
+        // booleana para quien quiera el dato y no el texto; no se cambia la columna.
+        sinDibujo: sinDibujo,
+        SIN_DIBUJO: sinDibujo,
+        sinDibujoEs: /^(SI|SÍ|TRUE|1)$/i.test(sinDibujo),
+        faltaTramo: faltaTramo,
+        FALTA_TRAMO: faltaTramo,
+        faltaTramoEs: /^(SI|SÍ|TRUE|1)$/i.test(faltaTramo),
+        detalle: objetoOjson(row.detalle),
+      };
+    }).filter(function (item) { return Boolean(item.ot); });
+  }
+
+  /** Un jsonb ya parseado, o un texto que se intenta parsear. Nunca una cadena fallida. */
+  function objetoOjson(valor) {
+    if (valor && typeof valor === "object") return valor;
+    const texto = String(valor == null ? "" : valor).trim();
+    if (!texto) return {};
+    try { return JSON.parse(texto); } catch (error) { return { texto: texto }; }
+  }
+
+  /**
+   * El historial de impresiones de UNA OT, con la forma que la pagina ya leia.
+   *
+   * POR QUE NO SE USA `readTable` Y SE USA ESTA. La pagina necesita el TOTAL y las
+   * ultimas cinco, y el total no cabe en la respuesta de una lectura con `limit`: son
+   * dos peticiones a la misma tabla, con el mismo filtro. Se hacen juntas con
+   * `Promise.all` porque no dependen una de la otra.
+   *
+   * EL NUMERO DE CADA IMPRESION. `number` cuenta desde la mas reciente hacia la mas
+   * antigua (la ultima impresion es la numero 1), que es como lo numeraba la hoja:
+   * `rows.length - index` sobre `slice(-5).reverse()`. Por eso depende del total y no
+   * del indice de la lista: con el total es el numero real de impresion de esa OT, y
+   * si el `count` no llega (PostgREST devuelve `*`) se cae al numero de filas que si
+   * volvieron, que es el mejor dato disponible y no uno inventado.
+   *
+   * EL ORDEN, Y POR QUE ES POR EL INSTANTE Y NO POR EL TEXTO. `printed_at.desc` con
+   * `.nullslast`: en PostgreSQL un `desc` pone los NULLS PRIMERO, y las filas sin
+   * instante son las que no pudieron leer la fecha, o sea las MAS VIEJAS del
+   * importador. Sin `.nullslast` se subirian alprincipio de la lista y la pagina
+   * diria que la ultima impresion fue una de las que no tiene fecha. `created_at`
+   * desempata las que comparten `printed_at` (una OT puede imprimirse dos veces en el
+   * mismo segundo).
+   *
+   * DEVUELVE `{ count, conteo, history, historial }`: los dos nombres de cada cosa
+   * porque `renderHistory` acepta cualquiera de los dos (`data?.count ??
+   * data?.conteo`) y la hoja devolvia las dos parejas. No se inventa una tercera.
+   */
+  async function readInspectionHistory(ot) {
+    const folio = String(ot == null ? "" : ot).trim();
+    const vacio = { count: 0, conteo: 0, history: [], historial: [] };
+    if (!folio) return vacio;
+    const select = "ot,fecha_hora,printed_at,articulo,cantidad,estado_trabajo,semaforo,"
+      + "alertas,materiales_pendientes,materiales_deficit,sin_dibujo,falta_tramo,detalle";
+    const pedidos = await Promise.all([
+      readTable("inspection_history", {
+        select: select,
+        filters: { ot: folio },
+        order: "printed_at.desc.nullslast,created_at.desc",
+        limit: INSPECTION_HISTORY_ULTIMAS,
+      }),
+      countTable("inspection_history", { select: "id", filters: { ot: folio } }),
+    ]);
+    const filas = mapInspectionHistory(pedidos[0]);
+    const total = pedidos[1] === null || !isFinite(pedidos[1]) ? filas.length : pedidos[1];
+    const history = filas.map(function (item, index) {
+      return { number: total - index, printedAt: item.printedAt, semaphore: item.semaforo, folio: item.folio };
+    });
+    return {
+      count: total,
+      conteo: total,
+      history: history,
+      historial: history.map(function (item) {
+        return { numero: item.number, fechaHora: item.printedAt, semaforo: item.semaphore, folio: item.folio };
+      }),
+    };
   }
 
   function mapOtTypes(rows) {
@@ -946,6 +1201,13 @@
           : Math.max(0, quantity),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
         lastSalePrice: number(row.precio_ultima_venta),
+        // `revision` NO es la revision del BOM. MEDIDO 2026-10-01: la columna existe
+        // pero `filasWorkOrders` (supabase-writer.js:1645) escribe ahi la REVISION DEL
+        // PLAN, un contador de guardado. La hoja de inspeccion pinta esta celda en un
+        // cuadrito rotulado REV y quiere la revision del BOM de NetSuite. Se deja ""
+        // y no se copia `row.revision`: un numero de guardado en una celda de revision
+        // de ingenieria es peor que una celda vacia. Ver MAPPING_GAPS.work_orders.
+        revision: "",
       };
     });
   }
@@ -1157,6 +1419,18 @@
     // bien puesto y sin leer, y que sessionRequired: la pieza existe y nadie la conecta.
     mapMaterials: mapMaterials,
     mapMachinePlanningOverrides: mapMachinePlanningOverrides,
+    // MEDIDO 2026-10-01: el catalogo de tramos de inspeccion. No es parte de
+    // `state`, asi que no sale de readCatalogs() sino de readInspectionRoutes().
+    mapInspectionRoutes: mapInspectionRoutes,
+    readInspectionRoutes: readInspectionRoutes,
+    // MEDIDO 2026-10-01: el historial de impresiones de la hoja de inspeccion. La
+    // tabla se creo en docs/schema-inspection-history.sql y sale de la misma razon que
+    // `inspection_routes`: el puente de Apps Script esta deshabilitado y la hoja
+    // `HISTORIAL_IMPRESION_INSPEC` se queda congelada como respaldo, sin ni escritor
+    // ni lector. `mapInspectionHistory` se exporta para poder probarlo SIN red.
+    mapInspectionHistory: mapInspectionHistory,
+    readInspectionHistory: readInspectionHistory,
+    INSPECTION_HISTORY_ULTIMAS: INSPECTION_HISTORY_ULTIMAS,
     // Los cuatro inversos del escritor, para poder probarlos SIN red: la pareja
     // mapear->mapear es la que demuestra que un guardado y su lectura se cierran.
     mapSelectedOts: mapSelectedOts,
