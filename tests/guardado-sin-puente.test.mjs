@@ -51,7 +51,12 @@ const FUENTES = [
   bloque("function appSheetMarkDirtyScope(", "function appSheetConsumeDirtyScopes"),
   bloque("function appSheetFlushPendingScopes(", "function appSheetConsumeDirtyScopes"),
   bloque("function appSheetConsumeDirtyScopes(", "function purgeClosedWorkOrderRetention"),
+  bloque("function appSheetTryAcquireSaveGate(", "async function appSheetAcquireSaveGate("),
+  bloque("function appSheetReleaseSaveGate(", "async function appSheetWaitForIdle("),
   bloque("function ambitosDeCatalogo(", "async function saveAppSheet("),
+  // El cuerpo real de saveAppSheet, para probar el fallo de catalogos (regresion del
+  // 2026-10-03: un catalogo que fallaba soltaba el "Plan guardado" y perdia el ambito).
+  bloque("async function saveAppSheet(", "function appSheetMarkDirtyScope("),
 ].join("\n");
 
 /** Monta el contexto con el estado que describe el escenario. */
@@ -265,11 +270,38 @@ test("un ok false dice QUE tabla fallo y con que error, no 'fallo desconocido'",
     "un informe sin tablas tampoco puede decir 'fallo desconocido': se dice que no dio motivo");
   assert.doesNotMatch(ctx.motivoDelInforme({ ok: false }), /fallo desconocido/);
 
+  // MEDIDO 2026-10-03 en el navegador: el toast decia "No se pudo guardar el plan: sin
+  // filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)". Esa nota es la del
+  // freno del vacio funcionando a proposito, y el resto del informe no tiene fallo: todo
+  // lo demas se escribio bien. "No se pudo" decia que si fallo cuando el guardado se
+  // detuvo a proposito. El mensaje tiene que decir que NO se escribio nada y porque, y
+  // nombrar vaciarSiEstaVacio es lo que lo hace explicito.
+  const soloFreno = { ok: false, tablas: {} };
+  for (const t of ["selected_ots", "locked_ots", "operation_plan_statuses"]) {
+    soloFreno.tablas[t] = { insertadas: 0, error: null, nota: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
+  }
+  const dichoFreno = ctx.motivoDelInforme(soloFreno);
+  assert.match(dichoFreno, /no se escribio nada/i, "se dice que no se escribio nada: " + dichoFreno);
+  assert.match(dichoFreno, /sin filas/i, "se dice porque no se escribio: " + dichoFreno);
+  assert.match(dichoFreno, /vaciarSiEstaVacio/, "y se nombra la forma de pedirlo a proposito: " + dichoFreno);
+  assert.doesNotMatch(dichoFreno, /fallo desconocido/);
+
+  // El freno de una tabla Y un fallo de verdad en otra: el fallo manda, porque es lo que
+  // hay que arreglar. La nota del freno no puede taparlo.
+  const frenoYFallo = {
+    ok: false,
+    tablas: {
+      selected_ots: { insertadas: 0, error: null, nota: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" },
+      work_orders: { insertadas: 0, error: "HTTP 409: duplicate key value violates unique constraint work_orders_ot_key" },
+    },
+  };
+  assert.match(ctx.motivoDelInforme(frenoYFallo), /work_orders: HTTP 409/, "con un fallo de verdad, el fallo manda: " + ctx.motivoDelInforme(frenoYFallo));
+
   // Con MUCHAS tablas que fallan, los nombres van todos y el detalle va al primero, que es
   // el que identifica la peticion que hay que arreglar.
   const muchas = { ok: false, tablas: {} };
   for (const t of ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"]) {
-    muchas.tablas[t] = { error: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" };
+    muchas.tablas[t] = { error: "HTTP 500: internal server error" };
   }
   const resumen = ctx.motivoDelInforme(muchas);
   for (const t of ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"]) {

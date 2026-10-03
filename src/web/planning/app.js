@@ -16,7 +16,11 @@ const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
 // prompt colgado de forma indefinida. El reloj del puente va por encima (420 s) porque el
 // cliente reintenta una vez: 2 x 180 + 5 s de espera.
 const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;
-const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
+// DECIDIDO 2026-10-03 por el usuario: vuelve a 24 h, el valor que declara RULE-OT-013 y
+// docs/data/sources.md. El 72 h (3 * 24) que estaba aqui no estaba documentado en ninguna
+// parte, o sea que era un cambio de conducta sin registro. Con 24 h, una OT cuyos datos de
+// planeacion tengan mas de un dia de Antiguedad se re-sincroniza antes de generar el plan.
+const NETSUITE_PLANNING_FRESH_MS = 24 * 60 * 60 * 1000;
 const NETSUITE_WORKORDER_FRESH_MS = 15 * 60 * 1000;
 const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
 const PLANNING_PLAN_TIME_BUDGET_MS = 300000;
@@ -6144,7 +6148,17 @@ onProgress: (event) => {
     state.draftVersionId = snapshot.snapshotId;
     setScheduleStatus("Guardando plan...");
     appSheetMarkDirtyScope("plan");
-    await saveAppSheet(false);
+    const planSubio = await saveAppSheet(false);
+    // MEDIDO 2026-10-03: antes esto era `await saveAppSheet(false)` sin mirar el retorno. El
+    // borrador ya habia vivido en persistPlanSnapshot (arriba), o sea que si ESTE guardado
+    // falla no se pierde el plan calculado; lo que queda atras es app_state/revision, y el
+    // mensaje de abajo salia igual ("borrador guardado"), que es a medias: el borrador SÍ,
+    // pero el estado del plan no. Se avisa aparte y sin volver a decir "No se pudo programar"
+    // (eso seria falso: el plan se calculo y el borrador se guardo). El scope de plan queda
+    // re-marcado por dentro de saveAppSheet, que es lo que permite el reintento.
+    if (!planSubio) {
+      showToast("El plan se genero y el borrador se guardo, pero el estado (app_state) no subio: recarga o vuelve a guardar", 9000);
+    }
     saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`, "ui");
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
@@ -13971,6 +13985,20 @@ function motivoDelInforme(informe) {
   const motivo = informe && informe.motivo ? String(informe.motivo) : "";
   if (motivo) return motivo.length > 220 ? motivo.slice(0, 217) + "..." : motivo;
   const tablas = informe && informe.tablas && typeof informe.tablas === "object" ? informe.tablas : {};
+  // Las notas son de dos especies y se tratan distinto:
+  //   - nota de ACCION (por ejemplo la del 42P01 de escribirAnexo): dice que hacer
+  //     y manda sobre el error crudo, que exige saber de Postgres para leerse.
+  //   - nota del FREN (escribirEspejo, supabase-writer.js): "sin filas: no se borra la
+  //     tabla (vaciarSiEstaVacio lo hace explicito)". No es un fallo: es la tabla dejada
+  //     intacta A PROPOSITO. MEDIDO 2026-10-03 en el navegador: cuando era la unica nota
+  //     de un informe ok:false, el toast decia "No se pudo guardar el plan: sin filas: no
+  //     se borra la tabla..." o sea que presentaba el freno como fallo. No lo puede
+  //     tapar ni a un fallo de verdad: un 409 de otra tabla es lo que hay que arreglar.
+  const notas = Object.keys(tablas)
+    .filter((tabla) => tablas[tabla] && tablas[tabla].nota)
+    .map((tabla) => tablas[tabla].nota);
+  const notasDelFreno = notas.filter((nota) => /vaciarSiEstaVacio/i.test(nota));
+  const notasDeAccion = notas.filter((nota) => !/vaciarSiEstaVacio/i.test(nota));
   const fallos = Object.keys(tablas)
     .filter((tabla) => tablas[tabla] && tablas[tabla].error)
     // MEDIDO 2026-09-30: se nombra el PASO, no solo la tabla. GuardarCatalogos hace dos
@@ -13979,17 +14007,23 @@ function motivoDelInforme(informe) {
     // "column ot_configurations.1905 does not exist" se lee como lo que es: un filtro de
     // borrado mal armado, no un dato malo.
     .map((tabla) => tabla + (tablas[tabla].paso ? " (" + tablas[tabla].paso + ")" : "") + ": " + tablas[tabla].error);
-  if (!fallos.length) return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
+  if (!fallos.length) {
+    // Sin fallo de verdad, la nota de accion sigue mandando; si solo hay frenos, se dice
+    // que no se escribio nada y porque, y si no hay nada, se dice que no hay motivo.
+    if (notasDeAccion.length) return notasDeAccion[0].length <= 220 ? notasDeAccion[0] : notasDeAccion[0].slice(0, 217) + "...";
+    if (notasDelFreno.length) {
+      return "no se escribio nada: el plan llego sin filas y sin vaciarSiEstaVacio, asi que la tabla se deja intacta. Avisa con vaciarSiEstaVacio si el vacio es de verdad";
+    }
+    return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
+  }
 
   // MEDIDO 2026-09-30: cuando el fallo es "no unique or exclusion constraint matching the
   // ON CONFLICT", el escritor deja una `nota` con lo que hay que hacer. Se sube la PRIMERA
-  // nota antes que el error crudo, porque el error dice que paso y la nota dice que hacer, y
-  // en un toast de 220 caracteres el "que hacer" es lo que se necesita. Sin esto se vio en
-  // produccion un 42P01 pelado, que exige saber de Postgres para saber por donde empezar.
-  const notas = Object.keys(tablas)
-    .filter((tabla) => tablas[tabla] && tablas[tabla].nota)
-    .map((tabla) => tablas[tabla].nota);
-  if (notas.length) return notas[0].length <= 220 ? notas[0] : notas[0].slice(0, 217) + "...";
+  // nota ANTES que el error crudo, porque el error dice que paso y la nota dice que hacer,
+  // y en un toast de 220 caracteres el "que hacer" es lo que se necesita. Sin esto se vio
+  // en produccion un 42P01 pelado, que exige saber de Postgres para saber por donde
+  // empezar. Solo la nota de accion: la del freno no tapa un fallo de otra tabla.
+  if (notasDeAccion.length) return notasDeAccion[0].length <= 220 ? notasDeAccion[0] : notasDeAccion[0].slice(0, 217) + "...";
 
   const texto = fallos.join(" | ");
   if (texto.length <= 220) return texto;
@@ -14200,7 +14234,22 @@ async function saveAppSheet(showMessage) {
       // 'matrix' manda si aparece con 'catalogs': el aviso que da el escritor es el
       // de la pestana de Matriz, que es lo que falta escribir.
       const ambito = deCatalogo.has("matrix") ? "matrix" : [...deCatalogo][0];
-      await guardarCatalogosEnSupabase(ambito);
+      // MEDIDO 2026-10-03: antes esto era `await guardarCatalogosEnSupabase(ambito)`
+      // sin mirar el retorno. Si el plan subia y un catalogo fallaba (una tabla entre
+      // muchas, un 400, un RLS), el guardado devolvia true y salia el toast "Plan guardado
+      // en Supabase", y los formularios de la pestana se borraban. El ambito de catalogo ya
+      // habia sido consumido por appSheetConsumeDirtyScopes (linea de arriba del try), asi
+      // que no habia reintento: la edicion se perdia hasta que la repitieran. Devolver false
+      // aqui deja el cambio VIVO: se re-marcan SOLO los ambitos de catalogo (no el de plan,
+      // que ya esta en la base y no hay que re-escribirlo) y el llamador reintenta. El toast
+      // de "No se pudieron guardar los catalogos" ya lo puso guardarCatalogosEnSupabase.
+      const catalogosOk = await guardarCatalogosEnSupabase(ambito);
+      if (!catalogosOk) {
+        deCatalogo.forEach((scope) => appSheetDirtyScopes.add(scope));
+        appSheetAvailable = true;
+        if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
+        return false;
+      }
     }
     appSheetAvailable = true;
     delete state._pendingAddOt;
