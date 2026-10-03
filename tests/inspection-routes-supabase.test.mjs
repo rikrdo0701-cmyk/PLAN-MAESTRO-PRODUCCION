@@ -103,11 +103,60 @@ test("readInspectionRoutes pide las columnas del tramo y NO `materials`", async 
 
   const filas = await api.readInspectionRoutes();
 
+  // MEDIDO 2026-10-03: la lectura pagina con limit=1000 + offset (ver
+  // readInspectionRoutes en supabase-reader.js). Sin limit, PostgREST aplica
+  // db-max-rows (1000) y un catalogo de 2006 filas llega recortado en
+  // silencio. Con una sola fila la paginacion termina en la primera vuelta.
   assert.equal(pedido.length, 1);
   assert.equal(pedido[0].tabla, "inspection_routes");
   assert.match(pedido[0].url, /select=clave%2Carticulo%2Cmaterial%2Ctramo%2Cdibujo%2Cactualizado%2Cactualizado_at/);
   assert.match(pedido[0].url, /order=articulo\.asc/);
+  assert.match(pedido[0].url, /limit=1000/);
+  assert.match(pedido[0].url, /offset=0/);
   assert.equal(filas[0].tramo, "650 mm");
+});
+
+test("readInspectionRoutes pagina: un catalogo de 2006 filas llega entero (2 vueltas)", async () => {
+  // MEDIDO 2026-10-03 en produccion: sin limit, la consulta de la pagina
+  // recibia solo las primeras 1000 de 2006 (db-max-rows de PostgREST) y las
+  // 1006 restantes nunca llegaron: D88-6055 iba en la 1201 y su tramo salia en
+  // blanco en la hoja de inspeccion. Este test simula el corte: el fetch de
+  // mentira respeta limit/offset, como PostgREST.
+  const todas = Array.from({ length: 2006 }, (_, i) => ({
+    clave: "A" + String(i).padStart(4, "0") + "|MP-1",
+    articulo: "A" + String(i).padStart(4, "0"),
+    material: "MP-1",
+    tramo: "tramo " + i,
+    dibujo: "",
+    actualizado: "",
+    actualizado_at: null,
+  }));
+  const pedido = [];
+  const contexto = {
+    console,
+    JSON, Object, Array, Promise, Date, String, Number, Boolean, Error, RegExp, isFinite,
+    encodeURIComponent, decodeURIComponent,
+    fetch: async (url) => {
+      const params = new URLSearchParams(String(url).split("?")[1] || "");
+      const limit = Number(params.get("limit") || 0);
+      const offset = Number(params.get("offset") || 0);
+      pedido.push({ limit, offset });
+      return { ok: true, status: 200, json: async () => todas.slice(offset, offset + limit) };
+    },
+  };
+  contexto.globalThis = contexto;
+  vm.createContext(contexto);
+  vm.runInContext(readerSource, contexto, { filename: "supabase-reader.js" });
+  const api = contexto.PPSupabaseReader;
+  api.configure({ url: "https://ejemplo.supabase.co", anonKey: "sb_publishable_falsa" });
+
+  const filas = await api.readInspectionRoutes();
+
+  // 1000 + 1000 + 6: la ultima vuelta devuelve menos de una pagina y cierra el bucle.
+  assert.deepEqual(pedido, [{ limit: 1000, offset: 0 }, { limit: 1000, offset: 1000 }, { limit: 1000, offset: 2000 }]);
+  assert.equal(filas.length, 2006);
+  // La que antes nunca llegaba:
+  assert.equal(filas[1200].tramo, "tramo 1200");
 });
 
 test("el mapeo trae los dos aliases que acepta el nucleo de inspeccion", () => {

@@ -49,7 +49,7 @@
     "inspection_routes",
     // MEDIDO 2026-10-01: el historial de IMPRESIONES de la hoja de inspeccion. Antes
     // vivia en la hoja `HISTORIAL_IMPRESION_INSPEC` y se leia por el puente de Apps
-    // Script, que esta deshabilitado (RULE-SUP-029), o sea que no tenia destino
+    // Script, que esta deshabilitado (RULE-SUP-030), o sea que no tenia destino
     // (docs/schema-inspection-history.sql). NO es lo mismo que `inspection_routes`:
     // esa es el CATALOGO de tramos (una fila por articulo+material, se edita a mano) y
     // esta es el HISTORIAL (una fila por impresion, la escribe la pagina sola).
@@ -222,6 +222,7 @@
     const parts = ["select=" + encodeURIComponent(opts.select || "*")];
     if (opts.order) parts.push("order=" + encodeURIComponent(opts.order));
     if (opts.limit != null) parts.push("limit=" + encodeURIComponent(opts.limit));
+    if (opts.offset != null) parts.push("offset=" + encodeURIComponent(opts.offset));
     if (opts.filters && typeof opts.filters === "object") {
       Object.keys(opts.filters).forEach(function (column) {
         parts.push(encodeURIComponent(column) + "=eq." + encodeURIComponent(opts.filters[column]));
@@ -631,23 +632,50 @@
   /**
    * Lee el catalogo de tramos entero y lo devuelve mapeado.
    *
-   * POR QUE ENTERO Y NO POR ARTICULO. La tabla son unas 400 filas: una pagina de
-   * PostgREST traeria el mismo numero de bytes con el filtro puesto, sin el
-   * `&offset` que obliga a paginar, y el filtro en memoria es el mismo que ya
-   * usaba la hoja. El filtro por articulo lo aplica quien llama
-   * (getInspectionDrawingRoutes del reemplazo del puente).
+   * POR QUE ENTERO Y NO POR ARTICULO. La tabla son unas 400 filas (comentario de
+   * 2026-10-01, YA DESACTUALIZADO: hoy son 2006): una pagina de PostgREST
+   * traeria el mismo numero de bytes con el filtro puesto, sin el `&offset` que
+   * obliga a paginar, y el filtro en memoria es el mismo que ya usaba la hoja.
+   * El filtro por articulo lo aplica quien llama (getInspectionDrawingRoutes
+   * del reemplazo del puente).
+   *
+   * POR QUE PAGINA Y NO UNA SOLA LECTURA. MEDIDO 2026-10-03 en produccion: la
+   * lectura de ANTES no traia `limit`, y PostgREST (Supabase) aplica
+   * `db-max-rows` (1000 por defecto) cuando no hay limit: la pagina recibia
+   * SILENCIOSAMENTE solo las primeras 1000 filas de 2006, sin error ni aviso.
+   * Con el orden `articulo.asc`, las 1006 filas de la Z y la A tardia
+   * (D88-6055 iba en la 1201) nunca llegaron a la pagina: la tabla de Catalogos
+   * parecia incompleta y el tramo de esos articulos salia en blanco en la hoja
+   * de inspeccion, aunque la fila ESTABA en Supabase. Por eso la lectura ahora
+   * pagina con `limit=1000` + `offset` hasta que una vuelta devuelve menos filas
+   * de lo pedido (el ultimo chunk); con 2006 filas son dos peticiones.
    *
    * EL ORDEN. Por `articulo` y no por `actualizado`: `actualizado` es texto y
    * ordenarlo como texto daria "01/02/2026" antes que "15/12/2025". El nucleo de
    * inspeccion reordena con localeCompare es, asi que el orden de aqui es solo el
-   * de la red; se deja el que si es un orden.
+   * de la red; se deja el que si es un orden. Y la paginacion EXIGE un orden
+   * estable: sin el, `offset` saltaria filas entre una lectura y otra.
    */
   async function readInspectionRoutes() {
-    const rows = await readTable("inspection_routes", {
-      select: "clave,articulo,material,tramo,dibujo,actualizado,actualizado_at",
-      order: "articulo.asc",
-    });
-    return mapInspectionRoutes(rows);
+    const PAGE = 1000;
+    let offset = 0;
+    const todas = [];
+    // Bucle con tope: una pagina que devolviera PAGE filas para siempre seria
+    // un ciclo sin fin (falso positivo del conteo, un error que PostgREST
+    // tolera, o un bug del reader). 50 paginas = 50000 filas, 25x el catalogo;
+    // mas que eso ya es un fallo, no un catalogo.
+    for (let vuelta = 0; vuelta < 50; vuelta++) {
+      const chunk = await readTable("inspection_routes", {
+        select: "clave,articulo,material,tramo,dibujo,actualizado,actualizado_at",
+        order: "articulo.asc",
+        limit: PAGE,
+        offset,
+      });
+      todas.push(...(Array.isArray(chunk) ? chunk : []));
+      if (chunk.length < PAGE) break;
+      offset += PAGE;
+    }
+    return mapInspectionRoutes(todas);
   }
 
   /**
