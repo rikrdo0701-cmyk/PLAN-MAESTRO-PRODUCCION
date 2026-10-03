@@ -735,37 +735,32 @@
    * saveDraftSnapshot / savePlanSnapshot / publishDraftPlan -> escriben en
    * plan_snapshots.
    *
-   * MEDIDO 2026-10-02: los TRES tienen el mismo defecto que `saveOperationPlanStatus`
-   * pedian `writer.guardarPlan`, que el escritor no exporta. A diferencia del boton
-   * Completar/Reabrir, NO se reparan aqui: la razon esta escrita y medida en
-   * supabase-writer.js, en el bloque "NO HAY UN `guardarPlanSnapshot`". En corto: el RPC
-   * `plan_guardar` escribe la instantanea en TRES columnas (`snapshot_id`, `payload`,
-   * `created_at`, docs/schema-supabase-plan.sql:863) con el plan entero dentro del
-   * `payload` jsonb, y el mapeador de columnas sueltas (`filasSnapshots`) no escribe
-   * `payload`: un UPSERT directo con el guardaria VACIA de cuerpo. Hay que medir en la
-   * base que columnas tiene hoy la fila antes de decidir.
+   * MEDIDO 2026-10-02. Los TRES tenian el mismo defecto que `saveOperationPlanStatus`:
+   * pedian `writer.guardarPlan`, que el escritor no exporta. Ademas mandaban DOS cosas
+   * que la tabla no tiene, medido contra el schema cache que sirve PostgREST:
    *
-   * Lo que SI cambia con el arreglo: antes el fallo decia "PPSupabaseWriter no esta
-   * disponible", que senala al modulo cuando el modulo esta cargado y lo que falta es el
-   * metodo. Ahora `exigirMetodo` dice el metodo que falta y que para que se usa, y que no
-   * se escribio nada. Mismo resultado (no se escribe), pero el aviso deja de senalar al
-   * sistema equivocado.
+   *   1. `status: "BORRADOR" | "RESPALDO" | "PUBLICADO"` como COLUMNA. No existe:
+   *      `plan_snapshots` tiene 12 columnas y ninguna es `status`, asi que un POST con
+   *      esa columna es HTTP 400 `42703 column not found`. El estado de la instantanea vive
+   *      DENTRO del `payload` jsonb, y asi lo lee `planSnapshotFromRow` mas abajo
+   *      (`status: planSnapshotTexto(payload.status, payload.planStatus)`).
+   *   2. `payload: JSON.stringify(data)`. Guardaria un jsonb que es una CADENA, no un
+   *      objeto. La fila real de `draft` trae un objeto de 447375 caracteres.
+   *
+   * El `status` ahora va DENTRO del payload que se manda, que es donde la pagina lo lee.
    */
   async function saveDraftSnapshot(payload) {
     const w = exigirMetodo("guardarPlanSnapshot", "guarda el borrador del plan");
     const data = payload || {};
-    const snapshotId = data.snapshotId || `snap-${Date.now()}`;
+    const snapshotId = data.snapshotId || `draft`;
     const result = await w.guardarPlanSnapshot({
-      planSnapshots: [{
-        snapshot_id: snapshotId,
-        version: data.version || 1,
-        plan_start: data.planStart || "",
-        status: "BORRADOR",
-        payload: JSON.stringify(data),
-        generated_at: data.generatedAt || new Date().toISOString(),
-      }],
+      snapshot_id: snapshotId,
+      // El estado va en el payload, no en una columna: es lo que `planSnapshotFromRow`
+      // lee y lo unico que sobrevive a una tabla sin columna `status`.
+      payload: Object.assign({}, data, { snapshotId, status: data.status || "BORRADOR" }),
+      createdAt: data.generatedAt || new Date().toISOString(),
     });
-    if (result?.error) throw new Error(result.error);
+    if (result?.ok === false) throw new Error(result?.motivo || "No se pudo guardar el borrador");
     return { ...data, snapshotId };
   }
 
@@ -777,16 +772,11 @@
     const data = payload || {};
     const snapshotId = data.snapshotId || `snap-${Date.now()}`;
     const result = await w.guardarPlanSnapshot({
-      planSnapshots: [{
-        snapshot_id: snapshotId,
-        version: data.version || 1,
-        plan_start: data.planStart || "",
-        status: data.status || "RESPALDO",
-        payload: JSON.stringify(data),
-        generated_at: data.generatedAt || new Date().toISOString(),
-      }],
+      snapshot_id: snapshotId,
+      payload: Object.assign({}, data, { snapshotId, status: data.status || "RESPALDO" }),
+      createdAt: data.generatedAt || new Date().toISOString(),
     });
-    if (result?.error) throw new Error(result.error);
+    if (result?.ok === false) throw new Error(result?.motivo || "No se pudo guardar la copia del plan");
     return { ...data, snapshotId };
   }
 
@@ -797,18 +787,15 @@
     const w = exigirMetodo("guardarPlanSnapshot", "publica el borrador del plan");
     const data = payload || {};
     const snapshotId = data.snapshotId || `snap-${Date.now()}`;
+    const publicado = data.publishedAt || new Date().toISOString();
     const result = await w.guardarPlanSnapshot({
-      planSnapshots: [{
-        snapshot_id: snapshotId,
-        version: data.version || 1,
-        plan_start: data.planStart || "",
-        status: "PUBLICADO",
-        payload: JSON.stringify(data),
-        generated_at: data.generatedAt || new Date().toISOString(),
-      }],
+      snapshot_id: snapshotId,
+      payload: Object.assign({}, data, { snapshotId, status: "PUBLICADO", publishedAt: publicado }),
+      createdAt: data.generatedAt || publicado,
+      publishedAt: publicado,
     });
-    if (result?.error) throw new Error(result.error);
-    return { ok: true, activeVersion: { ...data, snapshotId } };
+    if (result?.ok === false) throw new Error(result?.motivo || "No se pudo publicar el plan");
+    return { ok: true, activeVersion: { ...data, snapshotId, status: "PUBLICADO", publishedAt: publicado } };
   }
 
   /**
@@ -821,10 +808,21 @@
    * `JSON.parse("[object Object]")`: lanza, el `catch` devuelve la fila CRUDA, con
    * `snapshot_id` y `generated_at` en vez de `snapshotId` y `generatedAt`.
    *
-   * MEDIDO en la base, con lo que hace ese fallo: la fila existe y esta completa
-   * (`snapshot_id='draft'`, 101603 bytes, 129 operaciones, `status='BORRADOR'`,
-   * `generatedAt='2026-10-02T01:38:40.191Z'`, `planStart='2026-09-28'`) y no se podia
-   * leer. En cascada, porque TODO lo que consume la lista lee camelCase:
+   * MEDIDO en la base, con lo que hace ese fallo: la fila existe y esta completa, y no
+   * se podia leer. MEDIDO 2026-10-02 contra el schema cache que sirve PostgREST, la
+   * tabla tiene 12 columnas y **ninguna es `status`**: el estado, las operaciones,
+   * `generatedAt` y `planStart` van DENTRO del `payload` jsonb, que trae 447375
+   * caracteres. La fila es una sola, `snapshot_id='draft'`, con `operations='[]'` y
+   * `created_at='2026-10-02T01:38:40.191+00:00'`.
+   *
+   * OJO CON ESTE DATO, QUE ANTES ESTABA MAL. Una version anterior de este comentario
+   * decia "`status='BORRADOR'`, 101603 bytes, 129 operaciones" como si fueran columnas
+   * de la fila. No lo son: `status` no existe como columna (mandarla es un HTTP 400
+   * `42703 column not found`) y el cuerpo del plan vive en `payload`. Lo que esta
+   * funcion hace abajo, leer el estado de `payload.status` y de la fila como respaldo,
+   * es lo que la base tiene de verdad.
+   *
+   * En cascada, porque TODO lo que consume la lista lee camelCase:
    * `publishedPlanSnapshots` filtra por `snapshot.snapshotId !== "draft"` y no lo
    * reconoce; `planSourceOptionsMarkup` le pone `id: undefined` y
    * `operationalPlanOptions` descarta lo que no sea PUBLICADO, o sea que el selector de

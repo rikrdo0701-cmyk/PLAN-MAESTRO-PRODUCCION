@@ -1431,34 +1431,89 @@
   }
 
   /**
-   * NO HAY UN `guardarPlanSnapshot`, Y ESTO DICE POR QUE.
+   * guardarPlanSnapshot -> escribe SOLO `plan_snapshots`, por UPSERT en `snapshot_id`.
    *
-   * MEDIDO 2026-10-02: los tres `saveDraftSnapshot`/`savePlanSnapshot`/`publishDraftPlan`
-   * de PPSupabaseBridgeReplacement tienen el MISMO defecto que `saveOperationPlanStatus`
-   * (piden `writer.guardarPlan`, que este modulo no exporta). NO se reparan aqui, y el
-   * motivo es que no se pueden reparar a ciegas:
+   * MEDIDO 2026-10-02 contra el schema cache que sirve PostgREST, que es exactamente lo
+   * que el navegador puede escribir. La tabla tiene 12 columnas y el dato que importa:
    *
-   *   `plan_snapshots` se escribe por el RPC `plan_guardar`, y ese RPC inserta TRES
-   *   columnas: `insert into public.plan_snapshots (snapshot_id, payload, created_at)`
-   *   (docs/schema-supabase-plan.sql:863-865). El cuerpo del plan entero viaja dentro de
-   *   la columna jsonb `payload`, y ahi `jsonb_populate_recordset` deja pasar el objeto
-   *   entero sin tocarlo. El mapeador de columna por columna que usa el camino viejo,
-   *   `filasSnapshots` (este archivo:1981), escribe `operations`, `plan_start`,
-   *   `version`, `usuario`, `change_summary`, `published_at` y `publication_reason`, y
-   *   NO escribe `payload`. O sea que un UPSERT directo con `filasSnapshots` guardaria la
-   *   fila VACIA de cuerpo: perderia el plan. Y el reemplazo ademas manda `status` y
-   *   `payload` como columnas, que no son las que el RPC escribe.
+   *   - NO HAY columna `status`. Este modulo y el reemplazo mandaban `status: "BORRADOR"`,
+   *     que es un HTTP 400 `42703 column not found`. El estado de la instantanea vive
+   *     DENTRO del `payload` jsonb: asi lo lee `planSnapshotFromRow`
+   *     (supabase-bridge-replacement.js:897) y asi esta la fila real de `draft`.
+   *   - La unica NOT NULL SIN default es `snapshot_id`. `operations`, `plan_start`,
+   *     `version`, `usuario` y `publication_reason` tienen default, y `id` y `created_at`
+   *     tambien. Por eso esta funcion manda solo lo que trae el snapshot y deja que los
+   *     defaults llenen el resto: mandarlas vacias BORRARIA en un merge lo que la fila ya
+   *     tenia.
+   *   - El cuerpo del plan viaja en `payload` como OBJETO, no como texto: la fila real
+   *     de `draft` trae 447375 caracteres de jsonb.
    *
-   * Para repararlo hay que decidir una sola cosa y medirla antes: si la instantanea
-   * estrecha escribe `payload` con el objeto entero (mismo contrato que el RPC) o
-   * columnas sueltas (mismo contrato que `filasSnapshots`). Las dos no pueden ser
-   * ciertas a la vez y elegir a ciegas deja borradores vacios en la base.
+   * EL CONTRATO ES EL DEL RPC, NO EL DEL MAPEADOR DE COLUMNAS. `plan_guardar` inserta tres
+   * columnas: `insert into public.plan_snapshots (snapshot_id, payload, created_at)`
+   * (docs/schema-supabase-plan.sql:863-865). Este UPSERT manda esas tres, mas
+   * `published_at` cuando se publica. NO usa `filasSnapshots` (el mapeador del camino
+   * viejo, que escribe `operations`, `plan_start`, `version`, `usuario`, `change_summary` y
+   * `publication_reason` y NO escribe `payload`): con ese la fila se guardaria sin cuerpo
+   * y la pagina leeria un borrador vacio.
    *
-   * LO QUE PASA HOY. Los tres metodos lanzan, `getWriter()` lo dice por el nombre del
-   * metodo que falta, y no se escribe nada. Que es el estado de partida: hoy tampoco se
-   * escribe nada, solo que el mensaje era falso (decia que el escritor no estaba, cuando
-   * si estaba y lo que faltaba era el metodo).
+   * `created_at` va con el instante del snapshot y no con el del reloj, por el mismo
+   * motivo que en `filasSnapshotsRpc`: recargar y volver a guardar no debe cambiarle la
+   * hora a un borrador que ya estaba. Sin fecha no se manda la columna y la pone `now()`.
    */
+  async function guardarPlanSnapshot(fila, opciones) {
+    const opts = opciones || {};
+    const t0 = Date.now();
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: "plan_snapshots", fila: null };
+    if (!isConfigured()) {
+      return sinEscribir(informe, t0, "Supabase no esta configurado en este build: faltan la URL o la clave publicable");
+    }
+    const auth = root.PPSupabaseAuth;
+    if (!auth || typeof auth.token !== "function") {
+      return sinEscribir(informe, t0, "no esta PPSupabaseAuth: no hay quien pida el token de sesion");
+    }
+    const token = await auth.token();
+    if (!token) {
+      return sinEscribir(informe, t0, "no hay sesion de Supabase: entra con tu correo para poder guardar. No se escribe nada");
+    }
+    const data = fila || {};
+    const snapshotId = texto(data.snapshot_id || data.snapshotId);
+    if (!snapshotId) {
+      return sinEscribir(informe, t0,
+        "la instantanea necesita su snapshot_id: es la unica NOT NULL sin default, y sin ella no hay clave ni UPSERT posible");
+    }
+    const cuerpo = { snapshot_id: snapshotId, payload: cuerpoDePayload(data) };
+    const createdAt = instante(data.created_at || data.createdAt || data.generatedAt || data.publishedAt, "");
+    if (createdAt) cuerpo.created_at = createdAt;
+    const publishedAt = instante(data.publishedAt || data.published_at, "");
+    if (publishedAt) cuerpo.published_at = publishedAt;
+    const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+    // `snapshot_id text not null unique` (docs/schema-supabase.sql:305). Sin `on_conflict`,
+    // PostgREST usaria la primary key, que es el uuid que la pagina nunca manda, y cada
+    // guardado del borrador entraria como fila nueva en vez de reemplazar la de 'draft'.
+    informe.tablas.plan_snapshots = await escribirAnexo(ctx, "plan_snapshots", [cuerpo], "snapshot_id");
+    if (informe.tablas.plan_snapshots.error && opts.motivoDeError) informe.motivo = opts.motivoDeError;
+    return cerrar(informe, t0);
+  }
+
+  /**
+   * El cuerpo de la instantanea como OBJETO jsonb. Si llega texto se parsea, porque el
+   * RPC acepta las dos formas y `planSnapshotPayload` tambien las lee, pero lo que se MANDA
+   * es el objeto: mandar `JSON.stringify(...)` guardaria un jsonb que es una cadena, no un
+   * plan.
+   */
+  function cuerpoDePayload(data) {
+    const fuente = data && data.payload != null ? data.payload : data;
+    if (fuente == null) return {};
+    if (typeof fuente === "string") {
+      try {
+        const parseado = JSON.parse(fuente);
+        return parseado && typeof parseado === "object" && !Array.isArray(parseado) ? parseado : {};
+      } catch {
+        return {};
+      }
+    }
+    return typeof fuente === "object" && !Array.isArray(fuente) ? fuente : {};
+  }
 
   /**
    * app_state tiene UNA fila (id integer, check id = 1): se ACTUALIZA, no se
@@ -2534,6 +2589,11 @@
     // `saveOperationPlanStatus`). UPSERT por `key`, sin borrar nada. El camino ancho
     // sigue siendo `guardar` -> `plan_guardar`, que es el que sube la revision.
     guardarPlanStatuses: guardarPlanStatuses,
+    // MEDIDO 2026-10-02: el UNICO escritor de `plan_snapshots` para los tres caminos
+    // angostos (borrador, copia y publicacion). UPSERT por `snapshot_id`, con el cuerpo
+    // del plan en la columna jsonb `payload` como OBJETO. El camino ancho sigue siendo
+    // `guardar` -> `plan_guardar`, que es el que sube la revision.
+    guardarPlanSnapshot: guardarPlanSnapshot,
     normalizeKey: normalizeKey,
     // armarCatalogos() sin red, para probar el mapeo y las claves contra el esquema
     // sin abrir nada (mismo criterio que armarPayload para el plan).
