@@ -1,6 +1,6 @@
 // Candado de que los botones de sincronizacion DISPAREN LA INGESTA y no la releen.
 //
-// MEDIDO 2026-09-30, y por que este archivo existe. Con RULE-SUP-029 la app no habla con
+// MEDIDO 2026-09-30, y por que este archivo existe. Con RULE-SUP-030 la app no habla con
 // NetSuite: NetSuite carga a Supabase y la pagina lee de Supabase. Los botones Sincronizar y
 // Sincronizar OTs se HABIAN QUEDADO COMO UN REREAD de las tablas: releian work_orders,
 // operations y materials, y no pedian que NetSuite escribiera nada. O sea que un boton

@@ -687,7 +687,7 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else initializePlanningApp();
 
 // MEDIDO 2026-09-30 en la pagina real: el bootSync de esta funcion estaba compuerteado por
-// isAppsScriptRuntime(), que da false desde que el puente quedo deshabilitado (RULE-SUP-029).
+// isAppsScriptRuntime(), que da false desde que el puente quedo deshabilitado (RULE-SUP-030).
 // O sea que el sync de arranque NO se lanzaba nunca en el sitio estatico: la pagina abria con
 // el estado cacheado y sin pedir OTs a Supabase. syncNetSuiteInBackground ya va a Supabase,
 // que esta en los dos runtimes, asi que la pregunta no tiene a que existir. El caso grave, el
@@ -849,7 +849,7 @@ async function maybeRestoreSavedDraftOnBoot() {
 //
 // MEDIDO 2026-09-30: el techo del que este rescate espera ya no es el CALL_TIMEOUT_MS del
 // puente (120 000 ms, apps-script-bridge-client.js), porque el puente quedo deshabilitado
-// (RULE-SUP-029). Ahora lo que puede tener ocupado al flag es el presupuesto del cliente,
+// (RULE-SUP-030). Ahora lo que puede tener ocupado al flag es el presupuesto del cliente,
 // NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180 000 ms, que esta en ESTE MISMO archivo, linea 18.
 //
 // POR QUE 240 000 y no 180 000, que es el numero que habia. Con el puente, el sync se cortaba
@@ -4122,6 +4122,11 @@ function toggleJobLock(ot) {
 
 function updateQueueLockCard(ot) {
   if (!els.priorityQueue) return;
+  // MEDIDO 2026-10-03 (ReferenceError en produccion al alternar Completar/
+  // Reabrir): esta funcion usaba `activeMoveOt`, que solo existe como local de
+  // renderPriorityQueue. La fuente de verdad es state.queueMoveOt, la misma que
+  // renderPriorityQueue usa (y escribe en el dataset del contenedor).
+  const activeMoveOt = state.queueMoveOt || "";
   els.priorityQueue.querySelectorAll("[data-queue-ot]").forEach((el) => {
     if (materialOtKey(el.dataset.queueOt) !== materialOtKey(ot)) return;
     const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
@@ -7957,7 +7962,7 @@ function inspectionFillOnHold() {
 async function ensureInspectionWorkOrders(ots) {
   // MEDIDO 2026-09-30: el `if (!isAppsScriptRuntime()) return;` de aqui hacia que la
   // precarga de inspeccion no ocurriera nunca en el sitio estatico, porque da false desde que
-  // el puente quedo deshabilitado (RULE-SUP-029). La recarga de inspeccion va a Supabase, que
+  // el puente quedo deshabilitado (RULE-SUP-030). La recarga de inspeccion va a Supabase, que
   // esta en los dos runtimes, asi que la compuerta no tiene a que proteger nada. Lo que SI
   // protege de verdad es inspectionFillOnHold, una linea mas abajo, y esa se queda.
   if (inspectionFillOnHold()) return;
@@ -8155,7 +8160,7 @@ let closedPiecesBackfillRunning = false;
 async function backfillClosedPendingPiecesFromHistory(rows) {
   // MEDIDO 2026-09-30: aqui `!isAppsScriptRuntime()` hacia de guarda a guarda, y la segunda
   // compuerta (que es la que evita el reentrada: closedPiecesBackfillRunning) impedia que la
-  // primera se notara. Da false desde que el puente quedo deshabilitado (RULE-SUP-029), o sea
+  // primera se notara. Da false desde que el puente quedo deshabilitado (RULE-SUP-030), o sea
   // que el relleno de piezas pendientes de OTs cerradas no ocurria nunca en el sitio
   // estatico. El historico se lee de Supabase, que esta en los dos runtimes. Se queda solo la
   // guarda de reentrada, que es la que hace falta.
@@ -9783,7 +9788,7 @@ async function syncBacklogWorkOrders(options = {}) {
       if (!ingesta.seguir) return { ok: false, error: ingesta.resultado || new Error("La ingesta no corrio"), ingesta: ingesta.resultado };
     }
     // MEDIDO 2026-09-30: esto reintentaba solo ante SSS_REQUEST_LIMIT_EXCEEDED, que es el
-    // 400 de limite de solicitudes de NETSUITE. Con el puente deshabilitado (RULE-SUP-029) la
+    // 400 de limite de solicitudes de NETSUITE. Con el puente deshabilitado (RULE-SUP-030) la
     // lectura va a Supabase, y ese codigo ya no puede llegar: el reintento estaba muerto y no
     // cubria el limite que de verdad existe ahora, que es el de PostgREST (429, y el texto
     // PGRST124 "Request rate limit reached"). Un reintento que solo mira el codigo del sistema
@@ -9990,7 +9995,7 @@ async function refreshSmartSyncOtTimes(records) {
   if (!toRefresh.length) return results;
 
   // MEDIDO 2026-09-30: esta rama se tomaba SIEMPRE, porque `isAppsScriptRuntime()` da false
-  // desde que el puente quedo deshabilitado (RULE-SUP-029). O sea que el refresco de tiempos
+  // desde que el puente quedo deshabilitado (RULE-SUP-030). O sea que el refresco de tiempos
   // tras una sincronizacion inteligente no ocurria nunca en el sitio estatico: cada OT se
   // marcaba `skipped` y los tiempos se quedaban como estaban. La lectura de tiempos va a
   // Supabase, que esta en los dos runtimes, asi que la rama se borra y el refresco ocurre.
@@ -10491,7 +10496,7 @@ function validateNetSuiteImportedData(imported, mode) {
   if (!workOrders.length) {
     // MEDIDO 2026-09-30 en la pagina real: este mensaje decia "Revisa credenciales, permisos
     // del deployment y ejecuta runProductionReadinessCheck({liveNetSuite:true})", y ya no
-    // senala al lugar del fallo. La app no habla con NetSuite (RULE-SUP-029): lee la tabla
+    // senala al lugar del fallo. La app no habla con NetSuite (RULE-SUP-030): lee la tabla
     // work_orders de Supabase. Un mensaje que manda a revisar el deployment de Apps Script
     // cuando el problema es una tabla vacia o una politica de RLS hace perder el rato en el
     // sistema equivocado, y por encima tapa el motivo real, que es el que se pedia en
@@ -10968,7 +10973,7 @@ async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null
   };
   // MEDIDO 2026-09-30 en la pagina real: esto era
   //   if (!isAppsScriptRuntime()) { return { ready, source: "cached"|"none", missingOts } }
-  // y con el puente deshabilitado (RULE-SUP-029) `isAppsScriptRuntime()` da false, o sea
+  // y con el puente deshabilitado (RULE-SUP-030) `isAppsScriptRuntime()` da false, o sea
   // que ESTA era la rama que se tomaba siempre. Y esa rama no sincroniza nada: solo mira
   // lo que ya hay en state.operations y devuelve lo que falta. MEDIDO en produccion: el
   // boton Generar plan daba
@@ -11565,7 +11570,10 @@ function captureLocalPlanningState() {
     "publishedVersions",
   ];
   return keys.reduce((out, key) => {
-    if (Object.prototype.hasOwnProperty.call(state, key)) out[key] = deepClone(state[key]);
+    // El guard es hasOwnProperty y NO solo valor: una clave puede existir como
+    // propiedad propia con valor undefined (ver el MEDIDO en deepClone), y en
+    // ese caso no hay nada que capturar ni restaurar.
+    if (Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined) out[key] = deepClone(state[key]);
     return out;
   }, {});
 }
@@ -14128,12 +14136,13 @@ async function guardarSyncDeOrdenesTrabajoEnSupabase() {
 }
 
 /**
- * Guarda los CATALOGOS en Supabase: las seis tablas de la pestana Catalogos.
+ * Guarda los CATALOGOS en Supabase: las nueve tablas de guardarCatalogos (las seis de la
+ * pestana Catalogos, mas operators y matrix de la Matriz y machine_catalog, unica de la pagina).
  *
  * POR QUE ESTE CAMINO Y NO EL DE LOS CATALOGOS DE ANTES. Antes, guardar un catalogo
  * era `saveCatalogState()`, que escribe las hojas de Apps Script y dispara el
  * espejo (16-supabase-catalogo.js). MEDIDO 2026-09-29 con la sesion de correo, RLS
- * DEJA ESCRIBIR esas seis tablas (`for all to authenticated`), asi que el navegador
+ * DEJA ESCRIBIR esas tablas (`for all to authenticated`), asi que el navegador
  * puede escribirlas por su cuenta y no hace falta el puente para ningun catalogo.
  *
  * POR QUE SOLO CUANDO EL AMBITO LO PIDE. Se llama desde saveAppSheet, que recibe los
@@ -14226,7 +14235,7 @@ async function saveAppSheet(showMessage) {
     // de Apps Script; esa funcion se BORRO el 2026-09-30 (ver el comentario donde
     // estaba): el ambito ya no elige un metodo del puente, elige si se suben catalogos.
     // MEDIDO 2026-09-29, con la sesion de correo RLS deja escribir
-    // las seis tablas de catalogo, asi que van por Supabase y no por el puente.
+    // las tablas de catalogo, asi que van por Supabase y no por el puente.
     // Se escriben DESPUES del plan y no antes: si el plan falla, no se suben
     // catalogos de un guardado que no ocurrio.
     const deCatalogo = ambitosDeCatalogo(scopes);
@@ -14452,6 +14461,14 @@ function downloadBlob(content, filename, type) {
 }
 
 function deepClone(value) {
+  // MEDIDO 2026-10-03 (stack de produccion, syncNetSuiteData ->
+  // captureLocalPlanningState): varias funciones de planning-workflow-core
+  // devuelven `lastSchedule: state?.lastSchedule` y Object.assign(state, ...)
+  // deja la propiedad PROPIA con valor undefined. deepClone(undefined) hacia
+  // JSON.parse(JSON.stringify(undefined)) = JSON.parse(undefined) y lanzaba
+  // SyntaxError: "undefined" es JSON invalido, que mataba el applyImported del
+  // sync de NetSuite. undefined no se clona: no hay nada que clonar.
+  if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value));
 }
 

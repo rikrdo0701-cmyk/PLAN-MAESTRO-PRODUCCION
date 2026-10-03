@@ -855,7 +855,7 @@
         // Apps Script en un sitio que ya decidio que Supabase es la fuente, y ademas consume
         // el ancho de banda de cada persona que abre la pagina. La puerta de escritura ya no
         // la consulta: `appSheetDisponible()` de app.js pregunta por PPSupabaseWriter
-        // (RULE-SUP-029).
+        // (RULE-SUP-030).
         snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
           console.warn("No se pudieron cargar los historicos:", error);
           return null;
@@ -893,7 +893,7 @@
       // `bridgeAvailable()` dice que no hay puente) el sync no pasaba. Con el puente
       // deshabilitado NO se pierde: `syncNetSuiteData` de app.js ya lee
       // `PPSupabaseBridgeReplacement.syncNetSuiteWorkOrders`, o sea de Supabase, que esta
-      // disponible en los dos runtimes. Supabase es la fuente (RULE-SUP-029), asi que la
+      // disponible en los dos runtimes. Supabase es la fuente (RULE-SUP-030), asi que la
       // frescura del espejo se decide con `shouldRefreshNetSuite` y nada mas.
       const bootSync = shouldRefreshNetSuite(loaded)
         ? syncWorkOrdersOnce({ showMessage: state.workOrders.length === 0 })

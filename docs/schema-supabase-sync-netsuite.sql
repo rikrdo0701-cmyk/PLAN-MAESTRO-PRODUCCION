@@ -1,9 +1,14 @@
 -- =============================================================================
--- ESQUEMA SUPABASE — DELTA DE LA INGESTA NETSUITE (PROPUESTO, NO APLICADO)
+-- ESQUEMA SUPABASE — DELTA DE LA INGESTA NETSUITE (APLICADO)
 -- =============================================================================
--- ESTE ARCHIVO NO SE EJECUTA TODAVIA. Es el delta que necesita
--- netsuite-restlet-supabase-sync.js para escribir, y sigue la misma regla que
--- docs/schema-supabase.sql: nada se mueve hasta que se apruebe.
+-- MEDIDO 2026-10-03: el delta de este archivo SÍ esta aplicado en la base —
+-- items, inventory y sales_orders existen y la ingesta (commit 574bafe,
+-- 2026-09-28) escribe las 7 tablas contra ellas cada 15 min. El encabezado
+-- decia 'PROPUESTO, NO APLICADO' y nadie actualizo el archivo tras aplicar el
+-- DDL (ver data-sources.json, registro NETSUITE: 'delta ya aplicado'). La
+-- forma sigue siendo la declarada aqui; si alguien lo vuelve a aplicar, el
+-- `create table if not exists` y los ``if not exists`` de policies lo hacen
+-- inofensivo, pero esto ya no es un plano pendiente: es el DDL de lo que hay.
 --
 -- De donde sale cada hueco (medido, no supuesto):
 --   - El RESTlet escribe 7 tablas. En docs/schema-supabase.sql existen 4

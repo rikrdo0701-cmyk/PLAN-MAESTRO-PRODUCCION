@@ -477,7 +477,7 @@ function PP_ingesta_(forzado) {
  * de antes. Por eso el mensaje esta aqui y no en el cliente.
  *
  * QUE NO HACE ESTA PUERTA, Y POR QUE. No lee nada de NetSuite para la pagina y no devuelve
- * datos: la ingesta escribe en Supabase y la pagina lee de Supabase (RULE-SUP-029). Esta puerta
+ * datos: la ingesta escribe en Supabase y la pagina lee de Supabase (RULE-SUP-030). Esta puerta
  * solo ORDENA la corrida. Lo que la pagina lee despues sale de las tablas de Supabase por el
  * lector de siempre, o sea que el boton Sincronizar quedaria leyendo lo que ya esta en la base
  * aunque el despliegue viejo siga sirviendo.

@@ -289,7 +289,7 @@
    *
    * MEDIDO 2026-10-01, POR QUE ESTA NO EXISTIA. `loadList` (inspection-app.js:75) la
    * pedia por `call("getInspectionWorkOrders")`, o sea por el puente de Apps Script, que
-   * esta deshabilitado (RULE-SUP-029). `call` devuelve una promesa rechazada y la
+   * esta deshabilitado (RULE-SUP-030). `call` devuelve una promesa rechazada y la
    * pagina no podia ni hacer la lista: la pestana de inspeccion abria sin una sola OT,
    * sin error visible y sin poder imprimir nada. No era un dato faltante: la funcion
    * estaba en 16-inspection-service.js:139 y no tiene a quien llamar.
@@ -438,7 +438,7 @@
    * plan B: si Supabase no responde, lee la hoja `Tramos` y devuelve `fuente: 'hoja'` con
    * un aviso, porque la hoja es el respaldo y todavia esta ahi. Aca NO se puede copiar
    * ese plan B: la hoja se leia por Apps Script y el puente esta deshabilitado
-   * (RULE-SUP-029). O sea que el plan B de la pagina no es "la hoja", es "cargar el
+   * (RULE-SUP-030). O sea que el plan B de la pagina no es "la hoja", es "cargar el
    * catalogo una vez a mano" (PP_migrarTramosASupabase_, 16-inspection-service.js:352).
    * Sin tabla, lo unico honesto es devolver el catalogo vacio Y DECIRLO, para que quien
    * imprime sepa que los tramos que ve son los de la fila de la OT, no los del catalogo.
@@ -567,7 +567,7 @@
    *
    * MEDIDO 2026-10-01, POR QUE EXISTIA ESTA Y NO LA HABIA. `printInspection`
    * (inspection-app.js:565) la pedia por `call(...)` y por ahi salia a la hoja
-   * `HISTORIAL_IMPRESION_INSPEC`. Con el puente deshabilitado (RULE-SUP-029) el registro
+   * `HISTORIAL_IMPRESION_INSPEC`. Con el puente deshabilitado (RULE-SUP-030) el registro
    * NUNCA se guardaba, y como la app lo trata como no bloqueante (pregunta "¿Imprimir de
    * todos modos?"), la impresion salia y no quedaba rastro: el historial era un historial
    * SIN LUGAR. No se notaba porque el "no se pudo guardar" solo aparecia en un confirm.

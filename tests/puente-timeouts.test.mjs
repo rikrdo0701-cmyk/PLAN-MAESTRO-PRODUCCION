@@ -13,7 +13,7 @@
 // QUE HACE ESTE TEST AHORA. La version anterior de este archivo FIJABA que los metodos
 // medidos lentos tuvieran entrada propia en METHOD_TIMEOUT_MS y que esa entrada fuera mayor
 // que el peor caso medido. Eso era lo correcto mientras el puente existia. Con el puente
-// deshabilitado (RULE-SUP-029) la entrada no tiene que existir: no hay llamada que cronometrar.
+// deshabilitado (RULE-SUP-030) la entrada no tiene que existir: no hay llamada que cronometrar.
 // Asi que el test afirma la AUSENCIA, que es la un forma honesta de fijar "esto no se
 // reintroduce": si alguien vuelve a meter presupuestos por metodo del puente, es porque
 // volvio el iframe, y este test lo dice.

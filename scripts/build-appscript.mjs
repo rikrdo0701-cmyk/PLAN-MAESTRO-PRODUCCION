@@ -176,7 +176,7 @@ function patchPlanningApp(app) {
   // llevar comentarios propios: si se le anade uno, el texto deja de coincidir con el fuente,
   // el patch no aplica y el throw de mas abajo lo dice. Por eso la razon de que la linea
   // `const bootSync = ...` ya no este compuerteada por isAppsScriptRuntime() vive en app.js y
-  // en RULE-SUP-029, no aqui. Le pasa a cualquier parche por texto: el marcador es una
+  // en RULE-SUP-030, no aqui. Le pasa a cualquier parche por texto: el marcador es una
   // fotografia del fuente, y se rompe en cuanto el fuente cambia.
   const startupMarker = `async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
@@ -318,7 +318,7 @@ async function planningFetchSnapshotById(snapshotId) {
   // : fetchJson(PLAN_SNAPSHOTS_API + "/" + id). Las dos ramas estan muertas: el puente
   // quedo deshabilitado y PLAN_SNAPSHOTS_API es la URL del web app de Apps Script, que
   // en el sitio estatico da 404 (es el mismo 404 que ya se midio en syncNetSuiteData). El
-  // unico destino real es Supabase, asi que queda una sola rama (RULE-SUP-029).
+  // unico destino real es Supabase, asi que queda una sola rama (RULE-SUP-030).
   return PPSupabaseBridgeReplacement.getPlanSnapshotLight(snapshotId);
 }
 

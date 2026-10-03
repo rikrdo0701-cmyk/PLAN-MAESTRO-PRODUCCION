@@ -538,18 +538,18 @@
   // CATALOGOS: lo que edita la persona en la pestana Catalogos
   // ---------------------------------------------------------------------------
   //
-  // QUE ES Y QUE NO ES. Estas seis tablas NO son un espejo del estado: son
+  // QUE ES Y QUE NO ES. Estas nueve tablas NO son un espejo del estado: son
   // CATALOGOS, y el estado es la vista que de ellas tiene la pagina. Por eso aqui NO
   // se borra la tabla entera y se reescribe (el modelo de las seis de plan_guardar):
-  // se hace UPSERT por clave natural de lo que hay en el estado, y se borran SOLO
-  // las filas cuya clave estaba en la ultima lectura y ya no esta en el estado, que
-  // es exactamente lo que la persona quito. La razon esta medida: `tools`,
-  // `subcontracts`, `calendar_exceptions`, `ot_configurations` y
-  // `article_configurations` los escribe TAMBIEN el espejo de las Hojas
-  // (16-supabase-catalogo.js), o sea que hay un segundo escritor y un borrado masivo
-  // desde un navegador con estado viejo se llevaria filas que la persona todavia no
-  // ha visto. Es el mismo peligro medido de la cabecera para operations/work_orders/
-  // materials, aqui con un escritor menos visible.
+  // se hace UPSERT por clave natural de lo que hay en el estado (anexo), y el borrado
+  // comparativo esta APAGADO desde 2026-09-30 (ver BORRADO APAGADO, abajo). La razon
+  // esta medida: OCHO de las nueve (todas menos machine_catalog) las escribe TAMBIEN
+  // el espejo de las Hojas (16-supabase-catalogo.js, borra-e-inserta desde las Hojas
+  // congeladas), o sea que hay un segundo escritor (riesgo documentado en Project
+  // Memory, decision del usuario 2026-10-03) y un borrado masivo desde un navegador
+  // con estado viejo se llevaria filas que la persona todavia no ha visto. Es el mismo
+  // peligro medido de la cabecera para operations/work_orders/materials, aqui con un
+  // escritor menos visible.
   //
   // POR QUE EL BORRADO NECESITA `clavesLeidas` Y NO PUEDE HACERSE SOLO. Para saber
   // que fila hay que borrar hay que compararla con lo que se leyo AL ARRANCAR. Sin
@@ -560,11 +560,14 @@
   // una operacion que no se puede hacer bien, y se dice con un aviso en vez de
   // adivinar.
   //
-  // LO QUE NO SE ESCRIBE, Y POR QUE. La pestana de Matriz (operators, capabilities,
-  // operation_catalog y matrix) NO se escribe desde aqui: su forma en el estado es
-  // indexada y con reglas derivadas (operationRules, capacityModes, cts), y mapearla
-  // entera al reves sin medir cada columna seria inventar el contrato. Se declara
-  // como no escrito y la pagina lo avisa, en vez de fingir que se guardo.
+  // LO QUE NO SE ESCRIBE, Y POR QUE. MEDIDO 2026-10-03: operators y matrix YA se
+  // escriben desde aqui (arriba en CATALOGOS, con el mapeo inverso de mapOperators /
+  // mapMatrixFull de supabase-reader.js), asi que la pestana Matriz se guarda. Lo que
+  // sigue SIN escritora desde la pagina son capabilities y operation_catalog (y
+  // ot_types, que es de la hoja): su forma en el estado es indexada y con reglas
+  // derivadas (operationRules, capacityModes, cts), y mapearlas enteras al reves sin
+  // medir cada columna seria inventar el contrato. Se declara como no escrito y la
+  // pagina lo avisa, en vez de fingir que se guardo.
   //
   // MEDIDO 2026-09-29: con la sesion, RLS DEJA ESCRIBIR estas tablas. La sonda
   // .openchamber/sonda-rls-escritura.mjs manda un DELETE con un filtro que no puede
@@ -574,11 +577,11 @@
   // falta el puente para ningun catalogo.
 
   /**
-   * Las seis tablas, su clave natural y el mapeo desde el estado. El mapeo es el
-   * INVERSO EXACTO de mapTools, mapSubcontracts, mapCalendar, mapOtConfigurations y
-   * mapArticleConfigurations en supabase-reader.js: si uno de los dos lados cambia un
-   * nombre, el otro tiene que cambiarlo en la misma TASK, porque un guardado y su
-   * lectura tienen que cerrar.
+   * Las nueve tablas, su clave natural y el mapeo desde el estado. El mapeo es el
+   * INVERSO EXACTO de mapTools, mapSubcontracts, mapCalendar, mapOtConfigurations,
+   * mapArticleConfigurations, mapOperators, mapMatrixFull y mapMachines en
+   * supabase-reader.js: si uno de los dos lados cambia un nombre, el otro tiene que
+   * cambiarlo en la misma TASK, porque un guardado y su lectura tienen que cerrar.
    */
   const CATALOGOS = [
     {
@@ -1209,7 +1212,7 @@
   //
   // POR QUE EXISTE. MEDIDO 2026-10-01: `recordInspectionPrint` de Apps Script
   // escribia la hoja `HISTORIAL_IMPRESION_INSPEC` por el puente, que esta
-  // deshabilitado (RULE-SUP-029). La impresion salia igual, porque la app trata el
+  // deshabilitado (RULE-SUP-030). La impresion salia igual, porque la app trata el
   // registro como no bloqueante y pregunta ""Imprimir de todos modos?"", pero no
   // quedaba registro en ningun sitio. No era un historial en otro lugar: era un
   // historial SIN LUGAR, y nadie se enteraba.

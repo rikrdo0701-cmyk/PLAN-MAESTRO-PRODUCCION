@@ -17,7 +17,7 @@ import path from "node:path";
  * servidor: 2.43.0 llego en 9103c17 y el 2.41.1 de la v= lo escribio a mano 50e8b5f. No
  * era un backend adelantado, eran tres numeros sueltos.
  *
- * MEDIDO 2026-09-30: el puente quedo deshabilitado (RULE-SUP-029) y con el desaparecio el
+ * MEDIDO 2026-09-30: el puente quedo deshabilitado (RULE-SUP-030) y con el desaparecio el
  * iframe, asi que la v= de cache-busting se fue con el. Quedan DOS lugares, no tres, y la
  * regla baja a dos. Lo que NO se pierde es lo que la reglaprotected: que esos dos tienen que
  * coincidir, y que el servidor del web app no debe empezar a leer una v= que nadie le manda.

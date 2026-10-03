@@ -34,7 +34,7 @@ test("el presupuesto de reintentos del borrador dura MAS que el timeout que espe
 
   // MEDIDO 2026-09-30: esta prueba leia CALL_TIMEOUT_MS del puente. Ese ya no es el techo que
   // puede tener ocupado a netSuiteSyncInFlight, porque el puente quedo deshabilitado
-  // (RULE-SUP-029). El techo real paso a ser el presupuesto del cliente, que vive en el mismo
+  // (RULE-SUP-030). El techo real paso a ser el presupuesto del cliente, que vive en el mismo
   // archivo. Y aqui se rompio algo de verdad: con el puente el sync se cortaba a los 120 s, asi
   // que un presupuesto de 180 s iba con margen; al quitarlo el sync ocupa los 180 s completos y
   // el presupuesto se agotaba en el MISMO instante en que se liberaba el flag, que es el fallo

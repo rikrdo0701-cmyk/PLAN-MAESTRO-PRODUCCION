@@ -5,7 +5,7 @@
 //
 // 1. NO SE GUARDABA NADA. `printInspection` (inspection-app.js) pedia
 //    `recordInspectionPrint` por `call(...)`, o sea por el puente de Apps Script, que
-//    esta deshabilitado (RULE-SUP-029). La impresion salia igual porque el registro es
+//    esta deshabilitado (RULE-SUP-030). La impresion salia igual porque el registro es
 //    NO BLOQUEANTE: la app pregunta "¿Imprimir de todos modos?" y sigue. O sea que no
 //    era un historial guardado en otro sitio: era un historial SIN LUGAR, y el unico
 //    sintoma era un confirm.
@@ -610,7 +610,7 @@ test("si `inspection_routes` no existe, el detalle sale SIN TRAMOS y lo dice", a
   assert.ok(result.data.detail, "una tabla que falta tumbaba el detalle entero");
   // Sin tabla, lo unico honesto es el catalogo vacio Y DECIRLO. El plan B a la hoja NO
   // se puede copiar aca: la hoja se leia por Apps Script y el puente esta deshabilitado
-  // (RULE-SUP-029), asi que el plan B de la pagina es cargar el catalogo a mano.
+  // (RULE-SUP-030), asi que el plan B de la pagina es cargar el catalogo a mano.
   assert.equal(result.data.detail.routesFuente, "ninguna");
   assert.match(result.data.detail.routesAviso, /schema-inspection-routes\.sql/);
   assert.match(result.data.detail.routesAviso, /PP_migrarTramosASupabase_/, "el aviso tiene que decir cual es el plan B: correr el importador una vez");

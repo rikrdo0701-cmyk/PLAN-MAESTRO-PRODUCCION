@@ -60,8 +60,9 @@ const FUENTES = [
 ].join("\n");
 
 /** Monta el contexto con el estado que describe el escenario. */
-function escenario({ disponible = false, enVuelo = false, sucias = [] } = {}) {
+function escenario({ disponible = false, enVuelo = false, sucias = [], planOk = true, catalogosOk = true } = {}) {
   const guardados = [];
+  const toasts = [];
   const temporizadores = [];
   const ctx = {
     appSheetAvailable: disponible,
@@ -92,14 +93,29 @@ function escenario({ disponible = false, enVuelo = false, sucias = [] } = {}) {
         return temporizadores.length;
       },
     },
-    saveAppSheet: () => guardados.push("saveAppSheet"),
     queueAppSheetSave: undefined, // la fuente lo define
+    // saveAppSheet ya NO va como double: FUENTES trae el cuerpo real de app.js
+    // (bloque de arriba) y la declaracion del vm reemplaza al doble anterior.
+    // `guardados` se queda vacio a proposito: nada de lo que se programa aqui
+    // debe ejecutarse, y si un test quiere el resultado del guardado, llama a
+    // ctx.saveAppSheet directamente.
+    // Lo que saveAppSheet toca DENTRO del vm (fuente real, extraida arriba). La puerta
+    // de guardado (appSheetTryAcquireSaveGate) crea y resuelve sus promesas de espera
+    // ahi, asi que las dos variables de la puerta se dejan nulas para que el vm las
+    // use y las libere; cada llamada a saveAppSheet las deja limpias al terminar.
+    appSheetSaveOwner: null,
+    appSheetSaveCompletion: null,
+    resolveAppSheetSaveCompletion: null,
+    state: { selectedOts: [], operations: [] },
+    guardarPlanEnSupabase: async () => planOk,
+    guardarCatalogosEnSupabase: async () => catalogosOk,
+    showToast: (mensaje) => toasts.push(String(mensaje)),
     Set, String, Object, Array, JSON, Math, Date, Number, Boolean,
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(FUENTES, ctx);
-  return { ctx, guardados, temporizadores };
+  return { ctx, guardados, toasts, temporizadores };
 }
 
 test("un cambio con el puente sin conectar NO se pierde: queda marcado", () => {
@@ -326,4 +342,54 @@ test("los dos caminos de guardado usan el motivo del informe, no un texto fijo",
     assert.doesNotMatch(cuerpo, /fallo desconocido/,
       nombre + ": volvio el texto fijo, que es lo que se vio MEDIDO 2026-09-30");
   }
+});
+
+// ---------------------------------------------------------------------------
+// EL FALLO DE CATALOGOS NO PUEDE DECIR "GUARDADO" (regresion del 2026-10-03)
+// ---------------------------------------------------------------------------
+//
+// MEDIDO 2026-10-03: con el plan subido y un catalogo fallando (una tabla entre
+// muchas, un 400, un RLS), saveAppSheet devolvia true y salia el toast "Plan
+// guardado en Supabase". El ambito de catalogo ya habia sido consumido por
+// appSheetConsumeDirtyScopes, asi que NO habia reintento: la edicion de la
+// pestana quedaba en la memoria y se perdia en la proxima carga. El fix devuelve
+// false y re-marca SOLO los ambitos de catalogo (el plan ya esta en la base).
+// Estos tests corren el cuerpo real de saveAppSheet, extraido arriba, con los
+// dos escritores como dobles: re-implementar el guardado aqui probaria el test.
+test("el plan sube y un catalogo falla: false, sin toast de exito y el ambito de catalogo queda vivo", async () => {
+  const { ctx, toasts } = escenario({ disponible: true, sucias: ["plan", "catalogs"], planOk: true, catalogosOk: false });
+  const guardado = await ctx.saveAppSheet(true);
+  assert.equal(guardado, false, "un catalogo que fallo no deja decir que el guardado completo salio bien");
+  assert.ok(ctx.appSheetDirtyScopes.has("catalogs"), "el ambito de catalogo quedo re-marcado: la edicion se reintenta y no se pierde");
+  assert.ok(!ctx.appSheetDirtyScopes.has("plan"), "el plan YA esta en la base: no se vuelve a re-escribir en el reintento");
+  assert.ok(!toasts.some((t) => t === "Plan guardado en Supabase"), "no se dice 'Plan guardado en Supabase' con los catalogos por subir");
+  assert.equal(ctx.appSheetSaveInFlight, false, "la puerta se suelta: otro guardado puede entrar a reintentar");
+});
+
+test("el ambito de catalogo que falla es el que se re-marca, no otro", async () => {
+  const { ctx } = escenario({ disponible: true, sucias: ["matrix"], planOk: true, catalogosOk: false });
+  const guardado = await ctx.saveAppSheet(false);
+  assert.equal(guardado, false);
+  assert.ok(ctx.appSheetDirtyScopes.has("matrix"), "se re-marca 'matrix', que es lo que fallo");
+  assert.ok(!ctx.appSheetDirtyScopes.has("catalogs"), "no se inventa un ambito que no estaba en el guardado");
+  assert.equal(ctx.appSheetSaveInFlight, false);
+});
+
+test("el plan y los catalogos suben: true, ambitos limpios y el toast de exito", async () => {
+  const { ctx, toasts } = escenario({ disponible: true, sucias: ["plan", "catalogs"], planOk: true, catalogosOk: true });
+  const guardado = await ctx.saveAppSheet(true);
+  assert.equal(guardado, true);
+  assert.equal(ctx.appSheetDirtyScopes.size, 0, "los ambitos se consumieron y no se re-marcaron");
+  assert.deepEqual(toasts, ["Plan guardado en Supabase"], "el toast de exito sale una sola vez y solo cuando todo subio");
+  assert.equal(ctx.appSheetSaveInFlight, false);
+});
+
+test("el plan falla: todos los ambitos vuelven a marcarse, como siempre", async () => {
+  const { ctx, toasts } = escenario({ disponible: true, sucias: ["plan", "catalogs"], planOk: false, catalogosOk: true });
+  const guardado = await ctx.saveAppSheet(true);
+  assert.equal(guardado, false);
+  assert.ok(ctx.appSheetDirtyScopes.has("plan"), "el ambito de plan quedo re-marcado");
+  assert.ok(ctx.appSheetDirtyScopes.has("catalogs"), "el ambito de catalogo quedo re-marcado junto con el de plan");
+  assert.match(toasts.join(" "), /No se pudo guardar/, "se dice que no se pudo guardar, con el motivo del informe");
+  assert.equal(ctx.appSheetSaveInFlight, false);
 });

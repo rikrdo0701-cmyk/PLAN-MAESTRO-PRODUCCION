@@ -56,7 +56,14 @@ const TABLA = "inspection_history";
  *  encuentra el texto DENTRO del comentario que explica el bug y el test falla por
  *  su propia explicacion. */
 function sqlSinComentarios(texto) {
-  return texto.split("\n").map((l) => l.replace(/--.*$/, "")).join("\n");
+  // MEDIDO 2026-10-03: el $ sin bandera m solo termina al final ABSOLUTO de la
+  // string, no antes del \r de fin de linea. Con checkout CRLF (git i/lf, w/crlf
+  // en este archivo; core.autocrlf=true) cada linea dividida terminaba en \r y
+  // NINGUN comentario se quitaba: el extracto de columnas heredaba los comentarios
+  // y las columnas que los siguen (ot, fecha_hora, alertas, sin_dibujo, detalle)
+  // quedaban "sin declarar". Sin anclaje, .* devora hasta el \r y el corte es
+  // portable LF/CRLF, como el del arnes de performance-client-calls.
+  return texto.split("\n").map((l) => l.replace(/--.*/, "")).join("\n");
 }
 
 const ddl = sqlSinComentarios(DDL);

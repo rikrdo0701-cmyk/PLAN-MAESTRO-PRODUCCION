@@ -558,7 +558,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // getAppState tardaba 11,3 s y getAppStateIfChanged 197 s, y eran 74 llamadas al puente en
   // una sola carga de pagina, cada una con arranque en frio. Ese era el problema de fondo.
   //
-  // Con el puente deshabilitado (RULE-SUP-029) la RELACION ya no existe: no hay llamada que
+  // Con el puente deshabilitado (RULE-SUP-030) la RELACION ya no existe: no hay llamada que
   // cortar, asi que no hay segundo reloj. El presupuesto del cliente es el unico, y la
   // sincronizacion va a Supabase. Por eso lo que se afirma ahora es la AUSENCIA: si el
   // cliente vuelve a traer presupuestos por metodo del "puente", es porque el iframe volvio.
@@ -649,7 +649,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // decidir si el sync muestra mensaje (`state.workOrders.length === 0`). Antes no se notaba
   // porque la llamada estaba dentro de un ternario con `isAppsScriptRuntime()`, que el arnes
   // fijaba en false y hacia que la rama se cortara antes de evaluar el argumento. Al quitar la
-  // compuerta (RULE-SUP-029) el argumento se evalua siempre. El estado real de la app SI trae
+  // compuerta (RULE-SUP-030) el argumento se evalua siempre. El estado real de la app SI trae
   // workOrders porque normalizeState() lo garantiza, asi que lo que faltaba era el fixture.
   const startupState = { operations: [], workOrders: [] };
   let operationsSeenByPurge = [];
@@ -763,7 +763,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
-  // Apps Script. El puente esta deshabilitado (RULE-SUP-029) y las tres llamadas no
+  // Apps Script. El puente esta deshabilitado (RULE-SUP-030) y las tres llamadas no
   // tenían a quien responder: la pestana de inspeccion abria sin lista de OTs. Ahora
   // salen por `llamar`, que es el reemplazo del puente, y el `call` ni existe en el
   // archivo. El `doesNotMatch` de `PPAppsScriptBridge` es lo que protege esto: si alguien

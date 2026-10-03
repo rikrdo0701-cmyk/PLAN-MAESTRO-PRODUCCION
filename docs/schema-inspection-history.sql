@@ -5,7 +5,7 @@
 -- 16-inspection-service.js:689) escribia una fila en la hoja
 -- `HISTORIAL_IMPRESION_INSPEC` del libro INSPECTION_SPREADSHEET_ID, y
 -- `getInspectionHistory` la leia de ahi. Con el puente de Apps Script
--- deshabilitado (RULE-SUP-029) las dos funciones no tienen a quien llamar: la hoja
+-- deshabilitado (RULE-SUP-030) las dos funciones no tienen a quien llamar: la hoja
 -- sigue existiendo, pero nadie la escribe ni la lee desde la pagina. O sea que no
 -- era un historial en otro lugar, era un historial SIN LUGAR: la impresion salia
 -- igual porque la app trata el registro como no bloqueante, y nadie se enteraba de

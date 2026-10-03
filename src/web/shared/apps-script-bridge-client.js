@@ -4,7 +4,7 @@
   /**
    * EL PUENTE DE APPS SCRIPT ESTA DESHABILITADO. NetSuite ya carga a Supabase y Supabase
    * es la fuente; la app habla con Supabase por PPSupabaseReader, PPSupabaseWriter y
-   * PPSupabaseBridgeReplacement (RULE-SUP-029).
+   * PPSupabaseBridgeReplacement (RULE-SUP-030).
    *
    * POR QUE ESTE ARCHIVO SIGUE EXISTIENDO, siendo que ya no hace nada. Porque varios lugares
    * leen `window.PPAppsScriptBridge.isConfigured` / `.nativeRuntimeAvailable` /
@@ -55,7 +55,7 @@
     return false;
   }
 
-  const MOTIVO = "El puente de Apps Script esta deshabilitado: NetSuite ya carga a Supabase y la app lee y escribe en Supabase (RULE-SUP-029)";
+  const MOTIVO = "El puente de Apps Script esta deshabilitado: NetSuite ya carga a Supabase y la app lee y escribe en Supabase (RULE-SUP-030)";
 
   async function call(method) {
     return Promise.reject(new Error(`${MOTIVO}. Metodo: ${method}`));

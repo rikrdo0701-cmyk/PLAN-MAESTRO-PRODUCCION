@@ -162,7 +162,7 @@
    *
    * POR QUE VIVE EN LA PAGINA Y NO SE PIDE AL SERVIDOR. MEDIDO 2026-10-01: la hoja de
    * inspeccion pedia su detalle por el puente de Apps Script, que esta deshabilitado
-   * (RULE-SUP-029). El tramo de cada material salia de `PP_Inspection_routeIndexV2_`
+   * (RULE-SUP-030). El tramo de cada material salia de `PP_Inspection_routeIndexV2_`
    * (17-inspection-drawing-service.js:76), que es indice en memoria sobre el catalogo.
    * El catalogo ya esta en Supabase (`inspection_routes`, RULE-INS-001), asi que el
    * indice se arma en el navegador con la MISMA forma y las MISMAS reglas. Duplicar

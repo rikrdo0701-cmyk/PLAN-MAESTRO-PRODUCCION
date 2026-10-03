@@ -576,14 +576,19 @@ test("matrix manda sobre catalogs cuando los dos ambitos vienen juntos", async (
   assert.deepEqual(deCatalogo.map((call) => call.ambito), ["matrix"]);
 });
 
-test("un fallo de los catalogos no da por fallido el guardado del plan", async () => {
+test("un fallo de los catalogos da por fallido el guardado, sin borrar el plan", async () => {
   const fixture = loadAppSheetSaveFlow({ state: {}, appsScriptRuntime: false, failCatalogs: "tabla bloqueada" });
 
   const saved = await fixture.flow.flushPlanSave("catalogs");
 
-  // El aviso lo da guardarCatalogosEnSupabase; saveAppSheet no lo convierte en fallo
-  // del plan, que si se escribio.
-  assert.equal(saved, true);
+  // MEDIDO 2026-10-03 (fix de la auditoria): antes esto devolvía true y salía el
+  // toast "Plan guardado en Supabase" con la edición de catalogos perdida, porque
+  // el ambito se habia consumido y no habia reintento. Ahora saveAppSheet devuelve
+  // false SI el plan subio: el plan esta en la base (no se reescribe), el ambito de
+  // catalogo queda vivo para reintentar y el llamador no borra los formularios.
+  // Cubrir que el ambito queda vivo y que el plan no se reescribe esta en
+  // tests/guardado-sin-puente.test.mjs, que mide el cuerpo completo.
+  assert.equal(saved, false);
   assert.deepEqual(fixture.calls.map((call) => call.method), ["guardarPlanEnSupabase", "guardarCatalogosEnSupabase"]);
 });
 
@@ -1093,7 +1098,7 @@ const reportSource = options.reportOperations || state.operations;
     // appSheetAvailable = true), asi que se le pasa esa misma regla.
     () => true,
     // MEDIDO 2026-09-30: el puente de Apps Script quedo deshabilitado porque NetSuite ya
-    // carga a Supabase y Supabase es la fuente (RULE-SUP-029). app.js ya no llama a
+    // carga a Supabase y Supabase es la fuente (RULE-SUP-030). app.js ya no llama a
     // `callAppsScript("saveOperationPlanStatus")` sino a
     // `PPSupabaseBridgeReplacement.saveOperationPlanStatus`, asi que el arnes inyecta esa
     // puerta y la ata al mismo `options.callAppsScript` que usaba antes: el test sigue
@@ -1885,7 +1890,7 @@ test("el arranque remoto conserva la OT de detalle y la operacion seleccionada",
   // MEDIDO 2026-09-30: el arranque leia state.workOrders.length para decidir si el sync muestra
   // mensaje, y este estado de prueba no traia workOrders. No se notaba porque la llamada estaba
   // en la rama verdadera de un ternario con isAppsScriptRuntime(), que el arnes fijaba en false.
-  // Al quitar esa compuerta (RULE-SUP-029) el argumento se evalua siempre. El estado real de la
+  // Al quitar esa compuerta (RULE-SUP-030) el argumento se evalua siempre. El estado real de la
   // app SI trae workOrders porque normalizeState() lo garantiza: lo que faltaba era el fixture.
   const state = { selectedDetailOt: "2773", selectedOperationId: "duplicada", workOrders: [] };
   const renderOptions = [];

@@ -77,7 +77,7 @@ function loadClient(options = {}) {
     ...(options.bridgeResults || {}),
   };
   // MEDIDO 2026-09-30: el puente de Apps Script quedo deshabilitado porque NetSuite ya
-  // carga a Supabase (RULE-SUP-029). `performance-client.js` ahora lee por
+  // carga a Supabase (RULE-SUP-030). `performance-client.js` ahora lee por
   // `PPSupabaseBridgeReplacement` en vez de `PPAppsScriptBridge.call`, asi que el doble
   // tiene que dejar la misma traza: una entrada `{ method, args }` por llamada, con los
   // argumentos en la posicion en que los recibia el metodo del puente.
@@ -764,7 +764,7 @@ test("el cache local se lee una sola vez, ni al evaluar el modulo ni despues del
 test("la validez de cache se captura ANTES de esperar al remoto, y lo que se escriba durante la espera no la invalida", async () => {
   // MEDIDO 2026-09-30: esta prueba se llamaba "la validez de cache se captura antes de
   // ensureReady...", y su "espera" era el ensureReady del puente, que montaba un iframe. Con
-  // el puente deshabilitado (RULE-SUP-029) ese await ya no existe, asi que la espera paso a
+  // el puente deshabilitado (RULE-SUP-030) ese await ya no existe, asi que la espera paso a
   // ser la lectura remota, que es el unico await real que queda entre decidir y preguntar.
   //
   // Y al moverla se vio que el fixture no hacia lo que decia: noponia `localState`, o sea que

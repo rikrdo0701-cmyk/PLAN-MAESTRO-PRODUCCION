@@ -439,6 +439,218 @@ test("el modulo espera al DOMContentLoaded si la pagina aun esta cargando", () =
   assert.equal(ctx.PPCatalogApply.estado().aplicado, false, "antes del DOMContentLoaded no lee nada");
 });
 
+// ---------------------------------------------------------------------------
+// El umbral del aviso de antiguedad, en horas LABORALES.
+//
+// El umbral viejo (20 h de reloj) era mas corto que la cadencia real de
+// guardados y por eso el aviso SIEMPRE aparecia en un fin de semana sin
+// guardar: falso positivo por diseño. MEDIDO 2026-10-03 contra updated_at por
+// tabla (RULE-SUP-044): el toast decia la verdad de la base, y lo que estaba
+// rota era la escala. Ahora solo cuentan las horas del horario laboral de la
+// planta: un finde entero suma 0 y no dispara; 24 h laborales (~2-3 dias
+// habiles sin guardar) si. La fuente del calendario es, en orden: el catalogo
+// de Supabase (calendar_exceptions), el cache local (workSchedule/dailyBreaks)
+// y los valores de fabrica (DEFAULT_WORK_SCHEDULE/DEFAULT_DAILY_BREAKS de
+// app.js, que se replican aqui a proposito para no importar 5 MB de app.js).
+function calendarioDePrueba(overrides = {}) {
+  return {
+    workSchedule: {
+      MON: { enabled: true, start: "07:00", end: "17:00" },
+      TUE: { enabled: true, start: "07:00", end: "17:00" },
+      WED: { enabled: true, start: "07:00", end: "17:00" },
+      THU: { enabled: true, start: "07:00", end: "17:00" },
+      FRI: { enabled: true, start: "07:00", end: "17:00" },
+      SAT: { enabled: false, start: "07:00", end: "13:00" },
+      SUN: { enabled: false, start: "07:00", end: "13:00" },
+    },
+    dailyBreaks: {},
+    calendarExceptions: [],
+    ...overrides,
+  };
+}
+
+// LA MAQUINA CORRE EN AMERICA/MEXICO_CITY (UTC-6, sin DST). Por eso NINGUN
+// instante de esta seccion usa Z con zona implícita: se construye todo desde la
+// hora LOCAL con new Date(a, m-1, d, h, min), que es determinista sin importar
+// donde se corra la suite. El horario de prueba es 07:00-17:00 local, igual que
+// el de la planta (medido, DEFAULT_WORK_SCHEDULE).
+function L(a, m, d, h, min) {
+  return new Date(a, m - 1, d, h, min || 0).getTime();
+}
+function minutosDe(calendario) {
+  const ctx = correrBoot({ lecturas: async () => ({ catalogs: {}, missing: [], errors: {} }) });
+  return (desde, hasta) => ctx.PPCatalogBoot.minutosLaborales(new Date(desde).toISOString(), hasta, calendario);
+}
+
+test("un fin de semana entero sin guardar suma 0 horas laborales y no dispara", () => {
+  // 2026-10-02 es viernes y 2026-10-03 sábado.
+  const f = minutosDe(calendarioDePrueba());
+  // Guardado al fin del turno del viernes, medido el sábado: 20 h de reloj, 0 laborales.
+  assert.equal(f(L(2026, 10, 2, 17), L(2026, 10, 3, 13)), 0, "viernes 17:00 -> sábado 13:00 no cuenta nada");
+  // Ni al lunes antes de que abra el turno: el finde completo no existe para el umbral.
+  assert.equal(f(L(2026, 10, 2, 17), L(2026, 10, 5, 6)), 0, "lunes 06:00: el turno aun no abre, sigue 0");
+  // Y que no sea 'todo suma cero': guardado al INICIO del turno del viernes, la
+  // jornada entera del viernes si cuenta (10 h = 600 min) hasta el sábado.
+  assert.equal(f(L(2026, 10, 2, 7), L(2026, 10, 3, 13)), 600, "la jornada completa del viernes si suma");
+});
+
+test("24 h laborales si disparan: ~2 dias habiles completos sin guardar", () => {
+  const f = minutosDe(calendarioDePrueba());
+  const desde = L(2026, 10, 2, 7); // viernes 07:00, inicio de turno
+  assert.equal(f(desde, L(2026, 10, 5, 17)), 1200, "viernes 10 h + lunes 10 h");
+  assert.equal(f(desde, L(2026, 10, 6, 17)), 1800, "y + martes 10 h");
+  // 600 + 600 + 600 + 540 = 2340 min: 39 h laborales, lejos por encima del
+  // umbral de 24 h (1440 min) que dispara el aviso.
+  assert.equal(f(desde, L(2026, 10, 7, 16)), 2340, "viernes + lunes + martes + 9 h del miércoles: sobra el umbral de 24 h");
+});
+
+test("el horario de la planta manda: dia deshabilitado suma 0, dias a medida se respetan", () => {
+  const fDefecto = minutosDe(calendarioDePrueba());
+  // Sábado HABILITADO de 07:00 a 17:00: una hora del sábado si cuenta.
+  const fSabHabilitado = minutosDe(calendarioDePrueba({
+    workSchedule: { ...calendarioDePrueba().workSchedule, SAT: { enabled: true, start: "07:00", end: "17:00" } },
+  }));
+  assert.equal(fSabHabilitado(L(2026, 10, 3, 7), L(2026, 10, 3, 8)), 60, "con sábado habilitado, la hora del sábado cuenta");
+  assert.equal(fDefecto(L(2026, 10, 3, 7), L(2026, 10, 3, 8)), 0, "con el por defecto (sábado no), no");
+  // Lunes DESHABILITADO: una jornada entera de lunes no suma nada.
+  const fLunesFuera = minutosDe(calendarioDePrueba({
+    workSchedule: { ...calendarioDePrueba().workSchedule, MON: { enabled: false, start: "07:00", end: "17:00" } },
+  }));
+  assert.equal(fLunesFuera(L(2026, 10, 5, 7), L(2026, 10, 5, 16)), 0, "lunes deshabilitado: la jornada no suma");
+  assert.equal(fDefecto(L(2026, 10, 5, 7), L(2026, 10, 5, 16)), 540, "lunes normal 07:00-16:00 = 540 min");
+});
+
+test("los descansa diarios activos restan, y los inactivos no", () => {
+  const fActivo = minutosDe(calendarioDePrueba({ dailyBreaks: { MEAL: { enabled: true, start: "12:00", end: "13:00" } } }));
+  const fInactivo = minutosDe(calendarioDePrueba({ dailyBreaks: { MEAL: { enabled: false, start: "12:00", end: "13:00" } } }));
+  // 07:00-14:00 = 420 min; con la hora de comida activa (12:00-13:00) quedan 360.
+  assert.equal(fActivo(L(2026, 10, 5, 7), L(2026, 10, 5, 14)), 360, "420 menos la hora de comida = 360");
+  assert.equal(fInactivo(L(2026, 10, 5, 7), L(2026, 10, 5, 14)), 420, "con el descanso inactivo no se resta nada");
+});
+
+test("el calendario de la planta (asueto/vacaciones) resta horas; lo de maquina u operador no", () => {
+  // Un paro GENERAL de medio día el viernes: del viernes solo cuentan 07:00-12:00.
+  const fParo = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "GENERAL", startDate: "2026-10-02", endDate: "2026-10-02", start: "12:00", end: "", active: true }],
+  }));
+  assert.equal(fParo(L(2026, 10, 2, 7), L(2026, 10, 5, 17)), 300 + 600, "viernes 5 h (tras el paro) + lunes 10 h");
+  // Un asueto sin horas bloquea el día completo (la misma regla de effectiveWindows).
+  const fAsueto = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "ASUETO", startDate: "2026-10-07", endDate: "2026-10-07", start: "", end: "", active: true }],
+  }));
+  assert.equal(fAsueto(L(2026, 10, 2, 7), L(2026, 10, 7, 17)), 1800, "el miércoles en asueto no suma sus 10 h");
+  // Vacaciones multi-día: todo el bloque resta.
+  const fVacaciones = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "VACACIONES", startDate: "2026-10-05", endDate: "2026-10-06", start: "", end: "", active: true }],
+  }));
+  assert.equal(fVacaciones(L(2026, 10, 2, 7), L(2026, 10, 6, 17)), 600, "solo el viernes: lunes y martes en vacaciones");
+  // Un asueto INACTIVO no cuenta.
+  const fInactivo = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "ASUETO", startDate: "2026-10-07", endDate: "2026-10-07", start: "", end: "", active: false }],
+  }));
+  assert.equal(fInactivo(L(2026, 10, 2, 7), L(2026, 10, 7, 17)), 2400, "inactivo: se mide como si no existiera");
+  // Un evento de MAQUINA no frena un guardado de catalogos: no se resta.
+  const fMaquina = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "MAQUINA", machine: "MP0001", startDate: "2026-10-05", endDate: "2026-10-05", start: "", end: "", active: true }],
+  }));
+  assert.equal(fMaquina(L(2026, 10, 2, 7), L(2026, 10, 5, 17)), 1200, "lo de maquina no resta horas laborales de planta");
+});
+
+test("el aviso dispara solo con horas laborales: el escenario real medido el 2026-10-03", () => {
+  // El escenario exacto de la medicion (RULE-SUP-044): el usuario abrió la pagina el
+  // sábado 10/03 y el umbral viejo de 20 h de reloj disparaba para operadores y
+  // subcontracts, escritos el jueves 10/01 13:04Z (~52 h antes). En horas laborales,
+  // del jueves 07:04 local al sábado solo caben ~20 h (jueves tarde + viernes),
+  // por debajo del umbral de 24, y el aviso NO sale. La matriz, de la siembra del
+  // domingo 09/27, SI lleva ~5 jornadas laborables y sigue avisando.
+  const ctx = correrBoot({ lecturas: async () => ({ catalogs: {}, missing: [], errors: {} }) });
+  const SABADO_MEDICION = L(2026, 10, 3, 15); // sábado 10/03 15:00 local
+  // operadores/subcontracts: jueves 10/01 13:04Z = 07:04 local -> ~12 h laborales.
+  const fJueves = minutosDe(calendarioDePrueba());
+  assert.ok(
+    fJueves(new Date("2026-10-01T13:04:00Z").toISOString(), SABADO_MEDICION) < ctx.PPCatalogBoot.UMBRAL_MINUTOS_LABORALES,
+    "del jueves al sábado solo hay ~20 h laborales, por debajo del umbral",
+  );
+  // El aviso con esos dos y la matriz vieja: SI se pinta, porque la matriz cuenta.
+  let avisos = 0;
+  ctx.document.body.appendChild = () => { avisos += 1; };
+  assert.equal(
+    ctx.PPCatalogBoot.aviso({
+      activo: true, fallo: null, catalogs: {}, vacias: [],
+      viejo: {
+        operators: { minutos: 51 * 60, iso: "2026-10-01T13:04:00Z" },
+        subcontracts: { minutos: 51 * 60, iso: "2026-10-01T13:04:00Z" },
+        matrix: { minutos: 131 * 60, iso: "2026-09-28T05:11:00Z" },
+      },
+      calendario: calendarioDePrueba(),
+    }, SABADO_MEDICION),
+    true,
+    "con la matriz de hace 5 dias laborables SI hay aviso",
+  );
+  assert.equal(avisos, 1, "el aviso se pinta una sola vez");
+  // Y con SOLO el lote del jueves (el que disparaba el falso positivo): no se pinta.
+  assert.equal(
+    ctx.PPCatalogBoot.aviso({
+      activo: true, fallo: null, catalogs: {}, vacias: [],
+      viejo: {
+        operators: { minutos: 51 * 60, iso: "2026-10-01T13:04:00Z" },
+        subcontracts: { minutos: 51 * 60, iso: "2026-10-01T13:04:00Z" },
+      },
+      calendario: calendarioDePrueba(),
+    }, SABADO_MEDICION),
+    false,
+    "un finde sin guardar ya no dispara: solo cuenta el tiempo laboral",
+  );
+});
+
+test("el aviso respeta los asuetos de la planta: si el periodo viejo es solo finde + asueto, no dispara", () => {
+  const f = minutosDe(calendarioDePrueba());
+  const fConAsueto = minutosDe(calendarioDePrueba({
+    calendarExceptions: [{ concept: "ASUETO", startDate: "2026-10-05", endDate: "2026-10-05", start: "", end: "", active: true }],
+  }));
+  const desde = L(2026, 10, 2, 7); // viernes 07:00
+  const hasta = L(2026, 10, 5, 17); // lunes 17:00
+  assert.equal(f(desde, hasta), 1200, "sin asueto: viernes + lunes = 20 h laborales (bajo el umbral de 24)");
+  assert.equal(fConAsueto(desde, hasta), 600, "con asueto el lunes entero: quedan 10 h del viernes, lejos del umbral");
+});
+
+test("el horario laboral del cache local manda sobre el de fabrica", () => {
+  // El workSchedule no vive en Supabase (ver la regla del módulo): la pagina lo
+  // trae del cache local, y la medición tiene que respetarlo. Se inyecta uno con
+  // 08:00-16:00 en TODOS los dias habiles, para que la diferencia contra el de
+  // fabrica (07:00-17:00) sea de una hora.
+  const horarioLocal = {};
+  for (const clave of Object.keys(calendarioDePrueba().workSchedule)) {
+    horarioLocal[clave] = { ...calendarioDePrueba().workSchedule[clave], start: "08:00", end: "16:00" };
+  }
+  const ctx = correrBoot({ lecturas: async () => ({ catalogs: {}, missing: [], errors: {} }) });
+  ctx.localStorage = {
+    getItem: (clave) => (clave === "plan-produccion-app-v1" ? JSON.stringify({ workSchedule: horarioLocal }) : null),
+    setItem() {},
+  };
+  // Sin cache local: el resolutor cae en el de fabrica (07:00-17:00).
+  const ctxVacio = correrBoot({ lecturas: async () => ({ catalogs: {}, missing: [], errors: {} }) });
+  assert.equal(
+    ctxVacio.PPCatalogBoot.resolverCalendario({}).workSchedule.MON.start,
+    "07:00",
+    "sin cache local, el horario es el de fabrica",
+  );
+  // Con el cache local: el horario de 08:00 del cache manda.
+  const resuelto = ctx.PPCatalogBoot.resolverCalendario({});
+  assert.equal(resuelto.workSchedule.MON.start, "08:00", "el cache local manda sobre fabrica");
+  // .length, no deepEqual: el [] lo creó el módulo DENTRO del realm del vm, y
+  // deepStrictEqual exige el Array.prototype del realm del test.
+  assert.equal(resuelto.calendarExceptions.length, 0, "no hay excepciones: queda la lista vacia");
+  // El efecto se nota en la medicion: lunes 07:30 -> 13:00. Con fabrica (07-17)
+  // cuenta desde las 07:30 = 330 min; con el local (08-16), desde las 08:00 = 300.
+  const desde = L(2026, 10, 5, 7, 30);
+  const hasta = L(2026, 10, 5, 13);
+  const fLocal = (d, h) => ctx.PPCatalogBoot.minutosLaborales(new Date(d).toISOString(), h, resuelto);
+  assert.equal(fLocal(desde, hasta), 300, "con el horario local 08:00-16:00, el lunes 07:30-13:00 suma 300");
+  const fFabrica = (d, h) => ctxVacio.PPCatalogBoot.minutosLaborales(new Date(d).toISOString(), h, ctxVacio.PPCatalogBoot.resolverCalendario({}));
+  assert.equal(fFabrica(desde, hasta), 330, "con el de fabrica 07:00-17:00, suma 330");
+});
+
 test("los tres modulos van en el build, y apply va despues de reader", () => {
   for (const f of ["supabase-auth.js", "supabase-catalog-boot.js", "supabase-catalog-apply.js"]) {
     assert.match(build, new RegExp(`read\\("src/web/shared/${f.replace(/\./g, "\\.")}"\\)`), `falta ${f} en el build`);

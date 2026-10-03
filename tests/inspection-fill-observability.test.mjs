@@ -161,7 +161,7 @@ test("con una sincronizacion en curso la carga espera, y no registra nada", asyn
   // puente ni se registra nada", y afirmaba sobre la guarda `if (!isAppsScriptRuntime()) return;`
   // de ensureInspectionWorkOrders. Esa guarda impedia que la precarga de inspeccion ocurriera
   // NUNCA en el sitio estatico, porque isAppsScriptRuntime() da false desde que el puente quedo
-  // deshabilitado (RULE-SUP-029). O sea: el test fijaba el bug, no la intencion.
+  // deshabilitado (RULE-SUP-030). O sea: el test fijaba el bug, no la intencion.
   //
   // La intencion real es la que dice el comentario de al lado de la guarda: no saturar mientras
   // corre una sincronizacion de OTs. Eso NO cambio, y es lo que se afirma aqui: con la

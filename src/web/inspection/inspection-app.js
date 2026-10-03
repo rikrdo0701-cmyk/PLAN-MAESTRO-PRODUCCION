@@ -28,7 +28,7 @@
    * MEDIDO 2026-10-01: TODO lo que esta pagina pide al backend sale por aqui.
    *
    * POR QUE NO SE USA `call`. `call` es el puente de Apps Script, y el puente esta
-   * deshabilitado (RULE-SUP-029): devuelve una promesa rechazada con "Backend no
+   * deshabilitado (RULE-SUP-030): devuelve una promesa rechazada con "Backend no
    * disponible". La pagina se quedaba sin lista de OTs, sin detalle y sin historial, sin
    * un error que dijera por que. Estas cuatro llamadas (`getInspectionWorkOrders`,
    * `getInspectionWorkOrderBundle`, `getInspectionHistory` y `recordInspectionPrint`) ya

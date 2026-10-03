@@ -24,7 +24,10 @@ const WORKFLOW = loadWorkflowCore();
 
 const PLAN_START = "2026-07-13";
 const EXECUTION_TIME = "2026-07-13T07:00:00";
-const NETSUITE_PLANNING_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
+// Vigencia de los datos de planeacion por OT, el valor que usa app.js
+// (NETSUITE_PLANNING_FRESH_MS) y que declara RULE-OT-013. 24 h (regresa del 72 h que
+// se habia puesto en el codigo sin documentar; DECIDIDO 2026-10-03 por el usuario).
+const NETSUITE_PLANNING_FRESH_MS = 24 * 60 * 60 * 1000;
 const TOOL_CHANGE_KEY = "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL";
 
 function norm(value) {

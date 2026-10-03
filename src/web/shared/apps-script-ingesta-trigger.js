@@ -8,7 +8,7 @@
  *
  * POR QUE EXISTE, EN UNA FRASE. Antes los botones Sincronizar y Sincronizar OTs se limits a
  * leer lo que ya estaba en las tablas, asi que sincronizar era RALENTIZAR: pulsar el boton
- * noacia que NetSuite corriera. Con RULE-SUP-029 (la app no habla con NetSuite, NetSuite
+ * noacia que NetSuite corriera. Con RULE-SUP-030 (la app no habla con NetSuite, NetSuite
  * carga a Supabase) un boton llamado Sincronizar que no dispara la ingesta no sincroniza
  * nada: solo vuelve a pintar lo viejo. Este modulo es la mitad que faltaba.
  *

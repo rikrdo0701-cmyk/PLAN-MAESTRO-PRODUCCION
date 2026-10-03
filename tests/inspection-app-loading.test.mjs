@@ -40,7 +40,7 @@ function createElement(id) {
  * MEDIDO 2026-10-01: el harness ya NO expone `PPAppsScriptBridge`. Antes si, y la app
  * pedia las cuatro funciones de la hoja de inspeccion (`getInspectionWorkOrders`,
  * `getInspectionWorkOrderBundle`, `getInspectionHistory`, `recordInspectionPrint`) por
- * `call(...)`, o sea por Apps Script, que esta deshabilitado (RULE-SUP-029). Con el
+ * `call(...)`, o sea por Apps Script, que esta deshabilitado (RULE-SUP-030). Con el
  * puente en el harness, estos tests pasaban mientras la pagina en produccion no podia
  * ni hacer la lista de OTs: el mock era mas fiel que el codigo.
  *
