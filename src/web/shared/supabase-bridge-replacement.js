@@ -27,10 +27,29 @@
   }
 
   function getWriter() {
-    if (!writer || typeof writer.guardarPlan !== "function") {
-      throw new Error("PPSupabaseWriter no esta disponible");
+    // MEDIDO 2026-10-02: esta puerta pedia `writer.guardarPlan`, que PPSupabaseWriter no
+    // exporta (exporta `guardar`). O sea que lanzaba "PPSupabaseWriter no esta
+    // disponible" con el escritor CARGADO, y el mensaje seniaba al sistema equivocado:
+    // no era que faltara el modulo, era que faltaba el metodo. Ahora la puerta pregunta
+    // por el metodo que el llamador va a usar, para que el fallo diga cual falta.
+    if (!writer || typeof writer.guardar !== "function") {
+      throw new Error("PPSupabaseWriter no esta disponible: no se cargo el modulo, o el bundle no trae `guardar`");
     }
     return writer;
+  }
+
+  /**
+   * La puerta de un metodo en concreto del escritor. Devolver el escritor entero y que
+   * sea cada llamador el que lance `w.algo(...)` daria "w.algo is not a function", que
+   * es un error de JavaScript, no un aviso de que el build no trae ese camino.
+   */
+  function exigirMetodo(nombre, paraQue) {
+    const w = getWriter();
+    if (typeof w[nombre] !== "function") {
+      throw new Error(`PPSupabaseWriter no trae \`${nombre}\`, que es lo que ${paraQue}. `
+        + "Es un build desactualizado, no un fallo de Supabase: no se escribio nada");
+    }
+    return w;
   }
 
   /**
@@ -713,14 +732,30 @@
   }
 
   /**
-   * saveDraftSnapshot -> escribe en plan_snapshots
-   * Devuelve { snapshotId, version, ... }
+   * saveDraftSnapshot / savePlanSnapshot / publishDraftPlan -> escriben en
+   * plan_snapshots.
+   *
+   * MEDIDO 2026-10-02: los TRES tienen el mismo defecto que `saveOperationPlanStatus`
+   * pedian `writer.guardarPlan`, que el escritor no exporta. A diferencia del boton
+   * Completar/Reabrir, NO se reparan aqui: la razon esta escrita y medida en
+   * supabase-writer.js, en el bloque "NO HAY UN `guardarPlanSnapshot`". En corto: el RPC
+   * `plan_guardar` escribe la instantanea en TRES columnas (`snapshot_id`, `payload`,
+   * `created_at`, docs/schema-supabase-plan.sql:863) con el plan entero dentro del
+   * `payload` jsonb, y el mapeador de columnas sueltas (`filasSnapshots`) no escribe
+   * `payload`: un UPSERT directo con el guardaria VACIA de cuerpo. Hay que medir en la
+   * base que columnas tiene hoy la fila antes de decidir.
+   *
+   * Lo que SI cambia con el arreglo: antes el fallo decia "PPSupabaseWriter no esta
+   * disponible", que senala al modulo cuando el modulo esta cargado y lo que falta es el
+   * metodo. Ahora `exigirMetodo` dice el metodo que falta y que para que se usa, y que no
+   * se escribio nada. Mismo resultado (no se escribe), pero el aviso deja de senalar al
+   * sistema equivocado.
    */
   async function saveDraftSnapshot(payload) {
-    const w = getWriter();
+    const w = exigirMetodo("guardarPlanSnapshot", "guarda el borrador del plan");
     const data = payload || {};
     const snapshotId = data.snapshotId || `snap-${Date.now()}`;
-    const result = await w.guardarPlan({
+    const result = await w.guardarPlanSnapshot({
       planSnapshots: [{
         snapshot_id: snapshotId,
         version: data.version || 1,
@@ -738,10 +773,10 @@
    * savePlanSnapshot -> escribe en plan_snapshots
    */
   async function savePlanSnapshot(payload) {
-    const w = getWriter();
+    const w = exigirMetodo("guardarPlanSnapshot", "guarda la copia del plan");
     const data = payload || {};
     const snapshotId = data.snapshotId || `snap-${Date.now()}`;
-    const result = await w.guardarPlan({
+    const result = await w.guardarPlanSnapshot({
       planSnapshots: [{
         snapshot_id: snapshotId,
         version: data.version || 1,
@@ -759,10 +794,10 @@
    * publishDraftPlan -> escribe en plan_snapshots con status PUBLICADO
    */
   async function publishDraftPlan(payload) {
-    const w = getWriter();
+    const w = exigirMetodo("guardarPlanSnapshot", "publica el borrador del plan");
     const data = payload || {};
     const snapshotId = data.snapshotId || `snap-${Date.now()}`;
-    const result = await w.guardarPlan({
+    const result = await w.guardarPlanSnapshot({
       planSnapshots: [{
         snapshot_id: snapshotId,
         version: data.version || 1,
@@ -947,18 +982,31 @@
    * saveOperationPlanStatus -> escribe en operation_plan_statuses
    */
   async function saveOperationPlanStatus(payload) {
-    const w = getWriter();
+    // MEDIDO 2026-10-02, QUE ROMPIA EL BOTON COMPLETAR/REABRIR DEL DETALLE DE OT.
+    // Este es el await que hace `persistOptimisticPlanStatus` (app.js:9352) cada vez que
+    // se pulsa Completar o Reabrir en una operacion. Pedia `w.guardarPlan`, que el
+    // escritor no exporta: la llamada rechazaba con "PPSupabaseWriter no esta disponible"
+    // ANTES de escribir nada, el catch de app.js:9369 revertia el estado optimista y la
+    // persona veia el estado cambiar y volver, sin haberse guardado. La suite no lo
+    // no lo tapa, porque `tests/supabase-writer-app.test.mjs` reemplaza este metodo
+    // por un falso que llama a `writer.guardar`: el camino real nunca se ejercitaba.
+    const w = exigirMetodo("guardarPlanStatuses", "guarda el estado de la operacion que completo o reabrio");
     const data = payload || {};
     const statuses = Array.isArray(data.statuses) ? data.statuses : [data.status].filter(Boolean);
-    const result = await w.guardarPlan({
+    // La forma de la fila la pone `filasPlanStatuses`, el mapeador del escritor: aqui
+    // solo se le pasa el estado como lo tiene la pagina (`sequence`, `completedAt`,
+    // `reopenedAt`) y el que lo traduce es el unico que ya traduce el camino ancho.
+    const result = await w.guardarPlanStatuses({
+      revision: data.revision,
       operationPlanStatuses: statuses.map((s) => ({
         key: s.key || `${s.ot}-${s.sequence}`,
         ot: s.ot || "",
-        secuencia: s.sequence || 0,
+        sequence: s.sequence || 0,
+        ct: s.ct || "",
         status: s.status || "PENDIENTE",
         origin: s.origin || "draft",
-        fecha_completado: s.completedAt || null,
-        fecha_reapertura: s.reopenedAt || null,
+        completedAt: s.completedAt || null,
+        reopenedAt: s.reopenedAt || null,
       })),
     });
     return { revision: data.revision, savedAt: new Date().toISOString(), ...result };

@@ -1359,6 +1359,108 @@
   }
 
   /**
+   * guardarPlanStatuses -> escribe SOLO `operation_plan_statuses`, por UPSERT en `key`.
+   *
+   * POR QUE EXISTE ESTA FUNCION Y NO UN ALIAS. MEDIDO 2026-10-02:
+   * `PPSupabaseBridgeReplacement.getWriter()` exigia `writer.guardarPlan`, y este modulo
+   * exporta `guardar`. O sea que `saveOperationPlanStatus` - el await que hace
+   * `persistOptimisticPlanStatus` (app.js:9352) cada vez que se pulsa Completar o Reabrir
+   * en el detalle de una OT - lanzaba "PPSupabaseWriter no esta disponible" ANTES de
+   * escribir nada, y el catch de app.js:9369 revierte el estado optimista. O sea que el
+   * boton del detalle no guardaba NADA y la persona veia el estado cambiar y volver.
+   * El defecto ya estaba escrito en este archivo, en el comentario de
+   * `saveInspectionLink` (supabase-bridge-replacement.js:646), y se arreglo ahi, no aqui.
+   *
+   * POR QUE NO SE USA `guardar`. `guardar(state, opciones)` arma el payload COMPLETO y lo
+   * manda por el RPC `plan_guardar`, que hace `delete` + `insert` en `selected_ots`,
+   * `locked_ots` y `operation_plan_statuses` (docs/schema-supabase-plan.sql:831). Con un
+   * payload que trae SOLO las filas tocadas, ese delete se llevaria por delante todos los
+   * estados de operacion que no venian en la llamada. Un UPSERT por `key` no puede pasar
+   * eso: escribe las filas que le dieron y no toca ninguna otra.
+   *
+   * LA CLAVE NO SE ACEPTA DEL QUE LLAMA, sale del DDL: `plan_tabla_escritura` declara
+   * `('operation_plan_statuses', 'espejo', 'key', ...)` (docs/schema-supabase-plan.sql:608)
+   * y `CLAVE_NATURAL.operation_plan_statuses` es "key". Las filas las arma
+   * `filasPlanStatuses`, el MISMO mapeador que usa el camino del plan completo, para que
+   * este camino estrecho y el ancho no puedan divergir en los nombres de columna.
+   *
+   * LO QUE NO HACE, DICHO: no sube la revision y no manda `app_state`. La revision la
+   * sube el guardado del plan (`guardar` -> `plan_guardar`), que es el que la compara.
+   */
+  async function guardarPlanStatuses(datos, opciones) {
+    const opts = opciones || {};
+    const t0 = Date.now();
+    const informe = { ok: true, tablas: {}, ms: 0, avisos: [], camino: "operation_plan_statuses" };
+    if (!isConfigured()) {
+      return sinEscribir(informe, t0, "Supabase no esta configurado en este build: faltan la URL o la clave publicable");
+    }
+    const auth = root.PPSupabaseAuth;
+    if (!auth || typeof auth.token !== "function") {
+      return sinEscribir(informe, t0, "no esta PPSupabaseAuth: no hay quien pida el token de sesion");
+    }
+    const token = await auth.token();
+    if (!token) {
+      return sinEscribir(informe, t0, "no hay sesion de Supabase: entra con tu correo para poder guardar. No se escribe nada");
+    }
+    const filas = filasPlanStatuses({ operationPlanStatuses: (datos || {}).operationPlanStatuses }, 0)
+      // MEDIDO 2026-10-02. `filasPlanStatuses` pone `revision` porque su unico
+      // llamador es el RPC, donde la sobreescribe la funcion. Aqui la llamada es
+      // DIRECTA a PostgREST, asi que la revision que mandara la pagina seria la de
+      // un guardado que todavia no ha pasado, y `plan_tabla_escritura` lo dice
+      // explicito: la lista de columnas de `operation_plan_statuses` NO incluye
+      // `revision` y la nota dice "revision la pone la funcion"
+      // (docs/schema-supabase-plan.sql:608-610). Por eso se quita de las filas en
+      // vez de inventar un numero: el default de la base se encarga.
+      .map((fila) => {
+        const copia = Object.assign({}, fila);
+        delete copia.revision;
+        return copia;
+      });
+    if (!filas.length) {
+      // Sin filas no hay nada que escribir, y eso NO es un fallo: el llamador puede
+      // tener una lista vacia porque solo habia estados que ya estaban como pedia.
+      return cerrar(informe, t0, true);
+    }
+    const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
+    const clave = CLAVE_NATURAL.operation_plan_statuses;
+    informe.tablas.operation_plan_statuses = await escribirAnexo(ctx, "operation_plan_statuses", filas, clave);
+    if (informe.tablas.operation_plan_statuses.error && opts.motivoDeError) {
+      informe.motivo = opts.motivoDeError;
+    }
+    return cerrar(informe, t0);
+  }
+
+  /**
+   * NO HAY UN `guardarPlanSnapshot`, Y ESTO DICE POR QUE.
+   *
+   * MEDIDO 2026-10-02: los tres `saveDraftSnapshot`/`savePlanSnapshot`/`publishDraftPlan`
+   * de PPSupabaseBridgeReplacement tienen el MISMO defecto que `saveOperationPlanStatus`
+   * (piden `writer.guardarPlan`, que este modulo no exporta). NO se reparan aqui, y el
+   * motivo es que no se pueden reparar a ciegas:
+   *
+   *   `plan_snapshots` se escribe por el RPC `plan_guardar`, y ese RPC inserta TRES
+   *   columnas: `insert into public.plan_snapshots (snapshot_id, payload, created_at)`
+   *   (docs/schema-supabase-plan.sql:863-865). El cuerpo del plan entero viaja dentro de
+   *   la columna jsonb `payload`, y ahi `jsonb_populate_recordset` deja pasar el objeto
+   *   entero sin tocarlo. El mapeador de columna por columna que usa el camino viejo,
+   *   `filasSnapshots` (este archivo:1981), escribe `operations`, `plan_start`,
+   *   `version`, `usuario`, `change_summary`, `published_at` y `publication_reason`, y
+   *   NO escribe `payload`. O sea que un UPSERT directo con `filasSnapshots` guardaria la
+   *   fila VACIA de cuerpo: perderia el plan. Y el reemplazo ademas manda `status` y
+   *   `payload` como columnas, que no son las que el RPC escribe.
+   *
+   * Para repararlo hay que decidir una sola cosa y medirla antes: si la instantanea
+   * estrecha escribe `payload` con el objeto entero (mismo contrato que el RPC) o
+   * columnas sueltas (mismo contrato que `filasSnapshots`). Las dos no pueden ser
+   * ciertas a la vez y elegir a ciegas deja borradores vacios en la base.
+   *
+   * LO QUE PASA HOY. Los tres metodos lanzan, `getWriter()` lo dice por el nombre del
+   * metodo que falta, y no se escribe nada. Que es el estado de partida: hoy tampoco se
+   * escribe nada, solo que el mensaje era falso (decia que el escritor no estaba, cuando
+   * si estaba y lo que faltaba era el metodo).
+   */
+
+  /**
    * app_state tiene UNA fila (id integer, check id = 1): se ACTUALIZA, no se
    * inserta. Un POST crearia una fila que el check del DDL no deja crear, y un
    * borrado previo dejaria la pagina sin revision.
@@ -2427,6 +2529,11 @@
     // unico consumidor, y registra aunque la impresion se cancele en el dialogo del
     // navegador: es el momento en que la hoja de impresion ya se dio por buena.
     guardarInspectionPrint: guardarInspectionPrint,
+    // MEDIDO 2026-10-02: el UNICO escritor de `operation_plan_statuses` para el
+    // camino angosto del boton Completar/Reabrir (supabase-bridge-replacement.js
+    // `saveOperationPlanStatus`). UPSERT por `key`, sin borrar nada. El camino ancho
+    // sigue siendo `guardar` -> `plan_guardar`, que es el que sube la revision.
+    guardarPlanStatuses: guardarPlanStatuses,
     normalizeKey: normalizeKey,
     // armarCatalogos() sin red, para probar el mapeo y las claves contra el esquema
     // sin abrir nada (mismo criterio que armarPayload para el plan).

@@ -116,6 +116,18 @@ function escenario({ guardar = null, esRuntimeDeAppsScript = false } = {}) {
     // PPSupabaseBridgeReplacement: el reemplazo del puente de Apps Script por Supabase.
     // syncNetSuiteTwoPhase y persistOptimisticPlanStatus lo usan para leer de Supabase.
     // saveOperationPlanStatus delega en el writer para que los tests de fallen puedan simular errores.
+    //
+    // MEDIDO 2026-10-02, Y ESTE DOBLE ESCONDIO UN DEFECTO. Este falso REEMPLAZA el metodo
+    // real de `PPSupabaseBridgeReplacement`, y el metodo real estaba roto: pedia
+    // `writer.guardarPlan`, que el escritor no exporta, o sea que en el navegador el boton
+    // Completar/Reabrir del detalle de OT rechazaba antes de escribir y la persona veia el
+    // estado cambiar y volver. Con este doble, el camino real no se ejercitaba NUNCA y la
+    // suite podia estar en verde con el boton roto.
+    //
+    // El metodo real, con el escritor real y sin red, se prueba en
+    // tests/supabase-bridge-escritura.test.mjs. Este doble sigue aqui porque su proposito
+    // es otro: estos tests simulan fallos de guardado, y para eso hay que poder hacer que
+    // la escritura falle sin abrir Supabase.
     PPSupabaseBridgeReplacement: {
       syncNetSuitePlanningData: async () => ({ operations: [], materials: [], source: "supabase" }),
       saveOperationPlanStatus: async (payload) => {
