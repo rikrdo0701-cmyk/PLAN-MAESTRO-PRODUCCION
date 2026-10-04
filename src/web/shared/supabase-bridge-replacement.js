@@ -425,9 +425,17 @@
    * fuera por un limite seria un material sin tramo y sin disponible en una hoja que
    * parece completa. El orden es por componente para que el orden de la hoja sea estable
    * entre recargas, que es lo que permite comparar dos impresiones de la misma OT.
+   *
+   * MEDIDO 2026-10-04, POR QUE EL ORDEN TAMBIEN DESEMPATA POR `line_id`. `componente`
+   * solo no es un orden TOTAL: la base tenia dos filas por cada (ot, componente) (las copias
+   * que creo `filasMaterials` escribiendo el UUID de la fila como `line_id`), y dentro de
+   * un mismo componente Postgres puede devolver las dos en cualquier orden. Sin el
+   * desempate, "la primera" es una moneda al aire entre recargas. Con `line_id.asc` el
+   * orden es total y ademas gana la fila del ERP: los `line_id` de la ingesta son
+   * numericos ('2', '3', '24') y salen antes que un UUID en orden de texto.
    */
   async function leerMaterialesDeLaOt(r, ot) {
-    const rows = await r.readTable("materials", { filters: { ot: ot }, order: "componente.asc" });
+    const rows = await r.readTable("materials", { filters: { ot: ot }, order: "componente.asc,line_id.asc" });
     return Array.isArray(rows) ? rows : [];
   }
 

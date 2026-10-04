@@ -1156,6 +1156,16 @@
         componentId: row.componente_id, component: row.componente, description: row.descripcion,
         unit: row.unidad, required: number(row.requerido), issued: number(row.emitido),
         pending: number(row.pendiente),
+        // MEDIDO 2026-10-04: `lineId` es la clave natural de la fila y la pagina la
+        // necesita para poder GUARDAR sin crear una fila nueva por cada guardado. `line_id`
+        // lo escribe la ingesta (RESTlet 2246) con el id de renglon de NetSuite (`comp.id`),
+        // y con el UNIQUE (ot, line_id) es la unica clave con la que un UPSERT actualiza la
+        // fila del ERP en vez de insertar una copia. Sin exponerla, `filasMaterials`
+        // (supabase-writer.js) no tiene mas que `id`, que es el UUID de la fila, y escribia
+        // ESO como `line_id`: medido 348 (ot, componente) con dos filas cada uno (697 filas
+        // para 348 materiales) y una MP saliendo dos veces en la hoja de inspeccion. Se
+        // escribe aqui, no en el escritor, porque el escritor no tiene la fila cruda.
+        lineId: String(row.line_id == null ? "" : row.line_id).trim(),
       };
     });
   }

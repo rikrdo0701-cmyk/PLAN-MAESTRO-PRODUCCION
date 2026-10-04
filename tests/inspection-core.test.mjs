@@ -116,6 +116,124 @@ test("prepara el guardado route-only del catalogo sin enviar dibujo cacheado", (
   });
 });
 
+/**
+ * MEDIDO 2026-10-04 en la base en vivo (697 filas de `materials`): habia DOS filas por
+ * cada (ot, componente) y la hoja de inspeccion sacaba cada MP DOS VECES, lado a lado. La
+ * hoja de la OT 3374, que tiene UNA sola MP (MP00153), mostraba MP00153 en la columna
+ * izquierda y MP00153 en la derecha.
+ *
+ * LA CAUSA, Y NO ES SUPOSICION. `materials` tiene dos escritores con dos claves distintas:
+ * la ingesta (RESTlet 2246, `materiales_`) escribe `line_id` = `comp.id`, el id de renglon de
+ * NetSuite, que es SIEMPRE un entero (medidos '2', '3', '4', '24'); la pagina escribia
+ * `line_id` = `id`, el UUID de la fila que acababa de LEER (medido: la copia tiene `id`
+ * '68d0519a-...' y `line_id` 'c1f3421a-...', y la original de la misma MP tiene `id`
+ * 'c1f3421a-...'). El UNIQUE es (ot, line_id): con dos claves para el mismo renglon de BOM
+ * no se emparejan y el merge-duplicates INSERTA en vez de actualizar. 348 (ot, componente)
+ * distintos, 348 con mas de una fila, 349 filas de mas, y uno con tres.
+ *
+ * Y EL CASO QUE HACE QUE LA CLAVE NO SEA EL NOMBRE DEL COMPONENTE: la OT 3776 tiene
+ * MP00094 en DOS renglones de verdad del BOM (`comp.id` 2 con 6.27 y `comp.id` 3 con 330).
+ * Son dos lineas con cantidades distintas, no un duplicado, y juntarlas perderia el 330 (o
+ * sumaria 336.27, que no existe en ninguna parte). Es 1 caso de 348, y por eso la regla es
+ * "una fila por RENGLON DEL BOM", no "una fila por MP".
+ */
+test("una sola MP se queda con una sola fila, y la copia del escritor se va", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00153", description: 'Tubo de 2" x 6mts', required: 1.666, requiredOriginal: 1.666, route: "500 mm", lineId: "2" },
+    { material: "MP00153", description: 'Tubo de 2" x 6mts', required: 1.666, requiredOriginal: 1.666, route: "500 mm", lineId: "c1f3421a-29e6-4491-8701-1321c95251a5" }
+  ]);
+
+  assert.equal(unicos.length, 1, "una MP, una vez: la hoja no puede repetirla");
+  assert.equal(unicos[0].material, "MP00153");
+  assert.equal(unicos[0].lineId, "2", "gana el renglon del BOM, no la copia");
+  assert.equal(unicos[0].required, 1.666, "la cantidad no se suma: las dos traian 1.666");
+  assert.equal(unicos[0].route, "500 mm");
+});
+
+test("la misma MP escrita con espacios o distinta caja es la misma MP", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00153", required: 2, lineId: "2" },
+    { material: " mp00153 ", required: 2, lineId: "c1f3421a" }
+  ]);
+
+  assert.equal(unicos.length, 1, "la clave del grupo es el componente normalizado, no el crudo");
+  assert.equal(unicos[0].lineId, "2", "gana el renglon del BOM");
+});
+
+test("dos renglones REALES del BOM con la misma MP se conservan los dos", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00094", required: 6.27, requiredOriginal: 6.27, lineId: "2" },
+    { material: "MP00094", required: 330, requiredOriginal: 330, lineId: "3" },
+    { material: "MP00094", required: 6.27, requiredOriginal: 6.27, lineId: "bda4aa98-5b50-4156-81f4-45bea8c5fbde" }
+  ]);
+
+  assert.deepEqual(structuredClone(unicos).map((item) => item.lineId), ["2", "3"], "la de 330 es un renglon real: juntarla perderia el dato");
+  assert.deepEqual(structuredClone(unicos).map((item) => item.required), [6.27, 330], "y las cantidades no se suman: 336.27 no existe");
+});
+
+test("si no hay ningun renglon del BOM, se conserva uno en vez de dejar la hoja vacia", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00070", required: 1, lineId: "" },
+    { material: "MP00070", required: 1, lineId: "a1b2c3d4-0000-0000-0000-000000000000" }
+  ]);
+
+  assert.equal(unicos.length, 1, "un material sin clave del ERP se muestra, no se borra");
+  assert.equal(unicos[0].material, "MP00070");
+});
+
+test("la descripcion vacia se rescata de la copia, y la ruta NO se toca", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00153", description: "", route: "500 mm", lineId: "2" },
+    { material: "MP00153", description: 'Tubo de 2" x 6mts', route: "", lineId: "c1f3421a" }
+  ]);
+
+  assert.equal(unicos.length, 1);
+  assert.equal(unicos[0].description, 'Tubo de 2" x 6mts');
+  assert.equal(unicos[0].route, "500 mm", "la ruta sale del catalogo por componente, no de la fila");
+});
+
+test("el renglon del BOM se reconoce por ser un entero, no por parecer un UUID", () => {
+  // Los `line_id` de la ingesta son '2', '3', '4', '24'. Un UUID es lo que invento el
+  // escritor de la pagina. La regla no dice "no es UUID" para no atarse al formato de una
+  // clave ajena: dice "es el id de renglon de NetSuite", y eso es un entero.
+  assert.equal(core.inspectionLineaDelBom("2"), true);
+  assert.equal(core.inspectionLineaDelBom(" 24 "), true);
+  assert.equal(core.inspectionLineaDelBom("c1f3421a-29e6-4491-8701-1321c95251a5"), false);
+  assert.equal(core.inspectionLineaDelBom(""), false);
+  assert.equal(core.inspectionLineaDelBom(null), false);
+});
+
+test("la deduplicacion no cambia el orden de los materiales", () => {
+  const unicos = core.inspectionMaterialsUnicos([
+    { material: "MP00219", lineId: "a-1" },
+    { material: "MP00153", lineId: "2" },
+    { material: "MP00219", lineId: "b-2" },
+    { material: "BRIDA-2668", lineId: "3" }
+  ]);
+
+  assert.deepEqual(structuredClone(unicos).map((item) => item.material), ["MP00219", "MP00153", "BRIDA-2668"],
+    "la hoja se llena en el orden de la tabla de materiales");
+});
+
+test("el detalle de la OT ya no trae la copia: una MP, una fila", () => {
+  // El filtro de la hoja (`inspectionMaterials`) es el que decide que se imprime, asi que
+  // con la copia en `detail.materials` el semaforo, el contador de materiales y el dialogo
+  // de editar tramo tambien la contaban dos veces. Por eso la deduplicacion va en
+  // `inspectionDetail` y no solo en el render.
+  const detail = core.inspectionDetail({
+    workOrder: { item: "C 290 UID", ot: "3374", quantity: 20 },
+    materials: [
+      { component: "MP00153", description: 'Tubo de 2" x 6mts', required: 1.666, pending: 1.666, lineId: "2" },
+      { component: "MP00153", description: 'Tubo de 2" x 6mts', required: 1.666, pending: 1.666, lineId: "c1f3421a" }
+    ],
+    routes: { byMaterialDrawing: {}, rows: [] },
+    disponibles: {}
+  });
+
+  assert.equal(detail.materials.length, 1);
+  assert.deepEqual(structuredClone(core.inspectionMaterials(detail.materials)).map((item) => item.material), ["MP00153"]);
+  assert.equal(core.inspectionMaterials(detail.materials).length, 1, "la hoja imprime una vez");
+});
 test("aplica el guardado a la fila vigente por clave aunque la cache se reemplace", () => {
   const selectedBeforeRefresh = {
     article: " A-100 ",

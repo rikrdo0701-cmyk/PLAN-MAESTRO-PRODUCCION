@@ -611,7 +611,10 @@ test("el mapeo usa los nombres de columna del esquema, no los del estado", async
   assert.equal("precio_hasta" in wo, false);
 
   const mat = cuerpoDe(llamadas, "POST", "materials")[0];
-  assert.equal(mat.line_id, "mat-1", "line_id es la segunda mitad del UNIQUE (ot, line_id)");
+  // MEDIDO 2026-10-04: este material de prueba NO trae `lineId`, asi que cae al respaldo
+  // (`m.id`), que es lo que habia antes. La clave correcta, la del renglon de NetSuite, la
+  // trae el material real; ver el test de abajo, que es el que fija la regla.
+  assert.equal(mat.line_id, "mat-1", "sin lineId se usa el id de la fila: es la unica clave que hay");
   assert.equal(mat.componente_id, "45");
   assert.equal(mat.pendiente, 3);
 
@@ -1071,4 +1074,87 @@ test("los eventos que no caben en una peticion se dejan para el siguiente guarda
   // El corte avanza de verdad: lo que no se mande sale en el siguiente guardado.
   await writer.guardar(grande);
   assert.equal(llamadas[1].cuerpo.p_payload.operation_events.length, 10);
+});
+
+/**
+ * MEDIDO 2026-10-04 en la base en vivo: `materials` tenia DOS filas por cada
+ * (ot, componente) -- 697 filas para 348 materiales, 348 con mas de una fila y 349 filas de
+ * mas -- y la hoja de inspeccion sacaba cada MP DOS VECES, lado a lado. En la OT 3374, que
+ * tiene UNA sola MP, MP00153 aparecia en la columna izquierda y en la derecha.
+ *
+ * LA CAUSA ESTA EN ESTE ARCHIVO. `filasMaterials` usaba `m.id` como `line_id`, y `m.id` es el
+ * UUID de la fila. Pero la ingesta (RESTlet 2246) escribe `line_id` con el id de renglon de
+ * NetSuite (`comp.id`, que es un entero). El UNIQUE es (ot, line_id): con dos claves
+ * distintas para el mismo renglon de BOM las dos filas no se emparejan nunca, y el
+ * `merge-duplicates` de `escribirEspejo` INSERTA en vez de actualizar. Cada guardado anadia
+ * una copia mas.
+ *
+ * MEDIDO, en la OT 3374: la copia tiene `id` '68d0519a-...' y `line_id` 'c1f3421a-...', y la
+ * fila original de esa misma MP tiene `id` 'c1f3421a-...'. O sea que la copia se creo con el
+ * id de la original como clave, que es literalmente lo que hacia `line_id = m.id`.
+ *
+ * La clave correcta es la que trae la fila leida (`m.lineId`, que expone `mapMaterials`), y
+ * por eso el lector tambien cambio: sin `lineId` en el estado, este escritor no tendria con
+ * que actualizar la fila del ERP.
+ */
+test("materials se escribe con el line_id del renglon de NetSuite, no con el UUID de la fila", async () => {
+  const { writer, llamadas } = escritor();
+  const base = estado();
+  base.materials = [{
+    // `id` es el UUID de la fila (lo que la pagina tiene) y `lineId` es el `line_id` que
+    // escribio la ingesta. Si el escritor usara `id`, este POST crearia una fila nueva.
+    id: "68d0519a-1111-2222-3333-444455556666", ot: "3374", workOrderId: "8744",
+    assembly: "C 290 UID", componentId: "1961", component: "MP00153",
+    description: 'Tubo de 2" x 6mts', unit: "PZA",
+    required: 1.666, issued: 0, pending: 1.666, lineId: "2",
+  }];
+
+  await writer.guardar(base);
+
+  const mat = cuerpoDe(llamadas, "POST", "materials")[0];
+  assert.equal(mat.line_id, "2",
+    "line_id es el id de renglon del ERP: con el UUID el merge-duplicates inserta una copia");
+  assert.equal(mat.ot, "3374");
+  assert.notEqual(mat.line_id, base.materials[0].id, "el UUID de la fila NO es la clave natural");
+  assert.equal(mat.requerido, 1.666, "RULE-SUP-046: la cantidad de BOM es fraccionaria y no se redondea");
+  const post = de(llamadas, "POST", "materials")[0];
+  assert.ok(post.url.includes("on_conflict=" + encodeURIComponent("ot,line_id")),
+    "y el on_conflict es la clave que declara el DDL");
+});
+
+test("dos materiales con el mismo id de fila y distinto renglon NO se pisan", async () => {
+  // MEDIDO 2026-10-04, OT 3776 MP00094: la MISMA MP aparece en DOS renglones de verdad del
+  // BOM (`comp.id` 2 con 6.27 y `comp.id` 3 con 330). Son dos filas de la tabla, con dos
+  // `line_id` distintos, y si el escritor se comiera la segunda por tener el mismo `id`,
+  // la hoja perderia el 330.
+  const { writer, llamadas } = escritor();
+  const base = estado();
+  const linea = (id, lineId, requerido) => ({
+    id, lineId, ot: "3776", workOrderId: "9001", assembly: "TUBO 4\"",
+    componentId: "1961", component: "MP00094", description: 'Tubo de 4" x 6mts', unit: "PZA",
+    required: requerido, issued: 0, pending: requerido,
+  });
+  base.materials = [
+    linea("bda4aa98-0000-0000-0000-000000000000", "2", 6.27),
+    linea("bda4aa98-0000-0000-0000-000000000001", "3", 330),
+  ];
+
+  await writer.guardar(base);
+
+  const mat = cuerpoDe(llamadas, "POST", "materials");
+  assert.equal(mat.length, 2, "los dos renglones del BOM se escriben");
+  assert.deepEqual(mat.map((fila) => fila.line_id), ["2", "3"]);
+  assert.deepEqual(mat.map((fila) => fila.requerido), [6.27, 330]);
+});
+
+test("un material sin lineId ni id no se escribe, y no se inventa una clave", async () => {
+  const { writer, llamadas } = escritor();
+  const base = estado();
+  base.materials = [{ ot: "3177", component: "MP00070", required: 2, pending: 2 }];
+
+  await writer.guardar(base);
+
+  const mat = cuerpoDe(llamadas, "POST", "materials");
+  assert.ok(!mat || mat.length === 0,
+    "sin clave natural no hay UPSERT posible: una fila anonima crearia materiales sin identidade");
 });

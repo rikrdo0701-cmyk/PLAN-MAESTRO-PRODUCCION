@@ -754,6 +754,32 @@ test("el hueco de FORMA de las fechas dice la REGLA, no 'no se sabe'", () => {
   assert.match(deWorkOrders[0], /sin convertir de zona/i);
 });
 
+// MEDIDO 2026-10-04: `line_id` es la clave natural de la fila de `materials` (docs/
+// schema-supabase-sync-netsuite.sql: UNIQUE (ot, line_id)) y la que escribe la ingesta del
+// RESTlet 2246 con el renglon del BOM (`comp.id`). Si el lector no la expone, el escritor se
+// queda solo con `id` (UUID de la fila) y escribe ESO como `line_id`: medido 348 (ot,
+// componente) con dos filas, 697 filas para 348 materiales, y una MP repetida en la hoja.
+test("mapMaterials EXPONE line_id como lineId, tal cual y sin inventar nada", () => {
+  const filas = reader.mapMaterials([
+    { id: "uuid-del-erp", ot: "OT-3374", wo_internal_id: "wo-1", ensamble: "A-1", componente_id: 77, componente: "MP00153", descripcion: "Tornillo", unidad: "pza", requerido: 4, emitido: 1, pendiente: 3, line_id: 2 },
+    { id: "uuid-de-la-copia", ot: "OT-3374", wo_internal_id: "wo-1", ensamble: "A-1", componente_id: 77, componente: "MP00153", descripcion: "Tornillo", unidad: "pza", requerido: 4, emitido: 1, pendiente: 3, line_id: "uuid-del-erp" },
+    { id: "uuid-sin-line", ot: "OT-3374", componente_id: 78, componente: "MP00094", requerido: 1, line_id: null },
+  ]);
+  assert.equal(filas.length, 3, "mapMaterials NO deduplica: eso es de la hoja, no del lector");
+  // El renglon del ERP: la columna llega como numero y sale como texto, porque con el UNIQUE
+  // (ot, line_id) la clave se compara como texto y "2" y 2 tienen que ser la misma fila.
+  assert.equal(filas[0].lineId, "2");
+  // La COPIA: la pagina habia escrito el UUID de la fila en `line_id`. Sigue saliendo tal cual,
+  // porque el lector no juzga que fila es buena: eso lo decide inspection-core.js.
+  assert.equal(filas[1].lineId, "uuid-del-erp");
+  // Nulo es cadena vacia, no "null" ni "undefined": `filasMaterials` hace
+  // `texto(m.lineId) || texto(m.id)`, y un "null" de texto seria una clave que no existe.
+  assert.equal(filas[2].lineId, "");
+  // Y las demas columnas no se tocan: esto solo agrega la clave que faltaba.
+  assert.equal(filas[0].componentId, 77);
+  assert.equal(filas[0].required, 4);
+});
+
 test("el lector NO tiene maquinaria de zona horaria: ninguna fecha se puede convertir", () => {
   // Los tests de arriba comprueban COMO SE LEE HOY un valor. Este comprueba que la conversion no
   // se puede colar ni por error: no hay ninguna llamada en el codigo que la haga. Se quitan los

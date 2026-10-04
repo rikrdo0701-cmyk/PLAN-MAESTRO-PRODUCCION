@@ -216,6 +216,98 @@
     return index;
   }
 
+  /**
+   * ¿ESTA FILA DE `materials` ES UN RENGLON DEL BOM DE NETSUITE?
+   *
+   * MEDIDO 2026-10-04 en la base en vivo (697 filas). El id de renglon de NetSuite
+   * (`comp.id`, que es lo que la ingesta escribe en `line_id`) es SIEMPRE un entero:
+   * medidos '2', '3', '4', '24'. Las 348 filas que creo la pagina tienen un UUID, porque
+   * `filasMaterials` usaba el `id` de la fila como `line_id` (corregido; ver ahi el por que).
+   *
+   * POR QUE HACE FALTA DISTINGUIRLAS Y POR QUE NO ES "QUE HAYA DOS MP". Hay un caso
+   * medido en el que la MISMA MP tiene DOS renglones de verdad en el BOM de la misma OT: la
+   * OT 3776 tiene MP00094 (item 1961) en `comp.id` 2 con 6.27 y en `comp.id` 3 con 330. Son
+   * dos lineas con cantidades distintas, no un duplicado, y juntarlas perderia el 330 (o
+   * sumaria 336.27, que no existe en ninguna parte). Ese es UN caso de 348, y es la razon
+   * por la que la deduplicacion de abajo NO usa el nombre del componente como clave, sino
+   * esta pregunta.
+   *
+   * UNA FILA SIN `lineId` NO ES DEL ERP, PERO TAMPOCO SE TIRA. `lineId` solo existe si la
+   * fila viene por `mapMaterials` (supabase-reader.js); un material de otro origen (un
+   * import, un estado viejo) llega sin el. Por eso el que decide es el grupo entero y no
+   * cada fila suelta: si no hay NINGUN renglon del ERP para ese componente, se conserva
+   * uno. Medido: hoy no hay ningun (ot, componente) sin renglon del ERP (0 de 348), o sea
+   * que ese respaldo no se esta usando; esta para que un origen nuevo no borre la hoja.
+   */
+  function inspectionLineaDelBom(lineId) {
+    return /^\d+$/.test(String(lineId == null ? "" : lineId).trim());
+  }
+
+  /**
+   * UNA MP, UNA VEZ: quita las COPIAS y deja los RENGLONES DEL BOM (medido 2026-10-04).
+   *
+   * LO QUE PASABA. La base `materials` tenia DOS filas por cada (ot, componente): 697
+   * filas para 348 materiales. La hoja de inspeccion pinta los materiales en pares (uno a
+   * la izquierda, otro a la derecha), asi que cada MP salia DOS VECES en la misma
+   * impresion, lado a lado. Medido en la OT 3374 (C 290 UID, 20 piezas): dos filas de
+   * MP00153, y las dos en la hoja.
+   *
+   * DE DONDE SALIAN LAS COPIAS (medido tambien el 2026-10-04, no es una suposicion).
+   * `materials` tiene DOS escritores y NO usaban la misma clave:
+   *   - la ingesta (RESTlet 2246, `netsuite-restlet-unificado-supabase.js` materiales_)
+   *     escribe `line_id` = `comp.id`, el id de renglon de NetSuite. Ejemplos medidos:
+   *     '2', '3', '4', '24'.
+   *   - la pagina (`filasMaterials`, supabase-writer.js) escribia `line_id` = `id`, el
+   *     UUID de la fila que acababa de LEER. Medido: la fila con `line_id` 'c1f3421a-...'
+   *     tiene `id` '68d0519a-...', y la otra fila de esa misma MP tiene `id`
+   *     'c1f3421a-...': o sea que la copia se creo con el id de la original como clave.
+   * El UNIQUE es `(ot, line_id)`, y con dos claves distintas para el mismo renglon de BOM
+   * ese UNIQUE no puede emparejar las dos filas: el merge-duplicates INSERTA en vez de
+   * actualizar. MEDIDO: 348 (ot, componente) distintos, 348 con mas de una fila, 349
+   * filas de mas, y UN caso con tres filas (cada guardado anade otra copia). Corregido en
+   * `filasMaterials`: la pagina ahora escribe el `line_id` que LYO, que es el del ERP.
+   *
+   * POR QUE ESTA DEDUPLICACION EXISTE AUNQUE EL ESCRITOR ESTE ARREGLADO. Las 348 copias ya
+   * estan en la base y la ingesta no las borra (es un upsert por clave natural, y esas
+   * claves no aparecen en NetSuite). Ademas, una hoja donde la misma MP sale dos veces es
+   * exactamente lo que la persona que la lee no puede dejar pasar: el aviso es "una MP, una
+   * vez", y eso tiene que valer aunque la base todavia este sucia.
+   *
+   * QUE SE PISA Y QUE NO. La `description` de una fila superviviente se completa con la de
+   * las copias si venia vacia (medido: las copias son copias byte a byte salvo 3 que
+   * difieren en un espacio al final, y ninguno traia la descripcion vacia; el respaldo es
+   * para que un texto faltante no se pierda). `route` y `drawing` NO se tocan: los dos
+   * salen de `inspectionRouteMatch` POR COMPONENTE, o sea que las copias los traian iguales
+   * y no hay nada que rescatar. Y las CANTIDADES no se suman ni se eligen: cada renglon del
+   * BOM se queda con las suyas.
+   *
+   * LA CLAVE DEL GRUPO ES EL COMPONENTE NORMALIZADO (`inspectionRouteNormalize`), no el
+   * crudo: "MP00153" y "mp00153 " son la misma MP y la hoja no puede ensinarla dos veces.
+   * Y NO SE REORDENA: cada grupo conserva la posicion de su PRIMERA fila, asi que la hoja
+   * se sigue llenando en el orden de la tabla de materiales, que es lo que se pidio.
+   */
+  function inspectionMaterialsUnicos(materials) {
+    const porComponente = new Map();
+    (materials || []).forEach((material) => {
+      const clave = inspectionRouteNormalize(material?.material);
+      if (!clave) return;
+      if (!porComponente.has(clave)) porComponente.set(clave, []);
+      porComponente.get(clave).push(material);
+    });
+    const salida = [];
+    porComponente.forEach((grupo) => {
+      const delBom = grupo.filter((material) => inspectionLineaDelBom(material?.lineId));
+      const supervivientes = delBom.length ? delBom : grupo.slice(0, 1);
+      const copias = grupo.filter((material) => !supervivientes.includes(material));
+      supervivientes.forEach((material) => {
+        if (String(material?.description || "").trim()) { salida.push(material); return; }
+        const rescues = copias.map((copia) => String(copia?.description || "").trim()).find(Boolean);
+        salida.push(rescues ? { ...material, description: rescues } : material);
+      });
+    });
+    return salida;
+  }
+
   /** Una fila de tramo vacia. NUEVA en cada llamada, y no una constante compartida:
    *  quien recibe un `{}` como "no hubo match" puede escribirle sin romper la
    *  siguiente llamada de otro material. */
@@ -320,7 +412,13 @@
     // existe precisamente para eso (RULE-INS-001).
     const dibujoDeLaOt = inspectionCleanDrawing(inspectionArticleDrawingMatch(indice, articulo).drawing);
     let dibujoDeRespaldo = "";
-    const materials = (entrada.materials || []).map((material) => {
+    // MEDIDO 2026-10-04: la deduplicacion va AQUI y no en el filtro de `inspectionMaterials`,
+    // porque el duplicado nace en la LECTURA (dos filas del mismo material en `materials`) y
+    // la hoja no es el unico que la sufre: el dialogo de editar tramo/dibujo
+    // (`openEditModal`) recorre `detail.materials` y abriria dos filas para la misma MP, y
+    // el contador de `renderJobStatus` ("N materiales") diria el doble de los que hay.
+    // `inspectionMaterials` sigue siendo solo el filtro de "lo que se imprime".
+    const materials = inspectionMaterialsUnicos((entrada.materials || []).map((material) => {
       const nombre = String(material?.component == null ? "" : material.component).trim();
       const fila = inspectionRouteMatch(indice, articulo, nombre);
       const dibujo = inspectionCleanDrawing(fila.drawing)
@@ -362,8 +460,14 @@
         deficitNeto: Math.max(0, Math.max(0, pendiente) - disponible),
         route: String(fila.route || "").trim(),
         drawing: dibujo,
+        // MEDIDO 2026-10-04: `lineId` viaja para que `inspectionMaterialsUnicos` sepa
+        // cual de las filas del mismo componente es un RENGLON DEL BOM de NetSuite y cual
+        // es una COPIA que creo el escritor de la pagina. Sin el, la hoja tendria que
+        // adivinarlo por el nombre del componente, y eso borraria de la OT 3776 la segunda
+        // linea real de MP00094 (6.27 y 330). Es el dato, no un adorno.
+        lineId: String(material?.lineId == null ? "" : material.lineId).trim(),
       };
-    });
+    }));
 
     // MEDIDO 2026-10-01, por que el id NO es `folio + '-' + secuencia + '-' + indice`
     // como armaba el servidor: ese id cambia de posicion si la lista se reordena, y
@@ -412,7 +516,7 @@
     };
   }
 
-  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail };
+  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionMaterialsUnicos, inspectionLineaDelBom, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail };
 
   function inspectionRouteSavedValue(saved, field, fallback) {
     const aliases = {

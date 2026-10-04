@@ -1825,11 +1825,28 @@
     (Array.isArray(state.materials) ? state.materials : []).forEach((m) => {
       if (!m || typeof m !== "object") return;
       const ot = texto(m.ot);
-      // line_id es la segunda mitad del UNIQUE (ot, line_id) que se corrigio el
-      // 2026-09-29. En la ingesta es el id del renglon de NetSuite, que la app
-      // no trae; el identificador de fila que la app SI tiene es `id`, y es el
-      // que se usa aqui para que el UNIQUE se cumpla y el espejo sea idempotente.
-      const linea = texto(m.id);
+      // MEDIDO 2026-10-04, POR QUE ESTA LINEA CAMBIO Y QUE ESTABA MAL. Antes decia
+      // `const linea = texto(m.id)`, con el comentario de que `id` era "el identificador de
+      // fila que la app SI tiene". Es cierto que la app lo tiene, y por eso la clave estaba
+      // mal: `materials` tiene DOS escritores y NO usan la misma clave.
+      //   - la ingesta (RESTlet 2246, materiales_) escribe `line_id` = `comp.id`, el id de
+      //     renglon de NetSuite. MEDIDO: '2', '3', '4', '24'.
+      //   - esta pagina ponia `line_id` = `id`, el UUID de la fila que acababa de LEER.
+      //     MEDIDO en la OT 3374: la copia tiene `id` '68d0519a-...' y `line_id`
+      //     'c1f3421a-...', y la fila original de la MISMA MP tiene `id` 'c1f3421a-...': la
+      //     copia se creo usando el id de la original como clave.
+      // El UNIQUE es (ot, line_id). Con dos claves distintas para el mismo renglon de BOM, el
+      // `merge-duplicates` de `escribirEspejo` no puede emparejar las filas y INSERTA. MEDIDO
+      // en la base: 697 filas para 348 (ot, componente) distintos, 348 con mas de una fila,
+      // 349 filas de mas y una con tres (cada guardado anadia otra copia). Y el efecto en la
+      // hoja de inspeccion era que cada MP salia DOS VECES, lado a lado.
+      //
+      // LA CLAVE CORRECTA ES `lineId`, que es el `line_id` de la fila leida (lo expone
+      // `mapMaterials`, supabase-reader.js:1152) y que es el que escribio la ingesta: con
+      // esa clave el UPSERT actualiza la fila del ERP. El respaldo a `m.id` es solo para un
+      // material que venga de OTRO origen sin `lineId` (un import, un estado viejo): ahi no
+      // hay mejor clave, y es la misma que habia antes.
+      const linea = texto(m.lineId) || texto(m.id);
       if (!ot || !linea) return;
       const clave = ot + "|" + linea;
       if (vistas.has(clave)) return;

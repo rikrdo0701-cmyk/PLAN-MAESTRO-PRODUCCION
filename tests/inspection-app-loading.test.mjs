@@ -5,6 +5,15 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/web/inspection/inspection-app.js", import.meta.url), "utf8");
 
+// MEDIDO 2026-10-04: el harness carga el INSPECTION CORE REAL para `inspectionMaterialsUnicos`.
+// La hoja llama a esa funcion en `renderDetail` (para que una MP no salga dos veces) y este
+// archivo, antes de que existiera, tendria un `TypeError` al pintar. Poner un mock trivial
+// ("devuelve el arreglo tal cual") dejaria en verde justo el defecto que se quiere cazar:
+// aqui la deduplicacion tiene que ser la de verdad, la que decide que fila es del BOM.
+const coreContext = { window: {} };
+vm.runInNewContext(await readFile(new URL("../src/web/inspection/inspection-core.js", import.meta.url), "utf8"), coreContext);
+const coreReal = coreContext.window.InspectionCore;
+
 function deferred() {
   let resolve;
   let reject;
@@ -81,6 +90,8 @@ function createHarness(callBackend, now = { value: 0 }) {
     InspectionCore: {
       initialOperationSelection: (operations) => Object.fromEntries(operations.map((operation, index) => [operation.id || operation.code || String(index), true])),
       inspectionMaterials: (materials) => materials,
+      // La deduplicacion de verdad, no una de mentira (ver la nota de `coreReal` arriba).
+      inspectionMaterialsUnicos: (materials) => coreReal.inspectionMaterialsUnicos(materials),
       inspectionRows: () => [],
       inspectionPrintDiagnostic: () => ({ status: "ok", label: "Listo", missingRoutes: [], deficit: [], pending: [], alerts: [], materials: [] }),
       operationKey: (operation, index) => operation.id || operation.code || String(index),
@@ -484,4 +495,123 @@ test("la cache local vence exactamente a los cinco minutos", async () => {
   now.value += 1;
   await app.loadDetail();
   assert.equal(calls, 2);
+});
+/**
+ * MEDIDO 2026-10-04: la banda de MP de la hoja son las celdas que van entre el ULTIMO
+ * encabezado de la banda y el titulo de seccion que la cierra; antes esta el membrete de la
+ * OT y despues vienen las filas de operacion, asi que ese recorte es el unico que no cuenta
+ * celdas de otro bloque. `materialRow` mete 10 celdas por renglon: 2 de "Fechas de entrega",
+ * 5 de la MP IZQUIERDA (insignia, descripcion, tramo, cantidad) y... las que siguen.
+ */
+function bandaDeMateriales(html) {
+  const piezas = html.split('<div class="inspection-cell').slice(1);
+  const seccion = piezas.findIndex((pieza) => pieza.includes("inspection-section-title"));
+  // El titulo de seccion va PEGADO a la ultima celda de la banda (no abre `<div
+  // class="inspection-cell`), asi que el corte es DESPUES de esa pieza, no en ella: si se
+  // corta en ella se pierde la ultima celda y un renglon entero.
+  const hasta = seccion === -1 ? piezas.length : seccion + 1;
+  let ultimoEncabezado = -1;
+  piezas.slice(0, hasta).forEach((pieza, indice) => { if (pieza.includes("inspection-head")) ultimoEncabezado = indice; });
+  const contenido = (pieza) => (pieza.indexOf("</div>") === -1 ? pieza : pieza.slice(0, pieza.indexOf("</div>")));
+  const banda = piezas.slice(ultimoEncabezado + 1, hasta).map(contenido);
+  const filas = [];
+  for (let indice = 0; indice + 9 < banda.length; indice += 10) {
+    const celdas = banda.slice(indice, indice + 10);
+    // Las posiciones 2 y 6 son las insignias de MP (izquierda y derecha) y la 5 y la 9 las
+    // cantidades: eso es lo que dice `materialRow` (inspection-app.js:407).
+    filas.push({ celdas, izquierda: celdas[2], derecha: celdas[6] });
+  }
+  return filas;
+}
+
+/**
+ * El nombre de la MP que se ve en una celda de la banda. `materialBadge` pinta
+ * `<span class="inspection-mat ..." title="...">NOMBRE</span>`, y el `title` va con el texto
+ * dentro del mismo elemento: por eso el patron salta hasta el primer `>` en vez de terminar
+ * la clase con `"`.
+ */
+function mpDe(celda) {
+  const insignia = /<span class="inspection-mat[^>]*>([^<]*)<\/span>/.exec(celda || "");
+  return insignia ? insignia[1] : "";
+}
+
+/** Levanta la hoja con una OT que trae estos materiales y la deja pintada. */
+async function hojaCon(materials, wo = "3374") {
+  const { app, byId } = createHarness(async (method, args) => {
+    assert.equal(method, "getInspectionWorkOrderBundle");
+    return {
+      ok: true,
+      data: {
+        detail: {
+          workOrder: { wo, article: `ART-${wo}`, status: "En curso", quantity: 20, dueDate: "2026-10-10" },
+          operations: [],
+          materials,
+        },
+        history: { count: 0, history: [] },
+      },
+    };
+  });
+  byId("inspectionWorkOrder").value = wo;
+  await app.loadDetail();
+  return { byId, html: byId("inspectionSheetGrid").innerHTML };
+}
+
+test("la banda de MP se llena con ceil(MP/2) renglones, IZQUIERDA y luego DERECHA", async () => {
+  // Decision del usuario 2026-10-04: "empieza a poblar con las MP segun el catalogo y la tabla
+  // materiales desde la izq. a la der.; si faltan filas para mostrar materiales se deben
+  // agregar primero izquierda luego derecha, pero no se deben duplicar".
+  //   - El orden es el de la TABLA DE MATERIALES: no se reordena nada.
+  //   - Cada renglon toma dos MP del DATO, asi que hacen falta ceil(MP/2) renglones.
+  //   - Con 2 MP o menos se agrega DESPUES un renglon en blanco para escribir a mano, que NO
+  //     es un renglon de materiales (por eso va fuera del ciclo y no cuenta como MP).
+  for (let total = 1; total <= 6; total += 1) {
+    const materials = Array.from({ length: total }, (_, indice) => ({
+      material: `MP${String(indice + 1).padStart(5, "0")}`,
+      description: `Descripcion ${indice + 1}`,
+      required: indice + 1,
+      lineId: String(indice + 1),
+    }));
+    const { byId, html } = await hojaCon(materials, `OT-${total}`);
+    const filas = bandaDeMateriales(html);
+    const esperados = Math.ceil(total / 2) + (total <= 2 ? 1 : 0);
+    assert.equal(filas.length, esperados, `${total} MP: ceil(${total}/2) renglones${total <= 2 ? " + 1 en blanco" : ""}`);
+    const enHoja = filas.flatMap((fila) => [mpDe(fila.izquierda), mpDe(fila.derecha)]).filter(Boolean);
+    // De izquierda a derecha y de arriba abajo sale el orden de la tabla, cada MP UNA vez.
+    assert.deepEqual(enHoja, materials.map((material) => material.material), `${total} MP en el orden del dato`);
+    assert.equal(new Set(enHoja).size, total, `${total} MP distintas: ninguna repetida`);
+    // Y la hoja dice cuantas son, con la misma cuenta: el contador no puede mentir sobre la banda.
+    assert.match(byId("inspectionJobStatus").innerHTML, new RegExp(`· ${total} materiales`), `${total} MP en el contador`);
+  }
+});
+
+test("UNA MP, UNA VEZ: la hoja NO repite la MP aunque la base le mande la COPIA", async () => {
+  // MEDIDO 2026-10-04 en la OT 3374: `materials` traia DOS filas de MP00153 (la del ERP con
+  // `line_id` '2' y la COPIA con `line_id` = UUID, porque la pagina escribia el UUID de la fila
+  // leida), y al pintarse en pares la MP salia DOS VECES lado a lado. Este test mete esa misma
+  // pareja tal cual: la hoja tiene que mostrar una sola vez aunque la base este sucia.
+  const { html } = await hojaCon([
+    { material: "MP00153", description: "Tornillo", required: 4, lineId: "2" },
+    { material: "MP00153", description: "Tornillo", required: 4, lineId: "68d0519a-c1f3421a" },
+    { material: "MP00094", description: "Tubo", required: 6.27, lineId: "3" },
+  ]);
+  const filas = bandaDeMateriales(html);
+
+  // 3 filas de tabla con una repetida son 2 MP: un renglon con las dos y el renglon en blanco.
+  assert.equal(filas.length, 2, "3 filas de tabla con una repetida: un renglon con dos MP y el en blanco");
+  assert.deepEqual([mpDe(filas[0].izquierda), mpDe(filas[0].derecha)], ["MP00153", "MP00094"]);
+  assert.equal((html.match(/>MP00153<\/span>/g) || []).length, 1, "una sola insignia de MP00153 en toda la hoja");
+  // Las CANTIDADES no se suman ni se eligen: cada renglon del BOM se queda con la suya, y la
+  // MP00094 conserva su 6.27 (medido: es la del renglon 3, no la del 2).
+  assert.match(filas[0].celdas[5], />4$/, "la MP00153 conserva su cantidad");
+  assert.match(filas[0].celdas[9], />6\.27$/, "la MP00094 conserva su cantidad");
+  assert.equal((html.match(/>4<\/div>/g) || []).length, 1, "y el 4 no sale dos veces porque la MP se repitio");
+});
+
+test("una OT sin MP imprime la banda vacia con la fecha de entrega, y no es un fallo", async () => {
+  const { html } = await hojaCon([], "9999");
+  const filas = bandaDeMateriales(html);
+  assert.equal(filas.length, 2, "una fila con la etiqueta de fecha y una en blanco para escribir a mano");
+  assert.deepEqual([mpDe(filas[0].izquierda), mpDe(filas[0].derecha)], ["", ""]);
+  assert.match(filas[0].celdas[0], /Fechas de entrega:/);
+  assert.match(filas[0].celdas[1], /2026-10-10/, "la fecha de entrega va en la PRIMERA fila");
 });

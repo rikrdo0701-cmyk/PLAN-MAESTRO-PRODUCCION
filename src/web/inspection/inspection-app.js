@@ -583,11 +583,36 @@
     const detail = state.detail;
     if (!detail) return;
     const job = detail.workOrder || {};
-    const materials = root.InspectionCore.inspectionMaterials(detail.materials || []);
+    // MEDIDO 2026-10-04: `inspectionMaterialsUnicos` va aqui aunque `inspectionDetail` ya
+    // deduplique. Es una garantia local de la HOJA, que es donde el duplicado se ve: la base
+    // tenia dos filas por cada material (las copias que creo el escritor escribiendo el
+    // UUID de la fila como `line_id`, ya corregido) y la impression sacaba cada MP DOS
+    // VECES, lado a lado. Que la hoja no pueda duplicar una MP aunque le lleguen repetida
+    // no depende de que otro archivo se acuerde de hacerlo.
+    const materials = root.InspectionCore.inspectionMaterials(root.InspectionCore.inspectionMaterialsUnicos(detail.materials || []));
     const rows = root.InspectionCore.inspectionRows(detail.operations || [], state.selection);
+    // COMO SE LLENA LA BANDA DE MATERIALES, Y POR QUE (decision del usuario 2026-10-04:
+    // "empieza a poblar con las MP segun el catalogo y la tabla materiales desde la izq. a
+    // la der.; si faltan filas para mostrar materiales se deben agregar primero izquierda
+    // luego derecha, pero no se deben duplicar").
+    //   - `materials` ya viene en el orden de la tabla de materiales, y no se reordena: el
+    //     orden de las MP es el del dato, no uno impuesto aqui.
+    //   - Cada fila toma la IZQUIERDA y luego la DERECHA, y si la derecha queda vacia se
+    //     agrega la fila siguiente: por eso el salto es de DOS en DOS. Con 5 MP salen 3
+    //     filas (izq,der | izq,der | izq) y ninguna MP aparece dos veces, porque cada
+    //     indice se consume una sola vez.
+    //   - "Fechas de entrega" va en la PRIMERA fila, que es donde la etiqueta del formato
+    //     original esta; las siguientes la dejan vacia para que la persona escriba a mano.
     const materialRows = [];
     for (let index = 0; index < materials.length; index += 2) materialRows.push(materialRow(materials[index], materials[index + 1], index === 0 ? "Fechas de entrega:" : "", index === 0 ? escape(job.dueDate || "") : ""));
+    // Sin materiales visibles la hoja imprime igual, con la banda de MP vacia y la fecha de
+    // entrega puesta: una hoja vacia de materiales es un dato ("esta OT no trae MP"), no un
+    // fallo de la pagina.
     if (!materialRows.length) materialRows.push(materialRow({}, {}, "Fechas de entrega:", escape(job.dueDate || "")));
+    // Y despues, UNA fila en blanco para escribir a mano. NO es una fila para materiales: no
+    // tiene ningun material que mostrar, y por eso se agrega DESPUES del ciclo de arriba y no
+    // dentro. Sale cuando la ultima fila de materiales tiene un hueco (0 o 1 MP) y tambien
+    // con exactamente 2, que es el caso en que el formato deja la linea de libre.
     if (materials.length <= 2) materialRows.push(materialRow({}, {}));
     byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb")}${cell(3, escape(job.wo), "inspection-big inspection-bb")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb")}${cell(2, "REV", "inspection-big inspection-bb")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb")}${cell(2, "Cantidad:", "inspection-label inspection-bb")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-br inspection-bb")}${cell(3, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb")}${cell(2, "Material", "inspection-head inspection-bb")}${cell(2, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
     byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${inspectionOperationLayout(3).replace(operationSubheader("OP"), operationSubheader("OPER."))}</div>`;

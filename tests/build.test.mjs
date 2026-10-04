@@ -887,7 +887,12 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(inspectionService, /requeridoOriginal/);
   assert.match(inspectionService, /deficitNeto/);
   assert.match(inspectionService, /deficit/);
-  assert.match(pagesIndex, /InspectionCore\.inspectionMaterials\(detail\.materials \|\| \[\]\)/);
+  // MEDIDO 2026-10-04: la banda de MP se pinta con los materiales YA deduplicados, porque la
+  // base tiene una COPIA por cada renglon del BOM (348 de 348) y la hoja las sacaba una al
+  // lado de la otra. Que se pinten los que salen de `inspectionMaterialsUnicos` es lo que
+  // hace que una MP salga UNA vez; por eso el aserto pide la llamada anidada completa y no
+  // solo el nombre de la funcion.
+  assert.match(pagesIndex, /root\.InspectionCore\.inspectionMaterials\(root\.InspectionCore\.inspectionMaterialsUnicos\(detail\.materials \|\| \[\]\)\)/);
   assert.match(pagesIndex, /function firstInspectionMaterialIndex\(\)[\s\S]*inspectionMaterials\(materials\)[\s\S]*materials\.indexOf\(first\)/);
   assert.match(pagesIndex, /inspectionEditLink"\)\.addEventListener\("click", \(\) => editMaterialLink\(firstInspectionMaterialIndex\(\)\)/);
   assert.doesNotMatch(inspectionService, /credenciales\.txt|netsuiteauth\.txt/i);
