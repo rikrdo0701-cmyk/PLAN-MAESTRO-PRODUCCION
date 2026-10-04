@@ -134,12 +134,14 @@ test("compactLocalState sigue sin persistir el plan, y el borrador del backend e
   );
 });
 
-test("la puerta de frescura del rescate sigue comparando generatedAt contra el snapshot", async () => {
+test("la puerta del rescate: no toca un plan de pantalla mas nuevo que el borrador", async () => {
   const app = await leerApp();
-  // Si alguien relaja la comparacion para "hacer que siempre restaure", introduce el fallo de
-  // ERR-DATOS-VIEJOS-BORRADOR-001: un borrador viejo pisando uno nuevo.
-  assert.match(app, /savedGeneratedAtMs > currentGeneratedAtMs/, "el rescate debe seguir exigiendo que el snapshot sea mas nuevo");
-  assert.match(app, /savedToolChanges === 0\) return;/, "sin cambios de herramental y sin borrador mas nuevo, no se restaura");
+  // Si alguien relaja la puerta para "hacer que siempre restaure", introduce el fallo de
+  // ERR-DATOS-VIEJOS-BORRADOR-001: un borrador viejo pisando uno nuevo. La puerta de hoy: si el
+  // plan de pantalla es MAS NUEVO que el borrador Y ya tiene plan, no se toca. Antes era
+  // "no hay nada programado en pantalla", que ya no sirve porque el espejo hoy SI trae horas.
+  assert.match(app, /savedGeneratedAtMs > currentGeneratedAtMs/, "el rescate sigue comparando el reloj del borrador contra el de pantalla");
+  assert.match(app, /pantallaEsMasNueva && hayPlanEnPantalla\) return;/, "un plan de pantalla mas nuevo que el borrador no se pisa");
 });
 
 // ---------------------------------------------------------------------------

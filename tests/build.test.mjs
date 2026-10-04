@@ -1052,11 +1052,12 @@ test("un import o cache stale no pisa un borrador mas reciente; el restore de bo
   const bootRestoreEnd = app.indexOf("function scheduleDraftBootRestoreRetry()", bootRestoreStart);
   const bootRestore = app.slice(bootRestoreStart, bootRestoreEnd);
   assert.match(bootRestore, /const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;/);
-  // 2026-10-04 (RULE-PLAN-015): la puerta de herramental ya no es la unica segunda via. Entra
-  // tambien "en pantalla no hay nada programado y el borrador si", que es el caso medido del arranque
-  // de hoy: savedIsNewer da false porque el snapshot del borrador y app_state.last_schedule los
-  // escribio el MISMO guardado.
-  assert.match(bootRestore, /if \(!savedIsNewer && !noHayPlanEnPantalla\) \{\s*const savedToolChanges[\s\S]*if \(savedToolChanges === 0\) return;[\s\S]*if \(localToolChanges >= savedToolChanges\) return;\s*\}/);
+  // 2026-10-04 (RULE-PLAN-015): la puerta ya no es "en pantalla no hay nada programado" (el espejo
+  // hoy SI trae horas, MEDIDO 2026-10-04: 1168/2232 filas con hora_inicio no nula; el lector
+  // documentaba 0/1000 el 2026-09-29). La puerta de hoy: si el plan de pantalla es MAS NUEVO que
+  // el borrador Y ya tiene plan, no se toca. En cualquier otro caso entra cuando el plan en pantalla
+  // difiere del borrador (la comparacion de arriba, hecha solo sobre lo que este rescate restaura).
+  assert.match(bootRestore, /if \(pantallaEsMasNueva && hayPlanEnPantalla\) return;/);
   assert.match(bootRestore, /if \(state\.lastSchedule && savedIsNewer\)[\s\S]*savedGeneratedAtMs > embeddedAtMs/);
 
   const importStart = app.indexOf("async function applyImported(imported, options = {})");

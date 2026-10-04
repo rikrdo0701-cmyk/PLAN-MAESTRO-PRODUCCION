@@ -811,20 +811,21 @@ async function maybeRestoreSavedDraftOnBoot() {
     const savedGeneratedAtMs = Date.parse((snapshot && (snapshot.generatedAt || payload.generatedAt)) || "") || 0;
     const currentGeneratedAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
     const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;
-    // "NO HAY PLAN EN PANTALLA": la segunda via de entrada del rescate, y la que hace falta hoy.
-    // El espejo `operations` si trae operaciones, pero con `start_planned` a medianoche y sin horas
-    // (lector, MEDIDO 2026-09-29): hay operaciones y NO HAY PLAN. Sin esta via el rescate no entraria
-    // en ese caso, porque savedIsNewer da false (los dos generatedAt los escribio el MISMO guardado:
-    // el snapshot del borrador y el app_state.last_schedule salen del guardado de "Generar plan").
-    const programadasEnPantalla = (state.operations || []).filter((op) => enCola(op) && Boolean(opStart(op))).length;
-    const programadasEnElBorrador = savedOpsEnCola.filter((op) => Boolean(opStart(op))).length;
-    const noHayPlanEnPantalla = programadasEnPantalla === 0 && programadasEnElBorrador > 0;
-    if (!savedIsNewer && !noHayPlanEnPantalla) {
-      const savedToolChanges = savedOpsEnCola.filter(isToolChangeReportOperation).length;
-      if (savedToolChanges === 0) return;
-      const localToolChanges = (state.operations || []).filter(isToolChangeReportOperation).length;
-      if (localToolChanges >= savedToolChanges) return;
-    }
+    // EL PLAN DE PANTALLA ES MAS NUEVO QUE EL BORRADOR Y YA TIENE PLAN: NO SE TOCA. Si la persona
+    // genero despues de este borrador, su plan es la autoridad y el rescate no puede atrasarlo
+    // (ERR-DATOS-VIEJOS-BORRADOR-001). En cualquier otro caso el rescate entra cuando el plan en
+    // pantalla difiere del borrador, que es la comparacion de arriba (planningDraftDiffers) hecha
+    // SOLO sobre lo que este rescate restaura: las operaciones del borrador para las OTs de la cola,
+    // contra las que hay en pantalla.
+    //
+    // ANTES LA PUERTA ERA "no hay nada programado en pantalla" (`noHayPlanEnPantalla`), y eso ya no
+    // sirve: el espejo `operations` hoy SI trae horas (1168/2232 filas con hora_inicio no nula,
+    // MEDIDO 2026-10-04; el lector documentaba 0/1000 el 2026-09-29), o sea que la pantalla nunca
+    // esta "vacia" y el rescate no entraba. Y `savedIsNewer` tampoco: los dos generatedAt los escribe
+    // el MISMO guardado de "Generar plan" y salen iguales (MEDIDO 2026-10-04).
+    const pantallaEsMasNueva = currentGeneratedAtMs > 0 && currentGeneratedAtMs > savedGeneratedAtMs;
+    const hayPlanEnPantalla = (state.operations || []).some((op) => enCola(op) && Boolean(opStart(op)));
+    if (pantallaEsMasNueva && hayPlanEnPantalla) return;
     const restored = savedOpsEnCola.map((op, index) => normalizeOperation({
       ...op,
       id: op.id || `draft-boot-${snapshot.snapshotId || "draft"}-${index + 1}`,
