@@ -9711,11 +9711,18 @@ function formatReportDuration(minutes) {
  *
  * MEDIDO 2026-09-30: el caso de "fallo a medias" es real, no teorico. ingesta() recorre las
  * siete tablas en un bucle con try/catch por tabla y sigue; o sea que un RESTlet que responde
- * con cinco acciones bien y dos vacias escribe cinco tablas y deja dos con lo de la corrida
- * anterior. Si eso se tratara como fallo total, la persona se queda viendo datos viejos que
- * el espejo SI habia actualizado, y pensara que la ingesta no corrio. Si se tratara como
- * exito, el toast diria que se sincronizo con dos tablas sin tocar. Ninguna de las dos es
- * cierta: hay que decirlo.
+ * con cinco acciones bien y dos vacias escribe cinco tablas. Si eso se tratara como fallo total,
+ * la persona se queda viendo datos viejos que el espejo SI habia actualizado, y pensara que la
+ * ingesta no corrio. Si se tratara como exito, el toast diria que se sincronizo con dos tablas
+ * que no. Ninguna de las dos es cierta: hay que decirlo.
+ *
+ * MEDIDO 2026-10-04, Y QUE CAMBIO EN LO QUE SE DICE. Antes, una tabla que la corrida no
+ * reescribia conservaba los datos de la corrida anterior y el aviso la contaba como "sin tocar".
+ * Con RULE-SUP-048 ya no hay tabla que conserve lo anterior sin que se diga: la que NetSuite no
+ * devolvio se VACIA, y vacia es la verdad de "NetSuite no la devolvio". Los tres estados que se
+ * nombran abajo son distintos y se muestran aparte porque en pantalla se ven distinto: escritas
+ * (dato al dia), vacias (no hay dato) y con lo anterior (dato VIEJO). El tercero es el que hay
+ * que marcar aunque no se pueda arreglar desde aqui: son datos viejos que parecen frescos.
  */
 async function correrIngestaPorBoton() {
   const url = window.PPIngestaTrigger?.urlDeIngesta?.();
@@ -9752,11 +9759,27 @@ async function correrIngestaPorBoton() {
     const tocadas = resultado.filas || {};
     const bien = Object.keys(tocadas).length;
     const mal = resultado.errores.length;
+    // MEDIDO 2026-10-04, tres estados y no uno. La ingesta NO conserva valores previos de las
+    // tablas que no reescribio (RULE-SUP-048): una tabla que NetSuite no devolvio se vacia. Antes
+    // de esa regla el aviso decia "2 sin tocar" y las tablas seguian con los datos de la corrida
+    // anterior, que en la pantalla es indistinguible de un dato al dia. Ahora hay que distinguir
+    //   - escrituras: la tabla quedo al dia con lo que mando NetSuite;
+    //   - vaciadas:   la tabla quedo VACIA, y vacia es la verdad de "NetSuite no la devolvio";
+    //   - con lo anterior: la tabla conserva datos VIEJOS porque ni el vaciado se pudo hacer.
+    // El tercero es el unico peligroso: sin nombrarlo, quien mira ve numeros viejos
+    // producidos por una corrida que fallo y no puede distinguirlos de los de ahora. Se
+    // nombra en el toast y en el panel.
+    const vaciadas = resultado.vaciadas || [];
+    const sinVaciar = resultado.noSePudoVaciar || [];
     const detalle = Object.keys(tocadas).map((tabla) => `${tabla}: ${tocadas[tabla]} filas`).join(" | ")
-      + (mal ? " | SIN TOCAR: " + resultado.errores.join(" | ") : "");
-    setNetSuiteSyncAlert("Ingesta a medias: escribieron " + bien + " tablas y " + mal + " fallaron. " + detalle);
+      + (vaciadas.length ? " | VACIADAS (NetSuite no las devolvio): " + vaciadas.join(", ") : "")
+      + (sinVaciar.length ? " | CON LO ANTERIOR (no se pudo vaciar): "
+          + sinVaciar.map((x) => `${x.tabla} (${x.motivo})`).join(" | ") : "")
+      + (mal ? " | ERRORES: " + resultado.errores.join(" | ") : "");
+    setNetSuiteSyncAlert("Ingesta a medias: escribieron " + bien + " tablas, " + vaciadas.length
+      + " quedaron vacias y " + sinVaciar.length + " conservan lo anterior. " + detalle);
     render({ saveScope: "ui" });
-    showToast(`Ingesta a medias: ${bien} tablas al dia, ${mal} sin tocar`, 9000);
+    showToast(`Ingesta a medias: ${bien} al dia, ${vaciadas.length} vacias, ${sinVaciar.length} con lo anterior`, 9000);
     return { seguir: true, resultado };
   }
   showToast(resultado.mensaje || "La ingesta no corrio", 9000);

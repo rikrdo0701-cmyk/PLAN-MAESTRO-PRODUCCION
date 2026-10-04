@@ -159,7 +159,7 @@ create table if not exists public.sales_orders (
 -- OTs (medido: ot 271 id=1, ot 820 id=1, ot 1052 id=1...). Con UNIQUE(line_id)
 -- el upsert/dedupe colapsaba las 2376 filas a 31 y DESCARTABA materiales de
 -- otras OTs. La identidad real es (ot, line_id), asi que el UNIQUE es compuesto.
--- La ingesta (appscript-ingesta-supabase.gs) deduce y upsertea por
+-- La ingesta (src/server/19-appscript-ingesta-supabase.js) deduce y upsertea por
 -- `on_conflict=ot,line_id`.
 --
 -- Es NOT NULL porque una fila sin linea no tiene identidad: el RESTlet descarta

@@ -93,7 +93,16 @@
     const motivo = String(json?.motivo || "");
     const mensaje = String(json?.mensaje || "").trim();
     const errores = Array.isArray(json?.errores) ? json.errores.filter(Boolean) : [];
+    const noSePudoVaciar = Array.isArray(json?.noSePudoVaciar) ? json.noSePudoVaciar.filter(Boolean) : [];
     if (motivo === "ocupada") return "Ya hay una ingesta corriendo. Espera a que termine";
+    // MEDIDO 2026-10-04: este texto era igual para "una tabla quedo vacia" y "una tabla quedo con
+    // lo anterior", que son estados opuestos para quien esta mirando la pantalla: en el primero
+    // no ve nada (y es la verdad), en el segundo ve datos de la corrida pasada creyendo que son
+    // de ahora. Por eso el caso que NO se puede resumir en un conteo va PRIMERO y con el nombre
+    // de la tabla adentro, no como numero.
+    if (noSePudoVaciar.length) {
+      return "Estas tablas conservan lo anterior: " + noSePudoVaciar[0].tabla;
+    }
     if (errores.length) return "La ingesta fallo en " + errores.length + " tabla(s): " + errores[0].slice(0, 60);
     if (mensaje) return mensaje.slice(0, 100);
     if (motivo) return "La ingesta no corrio: " + motivo;
@@ -190,12 +199,20 @@
 
     const filas = json.filas && typeof json.filas === "object" ? json.filas : {};
     const total = Object.values(filas).reduce((suma, n) => suma + (Number(n) || 0), 0);
+    // Las dos listas de RULE-SUP-048 llegan tal cual. No se resume su largo porque quien las
+    // muestra es el panel de alertas, que no se corta, y reducir "noSePudoVaciar" a un numero
+    // seria justo el silencio que la regla viene a quitar: una tabla que conserva lo anterior
+    // tiene que poder leerse con su nombre.
+    const vaciadas = Array.isArray(json.vaciadas) ? json.vaciadas.filter(Boolean) : [];
+    const noSePudoVaciar = Array.isArray(json.noSePudoVaciar) ? json.noSePudoVaciar.filter(Boolean) : [];
     return {
       ok: json.ok === true,
       ejecutada: true,
       motivo: String(json.motivo || ""),
       filas,
       errores: Array.isArray(json.errores) ? json.errores.filter(Boolean) : [],
+      vaciadas,
+      noSePudoVaciar,
       totalFilas: total,
       inicio: String(json.inicio || ""),
       fin: String(json.fin || ""),

@@ -16,6 +16,21 @@
  * que devuelve NetSuite en UNA transaccion: no quedan datos antiguos y, si algo
  * falla, el rollback deja la tabla con los datos anteriores (nunca vacia).
  *
+ * NO QUEDAN VALORES PREVIOS, NI SI UNO FALLA (RULE-SUP-048). Decision del usuario
+ * el 2026-10-04: "todas las ingestas deberian borrar los valores previos y
+ * reescribirse". Aplicado asi: si NetSuite NO devuelve una tabla (accion ausente o
+ * `ok:false`), esa tabla se VACIA con el mismo RPC en vez de conservar lo de la corrida
+ * pasada, porque lo anterior se veria en pantalla como si fuera de ahora. Y si la
+ * escritura de una tabla revienta, se intenta vaciarla igual. Con la excepcion
+ * MEDIDA y deliberada del bloque `sin_acciones`: si NINGUNA de las siete acciones vino
+ * bien, la corrida se considera que no ocurrio y no se toca ninguna tabla (ver el
+ * comentario de ahi, que es el unico caso donde se conservan valores previos).
+ *
+ * LO QUE NO SE PUEDE VACIAR SE DICE. Si ni el vaciado funciona (Supabase caido, RPC
+ * con error), la tabla SI conserva lo anterior, y por eso la corrida devuelve
+ * `noSePudoVaciar` con el nombre de la tabla y el motivo: "queda lo anterior" es
+ * informacion que hay que poder leer, no un silencio.
+ *
  * UN ESCRITOR POR TABLA (RULE-SUP-015). Este archivo escribe las 7 tablas de
  * NetSuite y nada mas. Los catalogos los escribe 16-supabase-catalogo.js desde un
  * guardado, y `machines` en particular NO se toca aqui desde el espejo de
@@ -202,6 +217,27 @@ function PP_supabaseMirror_(tabla, filas, config) {
   return { escritas: r.insertadas || 0, borradas: r.borradas || 0 };
 }
 
+/**
+ * VACIA UNA TABLA, Y COMPRUEBA QUE QUEDO VACIA. El vaciado ES el espejo con el payload
+ * vacio: el RPC borra las filas y no inserta ninguna (docs/rpc-ingesta-mirror.sql:128,
+ * la rama `if jsonb_array_length(p_filas) > 0`). No hay un segundo camino para borrar, y
+ * ese es el punto: vaciar y reescribir son la misma llamada con dos payloads, asi que no
+ * puede haber un "borrado" que se ejecute con otras reglas que el espejo.
+ *
+ * POR QUE COMPRUEBA EL RESULTADO Y NO SE FIA. El RPC devuelve `insertadas`, asi que un
+ * vaciado que devolviera filas tiene un motivo que solo se ve aca. Sin esta comprobacion
+ * la corrida reportaria `vaciada` sobre una tabla con filas, que es exactamente el
+ * mentira que RULE-SUP-048 viene a quitar: por eso se tira el error y la tabla queda en
+ * `noSePudoVaciar`.
+ */
+function PP_vaciaTabla_(tabla, config) {
+  const r = PP_supabaseMirror_(tabla, [], config);
+  if (r.escritas !== 0) {
+    throw new Error('el espejo no vacio ' + tabla + ': devolvio ' + r.escritas + ' filas con el payload vacio');
+  }
+  return r;
+}
+
 // =============================================================================
 // Utilidades
 // =============================================================================
@@ -328,6 +364,15 @@ function ingesta() {
  * MEDIDO 2026-09-30 (lo otro): el cuerpo de este return tambien era `undefined`, o sea que
  * el activador no podia reportar nada de su propia corrida. Ahora devuelve un objeto con las
  * filas por tabla y los errores, que es lo que la pagina necesita para no mentir.
+ *
+ * LO QUE DEVUELVE, Y POR QUE HAY DOS LISTAS DE TABLAS QUE NO SE ESCRIBIERON (RULE-SUP-048).
+ *   - `filas`    : tabla -> filas escritas. Solo las que se reescribieron de verdad.
+ *   - `errores`  : una cosa que salio mal, sea cual sea. Define el `ok`.
+ *   - `vaciadas` : tablas que esta corrida NO reescribio y que quedaron VACIAS a proposito.
+ *   - `noSePudoVaciar` : tablas que conservan lo ANTERIOR porque ni el vaciado se pudo hacer.
+ * Las dos ultimas no se pueden fundir en `errores`: una tabla vaciada se ve vacia y una que
+ * quedo con lo anterior se ve CON DATOS VIEJOS, y quien mira la pantalla tiene que poder
+ * distinguir esos dos casos.
  */
 function PP_ingesta_(forzado) {
   console.log('=== INGESTA START ===' + (forzado ? ' (FORZADA, desde la pagina)' : ''));
@@ -341,7 +386,8 @@ function PP_ingesta_(forzado) {
   console.log('Hora: ' + ahora.toISOString() + ' (dia=' + dia + ', hora=' + hora + ')');
   if (!forzado && (dia === 0 || dia === 6 || hora < 7 || hora >= 17)) {
     console.log('Fuera de horario laboral. Saliendo.');
-    return { ok: true, ejecutada: false, motivo: 'fuera_de_horario', filas: {}, errores: [], log: [] };
+    return { ok: true, ejecutada: false, motivo: 'fuera_de_horario', filas: {}, errores: [], log: [],
+      vaciadas: [], noSePudoVaciar: [] };
   }
 
   // Una sola llamada al RESTlet unificado
@@ -353,8 +399,18 @@ function PP_ingesta_(forzado) {
 
   const acciones = respuesta.acciones;
   const log = [];
-  const filas = {};
+  // MEDIDO 2026-10-04: este contador se llamaba `filas` y lo tapaba el `let filas` de las filas
+  // que se escriben en el bucle. Ver el comentario de ahi: la pagina recibia un arreglo en vez
+  // de un conteo por tabla. Se llama `conteo` para que no se puedan volver a tapar.
+  const conteo = {};
   const errores = [];
+  // RULE-SUP-048: los dos inventarios de tablas que NO quedaron escritas en esta corrida.
+  // `vaciadas` se vaciaron a proposito (NetSuite no las devolvio, o la escritura se cayo);
+  // `noSePudoVaciar` son las que conservan lo anterior porque ni el vaciado funciono. La
+  // diferencia importa en la pagina: las primeras se ven vacias, las segundas se ven con
+  // datos VIEJOS, que es lo que hay que avisar.
+  const vaciadas = [];
+  const noSePudoVaciar = [];
 
   // Mapeo de accion -> tabla, clave natural, y funcion de transformacion
   const TABLAS = {
@@ -376,16 +432,65 @@ function PP_ingesta_(forzado) {
     ordenes_venta: { tabla: 'sales_orders', clave: 'folio' }
   };
 
+  // EL UNICO CASO EN EL QUE SE CONSERVAN VALORES PREVIOS, Y POR QUE. RULE-SUP-048 vacia
+  // toda tabla que esta corrida no reescribio, asi que hay que decidir el caso en el que la
+  // corrida no ocurrio: si NINGUNA de las siete acciones vino bien, la respuesta del RESTlet
+  // no es "esta tabla fallo", es "este origen no respondio" — y las dos cosas piden lo
+  // contrario. MEDIDO por que se distingue: una caida de red o un despliegue del RESTlet con
+  // otro shape llega aqui con `respuesta.ok` en true y cero acciones usables, y vaciar las
+  // siete tablas en ese caso deja la pagina EN BLANCO sin una sola OT, que en el taller se ve
+  // como "se borro todo" y no como "no se pudo leer". Conservar lo anterior y reportar
+  // `sin_acciones` deja la pagina con el dato viejo y un aviso que si dice la verdad.
+  //
+  // O sea: la regla es "toda tabla que esta corrida no reescribio queda vacia", y esta corrida
+  // no se conto como corrida. El `ok:false` va en las dos salidas, con y sin vaciar.
+  const accionesUsables = Object.keys(TABLAS).filter(function(nombre) {
+    const a = acciones[nombre];
+    return a && a.ok === true;
+  });
+  if (!accionesUsables.length) {
+    const detalle = Object.keys(TABLAS).map(function(nombre) {
+      const a = acciones[nombre];
+      return nombre + ':' + (a ? ('ok=' + a.ok) : 'ausente');
+    }).join(', ');
+    const msg = 'el RESTlet no devolvio ninguna accion utilizable (' + detalle + '): no se toco ninguna tabla';
+    console.log(msg);
+    console.log('=== INGESTA END ===');
+    return { ok: false, ejecutada: false, motivo: 'sin_acciones', mensaje: msg,
+      filas: {}, errores: [msg], log: [msg], vaciadas: vaciadas, noSePudoVaciar: noSePudoVaciar };
+  }
+  console.log('Acciones utilizables del RESTlet: ' + accionesUsables.length + ' de ' + Object.keys(TABLAS).length);
+
   for (const nombre in TABLAS) {
+    const def = TABLAS[nombre];
     try {
       const accion = acciones[nombre];
       if (!accion || !accion.ok) {
-        const msg = nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 100);
+        // RULE-SUP-048, primera mitad: NetSuite no entrego esta tabla, entonces NO se conservan
+        // las filas de la corrida anterior. Se vacia con el mismo RPC (payload vacio) y la tabla
+        // queda en cero. Antes de esta regla la tabla se saltaba con un `continue` mudo: la
+        // pagina seguia mostrando los datos viejos y el aviso decia "2 sin tocar" sin decir
+        // cuales; ahora se vacia y se dice el nombre de la TABLA, no el de la accion de NetSuite.
+        const causa = accion && accion.ok === false
+          ? ('ok=' + accion.ok + ' ' + JSON.stringify(accion).slice(0, 80))
+          : 'accion ausente en la respuesta del RESTlet';
+        const r = PP_vaciaTabla_(def.tabla, config);
+        const msg = def.tabla + ': NetSuite no la devolvio (' + causa + ') y se VACIO (' + r.borradas + ' filas borradas)';
+        vaciadas.push(def.tabla);
         log.push(msg);
         errores.push(msg);
-        console.log(nombre + ': ERROR ' + JSON.stringify(accion).slice(0, 200));
+        console.log(msg);
         continue;
       }
+      // MEDIDO 2026-10-04, UN DEFECTO QUE ESTA AQUI MISMO: el contador de filas por tabla se
+      // llamaba `filas`, el MISMO nombre que usan las filas que se estan por escribir, y lo
+      // tapaba dentro del bucle. Con el contador tapado, `filas[def.tabla] = r.escritas`
+      // escribia una propiedad sobre el arreglo de filas que se iba a mandar al espejo, y el
+      // `return { filas: filas }` devolvia ESE arreglo: las filas de la ULTIMA tabla del bucle
+      // (sales_orders), no el conteo por tabla. Lo que llegaba a la pagina era un arreglo, y
+      // su cuenta de "tablas al dia" era el numero de renglones de sales_orders con cada
+      // renglon de detalle en "undefined filas". El contador ahora se llama `conteo` y las
+      // filas se quedan con `filas`: el campo publico del return sigue llamandose `filas`.
       let filas = accion.rows || [];
       console.log(nombre + ': ' + filas.length + ' filas recibidas');
       // FOTOS DE GOOGLE DRIVE, Y POR QUE ESTA AQUI.
@@ -433,7 +538,6 @@ function PP_ingesta_(forzado) {
         console.log(nombre + ': muestra = ' + JSON.stringify(filas[0]).slice(0, 300));
       }
       // Deduplicar por clave natural
-      const def = TABLAS[nombre];
       if (nombre === 'items') filas = deduplicar_(filas, function(f) { return f.codigo; });
       if (nombre === 'materiales') filas = deduplicar_(filas, function(f) { return f.ot + '#' + f.line_id; });
       if (nombre === 'inventario') filas = deduplicar_(filas, function(f) { return f.item + '#' + f.ubicacion; });
@@ -441,14 +545,32 @@ function PP_ingesta_(forzado) {
       // nuevo en una sola transacción, para que no queden filas de corridas
       // anteriores ni ventanas con la tabla vacía.
       const r = PP_supabaseMirror_(def.tabla, filas, config);
-      filas[def.tabla] = r.escritas;
-      log.push(nombre + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
-      console.log(nombre + ': ' + r.escritas + ' escritas / ' + r.borradas + ' borradas (mirror atomico)');
+      conteo[def.tabla] = r.escritas;
+      log.push(def.tabla + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
+      console.log(def.tabla + ': ' + r.escritas + ' escritas / ' + r.borradas + ' borradas (mirror atomico)');
     } catch (e) {
-      const msg = nombre + ': ERROR ' + String(e.message || e).slice(0, 100);
+      // RULE-SUP-048, segunda mitad: la escritura de esta tabla se cayo, y tampoco se conservan
+      // los valores anteriores. Se intenta el vaciado con el mismo RPC. Lo que NO se hace es
+      // tragarselo: si el vaciado tambien falla, la tabla queda en `noSePudoVaciar` con su
+      // motivo, porque "queda lo anterior" es un dato que hay que poder leer.
+      const msg = def.tabla + ': ERROR al escribir: ' + String(e.message || e).slice(0, 100);
       log.push(msg);
       errores.push(msg);
-      console.log(nombre + ': ERROR ' + String(e.message || e).slice(0, 200));
+      console.log(msg);
+      try {
+        const r = PP_vaciaTabla_(def.tabla, config);
+        vaciadas.push(def.tabla);
+        const aviso = def.tabla + ': se intento escribir y no se pudo; se VACIO igual (' + r.borradas + ' filas borradas)';
+        log.push(aviso);
+        console.log(aviso);
+      } catch (e2) {
+        const motivo = String(e2.message || e2).slice(0, 100);
+        const aviso = def.tabla + ': NO SE PUDO VACIAR, conserva lo anterior: ' + motivo;
+        log.push(aviso);
+        errores.push(aviso);
+        noSePudoVaciar.push({ tabla: def.tabla, motivo: motivo });
+        console.log(aviso);
+      }
     }
   }
   console.log('Ingesta: ' + log.join(' | '));
@@ -457,7 +579,13 @@ function PP_ingesta_(forzado) {
   // antes escribia el error en el log y seguia, y eso se conserva. Lo que cambia es que quien
   // la pidio (la pagina) ahora puede enterarse de una sincronizacion a medias en vez de leer
   // "sincronizado" sobre una tabla que no se toco.
-  return { ok: errores.length === 0, ejecutada: true, filas: filas, errores: errores, log: log };
+  //
+  // `vaciadas` y `noSePudoVaciar` van aparte de `errores` porque NO SON LO MISMO y la pagina
+  // los muestra distinto: una tabla vaciada se ve vacia (dato honesto) y una que quedo con lo
+  // anterior se ve con datos VIEJOS (dato que hay que marcar). Juntas en `errores` las dos
+  // clases se perderian.
+  return { ok: errores.length === 0, ejecutada: true, filas: conteo, errores: errores, log: log,
+    vaciadas: vaciadas, noSePudoVaciar: noSePudoVaciar };
 }
 
 
@@ -544,6 +672,11 @@ function doPost(e) {
     salida.filas = resultado.filas || {};
     salida.errores = resultado.errores || [];
     salida.log = resultado.log || [];
+    // Las dos listas de RULE-SUP-048 viajan en la respuesta, no solo en el log de Apps Script:
+    // quien pide la corrida es la pagina, y "esta tabla quedo vacia" y "esta tabla quedo con
+    // lo anterior" son dos hechos que solo se pueden mostrar si llegan hasta ella.
+    salida.vaciadas = Array.isArray(resultado.vaciadas) ? resultado.vaciadas : [];
+    salida.noSePudoVaciar = Array.isArray(resultado.noSePudoVaciar) ? resultado.noSePudoVaciar : [];
     salida.inicio = inicio;
     salida.fin = new Date().toISOString();
     return PP_jsonIngesta_(salida);
@@ -559,6 +692,13 @@ function doPost(e) {
       filas: {},
       errores: [String(error && error.message || error).slice(0, 100)],
       log: [],
+      // Una excepcion antes de entrar al bucle (configuracion a medias, o el RESTlet que no.ok)
+      // deja las siete tablas SIN TOCAR. No es una corrida a medias: es que no hubo corrida, asi
+      // que las dos listas de RULE-SUP-048 van vacias y no se inventa ninguna tabla que se haya
+      // vaciado. Lo que no cabe es devolver esto como si fuera exito, y por eso ok:false va
+      // primero.
+      vaciadas: [],
+      noSePudoVaciar: [],
       fin: new Date().toISOString()
     });
   } finally {

@@ -589,13 +589,13 @@ Endpoint: `https://{accountId}.suitetalk.api.netsuite.com/services/rest/query/v1
 
 ---
 
-# Parte F — Supabase (destino de la migración; **aún sin tablas y sin datos reales**)
+# Parte F — Supabase (**ya es fuente de datos real desde 2026-09-29**)
 
-Proyecto ref **`xtgtfjcwxcoxvixholpj`**. Sigue **sin ser una fuente de datos**: es el destino del
-plan `docs/plan-migracion-supabase.md` (2026-09-27, *"No se mueve nada hasta que se apruebe"*).
-La diferencia desde la versión anterior de esta parte: **la ingesta ya está escrita y es el único
-writer**, pero **nada se ha ejecutado contra el proyecto**, así que no hay columnas reales que
-documentar aquí. Se documenta para que nadie la busque como origen de algo.
+Proyecto ref **`xtgtfjcwxcoxvixholpj`**. **Corrección de estado (2026-10-04)**: la intro de esta
+parte decía "aún sin tablas y sin datos reales" y ya no es cierto — el proyecto tiene el esquema
+aplicado, la ingesta corre y la **web lee de aquí** (hoja de inspección y plan). Lo que sigue
+se conserva porque describe el contrato, no el estado; donde el estado cambió se dice con fecha.
+Detalle del arranque en vivo en `docs/integrations/netsuite-supabase-sync.md`.
 
 - **Dos hosts que no se intercambian**: la Data API, el panel y `/auth` son
   `https://xtgtfjcwxcoxvixholpj.supabase.co` (**sin** prefijo `db.`); el Postgres directo del 5432
@@ -608,19 +608,52 @@ documentar aquí. Se documenta para que nadie la busque como origen de algo.
   real**. Los esquemas escritos en el repo son: `docs/schema-supabase.sql` (**21** `create table`,
   derivado de las hojas de este documento) y `docs/schema-supabase-sync-netsuite.sql`
   (**delta propuesto de la ingesta, NO aplicado**).
-- **Readers**: ninguno del producto. No hay código en `src/` que lea Supabase: la fase 3 del plan
-  (la lectura desde la web) no está hecha. El único lector es la sonda
-  `scripts/supabase-read-test.mjs`, de solo lectura (`RULE-TST-002`).
-- **Writers**: uno solo, del lado NetSuite. `netsuite-restlet-supabase-sync.js` es el **único
-  escritor** de las 7 tablas que NetSuite manda —`work_orders`, `operations`, `materials`, `items`,
-  `machines`, `inventory`, `sales_orders`— con upsert por clave natural y guarda de `revision`
-  (`RULE-SUP-001`, `RULE-SUP-004`). Lo disparan **6 User Events** a través de
-  `netsuite-suitelet-sync-tarea.js` y un barrido programado (`netsuite-scheduled-sincronizacion.js`),
-  que además es la red de seguridad de los seis porque un User Event se puede perder
-  (`RULE-SUP-003`, `RULE-SUP-006`). Apps Script conserva la escritura de las tablas de **estado y
-  plan** (`app_state`, `plan_snapshots`, `operation_plan_statuses` y la cola) hasta la fase 4 del
-  plan, y es el único que tiene el OAuth de NetSuite. **Ningún writer escribe en NetSuite**:
-  Supabase no puede llamarlo. Contrato completo: `docs/integrations/netsuite-supabase-sync.md`.
+- **`materials` — identidad y el duplicado de MP (medido 2026-10-04, `RULE-SUP-047`)**:
+  `line_id` es el `comp.id` de NetSuite, el renglón del BOM dentro de la OT, y es un **entero**
+  (`'2'`, `'3'`, `'4'`, `'24'` medidos en vivo). Es la clave natural de la fila con el UNIQUE
+  `(ot, line_id)`. **Es la única de las 7 tablas donde también escribe la página**, y el escritor
+  de la página (`filasMaterials`) usaba `line_id = id`, el UUID de la fila leída: el UNIQUE no
+  emparejaba y el merge insertaba una **copia** por material. Medido en la base viva: **697 filas
+  para 348 `(ot, componente)`**, de las cuales **348 son copias** escritas por la página (las
+  originales de la ingesta son 349, con `line_id` entero), y **un** `(ot, componente)` con
+  **dos renglones reales** del BOM (OT 3776 / MP00094, `line_id` 2 con 6.27 y 3 con 330). Por eso
+  la deduplicación de la hoja es **por renglón del BOM** (`line_id` entero) y no por MP, y por eso
+  las cantidades nunca se suman. Estado: escritor arreglado (`filasMaterials` usa
+  `texto(m.lineId) || texto(m.id)`), hoja blindada (`inspectionMaterialsUnicos` en
+  `inspection-core.js` + `renderDetail`), y las **348 copias sin borrar** (el `delete` está escrito
+  y **sin aplicar** en `docs/limpieza-materials-copias-2026-10-04.sql`; la próxima corrida de
+  `ingesta_mirror` las borra sola, porque hace `delete` + `insert` de la tabla completa).
+- **Ninguna ingesta conserva valores previos (`RULE-SUP-048`, medido 2026-10-04)**: toda tabla que
+  la corrida **no** reescribió se **vacía** con el mismo RPC (`p_filas: []`), y si ni el vaciado se
+  puede hacer la corrida lo reporta en `noSePudoVaciar` con el nombre de la tabla y su motivo.
+  Excepción única y deliberada: si **ninguna** de las 7 acciones del RESTlet vino bien, la corrida
+  no se cuenta y no se toca ninguna tabla. Convivían tres redactos distintos del aviso (escritas /
+  vaciadas / con lo anterior) porque una tabla que conserva lo anterior se ve en pantalla igual que
+  un dato fresco.
+- **Readers**: los del producto, todos desde la web contra Supabase (`RULE-SUP-030`: la página **no**
+  habla con NetSuite; NetSuite carga a Supabase y la página lee de Supabase):
+  `src/web/shared/supabase-reader.js` (`PPSupabaseReader` y sus `map*`), consumido por planificación e
+  inspección, y `src/web/shared/supabase-bridge-replacement.js` (`leerMaterialesDeLaOt` y las demás
+  lecturas por OT, con `order` explícito). MEDIDO 2026-10-04: al leer `materials` por PostgREST **sin
+  sesión** la API responde 200 con 0 filas, o sea que sin sesión no hay lectura (RLS); con la sesión
+  del navegador sí. Antes este documento decía "ninguno del producto, no hay código en `src/` que lea
+  Supabase": era de la fase 3 del plan y ya no describe el repo.
+- **Writers**: dos, y sus tablas no se pisan (RULE-SUP-015, un writer por tabla).
+  1. **Las 7 tablas de NetSuite** (`work_orders`, `operations`, `materials`, `items`, `machines`,
+     `inventory`, `sales_orders`) las escribe **una sola** el espejo de
+     `src/server/19-appscript-ingesta-supabase.js` vía el RPC `ingesta_mirror`, con la
+     `service_role` que se pega en `supabase-config.gs`; los datos los trae el RESTlet unificado 2246
+     (deploy 1) con `accion:'todas'`. La whitelist viva del RPC tiene **26** tablas (medido
+     2026-10-04): esas 7 + 19 de estado y catálogo. **Ningún writer escribe en NetSuite**: Supabase no
+     puede llamarlo.
+  2. **El estado y el plan** los escribe la página (`src/web/shared/supabase-writer.js`) y sus
+     catálogos `src/server/16-supabase-catalogo.js` desde un guardado, por las **políticas RLS** (la
+     clave `anon` viaja en el bundle público). `machines` está **excluido** de ese espejo a propósito,
+     porque la escribe el camino de la ingesta.
+  `materials` es la única tabla donde ambos caminos escriben, y por eso tiene su propia regla de
+  identidad (`RULE-SUP-047`, arriba). La arquitectura de **User Events** (`netsuite-user-event-*.js`,
+  Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el diseño propuesto y
+  **no está desplegada**: sus deployments no existen y subirlos es manual.
 - **Restricción de credenciales**: no hay **ninguna** en el repo —ni contraseña de la base, ni clave
   `anon`, ni `service_role`—. La `service_role` que usa el RESTlet va como **script parameter**
   `SUPABASE_KEY` del deployment en NetSuite, nunca en el repo, y el deployment **no** debe quedar

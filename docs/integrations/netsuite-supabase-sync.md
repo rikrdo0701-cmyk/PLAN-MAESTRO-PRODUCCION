@@ -8,8 +8,12 @@ tablas de NetSuite (`work_orders`, `operations`, `materials`, `items`, `inventor
 (mirror atómico de la RPC `ingesta_mirror`), medido con `.openchamber/diag-supabase-frescura.mjs`.
 
 **Ojo — dos caminos conviven en el repo.** El que **corre hoy** es **Apps Script → RESTlet unificado
-2246 → Supabase** (`appscript-ingesta-supabase.gs` + `netsuite-restlet-unificado-supabase.js`), que
+2246 → Supabase** (`src/server/19-appscript-ingesta-supabase.js`, el archivo que el build publica en `dist/`, + `netsuite-restlet-unificado-supabase.js`), que
 hace un *mirror* atómico (borra y reescribe) y por eso deja todas las filas con el mismo `created_at`.
+MEDIDO 2026-10-04: el `.gs` suelto de la raíz (`appscript-ingesta-supabase.gs`) se eliminó porque era una
+segunda copia que **nunca se despliega** (el build de Apps Script solo copia `src/server/*.js`) y su
+`continue` silencioso reportaba una escritura que no había pasado. Este documento lo señalaba como el
+código vivo; ya no lo es. Un escritor por repositorio, también para el archivo que se parece a un escritor.
 La arquitectura de **User Events** que describe este documento (seis archivos `netsuite-user-event-*.js`,
 Suitelet, RESTlet `netsuite-restlet-supabase-sync.js`, ScheduledScript) es el **diseño propuesto** y
 **no está desplegada** en NetSuite; sus `deployments` no existen todavía y subirlos es manual.
@@ -145,7 +149,7 @@ Desde el 2026-09-29 la ingesta no hace upsert incremental: **borra cada tabla co
 reescribe lo que NetSuite devuelve en esa corrida** (decisión del usuario: "que no se queden
 datos antiguos"). Las 7 tablas quedan como espejo exacto de las filas abiertas del ERP.
 
-El flujo corre en Google Apps Script (`appscript-ingesta-supabase.gs`, función `ingesta`):
+El flujo corre en Google Apps Script (`src/server/19-appscript-ingesta-supabase.js`, función `ingesta`):
 1. Una sola llamada al RESTlet unificado **2246** con `accion: 'todas'` (solo lectura).
 2. Por cada tabla: `POST /rest/v1/rpc/ingesta_mirror` con `{ p_tabla, p_filas }`. El RPC
    (`docs/rpc-ingesta-mirror.sql`) hace `delete` + `insert` **dentro de una sola transacción**:
@@ -165,6 +169,39 @@ El flujo corre en Google Apps Script (`appscript-ingesta-supabase.gs`, función 
    endpoint de tabla sin filtro (`DELETE /rest/v1/<tabla>` sin query) NO está permitido:
    la ingesta solo borra vía el RPC.
 
+### Una tabla que la corrida no reescribió se VACÍA (RULE-SUP-048)
+
+Decisión del usuario, 2026-10-04: *"todas las ingestas deberían borrar los valores previos y
+reescribirse"*. El RPC ya cumplía la mitad del borrado (una tabla vacía es un espejo legítimo:
+`p_filas: []` borra y no inserta). Lo que faltaba era el caso de **una tabla que esta corrida no
+reeescribió**, que antes conservaba lo anterior en silencio:
+
+| caso | qué hace ahora la ingesta (`src/server/19-appscript-ingesta-supabase.js`) | qué ve quien mira |
+| --- | --- | --- |
+| NetSuite no devolvió la tabla (`accion` ausente o `ok:false`) | `PP_vaciaTabla_` (el mismo RPC con payload vacío) y la tabla queda en `vaciadas` | vacío |
+| la escritura de la tabla se cayó | se intenta el mismo vaciado; si cuela, también queda en `vaciadas` | vacío |
+| ni el vaciado se pudo hacer (Supabase caído, RPC con error) | queda en `noSePudoVaciar` con su motivo, y la corrida es `ok:false` | **datos viejos**, nombrados |
+| **ninguna** de las 7 acciones vino bien | la corrida no se cuenta (`ejecutada:false`, `motivo:'sin_acciones'`) y **no se toca ninguna tabla** | datos viejos, con aviso |
+
+El último renglón es la única excepción, y es deliberada: "esta tabla falló" y "el origen no
+respondió" no son lo mismo. Ante un `respuesta.ok:true` con cero acciones usables (caída de red,
+o un despliegue del RESTlet con otro shape), vaciar las siete tablas deja el panel **en blanco**
+sin una sola OT, que en el taller se lee como "se borró todo" en vez de "no se pudo leer". Se
+conserva lo anterior y se devuelve `ok:false` con el detalle de las siete acciones.
+
+**Las dos listas no se pueden fundir en `errores`**: una tabla vaciada se ve vacía, y una que
+conservó lo anterior se ve con datos de la corrida pasada creyendo que son de ahora. Por eso la
+corrida devuelve `vaciadas` y `noSePudoVaciar` aparte, `doPost` las reenvía, y el cliente
+(`src/web/shared/apps-script-ingesta-trigger.js`) las pasa sin resumirlas.
+
+**Medición del 2026-10-04** (con sesión, `.openchamber/diag-mirror-exacto2.mjs`): las seis tablas
+espejo sin otro escritor tenían su última escritura en `2026-10-04T07:48:39-44Z`, todas de la
+misma corrida, y `materials` era la única con filas de otro escritor (las 348 copias, escritas a
+las `16:32:44Z` por la página). Es decir: la última reescritura completa fue esa, y las copias se
+borran solas en la próxima corrida de `ingesta_mirror` porque el RPC borra la tabla entera antes de
+insertar. El activador de 15 minutos sigue sin disparar (`tests/disparar-ingesta.test.mjs`,
+diagnóstico de `getTriggerStatus`): es un problema aparte y conocido.
+
 Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` dedupe por
 `codigo`, `materiales` por `ot+line_id`, `inventario` por `item+ubicacion`):
 - `work_orders` → `ot`
@@ -178,6 +215,49 @@ Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` d
 - `machines` → `nombre`
 - `inventory` → `item,ubicacion`
 - `sales_orders` → `folio`
+
+### `materials.line_id` = `comp.id`, y NINGÚN writer puede escribir otra cosa (RULE-SUP-047)
+
+`line_id` **es** el `comp.id` de NetSuite: el número de renglón del BOM **dentro** de la OT. La
+ingesta lo escribe en `materiales_` (`netsuite-restlet-unificado-supabase.js`, `comp.id AS
+line_id` + `String(r.line_id)`) y por eso siempre es un **entero** (`'2'`, `'3'`, `'4'`, `'24'`;
+medido en vivo). Cualquier otro valor en `line_id` lo escribió alguien que no es la ingesta.
+
+**Por qué importa, medido el 2026-10-04 contra la base en vivo**: `materials` es la única de las
+7 tablas donde la web también escribe (el resto es espejo de la ingesta), y el escritor de la
+página (`filasMaterials`, `src/web/shared/supabase-writer.js`) usaba `line_id = id`, el **UUID de
+la fila que acababa de leer**. Con el UNIQUE `(ot, line_id)` dos claves distintas para el mismo
+renglón de BOM no emparejan, y el merge inserta una **COPIA** en vez de actualizar:
+
+| medición (2026-10-04, con sesión) | valor |
+| --- | --- |
+| filas de `materials` | 697 |
+| `(ot, componente)` distintos | 348 |
+| filas escritas por la ingesta (`line_id` entero) | 349 |
+| filas escritas por la página (`line_id` con forma de UUID) = **las copias** | 348 |
+| filas de más si se cuenta `filas − (ot, componente)` | 349 (el único par con 3 filas aporta 2) |
+| `(ot, componente)` con **dos renglones reales** del BOM | 1 (OT 3776 / MP00094) |
+| `(ot, componente)` sin **ningún** renglón real | 0 |
+| parejas con datos idénticos / con alguna diferencia | 345 / 4 (3 con un espacio final en `descripcion`; la cuarta son los dos renglones reales de la 3776, no una diferencia copia↔original) |
+
+El síntoma era visible en la hoja de inspección: cada MP salía **dos veces lado a lado**.
+
+Contrato que queda, y que no se deduce del código:
+
+1. **Quien escribe `materials` desde la página escribe `line_id` = el `line_id` que leyó** de la
+   fila del ERP (`texto(m.lineId) || texto(m.id)`). Para eso `mapMaterials` expone `lineId`
+   (`supabase-reader.js`); sin esa columna el escritor solo tenía el UUID de la fila.
+2. **La hoja no confía en que la base esté limpia**: `inspectionMaterialsUnicos` +
+   `inspectionLineaDelBom` (`src/web/inspection/inspection-core.js`) quitan las copias, en
+   `inspectionDetail` (semáforo, contador, diálogo de tramo) y en `renderDetail`
+   (`inspection-app.js`), que es donde el duplicado se ve.
+3. **La deduplicación es por RENGLÓN DEL BOM, no por MP.** La copia se reconoce porque su
+   `line_id` **no es un entero**. No se puede agrupar por componente: medido que la OT 3776
+   tiene MP00094 en dos renglones reales (`line_id` 2 con 6.27 y 3 con 330) y son dos líneas
+   distintas del BOM. Las cantidades nunca se suman ni se eligen.
+4. Las copias que ya están (348) **no se han borrado**: el `delete` está escrito y sin aplicar
+   en `docs/limpieza-materials-copias-2026-10-04.sql`. La siguiente corrida de `ingesta_mirror`
+  las borra sola, porque el RPC hace `delete` + `insert` de la tabla completa (línea 123).
 
 Sin guarda de `revision` ni modo `comparar`: el mirror convive con la concurrencia optimista
 de `app_state`/`plan_snapshots` (que son tablas de estado, no de ingesta), sin pisarse.

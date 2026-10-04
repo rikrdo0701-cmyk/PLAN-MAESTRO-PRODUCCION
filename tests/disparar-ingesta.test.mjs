@@ -152,7 +152,10 @@ test("una sincronizacion a medias NO se dice sincronizada, y su detalle no se co
   // eran 121 caracteres, o sea que se cortaba a media palabra. Por TERCERA vez en dos dias, con el
   // mismo motivo que las dos anteriores. El toast lleva la cuenta y el detalle va a #planAlerts.
   const literales = [...app.matchAll(/showToast\(`([^`]*)`/g)].map((m) => m[1]);
-  const conTablas = literales.filter((t) => /tocadas|filas al dia|tablas/.test(t));
+  // MEDIDO 2026-10-04: la busca por palabras sueltas (tocadas / filas al dia / tablas) y fallo al
+  // cambiar el texto del toast a "N al dia, V vacias, S con lo anterior". Se busca por la MARCA
+  // del aviso, que es lo que no cambia, para que el filtro no dependa de la redaccion.
+  const conTablas = literales.filter((t) => /Ingesta a medias/.test(t));
   assert.ok(conTablas.length, "no se encontro el aviso de la ingesta a medias");
   // Las variables de estos avisos son CUENTOS de tablas espejo, y las tablas espejo son siete
   // (work_orders, operations, materials, items, machines, inventory, sales_orders), o sea que
@@ -368,4 +371,282 @@ test("la lectura esta en la lista blanca del puente y no inventa la proxima ejec
     "getTriggerStatus no puede crear ni borrar activadores: para eso estan PP_creaTriggerIngesta_ y PP_borraTriggerIngesta_, que se ejecutan a mano");
   assert.ok(!/getNextRunTime/.test(cuerpo),
     "y no puede inventar la proxima ejecucion: Apps Script no la expone para los activadores de reloj");
+});
+
+// =============================================================================
+// MEDIDO 2026-10-04: LA CORRIDA NO DEJA VALORES PREVIOS, Y ADEMAS CONTABA MAL.
+// =============================================================================
+//
+// QUE PIDE EL USUARIO, TEXTUAL. "TODAS LAS INGESTAS DEBERIAN BORRAR LOS VALORES PREVIOS Y
+// REESCRIBIRSE", 2026-10-04. El RPC ya lo hacia por tabla (borra + inserta en una transaccion,
+// docs/rpc-ingesta-mirror.sql:123) y eso lo vigilan las pruebas 3 y 4 de
+// tests/rpc-ingesta-mirror.test.mjs. Lo que NO estaba era el caso de una tabla que ESTA
+// CORRIDA no reescribio: la pagina de la ingesta hacia un continue silencioso y esa tabla
+// conservaba los datos de la corrida anterior, que en pantalla es indistinguible de un dato
+// al dia.
+//
+// LO QUE SE PRUEBA CON EL CODIGO REAL Y NO CON GREP. Estas pruebas levantan PP_ingesta_ en una
+// vm con un espejo de mentira que SI IMPLEMENTA el borrado (la tabla se queda con el payload
+// nuevo, o con cero si el payload viene vacio) y una base de datos de mentira con lo que habia
+// de la corrida anterior. Asi se afirma el estado FINAL de cada tabla, que es lo que la regla
+// prohibe: no que se llamo a una funcion, sino que quedo en la tabla.
+//
+// Y DE PASO, UN DEFECTO QUE ESTA EN ESTE ARCHIVO Y NO SE HABIA VISTO. El contador por tabla se
+// llamaba filas, el mismo nombre que las filas que se escriben, y lo tapaba dentro del bucle:
+// el return devolvia el ARREGLO de filas de la ultima tabla en vez del conteo. Se fijo con una
+// prueba que falla con el nombre viejo.
+const TABLAS_DE_LA_INGESTA = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders"];
+
+/**
+ * Corre PP_ingesta_ de verdad. Devuelve { r, base, escrituras }.
+ *
+ * - acciones      : lo que "NetSuite" devuelve. Las claves son las del RESTlet (workorders,
+ *                   operaciones, materiales, items, centros, inventario, ordenes_venta).
+ * - previas       : lo que hay en la base ANTES de la corrida, tabla -> numero de filas.
+ * - escribirFalla : tablas cuyo espejo revienta al escribir, para el caso en el que ni el
+ *                   vaciado se puede hacer.
+ * - vaciarFalla   : tablas cuyo espejo revienta al vaciar.
+ */
+function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla = [] }) {
+  const base = {};
+  for (const t of TABLAS_DE_LA_INGESTA) base[t] = previas[t] || 0;
+  const escrituras = [];
+  const lineas = [];
+  const contexto = {
+    console: { log: (m) => lineas.push(String(m)) },
+    JSON, Date, Object, Array, String, Number, Boolean, Error, RegExp, Math, encodeURIComponent,
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => "" }) },
+    ScriptApp: { getProjectTriggers: () => [] },
+    Session: { getScriptTimeZone: () => "America/Monterrey" },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
+    ContentService: { MimeType: { JSON: "json" }, createTextOutput: () => ({ setMimeType: () => {} }) },
+    SUPABASE_URL: "https://ejemplo.supabase.co",
+    SUPABASE_KEY: "service-role-de-mentira",
+    UBICACION: 1,
+  };
+  contexto.globalThis = contexto;
+  createContext(contexto);
+  runInContext(server, contexto, { filename: "19-appscript-ingesta-supabase.js" });
+
+  // Se sustituyen SOLO las tres fronteras: de donde salen los datos (el RESTlet), de donde sale
+  // la configuracion y a donde se escribe (el espejo). Todo lo de en medio es el codigo real.
+  contexto.PP_config_ = () => ({
+    accountId: "TST", consumerKey: "ck", consumerSecret: "cs", token: "tk", tokenSecret: "ts",
+    supabaseUrl: "https://ejemplo.supabase.co", supabaseKey: "service-role-de-mentira", ubicacion: 1,
+  });
+  contexto.PP_restletUnificado_ = () => ({ ok: true, acciones });
+  contexto.PP_enrichPhotoRows_ = (filas) => ({ filas, conFoto: 0, sinFoto: filas.length });
+  contexto.PP_photoMotivoCero_ = () => "";
+  // El espejo de mentira ES la regla: borra la tabla y escribe el payload. Con payload vacio
+  // deja la tabla en cero, que es lo que hace el RPC real (docs/rpc-ingesta-mirror.sql:128).
+  contexto.PP_supabaseMirror_ = (tabla, filas) => {
+    const vacio = filas.length === 0;
+    if (vacio && vaciarFalla.includes(tabla)) throw new Error("Supabase no responde (al vaciar)");
+    if (!vacio && escribirFalla.includes(tabla)) throw new Error("columna no existe en materials");
+    const borradas = base[tabla];
+    base[tabla] = filas.length;
+    escrituras.push({ tabla, enviadas: filas.length, borradas });
+    return { escritas: filas.length, borradas: borradas };
+  };
+
+  const r = contexto.PP_ingesta_(true);
+  return { r, base, escrituras, lineas };
+}
+
+// Las siete acciones del RESTlet, con dos filas cada una y line_id ENTERO en materiales, que es
+// la forma que escribe la ingesta (RULE-SUP-047).
+function accionesCompletas() {
+  const dos = (n) => Array.from({ length: 2 }, (_, i) => ({ clave: n + (i + 1) }));
+  return {
+    workorders: { ok: true, rows: [{ ot: "2121", articulo: "A" }, { ot: "2122", articulo: "B" }] },
+    operaciones: { ok: true, rows: dos("ns-op") },
+    materiales: { ok: true, rows: [{ ot: "2121", componente: "MP00094", line_id: "2" }, { ot: "2121", componente: "MP00095", line_id: "3" }] },
+    items: { ok: true, rows: [{ codigo: "IT1" }, { codigo: "IT2" }] },
+    centros: { ok: true, rows: [{ nombre: "CORTADOR" }, { nombre: "TORNEADO" }] },
+    inventario: { ok: true, rows: [{ item: "IT1", ubicacion: "U1" }, { item: "IT2", ubicacion: "U1" }] },
+    ordenes_venta: { ok: true, rows: [{ folio: "F1" }, { folio: "F2" }] },
+  };
+}
+
+test("una corrida completa reescribe las SIETE tablas y no deja ninguna con lo anterior", () => {
+  const previas = Object.fromEntries(TABLAS_DE_LA_INGESTA.map((t) => [t, 9]));
+  const { r, base, escrituras } = correrIngesta({ acciones: accionesCompletas(), previas });
+  assert.equal(r.ok, true, "siete tablas escritas y ningun fallo, la corrida es ok");
+  assert.equal(r.ejecutada, true);
+  assert.deepEqual(structuredClone(r.vaciadas), [], "no se vacio ninguna: todas se reescribieron");
+  assert.deepEqual(structuredClone(r.noSePudoVaciar), []);
+  for (const t of TABLAS_DE_LA_INGESTA) {
+    assert.equal(base[t], 2, t + " quedo con lo que devolvio NetSuite, no con las 9 filas anteriores");
+  }
+  // El espejo BORRA antes de escribir: en las siete escrituras el borrado es el conteo previo.
+  assert.equal(escrituras.length, 7, "y se escribieron las siete, una llamada cada una");
+  for (const e of escrituras) assert.equal(e.borradas, 9, e.tabla + ": el espejo borro lo que habia");
+});
+
+test("una tabla que NetSuite NO devuelve se VACIA: no conserva lo anterior", () => {
+  // Este es el caso que motiva la regla. MEDIDO en la base viva el 2026-10-04: lo que queda de
+  // la corrida pasada se ve en la hoja de inspeccion igual que un dato fresco.
+  const acciones = accionesCompletas();
+  delete acciones.materiales;                                    // la accion no vino
+  acciones.inventario = { ok: false, rows: [], error: "SuiteQL fallo" };  // vino pero fallo
+  const { r, base, escrituras } = correrIngesta({
+    acciones, previas: { materials: 328, inventory: 1935 },
+  });
+  assert.equal(base.materials, 0, "materials quedo VACIA: no se quedo con las 328 filas de la corrida anterior");
+  assert.equal(base.inventory, 0, "y lo mismo con la que vino pero fallo");
+  assert.deepEqual(structuredClone(r.vaciadas), ["materials", "inventory"]);
+  assert.equal(r.ok, false, "y la corrida NO es ok: se escribieron cinco de siete");
+  // El aviso tiene que NOMBRAR LA TABLA, no el nombre de la accion de NetSuite: materiales y
+  // materials no son lo mismo para quien va a buscarla en la base.
+  assert.ok(r.errores.some((e) => /materials/.test(e) && /VACIO/.test(e)),
+    "el error dice la tabla (materials) y que quedo vacia: " + JSON.stringify(r.errores));
+  // Y las dos se vaciaron por el MISMO RPC con payload vacio, no por un borrado aparte.
+  const vacios = escrituras.filter((e) => e.enviadas === 0);
+  assert.deepEqual(vacios.map((e) => e.tabla).sort(), ["inventory", "materials"],
+    "vaciar es el espejo con el payload vacio: no hay un segundo camino de borrado");
+  assert.ok(!/method:\s*["']DELETE["']/.test(server),
+    "y la ingesta no tiene un DELETE propio: el unico que borra es el RPC (si lo tuviera, seria otra regla)");
+});
+
+test("una escritura que se cae tambien vacia la tabla, y lo dice de otra manera", () => {
+  const { r, base } = correrIngesta({
+    acciones: accionesCompletas(), previas: { operations: 2232 }, escribirFalla: ["operations"],
+  });
+  assert.equal(base.operations, 0,
+    "el espejo de operations se cayo y la tabla quedo vacia, no con las 2232 filas viejas");
+  assert.ok(r.vaciadas.includes("operations"));
+  assert.equal(r.ok, false);
+  assert.ok(r.errores.some((e) => /operations/.test(e) && /ERROR al escribir/.test(e)),
+    "y el aviso distingue 'no se pudo escribir' de 'NetSuite no la devolvio': " + JSON.stringify(r.errores));
+});
+
+test("si NI el vaciado se puede hacer, la tabla conserva lo anterior y APARECE CON SU NOMBRE", () => {
+  // Este es el unico estado peligroso: en pantalla hay datos y parecen frescos. Por eso la
+  // corrida lo lleva en una lista propia y la pagina lo nombra (RULE-SUP-048).
+  const { r, base } = correrIngesta({
+    acciones: accionesCompletas(), previas: { operations: 2232 },
+    escribirFalla: ["operations"], vaciarFalla: ["operations"],
+  });
+  assert.equal(base.operations, 2232, "no se pudo borrar nada: la tabla sigue con lo que tenia");
+  assert.ok(!r.vaciadas.includes("operations"), "y NO se reporta como vaciada: seria mentira");
+  assert.equal(r.noSePudoVaciar.length, 1);
+  assert.equal(r.noSePudoVaciar[0].tabla, "operations");
+  assert.match(r.noSePudoVaciar[0].motivo, /Supabase no responde/,
+    "el motivo viaja con la tabla: 'conserva lo anterior' sin motivo no se puede corregir");
+  assert.equal(r.ok, false);
+});
+
+test("si NINGUNA accion vino bien, no se toca ninguna tabla y se dice por que", () => {
+  // La excepcion medida y deliberada de la regla. "Una tabla fallo" y "el origen no respondio"
+  // no son lo mismo: ante cero acciones usables (caida de red, o el RESTlet desplegado con otro
+  // shape) vaciar las siete deja el panel en blanco sin una sola OT, que en el taller se lee
+  // como "se borro todo". Aqui la corrida ni se cuenta como corrida.
+  const acciones = accionesCompletas();
+  for (const k of Object.keys(acciones)) acciones[k] = { ok: false, error: "no such table" };
+  const previas = Object.fromEntries(TABLAS_DE_LA_INGESTA.map((t) => [t, 7]));
+  const { r, base, escrituras } = correrIngesta({ acciones, previas });
+  assert.equal(r.ejecutada, false, "no hubo corrida");
+  assert.equal(r.motivo, "sin_acciones");
+  assert.equal(r.ok, false);
+  assert.equal(escrituras.length, 0, "CERO escrituras: ni una tabla se toco");
+  for (const t of TABLAS_DE_LA_INGESTA) assert.equal(base[t], 7, t + " conserva lo anterior");
+  assert.deepEqual(structuredClone(r.vaciadas), [], "y no se reporta ninguna como vaciada");
+});
+
+test("el conteo por tabla es un conteo por tabla, no el arreglo de filas de la ultima", () => {
+  // MEDIDO 2026-10-04, el defecto que estas pruebas destaparon. El contador se llamaba filas,
+  // el mismo nombre que las filas del bucle, y lo tapaba: el return devolvia el ARREGLO de la
+  // ultima tabla. La pagina hacia Object.keys() de ese arreglo (o sea, un indice por renglon) y
+  // decia "indice filas". Se fija la forma exacta que la pagina consume.
+  const { r } = correrIngesta({ acciones: accionesCompletas() });
+  assert.ok(!Array.isArray(r.filas), "filas NO puede ser un arreglo: la pagina cuenta Object.keys()");
+  assert.deepEqual(structuredClone(r.filas), {
+    work_orders: 2, operations: 2, materials: 2, items: 2, machines: 2, inventory: 2, sales_orders: 2,
+  }, "y son las SIETE tablas con su conteo, con el nombre de la TABLA");
+});
+
+test("el dedupe por clave natural cuenta lo que se ESCRIBE, no lo que vino", () => {
+  // El conteo que se devuelve tiene que ser el de lo que llego a la base. Materiales con dos
+  // renglones del BOM y una copia se escriben dos veces: la copia se quita, el renglon no.
+  const acciones = accionesCompletas();
+  acciones.materiales = { ok: true, rows: [
+    { ot: "3776", componente: "MP00094", line_id: "2" },
+    { ot: "3776", componente: "MP00094", line_id: "3" },
+    { ot: "3776", componente: "MP00094", line_id: "2" },
+  ] };
+  const { r, base } = correrIngesta({ acciones });
+  assert.equal(r.filas.materials, 2, "los dos renglones REALES se conservan y la copia no se escribe");
+  assert.equal(base.materials, 2);
+});
+
+test("PP_vaciaTabla_ NO se fia del RPC: si devuelve filas, tira el error", () => {
+  // Sin esta comprobacion la corrida reportaria "vaciada" sobre una tabla con filas, que es
+  // exactamente la mentira que la regla viene a quitar.
+  const contexto = { JSON, Object, Array, String, Number, Error };
+  contexto.globalThis = contexto;
+  createContext(contexto);
+  const desde = server.indexOf("function PP_vaciaTabla_(");
+  runInContext(server.slice(desde, server.indexOf("// ======", desde)), contexto);
+  let pedido = null;
+  contexto.PP_supabaseMirror_ = (tabla, filas) => { pedido = { tabla, filas: filas.length }; return { escritas: 0, borradas: 3 }; };
+  const r = contexto.PP_vaciaTabla_("materials", {});
+  assert.equal(r.borradas, 3);
+  assert.equal(pedido.tabla, "materials");
+  assert.equal(pedido.filas, 0, "vaciar es el espejo con el payload VACIO, no un DELETE aparte");
+
+  contexto.PP_supabaseMirror_ = () => ({ escritas: 4, borradas: 3 });
+  assert.throws(() => contexto.PP_vaciaTabla_("materials", {}), /no vacio materials/,
+    "y un espejo que devuelve filas al vaciar es un fallo DICHO, no una tabla reportada como vacia");
+});
+
+test("la respuesta de la corrida lleva las dos listas en TODAS sus salidas", () => {
+  // doPost es la unica puerta que usa la pagina, asi que si las listas no viajan por ahi, la
+  // pagina no puede distinguirlas aunque el servidor las sepa.
+  assert.match(server, /salida\.vaciadas = Array\.isArray\(resultado\.vaciadas\) \? resultado\.vaciadas : \[\]/,
+    "doPost reenvia vaciadas");
+  assert.match(server, /salida\.noSePudoVaciar = Array\.isArray\(resultado\.noSePudoVaciar\) \? resultado\.noSePudoVaciar : \[\]/,
+    "doPost reenvia noSePudoVaciar");
+  assert.match(server, /vaciadas: \[\],\n\s*noSePudoVaciar: \[\]/,
+    "y la salida de excepcion las declara vacias: ahi no hubo corrida y no se inventa ninguna tabla");
+
+  // El cliente las pasa sin resumirlas: "conserva lo anterior" tiene que poder leerse con el
+  // nombre de la tabla, no como un numero.
+  assert.match(gate, /const vaciadas = Array\.isArray\(json\.vaciadas\) \? json\.vaciadas\.filter\(Boolean\) : \[\];/);
+  assert.match(gate, /const noSePudoVaciar = Array\.isArray\(json\.noSePudoVaciar\) \? json\.noSePudoVaciar\.filter\(Boolean\) : \[\];/);
+  assert.match(gate, /Estas tablas conservan lo anterior: /,
+    "y el caso que NO se puede resumir en un conteo va PRIMERO, con la tabla adentro");
+});
+
+test("la pagina nombra los tres estados, y el que se ve con datos VIEJOS tiene su propio aviso", () => {
+  assert.match(app, /vaciadas\.length \? " \| VACIADAS \(NetSuite no las devolvio\): "/,
+    "las vaciadas se nombran aparte de las escritas");
+  assert.match(app, /sinVaciar\.length \? " \| CON LO ANTERIOR \(no se pudo vaciar\): "/,
+    "y las que conservan lo anterior tambien: es el estado que no se puede dejar mudo");
+  assert.match(app, /al dia, \$\{vaciadas\.length\} vacias, \$\{sinVaciar\.length\} con lo anterior/,
+    "el toast lleva los tres conteos");
+});
+
+test("el .gs suelto de la raiz NO vuelve: era una copia que nadie despliega", async () => {
+  // MEDIDO 2026-10-04: el build de Apps Script copia src/server/*.js a dist/ y el workflow
+  // despliega dist/, o sea que appscript-ingesta-supabase.gs en la raiz no llego nunca a
+  // produccion (63 funciones desplegadas, y la funcion ingesta no estaba entre ellas). Se
+  // quedaba como una segunda fuente con su propio continue silencioso, y dos documentos la
+  // senalaban como el codigo vivo. Se borro; estas pruebas son las que impiden que vuelva.
+  const { access } = await import("node:fs/promises");
+  await assert.rejects(() => access(new URL("../appscript-ingesta-supabase.gs", import.meta.url)),
+    "appscript-ingesta-supabase.gs no debe existir en la raiz: la copia muerta que no despliega nadie");
+
+  // Y ningun documento puede presentarlo como el codigo que corre. Se permite MENTIONARLO, porque
+  // el doc tiene que explicar por que se borro; lo que no se permite es presentarlo como vivo.
+  for (const doc of ["../docs/integrations/netsuite-supabase-sync.md", "../docs/schema-supabase-sync-netsuite.sql"]) {
+    const texto = await readFile(new URL(doc, import.meta.url), "utf8");
+    const citas = texto.split("\n").filter((l) => /appscript-ingesta-supabase\.gs/.test(l));
+    for (const linea of citas) {
+      assert.match(linea, /elimin|nunca se desplega|senalaba|señalaba|copia muerta|vivia en la raiz/,
+        doc + ": menciona el archivo borrado como si fuera el codigo vivo -> " + linea.trim());
+    }
+  }
+  // Y el doc tiene que senalar el archivo real, que es donde vive la ingesta que se despliega.
+  const sync = await readFile(new URL("../docs/integrations/netsuite-supabase-sync.md", import.meta.url), "utf8");
+  assert.match(sync, /src\/server\/19-appscript-ingesta-supabase\.js/, "el doc apunta al archivo que el build publica");
 });
