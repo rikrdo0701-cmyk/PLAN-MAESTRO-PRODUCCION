@@ -202,6 +202,16 @@ borran solas en la próxima corrida de `ingesta_mirror` porque el RPC borra la t
 insertar. El activador de 15 minutos sigue sin disparar (`tests/disparar-ingesta.test.mjs`,
 diagnóstico de `getTriggerStatus`): es un problema aparte y conocido.
 
+**Primera corrida real con esta regla, 2026-10-04T18:48Z** (forzada por POST directo al web app,
+con el código ya desplegado): `ok:true`, `ejecutada:true`, `vaciadas:[]`, `noSePudoVaciar:[]`,
+`errores:[]`, y el conteo por tabla **bien** — `work_orders 213`, `operations 2232`,
+`materials 349`, `items 2494`, `machines 202`, `inventory 1935`, `sales_orders 151`. Los mismos
+números que la corrida de las 07:48Z salvo `materials`, que es la que se había ensuciado: 349 filas
+escritas, o sea la tabla quedó con los renglones del ERP y **sin las 348 copias**. Que el conteo
+llegue como objeto y no como arreglo es la prueba en vivo del arreglo de `conteo` (el contador se
+llamaba `filas` y lo tapaba el arreglo de filas del bucle). Las siete acciones del RESTlet vinieron
+bien, así que `vaciadas` vacío es el resultado correcto y no un caso sin ejercitar.
+
 Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` dedupe por
 `codigo`, `materiales` por `ot+line_id`, `inventario` por `item+ubicacion`):
 - `work_orders` → `ot`
@@ -255,9 +265,15 @@ Contrato que queda, y que no se deduce del código:
    `line_id` **no es un entero**. No se puede agrupar por componente: medido que la OT 3776
    tiene MP00094 en dos renglones reales (`line_id` 2 con 6.27 y 3 con 330) y son dos líneas
    distintas del BOM. Las cantidades nunca se suman ni se eligen.
-4. Las copias que ya están (348) **no se han borrado**: el `delete` está escrito y sin aplicar
-   en `docs/limpieza-materials-copias-2026-10-04.sql`. La siguiente corrida de `ingesta_mirror`
-  las borra sola, porque el RPC hace `delete` + `insert` de la tabla completa (línea 123).
+4. Las copias que había (348) **se borraron con la ingesta del 2026-10-04T18:48Z**, sin delete a
+   mano: `ingesta_mirror` hace `delete` de la tabla completa + `insert` en una sola transacción
+   (línea 123), así que la corrida las dejó ir y `materials` quedó con las 349 filas del ERP. Por
+   eso `docs/limpieza-materials-copias-2026-10-04.sql` **ya no hace falta** y queda solo como
+   registro (y con su guarda, por si algún día hay que repetirla).
+5. Para que no vuelvan hace falta **el escritor con el `lineId` desplegado en el bundle de Pages**,
+   que ya lo está: verificado el 2026-10-04 por GET al bundle remoto, que trae
+   `inspectionMaterialsUnicos`, `function inspectionLineaDelBom` y `lineId`. Antes de ese push cada
+   guardado de plan recreaba las 348 copias entre ingesta e ingesta.
 
 Sin guarda de `revision` ni modo `comparar`: el mirror convive con la concurrencia optimista
 de `app_state`/`plan_snapshots` (que son tablas de estado, no de ingesta), sin pisarse.

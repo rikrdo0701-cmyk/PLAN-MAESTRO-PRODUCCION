@@ -620,16 +620,23 @@ Detalle del arranque en vivo en `docs/integrations/netsuite-supabase-sync.md`.
   la deduplicación de la hoja es **por renglón del BOM** (`line_id` entero) y no por MP, y por eso
   las cantidades nunca se suman. Estado: escritor arreglado (`filasMaterials` usa
   `texto(m.lineId) || texto(m.id)`), hoja blindada (`inspectionMaterialsUnicos` en
-  `inspection-core.js` + `renderDetail`), y las **348 copias sin borrar** (el `delete` está escrito
-  y **sin aplicar** en `docs/limpieza-materials-copias-2026-10-04.sql`; la próxima corrida de
-  `ingesta_mirror` las borra sola, porque hace `delete` + `insert` de la tabla completa).
+  `inspection-core.js` + `renderDetail`), y **cerrado**: los dos fixes se desplegaron el
+  2026-10-04 (el push a `main` disparó los tres workflows, los tres en verde, verificado por GET
+  al bundle remoto) y la ingesta forzada de las `18:48Z` **borró las 348 copias sin delete a
+  mano**, porque `ingesta_mirror` hace `delete` + `insert` de la tabla completa: esa corrida
+  devolvió `materials: 349` filas escritas, `ok:true`, `vaciadas: []`, `noSePudoVaciar: []`.
+  `docs/limpieza-materials-copias-2026-10-04.sql` queda sin aplicar y ya no hace falta.
 - **Ninguna ingesta conserva valores previos (`RULE-SUP-048`, medido 2026-10-04)**: toda tabla que
   la corrida **no** reescribió se **vacía** con el mismo RPC (`p_filas: []`), y si ni el vaciado se
   puede hacer la corrida lo reporta en `noSePudoVaciar` con el nombre de la tabla y su motivo.
   Excepción única y deliberada: si **ninguna** de las 7 acciones del RESTlet vino bien, la corrida
   no se cuenta y no se toca ninguna tabla. Convivían tres redactos distintos del aviso (escritas /
   vaciadas / con lo anterior) porque una tabla que conserva lo anterior se ve en pantalla igual que
-  un dato fresco.
+  un dato fresco. **Probada en vivo el 2026-10-04T18:48Z** con una corrida forzada: `ok:true`,
+  `vaciadas: []`, `noSePudoVaciar: []`, `errores: []` y el conteo por tabla como objeto
+  (`work_orders 213`, `operations 2232`, `materials 349`, `items 2494`, `machines 202`,
+  `inventory 1935`, `sales_orders 151`) — que es como se ve en producción que el contador ya no
+  vuelve tapado por el arreglo de filas.
 - **Readers**: los del producto, todos desde la web contra Supabase (`RULE-SUP-030`: la página **no**
   habla con NetSuite; NetSuite carga a Supabase y la página lee de Supabase):
   `src/web/shared/supabase-reader.js` (`PPSupabaseReader` y sus `map*`), consumido por planificación e

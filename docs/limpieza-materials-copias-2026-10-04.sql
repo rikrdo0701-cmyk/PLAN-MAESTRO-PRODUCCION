@@ -1,5 +1,17 @@
 -- =============================================================================
--- LIMPIEZA DE LAS COPIAS DE `materials` — MEDIDO 2026-10-04 — SIN APLICAR
+-- LIMPIEZA DE LAS COPIAS DE `materials` — MEDIDO 2026-10-04 — YA NO HACE FALTA
+-- -----------------------------------------------------------------------------
+-- ESTADO ACTUAL (2026-10-04T18:48Z): LAS COPIAS YA NO ESTAN, y no hubo que aplicar
+-- este archivo. La ingesta forzada de esa hora reescribio `materials` con los 349
+-- renglones del ERP y las 348 copias desaparecieron solas, porque
+-- `public.ingesta_mirror` hace `delete` de la tabla completa + `insert` en una sola
+-- transaccion (docs/rpc-ingesta-mirror.sql:123). Respuesta de esa corrida: `ok:true`,
+-- `materials: 349` filas escritas, `vaciadas: []`, `noSePudoVaciar: []`, `errores: []`.
+-- Y el escritor que las creaba ya no esta desplegado en el bundle de Pages (trae el
+-- `lineId` del ERP), asi que tampoco se recrean.
+-- O sea: este archivo queda como REGISTRO de lo que habia y como guarda por si hay
+-- que repetirla. NO lo apliques sin volver a medir: su guarda aborta si el numero de
+-- copias no es 348.
 -- -----------------------------------------------------------------------------
 -- QUE HACE. Borra SOLO las filas que creo el escritor de la pagina por escribir
 -- `line_id` con el UUID de la fila en vez del id de renglon de NetSuite. No toca
