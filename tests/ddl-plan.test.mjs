@@ -20,6 +20,9 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const ddl = await readFile(new URL("../docs/schema-supabase-plan.sql", import.meta.url), "utf8");
+// El delta que actualiza la whitelist en produccion: lo lee el test del fin del
+// archivo para contrastar su arreglo con el que declara el DDL de arriba.
+const deltaWhitelist = await readFile(new URL("../docs/schema-supabase-plan-delta-2026-10-04b.sql", import.meta.url), "utf8");
 
 const fuente = await readFile(new URL("../scripts/apply-sql-supabase.mjs", import.meta.url), "utf8");
 const desde = (a, b) => {
@@ -184,7 +187,7 @@ test("el archivo lleva comprobaciones que abortan si algo fallo a medias", () =>
   // Un DDL que se aplica a medias y no dice nada deja la base en un estado que
   // nadie pidio. Estas comprobaciones son las que evitan creerse un exito parcial.
   assert.match(ddl, /raise exception/);
-  assert.match(ddl, /operations: hay % de 8 columnas nuevas/);
+  assert.match(ddl, /operations: hay % de 12 columnas nuevas/);
   assert.match(ddl, /work_orders: hay % de 3 columnas nuevas/);
   assert.match(ddl, /QUEDAN % politicas abiertas a anon/);
 });
@@ -310,12 +313,45 @@ test("el update solo toca las columnas que la web decide, y eso sale de una tabl
       fueraDeLaWeb + " es un dato del ERP y no puede estar en la lista de lo que la web escribe"
     );
   }
-  for (const decisionDeLaWeb of ["maquina", "operador", "fecha_inicio", "hora_inicio", "kit_pending"]) {
+  // completado/tipo/precio/clasificacion son columnas de PLAN (no del ERP), y el
+  // writer del navegador ya las manda (filasOperations, supabase-writer.js:1764-1768):
+  // deben estar en la whitelist para que el RPC las persista igual que el camino viejo.
+  for (const decisionDeLaWeb of ["maquina", "operador", "fecha_inicio", "hora_inicio", "kit_pending",
+                                 "completado", "tipo", "precio", "clasificacion"]) {
     assert.ok(
       new RegExp("'" + decisionDeLaWeb + "'").test(listaOperaciones),
       decisionDeLaWeb + " si es una decision de la persona y tiene que estar en la lista"
     );
   }
+});
+
+test("el delta 2026-10-04b deja la whitelist de operations con las mismas 27 columnas que declara el DDL", () => {
+  // plan_guardar lee la whitelist DE LA TABLA en tiempo de ejecucion, y el delta
+  // 2026-10-04b (docs/schema-supabase-plan-delta-2026-10-04b.sql) es el UPDATE que
+  // la pone en produccion. Si el arreglo del delta se queda corto frente al del DDL,
+  // la base y el archivo fuente divergen y el RPC descarta columnas en silencio:
+  // por eso este test contrasta ambos archivos, y no al delta contra si mismo.
+  // El arreglo arranca en array['num' y cierra en el primer `],` que lo sigue
+  // (ningun elemento del array lleva comas ni corchetes dentro). Se toma el
+  // primer `],` porque un corte por el texto de la nota dependeria del salto de
+  // linea (los archivos van en CRLF) y se correria hasta el fin del archivo.
+  const parsear = (texto) => {
+    const desde = texto.indexOf("array['num'");
+    const hasta = texto.indexOf("],", desde);
+    return texto.slice(desde, hasta).split("'").filter((p, i) => i % 2 === 1);
+  };
+  const delDdl = parsear(ddl);
+  const delDelta = parsear(deltaWhitelist);
+  assert.equal(delDdl.length, 27, "el DDL declara 27 columnas escribibles para operations");
+  assert.deepEqual(
+    delDelta,
+    delDdl,
+    "la whitelist del delta (lo que llega a plan_tabla_escritura en produccion) tiene que ser el MISMO arreglo, en el MISMO orden, que la que declara el DDL"
+  );
+  assert.ok(
+    ["completado", "tipo", "precio", "clasificacion"].every((c) => delDelta.includes(c)),
+    "las 4 columnas nuevas no pueden faltar del arreglo que el delta escribe en la base"
+  );
 });
 
 test("app_state se actualiza AL FINAL, y su revision no se manda desde el navegador", () => {

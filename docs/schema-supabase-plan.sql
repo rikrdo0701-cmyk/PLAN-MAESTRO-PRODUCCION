@@ -453,9 +453,10 @@ begin
   select count(*) into n from information_schema.columns
    where table_schema = 'public' and table_name = 'operations'
      and column_name in ('num','parte','contenido','prioridad','fecha_req',
-                         'comentario','tiempo_fallback','kit_pending');
-  if n <> 8 then
-    raise exception 'operations: hay % de 8 columnas nuevas', n;
+                         'comentario','tiempo_fallback','kit_pending',
+                         'completado','tipo','precio','clasificacion');
+  if n <> 12 then
+    raise exception 'operations: hay % de 12 columnas nuevas', n;
   end if;
 
   select count(*) into n from information_schema.columns
@@ -590,10 +591,11 @@ comment on table public.plan_tabla_escritura is
 insert into public.plan_tabla_escritura (tabla, modo, clave, columnas, nota) values
   ('operations', 'actualiza', 'operation_id',
    array['num','parte','contenido','prioridad','fecha_req','comentario','tiempo_fallback','kit_pending',
+         'completado','tipo','precio','clasificacion',
          'secuencia','ct','operador','maquina','herramental','kit',
          'fecha_inicio','hora_inicio','fecha_fin','hora_fin',
          'estatus','locked','auto_frozen','subcontract_type','subcontract_days'],
-   'Solo decisiones de plan: cuando, donde, con que, en que orden. Los datos del ERP (descripcion, cantidades, tiempos, tipo_insercion) NO se tocan, y la fila tiene que existir: la pagina no crea operaciones. `revision` NO esta en la lista a proposito: la pone la funcion con el numero nuevo. Si la mandara la pagina, cada fila quedaria con la revision que tenia la pagina y no con la que se guardo, que es un guardado por detras y hace que el cambio no se pueda atribuir a una revision.'),
+   'Solo decisiones de plan: cuando, donde, con que, en que orden. Los datos del ERP (descripcion, cantidades, tiempos, tipo_insercion) NO se tocan, y la fila tiene que existir: la pagina no crea operaciones. `revision` NO esta en la lista a proposito: la pone la funcion con el numero nuevo. Si la mandara la pagina, cada fila quedaria con la revision que tenia la pagina y no con la que se guardo, que es un guardado por detras y hace que el cambio no se pueda atribuir a una revision. Las cuatro completado/tipo/precio/clasificacion son columnas de PLAN (docs/schema-supabase-plan.sql:79-82), no del ERP: la ingesta 2246 NO las escribe (quedan en default) y el writer del navegador ya las manda desde filasOperations (supabase-writer.js:1764-1768), asi que el camino viejo (guardarPorTablas) las escribe desde que el DDL las creo; anadirlas aqui (delta 2026-10-04, RULE-SUP-045) hace que el camino RPC persista lo MISMO que el camino viejo, y dejen de descartarse en silencio. El lector (mapOperations) no las lee de vuelta, igual que num..kit_pending (ver MAPPING_GAPS): son write-only de la pagina.'),
   ('work_orders', 'actualiza', 'wo_internal_id',
    array['fecha_inicio_ns','fecha_fin_ns','fecha_vencimiento','due_date_override','precio_desde','precio_hasta',
          'estatus','cant_ensamblada','cant_pendiente','synced_at'],
