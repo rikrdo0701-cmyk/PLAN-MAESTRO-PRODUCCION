@@ -1843,9 +1843,12 @@
         componente: texto(m.component),
         descripcion: texto(m.description),
         unidad: texto(m.unit),
-        requerido: Math.round(numero(m.required, 0)),
-        emitido: Math.round(numero(m.issued, 0)),
-        pendiente: Math.round(numero(m.pending, 0)),
+        // requerido/emitido/pendiente se escriben FRACCIONARIOS, sin Math.round
+        // (RULE-SUP-046): las cantidades de BOM son fraccionarias (0.127, 0.49742) y
+        // redondearlas a 0 dejaba 50 OTs sin MP en la hoja de inspeccion.
+        requerido: numero(m.required, 0),
+        emitido: numero(m.issued, 0),
+        pendiente: numero(m.pending, 0),
         revision: revision,
       });
     });

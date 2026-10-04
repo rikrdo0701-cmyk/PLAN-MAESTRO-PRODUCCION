@@ -244,9 +244,9 @@ create table public.materials (
   componente  text not null default '',
   descripcion text not null default '',
   unidad      text not null default '',
-  requerido   integer not null default 0,
-  emitido     integer not null default 0,
-  pendiente   integer not null default 0,
+  requerido   numeric(18,6) not null default 0,   -- RULE-SUP-046: fraccionaria (BOM cantidad_por_unidad); era integer, el 2246 la redondeaba a 0
+  emitido     numeric(18,6) not null default 0,   -- RULE-SUP-046: fraccionaria (quantityshiprecv); era integer
+  pendiente   numeric(18,6) not null default 0,   -- RULE-SUP-046: max(0, requerido-emitido), la misma formula del 2244:363-366; era integer y el 2246 nunca la escribio
   revision    integer not null default 0,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()

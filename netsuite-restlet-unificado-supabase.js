@@ -191,8 +191,18 @@ define(['N/query'], (query) => {
       '  BUILTIN.DF(comp.item) AS componente,',
       '  COALESCE(ci.description, ci.purchasedescription, ci.displayname) AS descripcion,',
       '  BUILTIN.DF(comp.units) AS unidad,',
+      // requerido/emitido/pendiente se dejan FRACCIONARIOS, sin Math.round. MEDIDO
+      // 2026-10-04 (RULE-SUP-046): las cantidades de BOM son cantidad_por_unidad del
+      // ensamble (0.127, 0.49742, 3.8). El Math.round que habia en el mapping cerro a 0
+      // a todas las <0.5, y la hoja (que exige requerido>0 o pendiente>0) oculto las 50
+      // OTs. pendiente usa la MISMA formula del lector viejo 2244 (netsuite-restlet-wo-
+      // inspeccion.js:363-366), max(0, requerido - emitido), para que la celda
+      // "Tubo/pzas" (required = max(0,pendiente)) muestre el numero de antes de la
+      // migracion a Supabase. Sin esta columna la ingesta la dejaba en 0 por defecto.
       '  ABS(NVL(comp.quantity, 0)) AS requerido,',
-      '  ABS(NVL(comp.quantityshiprecv, 0)) AS emitido',
+      '  ABS(NVL(comp.quantityshiprecv, 0)) AS emitido,',
+      '  CASE WHEN ABS(NVL(comp.quantity, 0)) - ABS(NVL(comp.quantityshiprecv, 0)) < 0 THEN 0',
+      '       ELSE ABS(NVL(comp.quantity, 0)) - ABS(NVL(comp.quantityshiprecv, 0)) END AS pendiente',
       'FROM transaction wo',
       "JOIN transactionline mainline_item ON mainline_item.transaction = wo.id AND mainline_item.mainline = 'T'",
       "JOIN transactionline comp ON comp.transaction = wo.id AND comp.mainline = 'F' AND comp.item IS NOT NULL",
@@ -214,7 +224,7 @@ define(['N/query'], (query) => {
     const rows = runSuiteQL_(sql);
     return {
       ok: true,
-      headers: ['wo_internal_id', 'ot', 'ensamble_id', 'ensamble', 'line_id', 'componente_id', 'componente', 'descripcion', 'unidad', 'requerido', 'emitido'],
+      headers: ['wo_internal_id', 'ot', 'ensamble_id', 'ensamble', 'line_id', 'componente_id', 'componente', 'descripcion', 'unidad', 'requerido', 'emitido', 'pendiente'],
       rows: rows.map(r => ({
         wo_internal_id: String(r.wo_internal_id || ''),
         ot: String(r.ot || ''),
@@ -224,8 +234,9 @@ define(['N/query'], (query) => {
         componente: String(r.componente || ''),
         descripcion: String(r.descripcion || ''),
         unidad: String(r.unidad || ''),
-        requerido: Math.round(Number(r.requerido) || 0),
-        emitido: Math.round(Number(r.emitido) || 0)
+        requerido: Number(r.requerido) || 0,
+        emitido: Number(r.emitido) || 0,
+        pendiente: Number(r.pendiente) || 0
       })),
       totalRows: rows.length
     };
