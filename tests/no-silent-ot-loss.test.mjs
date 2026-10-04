@@ -71,7 +71,14 @@ const AUTORIZADAS = new Set([
   "src/web/planning/app.js :: existingOperations()",
   "src/web/planning/app.js :: existingWorkOrder()",
   "src/web/planning/app.js :: normalizeState()",
-  "src/web/planning/app.js :: pushUnique()",
+  // "src/web/planning/app.js :: pushUnique()" SE SACO 2026-10-04 (RULE-PLAN-015). No se autorizo
+  // nada: se quito una poda. `pushUnique` es el ayudante de la fusion del rescate del borrador, y
+  // estaba aqui porque el rescate de antes (RULE-PLAN-014) hacia justo lo prohibido:
+  // state.selectedOts = payload.selectedOts y state.lockedOts = payload.lockedOts, o sea que
+  // resucitaba y reordenaba la cola de la persona. Ese rescate se reencendio SIN esas dos lineas
+  // (las de la autorizacion son las unicas que se quitaron del archivo), asi que la fusion ya no
+  // toca la cola y este lugar ya no existe. Si alguien las vuelve a poner, el scanner lo marca como
+  // funcion nueva y hay que decidirlo otra vez.
   "src/web/planning/app.js :: renderPlanStatusChange()",
   "src/web/planning/app.js :: reorderSelectedJobs()",
   "src/web/planning/app.js :: sigueViva()",

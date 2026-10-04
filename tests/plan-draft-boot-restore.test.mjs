@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import vm from "node:vm";
 
 /**
  * RULE-PLAN-013: el borrador del plan NO vive en localStorage (compactLocalState pone
@@ -139,4 +140,208 @@ test("la puerta de frescura del rescate sigue comparando generatedAt contra el s
   // ERR-DATOS-VIEJOS-BORRADOR-001: un borrador viejo pisando uno nuevo.
   assert.match(app, /savedGeneratedAtMs > currentGeneratedAtMs/, "el rescate debe seguir exigiendo que el snapshot sea mas nuevo");
   assert.match(app, /savedToolChanges === 0\) return;/, "sin cambios de herramental y sin borrador mas nuevo, no se restaura");
+});
+
+// ---------------------------------------------------------------------------
+// RULE-PLAN-015 (2026-10-04): el rescate vuelve a estar ENCENDIDO, y lo unico que dejo de
+// hacer es reordenar la cola. Estos tests ejecutan la funcion de verdad, en un vm con las
+// piezas de app.js que usa, porque lo que hay que proteger aqui no es una forma de codigo sino
+// una consecuencia: la cola de la persona y sus bloqueos tienen que salir intactos, y las
+// operaciones con fecha tienen que entrar.
+//
+// QUE SE MIDIO ANTES DE ESCRIBIRLOS. Con una carga nueva de la pagina (navegador del taller,
+// 2026-10-04) la cola volvia entera: 4 OTs, mismo orden manual, con sus configuraciones. El
+// plan NO volvia: el espejo `operations` trae lo que escribio la ingesta de NetSuite, con
+// `start_planned` a medianoche y sin horas (supabase-reader.js, MEDIDO 2026-09-29), y el reporte
+// de la semana decia "Sin OTs para esta semana". El borrador si estaba guardado (1 fila en
+// plan_snapshots, snapshot_id 'draft'); lo que no existia era quien lo leyera, porque este
+// rescate estaba apagado (RULE-PLAN-014) y el boton "Restaurar borrador" descarta el borrador de
+// su lista (`restoreDraftCandidateSnapshots`).
+// ---------------------------------------------------------------------------
+
+function recorteRescate(app) {
+  const desde = app.indexOf("async function maybeRestoreSavedDraftOnBoot()");
+  const hasta = app.indexOf("function scheduleDraftBootRestoreRetry()", desde);
+  assert.ok(desde > 0 && hasta > desde, "no se pudo recortar maybeRestoreSavedDraftOnBoot");
+  return app.slice(desde, hasta);
+}
+
+function operacion(ot, secuencia, extra = {}) {
+  return Object.assign({
+    id: `${ot}-${secuencia}`,
+    ot,
+    secuencia,
+    ct: "CT 1",
+    descripcion: "Corte",
+    operador: "",
+    maquina: "M1",
+    tiempoCiclo: 10,
+    tiempoSetup: 0,
+    fechaInicio: "",
+    horaInicio: "",
+    fechaFin: "",
+    horaFin: "",
+    tipoInsercion: "OPERACION",
+    estatus: "PLAN",
+    locked: false,
+  }, extra);
+}
+
+/**
+ * El rescate, ejecutado de verdad. Solo se sustituyen las piezas de app.js que son de otros
+ * modulos (las de planificacion) y las de pantalla; la DECISION (que restaura, que no, y sobre
+ * que cola) es la de app.js sin tocar.
+ */
+function correrRescate(app, { state, snapshot, planSnapshots = [{ snapshotId: "draft", operations: 99 }] }) {
+  const registro = { toasts: [], guardados: [], reintentos: 0, renders: 0 };
+  const contexto = {
+    console,
+    state,
+    planSnapshots,
+    netSuiteSyncInFlight: false,
+    netSuitePlanningSyncInFlight: false,
+    planningActionsBusy: false,
+    scheduleDraftBootRestoreRetry: () => { registro.reintentos += 1; },
+    fetchPlanSnapshot: async (snapshotId) => {
+      assert.equal(snapshotId, "draft", "el rescate solo puede leer el borrador");
+      return snapshot;
+    },
+    uniq: (lista) => [...new Set((Array.isArray(lista) ? lista : []).filter(Boolean))],
+    normalizeKey: (valor) => String(valor || "").trim().toUpperCase(),
+    normalizeOperation: (op) => Object.assign({}, op),
+    opStart: (op) => (op && op.fechaInicio
+      ? new Date(`${op.fechaInicio}T${String(op.horaInicio || "00:00")}:00Z`)
+      : null),
+    isToolChangeReportOperation: (op) => String(op && op.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL",
+    captureLocalPlanningState: () => ({ planStart: state.planStart, selectedOts: state.selectedOts, lockedOts: state.lockedOts, operations: state.operations }),
+    planningDraftDiffers: (a, b) => JSON.stringify((a.operations || []).map((op) => [op.ot, op.secuencia, op.fechaInicio, op.horaInicio, op.maquina]))
+      !== JSON.stringify((b.operations || []).map((op) => [op.ot, op.secuencia, op.fechaInicio, op.horaInicio, op.maquina])),
+    normalizeState: () => {},
+    invalidateCurrentPlanOperationsCache: () => {},
+    alignReportWeekStartToFirstScheduledOperation: () => {},
+    saveState: (ambito) => { registro.guardados.push(ambito); },
+    render: () => { registro.renders += 1; },
+    showToast: (mensaje) => { registro.toasts.push(String(mensaje || "")); },
+  };
+  vm.runInNewContext(recorteRescate(app), contexto);
+  return contexto.maybeRestoreSavedDraftOnBoot().then(() => ({ registro, estado: contexto.state }));
+}
+
+test("el rescate del borrador restaura el plan y NO toca la cola ni los bloqueos de la persona", async () => {
+  const app = await leerApp();
+  const state = {
+    // El orden MANUAL que puso la persona. El borrador trae el suyo, que es el de programacion.
+    selectedOts: ["3750", "3747"],
+    lockedOts: ["3747"],
+    planStart: "2026-06-29",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T18:00:00.000Z", scheduledOts: ["3750", "3747"] },
+    operations: [operacion("3750", 10), operacion("3750", 20), operacion("3747", 10)],
+  };
+  const snapshot = {
+    snapshotId: "draft",
+    generatedAt: "2026-10-04T19:00:00.000Z",
+    planStart: "2026-10-05",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T18:30:00.000Z", scheduledOts: ["3699", "3747", "3750"] },
+    // La cola del borrador, en orden de programacion, con una OT que la persona ya saco.
+    selectedOts: ["3699", "3747", "3750"],
+    lockedOts: ["3699"],
+    operations: [
+      operacion("3750", 10, { fechaInicio: "2026-10-05", horaInicio: "08:00", fechaFin: "2026-10-05", horaFin: "08:10", maquina: "M1", operador: "ANA" }),
+      operacion("3750", 20, { fechaInicio: "2026-10-05", horaInicio: "08:15", fechaFin: "2026-10-05", horaFin: "08:25", maquina: "M1", operador: "ANA" }),
+      operacion("3747", 10, { fechaInicio: "2026-10-05", horaInicio: "09:00", fechaFin: "2026-10-05", horaFin: "09:10", maquina: "M2", operador: "LUIS", locked: true }),
+      operacion("3699", 10, { fechaInicio: "2026-10-05", horaInicio: "10:00", horaFin: "2026-10-05", horaFin: "10:10" }),
+    ],
+  };
+
+  const { registro, estado } = await correrRescate(app, { state, snapshot });
+
+  // 1. LA COLA: intacta, en el orden de la persona, sin la OT que saco.
+  assert.deepEqual(estado.selectedOts, ["3750", "3747"], "el rescate no puede reordenar la cola ni resucitar una OT sacada");
+  assert.deepEqual(estado.lockedOts, ["3747"], "los bloqueos tambien son de la persona");
+  assert.ok(!estado.selectedOts.includes("3699"), "3699 no estaba en la cola y no vuelve con el plan");
+
+  // 2. EL PLAN: entra con fecha y hora, solo para las OTs de la cola.
+  const porOt = new Map();
+  for (const op of estado.operations) {
+    if (!porOt.has(op.ot)) porOt.set(op.ot, []);
+    porOt.get(op.ot).push(op);
+  }
+  assert.deepEqual([...porOt.keys()].sort(), ["3747", "3750"], "solo vuelven las operaciones de las OTs en cola");
+  const sec10 = porOt.get("3750").find((op) => op.secuencia === 10);
+  assert.equal(sec10.fechaInicio, "2026-10-05");
+  assert.equal(sec10.horaInicio, "08:00", "la hora es justo lo que el espejo de NetSuite no trae");
+  assert.equal(sec10.operador, "ANA", "el plan se restaura con la asignacion del borrador, no con la del espejo");
+  assert.equal(porOt.get("3747")[0].locked, true, "el bloqueo viaja en la propia operacion");
+
+  // 3. LO QUE SE DICE, y lo que se guarda.
+  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.000Z", "el reloj de frescura pasa al del snapshot");
+  assert.equal(estado.planStart, "2026-10-05");
+  assert.deepEqual(registro.guardados, ["plan"]);
+  assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)), `no se aviso del rescate: ${JSON.stringify(registro.toasts)}`);
+});
+
+test("el rescate entra aunque el borrador NO sea mas nuevo, si en pantalla no hay nada programado", async () => {
+  const app = await leerApp();
+  // Este es el caso medido del 2026-10-04. El `generatedAt` del borrador es ANTERIOR al del
+  // app_state (los dos los escribio el mismo guardado de "Generar plan", y el snapshot se sella
+  // despues de calcular el plan), asi que `savedIsNewer` da false y la unica segunda via que
+  // queda es "en pantalla no hay nada programado": el espejo trae operaciones, pero con
+  // `start_planned` a medianoche y sin horas.
+  const state = {
+    selectedOts: ["3750"],
+    lockedOts: [],
+    planStart: "2026-06-29",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T19:00:00.000Z" },
+    operations: [operacion("3750", 10), operacion("3750", 20)],
+  };
+  const snapshot = {
+    snapshotId: "draft",
+    generatedAt: "2026-10-04T18:59:00.000Z",
+    planStart: "2026-10-05",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T18:58:00.000Z", scheduledOts: ["3750"] },
+    operations: [
+      operacion("3750", 10, { fechaInicio: "2026-10-05", horaInicio: "07:00", fechaFin: "2026-10-05", horaFin: "07:10" }),
+      operacion("3750", 20, { fechaInicio: "2026-10-05", horaInicio: "07:15", fechaFin: "2026-10-05", horaFin: "07:25" }),
+    ],
+  };
+
+  const { registro, estado } = await correrRescate(app, { state, snapshot });
+
+  // `structuredClone` y no el array directo: `estado.operations` lo arma la funcion dentro del vm, y
+  // su Array.prototype es de otro realm, entonces `deepEqual` estricto falla por eso y no por el dato.
+  assert.deepEqual(structuredClone(estado.operations).map((op) => op.horaInicio), ["07:00", "07:15"], "el plan tiene que entrar igual: no hay nada programado en pantalla");
+  assert.deepEqual(estado.selectedOts, ["3750"]);
+  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T18:58:00.000Z", "sin savedIsNewer el reloj NO se adelanta: no se inventa una hora mas nueva que la de app_state");
+  assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)));
+});
+
+test("el rescate NO entra si el borrador es mas viejo Y en pantalla ya hay plan", async () => {
+  const app = await leerApp();
+  const state = {
+    selectedOts: ["3750"],
+    lockedOts: [],
+    planStart: "2026-10-05",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T19:00:00.000Z" },
+    operations: [operacion("3750", 10, { fechaInicio: "2026-10-06", horaInicio: "06:00", maquina: "M9", operador: "BETO" })],
+  };
+  const snapshot = {
+    snapshotId: "draft",
+    generatedAt: "2026-10-04T18:00:00.000Z",
+    planStart: "2026-10-05",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T17:59:00.000Z" },
+    operations: [operacion("3750", 10, { fechaInicio: "2026-10-05", horaInicio: "07:00", maquina: "M1", operador: "ANA" })],
+  };
+
+  const { registro, estado } = await correrRescate(app, { state, snapshot });
+
+  assert.equal(estado.operations[0].maquina, "M9", "un borrador viejo no pisa un plan en pantalla (ERR-DATOS-VIEJOS-BORRADOR-001)");
+  assert.equal(estado.operations[0].horaInicio, "06:00");
+  assert.deepEqual(registro.guardados, [], "no hay nada que guardar si no se restauro nada");
+  assert.deepEqual(registro.toasts, []);
 });

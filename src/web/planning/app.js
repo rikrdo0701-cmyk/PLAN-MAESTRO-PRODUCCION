@@ -734,21 +734,39 @@ async function loadAppStateInBackground() {
 }
 
 async function maybeRestoreSavedDraftOnBoot() {
-  // DESHABILITADA A PEDIDO DEL USUARIO el 2026-09-27, y solo esta funcion.
+  // REHABILITADA 2026-10-04 (RULE-PLAN-015): al abrir la web se ve el borrador.
   //
-  // El rescate hacia `state.selectedOts = payload.selectedOts` (o uniq(restored.map(ot))) y despues
-  // saveState("plan"), o sea que DEJABA LA COLA ORDENADA COMO EL BORRADOR y la guardaba asi. El orden
-  // de las operaciones del borrador es el orden de PROGRAMACION; el orden de la cola es el MANUAL que
-  // puso la persona, y el segundo no tiene por que seguir al primero. Como __planningRestoredFromServer
-  // no se marca en el camino normal de getAppState (solo en el build-patch
-  // restoreDraftPlanFromSharedState, build-appscript.mjs:196), el rescate corria en cada arranque y
-  // reordenaba la cola de la persona en silencio.
+  // QUE HACIA Y POR QUE SE APAGO (RULE-PLAN-014, decision de la persona el 2026-09-27). Esta
+  // funcion resucitaba el borrador de `plan_snapshots` cuando el arranque no conseguia el estado
+  // del servidor: leia el snapshot 'draft' y hacia state.selectedOts = payload.selectedOts (o
+  // uniq(restored.map(ot))) y despues saveState("plan"), o sea que DEJABA LA COLA ORDENADA COMO EL
+  // BORRADOR y la guardaba asi. El orden de las operaciones del borrador es el orden de
+  // PROGRAMACION; el de la cola es el MANUAL que puso la persona, y el segundo no tiene por que
+  // seguir al primero. Como __planningRestoredFromServer no se marca en el camino normal de
+  // getAppState (solo en el build-patch restoreDraftPlanFromSharedState, build-appscript.mjs:196), el
+  // rescate corria en cada arranque y reordenaba la cola de la persona en silencio.
   //
-  // El coste de deshabilitarla: si el arranque NO consigue el estado del servidor, ya no se recupera
-  // el borrador y la app cae a sampleState (sin plan). Es la contrapartida que acepta la persona: no
-  // quiere que le reordenen la cola. NO se toco nada mas: ni los disparadores, ni el orden del rescate,
-  // ni state.operations = merged (que sigue siendo correcto si alguna vez se vuelve a habilitar).
-  return;
+  // QUE HACE AHORA: RESTAURA EL PLAN Y NO LA COLA. Se trayendo `operations` con sus fechas y horas
+  // (que es lo que no existe en el arranque de hoy), `lastSchedule`, `planStart` y `horizonDays`, y
+  // de las operaciones SOLO las de las OTs que siguen en la cola, que es la autoridad de la persona
+  // (RULE-OT-047: la cola vive en `selected_ots` y se lee de ahi). `state.selectedOts` y
+  // `state.lockedOts` NO se tocan: una OT que la persona saco de la cola no vuelve con el plan, y el
+  // orden manual se queda como esta. Esa es la razon del apagado, y por eso no vuelve.
+  //
+  // POR QUE HACE FALTA, MEDIDO 2026-10-04 en produccion con una carga nueva de la pagina. La cola
+  // vuelve entera (4 OTs, mismo orden manual) pero el PLAN NO, y no es que no este guardado: el
+  // borrador esta en `plan_snapshots` (1 fila, snapshot_id 'draft', medida el mismo dia). Lo que no
+  // vuelve es el plan, porque lo unico que la pagina lee al arrancar es el espejo `operations`, y ese
+  // lo escribe la ingesta de NetSuite con `start_planned` a medianoche y SIN horas (lector,
+  // MEDIDO 2026-09-29). El sintoma: la pagina se ve armada y el reporte de la semana dice "Sin OTs
+  // para esta semana". Y este rescate estaba apagado, y el boton "Restaurar borrador" descarta el
+  // borrador de su lista (restoreDraftCandidateSnapshots), o sea que no habia NINGUNA via de vuelta.
+  //
+  // EL RELOJ DE FRESCURA SIGUE SIENDO EL DE RULE-PLAN-013 (`lastSchedule.generatedAt`), con una
+  // segunda via de entrada: el rescate entra tambien cuando en pantalla NO HAY NADA PROGRAMADO y el
+  // borrador si. Sin esa via no entraria nunca en el caso de arriba, porque el `generatedAt` del
+  // snapshot y el de `app_state.last_schedule` los escribe el MISMO guardado y salen iguales, y con
+  // `savedIsNewer` a false solo pasaban los recados de herramental.
   if (globalThis.__draftBootRestoreAttempted === true) return;
   if (globalThis.__planningRestoredFromServer === true) return;
   globalThis.__draftBootRestoreAttempted = true;
@@ -770,18 +788,44 @@ async function maybeRestoreSavedDraftOnBoot() {
       ? snapshot.operations
       : (Array.isArray(payload.operations) ? payload.operations : []);
     if (!savedOps.length) return;
+    // LA COLA MANDA, Y NO SE TOCA. Las operaciones del borrador se filtran por las OTs que
+    // siguen en la cola: las de una OT que la persona saco de la cola no vuelven con el plan, y las
+    // de una OT que se agrego DESPUES de generar se quedan con lo que traia el espejo, o sea por
+    // programar, que es la verdad (el borrador no las programo y no hay de donde sacarlas con hora).
+    const cola = uniq((state.selectedOts || []).map((ot) => normalizeKey(ot)).filter(Boolean));
+    if (!cola.length) return;
+    const enCola = (op) => cola.includes(normalizeKey(op && op.ot));
+    const savedOpsEnCola = savedOps.filter(enCola);
+    if (!savedOpsEnCola.length) return;
+    // "CAMBIO EL BORRADOR?" se pregunta SOLO sobre lo que este rescate va a restaurar. Por eso
+    // selectedOts y lockedOts se comparan contra los del propio estado: compararlos contra los del
+    // borrador haria que el rescate entrara en cada arranque solo porque el borrador trae su propia
+    // cola, que es exactamente lo que se dejo de hacer en RULE-PLAN-014.
     const localDraft = captureLocalPlanningState();
-    if (!planningDraftDiffers(localDraft, { ...payload, operations: savedOps })) return;
+    if (!planningDraftDiffers(localDraft, {
+      ...payload,
+      operations: savedOpsEnCola,
+      selectedOts: state.selectedOts,
+      lockedOts: state.lockedOts,
+    })) return;
     const savedGeneratedAtMs = Date.parse((snapshot && (snapshot.generatedAt || payload.generatedAt)) || "") || 0;
     const currentGeneratedAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
     const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;
-    if (!savedIsNewer) {
-      const savedToolChanges = savedOps.filter(isToolChangeReportOperation).length;
+    // "NO HAY PLAN EN PANTALLA": la segunda via de entrada del rescate, y la que hace falta hoy.
+    // El espejo `operations` si trae operaciones, pero con `start_planned` a medianoche y sin horas
+    // (lector, MEDIDO 2026-09-29): hay operaciones y NO HAY PLAN. Sin esta via el rescate no entraria
+    // en ese caso, porque savedIsNewer da false (los dos generatedAt los escribio el MISMO guardado:
+    // el snapshot del borrador y el app_state.last_schedule salen del guardado de "Generar plan").
+    const programadasEnPantalla = (state.operations || []).filter((op) => enCola(op) && Boolean(opStart(op))).length;
+    const programadasEnElBorrador = savedOpsEnCola.filter((op) => Boolean(opStart(op))).length;
+    const noHayPlanEnPantalla = programadasEnPantalla === 0 && programadasEnElBorrador > 0;
+    if (!savedIsNewer && !noHayPlanEnPantalla) {
+      const savedToolChanges = savedOpsEnCola.filter(isToolChangeReportOperation).length;
       if (savedToolChanges === 0) return;
       const localToolChanges = (state.operations || []).filter(isToolChangeReportOperation).length;
       if (localToolChanges >= savedToolChanges) return;
     }
-    const restored = savedOps.map((op, index) => normalizeOperation({
+    const restored = savedOpsEnCola.map((op, index) => normalizeOperation({
       ...op,
       id: op.id || `draft-boot-${snapshot.snapshotId || "draft"}-${index + 1}`,
     }, index));
@@ -808,10 +852,11 @@ async function maybeRestoreSavedDraftOnBoot() {
     }
     for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
     state.operations = merged;
-    if (Array.isArray(payload.selectedOts) && payload.selectedOts.length) state.selectedOts = payload.selectedOts;
-    else state.selectedOts = uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean));
-    if (Array.isArray(payload.lockedOts) && payload.lockedOts.length) state.lockedOts = payload.lockedOts;
-    else state.lockedOts = uniq(restored.filter((op) => op.locked === true).map((op) => String(op.ot || "").trim()).filter(Boolean));
+    // `state.selectedOts` y `state.lockedOts` NO SE TOCAN. Es la decision de RULE-PLAN-014 y lo unico
+    // que este rescate dejo de hacer respecto al de antes: el borrador dice en que ORDEN se programo y
+    // la persona dice en que ORDEN se trabaja. La autoridad de la cola es la persona y su tabla
+    // (`selected_ots`), y este rescate no tiene opinion sobre eso. Lo que si restaura son las
+    // operaciones: el `locked` de cada una viaja en la propia operacion y lo ve el plan.
     if (payload.lastSchedule && typeof payload.lastSchedule === "object") state.lastSchedule = payload.lastSchedule;
     else state.lastSchedule = {
       ...(state.lastSchedule || {}),
@@ -6926,7 +6971,19 @@ async function publishCurrentPlan() {
     };
     const publishFold = draftViewStatuses();
     setPublishStatus("Publicando plan...", 40);
-    const result = { ok: true, activeVersion: await persistPlanSnapshot() };
+    // MEDIDO 2026-10-04, Y POR QUE ESTA LLAMADA. Antes de este cambio lo que se guardaba al publicar
+    // era `persistPlanSnapshot()`, que vuelve a escribir la fila `draft` con status BORRADOR: el
+    // payload PUBLICADO que se arma mas arriba (planStatus, weekStart, version, publishedAt) se
+    // quedaba sin usar, `plan_snapshots` no tenia NINGUNA fila publicada, y por eso el desplegable de
+    // planes no tenia nunca la opcion "ultimo plan publicado" que el mismo codigo construye
+    // (planSourceOptionsMarkup -> operationalPlanOptions, que solo deja pasar las que son
+    // PUBLICADO). MEDIDO en produccion el mismo dia: el desplegable ofrecia 1 plan guardado y era el
+    // borrador.
+    // `publishDraftPlan` escribe la fila con SU PROPIO snapshot_id (`snap-<milis>`), con
+    // `status: "PUBLICADO"` dentro del payload --la columna `status` no existe en la tabla y por eso
+    // el estado va en el jsonb, MEDIDO 2026-10-02-- y con `published_at` en la columna. Con eso la fila
+    // existe, `listPlanSnapshots` la devuelve y el desplegable la ofrece sin tocar nada mas.
+    const result = await PPSupabaseBridgeReplacement.publishDraftPlan(payload);
     const active = result?.activeVersion || result;
     if (active?.snapshotId) {
       setPublishStatus("Guardando version publicada...", 75);

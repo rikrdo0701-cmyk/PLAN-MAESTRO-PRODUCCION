@@ -1052,7 +1052,11 @@ test("un import o cache stale no pisa un borrador mas reciente; el restore de bo
   const bootRestoreEnd = app.indexOf("function scheduleDraftBootRestoreRetry()", bootRestoreStart);
   const bootRestore = app.slice(bootRestoreStart, bootRestoreEnd);
   assert.match(bootRestore, /const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;/);
-  assert.match(bootRestore, /if \(!savedIsNewer\) \{\s*const savedToolChanges[\s\S]*if \(savedToolChanges === 0\) return;[\s\S]*if \(localToolChanges >= savedToolChanges\) return;\s*\}/);
+  // 2026-10-04 (RULE-PLAN-015): la puerta de herramental ya no es la unica segunda via. Entra
+  // tambien "en pantalla no hay nada programado y el borrador si", que es el caso medido del arranque
+  // de hoy: savedIsNewer da false porque el snapshot del borrador y app_state.last_schedule los
+  // escribio el MISMO guardado.
+  assert.match(bootRestore, /if \(!savedIsNewer && !noHayPlanEnPantalla\) \{\s*const savedToolChanges[\s\S]*if \(savedToolChanges === 0\) return;[\s\S]*if \(localToolChanges >= savedToolChanges\) return;\s*\}/);
   assert.match(bootRestore, /if \(state\.lastSchedule && savedIsNewer\)[\s\S]*savedGeneratedAtMs > embeddedAtMs/);
 
   const importStart = app.indexOf("async function applyImported(imported, options = {})");
@@ -2667,7 +2671,24 @@ test("publicar plan guarda la nueva version directo, sin dialogo de motivo ni co
   assert.doesNotMatch(publish, /Captura el motivo de la nueva version/);
   assert.doesNotMatch(publish, /compactVersionDiff\(/);
   assert.doesNotMatch(publish, /callAppsScript\("publishDraftPlan", payload\)/);
-  assert.doesNotMatch(publish, /PPSupabaseBridgeReplacement\.publishDraftPlan\(payload\)/);
+  // 2026-10-04: esto era la foto del defecto. Publicar guardaba con persistPlanSnapshot(), que
+  // vuelve a escribir la fila 'draft' con status BORRADOR y deja el payload PUBLICADO sin usar, asi
+  // que plan_snapshots no tenia ninguna fila publicada y el desplegable de planes
+  // (planSourceOptionsMarkup -> operationalPlanOptions, que solo deja pasar las PUBLICADO) ofrecia
+  // solo el borrador. MEDIDO en produccion ese dia: 1 plan guardado.
+  //
+  // SIN COMENTARIOS para la negativa: el comentario de app.js que explica el cambio NOMBRA la
+  // llamada vieja, y un doesNotMatch sobre el texto entero se enciende con el comentario.
+  const publishEjecutable = publish
+    .split(/\r?\n/)
+    .filter((linea) => !/^\s*\/\//.test(linea))
+    .join("\n");
+  assert.doesNotMatch(publishEjecutable, /persistPlanSnapshot\(\)/);
+  assert.match(
+    publishEjecutable,
+    /PPSupabaseBridgeReplacement\.publishDraftPlan\(payload\)/,
+    "publicar tiene que escribir la fila PUBLICADO con su propio snapshot_id, no volver a guardar el borrador",
+  );
 });
 
 test("bloquear/desbloquear OT no vuelve al render global y usa el indice operationsByOt", async () => {
