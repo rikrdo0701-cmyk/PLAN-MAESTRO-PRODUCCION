@@ -444,8 +444,9 @@ test("G. si la tabla no existe, el aviso nombra el archivo de DDL", async () => 
  * que devuelve PostgREST y lo que el lector mapea. Los filtros `ot=eq.X` e
  * `item=in.(...)` se respetan, que es lo que hace la base.
  */
-function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, fila: {} }) } = {}) {
+function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, fila: {} }), ordenar = false } = {}) {
   const leidos = [];
+  const urls = [];
   const guardados = [];
   const contexto = {
     console,
@@ -455,6 +456,7 @@ function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, 
       const url = String(destino);
       const tabla = decodeURIComponent(url.split("/rest/v1/")[1].split("?")[0]);
       leidos.push(tabla);
+      urls.push(url);
       if (errores[tabla]) throw new Error(errores[tabla]);
       let filas = (tablas[tabla] || []).slice();
       const query = url.split("?")[1] || "";
@@ -464,6 +466,34 @@ function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, 
       if (filtroIn) {
         const pedidos = decodeURIComponent(filtroIn[1]).split(",").filter(Boolean);
         filas = filas.filter((fila) => pedidos.includes(String(fila.item)));
+      }
+      // MEDIDO 2026-10-04 (OT 3747): este arnés ANTES no ordenaba NADA, o sea que una
+      // lectura con `order` se comportaba igual que una sin él, y por eso ninguna prueba
+      // podía distinguir "la consulta no impone orden" de "la consulta lo impone y aqui no
+      // se ve". Con `ordenar: true` hace lo que hace Postgres con `col.asc` /
+      // `col.desc` (texto con localeCompare, que es como compara Postgres), y una consulta
+      // SIN `order` se queda en el orden de las filas, que es el de inserción.
+      const pedirOrden = query.match(/order=([^&]*)/);
+      if (ordenar && pedirOrden) {
+        const claves = decodeURIComponent(pedirOrden[1]).split(",").map((parte) => {
+          const trozos = parte.split(".");
+          return {
+            columna: String(trozos[0]).replace(".nullslast", "").replace(".nullsfirst", ""),
+            descendente: trozos[1] === "desc",
+          };
+        });
+        filas = filas.slice().sort((a, b) => {
+          for (const clave of claves) {
+            const va = a[clave.columna];
+            const vb = b[clave.columna];
+            if (va === vb) continue;
+            if (va === null || va === undefined) return clave.descendente ? 1 : -1;
+            if (vb === null || vb === undefined) return clave.descendente ? -1 : 1;
+            const cmp = String(va).localeCompare(String(vb));
+            if (cmp !== 0) return clave.descendente ? -cmp : cmp;
+          }
+          return 0;
+        });
       }
       return {
         ok: true,
@@ -486,7 +516,7 @@ function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, 
     guardarInspectionPrint: async (cuerpo) => { guardados.push(cuerpo); return guardar(cuerpo); },
   };
   vm.runInContext(puenteSource, contexto, { filename: "supabase-bridge-replacement.js" });
-  return { api: contexto.PPSupabaseBridgeReplacement, leidos, guardados };
+  return { api: contexto.PPSupabaseBridgeReplacement, leidos, urls, guardados };
 }
 
 const coreSource = await readFile(new URL("../src/web/inspection/inspection-core.js", import.meta.url), "utf8");
@@ -717,6 +747,98 @@ test("el bundle de Apps Script es `{ detail, history }` y el detalle trae las TR
   // Y los avisos de la fuente de los tramos viajan en el detalle, que es del detalle.
   assert.match(detalle, /routesFuente/, "sin `routesFuente` la pagina no puede decir de donde salieron los tramos");
   assert.match(detalle, /routesAviso/, "sin `routesAviso` el aviso se pierde");
+});
+
+/**
+ * FILAS CRUDAS de `materials` de la OT 3747, EN EL ORDEN DEL BOM, que es el orden en que
+ * las deja el espejo (el RESTlet las recibio de NetSuite en ese orden y las inserta en el).
+ * NOTA el componente: el orden NO es alfabetico (COMP-6076 < D88-6076A < D88-6076B <
+ * MP00070), asi que cualquier prueba de orden que use estos datos cae si alguien mete un
+ * `order`.
+ */
+function materialesDeLa3747() {
+  return [
+    { ot: "OT-3747", componente: "MP00070", componente_id: "10", descripcion: 'Tubo de 1" x 6mts Cal. 16', unidad: "PZA", requerido: 0.25, emitido: 0, pendiente: 0.25, line_id: "2" },
+    { ot: "OT-3747", componente: "D88-6076A", componente_id: "11", descripcion: "BRACKET CAL. 10", unidad: "PZA", requerido: 5, emitido: 0, pendiente: 5, line_id: "3" },
+    { ot: "OT-3747", componente: "D88-6076B", componente_id: "12", descripcion: "BRACKET CAL. 10", unidad: "PZA", requerido: 5, emitido: 0, pendiente: 5, line_id: "4" },
+    { ot: "OT-3747", componente: "COMP-6076", componente_id: "9", descripcion: "COMPONENTE PARA EL D88-6076", unidad: "PZA", requerido: 5, emitido: 0, pendiente: 5, line_id: "1" },
+  ];
+}
+
+test("la hoja de inspeccion muestra las MP en el orden del Detalle OT, no en ALFABETICO", async () => {
+  // MEDIDO 2026-10-04, lo que reporto el usuario de la OT 3747: el Detalle OT empieza con
+  // MP00070 y la hoja arrancaba con COMP-6076. La causa era que las DOS vistas leian la misma
+  // tabla con dos consultas distintas: la del Detalle sin `order` y la de la hoja con
+  // `order=componente.asc,line_id.asc`.
+  // `ordenar: true` hace que el arnés ORDENE como Postgres, asi que si el `order` vuelve
+  // a meterse esta prueba se pone roja sola.
+  const { api } = puente({
+    ordenar: true,
+    tablas: {
+      work_orders: [otCruda("OT-3747", "D88-6076")],
+      operations: [],
+      materials: materialesDeLa3747(),
+    },
+  });
+
+  const hoja = await api.getInspectionWorkOrderBundle("OT-3747");
+  const detalle = await api.getMaterialsForOt("OT-3747");
+
+  // Las dos vistas, en el orden del BOM: MP00070 primero, COMP-6076 de ULTIMO.
+  // `structuredClone` y no `deepEqual` a pelo: los arrays salen del vm que corre el
+  // puente y su prototipo no es el de este archivo, o sea que son iguales y `deepStrictEqual`
+  // se queja igual (mismo truco que en inspection-core.test.mjs).
+  assert.deepEqual(structuredClone(hoja.data.detail.materials.map((material) => material.material)),
+    ["MP00070", "D88-6076A", "D88-6076B", "COMP-6076"],
+    "la hoja tiene que salir en el orden del Detalle OT");
+  assert.deepEqual(structuredClone(detalle.materials.map((material) => material.component)),
+    ["MP00070", "D88-6076A", "D88-6076B", "COMP-6076"],
+    "el Detalle OT no puede cambiar de orden");
+  // Y las dos salidas son la MISMA lista, no dos listas parecidas: si divergen, el Detalle y la
+  // hoja vuelven a contradecirse aunque hoy coincidan.
+  assert.deepEqual(
+    structuredClone(hoja.data.detail.materials.map((material) => material.material)),
+    structuredClone(detalle.materials.map((material) => material.component)));
+});
+
+test("la hoja y el Detalle OT piden la MISMA consulta a `materials`", async () => {
+  // La garantia de que esto no se vuelva a romper es que NO HAYA DOS CONSULTAS: si las dos
+  // vistas llaman a la misma funcion, no pueden pedir distinto. Ademas la consulta no lleva
+  // `order`: `materials` no tiene columna de posicion (docs/schema-supabase.sql:238-253),
+  // o sea que poner un orden seria inventarse uno.
+  const { api, urls } = puente({
+    ordenar: true,
+    tablas: {
+      work_orders: [otCruda("OT-3747", "D88-6076")],
+      operations: [],
+      materials: materialesDeLa3747(),
+    },
+  });
+
+  await api.getInspectionWorkOrderBundle("OT-3747");
+  await api.getMaterialsForOt("OT-3747");
+
+  const lecturas = urls.filter((url) => url.includes("/materials?"));
+  assert.equal(lecturas.length, 2, "una lectura por vista");
+  assert.equal(lecturas[0], lecturas[1], "las dos vistas piden la MISMA consulta, caracter por caracter");
+  assert.equal(lecturas.some((url) => /order=/.test(url)), false,
+    "una lectura de `materials` sin `order`: el orden es el del BOM, no uno puesto a mano");
+  // Y el filtro por OT no se puede perder en el camino: sin el, la hoja traeria los
+  // materiales de TODAS las OT.
+  assert.match(lecturas[0], /ot=eq\.OT-3747/);
+});
+
+test("`materials` se lee en UN solo punto de la pagina", () => {
+  // MEDIDO 2026-10-04: la divergencia de la OT 3747 no fue un bug de una linea, fue que la
+  // tabla se leia desde dos sitios y cada uno imponia su propio orden. Este test cuenta las
+  // lecturas POR OT: si alguien agrega otra, tiene que pasar por `leerMaterialesDeLaOt`.
+  const lecturasPorOt = puenteSource.match(/readTable\("materials",\s*\{\s*filters:\s*\{\s*ot/g) || [];
+  assert.equal(lecturasPorOt.length, 1,
+    "hay " + lecturasPorOt.length + " lecturas de materials filtradas por OT; deberia ser UNA (leerMaterialesDeLaOt)");
+  // Y las que piden la tabla entera (planeacion) ordenan solo por OT, nunca por componente:
+  // un `order` con `componente` dentro es justo lo que rompio el orden.
+  const conComponente = puenteSource.match(/readTable\("materials"[\s\S]{0,120}?order:[^\n]*componente/g) || [];
+  assert.equal(conComponente.length, 0, "ninguna lectura de materials puede ordenar por componente");
 });
 
 /** El cuerpo de una funcion de Apps Script: desde su `function` hasta la primera llave

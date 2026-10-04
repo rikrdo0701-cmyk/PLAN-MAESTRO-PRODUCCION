@@ -607,6 +607,34 @@ test("UNA MP, UNA VEZ: la hoja NO repite la MP aunque la base le mande la COPIA"
   assert.equal((html.match(/>4<\/div>/g) || []).length, 1, "y el 4 no sale dos veces porque la MP se repitio");
 });
 
+test("el ORDEN de la banda es el del Detalle OT, no el alfabetico (OT 3747)", async () => {
+  // MEDIDO 2026-10-04, lo que reporto el usuario de la OT 3747: el Detalle OT empieza con
+  // MP00070 y la hoja arrancaba con COMP-6076. La banda no se reordena NADA: se pinta en el
+  // orden en que llegan los materiales, que es el orden del Detalle OT.
+  // Y el llenado es el que pidio el usuario, textual: "izq. el primero, derecha el segundo,
+  // luego izq. abajo de el el tercero y derecha el cuarto", o sea POR RENGLONES de dos.
+  // Con cuatro MP son dos renglones, y ninguno en blanco (el renglon en blanco solo se agrega
+  // cuando sobran celdas, o sea con dos MP o menos, para poder escribir a mano).
+  const { html } = await hojaCon([
+    { material: "MP00070", description: 'Tubo de 1" x 6mts Cal. 16', required: 0.25, lineId: "2" },
+    { material: "D88-6076A", description: "BRACKET CAL. 10", required: 5, lineId: "3" },
+    { material: "D88-6076B", description: "BRACKET CAL. 10", required: 5, lineId: "4" },
+    { material: "COMP-6076", description: "COMPONENTE PARA EL D88-6076", required: 5, lineId: "1" },
+  ], "3747");
+  const filas = bandaDeMateriales(html);
+
+  assert.equal(filas.length, 2, "cuatro MP: ceil(4/2) = 2 renglones, sin renglon en blanco");
+  // IZQ el primero (MP00070), DER el segundo (D88-6076A).
+  assert.equal(mpDe(filas[0].izquierda), "MP00070", "renglon 1 izq: el primero del Detalle");
+  assert.equal(mpDe(filas[0].derecha), "D88-6076A", "renglon 1 der: el segundo del Detalle");
+  // Abajo del primero el tercero, a la derecha el cuarto.
+  assert.equal(mpDe(filas[1].izquierda), "D88-6076B", "renglon 2 izq: el tercero del Detalle");
+  assert.equal(mpDe(filas[1].derecha), "COMP-6076", "renglon 2 der: el cuarto del Detalle");
+  // Y el orden ALFABETico es el que salia antes (COMP, D88-A, D88-B, MP), o sea que este test
+  // no pasa por casualidad: si alguien vuelve a ordenar, las cuatro aserciones de arriba caEN.
+  assert.notDeepEqual(mpDe(filas[0].izquierda), "COMP-6076", "la banda no puede arrancar en alfabetico");
+});
+
 test("una OT sin MP imprime la banda vacia con la fecha de entrega, y no es un fallo", async () => {
   const { html } = await hojaCon([], "9999");
   const filas = bandaDeMateriales(html);

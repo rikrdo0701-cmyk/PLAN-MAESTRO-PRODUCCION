@@ -177,9 +177,12 @@
       filters: { ot: key },
       order: "secuencia.asc",
     });
-    const materials = await r.readTable("materials", {
-      filters: { ot: key },
-    });
+    // MEDIDO 2026-10-04 (OT 3747): esta lectura y la de la hoja eran DOS preguntas
+    // distintas a la MISMA tabla, y por eso la hoja de inspeccion y el Detalle OT mostraban
+    // los materiales en orden contrario (la hoja en ALFABETICO, el Detalle en el del BOM).
+    // Delega en el mismo lector, para que no puedan volver a separarse. Ojo que esta era la
+    // TERCERA copia de esa lectura: el orden tiene que ser una decision de UN lugar.
+    const materials = await leerMaterialesDeLaOt(r, key);
     const workOrders = await r.readTable("work_orders", {
       filters: { ot: key },
     });
@@ -419,23 +422,46 @@
   }
 
   /**
-   * Los materiales de la OT, y por que van en una lectura propia.
+   * Los materiales de UNA OT, y por que van en una lectura propia. ESTA ES LA UNICA
+   * LECTURA DE `materials` QUE SE ACOTA A UNA OT, y la usan las TRES vistas que muestran
+   * materiales de una sola OT (la hoja de inspeccion, el Detalle OT y el dato suelto de
+   * planeacion). Las otras tres lecturas piden la tabla entera, por OT.
    *
    * No lleva `limit` porque el filtro por `ot` ya acota, y un material que se quedara
    * fuera por un limite seria un material sin tramo y sin disponible en una hoja que
-   * parece completa. El orden es por componente para que el orden de la hoja sea estable
-   * entre recargas, que es lo que permite comparar dos impresiones de la misma OT.
+   * parece completa.
    *
-   * MEDIDO 2026-10-04, POR QUE EL ORDEN TAMBIEN DESEMPATA POR `line_id`. `componente`
-   * solo no es un orden TOTAL: la base tenia dos filas por cada (ot, componente) (las copias
-   * que creo `filasMaterials` escribiendo el UUID de la fila como `line_id`), y dentro de
-   * un mismo componente Postgres puede devolver las dos en cualquier orden. Sin el
-   * desempate, "la primera" es una moneda al aire entre recargas. Con `line_id.asc` el
-   * orden es total y ademas gana la fila del ERP: los `line_id` de la ingesta son
-   * numericos ('2', '3', '24') y salen antes que un UUID en orden de texto.
+   * NO LLEVA `order`, Y ES A PROPOSITO (decision del usuario 2026-10-04, sobre la OT 3747).
+   * MEDIDO, y no supuesto: las dos vistas leian la MISMA tabla con dos lecturas distintas, y
+   * por eso los materiales salian en orden CONTRARIO. `getMaterialsForOt`, que es la que
+   * pinta el Detalle OT, pedia `materials` SIN `order`; `leerMaterialesDeLaOt`, que es la
+   * que pinta la hoja de inspeccion, pedia `order=componente.asc,line_id.asc`. En la OT 3747
+   * el Detalle empieza con MP00070 y la hoja arrancaba con COMP-6076, que es la primera en
+   * alfabetico. O sea: la hoja no salia en un orden equivocado, salia en ALFABETICO, que es un
+   * orden legitimo... de otra cosa.
+   *
+   * QUE ORDEN ES EL QUE NO SE IMPONE. `materials` no tiene columna de posicion ni de
+   * secuencia (docs/schema-supabase.sql:238-253): el orden del BOM no esta escrito en ningun
+   * dato de la fila. Es el ORDEN DE INSERCION, que es el unico que se pierde al meter
+   * `order` en la consulta, y el espejo lo inserta en el orden en que el RESTlet recibio las
+   * filas de NetSuite. Por eso la lectura va sin `order`: es la unica forma de que la hoja
+   * vea el MISMO orden que el Detalle, en vez de una copia del orden de otra vista.
+   *
+   * LO QUE SE PIERDE, DICHO. Sin `order` Postgres no garantiza un orden TOTAL, asi que si
+   * VOLVIERAN las copias (la pagina escribiendo el UUID de la fila como `line_id`, ya
+   * corregido en RULE-SUP-047) dos filas del mismo renglon del BOM podrian cambiar de lugar
+   * entre recargas, y `inspectionMaterialsUnicos` se quedaria con una u otra. MEDIDO: hoy no
+   * hay copias: la ingesta del 2026-10-04T18:48Z dejo `materials` con los 349 renglones del
+   * ERP, y mientras el escritor use el `lineId` del ERP no pueden volver. Si alguna vez
+   * hiciera falta un orden garantizado, el arreglo NO es volver al `order` alfabetico (que es
+   * justo lo que rompio esto): es que el espejo escriba una columna de posicion.
+   *
+   * LAS DEMAS LECTURAS de la tabla ordenan por `ot.asc` y nada mas
+   * (`getPlanningWorkOrderDataBatch`, `syncNetSuitePlanningData`, y la que se acaba de
+   * unificar), o sea que esta era la UNICA que imponia un orden DENTRO de la OT.
    */
   async function leerMaterialesDeLaOt(r, ot) {
-    const rows = await r.readTable("materials", { filters: { ot: ot }, order: "componente.asc,line_id.asc" });
+    const rows = await r.readTable("materials", { filters: { ot: ot } });
     return Array.isArray(rows) ? rows : [];
   }
 
@@ -1073,13 +1099,17 @@
   }
 
   /**
-   * getMaterialsForOt -> lee de materials
+   * getMaterialsForOt -> lee de materials. DELAGA EN `leerMaterialesDeLaOt`, y no por
+   * gusto sino porque el Detalle OT y la hoja de inspeccion tienen que mostrar los
+   * materiales en el MISMO orden: dos llamadas a la misma tabla son dos órdenes que se
+   * desincronizan solas (medido el 2026-10-04, OT 3747: el Detalle en orden del BOM y la
+   * hoja en alfabetico, al reves). La lectura es una sola y las dos vistas la comparten.
    */
   async function getMaterialsForOt(ot, revision) {
     const r = getReader();
     const key = String(ot || "").trim();
     if (!key) return { materials: [] };
-    const rows = await r.readTable("materials", { filters: { ot: key } });
+    const rows = await leerMaterialesDeLaOt(r, key);
     return { materials: r.mapMaterials(rows) };
   }
 

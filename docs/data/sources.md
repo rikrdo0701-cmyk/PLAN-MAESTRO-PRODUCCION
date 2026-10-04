@@ -626,6 +626,18 @@ Detalle del arranque en vivo en `docs/integrations/netsuite-supabase-sync.md`.
   mano**, porque `ingesta_mirror` hace `delete` + `insert` de la tabla completa: esa corrida
   devolvió `materials: 349` filas escritas, `ok:true`, `vaciadas: []`, `noSePudoVaciar: []`.
   `docs/limpieza-materials-copias-2026-10-04.sql` queda sin aplicar y ya no hace falta.
+- **`materials` — el orden en que salen las MP (`RULE-SUP-049`, medido 2026-10-04)**: el **Detalle OT**
+  y la **hoja de inspección** mostraban los materiales en orden **contrario**: en la OT 3747 el Detalle
+  empieza con MP00070 y la hoja arrancaba con COMP-6076, que es el primero en alfabético. La causa fue
+  que las dos vistas leían la misma tabla con dos consultas distintas y cada una con su `order`.
+  Ahora hay **una sola lectura por OT** (`leerMaterialesDeLaOt`) y las tres vistas delegan en ella
+  (`getMaterialsForOt` = Detalle OT, `getPlanningWorkOrderData` = planeación). Esa consulta **no lleva
+  `order`** a propósito: `materials` no tiene columna de posición ni de secuencia
+  (`docs/schema-supabase.sql:238-253`), así que el orden del BOM solo existe como **orden de inserción**,
+  que es como los deja el espejo (el RESTlet las recibe de NetSuite en ese orden). Poner cualquier
+  `order` no lo reproduce: lo cambia. Lo que sí se pierde, y está anotado en la regla: sin `order`
+  Postgres no garantiza un orden total, así que si volvieran las copias dos filas del mismo renglón
+  podrían alternar entre recargas (hoy no hay copias y el escritor ya no las puede crear).
 - **Ninguna ingesta conserva valores previos (`RULE-SUP-048`, medido 2026-10-04)**: toda tabla que
   la corrida **no** reescribió se **vacía** con el mismo RPC (`p_filas: []`), y si ni el vaciado se
   puede hacer la corrida lo reporta en `noSePudoVaciar` con el nombre de la tabla y su motivo.
@@ -641,7 +653,8 @@ Detalle del arranque en vivo en `docs/integrations/netsuite-supabase-sync.md`.
   habla con NetSuite; NetSuite carga a Supabase y la página lee de Supabase):
   `src/web/shared/supabase-reader.js` (`PPSupabaseReader` y sus `map*`), consumido por planificación e
   inspección, y `src/web/shared/supabase-bridge-replacement.js` (`leerMaterialesDeLaOt` y las demás
-  lecturas por OT, con `order` explícito). MEDIDO 2026-10-04: al leer `materials` por PostgREST **sin
+  lecturas por OT; con `order` donde el orden está escrito en alguna columna, y **sin** `order` en
+  `materials`, ver la nota de orden de más abajo). MEDIDO 2026-10-04: al leer `materials` por PostgREST **sin
   sesión** la API responde 200 con 0 filas, o sea que sin sesión no hay lectura (RLS); con la sesión
   del navegador sí. Antes este documento decía "ninguno del producto, no hay código en `src/` que lea
   Supabase": era de la fase 3 del plan y ya no describe el repo.

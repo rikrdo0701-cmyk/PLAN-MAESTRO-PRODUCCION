@@ -275,6 +275,33 @@ Contrato que queda, y que no se deduce del código:
    `inspectionMaterialsUnicos`, `function inspectionLineaDelBom` y `lineId`. Antes de ese push cada
    guardado de plan recreaba las 348 copias entre ingesta e ingesta.
 
+### El orden de `materials` es el del BOM, y no se impone en la consulta (`RULE-SUP-049`)
+
+**Medido 2026-10-04, OT 3747**: el Detalle OT mostraba MP00070, D88-6076A, D88-6076B y COMP-6076, y la
+hoja de inspección mostraba COMP-6076, D88-6076A, D88-6076B y MP00070. No era desorden al azar: la hoja
+estaba en **alfabético**. Dos vistas, una tabla, dos consultas distintas y un `order` de por medio.
+
+Contrato que queda:
+
+1. **Los materiales de una OT se leen en UN solo punto**: `leerMaterialesDeLaOt`
+   (`supabase-bridge-replacement.js`), y las tres vistas que muestran materiales de una sola OT
+   delegan en él: `getMaterialsForOt` (Detalle OT), `getPlanningWorkOrderData` (planeación) y el bundle
+   de la hoja de inspección.
+2. **Esa consulta no lleva `order`.** `materials` no tiene columna de posición ni de secuencia
+   (`docs/schema-supabase.sql:238-253`): el orden del BOM no está escrito en ningún dato de la fila,
+   es el **orden de inserción**, y es el único que se pierde en cuanto se mete un `order`. El espejo lo
+   inserta en el orden en que el RESTlet recibió las filas de NetSuite.
+3. **Quién escribe `materials` decide el orden de cómo se lee**: si un día se necesita un orden
+   garantizado, no es volver a ordenar por componente (que es lo que rompió esto), es que el espejo
+   escriba una columna de posición.
+
+Lo que se pierde, dicho: sin `order` Postgres no garantiza un orden total. Si volvieran las copias, dos
+filas del mismo renglón podrían alternar entre recargas y `inspectionMaterialsUnicos` se quedaría con
+una u otra. Hoy no hay copias y el escritor con `lineId` (punto anterior) impide que vuelvan.
+
+El **llenado** de la banda no cambió en nada: `ceil(MP/2)` renglones, izquierda luego derecha, sin
+reordenar. La banda no tenía el defecto; tenía la lista equivocada.
+
 Sin guarda de `revision` ni modo `comparar`: el mirror convive con la concurrencia optimista
 de `app_state`/`plan_snapshots` (que son tablas de estado, no de ingesta), sin pisarse.
 
