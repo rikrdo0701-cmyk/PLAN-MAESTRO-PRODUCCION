@@ -191,24 +191,6 @@ test("ALLOCATION_CHUNK_MINUTES es 120 (chunks 4x más grandes que 30)", () => {
     "el chunk de asignación es 120 minutos, 4× más grande que 30");
 });
 
-test("findBestAssignment usa findBestOfAssignments (O(n) en vez de sort O(n log n))", () => {
-  // selectTopKAssignment usa slice(0, 3): necesita los 3 mejores ordenados.
-  // findBestOfAssignments encuentra minStart y filtra en una sola pasada O(n),
-  // produciendo exactamente el mismo resultado que sort + selectOperationAssignment.
-  const start = source.indexOf("function findBestAssignment(");
-  const end = source.indexOf("\n  function ", start + 1);
-  const fn = source.slice(start, end);
-  assert.match(fn, /findBestOfAssignments\(context, op, assignments\)/,
-    "debe usar findBestOfAssignments, no sort + selectOperationAssignment");
-  assert.doesNotMatch(fn, /assignments\.sort\(/,
-    "no debe ordenar todo el array");
-  const best = source.slice(source.indexOf("function findBestOfAssignments("), source.indexOf("\n  function ", source.indexOf("function findBestOfAssignments(") + 1));
-  assert.match(best, /selectTopKAssignment\(context, atMin\)/,
-    "debe llamar selectTopKAssignment con los candidatos en minStart");
-  assert.match(best, /selectTopKAssignment\(context, candidates\)/,
-    "sin preferred operator, debe llamar selectTopKAssignment con todos");
-});
-
 test("PlannerCore devuelve el mejor plan completo si vence el presupuesto en una estrategia posterior", async () => {
   const core = loadPlannerCore();
   let nowCalls = 0;

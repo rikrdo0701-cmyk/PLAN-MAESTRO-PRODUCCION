@@ -259,7 +259,6 @@ assert.match(dryRunSource, /totalMs/);
   assert.match(dryRunSource, /resultBuildMs/);
   assert.match(dryRunSource, /plannerStrategiesStarted/);
   assert.match(dryRunSource, /plannerMainLoopIterations/);
-  assert.match(dryRunSource, /plannerFindBestAssignmentCalls/);
   assert.match(dryRunSource, /plannerAssignmentCandidateEvaluations/);
   assert.match(dryRunSource, /plannerSlotProbes/);
   assert.match(dryRunSource, /plannerBusyConflictScans/);

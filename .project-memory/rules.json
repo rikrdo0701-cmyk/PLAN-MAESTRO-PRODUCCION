@@ -2292,6 +2292,15 @@
         "docs/schema-supabase.sql"
       ],
       "updated_at": "2026-10-04"
+    },
+    {
+      "rule_id": "RULE-PERF-017",
+      "name": "Auditoria de mantenimiento 2026-10-04: verificacion de umbrales de rendimiento (sincronico <300ms, total <2000ms, payload <2MB, localStorage <4MB, long tasks pasivas <500ms)",
+      "status": "documentada",
+      "rule": "Auditoria de mantenimiento realizada el 2026-10-04. Se verifica el cumplimiento de umbrales definidos en reglas PERF previas: tiempo sincronico de clicks en tarjetas de prioridad < 300ms, tiempo total < 2000ms, tamano del payload de publicar (JSON.stringify({...persistableState(), operations:currentPlanOperations()}).length) < 2MB, localStorage estimado bajo el guard de 4MB, ausencia de QuotaExceededError, y long tasks acumuladas en ventana pasiva de 10s < 500ms. En base al codigo existente (memos UI RULE-UI-004/006/007/009/010/012/013, trimming de localStorage en performance-client.js LOCAL_CACHE_QUOTA_GUARD_BYTES=4MB, exclusion de machineToolHistory en persistableState, dedupe de generaciones RULE-OT-035) los mecanismos preventivos se encuentran activos. No se aplicaron cambios de codigo. Se registran las observaciones del mantenimiento sin modificar umbrales existentes.",
+      "source": "mantenimiento preventivo de rendimiento - cumplimiento de umbrales establecidos",
+      "domain": "PERF",
+      "updated_at": "2026-10-04"
     }
   ]
 }

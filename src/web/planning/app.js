@@ -1781,6 +1781,13 @@ function normalizeMaterials(materials) {
       required: Number(materialValue(item, ["required", "Requerido"]) || 0),
       issued: Number(materialValue(item, ["issued", "Emitido"]) || 0),
       pending: Number(materialValue(item, ["pending", "Pendiente"]) || 0),
+      // MEDIDO 2026-10-04: `lineId` viaja porque esta funcion RECONSTRUYE el material con
+      // una lista fija de campos, y `filasMaterials` (supabase-writer.js) lo necesita para
+      // escribir `line_id` con el id de renglon de NetSuite en vez de con el UUID de la fila.
+      // Sin el, cada guardado inseria una copia del material y la hoja de inspeccion
+      // acababa con cada MP dos veces. No se deduce nada de `id`: son claves distintas y
+      // solo `line_id` es la natural.
+      lineId: String(materialValue(item, ["lineId", "line_id", "LINE_ID"]) || "").trim(),
     };
   }).filter((item) => {
     if (!item.ot || !item.component) return false;
@@ -6217,7 +6224,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     plannerLastPhase: "",
     plannerStrategiesStarted: 0,
     plannerMainLoopIterations: 0,
-    plannerFindBestAssignmentCalls: 0,
     plannerAssignmentCandidateEvaluations: 0,
     plannerSlotProbes: 0,
     plannerSlotProbeSkips: 0,
@@ -6417,7 +6423,6 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.plannerLastPhase = plannerPerformance.lastPhase || metrics.plannerLastPhase || "";
     metrics.plannerStrategiesStarted = Number(plannerStats.strategiesStarted || 0);
     metrics.plannerMainLoopIterations = Number(plannerStats.mainLoopIterations || 0);
-    metrics.plannerFindBestAssignmentCalls = Number(plannerStats.findBestAssignmentCalls || 0);
     metrics.plannerAssignmentCandidateEvaluations = Number(plannerStats.assignmentCandidateEvaluations || 0);
     metrics.plannerSlotProbes = Number(plannerStats.slotProbes || 0);
     metrics.plannerSlotProbeSkips = Number(plannerStats.slotProbeSkips || 0);
