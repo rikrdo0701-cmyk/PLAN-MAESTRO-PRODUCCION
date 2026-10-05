@@ -408,7 +408,7 @@ const TABLAS_DE_LA_INGESTA = ["work_orders", "operations", "materials", "items",
  *                   vaciado se puede hacer.
  * - vaciarFalla   : tablas cuyo espejo revienta al vaciar.
  */
-function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla = [] }) {
+function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla = [], saneaFalla = [] }) {
   const base = {};
   for (const t of TABLAS_DE_LA_INGESTA) base[t] = previas[t] || 0;
   const escrituras = [];
@@ -446,6 +446,13 @@ function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla
   contexto.PP_restletUnificado_ = () => ({ ok: true, acciones });
   contexto.PP_enrichPhotoRows_ = (filas) => ({ filas, conFoto: 0, sinFoto: filas.length });
   contexto.PP_photoMotivoCero_ = () => "";
+  if (saneaFalla.length) {
+    const sano = contexto.PP_saneaTipos_;
+    contexto.PP_saneaTipos_ = (tabla, filas) => {
+      if (saneaFalla.includes(tabla)) throw new Error("PP_bool_ is not defined");
+      return sano(tabla, filas);
+    };
+  }
   // El espejo de mentira ES la regla: borra la tabla y escribe el payload. Con payload vacio
   // deja la tabla en cero, que es lo que hace el RPC real (docs/rpc-ingesta-mirror.sql:128).
   contexto.PP_supabaseMirror_ = (tabla, filas) => {
@@ -601,6 +608,27 @@ test("sin nada que corregir, el log NO inventa una linea de saneo", () => {
   const { r } = correrIngesta({ acciones: accionesCompletas() });
   assert.ok(!r.log.some((l) => /no eran del tipo/.test(l)),
     "una corrida limpia no dice que corrigio nada: " + JSON.stringify(r.log));
+});
+
+test("si el SANEO falla, la tabla NO se vacia: un arreglo de la escritura que tumba la escritura no es un arreglo", () => {
+  // El bloque del saneo esta dentro del try cuya falla VACIA la tabla (RULE-SUP-048). El 22P02 del
+  // 2026-10-05 se produjo justo ahi, asi que un saneo que revienta por su cuenta repetiria el
+  // defecto: la tabla en cero, por un arreglo. Con `PP_saneaTipos_` tirandolo (lo que pasaria en un
+  // despliegue a medias donde `PP_bool_` todavia no existe), las filas tienen que ir COMO VINIERON
+  // y el aviso tiene que decir que el saneo no corrio.
+  const acciones = accionesCompletas();
+  const { r, base, escrituras } = correrIngesta({
+    acciones, previas: { work_orders: 213 }, saneaFalla: ["work_orders"]
+  });
+  const escritura = escrituras.find((e) => e.tabla === "work_orders");
+  assert.ok(escritura, "work_orders se escribio igual: " + JSON.stringify(r.vaciadas));
+  assert.equal(escritura.enviadas, 2, "las dos filas llegaron al espejo, sin sanear");
+  assert.equal(base.work_orders, 2, "y la tabla quedo con lo escrito, NO en cero");
+  assert.ok(!r.vaciadas.includes("work_orders"), "y no esta en la lista de vaciadas: " + JSON.stringify(r.vaciadas));
+  assert.ok(r.errores.some((e) => /saneo de tipos NO se pudo correr/.test(e)),
+    "el fallo del saneo va a errores, porque aqui la escritura SI se hizo con el payload sin sanear: " + JSON.stringify(r.errores));
+  assert.ok(r.errores.some((e) => /PP_bool_ is not defined/.test(e)),
+    "con el motivo, no solo con que fallo: " + JSON.stringify(r.errores));
 });
 
 test("una corrida completa reescribe las SIETE tablas y no deja ninguna con lo anterior", () => {

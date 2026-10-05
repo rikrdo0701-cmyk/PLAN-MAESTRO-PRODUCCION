@@ -685,13 +685,29 @@ function PP_ingesta_(forzado) {
       // ANTES de escribir, y por lo que paso el 2026-10-05: una fila con `cantidad` en "" hizo
       // que Postgres tirara 22P02 y que la tabla quedara VACIA (arriba, el porque). El saneo no
       // adivina el dato: le da a Postgres el TIPO que el DDL declara, y avisa cuantos valores toco.
-      const saneadas = PP_saneaTipos_(def.tabla, filas);
-      filas = saneadas.filas;
-      if (saneadas.corregidas) {
-        const aviso = def.tabla + ': ' + saneadas.corregidas + ' valores que no eran del tipo que el DDL declara (' +
-          saneadas.detalle + ') se escribieron con el valor por omision de la columna; el espejo es exacto y no se corrige a mano';
-        log.push(aviso);
-        console.log(aviso);
+      //
+      // Va en SU PROPIO try/catch, y no es paranoia. Este bloque esta dentro del try cuya falla
+      // VACIA la tabla (RULE-SUP-048, segunda mitad): si el saneo llegara a fallar -un despliegue
+      // a medias donde `PP_bool_` todavia no existe, o una fila que no es un objeto- fallaria por
+      // lo mismo que fallo el 22P02, o sea por su propia cuenta. Un arreglo de la escritura que
+      // puede tumbar la escritura no es un arreglo. Si falla, las filas van COMO VINIERON (que es
+      // como se comportaba antes) y el log lo dice con el motivo: un saneo que no corrio tiene que
+      // ser visible, no un 22P02 a los dos segundos.
+      try {
+        const saneadas = PP_saneaTipos_(def.tabla, filas);
+        filas = saneadas.filas;
+        if (saneadas.corregidas) {
+          const aviso = def.tabla + ': ' + saneadas.corregidas + ' valores que no eran del tipo que el DDL declara (' +
+            saneadas.detalle + ') se escribieron con el valor por omision de la columna; el espejo es exacto y no se corrige a mano';
+          log.push(aviso);
+          console.log(aviso);
+        }
+      } catch (error) {
+        const msg = def.tabla + ': el saneo de tipos NO se pudo correr (' +
+          String(error && error.message || error).slice(0, 120) + '); las filas van como vinieron';
+        log.push(msg);
+        errores.push(msg);
+        console.log(msg);
       }
       const r = PP_supabaseMirror_(def.tabla, filas, config);
       conteo[def.tabla] = r.escritas;
