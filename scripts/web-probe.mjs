@@ -65,12 +65,15 @@ const HEADED = has("headed");
 const KEEP_OPEN = has("keep-open");
 const TIMEOUT_MS = Number(flag("timeout", 60000));
 const BACKEND = flag("backend", "stub") === "none" ? "none" : "stub";
-// MEDIDO 2026-10-05: `machine_planning_overrides` NO existe en el proyecto, y su 404 hace que
-// `supabase-catalog-boot.js` marque `informe.fallo`, que `supabase-catalog-apply.js:141` tome
-// como motivo para NO aplicar NADA, y que la pagina arranque sin operadores, sin matriz y sin
-// maquinas. Es lo que le pasa a la persona hoy. `--overrides=vacias` apaga esa unica falla para
-// medir el resto de la corrida: si con el todo lo demas queda verde, queda medido que el 404 es
-// la causa y no la sonda ni los datos.
+// MEDIDO 2026-10-05T18:31Z con sesion: de las 25 tablas que lee el arranque, la UNICA vacia en
+// produccion es `work_orders` (0 filas). Con eso, el aviso de catalogos que la persona ve hoy dice
+// solo esa, y las ocho que decia la sonda (que no las siembra) no son suyas. Se comparan en el
+// informe para que el aviso de la corrida no se lea como el de la planta.
+const VACIAS_EN_PRODUCCION = ["work_orders"];
+// `--overrides=vacias` ya no apaga una falla real: `machine_planning_overrides` SI existe en el
+// proyecto (8 filas medidas) y la sonda ya la sirve con filas. La opcion se deja por si hay que
+// aislar el camino del override, pero su premisa anterior (que la tabla no existia y que el 404
+// abortaba el apply entero) quedo desmentida.
 const OVERRIDES_VACIAS = flag("overrides", "inexistente") === "vacias";
 
 const root = path.resolve(".");
@@ -850,7 +853,27 @@ async function runProbe() {
       });
       if (avisoCatalogos) {
         summary.avisoCatalogos = avisoCatalogos;
-        record("warn", "aviso de catalogos en pantalla", avisoCatalogos);
+        // El aviso de la sonda NO es el de la persona, y decirlo es parte del dato. MEDIDO
+        // 2026-10-05T18:31Z con sesion, de las 25 tablas que lee el arranque la UNICA vacia en
+        // produccion es `work_orders` (0 filas, el incidente de las 07:52); las otras ocho que el
+        // aviso nombra tienen filas ahi (items 2494, inventory 1935, sales_orders 148,
+        // unconfirmed_work_orders 20, closed_work_order_summaries 18, subcontracts 11, ot_types 4,
+        // calendar_exceptions 2). La sonda las sirve vacias porque el fixture no las siembra, asi
+        // que el aviso se lee como "una planta sin esos datos" y no como "la pagina esta asi".
+        // El texto del aviso viene pegado ("Supabaseot_types", porque son dos elementos sin
+        // espacio entre ellos), asi que se quita la frase fija del pie y se parte por comas. MEDIDO
+        // 2026-10-05: con un `match` de identificadores salian pedazos ("ablas", "upabaseot_types").
+        const cuerpo = avisoCatalogos
+          .replace(/^.*?Supabase/, "")
+          .split(".")[0];
+        const enElAviso = cuerpo
+          .split(",")
+          .map((t) => t.trim().replace(/^[^a-z_]*/, ""))
+          .filter((t) => /^[a-z_][a-z0-9_]*$/.test(t));
+        const soloEnLaSonda = enElAviso.filter((t) => !VACIAS_EN_PRODUCCION.includes(t));
+        const soloEnProduccion = VACIAS_EN_PRODUCCION.filter((t) => !enElAviso.includes(t));
+        summary.avisoCatalogosVsProduccion = { enLaSonda: enElAviso, vaciasEnProduccion: VACIAS_EN_PRODUCCION, soloEnLaSonda, soloEnProduccion };
+        record("warn", "aviso de catalogos en pantalla", `${avisoCatalogos} || MEDIDO en produccion: solo ${VACIAS_EN_PRODUCCION.join(", ")} esta vacia; la sonda deja ${soloEnLaSonda.length} sin sembrar (${soloEnLaSonda.join(", ")}) y no nombra ${soloEnProduccion.join(", ") || "ninguna"}`);
       }
       const observed = await page.evaluate(() => ({
         calls: window.__PROBE_CALLS__ || [],
@@ -858,6 +881,14 @@ async function runProbe() {
         pisados: window.__PROBE_STOLEN__ || [],
         supabase: window.__PROBE_SUPABASE__ || { configurados: [], configurecidos: [] },
         maquinas: document.querySelectorAll("#machineTable [data-delete-machine]").length,
+        // MEDIDO 2026-10-05: contar maquinas NO demuestra que el catalogo llegara desde Supabase,
+        // porque el estado del fixture ya trae 4 y con el apply abortado seguian siendo 4. Por eso
+        // el falso sirve una maquina de mas que el fixture NO tiene (`SUP-05`): si el nombre esta
+        // en pantalla, el catalogo vino de `machine_catalog`; si no esta, el apply se aborto y la
+        // pagina quedo con el estado del fixture.
+        maquinasDeSupabase: Array.from(document.querySelectorAll("#machineTable tr"))
+          .map((fila) => (fila.textContent || "").replace(/\s+/g, " ").trim())
+          .filter((texto) => texto.indexOf("SUP-05") >= 0).length,
       }));
       // Se vuelve al PLAN. Los pasos que siguen miden el plan (agregar OT, generar, Gantt,
       // reportes) y sus controles solo existen en esa vista: quedarse en Herramientas hacia que
@@ -874,6 +905,13 @@ async function runProbe() {
       const pidioEstado = observed.supabase.configurecidos.includes("PPSupabaseReader") && tablasLeidas.length > 0;
       check("el arranque lee el estado por Supabase", pidioEstado, `configurados: ${JSON.stringify(observed.supabase.configurecidos)} · ${tablasLeidas.length} tablas: ${tablasLeidas.slice(0, 8).join(", ")}`);
       check("el catalogo de maquinas queda disponible", observed.maquinas > 0, `${observed.maquinas} maquinas en Catalogos`);
+      // El que de verdad importa: que la maquina que SOLO esta en `machine_catalog` aparezca. Sin
+      // este check, un apply abortado se ve igual que un apply bueno.
+      check(
+        "el catalogo de maquinas LLEGO desde Supabase, no se quedo con el del fixture",
+        observed.maquinasDeSupabase > 0,
+        `${observed.maquinasDeSupabase} filas con la maquina que solo esta en machine_catalog (SUP-05) de ${observed.maquinas} en pantalla`,
+      );
       record(pidioEstado ? "ok" : "fail", "carga de estado inicial", `${lecturas.length} lecturas a Supabase en ${tablasLeidas.length} tablas, ${observed.calls.length} llamadas al puente, ${observed.maquinas} maquinas`);
       if (!pidioEstado) throw new Error("SIN ESTADO INICIAL: el resto de los pasos mediria una app degradada, no la app real");
       return observed;

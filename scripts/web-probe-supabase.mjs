@@ -23,10 +23,18 @@
  * lector cambian, esta sonda se cae en vez de servir una tabla con la forma vieja.
  *
  * LAS TABLAS QUE NO TIENEN FIXTURE SE RESPONDEN VACIAS, y una VACIA es una respuesta legitima: es lo
- * que veria una planta que todavia no tiene esos datos. `machine_planning_overrides` se responde
- * 404 a proposito,
- * porque MEDIDO 2026-10-01 esa tabla NO existe en el proyecto y el lector la reporta en `errors` y
- * sigue adelante sin override: falsearla con filas taparia justo ese camino.
+ * que veria una planta que todavia no tiene esos datos.
+ *
+ * `machine_planning_overrides` DEJA DE RESPONDERSE 404. MEDIDO 2026-10-05T18:31Z con sesion (que sin
+ * sesion no mide nada, RULE-SUP-037): la tabla EXISTE y trae 8 filas, `machine_nombre` 39, 40, 42,
+ * 90, 113, 188, 209 y 211, todas `excluida = false`, `actualizado` 2026-09-29T22:20:31Z. La
+ * afirmacion anterior ("no existe en el proyecto", 2026-10-01) estaba en esta cabecera y en
+ * `TABLAS_INEXISTENTES`, y era falsa. Con el 404 falso pasaba esto, que es lo grave: el boot marca
+ * `informe.fallo` (`supabase-catalog-boot.js:406`) y `supabase-catalog-apply.js:141` ABORTA la
+ * aplicacion entera, asi que la sonda llevaba dos corridas midiendo la app con el estado del
+ * FIXTURE, no la app leyendo Supabase. El nombre real del catalogo de maquinas es
+ * `machine_catalog` (7 filas, manual, escrita por la pagina); `machines` es el espejo del RESTlet
+ * (202 filas) que la pagina ya no lee; `machines_catalog` NO existe (404 PGRST205 medido).
  *
  * `plan_guardar` SI SE IMPLEMENTA, y por que. MEDIDO con las reglas del repo: el 2026-09-30
  * contestaba HTTP 400 con 42702 -o sea que EXISTIA (RULE-SUP-025)- y el 2026-10-03 la pagina ya
@@ -110,6 +118,13 @@ export function filasDesdeFixture(state) {
   const operationCatalog = [];
   const ocultas = new Set(state.hiddenCapabilities || []);
   const customKeys = new Set((state.customCapabilities || []).map((c) => c.key));
+  // El catalogo que se sirve: las maquinas del estado MAS una que no esta en el estado. Sin esa
+  // maquina de mas, el check de la pagina no puede distinguir "llego de Supabase" de "se quedo con
+  // el fixture", y con el apply abortado los dos dan el mismo numero. Ver la nota de mas abajo.
+  const machineCatalog = [
+    ...(state.machines || []).map((m) => ({ nombre: texto(m.name || m.machine), activa: true, excluida: false })),
+    { nombre: "SUP-05", activa: true, excluida: false },
+  ];
 
   for (const [key, operadores] of Object.entries(state.matrix || {})) {
     const { ct, label } = partirKey(key);
@@ -221,11 +236,37 @@ export function filasDesdeFixture(state) {
     capabilities,
     operation_catalog: operationCatalog,
     matrix,
-    machine_catalog: (state.machines || []).map((m) => ({
-      nombre: texto(m.name || m.machine),
-      activa: true,
-      excluida: false,
-    })),
+    // UNA maquina de mas, que NO esta en el estado del fixture, para que el check de maquinas
+    // pueda distinguir "el catalogo llego desde Supabase" de "la pagina se quedo con el fixture".
+    // MEDIDO 2026-10-05: con el 404 falso de `machine_planning_overrides` el apply se abortaba y
+    // el check veia 4 maquinas, las mismas del fixture, y pasaba sin haber leido nada. Si el apply
+    // se aborta otra vez, este numero es 4 y el check se cae, que es lo que tiene que pasar.
+    machine_catalog: machineCatalog,
+    // MEDIDO 2026-10-05 en produccion: 8 filas para 7 maquinas del catalogo, todas
+    // `excluida = false`, y la sobrante (`90`) es una maquina que ya no esta en `machine_catalog`.
+    // O sea que hay una fila por maquina (las escribe el espejo de la hoja MAQUINAS con su columna
+    // EXCLUIDA) y la fila se queda cuando la maquina sale del catalogo: `guardarCatalogos` sube en
+    // ANEXO y su borrado esta apagado (`BorradoDeCatalogosHabilitado`, apagado el 2026-09-30
+    // cuando borro 76 filas de `ot_configurations`). Se reproduce esa forma -una fila por maquina
+    // del catalogo con `excluida` en falso, mas una fila cuya maquina no esta en el catalogo- para
+    // que la sonda mida el lector de verdad (`mapMachines`, supabase-reader.js:636, que ignora la
+    // que no corresponde) en vez de un `errors` por 404.
+    machine_planning_overrides: [
+      ...machineCatalog.map((m) => ({
+        machine_nombre: m.nombre.toUpperCase(),
+        excluida: false,
+        actualizado: new Date().toISOString(),
+      })),
+      { machine_nombre: "MAQUINA-RETIRADA-99", excluida: false, actualizado: new Date().toISOString() },
+    ],
+    // MEDIDO 2026-10-05 en produccion: 8 filas para 7 maquinas del catalogo, todas
+    // `excluida = false`, y la sobrante (`90`) es una maquina que ya no esta en `machine_catalog`.
+    // O sea que la fila se queda cuando la maquina sale del catalogo: `guardarCatalogos` sube en
+    // ANEXO y su borrado esta apagado (`BorradoDeCatalogosHabilitado`, apagado el 2026-09-30
+    // cuando borro 76 filas de `ot_configurations`). Se reproduce esa forma -una fila por maquina
+    // con `excluida` en falso, mas una fila cuya maquina no esta en el catalogo- para que la sonda
+    // mida el lector de verdad (`mapMachines`, supabase-reader.js:636, que ignora la que no
+    // corresponde) en vez de un `errors` por 404.
     operations,
     work_orders: workOrders,
     selected_ots: (state.selectedOts || []).map((ot, i) => ({ ot: texto(ot), posicion: i + 1 })),
@@ -308,11 +349,16 @@ export function filasDesdeFixture(state) {
 
 /**
  * Las tablas que en el proyecto SUPABASE NO EXISTEN y por eso el lector las reporta en `errors` y
- * sigue sin el dato. MEDIDO 2026-10-01 con `.openchamber/diag-supabase-todas.mjs`: la creaba
- * `docs/schema-supabase-cierre-catalogos.sql`, que sigue sin aplicar. Servirla con filas taparia
- * el camino; servirla con 404 es lo que pasa en produccion.
+ * sigue sin el dato.
+ *
+ * MEDIDO 2026-10-05T18:31Z con sesion, las 25 tablas que la pagina lee (`READ_TABLES` +
+ * `PERSON_TABLES` de supabase-reader.js:62-101) EXISTEN todas: las unicas 404 del proyecto son
+ * `machines_catalog` (PGRST205) y `prepared_planning_by_ot` (PGRST205), y ninguna de las dos la pide
+ * el arranque. Por eso la lista esta VACIA a proposito: dejar `machine_planning_overrides` aqui
+ * hacia que el apply entero se abortara por una tabla que si existe, y la sonda pasaba a medir el
+ * estado del fixture en vez del estado leido de Supabase.
  */
-export const TABLAS_INEXISTENTES = ["machine_planning_overrides"];
+export const TABLAS_INEXISTENTES = [];
 
 /**
  * `plan_guardar` en el falso, con la misma forma que la del DDL

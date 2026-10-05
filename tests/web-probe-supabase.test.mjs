@@ -91,6 +91,12 @@ const MAPPER_POR_TABLA = {
   operation_catalog: "mapOperationCatalog",
   matrix: "mapMatrix",
   machine_catalog: "mapMachines",
+  // MEDIDO 2026-10-05: la sonda antes la servia con 404 y no la vigila. Ahora que se sirve con
+  // filas (existe en produccion, 8 filas medidas), sus columnas tienen que estar cubiertas igual
+  // que las dems: `machine_nombre` y `excluida` las lee `mapMachinePlanningOverrides`, que es la
+  // que arma `state.machinePlanningOverrides` (supabase-reader.js:1494); `actualizado` esta en el
+  // DDL.
+  machine_planning_overrides: "mapMachinePlanningOverrides",
   operations: "mapOperations",
   work_orders: "mapWorkOrders",
   selected_ots: "mapSelectedOts",
@@ -170,7 +176,7 @@ test("toda columna que la sonda escribe la lee el lector de verdad", () => {
   assert.deepEqual(sueltas, [], `columnas que la sonda inventa y nadie lee: ${sueltas.join(", ")}`);
 });
 
-test("el guard de columnas cubre las quince tablas con datos", () => {
+test("el guard de columnas cubre las dieciseis tablas con datos", () => {
   // Si alguien quita una tabla del mapper, el guard deja de mirarla en silencio. Este test lo
   // dice: la cuenta de tablas vigiladas es parte del contrato.
   const tablas = filasDesdeFixture(estadoConUnPlan());
@@ -211,28 +217,38 @@ test("las unicas tablas que se sirven sin que el lector las pida son las que esc
   }
 });
 
-test("con inexistentesVacias la tabla que falta se sirve vacia, para aislar la causa", () => {
-  // MEDIDO 2026-10-05: el 404 de machine_planning_overrides hace que el boot marque `fallo` y que
-  // el apply NO aplique nada (supabase-catalog-apply.js:141), y con eso la pagina queda sin
-  // operadores ni maquinas. La opcion apagada mide lo que mide la persona; la encendida quita
-  // esa unica falla para ver si el resto de la corrida se pone verde.
-  const tablas = filasDesdeFixture(estadoConUnPlan());
-  const url = new URL("http://127.0.0.1:1/rest/v1/machine_planning_overrides?select=*");
-  const conTabla = responderPostgREST(url, "GET", {}, tablas, { inexistentesVacias: true });
-  assert.equal(conTabla.status, 200);
-  assert.deepEqual(JSON.parse(conTabla.body), []);
-});
-
-test("machine_planning_overrides se responde 404 porque en el proyecto NO existe", () => {
-  // MEDIDO 2026-10-01 con .openchamber/diag-supabase-todas.mjs: la 25a tabla todavia no esta; la
-  // crea docs/schema-supabase-cierre-catalogos.sql, que sigue sin aplicar. El lector la reporta
-  // en `errors` y sigue sin el override. Servirla con filas taparia justo ese camino, y servirla
-  // vacia seria fingir una tabla que no existe: la unica respuesta honesta es el 404.
-  assert.ok(TABLAS_INEXISTENTES.includes("machine_planning_overrides"));
+test("machine_planning_overrides se sirve CON FILAS porque en produccion EXISTE", () => {
+  // MEDIDO 2026-10-05T18:31Z con sesion (sin sesion el RLS responde cero y no mide nada,
+  // RULE-SUP-037): la tabla existe con 8 filas, `machine_nombre` 39, 40, 42, 90, 113, 188, 209 y
+  // 211, todas `excluida = false`, `actualizado` 2026-09-29T22:20:31Z. La version anterior de esta
+  // sonda la respondia 404 porque el 2026-10-01 se concluyo que no existia, y eso hacia que
+  // `supabase-catalog-boot.js:406` marcara `informe.fallo` y `supabase-catalog-apply.js:141`
+  // ABORTARA la aplicacion entera: dos corridas midiendo el estado del fixture, no el leido.
+  assert.deepEqual(TABLAS_INEXISTENTES, [], "ninguna tabla que la pagina lee falta en produccion (medido 2026-10-05)");
   const url = new URL("http://127.0.0.1:1/rest/v1/machine_planning_overrides?select=*");
   const respuesta = responderPostgREST(url, "GET", {}, filasDesdeFixture(estadoConUnPlan()));
-  assert.equal(respuesta.status, 404);
-  assert.equal(JSON.parse(respuesta.body).code, "42P01");
+  assert.equal(respuesta.status, 200);
+  const filas = JSON.parse(respuesta.body);
+  assert.ok(filas.length > 0, "la tabla existe: servirla vacia seria fingir que no hay maquinas");
+  for (const fila of filas) {
+    assert.equal(typeof fila.machine_nombre, "string", "machine_nombre es la clave que lee mapMachines");
+    assert.equal(fila.excluida, false, "en produccion nadie ha apartado ninguna maquina");
+  }
+  // La forma de produccion: una fila por maquina del catalogo MAS una cuya maquina ya no esta.
+  const tablas = filasDesdeFixture(estadoConUnPlan());
+  const delCatalogo = filas.filter((f) => tablas.machine_catalog.some((m) => m.nombre === f.machine_nombre));
+  assert.equal(delCatalogo.length, tablas.machine_catalog.length, "toda maquina del catalogo tiene su fila de override");
+  assert.ok(filas.length > delCatalogo.length, "esta la fila sobrante de la maquina retirada (medido: la 90)");
+});
+
+test("el catalogo de maquinas trae una fila que el fixture NO tiene, para poder distinguir de donde salio", () => {
+  // Sin esto, contar maquinas no prueba nada: el fixture ya trae 4 y con el apply abortado tambien
+  // son 4. El falso sirve una de mas (`SUP-05`), y el check de la sonda la busca por nombre.
+  const tablas = filasDesdeFixture(estadoConUnPlan());
+  const nombres = tablas.machine_catalog.map((m) => m.nombre);
+  assert.ok(nombres.indexOf("SUP-05") >= 0, "machine_catalog tiene la maquina que solo existe en Supabase");
+  const delFixture = (estadoConUnPlan().machines || []).map((m) => m.name || m.machine);
+  assert.ok(delFixture.indexOf("SUP-05") < 0, "SUP-05 no esta en el estado del fixture, que es justo lo que la distingue");
 });
 
 // ---------------------------------------------------------------------------
