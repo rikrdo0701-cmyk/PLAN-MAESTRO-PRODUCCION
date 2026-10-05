@@ -468,6 +468,32 @@ function accionesCompletas() {
   };
 }
 
+test("la ventana de OTs CERRADAS del 2246 queda saida en el LOG, y NO como error de corrida", () => {
+  // MEDIDO 2026-10-05: el 2246 desplegado (`netsuite-restlet-unificado-supabase.js`) es el unico
+  // que escribe `work_orders`, y su accion `workorders` ahora suma dos campos que la ingesta no
+  // necesita para escribir pero que si hay que decir: `cerradas` (cuantas trayo la ventana de 90
+  // dias, RULE-SUP-050) y `aviso` (que aparece SOLO si la consulta de cerradas fallo).
+  const acciones = accionesCompletas();
+  acciones.workorders.cerradas = { incluidas: 3, dias: 90, tope: 300 };
+  acciones.workorders.aviso = "No se pudieron leer las OTs CERRADAS (Failed to parse SQL): se trajo solo las abiertas";
+  const { r, base } = correrIngesta({ acciones, previas: { work_orders: 213 } });
+
+  assert.equal(r.ok, true, "las abiertas si se escribieron: la corrida ES valida y no se declara falsa");
+  assert.equal(base.work_orders, 2, "y work_orders quedo con las filas que si trajo el 2246");
+  assert.ok(r.log.some((l) => /3 OTs cerradas de 90 dias/.test(l)),
+    "el log dice cuantas cerradas entraron, que es la cifra que avisa si la ventana funciona: " + JSON.stringify(r.log));
+  assert.ok(r.log.some((l) => /No se pudieron leer las OTs CERRADAS/.test(l)),
+    "y el aviso pasa tal cual, con su POR QUE: " + JSON.stringify(r.log));
+  assert.ok(!r.errores.some((e) => /CERRADAS/.test(e)),
+    "pero NO es un error de corrida: ponerlo en `errores` diria que la ingesta fallo, y no fallo");
+});
+
+test("sin ventana declarada el log no inventa nada (el 2246 viejo no manda ese campo)", () => {
+  const { r } = correrIngesta({ acciones: accionesCompletas() });
+  assert.ok(!r.log.some((l) => /OTs cerradas/.test(l)),
+    "si el RESTlet no declara `cerradas`, la bitacora no escribe una linea de cerradas: " + JSON.stringify(r.log));
+});
+
 test("una corrida completa reescribe las SIETE tablas y no deja ninguna con lo anterior", () => {
   const previas = Object.fromEntries(TABLAS_DE_LA_INGESTA.map((t) => [t, 9]));
   const { r, base, escrituras } = correrIngesta({ acciones: accionesCompletas(), previas });

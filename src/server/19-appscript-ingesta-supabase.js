@@ -493,6 +493,16 @@ function PP_ingesta_(forzado) {
       // filas se quedan con `filas`: el campo publico del return sigue llamandose `filas`.
       let filas = accion.rows || [];
       console.log(nombre + ': ' + filas.length + ' filas recibidas');
+      // Lo que el 2246 dice de la ventana de OTs CERRADAS (RULE-SUP-050). Va al LOG y no a
+      // `errores` a proposito: si la consulta de cerradas fallo, las abiertas si se escribieron
+      // y la corrida es valida; lo que se pierde es la evidencia de cierre, y eso lo va a
+      // decir el toast de inspeccion cuando vuelva a aparecer. Meterlo en `errores` diria que
+      // la corrida fallo, y eso no fue.
+      if (accion.cerradas) {
+        log.push(nombre + ': ' + accion.cerradas.incluidas + ' OTs cerradas de ' + accion.cerradas.dias +
+          ' dias (tope ' + accion.cerradas.tope + ')');
+      }
+      if (accion.aviso) log.push(nombre + ': ' + accion.aviso);
       // FOTOS DE GOOGLE DRIVE, Y POR QUE ESTA AQUI.
       //
       // MEDIDO 2026-10-01: la foto_url que la pagina muestra sale de GOOGLE DRIVE

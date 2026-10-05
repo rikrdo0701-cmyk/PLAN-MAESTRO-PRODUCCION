@@ -146,6 +146,42 @@ truncado, avisos[], degradaciones[] }`.
 
 ### 4.1 `work_orders` también trae las OTs cerradas recientes (RULE-SUP-050)
 
+**En qué archivo vive esto, y por qué el primero que se editó no era el que corre (medido el
+2026-10-05, tarde).** La ventana de cerradas está en **los dos** archivos del espejo, y en el que
+corre se puso después:
+
+| Archivo | Qué es | Qué trae la ventana de cerradas |
+|---|---|---|
+| `netsuite-restlet-unificado-supabase.js` | **el RESTlet 2246 desplegado (deploy 1)**, invocado por `src/server/19-appscript-ingesta-supabase.js` | `workorders_()` = `sqlWorkordersAbiertas_()` + `sqlWorkordersCerradas_()`, con `DIAS_OT_CERRADAS = 90` y `MAX_OT_CERRADAS = 300` |
+| `netsuite-restlet-supabase-sync.js` | el **diseño propuesto** de User Events (Suitelet + RESTlet + ScheduledScript), **no desplegado** | `leerWorkorders` + `leerWorkordersCerradas_`, `DIAS_OT_CERRADAS = 90`, `ACCIONES.workorders.maxScanCerradas: 300` |
+
+La prueba de cuál es el que corre no es el documento (el documento lo dice desde el 2026-09-29,
+en las líneas 10-23) sino **la forma de las filas en Supabase**, medida el 2026-10-05 con sesión y
+solo lectura:
+
+- `work_orders.fecha_vencimiento` está poblada en **213 de 213** y `fecha_fin_ns` en **0 de 213**,
+  aunque el repositorio tiene un archivo que emite **las dos** desde el mismo `t.enddate`
+  (`netsuite-restlet-supabase-sync.js:354-355`). El único lector de `work_orders` que emite una y
+  no la otra es el unificado, que tiene **ocho columnas** y ni una de más.
+- `cant_ensamblada` está en **0 en las 213** y `cant_pendiente` es exactamente `cantidad`, con
+  `integer not null default 0` en el DDL: el unificado tampoco emite esas dos. El lector ya lo
+  declara y lo compensa (`supabase-reader.js:1276-1311`, medido el 2026-09-29: «solo llega
+  `fecha_vencimiento`»).
+- `descripcion` viene poblada en las 213 (RULE-SUP-012, `item.description`, cambio del 2026-09-28
+  que sí está en el archivo desplegado) y `cliente` en las 213 **como cadena vacía**.
+
+El detalle que hace el cambio irrelevante si se aplicara al archivo equivocado: desplegar
+`netsuite-restlet-supabase-sync.js` **no** sustituye al 2246, porque el que invoca la ingesta es el
+unificado. Y `RULE-SUP-001` (que nombraba al archivo propuesto como «único writer») estaba
+desactualizada en ese punto; se corrigió con esta medición.
+
+**Lo que la ingesta hace con los dos campos nuevos.** El 2246 devuelve, en la acción `workorders`,
+`cerradas: { incluidas, dias, tope }` siempre, y `aviso` **solo** si la consulta de cerradas falló.
+La ingesta no los necesita para escribir (`pp` lee `accion.rows`), pero los pasa al `log` de la
+corrida — y **no** a `errores`: si la ventana falla, las abiertas sí se escribieron y la corrida es
+válida; lo que se pierde es la evidencia de cierre, y eso lo dirá el toast de inspección cuando
+vuelva a aparecer.
+
 **Por qué, medido el 2026-10-05.** `confirmWorkOrderClosures` —la evidencia positiva de
 RULE-OT-051— lee `work_orders`, y mientras esa tabla trajera solo abiertas la OT cuya evidencia
 se buscaba era justo la que no estaba: las OTs 3302, 3492 y 3570, **cerradas** en NetSuite
@@ -157,7 +193,10 @@ a las abiertas, las OTs cerradas con `t.enddate` de los últimos `DIAS_OT_CERRAD
 (las de `t.enddate IS NULL` entran igual: son las que no se pueden fechar). Siguen la MISMA
 acción y no una segunda, porque la ingesta escribe con `ingesta_mirror`, que borra la tabla y
 reescribe: dos acciones sobre `work_orders` se comerían entre sí. El número de filas cerradas
-que entró se declara en `notas.cerradas.incluidas` y en `notas.cerradas.dias`.
+que entró se declara en `notas.cerradas.incluidas` y en `notas.cerradas.dias` (en el archivo
+desplegado el equivalente es `cerradas.incluidas` / `cerradas.dias` / `cerradas.tope`). El
+«solo en el barrido» es del archivo propuesto: el 2246 desplegado no tiene modo por folio, así que
+siempre trae la ventana.
 
 **Tope y orden, que es lo que hace que el recorte sea defendible:** `maxScanCerradas: 300`,
 aparte del `maxScan: 500` de las abiertas (si compartieran, un trimestre con muchas cerradas se
@@ -167,10 +206,13 @@ NULLS LAST, ot` para que si hay que recortar se pierdan las viejas y no las reci
 fuera arbitrario.
 
 **Si su SQL falla, no se pierde nada:** la consulta de cerradas va en su propio `try/catch` y su
-fallo degrada la acción a "solo abiertas" con aviso. Si la acción `workorders` completa
-fallara, la ingesta vaciaría `work_orders` entera. `SYSDATE - 90` y `NULLS LAST` **no se
-pudieron verificar desde el repo**: hay que comprobarlos en la cuenta con
-`accion:'diagnostico'` o `dryRun`.
+fallo degrada la acción a "solo abiertas" con aviso (en el 2246, el campo `aviso`, que la ingesta
+pasa al `log`). Si la acción `workorders` completa fallara, la ingesta vaciaría `work_orders`
+entera. `SYSDATE - 90`, `NULLS LAST` y `FETCH NEXT n ROWS ONLY` **no se pudieron verificar desde
+el repo**: hay que comprobarlos en la cuenta con `accion:'diagnostico'` o `dryRun` (en el 2246, con
+`accion: 'workorders'` a pelo y leyendo `cerradas.incluidas` y `aviso`). Si el SQL no fuera
+válido, el resultado esperado es `work_orders` con las mismas 213 abiertas, `cerradas.incluidas: 0`
+y el aviso en el `log`: eso es la degradación funcionando, no un fallo.
 
 **Lo que el espejo hace con esas filas: nada.** `work_orders` es espejo exacto de lo que devolvió
 la última corrida, así que una OT cerrada que dejó de entrar en la ventana desaparece en la

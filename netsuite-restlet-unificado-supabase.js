@@ -14,6 +14,9 @@
  *                  "centros" | "inventario" | "ordenes_venta" | "todas" }
  *
  * Respuesta: { ok, accion, headers, rows, totalRows }
+ * La accion `workorders` suma dos campos que la ingesta no lee: `cerradas` (cuantas OTs
+ * cerradas trajo la ventana de 90 dias) y `aviso`, que aparece SOLO si la consulta de
+ * cerradas fallo y la accion quedo en "solo abiertas" (RULE-SUP-050).
  */
 define(['N/query'], (query) => {
 
@@ -45,10 +48,76 @@ define(['N/query'], (query) => {
   }
 
   // ===========================================================================
-  // 1764 — WO_LISTA: search en transaction + record.load para BOM Revision
+  // 1764 — WO_LISTA: SuiteQL, y ADEMAS las OTs cerradas de una ventana (RULE-SUP-050)
   // ===========================================================================
+  //
+  // POR QUE LAS CERRADAS, MEDIDO 2026-10-05. Este filtro de estatus (abajo) hacia que
+  // `work_orders` fuera, por definicion, la tabla de las OTs que NO estan cerradas. Y
+  // `confirmWorkOrderClosures` —la evidencia positiva de RULE-OT-051— busca en `work_orders`
+  // la OT cuya closure quiere confirmar: la OT que hay que confirmar es justo la que no
+  // estaba. Daba `found:false` para siempre. MEDIDO en produccion: las OTs 3302, 3492 y 3570
+  // ("Orden de trabajo : Cerrada", entrega 2026-10-01) quedaron en el plan con 57 piezas
+  // fantasma. Ningun filtro del lado de la pagina lo arregla: faltaba el dato.
+  //
+  // La ventana es de 90 dias por `t.enddate` (decision del usuario 2026-10-05) y las de
+  // `t.enddate IS NULL` entran tambien: son las que no se pueden fechar, y sin ellas la
+  // evidencia de cierre volveria a faltar justo en las OTs que NetSuite cerro sin fecha.
+  //
+  // TOPE PROPIO y no compartido con las abiertas: si compartieran, un trimestre con muchas
+  // cerradas se comería el lugar de las abiertas, que son las que la pagina necesita para
+  // planificar. `ORDER BY t.enddate DESC NULLS LAST, t.tranid` para que, si hay que
+  // recortar, se pierdan las viejas y no las recientes.
+  //
+  // NO SE PUEDO VERIFICAR DESDE EL REPO: la aritmetica `SYSDATE - 90` y el `NULLS LAST` /
+  // `FETCH NEXT` de SuiteQL no se pueden correr desde aca. Por eso la consulta de cerradas
+  // va en su propio `try/catch` y su fallo degrada la accion a "solo abiertas" CON AVISO,
+  // en vez de tumbar la accion entera: si `workorders_` fallara completo, la ingesta
+  // vaciaria `work_orders` entera (RULE-SUP-048).
+  const DIAS_OT_CERRADAS = 90;
+  const MAX_OT_CERRADAS = 300;
+  const COLUMNAS_WORKORDERS = [
+    'wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'estatus', 'cliente', 'fecha_vencimiento'
+  ];
+
   function workorders_() {
-    const sql = [
+    const abiertas = runSuiteQL_(sqlWorkordersAbiertas_());
+    let cerradas = [];
+    let aviso = null;
+    try {
+      cerradas = runSuiteQL_(sqlWorkordersCerradas_());
+    } catch (error) {
+      aviso = 'No se pudieron leer las OTs CERRADAS (' + (error && error.message ? error.message : String(error)) +
+        '): se trajo solo las abiertas';
+    }
+    const rows = abiertas.concat(cerradas);
+    const salida = {
+      ok: true,
+      headers: COLUMNAS_WORKORDERS,
+      rows: rows.map(filaWorkOrder_),
+      totalRows: rows.length,
+      // Lo que la ingesta no lee, pero dice que paso. `cerradas.incluidas` es la cifra que
+      // dice si la ventana esta trayendo lo que debe.
+      cerradas: { incluidas: cerradas.length, dias: DIAS_OT_CERRADAS, tope: MAX_OT_CERRADAS }
+    };
+    if (aviso) salida.aviso = aviso;
+    return salida;
+  }
+
+  function filaWorkOrder_(r) {
+    return {
+      wo_internal_id: String(r.wo_internal_id || ''),
+      ot: String(r.ot || ''),
+      articulo: String(r.articulo || ''),
+      descripcion: String(r.descripcion || ''),
+      cantidad: Number(r.cantidad) || 0,
+      estatus: String(r.estatus || ''),
+      cliente: String(r.cliente || ''),
+      fecha_vencimiento: isoFecha_(r.fecha_vencimiento)
+    };
+  }
+
+  function sqlWorkordersAbiertas_() {
+    return [
       'SELECT DISTINCT',
       '  t.id AS wo_internal_id,',
       '  t.tranid AS ot,',
@@ -65,6 +134,9 @@ define(['N/query'], (query) => {
       "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
       'LEFT JOIN item i ON i.id = tl.item',
       "WHERE t.type = 'WorkOrd'",
+      // Estas tres palabras son las que hacen "abierta" y las MISMAS tres son las que
+      // arman la consulta de cerradas: los dos conjuntos son disjuntos por construccion, y
+      // por eso una OT no puede aparecer dos veces en el espejo.
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CERRAD%'",
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%CLOSED%'",
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%COMPLET%'",
@@ -74,22 +146,33 @@ define(['N/query'], (query) => {
       '  AND tl.location = 1',
       'ORDER BY t.tranid'
     ].join('\n');
-    const rows = runSuiteQL_(sql);
-    return {
-      ok: true,
-      headers: ['wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'estatus', 'cliente', 'fecha_vencimiento'],
-      rows: rows.map(r => ({
-        wo_internal_id: String(r.wo_internal_id || ''),
-        ot: String(r.ot || ''),
-        articulo: String(r.articulo || ''),
-        descripcion: String(r.descripcion || ''),
-        cantidad: Number(r.cantidad) || 0,
-        estatus: String(r.estatus || ''),
-        cliente: String(r.cliente || ''),
-        fecha_vencimiento: isoFecha_(r.fecha_vencimiento)
-      })),
-      totalRows: rows.length
-    };
+  }
+
+  function sqlWorkordersCerradas_() {
+    return [
+      'SELECT DISTINCT',
+      '  t.id AS wo_internal_id,',
+      '  t.tranid AS ot,',
+      '  BUILTIN.DF(tl.item) AS articulo,',
+      '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
+      '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
+      '  BUILTIN.DF(t.status) AS estatus,',
+      '  BUILTIN.DF(t.entity) AS cliente,',
+      '  t.enddate AS fecha_vencimiento',
+      'FROM transaction t',
+      "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
+      'LEFT JOIN item i ON i.id = tl.item',
+      "WHERE t.type = 'WorkOrd'",
+      "  AND (UPPER(BUILTIN.DF(t.status)) LIKE '%CERRAD%'",
+      "       OR UPPER(BUILTIN.DF(t.status)) LIKE '%CLOSED%'",
+      "       OR UPPER(BUILTIN.DF(t.status)) LIKE '%COMPLET%')",
+      // Misma planta que las abiertas: el app trabaja la 1, y una OT de la planta 2 no
+      // entra ni como abierta ni como cerrada.
+      '  AND tl.location = 1',
+      '  AND (t.enddate IS NULL OR t.enddate >= SYSDATE - ' + DIAS_OT_CERRADAS + ')',
+      'ORDER BY t.enddate DESC NULLS LAST, t.tranid',
+      'FETCH NEXT ' + MAX_OT_CERRADAS + ' ROWS ONLY'
+    ].join('\n');
   }
 
   // ===========================================================================
