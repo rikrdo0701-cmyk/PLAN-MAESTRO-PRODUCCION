@@ -62,7 +62,20 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
   // Cada accion dice a que tabla de docs/schema-supabase.sql escribe y por que columna
   // es upsert. `claves` es la clave natural: tiene UNIQUE en el esquema.
   const ACCIONES = {
-    workorders:    { tabla: 'work_orders', claves: ['ot'],            maxScan: 500,  porId: 'workorderIds' },
+    // `maxScan` es el tope del listado de ABIERTAS y `maxScanCerradas` el de las CERRADAS
+    // recientes, por separado a proposito: 500 y 300. Si compartieran tope, un trimestre con
+    // muchas cerradas se comeria el lugar de las abiertas, y las abiertas son las que la
+    // pagina necesita para planificar. MEDIDO 2026-10-05: abiertas = 213.
+    //
+    // POR QUE 300 Y NO UN NUMERO MEDIDO. Cada fila que sale de `leerWorkorders` paga un
+    // `record.load` en `leerEnsamblada_` (la cantidad ensamblada NO existe en SuiteQL en esta
+    // cuenta), o sea que este tope es tambien un tope de COSTO por corrida, no solo de filas.
+    // No pude medir cuantos cierres da la planta en un trimestre porque las OTs cerradas no
+    // estan en ninguna tabla de este lado, asi que 300 es un tope de seguridad y no una
+    // cifra. Si se llegara a recortar, lo que se pierde es la confirmacion de OTs VIEJAS:
+    // el `ORDER BY fecha_fin DESC NULLS LAST, ot` manda primero las recientes, que es la
+    // direccion segura (la OT que se acaba de cerrar del taller es la que hay que confirmar).
+    workorders:    { tabla: 'work_orders', claves: ['ot'],            maxScan: 500,  maxScanCerradas: 300, porId: 'workorderIds' },
     operaciones:   { tabla: 'operations',  claves: ['operation_id'],  maxScan: 5000, porId: 'workorderIds' },
     materiales:    { tabla: 'materials',   claves: ['line_id'],       maxScan: 5000, porId: 'workorderIds' },
     items:         { tabla: 'items',       claves: ['codigo'],        maxScan: 5000, porId: 'itemIds' },
@@ -76,6 +89,33 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
   const MAX_FILAS_COMPARAR = 60;
   const LOTE_MAX = 500;
   const MAX_PARAMETROS_SQL = 400; // tope conservador de binds por SuiteQL
+
+  // MEDIDO 2026-10-05. Ventana de las OTs CERRADAS que trae el espejo, DECIDIDA POR EL USUARIO
+  // ese dia: 90 dias, contados desde `t.enddate` (la fecha de entrega). Ver el comentario
+  // completo de `leerWorkordersCerradas_` para por que esa fecha y no otra, y por que no pude
+  // medir cuantos cierres da la planta.
+  //
+  // ESTA CONSTANTE ES UN PARAMETRO DE NEGOCIO, no un detalle tecnico. Si la planta cierra mas
+  // de 300 OTs por trimestre, el tope `maxScanCerradas` empezaria a recortar y las MAS
+  // recientes se siguen leyendo (el ORDER BY manda primero las recientes), pero habria que
+  // subirlo o acortar la ventana.
+  const DIAS_OT_CERRADAS = 90;
+
+  // MEDIDO 2026-10-05: las columnas de `work_orders` viven en UNA constante y las comparten el
+  // barrido de abiertas y el de cerradas. Antes eran una lista literal dentro de `leerWorkorders`
+  // y, al añadir la segunda consulta, copiarla: dos copias de la misma lista de columnas es
+  // exactamente como una empieza a traer una columna y la otra no, sin que nada lo diga.
+  const COLUMNAS_WORKORDERS = [
+    '  t.id                                     AS wo_internal_id,',
+    '  t.tranid                                 AS ot,',
+    '  BUILTIN.DF(tl.item)                      AS articulo,',
+    '  COALESCE(i.description, i.purchasedescription, i.displayname) AS descripcion,',
+    '  ABS(NVL(tl.quantity, 0))                 AS cantidad,',
+    '  BUILTIN.DF(t.status)                     AS estatus,',
+    '  BUILTIN.DF(t.entity)                     AS cliente,',
+    '  t.startdate                              AS fecha_inicio,',
+    '  t.enddate                                AS fecha_fin'
+  ];
 
   // Sin esto NO se puede escribir nada, y es un problema de configuracion del deployment,
   // no un fallo de datos. Se dice una vez, no una vez por fila.
@@ -249,20 +289,18 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
 
     const sql = [
       'SELECT DISTINCT',
-      '  t.id                                     AS wo_internal_id,',
-      '  t.tranid                                 AS ot,',
-      '  BUILTIN.DF(tl.item)                      AS articulo,',
-      '  COALESCE(i.description, i.purchasedescription, i.displayname) AS descripcion,',
-      '  ABS(NVL(tl.quantity, 0))                 AS cantidad,',
-      '  BUILTIN.DF(t.status)                     AS estatus,',
-      '  BUILTIN.DF(t.entity)                     AS cliente,',
-      '  t.startdate                              AS fecha_inicio,',
-      '  t.enddate                                AS fecha_fin',
+      COLUMNAS_WORKORDERS.join(',\n'),
       'FROM transaction t',
       'JOIN transactionline tl ON tl.transaction = t.id',
       "  AND tl.mainline = 'T'",
       'LEFT JOIN item i ON i.id = tl.item',
-      'WHERE ' + where.join('\n  AND ')
+      'WHERE ' + where.join('\n  AND '),
+      // MEDIDO 2026-10-05: esta consulta NO tenia ORDER BY y el recorte de maxScan se hacia con
+      // `slice(0, maxScan)` sobre las filas que salieran en cualquier orden. Con el tope de 500
+      // y 213 filas nunca se noto; si algun dia hubiera mas de 500 abiertas, las que se caerian
+      // serian arbitrarias y serian OTs que desaparecen sin aviso. El orden hace que el recorte
+      // sea siempre el mismo, que es lo unico que se puede defender.
+      'ORDER BY t.tranid'
     ].join('\n');
 
     const crudas = suiteql(sql, ids, 'workorders');
@@ -270,7 +308,36 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
     const recorte = crudas.slice(0, ACCIONES.workorders.maxScan);
     if (truncado) avisos.push('Se leyeron ' + crudas.length + ' OTs y solo se empujan ' + ACCIONES.workorders.maxScan + ': el barrido tiene tope.');
 
-    const filas = recorte.map((r) => {
+    // MEDIDO 2026-10-05, LAS CERRADAS TAMBIEN. Por que: `work_orders` era la unica fuente que
+    // responde "¿esta cerrada esta OT?", y por construccion NO puede: el espejo filtra las
+    // cerradas (`soloAbiertos`), o sea que la OT que hay que confirmar es justamente la que no
+    // esta. MEDIDO: las OTs 3302, 3492 y 3570 estan cerradas en NetSuite ("Orden de trabajo :
+    // Cerrada", entrega del 1-oct-2026) y la confirmacion de RULE-OT-051 no las podia confirmar:
+    // `confirmWorkOrderClosures` (supabase-bridge-replacement.js) las buscaba en `work_orders`
+    // y no las encontraba jamas, se quedaban en el plan con sus operaciones viejas y el reporte
+    // avisaba "sin dato de NetSuite". La fila de la OT cerrada es la evidencia que hace falta,
+    // y se trae con su estatus real.
+    //
+    // SOLO EN EL BARRIDO. Cuando viene una lista de folios o de ids, el que llama quiere
+    // exactamente esas OTs (la sincronizacion delta por OT), y agregarles 90 dias de cerradas
+    // seria ruido que ademas rompe el significado de la llamada.
+    //
+    // AISLADA A PROPOSITO. Esta consulta va en su propio try/catch y su fallo NO tira la accion:
+    // si la accion `workorders` falla, la ingesta vacia `work_orders` entera (RULE-SUP-048) y la
+    // pagina se queda sin una sola OT. Un error de SuiteQL en una consulta NUEVA no puede
+    // costarle el taller una tabla completa, asi que aqui se degrada a "solo abiertas", que es
+    // como estaba, y se dice en el aviso.
+    let cerradas = [];
+    if (ctx.soloAbiertos && ctx.ids.workorderIds.length === 0 && ctx.folios.length === 0) {
+      try {
+        cerradas = leerWorkordersCerradas_(avisos);
+      } catch (error) {
+        avisos.push('No se pudieron leer las OTs CERRADAS de los ultimos ' + DIAS_OT_CERRADAS
+          + ' dias; se manda solo el listado de abiertas: ' + String(error && error.message || error).slice(0, 160));
+      }
+    }
+
+    const filas = recorte.concat(cerradas).map((r) => {
       const cantidad = Math.abs(num(r.cantidad));
       const ensamblada = leerEnsamblada_(r.wo_internal_id, cantidad, avisos);
       const fila = {
@@ -294,8 +361,69 @@ define(['N/query', 'N/https', 'N/runtime', 'N/log', 'N/record'], (query, https, 
 
     return {
       filas: filas, truncado: truncado, avisos: avisos,
-      notas: { ensamblada: fuentesEnsamblada(filas), fecha_fin: 'fecha_fin_ns y fecha_vencimiento salen de t.enddate (NetSuite no separa fin real de entrega)' }
+      // `cerradas` va en las notas y no en un campo aparte porque no cambia la FORMA de la
+      // respuesta: la accion `workorders` ya traia filas, ahora son mas. Quien lo lee tiene
+      // que poder ver cuantos de esas filas son OTs que ya se cerraron, o el numero de
+      // `work_orders` parece haber crecido sin que nadie haya creado OTs.
+      notas: {
+        ensamblada: fuentesEnsamblada(filas),
+        fecha_fin: 'fecha_fin_ns y fecha_vencimiento salen de t.enddate (NetSuite no separa fin real de entrega)',
+        cerradas: {
+          incluidas: cerradas.length,
+          dias: DIAS_OT_CERRADAS,
+          motivo: 'traer las cerradas con su estatus es lo que permite CONFIRMAR un cierre desde Supabase (RULE-OT-051). Sin ellas, la OT que hay que confirmar es la que no esta en la tabla.'
+        }
+      }
     };
+  }
+
+  /**
+   * OTs CERRADAS recientes, con su estatus real. MEDIDO 2026-10-05; ventana de 90 dias
+   * DECIDIDA POR EL USUARIO ese dia.
+   *
+   * POR QUE 90 DIAS Y POR QUE POR `t.enddate`. La pregunta que responde esto es "¿esta cerrada
+   * la OT que tengo en el plan?", y la OT que se acaba de cerrar del taller tiene su entrega
+   * alrededor de hoy. 90 dias cubre vacaciones largas, un cierre que se tarda en reflejarse y
+   * una OT que se reabre. No pude medir cuantos cierres da la planta al mes (las OTs cerradas no
+   * estan en ningun lado de este lado), asi que el numero de filas que agrega no se sabe: hoy
+   * `work_orders` tiene 213 y crecera en proporcion a los cierres del trimestre. Como el
+   * espejo NO borra filas, las de una corrida se quedan: la ventana no acota lo que hay,
+   * solo lo que se agrega.
+   *
+   * POR QUE `t.enddate IS NULL` TAMBIEN ENTRA. Una OT cerrada sin fecha de entrega es
+   * exactamente el caso en el que la confirmacion mas hace falta, y es el unico que no se
+   * puede fechar. Entra y lo cubre `maxScanCerradas`; el ORDER BY las manda AL FINAL para
+   * que, si hay que recortar, se pierdan las viejas y no las recientes.
+   *
+   * `SYSDATE - 90` NO SE PUDO VERIFICAR desde este repo (no hay credenciales de NetSuite
+   * aca). Se verifica con `accion: 'diagnostico'` o `dryRun` en la cuenta. Por eso la
+   * llamada va envuelta en un try/catch en `leerWorkorders`: si la expresion no fuera valida,
+   * se avisa y se manda solo el listado de abiertas, que es como estaba antes.
+   */
+  function leerWorkordersCerradas_(avisos) {
+    const sql = [
+      'SELECT DISTINCT',
+      COLUMNAS_WORKORDERS.join(',\n'),
+      'FROM transaction t',
+      'JOIN transactionline tl ON tl.transaction = t.id',
+      "  AND tl.mainline = 'T'",
+      'LEFT JOIN item i ON i.id = tl.item',
+      "WHERE t.type = 'WorkOrd'",
+      '  AND (UPPER(BUILTIN.DF(t.status)) LIKE \'%CERRAD%\'',
+      '    OR UPPER(BUILTIN.DF(t.status)) LIKE \'%CLOSED%\'',
+      '    OR UPPER(BUILTIN.DF(t.status)) LIKE \'%COMPLET%\'',
+      '    OR UPPER(BUILTIN.DF(t.status)) LIKE \'%CANCEL%\')',
+      '  AND (t.enddate IS NULL OR t.enddate >= SYSDATE - ' + DIAS_OT_CERRADAS + ')',
+      'ORDER BY fecha_fin DESC NULLS LAST, ot'
+    ].join('\n');
+
+    const crudas = suiteql(sql, [], 'workorders_cerradas');
+    const tope = ACCIONES.workorders.maxScanCerradas;
+    if (crudas.length > tope) {
+      avisos.push('Se leyeron ' + crudas.length + ' OTs cerradas y solo se empujan ' + tope
+        + ': el tope es del listado de cerradas, no del total.');
+    }
+    return crudas.slice(0, tope);
   }
 
   /**

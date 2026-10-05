@@ -131,6 +131,7 @@ POST { accion, ids: {workorderIds, itemIds, salesOrderIds, workcenterIds}, folio
 | `accion` | Tabla | Clave natural | Origen SuiteQL |
 |---|---|---|---|
 | `workorders` | `work_orders` | `ot` | `transaction` + `transactionline` mainline |
+| | | | **+ las CERRADAS recientes (RULE-SUP-050)**: ventana de 90 días por `t.enddate`, solo en el barrido, tope propio `maxScanCerradas: 300` |
 | `operaciones` | `operations` | `operation_id` = `ns-<mot.id>` | `manufacturingoperationtask` |
 | `materiales` | `materials` | `line_id` = `comp.id` | `transaction` + `transactionline` no-mainline |
 | `items` | `items` | `codigo` | `item` |
@@ -143,11 +144,50 @@ POST { accion, ids: {workorderIds, itemIds, salesOrderIds, workcenterIds}, folio
 Respuesta: `{ ok, accion, tabla, modoUsado, leidas, escritas, omitidas, conflictos[], batches,
 truncado, avisos[], degradaciones[] }`.
 
+### 4.1 `work_orders` también trae las OTs cerradas recientes (RULE-SUP-050)
+
+**Por qué, medido el 2026-10-05.** `confirmWorkOrderClosures` —la evidencia positiva de
+RULE-OT-051— lee `work_orders`, y mientras esa tabla trajera solo abiertas la OT cuya evidencia
+se buscaba era justo la que no estaba: las OTs 3302, 3492 y 3570, **cerradas** en NetSuite
+(entrega 2026-10-01), dieron `found:false` para siempre y quedaron en el plan pidiendo 57 piezas
+fantasma. Ningún filtro del lector lo arreglaba: faltaba el dato.
+
+**Qué hace.** En el **barrido** (`folios` y `workorderIds` vacíos) la acción `workorders` suma,
+a las abiertas, las OTs cerradas con `t.enddate` de los últimos `DIAS_OT_CERRADAS = 90` días
+(las de `t.enddate IS NULL` entran igual: son las que no se pueden fechar). Siguen la MISMA
+acción y no una segunda, porque la ingesta escribe con `ingesta_mirror`, que borra la tabla y
+reescribe: dos acciones sobre `work_orders` se comerían entre sí. El número de filas cerradas
+que entró se declara en `notas.cerradas.incluidas` y en `notas.cerradas.dias`.
+
+**Tope y orden, que es lo que hace que el recorte sea defendible:** `maxScanCerradas: 300`,
+aparte del `maxScan: 500` de las abiertas (si compartieran, un trimestre con muchas cerradas se
+come el lugar de las abiertas, que son las que la página necesita); `ORDER BY fecha_fin DESC
+NULLS LAST, ot` para que si hay que recortar se pierdan las viejas y no las recientes; y
+`ORDER BY t.tranid` en las abiertas, que antes no lo tenía y hacía que su `slice(0, maxScan)`
+fuera arbitrario.
+
+**Si su SQL falla, no se pierde nada:** la consulta de cerradas va en su propio `try/catch` y su
+fallo degrada la acción a "solo abiertas" con aviso. Si la acción `workorders` completa
+fallara, la ingesta vaciaría `work_orders` entera. `SYSDATE - 90` y `NULLS LAST` **no se
+pudieron verificar desde el repo**: hay que comprobarlos en la cuenta con
+`accion:'diagnostico'` o `dryRun`.
+
+**Lo que el espejo hace con esas filas: nada.** `work_orders` es espejo exacto de lo que devolvió
+la última corrida, así que una OT cerrada que dejó de entrar en la ventana desaparece en la
+siguiente. Quien necesite "todas las cerradas" tiene que preguntar folio por folio al 2244.
+
+**Quién las filtra, en la página:** el catálogo de OTs, `fetchNetSuiteWorkOrdersLite` y
+`getInspectionWorkOrders`. **Quién no:** `confirmWorkOrderClosures` y `getInspectionWorkOrder`,
+porque para esas dos la fila completa *es* la respuesta (ver `supabase-reader.js`,
+`workOrderCerrada`/`soloWorkOrdersAbiertas`).
+
 ## 5. Modo de escritura: MIRROR EXACTO ATOMICO (RPC)
 
 Desde el 2026-09-29 la ingesta no hace upsert incremental: **borra cada tabla completa y
 reescribe lo que NetSuite devuelve en esa corrida** (decisión del usuario: "que no se queden
-datos antiguos"). Las 7 tablas quedan como espejo exacto de las filas abiertas del ERP.
+datos antiguos"). Las 7 tablas quedan como espejo exacto de las filas abiertas del ERP, con una
+excepción documentada en §4.1: `work_orders` suma además las OTs **cerradas** de los últimos
+90 días (`DIAS_OT_CERRADAS`), y por eso su número de filas no es el de las abiertas.
 
 El flujo corre en Google Apps Script (`src/server/19-appscript-ingesta-supabase.js`, función `ingesta`):
 1. Una sola llamada al RESTlet unificado **2246** con `accion: 'todas'` (solo lectura).
@@ -359,6 +399,13 @@ lectores filtran ahora solo abiertas — `materiales` con el mismo patrón de 3 
 `CERRAD`/`CLOSED`/`FACTURAD` (los estatus reales de venta son `Cerrada`, `Facturada` y
 `Ejecución de la orden pendiente`). Y filtrar solo OTs abiertas **esconde trabajo**: hay
 **17 operaciones `NOTSTART` en OTs `CERRADAS`** (de 2219 sin terminar).
+
+Desde el 2026-10-05 (RULE-SUP-050) `workorders` tiene un **segundo tope**, `maxScanCerradas:
+300`, para las cerradas recientes de §4.1, y su recorte ordena por fecha de entrega descendente
+para que lo que se pierda sean las viejas. No se pudo medir cuántos cierres da la planta al mes
+—las OTs cerradas no están en ninguna tabla local—, así que ese 300 es un tope de seguridad
+defendido por el orden, no un número medido; si un día las más recientes no caben, el aviso de
+truncado lo dice y hay que subirlo o acortar `DIAS_OT_CERRADAS`.
 
 Por eso el nombre del centro en `operaciones` sale de `BUILTIN.DF(mot.manufacturingworkcenter)` —la
 misma columna que usan el 2240 y el 2244, los dos que hoy funcionan— y **no** de un JOIN a

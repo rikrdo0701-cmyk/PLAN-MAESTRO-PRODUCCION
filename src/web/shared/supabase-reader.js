@@ -102,6 +102,61 @@
     "unconfirmed_work_orders", "closed_work_order_summaries",
   ];
 
+  // QUE ES UNA OT CERRADA. MEDIDO 2026-10-05, Y POR QUE ESTA EN EL LECTOR Y NO EN DOS LISTAS.
+  //
+  // MEDIDO. El estatus que trae NetSuite nunca es la palabra pelada: es
+  // "Orden de trabajo : Cerrada", "Orden de trabajo : Liberada", "Orden de trabajo : En curso"
+  // (las 213 de `work_orders` hoy: 110 Liberada + 103 En curso). Y el predicado que estaba
+  // antes, en las dos preguntas que lo usan, era `ESTADOS_CERRADOS.includes(estatus)`, o sea
+  // igualdad EXACTA de cadena: contra "ORDEN DE TRABAJO : CERRADA" da false SIEMPRE. No se
+  // noto mientras `work_orders` solo trajera OTs abiertas (no hay ninguna cerrada que
+  // clasificar), y en cuanto el espejo traiga tambien las cerradas aparece: la confirmacion
+  // de cierres no confirmaria ninguna y la hoja de inspeccion ofreceria para imprimir OTs
+  // cerradas.
+  //
+  // LA REGLA, que es la de planning-workflow-core.js:977-959 (`hasExplicitClosedStatus`):
+  // se busca la PALABRA dentro del estatus, sin tildes y en mayusculas. No es una lista de
+  // estados completos porque el estado completo de NetSuite lleva el prefijo del tipo de
+  // registro, y ese prefijo no es parte del dato.
+  //
+  // POR QUE UNA SOLA COPIA Y NO DOS. `confirmWorkOrderClosures` (¿esta cerrada?) y
+  // `getInspectionWorkOrders` (la lista de la hoja) son DOS preguntas sobre el MISMO dato.
+  // Con dos listas distintos, la pagina podria ofrecer para imprimir una OT que al rato
+  // declara cerrada: el aviso seria una contradiccion del propio sistema.
+  const PALABRAS_OT_CERRADA = ["CERRAD", "CLOSED", "COMPLET", "CANCEL"];
+
+  function workOrderCerrada(estatus) {
+    const texto = String(estatus == null ? "" : estatus)
+      .trim()
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    if (!texto) return false;
+    return PALABRAS_OT_CERRADA.some(function (palabra) { return texto.indexOf(palabra) >= 0; });
+  }
+
+  /**
+   * work_orders -> solo las ABIERTAS, mapeadas.
+   *
+   * POR QUE HACE FALTA. `work_orders` cambio de significado el 2026-10-05: el espejo
+   * (netsuite-restlet-supabase-sync.js, `leerWorkorders`) devuelve tambien las OTs cerradas
+   * con entrega en los ultimos 90 dias, para que se pueda CONFIRMAR un cierre desde
+   * Supabase (RULE-OT-051 capa 2). Antes no hacia falta porque la tabla solo tenia abiertas.
+   * Ahora, cualquier cosa que use `work_orders` como "las OTs del taller" tiene que quitar
+   * las cerradas o meteria en el plan y en la hoja de inspeccion OTs que ya se cerraron.
+   *
+   * DONDE SE APLICA Y DONDE NO, y por que:
+   *   - aqui y en `fetchNetSuiteWorkOrdersLite`: el catalogo de OTs y el conjunto "activas"
+   *     que usa reconcileActiveWorkOrders. Si una cerrada entrara como activa, NUNCA se
+   *     podaria del plan, que es lo contrario de lo que se quiere.
+   *   - NO en `confirmWorkOrderClosures` ni en `getInspectionWorkOrder`: esas dos son
+   *     justamente las preguntas cuya respuesta es "esta cerrada", y para eso necesitan la
+   *     fila completa, con su estatus y sus cantidades.
+   */
+  function soloWorkOrdersAbiertas(rows) {
+    return mapWorkOrders(rows).filter(function (wo) { return !wo.cerrada; });
+  }
+
   // HUECOS DE MAPEO Supabase -> shape del estado, MEDIDOS 2026-09-29 contra el esquema REAL
   // desplegado (.openchamber/esquema-supabase.json, el OpenAPI que sirve PostgREST), tabla por
   // tabla y columna por columna. No contra el DDL objetivo: si algo solo existe en un DDL sin
@@ -1270,6 +1325,12 @@
         description: row.descripcion, photoUrl: row.foto_url, startDate: inicio.fecha,
         endDate: fin.fecha, dueDate: vencimiento.fecha, dueDateOverride: "",
         quantity: quantity, status: row.estatus, customer: row.cliente, builtQuantity: builtQuantity,
+        // Si la OT esta cerrada, segun el ESTATUS de NetSuite. No es un dato de la OT: es la
+        // respuesta a la pregunta "¿esta cerrada?" que hacen confirmWorkOrderClosures y la
+        // lista de inspeccion. Se calcula aqui, con el UNICO predicado (workOrderCerrada), y
+        // viaja con la fila para que cada consumidor decida en vez de recalcularlo con su
+        // propia lista de palabras. MEDIDO 2026-10-05: ver el comentario de PALABRAS_OT_CERRADA.
+        cerrada: workOrderCerrada(row.estatus),
         // Ver el comentario de `pendienteEscrito` arriba. En resumen: un 0 que no viene
         // acompañado de avance no es evidencia de que no quede nada, y por eso la cantidad de la
         // orden gana. Un 0 de verdad se respeta, y se distingue porque en ese caso
@@ -1461,7 +1522,10 @@
       // en MAPPING_GAPS: leer de aqui deja el plan sin num, parte, contenido,
       // prioridad, fechaReq ni log.
       operations: mapOperations(rows.operations),
-      workOrders: mapWorkOrders(rows.work_orders),
+      // Solo las ABIERTAS. `work_orders` tambien trae las cerradas recientes (ver
+      // soloWorkOrdersAbiertas): el catalogo de OTs del arranque es el conjunto de las que se
+      // pueden_planear, y una OT cerrada en esa lista se planaria.
+      workOrders: soloWorkOrdersAbiertas(rows.work_orders),
       materials: mapMaterials(rows.materials),
       operationalRaw: {
         operations: rows.operations || null,
@@ -1510,6 +1574,13 @@
     mapOperations: mapOperations,
     mapSubcontracts: mapSubcontracts,
     mapWorkOrders: mapWorkOrders,
+    // MEDIDO 2026-10-05: el UNICO predicado de "esta OT cerrada", y las dos que lo usan.
+    // Se publica para que `supabase-bridge-replacement.js` NO tenga su propia lista: sus tres
+    // preguntas (el catalogo de OTs, la confirmacion de cierres y la lista de la hoja de
+    // inspeccion) son la misma pregunta con tres palabras distintas, y con dos listas
+    // distintas se contradecirian entre si. Ver PALABRAS_OT_CERRADA mas arriba.
+    workOrderCerrada: workOrderCerrada,
+    soloWorkOrdersAbiertas: soloWorkOrdersAbiertas,
     // MEDIDO 2026-10-01: esta NO estaba exportada y el reemplazo la pide. mapMaterials existia
     // (esta misma linea 851) y se usaba internamente en readCatalogs (linea ~1039), o sea que
     // estaba escrita, probada por dentro y solo faltaba publicarla. El efecto fue que

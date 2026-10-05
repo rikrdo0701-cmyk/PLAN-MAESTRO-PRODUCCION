@@ -520,6 +520,9 @@ function puente({ tablas = {}, errores = {}, guardar = async () => ({ ok: true, 
 }
 
 const coreSource = await readFile(new URL("../src/web/inspection/inspection-core.js", import.meta.url), "utf8");
+// MEDIDO 2026-10-05: `readerSource` (arriba) sirve tambien para el test de estados cerrados,
+// porque el unico predicado de "esta OT cerrada" paso a vivir en el LECTOR (antes era una
+// constante del reemplazo).
 
 /** Filas CRUDAS de `work_orders`, con los nombres de columna de Postgres. */
 function otCruda(ot, articulo, estado = "EN PROCESO") {
@@ -551,16 +554,52 @@ test("la lista de OTs sale de `work_orders` y excluye las cerradas", async () =>
   assert.equal(result.data[1].wo, "OT-4");
 });
 
-test("los estados cerrados son los mismos de `confirmWorkOrderClosures`", () => {
+/**
+ * El CODIGO del archivo, sin sus comentarios.
+ *
+ * POR QUE. Los tres assert de abajo buscan nombres de identificadores, y el nombre del
+ * predicado que se quito esta escrito en la prosa que explica por que se quito. Buscarlo en el
+ * archivo entero daria un falso positivo que obligaria a no poder explicar nada.
+ */
+function sinComentarios(texto) {
+  return texto
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .filter((linea) => !/^\s*(\/\/|\*)/.test(linea))
+    .join("\n");
+}
+
+test("los estados cerrados son UNOS SOLOS, y hoy viven en el lector", () => {
   // Las dos hacen la MISMA pregunta -si la OT sigue abierta- y si cada una escribiera
   // su propia lista, al confirmar el cierre de una OT el estado podria quedar en uno
-  // que la lista sigue mostrando como abierta. Por eso la lista esta en UNA
-  // constante.
-  assert.match(puenteSource, /const ESTADOS_CERRADOS = \["CERRADA", "CERRADO", "CLOSED", "COMPLETADA", "COMPLETADO", "CANCELADA", "CANCELADO"\]/);
-  assert.equal((puenteSource.match(/ESTADOS_CERRADOS\.includes/g) || []).length >= 2, true,
-    "ESTADOS_CERRADOS tiene que usarse en los DOS caminos: la lista de inspeccion y confirmWorkOrderClosures");
-  assert.equal((puenteSource.match(/const ESTADOS_CERRADOS =/g) || []).length, 1,
-    "hay mas de una lista de estados cerrados: se declaran en dos sitios y se van a desincronizar");
+  // que la lista sigue mostrando como abierta. Por eso hay un solo predicado.
+  //
+  // MEDIDO 2026-10-05, Y POR QUE SE MOVIO. El predicado era
+  // `ESTADOS_CERRADOS.includes(estatus.toUpperCase())`, o sea igualdad EXACTA de cadena, y el
+  // estatus de NetSuite nunca es la palabra pelada: es "Orden de trabajo : Cerrada". Contra
+  // eso daba false SIEMPRE, y no se noto mientras `work_orders` solo trajera OTs abiertas: no
+  // habia ninguna cerrada que clasificar. Desde que el espejo trae tambien las cerradas
+  // (netsuite-restlet-supabase-sync.js, `leerWorkorders`), esa lista exacta hacia que la hoja
+  // de inspeccion ofreciera para imprimir OTs cerradas y que `confirmWorkOrderClosures` no
+  // confirmara NINGUN cierre. Ahora el predicado busca la PALABRA dentro del estatus, vive en
+  // el lector (supabase-reader.js, `workOrderCerrada`), y las dos preguntas lo llaman.
+  // Se busca en el CODIGO, no en los comentarios: el nombre del predicado viejo esta escrito
+  // arriba, en prosa, justamente para dejar dicho que se quito y por que.
+  assert.equal(/ESTADOS_CERRADOS/.test(sinComentarios(puenteSource)), false,
+    "el reemplazo no puede tener su propia lista de estados cerrados: volverian a desincronizarse");
+  const codigo = sinComentarios(puenteSource);
+  assert.equal((codigo.match(/workOrderCerrada/g) || []).length >= 2, true,
+    "el predicado del lector tiene que usarse en la lista de inspeccion y en confirmWorkOrderClosures: son la misma pregunta");
+  assert.match(codigo, /soloWorkOrdersAbiertas/,
+    "el catalogo de OTs (el conjunto ACTIVO que compara reconcileActiveWorkOrders) tiene que pasar por el filtro del lector: si una OT cerrada viniera como activa, no se podaria nunca del plan");
+
+  const readerSrc = sinComentarios(readerSource);
+  assert.match(readerSrc, /const PALABRAS_OT_CERRADA = \["CERRAD", "CLOSED", "COMPLET", "CANCEL"\];/,
+    "las cuatro palabras tienen que ser las mismas que excluye el espejo en `leerWorkorders` (%CERRAD%, %CLOSED%, %COMPLET%, %CANCEL%), o una OT saldria del espejo y seguiria contando como abierta");
+  assert.equal((readerSrc.match(/const PALABRAS_OT_CERRADA =/g) || []).length, 1,
+    "hay mas de una lista de palabras cerradas: se declaran en dos sitios y se van a desincronizar");
+  assert.match(readerSrc, /workOrderCerrada: workOrderCerrada,/,
+    "el predicado tiene que estar PUBLICADO en PPSupabaseReader: sin esto el reemplazo llama un metodo que no existe y toda lista de inspeccion se cae");
 });
 
 test("el bundle trae `detail` y `history`, que es lo que los DOS consumidores leen", async () => {

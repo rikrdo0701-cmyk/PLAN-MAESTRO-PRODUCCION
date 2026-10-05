@@ -74,28 +74,40 @@
   }
 
   /**
-   * QUE ESTADO CUENTA COMO ABIERTA. MEDIDO 2026-10-01.
+   * QUE ESTADO CUENTA COMO ABIERTA. MEDIDO 2026-10-01, CORREGIDO 2026-10-05.
    *
    * El camino viejo lo decidia NetSuite: `getInspectionWorkOrders` pasaba
    * `onlyOpen: true` al RESTlet 2244 (16-inspection-service.js:141) y esa regla NO esta
-   * escrita en ningun archivo de este repo, porque vive en el RESTlet. La unica lista de
-   * estados cerrados que hay aqui es la de `confirmWorkOrderClosures`, que es la que la
-   * pagina usa para preguntarle "¿esta cerrada?" a una OT, y por eso es la que se usa
-   * tambien para armar la lista de inspeccion. Se declara en una constante compartida
-   * porque son DOS preguntas sobre el mismo dato —si la OT sigue abierta— y dos listas
-   * distintas harían que la pagina mostrara una OT en la hoja de inspeccion y preguntara
-   * al rato si está cerrada.
+   * escrita en ningun archivo de este repo, porque vive en el RESTlet.
+   *
+   * MEDIDO 2026-10-05, POR QUE ESTA TABLA CAMBIO Y LA REGLA TIENE QUE ESTAR EN EL LECTOR.
+   * La lista de estados cerrados que estaba aqui comparaba por IGUALDAD EXACTA
+   * (`ESTADOS_CERRADOS.includes(estatus.toUpperCase())`), y el estatus de NetSuite nunca es la
+   * palabra pelada: es "Orden de trabajo : Cerrada". Contra eso daba false siempre. No se
+   * noto mientras `work_orders` solo trajera abiertas; desde que el espejo tambien trae las
+   * cerradas (netsuite-restlet-supabase-sync.js, `leerWorkorders`), sin corregirlo la hoja de
+   * inspeccion ofreceria para imprimir OTs cerradas.
+   *
+   * Ahora la pregunta se hace con `reader.workOrderCerrada`, el UNICO predicado, que vive en
+   * el lector (supabase-reader.js, PALABRAS_OT_CERRADA) y es el mismo que usa
+   * `confirmWorkOrderClosures` y el catalogo de OTs. Son la misma pregunta y por eso tienen
+   * que tener la misma respuesta.
    */
-  const ESTADOS_CERRADOS = ["CERRADA", "CERRADO", "CLOSED", "COMPLETADA", "COMPLETADO", "CANCELADA", "CANCELADO"];
 
   /**
    * fetchNetSuiteWorkOrdersLite -> lee de work_orders
    * Devuelve { workOrders, syncedAt, savedAt, previewComplete }
+   *
+   * MEDIDO 2026-10-05: `work_orders` trae tambien las OTs cerradas recientes, y esta lista es
+   * el CONJUNTO ACTIVO que `reconcileActiveWorkOrders` (planning-workflow-core.js:977) usa para
+   * saber que OTs siguen en el taller. Si una cerrada viniera como activa, no se podaria
+   * nunca del plan y la regla de cierre (RULE-OT-046/049) no tendria con que trabajar. Por eso
+   * aqui se filtran, con el mismo predicado del lector.
    */
   async function fetchNetSuiteWorkOrdersLite() {
     const r = getReader();
     const rows = await r.readTable("work_orders", { order: "ot.asc" });
-    const workOrders = r.mapWorkOrders(rows);
+    const workOrders = r.soloWorkOrdersAbiertas(rows);
     const now = new Date().toISOString();
     return {
       workOrders,
@@ -251,9 +263,15 @@
       const key = String(ot || "").trim();
       const wo = woByOt[key];
       if (wo) {
-        const status = String(wo.estatus || "").toUpperCase();
-        const closed = ESTADOS_CERRADOS.includes(status);
-        results[key] = { ot: key, found: true, closed, status: wo.estatus };
+        // MEDIDO 2026-10-05: antes era `ESTADOS_CERRADOS.includes(estatus.toUpperCase())`, o
+        // sea igualdad EXACTA. El estatus de NetSuite es "Orden de trabajo : Cerrada", con
+        // prefijo, y eso nunca es igual a "CERRADA": la funcion NO PODIA confirmar un cierre,
+        // ni con la fila presente. Ahora usa el predicado del lector, que busca la PALABRA.
+        // Con el espejo trayendo tambien las cerradas (esta es justamente la pregunta para la
+        // que hace falta esa fila), la confirmacion de RULE-OT-051 vuelve a tener respuesta.
+        const status = String(wo.estatus || "");
+        const closed = r.workOrderCerrada(status);
+        results[key] = { ot: key, found: true, closed, status };
       } else {
         results[key] = { ot: key, found: false, closed: false, status: "" };
       }
@@ -264,6 +282,18 @@
   /**
    * getInspectionWorkOrder -> lee de work_orders para inspeccion
    * Devuelve { ok, data: { workOrder: { quantity, builtQuantity, pendingQuantity, status } } }
+   *
+   * MEDIDO 2026-10-05, QUE CAMBIA CON QUE `work_orders` TRAIGA LAS CERRADAS. Antes, una OT
+   * cerrada no estaba en la tabla (el espejo la filtra con `soloAbiertos`), y esta funcion
+   * contestaba "OT no encontrada": el reporte avisaba "N OT(s) sin dato de NetSuite" y la
+   * columna Ensamblado se quedaba sin dato. MEDIDO: 3 OTs del plan (3302, 3492, 3570)、
+   * cerradas en NetSuite con entrega del 1-oct-2026, caian en eso. Ahora la fila esta, y la
+   * respuesta trae las cantidades de verdad: 3302 con 50 de cantidad, 48 ensambladas y 2
+   * pendientes, que es lo que dice NetSuite.
+   *
+   * "OT no encontrada" sigue existiendo y significa lo que de verdad significa: que la OT no
+   * esta en `work_orders`. No es lo mismo que "cerrada" (eso ahora viene con `status`), y el
+   * reporte los distingue (RULE-REP-015-A).
    */
   async function getInspectionWorkOrder(ot) {
     const r = getReader();
@@ -320,7 +350,7 @@
     const r = getReader();
     const rows = await r.readTable("work_orders", { order: "ot.asc" });
     const data = r.mapWorkOrders(rows || [])
-      .filter((wo) => !ESTADOS_CERRADOS.includes(String(wo.status || "").trim().toUpperCase()))
+      .filter((wo) => !r.workOrderCerrada(wo.status))
       .map((wo) => ({
         wo: wo.ot,
         article: wo.item,
