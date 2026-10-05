@@ -11376,7 +11376,20 @@ async function applyImported(imported, options = {}) {
     || Array.isArray(imported.workOrders);
   const currentScheduleAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
   const importedScheduleAtMs = Date.parse((imported && imported.lastSchedule && imported.lastSchedule.generatedAt) || "") || 0;
-  const importedIsStaleSchedule = currentScheduleAtMs > 0 && importedScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;
+  // FIX 2026-10-05 (RULE-PLAN-015): el reloj de la IMPORTACION ya NO tiene que ser > 0.
+  // MEDIDO 2026-10-05 en produccion: el payload del arranque se pide mientras
+  // `app_state.last_schedule` es NULL, o sea `importedScheduleAtMs = 0`, y con la clausula de
+  // antes la comparacion daba FALSA POR FALTA DE DATO, no por antiguedad: la importacion de
+  // fondo se llevaba `operations`, `planStart`, `loadWeekStart`, `reportWeekStart`, `selectedOts`
+  // y `lockedOts` del espejo, y el plan que RULE-PLAN-015 acababa de restaurar se perdia.
+  // Un reloj en cero no es "mas viejo", es "el servidor no trae plan" (RULE-PLAN-012: un estado
+  // con `generatedAt` mas viejo no pisa uno mas nuevo; el que no tiene reloj, menos aun).
+  // LO QUE ESTO DEJA DE HACER, DICHO: mientras el servidor no traiga reloj, un plan en memoria
+  // mas nuevo bloquea el reemplazo de `state.operations` COMPLETO, no solo sus fechas, asi que
+  // en esa ventana tampoco entran por esta via los deltas de la ingesta. Dura lo que el NULL: en
+  // cuanto el rescate o un guardado escriben `app_state.last_schedule`, los dos relojes existen y
+  // esto vuelve a ser exactamente la comparacion de siempre.
+  const importedIsStaleSchedule = currentScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
   const localCapabilityConfigEdited = state._locallyEditedCapabilityConfig === true;

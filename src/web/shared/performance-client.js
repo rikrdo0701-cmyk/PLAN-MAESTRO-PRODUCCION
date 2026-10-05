@@ -24,6 +24,9 @@
   let saveRetryTimer = null;
   let saveRetryAttempt = 0;
   let priorityRenderFrame = 0;
+  // FIX 2026-10-05 (RULE-PLAN-015): el agendamiento del flush de las dos listas ya no depende
+  // SOLO de `requestAnimationFrame`. Ver schedulePriorityRender.
+  let priorityRenderTimeout = 0;
   let priorityListRequested = false;
   let priorityQueueRequested = false;
   let planStatusRefreshHandle = null;
@@ -245,7 +248,11 @@
   }
 
   function flushPriorityRenders() {
+    // Idempotente a proposito: con el reloj y el temporizador agonistos, el que llegue
+    // segundo vuelve a entrar aqui y no tiene nada que pintar (las dos banderas ya se
+    // borraron). Es lo que hace segura la carrera.
     priorityRenderFrame = 0;
+    priorityRenderTimeout = 0;
     if (priorityListRequested) {
       priorityListRequested = false;
       originalRenderPriorityList();
@@ -264,7 +271,35 @@
   }
 
   function schedulePriorityRender() {
-    if (!priorityRenderFrame) priorityRenderFrame = root.requestAnimationFrame(flushPriorityRenders);
+    if (priorityRenderFrame) return;
+    // MEDIDO 2026-10-05 en produccion: `requestAnimationFrame` NO se ejecuta en una pestana
+    // oculta, y estas dos listas son las unicas que se pintan por aqui (todo el resto de la
+    // pagina se repinta desde `render`). Con el flush colgado solo del reloj, una pestana abierta
+    // al fondo se quedaba con el texto del TEMPLATE para siempre: "0 OTs" y "0 en el plan" en
+    // Backlog y en "Planeado / Por planear", mientras el KPI de arriba si mostraba las 4 OTs de
+    // la cola, porque ese si lo pinta `renderTop`. Los dos textos del template solo se
+    // sobreescriben en app.js:2773, o sea que medido: `renderPriorityQueue` no habia terminado su
+    // cuerpo ni una vez. Y como el unico otro disparador de la cola es un debounce de 150 ms
+    // (app.js:1201), tampoco lo movia escribir en el buscador.
+    // El temporizador es el que hace el trabajo en una pestana oculta: ahi los timers SI corren,
+    // con throttling. Gana el primero que llegue; el otro no pinta nada.
+    priorityRenderFrame = root.requestAnimationFrame(flushPriorityRenders);
+    if (!priorityRenderTimeout) {
+      priorityRenderTimeout = root.setTimeout(() => {
+        priorityRenderTimeout = 0;
+        flushPriorityRenders();
+      }, 0);
+    }
+  }
+
+  // LA PESTANA CONGELADA. Chrome congela una pestana oculta y mientras esta congelada tampoco
+  // corre los temporizadores, asi que ni el reloj ni el `setTimeout` pintan nada. Cuando la
+  // persona la vuelve a mirar, esto fuerza el flush de lo que quedo pendiente: sin esto, mirar la
+  // pestana no repinta las listas por si solo.
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener("visibilitychange", () => {
+      if (priorityListRequested || priorityQueueRequested) flushPriorityRenders();
+    });
   }
 
   renderPriorityList = function optimizedRenderPriorityList() {
@@ -959,12 +994,23 @@
             render({ parts: { normalize: false, top: true, alerts: true, priorityList: true, queue: true, gantt: true } });
             showToast(`${state.workOrders.length} OTs NetSuite cargadas`);
           } else {
-            root.requestAnimationFrame(() => {
-              renderTop();
-              renderPlanAlerts();
-              renderPriorityList();
-              renderPriorityQueue();
-            });
+            // FIX 2026-10-05 (RULE-PLAN-015): esto ya NO se aplaza a `requestAnimationFrame`.
+            // MEDIDO 2026-10-05 en produccion: `requestAnimationFrame` NO se ejecuta en una
+            // pestana oculta, asi que en una pestana abierta al fondo el repintado se quedaba
+            // en la cola para siempre. Las dos listas (Backlog y "Planeado / Por planear") se
+            // quedaban con el texto del TEMPLATE ("0 OTs" y "0 en el plan") mientras el KPI de
+            // arriba, que se pinta en la misma pasada, si mostraba las 4 OTs de la cola; y como
+            // el unico otro disparador de esas dos listas es `debounce(renderPriorityQueue, 150)`
+            // (app.js:1201), tampoco las escribia buscar en la cola. Medido en dos pestanas del
+            // mismo build: una reciente con "4 en el plan / 2 por programar / 1 fijas" y Backlog
+            // "30 de 184 trabajos en espera", y otra con "0 en el plan" y "0 OTs" 15+ minutos.
+            // Se pinta directo, igual que la rama del aviso de arriba, que ya lo hacia de forma
+            // sincrona: el costo en el hilo es el mismo y asi no depende de que la pestana este
+            // visible.
+            renderTop();
+            renderPlanAlerts();
+            renderPriorityList();
+            renderPriorityQueue();
           }
         } else if (syncWorkOrdersMessageRequested && !syncWorkOrdersManualRequested) {
           showToast(`No se pudo cargar NetSuite: ${state.netSuiteSyncAlert?.message || "Error desconocido"}`, 9000);

@@ -239,6 +239,47 @@
   }
 
   /**
+   * Lee una tabla ENTERA, paginando, y devuelve las filas crudas.
+   *
+   * POR QUE EXISTE. MEDIDO 2026-10-05 en produccion: `operations` tiene 2275 filas y la
+   * lectura SIN `limit` devolvia SILENCIOSAMENTE las primeras 1000, porque PostgREST (Supabase)
+   * aplica `db-max-rows` (1000 por defecto) cuando la peticion no trae limite. No es un error ni
+   * un aviso: es HTTP 200 con la tabla cortada. MEDIDO el efecto: en esa ventana la OT 2624
+   * tenia 8 operaciones y la 3562 tenia 11, que es exactamente lo que pintaba el Gantt (19 ops,
+   * 509 h) y lo que usaban las dos listas. El Gantt no mintia: lo que llegaba era menos.
+   * Es la misma falla que ya se corrigio para `inspection_routes` (readInspectionRoutes, que
+   * pagina a mano); aqui se hace una vez para cualquier tabla.
+   *
+   * `opciones` acepta lo mismo que `readTable`. El `limit` del llamador se IGNORA a proposito:
+   * esta funcion existe justamente para cuando NO se quiere un recorte. El `order` lo pone el
+   * llamador porque la paginacion lo EXIGE: sin un orden estable, `offset` puede saltar filas
+   * entre una vuelta y otra (MEDIDO en el caso de `inspection_routes`: sin `order`, el `offset`
+   * se comia filas del principio en cada pagina).
+   *
+   * EL TOPE DE VUELTAS. 50 paginas = 50000 filas. Una pagina que devolviera PAGE filas para
+   * siempre seria un ciclo sin fin: el corte por false positive del conteo, un error que
+   * PostgREST tolera, o un bug del reader. Pasarse de ahi ya no es una tabla, es un fallo.
+   */
+  async function readTableEntero(table, options) {
+    const PAGE = 1000;
+    const tope = 50;
+    let offset = 0;
+    const todas = [];
+    for (let vuelta = 0; vuelta < tope; vuelta++) {
+      const pedido = Object.assign({}, options || {});
+      delete pedido.limit;
+      pedido.limit = PAGE;
+      pedido.offset = offset;
+      const chunk = await readTable(table, pedido);
+      const filas = Array.isArray(chunk) ? chunk : [];
+      todas.push(...filas);
+      if (filas.length < PAGE) break;
+      offset += PAGE;
+    }
+    return todas;
+  }
+
+  /**
    * El numero TOTAL de filas que calzan, del encabezado `content-range`.
    *
    * `opciones` acepta lo mismo que `readTable` y se le pasa entero. Se agrego el
@@ -1302,6 +1343,23 @@
   // LEE LOS CATALOGOS y devuelve las rebanadas del estado que HOY se pueden llenar de Supabase, mas
   // missing (tablas vacias/ausentes) y gaps (campos que no se pueden llenar). Nunca lanza por una
   // tabla caida: la reporta en errors para que el llamador decida el fallback.
+
+  // LAS TABLAS QUE SE LEEN PAGINADAS, con el orden estable que la paginacion exige.
+  //
+  // MEDIDO 2026-10-05 con el conteo exacto de Supabase: de las 24 tablas que lee
+  // `readCatalogs`, solo `operations` (2275 filas) REBASA `db-max-rows` (1000). La que mas filas
+  // tiene despues es `materials`, con 349, y las otras 22 andan de 0 a 213. `inspection_routes`
+  // (2006 filas) tambien lo rebasa, pero no entra aqui: se lee suelta y ya pagina a mano
+  // (`readInspectionRoutes`, linea ~700). Paginarlas todas seria gastar peticiones sin ganar
+  // nada. CUANDO ALGUNA CREZCA DE 1000 HAY QUE AGREGARLA AQUI: tocar el limite no sirve,
+  // porque el corte es de PostgREST y llega como HTTP 200 sin aviso.
+  //
+  // `operations` se ordena por `ot` y `secuencia` (no por `id`): es el orden en que el plan se
+  // presenta y el que la pagina ya usa al agrupar (`sequenceSort`). Mapear y agrupar son
+  // insensibles al orden de las filas, asi que esto no cambia lo que se ve; lo que evita es que
+  // el `offset` de la segunda vuelta se coma operaciones del principio.
+  const ORDEN_PAGINADO = { operations: "ot.asc,secuencia.asc" };
+
   async function readCatalogs(options) {
     const opts = options || {};
     // Las de persona van SIEMPRE, sin opcion para dejarlas fuera: sin ellas la pagina
@@ -1314,7 +1372,9 @@
     const errors = {};
     await Promise.all(tables.map(async function (table) {
       try {
-        rows[table] = await readTable(table);
+        rows[table] = ORDEN_PAGINADO[table]
+          ? await readTableEntero(table, { order: ORDEN_PAGINADO[table] })
+          : await readTable(table);
       } catch (error) {
         rows[table] = null;
         errors[table] = String((error && error.message) || error);
@@ -1429,6 +1489,10 @@
     sessionRequired: sessionRequired,
     PERSON_TABLES: PERSON_TABLES,
     readTable: readTable,
+    // FIX 2026-10-05: la lectura paginada y el mapa de tablas que la usan se exportan para que las
+    // sondas y los tests puedan correrlas contra un `fetch` de mentira que aplique `db-max-rows`.
+    readTableEntero: readTableEntero,
+    ORDEN_PAGINADO: ORDEN_PAGINADO,
     countTable: countTable,
     status: status,
     readCatalogs: readCatalogs,

@@ -687,11 +687,18 @@ function loadClient(options = {}) {
   };
   const root = {
     location: { hostname: "localhost" },
-    setTimeout: () => 1,
+    // El default nunca dispara, como antes. MEDIDO 2026-10-05 en produccion: en una pestana
+    // oculta los temporizadores SI corren (con throttling) aunque `requestAnimationFrame` no, y esa
+    // diferencia es la que hace falta para probar el repintado de las dos listas.
+    setTimeout: options.setTimeout || (() => 1),
     clearTimeout: () => {},
     requestIdleCallback: () => 1,
     cancelIdleCallback: () => {},
-    requestAnimationFrame: (callback) => { callback(); return 1; },
+    // MEDIDO 2026-10-05 en produccion: `requestAnimationFrame` NO se ejecuta en una pestana
+    // oculta, y el repintado de las dos listas colgaba de el (FIX en performance-client.js). Un
+    // rAF que NUNCA dispara deja probada esa puerta cerrada; el de verdad (que si dispara) sigue
+    // siendo el default, para que los otros tests no midan otra cosa.
+    requestAnimationFrame: options.requestAnimationFrame || ((callback) => { callback(); return 1; }),
     PPAppsScriptBridge: {
       isConfigured: () => true,
       // MEDIDO 2026-09-29 en el navegador: `isConfigured` dice "el puente esta configurado",
@@ -760,8 +767,8 @@ function loadClient(options = {}) {
     scheduleLocalStorageFlush: () => {},
     checkpointState: () => options.checkpointState?.(),
     undoLastChange: () => {},
-    renderPriorityList: () => {},
-    renderPriorityQueue: () => {},
+    renderPriorityList: () => { options.renderCalls?.push("renderPriorityList"); },
+    renderPriorityQueue: () => { options.renderCalls?.push("renderPriorityQueue"); },
     enhanceRenderedImages: () => {},
     els: {
       priorityList: { querySelectorAll: () => [] },
@@ -922,8 +929,8 @@ function loadClient(options = {}) {
       confirmWorkOrderClosures: (...args) => options.callAppsScript?.("confirmWorkOrderClosures", ...args),
     },
     createAppSheetPayload: (source) => options.createAppSheetPayload?.(source) ?? {},
-    renderTop: () => {},
-    renderPlanAlerts: () => {},
+    renderTop: () => { options.renderCalls?.push("renderTop"); },
+    renderPlanAlerts: () => { options.renderCalls?.push("renderPlanAlerts"); },
     showWorkspaceView: () => {},
     renderSelectedJobPanel: () => {},
     getSelectedPriorityJob: () => null,
@@ -4053,4 +4060,26 @@ test("una lista de snapshots vacia y exitosa queda cargada entre Reportes y Rest
   assert.equal(reports.ok, true);
   assert.equal(restore.ok, true);
   assert.equal(snapshotCalls, 1);
+});
+
+test("las dos listas se repintan aunque la pestana este oculta (MEDIDO 2026-10-05 en produccion)", async () => {
+  const renderCalls = [];
+  const fixture = loadClient({
+    state: { workOrders: [{ ot: "WO-1" }] },
+    renderCalls,
+    // Asi se comporta de verdad una pestana en segundo plano, y es como se midio el fallo: el
+    // repintado de las dos listas colgaba de `requestAnimationFrame`, que ahi no se ejecuta, y
+    // entonces se quedaban con el texto del TEMPLATE ("0 OTs" y "0 en el plan") mientras el KPI de
+    // arriba si mostraba las 4 OTs de la cola. El `setTimeout` SI corre, como en el navegador, y
+    // corre en un microtask (no en linea) porque asi es como lo entrega el temporizador real: las
+    // dos peticiones de pintado se juntan en un solo flush, que es lo que hace el agrupador.
+    requestAnimationFrame: () => 1,
+    setTimeout: (callback) => { queueMicrotask(callback); return 1; },
+    loadPlanSnapshots: async () => ({ ok: true, count: 0 }),
+    syncNetSuiteData: async () => true,
+  });
+
+  await fixture.context.syncNetSuiteInBackground({ showMessage: false });
+
+  assert.deepEqual(renderCalls, ["renderTop", "renderPlanAlerts", "renderPriorityList", "renderPriorityQueue"]);
 });

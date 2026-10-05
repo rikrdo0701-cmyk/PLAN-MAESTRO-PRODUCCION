@@ -1063,7 +1063,15 @@ test("un import o cache stale no pisa un borrador mas reciente; el restore de bo
   const importStart = app.indexOf("async function applyImported(imported, options = {})");
   const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
   const importFlow = app.slice(importStart, importEnd);
-  assert.match(importFlow, /const importedIsStaleSchedule = currentScheduleAtMs > 0 && importedScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;/);
+  // 2026-10-05 (RULE-PLAN-015): el reloj de la IMPORTACION ya NO tiene que ser > 0. MEDIDO en
+  // produccion: en el arranque el payload se pide con `app_state.last_schedule` NULL, o sea reloj 0,
+  // y la clausula de antes hacia que la comparacion saliera FALSA por falta de dato y no por
+  // antiguedad: la importacion de fondo se llevaba `operations`, `planStart`, `selectedOts` y
+  // `lockedOts` del espejo y el plan recien restaurado se perdia (medido: el rescate escribia
+  // app_state revision 2 y 3 y la pantalla seguia con las 8 operaciones truncadas de la 2624).
+  // Un reloj en cero no es "mas viejo": es "el servidor no trae plan" (RULE-PLAN-012).
+  assert.match(importFlow, /const importedIsStaleSchedule = currentScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;/);
+  assert.doesNotMatch(importFlow, /importedScheduleAtMs > 0 &&/);
   assert.match(importFlow, /Array\.isArray\(imported\.operations\) && !importedIsStaleSchedule/);
   assert.match(importFlow, /imported\.lastSchedule && !importedIsStaleSchedule/);
   assert.match(importFlow, /Array\.isArray\(imported\.selectedOts\) && !importedIsStaleSchedule/);
