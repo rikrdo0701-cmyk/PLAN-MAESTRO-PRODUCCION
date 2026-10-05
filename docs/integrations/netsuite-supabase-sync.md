@@ -308,6 +308,56 @@ Claves naturales del dedupe (solo evita duplicados DENTRO del payload: `items` d
 - `inventory` → `item,ubicacion`
 - `sales_orders` → `folio`
 
+### A Postgres nunca le llega un valor del tipo equivocado, porque ya se corrigió en la ingesta (RULE-SUP-051)
+
+**Lo que pasó, medido el 2026-10-05 a las 07:52.** La ventana de OTs cerradas del 2246 **sí
+funcionó**: `workorders: 513 filas recibidas` son 213 abiertas + 300 cerradas, y 300 es
+exactamente `MAX_OT_CERRADAS`, así que el tope entró y de paso quedaron **verificados en la cuenta
+Su** los tres pedazos de SQL que el repo no podía comprobar (`SYSDATE - 90`, `NULLS LAST`,
+`FETCH NEXT n ROWS ONLY`). Dos segundos después la escritura se cayó:
+
+```
+work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+codigo 22P02 | invalid input syntax for type integer: "
+work_orders: se intento escribir y no se pudo; se VACIO igual (213 filas borradas)
+```
+
+`work_orders.cantidad` es `integer not null default 0` (`docs/schema-supabase.sql:179`) y **alguna
+fila trajo `cantidad` con la cadena vacía**. Postgres no castea `""` a entero: `22P02`. Y como la
+escritura falló, RULE-SUP-048 vació la tabla igual. **`work_orders` quedó en 0 filas** (medido) y
+en el taller no había ni una sola OT: el espejo es la única fuente, no hay de dónde recuperar.
+
+**Qué hace el saneo (`PP_saneaTipos_`, `src/server/19-appscript-ingesta-supabase.js`).** No decide
+si el dato es correcto: decide que a Postgres le llegue algo del **tipo que el DDL declara**.
+
+| columna del DDL | qué hace con un valor ilegible | por qué ese valor |
+| --- | --- | --- |
+| `integer` / `numeric` (`not null default 0`) | `0`, y el nombre de la tabla y la columna al `log` de la corrida | es el **default de la columna**, o sea el mismo dato que ya hay cuando nadie escribe esa columna |
+| `integer` / `numeric` que llega como **texto** que sí es número | el número (`"480"` → `480`) | Postgres sí acepta el texto de un número; el problema es la cadena vacía, no el texto |
+| `boolean` | `false` (usando `PP_bool_` de `02-storage.js:2411`, con `false` de fallback) | `false` es el default; inventar `true` sería peorar |
+| `timestamptz` / `date` | `null`, y solo se acepta **ISO** (`^\d{4}-\d{2}-\d{2}`) | las fechas de las siete tablas son nullable. Y `"01/10/2026"` **sí** se parsea en JS, como octubre: escribirlo sería inventar un dato con cara de dato |
+
+`cantidad: true` en una columna `integer` va a `0`, no a `1`: `Number(true)` es `1`, y poner un 1
+porque llegó un booleano es escribir un dato que nadie mandó.
+
+**Las listas de columnas están escritas contra el DDL, no de memoria**, y
+`tests/espejo-tipos-ddl.test.mjs` las compara con `docs/schema-supabase.sql` **y**
+`docs/schema-supabase-sync-netsuite.sql` (las siete tablas están repartidas en los dos archivos):
+si el esquema gana una columna numérica y la lista no, ese test se cae en la misma corrida.
+
+**Lo que el saneo NO tapa, y por qué el aviso va al `log`.** Un `0` puesto sin que nadie lo diga es
+peor que un error: parece un dato. Por eso el conteo de lo corregido va al `log` de la corrida (no a
+`errores`: la escritura sí se hizo y la corrida es válida) con el nombre de la tabla y de las
+columnas. Y si algún día el `log` dice que se corrigieron valores, eso es **una OT con un 0 que hay
+que ir a buscar al 2246**, no un dato perdido.
+
+**Lo que sigue sin resolverse, y es de donde viene el `""`.** El mapeo de este repositorio es
+`cantidad: Number(r.cantidad) || 0` (`netsuite-restlet-unificado-supabase.js:112`), que de `""`, de
+`null`, de `NaN` y de `"1,200"` sale `0` o un número, **siempre un número**, y las dos ramas
+(abiertas y cerradas) usan el mismo `filaWorkOrder_`. Un payload con `cantidad: ""` **no puede
+salir de este archivo** — es una deducción, no una sospecha. El saneo protege la tabla mientras se
+encuentra el 2246 que corre; **no** lo absuelve.
+
 ### `materials.line_id` = `comp.id`, y NINGÚN writer puede escribir otra cosa (RULE-SUP-047)
 
 `line_id` **es** el `comp.id` de NetSuite: el número de renglón del BOM **dentro** de la OT. La

@@ -23,6 +23,7 @@ const leer = (p) => readFile(new URL("../" + p, import.meta.url), "utf8").then((
 const app = await leer("src/web/planning/app.js");
 const gate = await leer("src/web/shared/apps-script-ingesta-trigger.js");
 const server = await leer("src/server/19-appscript-ingesta-supabase.js");
+const storage = await leer("src/server/02-storage.js");
 const build = await leer("scripts/build-appscript.mjs");
 const puente = await leer("src/web/shared/apps-script-bridge-client.js");
 const boot = await leer("src/web/shared/performance-client.js");
@@ -426,6 +427,14 @@ function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla
   };
   contexto.globalThis = contexto;
   createContext(contexto);
+  // `PP_bool_` (el saneo de booleanos) NO esta en el archivo de ingesta: vive en 02-storage.js y
+  // los dos van al mismo proyecto de Apps Script. Se recorta DEL ARCHIVO, no se copia pegada: si
+  // aqui fuera una reimplementacion, estas pruebas pasarian aunque la de 02-storage.js hiciera otra
+  // cosa, y justo lo que se prueba es que el saneo usa la regla de la casa.
+  const desdeBool = storage.indexOf("function PP_bool_(");
+  const hastaBool = storage.indexOf("\n}", desdeBool) + 2;
+  assert.ok(desdeBool > 0 && hastaBool > desdeBool, "no se pudo recortar PP_bool_ de 02-storage.js");
+  runInContext(storage.slice(desdeBool, hastaBool), contexto, { filename: "02-storage.js:PP_bool_" });
   runInContext(server, contexto, { filename: "19-appscript-ingesta-supabase.js" });
 
   // Se sustituyen SOLO las tres fronteras: de donde salen los datos (el RESTlet), de donde sale
@@ -445,7 +454,10 @@ function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla
     if (!vacio && escribirFalla.includes(tabla)) throw new Error("columna no existe en materials");
     const borradas = base[tabla];
     base[tabla] = filas.length;
-    escrituras.push({ tabla, enviadas: filas.length, borradas });
+    // Se guarda el payload, no solo el conteo: hay pruebas que afirman sobre VALORES (por ejemplo
+    // que una cadena vacia en una columna `integer` sale como 0 antes de llegar a Postgres), y un
+    // conteo no las dejaria afirmar nada.
+    escrituras.push({ tabla, enviadas: filas.length, borradas, filas: structuredClone(filas) });
     return { escritas: filas.length, borradas: borradas };
   };
 
@@ -492,6 +504,103 @@ test("sin ventana declarada el log no inventa nada (el 2246 viejo no manda ese c
   const { r } = correrIngesta({ acciones: accionesCompletas() });
   assert.ok(!r.log.some((l) => /OTs cerradas/.test(l)),
     "si el RESTlet no declara `cerradas`, la bitacora no escribe una linea de cerradas: " + JSON.stringify(r.log));
+});
+
+test("una cadena vacia en una columna `integer` NO se va a escribir como cadena: sale 0 y se dice", () => {
+  // MEDIDO 2026-10-05 07:52, en produccion y de verdad: 513 filas de `work_orders` (213 abiertas
+  // + 300 cerradas), una de ellas con `cantidad` en "", Postgres 22P02 "invalid input syntax for
+  // type integer", y RULE-SUP-048 vaciando la tabla: `work_orders` quedo en CERO filas. Un valor
+  // mal escrito en una fila dejo a la pagina sin una sola OT.
+  //
+  // El DDL declara `cantidad integer not null default 0` (docs/schema-supabase.sql:179), asi que
+  // el 0 es el valor por omision de la columna: la fila queda con el mismo dato que tendria si
+  // nadie escribiera esa columna, y no con una cadena que Postgres rechaza.
+  const acciones = accionesCompletas();
+  acciones.workorders.rows = [
+    { ot: "3302", articulo: "A", cantidad: "", estatus: "Orden de trabajo : Cerrada" },
+    { ot: "3492", articulo: "B", cantidad: null, estatus: "Orden de trabajo : Cerrada" },
+    { ot: "2624", articulo: "C", cantidad: 30, estatus: "Orden de trabajo : En curso" },
+  ];
+  const { r, escrituras } = correrIngesta({ acciones, previas: { work_orders: 213 } });
+
+  assert.equal(r.ok, true, "la corrida es valida: no se perdio ninguna tabla");
+  const escritura = escrituras.find((e) => e.tabla === "work_orders");
+  assert.equal(escritura.enviadas, 3, "las tres filas entraron, la buena y las dos malas");
+  assert.deepEqual(escritura.filas.map((f) => f.cantidad), [0, 0, 30]);
+  for (const f of escritura.filas) {
+    assert.equal(typeof f.cantidad, "number", "a Postgres le llega un numero, no una cadena: " + JSON.stringify(f.cantidad));
+  }
+  // Y se dice, con el nombre de la tabla y de la columna, porque un 0 sin explicación es un
+  // dato que nadie va a suspectar.
+  assert.ok(r.log.some((l) => /work_orders/.test(l) && /2 valores/.test(l) && /cantidad 2/.test(l)),
+    "el log dice cuantas filas y que columna: " + JSON.stringify(r.log));
+  assert.ok(!r.errores.some((e) => /work_orders/.test(e)), "y no es un error de corrida: " + JSON.stringify(r.errores));
+});
+
+test("una cantidad que llega como TEXTO se convierte, y una que no es numero va a 0", () => {
+  const acciones = accionesCompletas();
+  acciones.workorders.rows = [
+    { ot: "1", cantidad: "480" },
+    { ot: "2", cantidad: "1,200" },
+    { ot: "3", cantidad: "48.5" },
+    { ot: "4", cantidad: true },
+  ];
+  const { escrituras } = correrIngesta({ acciones });
+  const f = escrituras.find((e) => e.tabla === "work_orders").filas;
+  assert.equal(f[0].cantidad, 480, "el texto que SI es numero se vuelve numero, no cadena");
+  assert.equal(f[1].cantidad, 0, "y lo que no es numero no se inventa: 0 con el aviso en el log");
+  assert.equal(f[2].cantidad, 48.5);
+  assert.equal(f[3].cantidad, 0, "un booleano en una columna entera tampoco es un entero");
+});
+
+test("las fechas ilegibles van a null, y una fecha en dd/mm/aaaa NO se convierte (seria la fecha equivocada)", () => {
+  // Las fechas de las siete tablas son nullable, asi que null es legal. Y "01/10/2026" SI se
+  // parsea en un motor de JS, como OCTUBRE: escribirlo seria inventar un dato con cara de dato.
+  const acciones = accionesCompletas();
+  acciones.workorders.rows = [
+    { ot: "1", fecha_vencimiento: "2026-10-01T00:00:00.000Z" },
+    { ot: "2", fecha_vencimiento: "" },
+    { ot: "3", fecha_vencimiento: "01/10/2026" },
+    { ot: "4", fecha_vencimiento: null },
+  ];
+  const { escrituras } = correrIngesta({ acciones });
+  const f = escrituras.find((e) => e.tabla === "work_orders").filas;
+  assert.equal(f[0].fecha_vencimiento, "2026-10-01T00:00:00.000Z", "una ISO se respeta tal cual");
+  assert.equal(f[1].fecha_vencimiento, null);
+  assert.equal(f[2].fecha_vencimiento, null, "dd/mm/aaaa en una columna timestamptz es null, no la fecha que el motor adivine");
+  assert.equal(f[3].fecha_vencimiento, null);
+});
+
+test("los booleanos del espejo se sietizan, y las columnas que no estan en la lista no se tocan", () => {
+  const acciones = accionesCompletas();
+  acciones.items.rows = [{ codigo: "A", inactivo: "", es_ensamblaje: "true", descripcion: "" }, { codigo: "B" }];
+  const { escrituras } = correrIngesta({ acciones });
+  const f = escrituras.find((e) => e.tabla === "items").filas;
+  assert.equal(f[0].inactivo, false, "una cadena vacia en un booleano es false, no error");
+  assert.equal(f[0].es_ensamblaje, true, "y el texto 'true' se reconoce");
+  assert.equal(f[0].descripcion, "", "el texto acepta la cadena vacia: es el default de la columna");
+  assert.ok(!("descripcion" in f[1]) === false || f[1].descripcion === undefined, "y una fila sin la columna no la inventa");
+});
+
+test("un payload que ya esta bien se escribe EXACTO como vino, y las filas de entrada no se tocan", () => {
+  // El saneo no puede cambiar el dato bueno, porque en eso se apoya: si no, el 0 de la OT
+  // cerrada se podria ir formando una costumbre y ningun dia se sabria que el espejo esta
+  // mintiendo. Y las filas que devuelve el RESTlet no se modifican en el sitio (el `forEach` del
+  // recorrido de fotos las reemplaza, no las muta).
+  const filas = [{ ot: "1", articulo: "A", cantidad: 30, estatus: "Orden de trabajo : En curso" }];
+  const acciones = accionesCompletas();
+  acciones.workorders.rows = filas;
+  const { escrituras } = correrIngesta({ acciones });
+  const escritura = escrituras.find((e) => e.tabla === "work_orders").filas[0];
+  assert.deepEqual(escritura, { ot: "1", articulo: "A", cantidad: 30, estatus: "Orden de trabajo : En curso" });
+  assert.deepEqual(filas[0].cantidad, 30);
+  assert.notEqual(escritura, filas[0], "y lo que se escribe es una copia, no el mismo objeto");
+});
+
+test("sin nada que corregir, el log NO inventa una linea de saneo", () => {
+  const { r } = correrIngesta({ acciones: accionesCompletas() });
+  assert.ok(!r.log.some((l) => /no eran del tipo/.test(l)),
+    "una corrida limpia no dice que corrigio nada: " + JSON.stringify(r.log));
 });
 
 test("una corrida completa reescribe las SIETE tablas y no deja ninguna con lo anterior", () => {

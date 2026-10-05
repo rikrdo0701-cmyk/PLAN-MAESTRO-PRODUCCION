@@ -255,6 +255,133 @@ function deduplicar_(filas, claveFn) {
 }
 
 // =============================================================================
+// QUE NUNCA LE LLEGA A POSTGRES UN VALOR QUE NO PUEDA TOMAR
+// =============================================================================
+
+/**
+ * MEDIDO 2026-10-05 a las 07:52, Y SALIO UNA TABLA EN CERO. La corrida llevo 513 filas a
+ * `work_orders` (213 abiertas + 300 cerradas: la ventana de OTs cerradas de RULE-SUP-050
+ * funcionando, y de paso verificadas `SYSDATE - 90`, `NULLS LAST` y `FETCH NEXT n ROWS ONLY`
+ * en la cuenta) y la escritura se cayo assim:
+ *
+ *   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+ *   codigo 22P02 | invalid input syntax for type integer: "
+ *   work_orders: se intento escribir y no se pudo; se VACIO igual (213 filas borradas)
+ *
+ * `work_orders.cantidad` es `integer not null` (docs/schema-supabase.sql:179) y ALGUNA fila
+ * trajo `cantidad` con la cadena vacia. Postgres no castea "" a entero: 22P02. Y como la
+ * escritura fallo, RULE-SUP-048 vacio la tabla igual. O sea que un valor mal escrito en UNA fila
+ * de 513 dejo a la pagina sin una sola OT de las 213 que tenia, y el espejo es la unica fuente:
+ * no hay de donde recuperar.
+ *
+ * QUE HACE ESTE PASO, Y QUE NO HACE. No decide si el dato es correcto: decide que a Postgres le
+ * llegue algo del TIPO que la columna declara. Un valor que no se puede leer va como 0 en las
+ * columnas `not null default 0` (que es el default de la columna, o sea el mismo valor que ya
+ * tiene la tabla cuando nadie escribe esa columna) y a `null` en las que admiten null. Y
+ * CUENTA cuantas filas toco, con el nombre de la tabla y de las columnas, al `log` de la corrida:
+ * un 0 puesto a mano sin que nadie lo diga es peor que un error.
+ *
+ * LA LISTA DE COLUMNAS ESTA ESCRITA CONTRA EL DDL, no adivinada: sale de `docs/schema-supabase.sql`
+ * y `docs/schema-supabase-sync-netsuite.sql` (las siete tablas del espejo estan repartidas en los
+ * dos). `tests/espejo-tipos-ddl.test.mjs` la COMPARA con esos DDL, asi que si el esquema gana una
+ * columna numerica y esta lista no, ese test se cae.
+ */
+const COLUMNAS_NUMERICAS_ = {
+  work_orders: ['cantidad', 'cant_ensamblada', 'cant_pendiente', 'precio_promedio_venta', 'precio_ultima_venta', 'revision'],
+  operations: ['secuencia', 'cant_total', 'cant_pendiente', 'tiempo_ciclo', 'tiempo_setup', 'tiempo_prod', 'subcontract_days', 'revision'],
+  materials: ['requerido', 'emitido', 'pendiente', 'revision'],
+  items: ['clase', 'revision'],
+  machines: [],
+  inventory: ['disponible', 'fisico', 'comprometido', 'pickeado', 'en_transito', 'revision'],
+  sales_orders: ['cliente_id', 'total', 'moneda', 'revision']
+};
+
+// Las fechas de las siete tablas del espejo son todas NULLABLE (docs/schema-supabase.sql:208-210
+// y 231-232, `schema-supabase-sync-netsuite.sql` `fecha` y `ultima_modificacion`), asi que aqui un
+// valor ilegible va a null y no a 0.
+const COLUMNAS_FECHA_ = {
+  work_orders: ['fecha_inicio_ns', 'fecha_fin_ns', 'fecha_vencimiento'],
+  operations: ['fecha_inicio', 'fecha_fin', 'hora_inicio', 'hora_fin'],
+  materials: [],
+  items: ['ultima_modificacion'],
+  machines: [],
+  inventory: [],
+  sales_orders: ['fecha']
+};
+
+const COLUMNAS_BOOL_ = {
+  work_orders: [],
+  operations: [],
+  materials: [],
+  items: ['es_ensamblaje', 'inactivo'],
+  machines: ['activa'],
+  inventory: [],
+  sales_orders: []
+};
+
+/**
+ * Una fecha solo pasa si es ISO. Un "01/10/2026" SI se parsea en un motor de JS (como octubre) y
+ * se escribiria la FECHA EQUIVOCADA, que es peor que no tenerla: null es lo que ya hay en la
+ * columna cuando no se sabe.
+ */
+function PP_fechaISO_(valor) {
+  if (valor === null || valor === undefined) return null;
+  const s = String(valor).trim();
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+  return isFinite(Date.parse(s)) ? s : null;
+}
+
+// El booleano NO se declara aqui: `PP_bool_` ya existe en 02-storage.js:2411 y los dos archivos
+// van al mismo proyecto de Apps Script, asi que declararlo otra vez aqui no daria una segunda
+// regla sino una funcin muerta que ademas gana la ultima en silencio
+// (tests/appscript-ambito-global.test.mjs es el que avisa de eso). Se usa el de ahi, con `false`
+// como valor cuando no se sabe: en el espejo, un booleano ilegible no se inventa.
+
+/**
+ * Deja las filas con el tipo que el DDL declara. Devuelve las filas nuevas (las de entrada NO se
+ * tocan) y el conteo de lo que se corrigio, con el detalle por columna para el log.
+ */
+function PP_saneaTipos_(tabla, filas) {
+  const numeros = COLUMNAS_NUMERICAS_[tabla] || [];
+  const fechas = COLUMNAS_FECHA_[tabla] || [];
+  const bools = COLUMNAS_BOOL_[tabla] || [];
+  const tocadas = {};
+  let corregidas = 0;
+  const marcar = function (col) { tocadas[col] = (tocadas[col] || 0) + 1; corregidas++; };
+
+  const salida = (filas || []).map(function (fila) {
+    const copia = Object.assign({}, fila);
+    for (const col of numeros) {
+      if (!(col in copia)) continue;
+      const v = copia[col];
+      // Solo un numero, o un TEXTO que sea un numero. Un booleano no: `Number(true)` es 1, y
+      // escribir 1 en una columna de cantidad porque llego un `true` es inventar un dato.
+      const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+      if (typeof n === 'number' && isFinite(n)) {
+        if (typeof v !== 'number') { copia[col] = n; marcar(col); }
+      } else {
+        copia[col] = 0; marcar(col);
+      }
+    }
+    for (const col of fechas) {
+      if (!(col in copia)) continue;
+      const limpio = PP_fechaISO_(copia[col]);
+      if (limpio !== copia[col]) { copia[col] = limpio; marcar(col); }
+    }
+    for (const col of bools) {
+      if (!(col in copia)) continue;
+      const v = PP_bool_(copia[col], false);
+      if (v !== copia[col]) { copia[col] = v; marcar(col); }
+    }
+    return copia;
+  });
+
+  const detalle = Object.keys(tocadas).sort().map(function (c) { return c + ' ' + tocadas[c]; }).join(', ');
+  return { filas: salida, corregidas: corregidas, detalle: detalle };
+}
+
+// =============================================================================
 // El activador (se crea a mano, ver PP_creaTriggerIngesta_)
 // =============================================================================
 
@@ -554,6 +681,18 @@ function PP_ingesta_(forzado) {
       // Mirror atómico de NetSuite: el RPC borra la tabla completa y escribe lo
       // nuevo en una sola transacción, para que no queden filas de corridas
       // anteriores ni ventanas con la tabla vacía.
+      //
+      // ANTES de escribir, y por lo que paso el 2026-10-05: una fila con `cantidad` en "" hizo
+      // que Postgres tirara 22P02 y que la tabla quedara VACIA (arriba, el porque). El saneo no
+      // adivina el dato: le da a Postgres el TIPO que el DDL declara, y avisa cuantos valores toco.
+      const saneadas = PP_saneaTipos_(def.tabla, filas);
+      filas = saneadas.filas;
+      if (saneadas.corregidas) {
+        const aviso = def.tabla + ': ' + saneadas.corregidas + ' valores que no eran del tipo que el DDL declara (' +
+          saneadas.detalle + ') se escribieron con el valor por omision de la columna; el espejo es exacto y no se corrige a mano';
+        log.push(aviso);
+        console.log(aviso);
+      }
       const r = PP_supabaseMirror_(def.tabla, filas, config);
       conteo[def.tabla] = r.escritas;
       log.push(def.tabla + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
