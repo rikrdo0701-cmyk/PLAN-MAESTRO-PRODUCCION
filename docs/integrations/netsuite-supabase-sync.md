@@ -358,6 +358,38 @@ que ir a buscar al 2246**, no un dato perdido.
 salir de este archivo** — es una deducción, no una sospecha. El saneo protege la tabla mientras se
 encuentra el 2246 que corre; **no** lo absuelve.
 
+### Con `work_orders` vacía, ninguna tarjeta muestra artículo: la tabla es su única fuente (RULE-SUP-052)
+
+**Medido el 2026-10-05 con la sonda web local** (`npm run probe`), no deducido: la tarjeta de
+backlog, la de la cola y el detalle arman
+
+```js
+// src/web/planning/app.js:12901-12903
+parte: workOrder?.item || ops.find((op) => op.parte)?.parte || "",
+descripcion: workOrder?.description || "",
+```
+
+La segunda fuente del `||` **no existe con datos de Supabase**: la tabla `operations` no tiene
+columna de parte ni de descripción del artículo (`docs/schema-supabase.sql:192-221`) y el lector no
+las arma (`src/web/shared/supabase-reader.js:1085-1110` mapea `descripcion` de la **operación**, no
+del artículo). Así que artículo y descripción salen **solo** de `work_orders`.
+
+Medido: la OT que la sonda inyecta fuera del espejo se dibuja como `PLAN SIN ARTICULO` /
+`Sin descripcion`, y las otras 25 tarjetas **sí** muestran su artículo — el síntoma es **por fila
+faltante**, no de la lista.
+
+**Por qué importa hoy:** con `work_orders` en 0 filas (el incidente de las 07:52, RULE-SUP-048 y
+RULE-SUP-051) **todas** las tarjetas pierden artículo y descripción y la página parece rota de punta
+a punta. Ese síntoma lo explica la tabla vacía, no la UI, así que cuando se vea "todo salió SIN
+ARTICULO" hay que mirar `work_orders` antes que el navegador. La sonda cuenta las tarjetas sin
+artículo en cada corrida (`summary.articulosEnBacklog`) para que el número esté medido y no
+supuesto.
+
+**Y no es lo mismo que una OT cerrada:** RULE-REP-006 elimina del estado a la OT cerrada por su
+**estado**, y una OT **sin fila** no tiene estado con el que eliminarse. Esa diferencia (ausencia de
+fila = cerrada, o = el espejo la perdió) es una decisión de regla que sigue abierta; ver §
+"Pendientes y ambigüedades" de `docs/rules/RULES.md`.
+
 ### `materials.line_id` = `comp.id`, y NINGÚN writer puede escribir otra cosa (RULE-SUP-047)
 
 `line_id` **es** el `comp.id` de NetSuite: el número de renglón del BOM **dentro** de la OT. La

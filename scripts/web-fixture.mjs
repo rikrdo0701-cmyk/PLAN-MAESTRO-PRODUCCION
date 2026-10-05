@@ -215,10 +215,17 @@ export function buildFixture(options = {}) {
 
   return {
     schemaVersion,
-    // syncedAt reciente: el gate de frescura (ensureNetSuiteWorkOrdersFresh) no debe
-    // intentar sincronizar, porque en localhost no hay backend de Apps Script.
+    // syncedAt VENCIDO a proposito, y antes era al reves. MEDIDO 2026-10-05: antes ponia la
+    // hora de ahora para que el gate de frescura (ensureNetSuiteWorkOrdersFresh) no intentara
+    // sincronizar "porque en localhost no hay backend de Apps Script". Con RULE-SUP-030 ese
+    // motivo ya no existe: la comprobacion automatica de frescura lee SUPABASE, no Apps Script
+    // (app.js:6017 -> syncNetSuiteData con `dispararIngesta:false`), y el reloj que mira es de
+    // 15 minutos (NETSUITE_WORKORDER_FRESH_MS, app.js:24). Con el reloj de ahora la comprobacion
+    // se saltaba entera y la sonda nunca media el retiro de la OT cerrada (RULE-OT-048/050).
+    // Vencido es ademas lo fiel: en produccion `app_state.synced_at` casi nunca tiene menos de
+    // 15 minutos, asi que la comprobacion corre practicamente siempre.
     revision: 7,
-    syncedAt: new Date().toISOString(),
+    syncedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
     ganttView: "job",
     selectedOperationId: "",
     selectedDetailOt: "",
@@ -273,7 +280,30 @@ export function buildFixture(options = {}) {
     toolCatalog,
     materials,
     calendarExceptions: [],
-    operationPlanStatuses: {},
+    // UNOS CUANTOS ESTADOS DE PLAN, y vacio era lo que habia. MEDIDO 2026-10-05: con esta tabla
+    // vacia el escritor NO llama a `plan_guardar` -`frenoDelRpc` ve `operation_plan_statuses` en
+    // `ESPEJO_QUE_SE_VACIA` y frena, RULE-SUP-021: una tabla del espejo que llega vacia sin que
+    // nadie lo pidiera podria vaciar el plan entero- y se va por el camino viejo, tabla por tabla.
+    // La sonda media entonces el camino viejo sin saberlo, y como `operation_events` no estaba en
+    // el almacen local el POST daba 404 y el guardado entero se perdia: de ahi el "No se pudo
+    // guardar el plan" de la corrida. Con estados, la app va por la funcion, que es el camino de
+    // produccion en cuanto el plan tiene algo (RULE-SUP-023).
+    //
+    // El valor es el NEUTRAL de verdad, no uno inventado: `mapPlanStatuses` (supabase-reader.js)
+    // convierte una fila sin completada en `status: "PENDIENTE"`, `origin: "draft"`, fechas vacias,
+    // y eso es una operacion normal todavia no empezada. Nada se marca como completada.
+    operationPlanStatuses: Object.fromEntries(
+      operations.slice(0, 3).map((op) => [`${op.ot}|${op.secuencia}|${op.ct}`, {
+        key: `${op.ot}|${op.secuencia}|${op.ct}`,
+        ot: op.ot,
+        sequence: op.secuencia,
+        ct: op.ct,
+        status: "PENDIENTE",
+        origin: "draft",
+        completedAt: "",
+        reopenedAt: "",
+      }]),
+    ),
     publishedPlanStatuses: {},
     netSuiteChangeAlerts: [],
     netSuiteSyncAlert: null,

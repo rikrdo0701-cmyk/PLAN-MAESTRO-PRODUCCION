@@ -2419,6 +2419,20 @@
         "tests/espejo-tipos-ddl.test.mjs"
       ],
       "updated_at": "2026-10-05"
+    },
+    {
+      "rule_id": "RULE-MAT-013",
+      "name": "La liberacion de la antecesora no es su fin: hay hito de solapamiento",
+      "status": "active",
+      "rule": "RULE-OT-012 dice que cada operacion movible espera el momento de liberacion MAS TARDIO de las anteriores, y ese momento NO es el fin de la antecesora: predecessorReleaseMoment (planner-core.js:1075-1087) devuelve el hito de duracion*solapamiento cuando la capacidad tiene regla de solapamiento menor que 1, y overlapForOperation (planner-core.js:1576) lee state.operationRules[<CT>].overlap (alias solapamiento) con 1 por defecto, es decir fin completo. MEDIDO 2026-10-05 con la sonda web local (fixture: 0.6 para 5527 SOLDADURA, 5495 PINTURA y 5459 DOBLADO): de 12 pares de operaciones consecutivas de la misma OT, 6 arrancan ANTES de que termine la anterior; el caso mayor, OT 3000 sec 2, arranca 928 min antes del fin de la sec 1, con el 13% de su duracion transcurrido en reloj (el 60% de sus minutos PRODUCTIVOS cae antes, porque el resto de la duracion son esperas y tiempo no operativo). CONSECUENCIA para medir: ninguna comprobacion puede afirmar que una sucesora arranca despues de que termine la anterior, porque es falso por construccion; lo que si se sostiene con cualquier solapamiento permitido es que ninguna sucesora arranca antes de que su antecesora arranque, y que el reparto de minutos iniciales lo calcula el motor sobre sus segmentos, no una sonda.",
+      "source": "MEDIDO 2026-10-05 con scripts/web-probe.mjs (paso de precedencia, vista job, 14 OTs en el plan); src/web/planning/planner-core.js:1031-1152; src/web/planning/app.js:4870-4907; scripts/web-fixture.mjs:269-271; .project-memory/rules.json RULE-OT-012"
+    },
+    {
+      "rule_id": "RULE-SUP-052",
+      "name": "El articulo y la descripcion de una OT salen SOLO de work_orders",
+      "status": "active",
+      "rule": "La tarjeta de backlog, la de la cola y el detalle muestran el articulo y la descripcion de la OT, y los dos datos salen UNICAMENTE de work_orders: app.js:12901-12903 arma parte = workOrder?.item || ops.find(op => op.parte)?.parte || '' y descripcion = workOrder?.description || ''. La tabla operations NO tiene columna de parte ni de descripcion del articulo (docs/schema-supabase.sql:192-221) y el lector tampoco las construye (supabase-reader.js:1085-1110 mapea operation_id, ot, secuencia, ct, descripcion de la OPERACION, operador, maquina, herramental, kit, cantidades y tiempos), de modo que la segunda fuente del ternario nunca existe con datos de Supabase. MEDIDO 2026-10-05 con la sonda web local: la OT que se inyecta fuera del espejo se dibuja como 'PLAN SIN ARTICULO' y 'Sin descripcion', y las demas 25 tarjetas muestran su articulo, o sea que el sintoma es por fila faltante y no de la lista. CONSECUENCIA que ya se esta viendo en produccion: con work_orders en 0 filas (el incidente del 2026-10-05 07:52, RULE-SUP-048 y RULE-SUP-051) TODAS las tarjetas del backlog pierden articulo y descripcion y la pagina parece rota de punta a punta; el sintoma se explica por la tabla vacia, no por la UI. Y no es lo mismo que una OT cerrada: RULE-REP-006 elimina del estado a una OT cerrada por su ESTADO, y una OT sin fila no tiene estado con el que eliminarse (ver pendientes en docs/rules/RULES.md).",
+      "source": "MEDIDO 2026-10-05 con scripts/web-probe.mjs (conteo de tarjetas sin articulo y retirada de la OT cerrada); src/web/planning/app.js:2633, 12901-12903; docs/schema-supabase.sql:192-221; src/web/shared/supabase-reader.js:1085-1110; .project-memory/rules.json RULE-SUP-048, RULE-SUP-051, RULE-REP-006"
     }
   ]
 }

@@ -10,15 +10,26 @@
  *   --backend=none reproduce el localhost puro (sin backend), util para ver como se
  *     comporta la app degradada. Ahi se espera que agregar OT falle con aviso.
  *
- * AISLAMIENTO (obligatorio, no opcional): el bundle de site/ trae embebida la URL del
- * backend REAL de produccion (DEFAULT_WEB_APP_URL en el cliente del puente) y su cliente
- * REESCRIBE window.PPAppsScriptBridge, pisando cualquier stub. Sin antidoto, abrir la
- * sonda es operate con el plan de produccion: se leyeron datos reales y "A backlog" (que
- * pide window.confirm) llego a guardarse en CONFIG. Por eso la sonda:
+ * LO QUE LA APP LEE DE VERDAD (MEDIDO 2026-10-05). Con RULE-SUP-030 la pagina no pide nada al
+ * puente: llama a `PPSupabaseBridgeReplacement`, que lee con `PPSupabaseReader` por `fetch` a
+ * `https://xtgtfjcwxcoxvixholpj.supabase.co`, URL REAL embebida en el bundle de `site/`. Por eso
+ * el stub del puente, que hasta el 2026-09-27 bastaba, dejo de basta el 2026-10-03: sus 34
+ * peticiones de arranque las cortaba la guarda anti-produccion, la app arrancaba sin estado y la
+ * sonda abortaba en la precondicion. Ahora el mismo servidor local de la sonda ATIENDE
+ * `/rest/v1/<tabla>` con filas del mismo fixture (`web-probe-supabase.mjs`) y `configure()`
+ * apunta ahi el lector y el escritor. Se falsea el ORIGEN, no el camino: la app arranca por
+ * Supabase, con el lector de verdad y sus mappers, y nada sale de la maquina.
+ *
+ * AISLAMIENTO (obligatorio, no opcional): el bundle de `site/` trae embebidas las URLs REALES de
+ * produccion (DEFAULT_WEB_APP_URL en el cliente del puente y DEFAULT_URL en el lector y el
+ * escritor de Supabase) y su cliente REESCRIBE window.PPAppsScriptBridge, pisando cualquier
+ * stub. Sin antidoto, abrir la sonda es operate con el plan de produccion: se leyeron datos reales
+ * y "A backlog" (que pide window.confirm) llego a guardarse en CONFIG. Por eso la sonda:
  *   1. bloquea en el contexto toda peticion que no sea del origen local, de modo que el
  *      iframe de Apps Script no se pueda cargar ni de broma;
  *   2. congela window.PPAppsScriptBridge con un setter trap para que el cliente real no lo
- *      pueda sustituir;
+ *      pueda sustituir, y hace lo mismo con PPSupabaseReader y PPSupabaseWriter para que no
+ *      puedan apuntar a otra parte;
  *   3. verifica al final que no salio ninguna peticion externa y que el puente que respondio
  *      es el stub. Si algo de eso falla, la corrida se marca FALLA.
  *
@@ -39,6 +50,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 import { buildFixture, readAppConstants } from "./web-fixture.mjs";
+import { filasDesdeFixture, responderPostgREST, TABLAS_INEXISTENTES } from "./web-probe-supabase.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -53,6 +65,13 @@ const HEADED = has("headed");
 const KEEP_OPEN = has("keep-open");
 const TIMEOUT_MS = Number(flag("timeout", 60000));
 const BACKEND = flag("backend", "stub") === "none" ? "none" : "stub";
+// MEDIDO 2026-10-05: `machine_planning_overrides` NO existe en el proyecto, y su 404 hace que
+// `supabase-catalog-boot.js` marque `informe.fallo`, que `supabase-catalog-apply.js:141` tome
+// como motivo para NO aplicar NADA, y que la pagina arranque sin operadores, sin matriz y sin
+// maquinas. Es lo que le pasa a la persona hoy. `--overrides=vacias` apaga esa unica falla para
+// medir el resto de la corrida: si con el todo lo demas queda verde, queda medido que el 404 es
+// la causa y no la sonda ni los datos.
+const OVERRIDES_VACIAS = flag("overrides", "inexistente") === "vacias";
 
 const root = path.resolve(".");
 const siteDir = path.join(root, "site");
@@ -102,6 +121,33 @@ async function shot(page, label) {
  * Un paso que falla NO corta la corrida: se registra, se toma captura y se sigue. Asi una
  * sola regresion no oculta el resto.
  */
+/**
+ * QUE ESTA ENCIMA DE LA PAGINA CUANDO UN PASO FALLA.
+ *
+ * MEDIDO 2026-10-05: dos pasosfallen con `page.click: Timeout 30000ms exceeded` y el informe
+ * decia solo eso. La causa era un elemento FIJO encima -el aviso de catalogos, `#pp-catalogo-aviso`,
+ * z-index 9997- que se vuelve a pintar cuando la pagina vuelve a aplicar los catalogos: el click
+ * nunca llega al boton y el error no dice por que. Con esta medicion, el fallo dice QUE habia
+ * encima, que es la mitad del trabajo de diagnosticarlo.
+ */
+async function queTapaLaPagina(page) {
+  return page.evaluate(() => {
+    const centro = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const encima = document.elementsFromPoint(centro.x, centro.y).slice(0, 3).map((el) => {
+      const estilo = getComputedStyle(el);
+      return `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}${el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).join(".") : ""} (z=${estilo.zIndex}, ${estilo.position})`;
+    });
+    const abiertos = Array.from(document.querySelectorAll("dialog[open]")).map((d) => d.id || "(sin id)");
+    const velos = ["#pp-login", "#pp-catalogo-aviso", "#planningDialog[open]"]
+      .filter((sel) => document.querySelector(sel))
+      .map((sel) => {
+        const el = document.querySelector(sel);
+        return `${sel} (visible=${el.offsetParent !== null || getComputedStyle(el).display !== "none"}, z=${getComputedStyle(el).zIndex})`;
+      });
+    return { centro, encima, dialogosAbiertos: abiertos, velos };
+  });
+}
+
 async function step(page, name, fn) {
   stepIndex += 1;
   const started = Date.now();
@@ -116,7 +162,9 @@ async function step(page, name, fn) {
     const elapsedMs = Date.now() - started;
     timings.push({ name, ms: elapsedMs, ok: false });
     const image = await shot(page, name.replace(/[^a-z0-9]+/gi, "-").slice(0, 40));
-    record("fail", name, String(error?.message || error), { elapsedMs, image });
+    const tapando = await queTapaLaPagina(page).catch(() => null);
+    const extra = tapando ? ` | encima: ${JSON.stringify(tapando)}` : "";
+    record("fail", name, String(error?.message || error) + extra, { elapsedMs, image, tapando });
     return null;
   }
 }
@@ -126,9 +174,64 @@ function assert(condition, message) {
   return true;
 }
 
-async function serveSite() {
-  const server = createServer(async (request, response) => {
+/**
+ * El cuerpo de la peticion, ya sea JSON o no. MEDIDO 2026-10-05: hace falta porque el PostgREST
+ * falso tambien ATIENDE escrituras -antes contestaba 200 a un POST sin guardar nada y por eso
+ * "Generar plan" no dejaba ni una operacion con fecha-.
+ */
+async function leerCuerpo(request) {
+  if (request.method === "GET" || request.method === "HEAD") return null;
+  const trozos = [];
+  for await (const trozo of request) trozos.push(trozo);
+  if (!trozos.length) return null;
+  const texto = Buffer.concat(trozos).toString("utf8");
+  try {
+    return JSON.parse(texto);
+  } catch {
+    return texto;
+  }
+}
+
+async function serveSite(tablas, registro, opcionesRest = {}) {
+  const server = createServer((request, response) => {
+    // MEDIDO 2026-10-05: sin esto, la corrida MUERE al final y no deja informe. Cuando el
+    // navegador cierra (la sonda lo hace en el ultimo paso, con peticiones de la pagina todavia
+    // en vuelo), Node aborta esas peticiones entrantes (`abortIncoming`) y cada `request` emite
+    // `error` con ECONNRESET. Sin un listener, eso es una excepcion sin capturar y el proceso
+    // muere con `Error: aborted` DESPUES del ultimo paso: por eso los informes de algunas
+    // corridas no existian aunque todos los pasos hubieran salido. Un abort de un cliente no
+    // es un defecto del sitio, asi que se escucha y se deja pasar.
+    request.on("error", () => {});
+    response.on("error", () => {});
+    atenderPeticion(request, response, tablas, registro, opcionesRest).catch((error) => {
+      try {
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end(`sonda: ${error.message}`);
+      } catch {
+        // la conexion ya no existe; no hay a quien avisarle
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { server, origin: `http://127.0.0.1:${server.address().port}` };
+}
+
+async function atenderPeticion(request, response, tablas, registro, opcionesRest) {
+  {
     const url = new URL(request.url, "http://localhost");
+    // El LECTOR REAL de Supabase (RULE-SUP-030). MEDIDO 2026-10-05: la sonda estaba midiendo un
+    // camino que ya no existe, porque su guarda cortaba estas peticiones y por eso la app
+    // arrancaba sin estado. Se atienden aqui, en el MISMO origen local, con filas de fixture.
+    // El cuerpo se lee ANTES de responder: las escrituras del escritor (`plan_guardar` y el
+    // camino viejo tabla por tabla) viajan en el cuerpo y sin el se contestaba 200 sin guardar.
+    const cuerpo = await leerCuerpo(request);
+    const rest = responderPostgREST(url, request.method, request.headers, tablas, { ...opcionesRest, cuerpo });
+    if (rest) {
+      registro.push(`${request.method} ${url.pathname}${url.search}`.slice(0, 160));
+      response.writeHead(rest.status, rest.headers);
+      response.end(rest.body);
+      return;
+    }
     if (url.pathname.startsWith("/api/")) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "sin backend en localhost" }));
@@ -144,9 +247,7 @@ async function serveSite() {
     const body = await readFile(target);
     response.writeHead(200, { "content-type": MIME[path.extname(target)] || "application/octet-stream" });
     response.end(body);
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, origin: `http://127.0.0.1:${server.address().port}` };
+  }
 }
 
 function isEnvironmental(text) {
@@ -319,6 +420,72 @@ function installStubTrap() {
   });
 }
 
+/**
+ * Apunta el LECTOR y el ESCRITOR de Supabase al PostgREST local.
+ *
+ * MEDIDO 2026-10-05: con RULE-SUP-030 la pagina no habla con el puente, llama directo a
+ * `PPSupabaseBridgeReplacement`, que a su vez usa `PPSupabaseReader` / `PPSupabaseWriter`. La
+ * sonda fausseaba `window.PPAppsScriptBridge`, o sea un camino que ya nadie recorre, y su guarda
+ * anti-produccion cortaba las 34 peticiones del lector. Con eso la app arrancaba sin estado y la
+ * sonda abortaba en la precondicion: verde el 2026-09-27, rota el 2026-10-03 y el 2026-10-05.
+ *
+ * QUE SE FALSEA Y QUE NO. Se falsea el ORIGEN, no el camino: `configure()` es el gancho que el
+ * propio modulo expone, y el lector de verdad corre con sus mappers, sus `MAPPING_GAPS` y su
+ * paginacion. La regla se respeta -la app arranca por Supabase- y nada sale de la maquina, porque
+ * la guarda sigue cortando todo lo que no sea de este origen y lo unico que responde es el
+ * servidor local. El puente de Apps Script se deja falseado igual: no hace falta para el
+ * arranque, pero evita que el cliente real se instale por debajo.
+ *
+ * POR QUE UN SETTER TRAP Y NO UNA LLAMADA. El bundle asigna `window.PPSupabaseReader` al
+ * cargarse, y la app lee el estado justo despues: configurar despues seria demasiado tarde. El
+ * trap intercepta la asignacion y configura en el acto, sin importar en que punto del bundle
+ * aparezca el modulo. La clave que se pone es una cadena local sin valor: solo hace falta que no
+ * empiece por `__PP_`, que es lo que `isConfigured()` rechaza.
+ */
+function installSupabaseTrap(url) {
+  const parche = { url: url, anonKey: "sonda-local-sin-valor" };
+  window.__PROBE_SUPABASE__ = { configurados: [], configurecidos: [], sesion: false };
+
+  // SESION LOCAL. MEDIDO 2026-10-05: sin esto la pagina levanta el VELO DE ENTRADA
+  // (`#pp-login`, z-index 9999) y se come todos los clics de la corrida: 13 pasos detràs de el.
+  // El velo aparece porque `supabase-auth.js` no tiene sesion guardada y su build SI esta
+  // configurado (la URL real va embebida), que es justo el estado de una pagina sin entrar.
+  //
+  // Se siembra una sesion FICTICIA en localStorage con `expires_at` lejos: asi `token()` no pide
+  // refresco (no hay red hacia auth) y el lector deja de mandar la clave publica sola. No hay
+  // contrasena ni token real en ningun sitio: el valor es una cadena sin valor, el JWT viaja al
+  // PostgREST local de la sonda, que no lo mira, y `guardarSesion` no escribe en produccion. La
+  // alternativa -dejar el velo y medirse una pagina sin sesion- seria medir otra app.
+  window.localStorage.setItem("pp_supabase_session", JSON.stringify({
+    access_token: "sonda-local-sin-valor",
+    refresh_token: "",
+    expires_at: Date.now() + 3600 * 1000,
+    correo: "sonda@local",
+  }));
+  window.__PROBE_SUPABASE__.sesion = true;
+  for (const nombre of ["PPSupabaseReader", "PPSupabaseWriter"]) {
+    let modulo = null;
+    const fijar = (valor) => {
+      if (valor && typeof valor.configure === "function") {
+        try {
+          valor.configure(parche);
+          window.__PROBE_SUPABASE__.configurecidos.push(nombre);
+        } catch (error) {
+          window.__PROBE_SUPABASE__.configurados.push(`${nombre}: ${String((error && error.message) || error)}`);
+        }
+      }
+    };
+    Object.defineProperty(window, nombre, {
+      configurable: true,
+      get: () => modulo,
+      set: (valor) => {
+        modulo = valor;
+        fijar(valor);
+      },
+    });
+  }
+}
+
 /** La app usa window.confirm (p. ej. "A backlog"): se acepta siempre y se deja constancia. */
 function installDialogHandlers(page, onDialog) {
   page.on("dialog", (dialog) => {
@@ -342,12 +509,17 @@ async function clearPlanningDialog(page, reason) {
  * recibe un valor plausible. No se adivina campo por campo porque el dialogo cambia con el
  * articulo (tipo comercial, tipo de trabajo, precio, materia prima, herramental, operador) y
  * la app rechaza la confirmacion mientras falte cualquiera de ellos.
+ *
+ * MEDIDO 2026-10-05: UNA PASADA NO BASTA, y el motivo esta medido, no supuesto. Al generar el
+ * plan, `ot_job_type` y `ot_machine` quedaban vacios aunque se llenaran: cambiar el primero
+ * REGENERA el formulario y deja como viejo el `NodeList` capturado, asi que lo que se leia del
+ * segundo ya no estaba en el documento y lo que se le escribia se perdia. Por eso cada pasada
+ * vuelve a consultar el DOM y solo toca lo que sigue vacio, y se repite hasta que una pasada no
+ * cambia nada. Con una sola pasada, el dialogo de preparacion del "Generar plan" se rechazaba solo.
  */
 async function fillRequiredControls(page) {
   return page.evaluate(() => {
-    const scope = document.querySelector("#planningDialogBody");
-    if (!scope) return [];
-    const done = [];
+    const scope = () => document.querySelector("#planningDialogBody");
     const setNative = (element, value) => {
       const setter = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value")?.set;
       if (setter) setter.call(element, value);
@@ -355,31 +527,91 @@ async function fillRequiredControls(page) {
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
     };
-    for (const select of scope.querySelectorAll("select[required]")) {
-      const option = Array.from(select.options).find((item) => item.value);
-      if (option) { setNative(select, option.value); done.push(`select:${select.name}`); }
+    const hechos = [];
+    for (let pasada = 0; pasada < 8; pasada += 1) {
+      const raiz = scope();
+      if (!raiz) break;
+      let cambios = 0;
+      for (const select of raiz.querySelectorAll("select[required]")) {
+        if (select.value) continue;
+        const option = Array.from(select.options).find((item) => item.value);
+        if (!option) continue;
+        setNative(select, option.value);
+        cambios += 1;
+        if (hechos.length < 40) hechos.push(`select:${select.name}`);
+      }
+      const raiz2 = scope();
+      if (!raiz2) break;
+      for (const input of raiz2.querySelectorAll("input[required]")) {
+        const type = (input.type || "text").toLowerCase();
+        if (type === "radio" || type === "checkbox") continue;
+        if (input.value) continue;
+        if (type === "number") setNative(input, "1250.50");
+        else if (type === "date") setNative(input, "2026-09-25");
+        else setNative(input, "Sonda");
+        cambios += 1;
+        if (hechos.length < 40) hechos.push(`${type}:${input.name}`);
+      }
+      const raiz3 = scope();
+      if (!raiz3) break;
+      const grupos = new Set();
+      for (const box of raiz3.querySelectorAll("input[required][type=radio], input[required][type=checkbox]")) {
+        const key = `${box.name}:${box.type}`;
+        if (grupos.has(key)) continue;
+        grupos.add(key);
+        if (box.checked) continue;
+        box.checked = true;
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+        cambios += 1;
+        if (hechos.length < 40) hechos.push(`${box.type}:${box.name}`);
+      }
+      if (!cambios) break;
     }
-    for (const input of scope.querySelectorAll("input[required]")) {
-      const type = (input.type || "text").toLowerCase();
-      if (type === "radio" || type === "checkbox") continue;
-      if (type === "number") { setNative(input, "1250.50"); done.push(`number:${input.name}`); }
-      else if (type === "date") { setNative(input, "2026-09-25"); done.push(`date:${input.name}`); }
-      else { setNative(input, "Sonda"); done.push(`text:${input.name}`); }
-    }
-    const groups = new Set();
-    for (const box of scope.querySelectorAll("input[required][type=radio], input[required][type=checkbox]")) {
-      const key = `${box.name}:${box.type}`;
-      if (groups.has(key)) continue;
-      groups.add(key);
-      box.checked = true;
-      box.dispatchEvent(new Event("change", { bubbles: true }));
-      done.push(`${box.type}:${box.name}`);
-    }
-    return done;
+    return hechos;
   });
 }
 
 /** Espera breve el dialogo de preparacion, lo llena como haria un usuario y lo confirma. */
+/**
+ * EL TOTAL DEL BACKLOG, no las tarjetas dibujadas.
+ *
+ * MEDIDO 2026-10-05: `renderPriorityList` pagina el backlog (`BACKLOG_PAGE_SIZE`) y lo carga
+ * con un observador de scroll (`handleBacklogIntersection`), o sea que cuantas tarjetas hay en el
+ * DOM depende del historial de scroll, no de cuantos trabajos hay. Comparar las tarjetas antes y
+ * despues de buscar media la paginacion, no el filtro: salia "30 de 35" con el backlog entero a
+ * la vista. El total si lo dice la app en `#priorityCount` ("N de M trabajos en espera").
+ */
+async function backlogTotal(page) {
+  const texto = ((await page.locator("#priorityCount").textContent()) || "").replace(/\s+/g, " ");
+  const total = /de (\d+)\s+trabajos/i.exec(texto);
+  return total ? Number(total[1]) : null;
+}
+
+/**
+ * La huella del dialogo abierto: titulo mas un resumen del cuerpo.
+ *
+ * MEDIDO 2026-10-05: hace falta porque la app REUSA el mismo `<dialog>` para todos (app.js:4125
+ * solo hace `innerHTML = body`), y durante "Generar plan" encadena un dialogo "Preparar OT" por
+ * cada OT que falta preparar. Con la pregunta "¿sigue abierto el dialogo?" la sonda confundia
+ * "el anterior se confirmo y la app abrio el siguiente" con "la confirmacion fue rechazada":
+ * cancelaba el dialogo nuevo, el plan no se preparaba nunca y el paso de "generar plan" quedaba
+ * en rojo con 14 OTs sin programar. Con la huella, si el dialogo que sigue abierto es OTRO, el
+ * anterior quedo confirmado.
+ */
+async function huellaDialogo(page) {
+  return page.evaluate(() => {
+    const abierto = document.querySelector("#planningDialog[open]");
+    if (!abierto) return null;
+    const titulo = (document.querySelector("#planningDialogTitle")?.textContent || "").trim();
+    const cuerpo = document.querySelector("#planningDialogBody")?.innerHTML || "";
+    // Un numero primo pequeno para el resumen: no es un hash criptografico, solo que dos
+    // cuerpos distintos den casi siempre numeros distintos.
+    let h = 0;
+    for (let i = 0; i < cuerpo.length; i += 1) h = (h * 31 + cuerpo.charCodeAt(i)) % 1000003;
+    return `${titulo}#${cuerpo.length}#${h}`;
+  });
+}
+
 async function confirmPlanningDialogIfOpen(page, timeout = 2500) {
   const open = page.locator("#planningDialog[open]");
   try {
@@ -389,28 +621,65 @@ async function confirmPlanningDialogIfOpen(page, timeout = 2500) {
   }
   const title = ((await page.locator("#planningDialogTitle").textContent()) || "").trim();
   const filled = await fillRequiredControls(page);
+  const antes = await huellaDialogo(page);
   await page.locator("#planningDialogConfirm").click();
   await page.waitForTimeout(400);
-  if (await open.count()) {
-    // El formulario es <form method="dialog"> con validacion nativa: si un required quedo
-    // vacio, el navegador no deja cerrar. Se listan los controlsen invalidos.
-    const invalid = await page.evaluate(() => {
-      const form = document.querySelector("#planningDialogForm");
-      if (!form) return [];
-      return Array.from(form.querySelectorAll("select, input, textarea"))
-        .filter((control) => !control.checkValidity())
-        .map((control) => {
-          const options = control.tagName === "SELECT"
-            ? `(opciones: ${Array.from(control.options).map((option) => option.value || "(vacia)").join("|")})`
-            : "";
-          return `${control.tagName.toLowerCase()}[name=${control.name || "?"}][type=${control.type || "-"}]${options}`;
-        });
-    });
-    record("warn", "dialogo de preparacion", `"${title}" rejecto la confirmacion; lenados ${filled.length}; sin validar: ${invalid.join(", ") || "ninguno (el rechazo no es de validacion nativa)"}`);
-    await clearPlanningDialog(page, "la confirmacion fue rechazada");
+  const despues = await huellaDialogo(page);
+  if (!despues) {
+    record("ok", "dialogo de preparacion", `"${title}" confirmado (${filled.length} campos)`);
     return title;
   }
-  record("ok", "dialogo de preparacion", `"${title}" confirmado (${filled.length} campos)`);
+  if (despues !== antes) {
+    // El dialogo que hay abierto es otro: el que llenamos SI se confirmo y la app encadeno el
+    // siguiente. No se toca nada y el bucle de afuera resuelve el nuevo.
+    record("ok", "dialogo de preparacion", `"${title}" confirmado (${filled.length} campos); la app encadeno otro dialogo`);
+    return title;
+  }
+  // El MISMO dialogo sigue abierto. MEDIDO 2026-10-05: se midio el valor de los controles en tres
+  // momentos para no adivinar: al abrir, justo despues de llenar y 700 ms despues. Si el valor
+  // aparece y luego desaparece solo, lo borra la pagina (un repintado asincrono del formulario);
+  // si nunca aparece, lo que falla es el llenado. Las dos cosas se contaban antes como "el dialogo
+  // no se pudo confirmar", que no dice nada.
+  const leer = () => page.evaluate(() => {
+    const out = {};
+    for (const control of document.querySelectorAll("#planningDialogBody select[required], #planningDialogBody input[required]")) {
+      out[control.name || control.type] = String(control.value === undefined ? "" : control.value);
+    }
+    return out;
+  });
+  const alAbrir = await leer();
+  const lenados = await fillRequiredControls(page);
+  const alLLenar = await leer();
+  await page.waitForTimeout(700);
+  const alEsperar = await leer();
+  record(
+    "warn",
+    "el llenado del dialogo no se sostiene",
+    [`${Object.keys(alAbrir).length} controles required`, ...Object.keys(alAbrir).map((nombre) => `${nombre}: abrir=${JSON.stringify(alAbrir[nombre] ?? null)} llenado=${JSON.stringify(alLLenar[nombre] ?? null)} 700ms=${JSON.stringify(alEsperar[nombre] ?? null)}`)].join(" | "),
+  );
+  await page.locator("#planningDialogConfirm").click();
+  await page.waitForTimeout(400);
+  const final = await huellaDialogo(page);
+  if (!final || final !== antes) {
+    record("ok", "dialogo de preparacion", `"${title}" confirmado al reintentar (${filled.length} + ${lenados.length} campos)`);
+    return title;
+  }
+    // El formulario es <form method="dialog"> con validacion nativa: si un required quedo
+  // vacio, el navegador no deja cerrar. Se listan los controles invalidos CON SU VALOR.
+  const invalid = await page.evaluate(() => {
+    const form = document.querySelector("#planningDialogForm");
+    if (!form) return [];
+    return Array.from(form.querySelectorAll("select, input, textarea"))
+      .filter((control) => !control.checkValidity())
+      .map((control) => {
+        const opciones = control.tagName === "SELECT"
+          ? `(opciones: ${Array.from(control.options).map((option) => option.value || "(vacia)").join("|")})`
+          : "";
+        return `${control.tagName.toLowerCase()}[name=${control.name || "?"}][type=${control.type || "-"}] valor=${JSON.stringify(control.value)}${opciones}`;
+      });
+  });
+  record("warn", "dialogo de preparacion", `"${title}" rejecto la confirmacion; lenados ${lenados.length}; sin validar: ${invalid.join(", ") || "ninguno (el rechazo no es de validacion nativa)"}`);
+  await clearPlanningDialog(page, "la confirmacion fue rechazada");
   return title;
 }
 
@@ -441,16 +710,25 @@ async function runProbe() {
   const appSource = await readFile(path.join(root, "src", "web", "planning", "app.js"), "utf8");
   const { schemaVersion, storageKey } = readAppConstants(appSource);
   const fixture = buildFixture({ otCount: OT_COUNT, seed: SEED, schemaVersion });
-  // Ultima OT de la cola: queda seleccionada y con operaciones, pero el backend no la lista.
+  // Ultima OT de la cola: queda seleccionada y con operaciones, pero los datos NO la listan.
   const closedOt = fixture.selectedOts[fixture.selectedOts.length - 1];
+
+  // Las filas que va a servir el PostgREST local salen del MISMO fixture, no de otra fuente: si
+  // se escribieran aparte, la sonda estaria midiendo datos que la app nunca ve. `work_orders` NO
+  // lista la OT cerrada, igual que el stub del puente no la listaba, para que el retiro de una OT
+  // cerrada (RULE-OT-048/050) se siga midiendo por el camino de verdad.
+  const tablas = filasDesdeFixture(fixture);
+  tablas.work_orders = tablas.work_orders.filter((wo) => wo.ot !== closedOt);
 
   console.log(`Sonda web local (backend=${BACKEND}): ${fixture.workOrders.length} OTs, ${fixture.operations.length} operaciones, ${fixture.selectedOts.length} en el plan, schemaVersion ${schemaVersion}`);
   console.log(`OT marcada como cerrada para el retiro: ${closedOt}`);
 
   Object.assign(summary, { otCount: OT_COUNT, seed: SEED, backend: BACKEND, closedOt });
 
-  const { server, origin } = await serveSite();
+  const peticionesSupabase = [];
+  const { server, origin } = await serveSite(tablas, peticionesSupabase, { inexistentesVacias: OVERRIDES_VACIAS });
   summary.origin = origin;
+  summary.overridesVacias = OVERRIDES_VACIAS;
   const browser = await chromium.launch({ headless: !HEADED });
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
   const page = await context.newPage();
@@ -490,6 +768,27 @@ async function runProbe() {
         window.localStorage.setItem(key, value);
         window.__PROBE__ = probe;
         window.__PROBE_CLOSED_OT__ = (probe.closedOts || [])[0] || "";
+        // MEDIDO 2026-10-05: `showToast` borra su texto a los 2.2 s (app.js:14511), asi que leer
+        // `#toast` despues del paso pierde el aviso que explica un fallo -que fue exactamente lo
+        // que paso con "Generar plan": no dejo fecha en el plan y no habia ni un aviso que
+        // medir-. Se copia cada texto a una lista que no se limpia. Un observador, no un
+        // parcheo de `showToast`, porque esa funcion no se exporta a `window`.
+        window.__PROBE_TOASTS__ = [];
+        const anotarToast = () => {
+          const toast = document.getElementById("toast");
+          if (!toast) return;
+          const texto = (toast.textContent || "").replace(/\s+/g, " ").trim();
+          if (texto && window.__PROBE_TOASTS__.slice(-1)[0] !== texto) {
+            window.__PROBE_TOASTS__.push(String(texto).slice(0, 200));
+          }
+        };
+        // Se observa `document` y no `document.documentElement`: el init script corre antes de
+        // que exista el elemento raiz y observar un null tira "parameter 1 is not of type 'Node'".
+        new MutationObserver(anotarToast).observe(document, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
       },
       [storageKey, JSON.stringify(fixture), { state: fixture, closedOts: BACKEND === "stub" ? [closedOt] : [] }],
     );
@@ -497,6 +796,9 @@ async function runProbe() {
       await context.addInitScript(bridgeStub);
       await context.addInitScript(installStubTrap);
     }
+    // El camino que la app SI usa (RULE-SUP-030): el lector y el escritor de Supabase, apuntados
+    // al PostgREST local. Va DESPUES del stub porque el trap se queda con la asignacion.
+    await context.addInitScript(installSupabaseTrap, origin);
 
     const queueCount = () => page.locator("[data-queue-ot]").count();
     const backlogCount = () => page.locator(".priority-card").count();
@@ -519,26 +821,65 @@ async function runProbe() {
     // no tiene con que llenarse y ninguna sincronizacion corre. Se comprobó el 2026-09-26: la
     // app entra a loadInitialStateConditionally, nunca emite la llamada al backend, no lanza
     // error ni rechazo, y los pasos siguientes fallan por eso y no por otra cosa.
-    const arranque = await step(page, "el arranque carga el estado desde el backend", async () => {
+    //
+    // MEDIDO 2026-10-05: la pregunta cambio de forma. Exigir llamadas al puente ya no prueba nada,
+    // porque la app no lo usa (RULE-SUP-030): las 34 peticiones del arranque eran todas del lector
+    // y ninguna del puente. Ahora lo que se mide es que el lector REAL se apunto al PostgREST
+    // local, que salio a leer y que la app quedo con el catalogo de maquinas. Si el trap no
+    // llegara a tiempo, estas preguntas darian negativo y la sonda abortaria aqui, como antes.
+    const arranque = await step(page, "el arranque carga el estado desde Supabase", async () => {
       await page.waitForTimeout(2500);
+      // La tabla de maquinas vive en la pestana HERRAMENTALES y `renderConfiguration()` -que la
+      // dibuja- solo corre cuando esa seccion esta abierta (app.js:1422). Contarla sin abrirla
+      // dio "0 maquinas" en todas las corridas desde el 2026-09-26, verde incluida: no era un
+      // defecto de la pagina sino de la comprobacion, que media un panel cerrado.
+      await page.click('a.nav-item[data-section="herramentales"]');
+      await page.waitForTimeout(600);
+      // El aviso de catalogos (#pp-catalogo-aviso) es fijo arriba de todo con z-index 9997 y se
+      // come los clics de media pantalla: sin medirlo aqui, los pasos siguientes fallan por el velo y
+      // el informe los señala como defectos de la app cuando son consecuencia del aviso. En
+      // produccion ese mismo aviso aparece (machine_planning_overrides no existe todavia) y la
+      // persona lo cierra con su X: la sonda hace lo mismo y deja constancia de lo que decía.
+      const avisoCatalogos = await page.evaluate(() => {
+        const caja = document.getElementById("pp-catalogo-aviso");
+        if (!caja) return null;
+        const texto = (caja.textContent || "").replace(/\s+/g, " ").trim();
+        const cerrar = caja.querySelector("button");
+        if (cerrar) cerrar.click();
+        return texto.slice(0, 240);
+      });
+      if (avisoCatalogos) {
+        summary.avisoCatalogos = avisoCatalogos;
+        record("warn", "aviso de catalogos en pantalla", avisoCatalogos);
+      }
       const observed = await page.evaluate(() => ({
         calls: window.__PROBE_CALLS__ || [],
         fijados: window.__PROBE_PINNED__ || [],
         pisados: window.__PROBE_STOLEN__ || [],
+        supabase: window.__PROBE_SUPABASE__ || { configurados: [], configurecidos: [] },
         maquinas: document.querySelectorAll("#machineTable [data-delete-machine]").length,
       }));
+      // Se vuelve al PLAN. Los pasos que siguen miden el plan (agregar OT, generar, Gantt,
+      // reportes) y sus controles solo existen en esa vista: quedarse en Herramientas hacia que
+      // fallen por "elemento no visible" y el informe los senale como defectos de la app.
+      await page.click('a.nav-item[data-section="plan-semanal"]');
+      await page.waitForTimeout(400);
+      const lecturas = peticionesSupabase.filter((linea) => linea.startsWith("GET "));
+      const tablasLeidas = [...new Set(lecturas.map((linea) => (/\/rest\/v1\/([^?]+)/.exec(linea) || [])[1]).filter(Boolean))].sort();
       summary.bridgeCalls = observed.calls;
       summary.bridgePinned = observed.fijados;
       summary.bridgeStolen = observed.pisados;
-      const pidioEstado = observed.calls.includes("getAppState") || observed.calls.includes("getAppStateIfChanged");
-      check("el arranque pide el estado al backend", pidioEstado, `llamadas: ${JSON.stringify(observed.calls.slice(0, 12))}${observed.pisados.length ? ` · pisaron: ${observed.pisados.join(" | ")}` : ""}`);
+      summary.supabaseConfigure = observed.supabase;
+      summary.supabaseTables = tablasLeidas;
+      const pidioEstado = observed.supabase.configurecidos.includes("PPSupabaseReader") && tablasLeidas.length > 0;
+      check("el arranque lee el estado por Supabase", pidioEstado, `configurados: ${JSON.stringify(observed.supabase.configurecidos)} · ${tablasLeidas.length} tablas: ${tablasLeidas.slice(0, 8).join(", ")}`);
       check("el catalogo de maquinas queda disponible", observed.maquinas > 0, `${observed.maquinas} maquinas en Catalogos`);
-      record(pidioEstado ? "ok" : "fail", "carga de estado inicial", `${observed.calls.length} llamadas al puente, ${observed.maquinas} maquinas`);
+      record(pidioEstado ? "ok" : "fail", "carga de estado inicial", `${lecturas.length} lecturas a Supabase en ${tablasLeidas.length} tablas, ${observed.calls.length} llamadas al puente, ${observed.maquinas} maquinas`);
       if (!pidioEstado) throw new Error("SIN ESTADO INICIAL: el resto de los pasos mediria una app degradada, no la app real");
       return observed;
     });
     if (!arranque) {
-      record("fail", "sonda interrumpida", "El arranque no cargo el estado desde el backend; los pasos siguientes no son validos. Revisar el stub del puente y el orden de instalacion de callAppsScript (apps-script-bridge-client.js lo reinstala en DOMContentLoaded y pisa el bridgeCall de performance-client.js).");
+      record("fail", "sonda interrumpida", "El arranque no cargo el estado desde Supabase; los pasos siguientes no son validos. Revisar que el trap de PPSupabaseReader este instalado ANTES de que el bundle lo asigne y que el PostgREST local atienda /rest/v1.");
       await verifyIsolation(page, context, blockedExternal, leakedExternal, step);
       throw new Error("sonda interrumpida por precondicion de arranque");
     }
@@ -554,21 +895,11 @@ async function runProbe() {
       record("ok", "estado estable", `${after} operaciones`);
     });
 
-    if (BACKEND === "stub") {
-      await step(page, "retiro de la OT cerrada que el backend no lista (RULE-OT-048/050)", async () => {
-        const inQueue = `[data-queue-ot='${closedOt}']`;
-        const deadline = Date.now() + TIMEOUT_MS;
-        while (Date.now() < deadline) {
-          if ((await page.locator(inQueue).count()) === 0) break;
-          await page.waitForTimeout(300);
-        }
-        const gone = (await page.locator(inQueue).count()) === 0;
-        const cardGone = (await page.locator(`.priority-card[data-ot='${closedOt}']`).count()) === 0;
-        check("la OT cerrada sale de la cola del plan", gone, closedOt);
-        check("la OT cerrada no reaparece en el backlog", cardGone, closedOt);
-        record(gone && cardGone ? "ok" : "fail", "retiro de OT cerrada", `cola ${gone ? "limpia" : "con la OT"}, backlog ${cardGone ? "limpio" : "con la OT"}`);
-      });
-    }
+    // El retiro de la OT cerrada NO se mide aqui. Antes se media en este punto porque el stub
+    // del puente hacia la conciliacion al arrancar; con Supabase como fuente (RULE-SUP-030) la
+    // conciliacion ocurre en la COMPROBACION AUTOMATICA DE FRESCURA, que solo corre dentro de
+    // "Generar plan" y "Publicar" (app.js:6017) y no cuando la pagina arranca. Se mide ahi,
+    // despues de generar el plan, que es donde ocurre de verdad.
 
     await step(page, "agregar OTs del backlog al plan", async () => {
       const before = await queueCount();
@@ -615,36 +946,76 @@ async function runProbe() {
     });
 
     await step(page, "volver a llenar el plan para las pruebas de programacion", async () => {
-      // El motor y el Gantt necesitan OTs en la cola: si el paso anterior la vacio, se
-      // repone con las que el propio flujo de agregar deja disponibles.
-      if ((await queueCount()) > 0) { record("ok", "reposicion del plan", "la cola ya tenia OTs"); return; }
+      // MEDIDO 2026-10-05: esta reposicion se daba por buena con UNA sola OT en la cola, y los
+      // pasos que miden el motor, el Gantt y el cuadre con los reportes comparan contra el plan
+      // entero (las 180 operaciones del fixture). Con una cola de 3 fallaban por falta de volumen
+      // y el informe senalaba un defecto del motor que no existia. Se repone hasta el numero de
+      // OTs con las que el fixture siembra el plan, que es el plan que se quiere medir.
+      const objetivo = fixture.selectedOts.length;
+      const antes = await queueCount();
       const cards = page.locator(".priority-card");
-      const available = Math.min(4, await cards.count());
-      let added = 0;
-      for (let index = 0; index < available; index += 1) {
-        const card = cards.nth(index);
+      let agregadas = 0;
+      let cursor = 0;
+      for (let intento = 0; intento < objetivo * 3 + 8; intento += 1) {
+        if ((await queueCount()) >= objetivo) break;
+        const total = await cards.count();
+        if (cursor >= total) break;
+        const card = cards.nth(cursor);
+        // Una tarjeta con el boton deshabilitado se SALTA y se sigue: MEDIDO 2026-10-05, se
+        // elegia la ultima del backlog y con la primera deshabilitada la reposicion se
+        // rendia ("5 de 14" con 30 tarjetas disponibles). El indice solo avanza en las que no
+        // se pueden agregar, porque al agregar una la tarjeta sale del backlog y las de despues
+        // se corren una posicion.
         const addButton = card.locator(".job-add");
-        if (await addButton.isDisabled()) continue;
+        if (await addButton.isDisabled()) {
+          cursor += 1;
+          continue;
+        }
         const ot = await card.getAttribute("data-ot");
         await addButton.click();
         await confirmPlanningDialogIfOpen(page);
         await page.waitForTimeout(350);
-        if ((await page.locator(`[data-queue-ot='${ot}']`).count()) > 0) added += 1;
+        if ((await page.locator(`[data-queue-ot='${ot}']`).count()) > 0) agregadas += 1;
+        else cursor += 1;
       }
       const queue = await queueCount();
-      check("la cola queda con OTs para programar", queue > 0, `${added} agregadas, ${queue} en la cola`);
-      record(queue > 0 ? "ok" : "fail", "reposicion del plan", `${queue} OTs en la cola`);
+      check("la cola queda con OTs para programar", queue > 0, `${agregadas} agregadas, ${queue} en la cola`);
+      check("la cola se repone al tamaño del plan que se va a medir", queue >= objetivo, `${queue} de ${objetivo} (estaba en ${antes})`);
+      record(queue > 0 ? "ok" : "fail", "reposicion del plan", `${queue} OTs en la cola de ${objetivo} del fixture`);
     });
 
     await step(page, "busqueda y filtro de backlog y cola", async () => {
       const cardsAll = await backlogCount();
+      // MEDIDO 2026-10-05: el total se leia DESPUES de filtrar, y con el filtro puesto
+      // `#priorityCount` ya no decia "N de M trabajos en espera" del backlog entero: el informe
+      // salia "total 26 de 0 que habia" y el paso fallaba solo por el orden de las lecturas. El
+      // total sin filtro se lee primero, que es lo que dice "que habia".
+      const totalAll = await backlogTotal(page);
       await page.fill("#searchInput", "EG40-001");
       await page.waitForTimeout(300);
       const cardsFiltered = await backlogCount();
+      const totalFiltrado = await backlogTotal(page);
       await page.fill("#searchInput", "");
-      await page.waitForTimeout(300);
-      check("la busqueda filtra el backlog", cardsFiltered <= cardsAll, `${cardsAll} -> ${cardsFiltered}`);
-      check("al limpiar la busqueda vuelve el backlog", (await backlogCount()) === cardsAll, `${await backlogCount()} de ${cardsAll}`);
+      // MEDIDO 2026-10-05: esperar 300 ms fijos no alcanza y el paso salia a veces con "0
+      // tarjetas, total 26 de 26 que habia": el total ya volvia pero las tarjetas todavia no,
+      // porque el repintado de la lista no termina en un tiempo fijo. Se espera a que el numero
+      // de tarjetas se estabilice, con un techo, y se reportan las lecturas para que un fallo
+      // diga si fue "nunca volvio" o "volvio tarde".
+      const lecturas = [];
+      let cardsRestored = 0;
+      for (let intento = 0; intento < 20; intento += 1) {
+        await page.waitForTimeout(150);
+        cardsRestored = await backlogCount();
+        lecturas.push(cardsRestored);
+        if (cardsRestored > 0 && lecturas.slice(-2).every((valor) => valor === cardsRestored)) break;
+      }
+      const totalRestored = await backlogTotal(page);
+      check("la busqueda filtra el backlog", cardsFiltered <= cardsAll, `${cardsAll} -> ${cardsFiltered} tarjetas, total ${totalAll} -> ${totalFiltrado}`);
+      check(
+        "al limpiar la busqueda vuelve el backlog",
+        totalAll !== null && totalRestored === totalAll && cardsRestored === cardsAll,
+        `${cardsRestored} tarjetas de las ${cardsAll} que habia, total ${totalRestored} de ${totalAll}; lecturas cada 150 ms: ${lecturas.join(", ")}`,
+      );
 
       const queueAll = await queueCount();
       await page.fill("#queueSearchInput", "zzz-no-existe-zzz");
@@ -655,6 +1026,22 @@ async function runProbe() {
       const queueRestored = await queueCount();
       check("la busqueda filtra la cola", queueFiltered <= queueAll, `${queueAll} -> ${queueFiltered}`);
       check("al limpiar la busqueda vuelve la cola", queueRestored === queueAll, `${queueRestored} de ${queueAll}`);
+      // MEDIDO 2026-10-05: el articulo de la tarjeta sale de `work_orders.item` y la descripcion de
+      // `work_orders.description` (app.js:12901-12903); `operations` NO tiene columna de parte ni
+      // de descripcion del articulo (docs/schema-supabase.sql:192-221, y el lector tampoco las
+      // arma, supabase-reader.js:1085-1110). Por eso una OT que no esta en el espejo sale con
+      // "PLAN SIN ARTICULO / Sin descripcion": es exactamente la tarjeta que se ve hoy con
+      // `work_orders` en cero, pero en esta corrida solo le falta la fila a UNA OT (la cerrada que
+      // se inyecta), asi que el numero medido es 1 y no todas. Se cuenta igual, porque el sintoma
+      // que se quiere vigilar es "la tarjeta perdio el articulo", y su causa es la tabla, no la
+      // pagina.
+      const sinArticulo = await page.evaluate(() => {
+        const tarjetas = Array.from(document.querySelectorAll(".priority-card"));
+        const malas = tarjetas.filter((tarjeta) => /SIN ARTICULO/.test(tarjeta.textContent || ""));
+        return { total: tarjetas.length, sinArticulo: malas.length, ejemplos: malas.slice(0, 3).map((t) => ((t.getAttribute("data-ot") || "") + ": " + (t.textContent || "").replace(/\s+/g, " ").trim().slice(0, 90))) };
+      });
+      summary.articulosEnBacklog = sinArticulo;
+      check("el backlog muestra el articulo de cada OT", sinArticulo.sinArticulo === 0, `${sinArticulo.sinArticulo} de ${sinArticulo.total} tarjetas sin articulo; el articulo sale de work_orders.item (app.js:12901-12903), asi que falta en la OT que no esta en el espejo${sinArticulo.ejemplos.length ? `: ${sinArticulo.ejemplos.join(" | ")}` : ""}`);
       record("ok", "busquedas", `backlog ${cardsAll}/${cardsFiltered}, cola ${queueAll}/${queueFiltered}`);
     });
 
@@ -680,21 +1067,111 @@ async function runProbe() {
       const started = Date.now();
       const button = page.locator("#generatePlanBtn");
       if (await button.isDisabled()) throw new Error("#generatePlanBtn quedo deshabilitado");
+      // MEDIDO 2026-10-05: la lista de avisos se recorta ANTES de pulsar. Antes se leian los tres
+      // ULTIMOS de toda la corrida y el paso 11 (que hace un dry run y avisa) venia despues, asi
+      // que lo que se mediia eran los avisos del dry run y los del "Generar plan" verdad se
+      // perdian. Con el recorte, lo que sale en el informe es lo que la persona vio al generar.
+      const avisosAntes = await page.evaluate(() => (window.__PROBE_TOASTS__ || []).length);
       await button.click();
       await page.waitForSelector("#planningDialog[open]", { timeout: TIMEOUT_MS });
       const weeks = await page.locator("#planningDialogBody input[name=plan_week]").count();
       check("el dialogo ofrece semanas", weeks >= 1, `${weeks} opciones`);
       await page.click("#planningDialogConfirm");
-      await page.waitForFunction(() => !document.querySelector("#planningDialog[open]"), { timeout: TIMEOUT_MS });
+      // MEDIDO 2026-10-05: elegir semana NO es el ultimo dialogo. El motor pide despues
+      // "Completar configuracion del plan" (app.js:3805) y ese dialogo se queda ABIERTO si nadie
+      // lo contesta: el plan no se genera y, ademas, `#planningDialog` es el unico `<dialog>` de
+      // la pagina, asi que se come los clics de los pasos siguientes: eso era lo que hacia que los
+      // pasos de reportes y de exportar fallaran con "click: Timeout" sin decir por que.
+      // Ahora se resuelve cada dialogo que aparezca, como haria una persona -llenar lo required y
+      // confirmar- y se espera a que el boton vuelva a su etiqueta de reposo ("Generar plan",
+      // app.js:5968), que es la unica senal de que la app termino. Los titulos quedan en el
+      // informe: un dialogo que la persona tiene que responder es informacion, no ruido.
+      const abiertos = [];
+      const limite = Date.now() + TIMEOUT_MS;
+      let quietos = 0;
+      while (Date.now() < limite && abiertos.length < 60) {
+        const titulo = await confirmPlanningDialogIfOpen(page, 400);
+        if (titulo) {
+          abiertos.push(titulo);
+          quietos = 0;
+          continue;
+        }
+        const trabajando = await page.evaluate(() => {
+          const etiqueta = document.querySelector("#generatePlanBtn [data-schedule-label]")?.textContent || "";
+          return /generando|revisando|actualizando|validando|calculando|guardando|reintentando/i.test(etiqueta);
+        });
+        // MEDIDO 2026-10-05: hay que ver la pagina QUIETA tres veces seguidas, no una. La app
+        // encadena los dialogos de preparacion con esperas entre uno y otro, asi que con una sola
+        // lectura de "reposo" el bucle se salia, el dialogo siguiente se dejaba abierto y el plan
+        // se quedaba sin preparar: era el paso entero el que quedaba en rojo.
+        quietos = trabajando ? 0 : quietos + 1;
+        if (quietos >= 3) break;
+        await page.waitForTimeout(400);
+      }
+      if (abiertos.length) {
+        summary.dialogosAlGenerar = abiertos;
+        record(abiertos.length > 1 ? "warn" : "ok", "dialogos durante generar plan", `la app abrio ${abiertos.length}: ${abiertos.join(" | ")}`);
+      }
       await page.waitForTimeout(1200);
       const alerts = ((await page.locator("#planAlerts").textContent()) || "").trim();
+      // MEDIDO 2026-10-05: el paso solo miraba `#planAlerts`, que esta VACIO cuando la app se
+      // avisa por `showToast` (app.js:14506). Con la cola llena, "Generar plan" no dejo ninguna
+      // operacion con fecha y el paso pasaba igual: el aviso va al toast, no a los alerts. Se
+      // leen los dos y se dejan en el informe, porque un toast que dice por que no se genero es
+      // la respuesta que hace falta.
+      const toast = ((await page.locator("#toast").textContent()) || "").trim();
+      const toasts = await page.evaluate((desde) => (window.__PROBE_TOASTS__ || []).slice(desde), avisosAntes);
+      summary.toastsAlGenerar = toasts;
+      const dicho = toasts.join(" | ");
+      if (dicho) {
+        summary.toastAlGenerar = dicho;
+        record(/no se genero|no hay|error|no se pudo/i.test(dicho) ? "warn" : "ok", "avisos al generar el plan", dicho.slice(0, 300));
+      }
+      // El boton lleva el estado del guardado (`[data-schedule-label]`, app.js:5973). Dice en que
+      // punto va o en que se quedo, que es lo que un boton en "Generando plan..." indefinidamente
+      // escondia.
+      const etiqueta = ((await page.locator("#generatePlanBtn [data-schedule-label]").textContent().catch(() => "")) || "").trim();
+      if (etiqueta) summary.etiquetaAlGenerar = etiqueta;
       const elapsedMs = Date.now() - started;
+      check("generar plan deja el plan con fecha", (await page.locator(".queue-item.pending-schedule").count()) === 0, `${await page.locator(".queue-item.pending-schedule").count()} OTs sin programar, toast: ${toast.slice(0, 120) || "(ninguno)"}`);
       check("generar plan no aborta por datos de OTs", !/datos de OTs sin sincronizar|No se pudo verificar NetSuite/.test(alerts), alerts.slice(0, 180));
       const queue = await queueCount();
       check("la cola sobrevive a generar plan", queue > 0, `${queue} OTs`);
       record("ok", "generar plan", `${elapsedMs} ms, ${queue} OTs en la cola`, { elapsedMs });
       summary.generatePlanMs = elapsedMs;
     });
+
+    // EL RETIRO DE LA OT CERRADA, aqui y no antes. MEDIDO 2026-10-05: la OT 3092 esta en la
+    // cola del fixture y NO esta en `work_orders`, que es lo mismo que una OT cerrada en
+    // NetSuite. Quien la tiene que sacar es `ensureNetSuiteWorkOrdersFresh` (app.js:6017), que
+    // corre dentro de "Generar plan" porque el reloj de frescura (15 min) venció, y llama a
+    // `reconcileActiveWorkOrders` sobre lo que lee de Supabase. Con el `syncedAt` fresco del
+    // fixture anterior esa comprobacion se saltaba y el retiro nunca se media.
+    if (BACKEND === "stub") {
+      await step(page, "retiro de la OT cerrada que ya no esta en el espejo (RULE-OT-048/050)", async () => {
+        const inQueue = `[data-queue-ot='${closedOt}']`;
+        const gone = (await page.locator(inQueue).count()) === 0;
+        const tarjeta = page.locator(`.priority-card[data-ot='${closedOt}']`);
+        const cardGone = (await tarjeta.count()) === 0;
+        check("la OT cerrada sale de la cola del plan", gone, closedOt);
+        // MEDIDO 2026-10-05: la tarjeta NO sale del backlog y este paso solo decia "3092". Que la
+        // OT se retire del PLAN es una cosa (eso si funciona) y que salga de la LISTA es otra, y
+        // son reglas distintas: si la tarjeta se queda, la persona sigue viendo una OT que ya no
+        // existe en NetSuite. El detalle dice COMO se ve la tarjeta -estado, clase y si esta
+        // bloqueada- porque la diferencia entre "el backlog no la limpio" y "la limpio pero la
+        // deja por una regla" no se puede ver sin mirarla, y es una decision de regla, no un
+        // arreglo de codigo. El paso se queda en rojo mientras la regla no se decida.
+        const estado = cardGone ? null : await tarjeta.evaluate((nodo) => ({
+          texto: (nodo.textContent || "").replace(/\s+/g, " ").trim().slice(0, 220),
+          clases: nodo.className,
+          etiqueta: nodo.getAttribute("aria-label") || "",
+          botonDeshabilitado: Boolean(nodo.querySelector("button[disabled]")),
+        }));
+        summary.retiroOtCerrada = { ot: closedOt, enCola: !gone, enBacklog: !cardGone, tarjeta: estado };
+        check("la OT cerrada no reaparece en el backlog", cardGone, cardGone ? closedOt : `${closedOt} sigue en la lista: "${estado.texto}"${estado.botonDeshabilitado ? " (su boton esta deshabilitado)" : ""}; clases ${estado.clases}`);
+        record(gone && cardGone ? "ok" : "fail", "retiro de OT cerrada", `cola ${gone ? "limpia" : "con la OT"}, backlog ${cardGone ? "limpio" : `con la OT${estado.botonDeshabilitado ? " sin boton para tomarla" : ""}`}`);
+      });
+    }
 
     await step(page, "generar plan deja las OTs programadas (sin huecos ni conflictos)", async () => {
       const metrics = await page.evaluate(async () => {
@@ -707,10 +1184,67 @@ async function runProbe() {
       const unscheduled = Number(metrics.unscheduledOperationsCount || 0);
       const codes = metrics.diagnosticsByCode || {};
       check("todas las operaciones del plan gotten hueco", unscheduled === 0, `${unscheduled} sin hueco de ${included}`);
-      check("el motor cubrio todas las operaciones del plan", scheduled + unscheduled >= included, `${scheduled}+${unscheduled} vs ${included}`);
+      // MEDIDO 2026-10-05: `scheduled + unscheduled >= included` NO SE PUEDE CUMPLIR y la asercion
+      // era falsa, no un defecto. `includedOperationsCount` es `currentPlanOperations().length`
+      // (app.js:6433), y esa funcion filtra por capacidades EXCLUIDAS, no por OTs seleccionadas
+      // (app.js:6380-6390): cuenta TODAS las operaciones del estado, tambien las de OTs que estan
+      // en el backlog. Por eso salia "68+0 vs 181" con las 14 OTs del plan bien programadas.
+      //
+      // Lo que si se puede cruzar con la metrica del motor es lo que la persona VE DENTRO de la
+      // ventana del Gantt, y la ventana hay que restarla: el Gantt dibuja `state.horizonDays`
+      // dias desde `window.start` (app.js:4636), asi que con el horizonte del fixture (7 dias,
+      // web-fixture.mjs:235) solo aparecen las operaciones que caen dentro. Contadas las de todo
+      // el plan, las barras dan 16 contra 68 programadas y eso NO es un defecto: son operaciones
+      // de dias que no estan a la vista. Se cuentan entonces las barras cuyo inicio cae dentro
+      // de la ventana, que es lo comparable.
+      const gantt = await page.evaluate(() => ({
+        dias: Array.from(document.querySelectorAll("#ganttCanvas .gantt-day-heading"))
+          .map((nodo) => (nodo.querySelector(".gantt-day-title")?.textContent || "").trim()).filter(Boolean),
+        barras: Array.from(document.querySelectorAll("#ganttCanvas .gantt-bar")).map((barra) => {
+          const id = String(barra.dataset.id || "");
+          const corte = id.lastIndexOf("-");
+          const lineas = (barra.getAttribute("title") || "").split("\n");
+          const de = (prefijo) => (lineas.find((linea) => linea.startsWith(prefijo)) || "").slice(prefijo.length).trim();
+          // Las barras de cambio de herramental no son una operacion: su id empieza con `chg-`
+          // (app.js:4874 las marca asi) y no llevan OT de forma directa.
+          const esCambio = id.startsWith("chg-");
+          return {
+            id,
+            ot: esCambio ? (id.split("-")[1] || "") : id.slice(0, corte),
+            esCambio,
+            inicio: de("Inicio:"),
+            fin: de("Fin:"),
+            izquierda: parseFloat(barra.style.left) || 0,
+            ancho: parseFloat(barra.style.width) || 0,
+          };
+        }),
+      }));
+      const cola = new Set((await page.locator("#priorityQueue [data-queue-ot]").evaluateAll((nodos) => nodos.map((nodo) => nodo.getAttribute("data-queue-ot")))).map((ot) => String(ot).trim()));
+      const barrasDelPlan = gantt.barras.filter((barra) => cola.has(barra.ot));
+      const barrasDeOtAjena = gantt.barras.filter((barra) => !cola.has(barra.ot));
+      summary.ventanaGantt = {
+        dias: gantt.dias,
+        horizonte: gantt.dias.length,
+        barras: gantt.barras.length,
+        barrasDelPlan: barrasDelPlan.length,
+        otsEnElGantt: Array.from(new Set(gantt.barras.map((barra) => barra.ot))),
+        scheduled,
+      };
+      check("el Gantt dibuja operaciones del plan", barrasDelPlan.length > 0, `${barrasDelPlan.length} barras de ${new Set(barrasDelPlan.map((b) => b.ot)).size} OTs de la cola; el motor programo ${scheduled} operaciones en todo el plan`);
+      check("el Gantt no dibuja operaciones de OTs ajenas al plan", barrasDeOtAjena.length === 0, barrasDeOtAjena.length ? barrasDeOtAjena.slice(0, 5).map((b) => `${b.id} (${b.inicio})`).join(" | ") : "ninguna barra de OT fuera de la cola");
       check("no hay conflictos de operador sin resolver", !codes.OPERATOR_CONFLICT_FIXED_WINDOW, JSON.stringify(codes));
-      check("el plan cubre todas las OTs seleccionadas", Number(metrics.scheduledOtsCount || 0) > 0, `${metrics.scheduledOtsCount} OTs programadas, ${metrics.unscheduledOtsCount} sin programar`);
-      record(unscheduled === 0 ? "ok" : "fail", "programacion del plan", `${scheduled}/${included} operaciones en ${metrics.plannerElapsedMs} ms, ${metrics.plannerStrategiesStarted} estrategia(s), diagnosticos ${JSON.stringify(codes)}`);
+      check("el plan cubre todas las OTs seleccionadas", Number(metrics.scheduledOtsCount || 0) > 0, `${metrics.scheduledOtsCount} OTs programadas, ${metrics.unscheduledOtsCount} sin programar, ${metrics.engineSelectedOtsCount} que el motor recibio del plan`);
+      // MEDIDO 2026-10-05: el Gantt solo dibuja `horizonDays` dias desde `window.start`
+      // (app.js:4636), asi que su numero de barras NUNCA es el total de operaciones programadas:
+      // con el horizonte del fixture (7 dias) salen 16 de 68. Tampoco se puede cruzar OT por OT
+      // con la metrica del motor porque `runPlanningPerformanceDryRun` no publica el detalle por
+      // OT (las metricas son app.js:6270-6280 y ninguna es una lista de OTs). Lo que si queda
+      // medido es lo que la persona ve, y va en el informe como numero, no como asercion:
+      // cuantas OTs de la cola tienen barra a la vista y cuantas de las 14 no.
+      const otsEnGantt = Array.from(new Set(barrasDelPlan.map((barra) => barra.ot)));
+      const otsSinBarra = Array.from(cola).filter((ot) => !otsEnGantt.includes(ot));
+      summary.coberturaGantt = { otsEnCola: cola.size, otsEnGantt: otsEnGantt.length, sinBarra: otsSinBarra };
+      record(unscheduled === 0 ? "ok" : "fail", "programacion del plan", `${scheduled} programadas, ${unscheduled} sin hueco, ${included} operaciones NO excluidas en el estado (todas, no solo las del plan), ${metrics.plannerElapsedMs} ms, ${metrics.plannerStrategiesStarted} estrategia(s), diagnosticos ${JSON.stringify(codes)}`);
     });
 
     await step(page, "la cola no deja OTs pendientes de programar", async () => {
@@ -730,21 +1264,103 @@ async function runProbe() {
       record("ok", "Gantt programado", `${rows} filas`);
     });
 
-    await step(page, "precedencia: una sucesora no empieza antes que su antecesora", async () => {
-      // Se toma la cola desde el DOM y se cruza con el reporte de la semana, que trae las
-      // fechas por OT; si el motor invirtiera el orden se veria en las horas de inicio.
-      const problems = await page.evaluate(() => {
-        const rows = Array.from(document.querySelectorAll("#weekReport [data-ot], #weekReport tr"))
-          .map((row) => ({
-            ot: row.getAttribute("data-ot") || (row.textContent.match(/\b\d{4}\b/) || [])[0] || "",
-            start: row.getAttribute("data-start") || "",
-          }))
-          .filter((row) => row.ot);
-        return rows.slice(0, 5);
-      });
-      summary.precedenceSample = problems;
-      check("el reporte de la semana expone OTs con fecha", problems.length > 0, `${problems.length} filas leidas`);
-      record("ok", "precedencia (muestra)", JSON.stringify(problems.slice(0, 3)));
+    await step(page, "precedencia: una sucesora no arranca antes que su antecesora", async () => {
+      // MEDIDO 2026-10-05: ESTE PASO NO COMPARABA NADA. Leia `data-start` de las filas del
+      // reporte de la semana -una columna que no existe, por eso la muestra salia con
+      // `start: ""`- y despues solo anotaba la muestra: el paso pasaba sin mirar un solo par de
+      // operaciones. Ahora se mide lo que la persona ve: las BARRAS DEL GANTT, que llevan el id de
+      // la operacion (`<ot>-<secuencia>`, app.js:4871) y su posicion en el carril (`left` y `width`
+      // en porcentaje de la MISMA ventana, app.js:4912-4913). La precedencia se compara con esos
+      // numeros: dentro de una OT, la secuencia siguiente no puede empezar antes de que termine la
+      // anterior.
+      //
+      // MEDIDO 2026-10-05, segundo intento: agrupar por FILA daba cero comparaciones, y no era un
+      // defecto del motor: en la vista "job" hay una fila por operacion, asi que cada grupo tenia
+      // una sola barra. La comparacion es por OT y con las FECHAS del tooltip, no con el
+      // `left`/`width` en porcentaje: esos dependen del zoom y del ancho minimo de la barra
+      // (`MIN_OPERATION_MINUTES`, app.js:4864), mientras que las fechas son minutos de reloj.
+      //
+      // MEDIDO 2026-10-05, tercer intento, y este es el que importa: "una sucesora no empieza
+      // antes de que la anterior TERMINE" NO es la regla. La regla es que espere al "momento de
+      // liberacion" (rules.json RULE-MAT-011: "cada operacion movible debe esperar el momento de
+      // liberacion mas tardio de las operaciones incluidas con secuencia anterior"), y ese momento
+      // puede caer ANTES del fin: `predecessorReleaseMoment` (planner-core.js:1075-1087) devuelve el
+      // hito de `duracion * overlap` cuando la capacidad tiene regla de solape
+      // (`overlapForOperation`, planner-core.js:1576; sin regla, 1 = fin completo). El fixture
+      // siembra 0.6 para DOBLADO, SOLDADURA y PINTURA (web-fixture.mjs:269-271), asi que hay
+      // solapes legitimos y la asercion anterior los contaba como errores.
+      //
+      // Lo que si es cierto con CUALQUIER solape permitido es que una sucesora no puede arrancar
+      // antes de que su antecesora arranque. Eso se comprueba. Los solapes se miden y se reportan
+      // con minutos y fraccion, porque la fraccion de minutos PRODUCTIVOS solo la puede calcular
+      // el motor (los segmentos Bucket/Include/Ignore) y una sonda que recalcula esa regla estaria
+      // midiendo una copia de la regla, no la regla.
+      const barras = await page.evaluate(() => Array.from(document.querySelectorAll("#ganttCanvas .gantt-bar")).map((barra) => {
+        const id = String(barra.dataset.id || "");
+        const esCambio = id.startsWith("chg-");
+        const corte = id.lastIndexOf("-");
+        const lineas = (barra.getAttribute("title") || "").split("\n");
+        const de = (prefijo) => (lineas.find((linea) => linea.startsWith(prefijo)) || "").slice(prefijo.length).trim();
+        const fecha = (texto) => {
+          const ms = Date.parse(String(texto).replace(" ", "T"));
+          return Number.isFinite(ms) ? ms : null;
+        };
+        return {
+          id,
+          ot: esCambio ? (id.split("-")[1] || "") : id.slice(0, corte),
+          secuencia: esCambio ? Number.NaN : Number(id.slice(corte + 1)),
+          esCambio,
+          inicio: fecha(de("Inicio:")),
+          fin: fecha(de("Fin:")),
+          espera: de("Espera:"),
+          inicioTexto: de("Inicio:"),
+          finTexto: de("Fin:"),
+        };
+      }).filter((barra) => barra.ot && Number.isFinite(barra.inicio) && Number.isFinite(barra.fin)));
+      const porOt = new Map();
+      for (const barra of barras) {
+        if (barra.esCambio) continue;
+        const lista = porOt.get(barra.ot) || [];
+        lista.push(barra);
+        porOt.set(barra.ot, lista);
+      }
+      const invertidas = [];
+      const solapes = [];
+      let comparadas = 0;
+      for (const [ot, lista] of porOt) {
+        lista.sort((a, b) => a.secuencia - b.secuencia);
+        for (let i = 1; i < lista.length; i += 1) {
+          comparadas += 1;
+          const previa = lista[i - 1];
+          const actual = lista[i];
+          if (actual.inicio < previa.inicio) {
+            invertidas.push(`OT ${ot}: la sec ${actual.secuencia} arranca ${actual.inicioTexto}, antes que su anterior, la sec ${previa.secuencia} (${previa.inicioTexto})`);
+          } else if (actual.inicio < previa.fin) {
+            const duracion = Math.max(1, previa.fin - previa.inicio);
+            const avance = actual.inicio - previa.inicio;
+            solapes.push(`OT ${ot}: la sec ${actual.secuencia} arranca ${actual.inicioTexto}, ${Math.round((previa.fin - actual.inicio) / 60000)} min antes de que termine la sec ${previa.secuencia} (lleva ${Math.round((avance / duracion) * 100)}% de su duracion)`);
+          }
+        }
+      }
+      summary.precedencia = {
+        barras: barras.length,
+        ots: porOt.size,
+        barrasPorOt: Array.from(porOt.entries()).map(([ot, lista]) => `${ot}:${lista.length}`),
+        comparadas,
+        invertidas,
+        solapes,
+        conEspera: barras.filter((barra) => barra.espera).map((barra) => `${barra.id} ${barra.espera}`).slice(0, 10),
+        // Las reglas de solape que se sembraron (web-fixture.mjs:269-271) van EN el informe al
+        // lado de los solapes medidos: sin ellas, el que lee "la sec 2 arranca 928 min antes" no
+        // puede saber si eso lo permitia la capacidad de la antecesora o no.
+        reglasDeSolape: fixture.operationRules,
+      };
+      check("hay operaciones con las que comparar precedencia", comparadas > 0, `${comparadas} pares en ${porOt.size} OTs (${Array.from(porOt.entries()).map(([ot, lista]) => `${ot}:${lista.length}`).join(", ")})`);
+      check("ninguna operacion arranca antes que la anterior de su secuencia", invertidas.length === 0, invertidas.slice(0, 5).join(" | ") || `${comparadas} pares en orden de arranque`);
+      record(invertidas.length === 0 ? "ok" : "fail", "precedencia en el Gantt", `${comparadas} pares, ${invertidas.length} arrancan invertidas, ${solapes.length} con solape permitido por la capacidad`);
+      if (solapes.length) {
+        record("warn", "solapes con la antecesora", solapes.slice(0, 6).join(" | "));
+      }
     });
 
     await step(page, "Gantt y tablas de carga", async () => {
@@ -784,13 +1400,69 @@ async function runProbe() {
 
     await step(page, "los reportes cuadran con el plan", async () => {
       const queue = await page.locator("#priorityQueue [data-queue-ot]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-queue-ot")));
-      const weekText = ((await page.locator("#weekReport").textContent()) || "");
-      const reportOts = Array.from(new Set((weekText.match(/\b\d{4}\b/g) || [])));
+      // MEDIDO 2026-10-05: este paso comparaba numeros sueltos: sacaba las OTs del texto del
+      // reporte con una expresion regular de cuatro digitos y las de la cola por atributo. Con eso
+      // decia "0 de 4 OTs del reporte estan en el plan" sin decir WHICH, sin decir de que semana
+      // es cada lado, y sin decir de donde saca sus operaciones el reporte. Ahora se leen las
+      // TRES fuentes con su dato real: las filas del reporte con su dia (`data-ot` de cada
+      // boton, app.js:8601), las barras del Gantt con su operacion y su `Inicio:`/`Fin:`
+      // (app.js:4895-4896) y la cola del plan. Con eso la pregunta "¿es un defecto de la app o
+      // estoy comparando cosas distintas?" se responde con numeros y no con suposiciones.
+      const detalle = await page.evaluate(() => {
+        const reporte = document.querySelector("#weekReport");
+        const filas = [];
+        for (const bloque of Array.from(reporte?.querySelectorAll(".weekly-day-block") || [])) {
+          const fecha = (bloque.querySelector(".weekly-day-ribbon")?.textContent || "").replace(/\s+/g, " ").trim();
+          for (const boton of Array.from(bloque.querySelectorAll(".weekly-ot-link"))) {
+            filas.push({ fecha, ot: boton.getAttribute("data-ot") || "" });
+          }
+        }
+        const barras = Array.from(document.querySelectorAll("#ganttCanvas .gantt-bar")).map((barra) => {
+          const id = String(barra.dataset.id || "");
+          const corte = id.lastIndexOf("-");
+          const lineas = (barra.getAttribute("title") || "").split("\n");
+          const de = (prefijo) => lineas.find((linea) => linea.startsWith(prefijo))?.slice(prefijo.length).trim() || "";
+          return { id, ot: id.slice(0, corte), secuencia: id.slice(corte + 1), inicio: de("Inicio:"), fin: de("Fin:") };
+        });
+        const panel = reporte?.closest("[data-tab-panel], section, article");
+        return {
+          fuente: (document.querySelector("#reportSnapshotMeta")?.textContent || "").replace(/\s+/g, " ").trim(),
+          semana: document.querySelector("#reportWeekStartInput")?.value || "",
+          titulo: (panel?.querySelector("h2, h3")?.textContent || "").replace(/\s+/g, " ").trim(),
+          filas: filas.slice(0, 24),
+          totalFilas: filas.length,
+          barras: barras.slice(0, 20),
+          totalBarras: barras.length,
+        };
+      });
+      const reportOts = Array.from(new Set(detalle.filas.map((fila) => fila.ot).filter(Boolean)));
       const planOts = new Set(queue.map((ot) => String(ot).trim()));
       const shared = reportOts.filter((ot) => planOts.has(ot));
-      check("el reporte de la semana trae filas", reportOts.length > 0, `${reportOts.length} OTs distintas en el reporte`);
-      check("las OTs del reporte coinciden con el plan", shared.length > 0, `${shared.length} de ${reportOts.length} OTs del reporte estan en el plan`);
-      record("ok", "cuadre plan/reporte", `${reportOts.length} OTs en el reporte, ${shared.length} en el plan`, { reportOts: reportOts.slice(0, 10) });
+      const delPlanEnGantt = new Set(detalle.barras.map((barra) => barra.ot));
+      summary.cuadre = {
+        fuenteDelReporte: detalle.fuente,
+        semanaDelReporte: detalle.semana,
+        titulo: detalle.titulo,
+        filasDelReporte: detalle.filas,
+        totalFilasDelReporte: detalle.totalFilas,
+        barrasDelGantt: detalle.barras,
+        totalBarrasDelGantt: detalle.totalBarras,
+        reportOts,
+        planOts: Array.from(planOts),
+        shared,
+      };
+      check("el reporte de la semana trae filas", detalle.totalFilas > 0, `${detalle.totalFilas} filas, ${reportOts.length} OTs distintas; fuente "${detalle.fuente}", semana ${detalle.semana || "?"}, titulo "${detalle.titulo}"`);
+      check("las OTs del reporte coinciden con el plan", shared.length > 0, `${shared.length} de ${reportOts.length} OTs del reporte estan en la cola del plan; el Gantt tiene ${detalle.totalBarras} barras de ${delPlanEnGantt.size} OTs; fechas del reporte ${Array.from(new Set(detalle.filas.map((f) => f.fecha))).slice(0, 4).join(" | ")}`);
+      // MEDIDO 2026-10-05: que una OT este en el reporte no significa que este programada. El
+      // reporte lista, por dia, las OTs que INICIAN y las que TERMINAN en esa semana
+      // (`weeklyJobSummary`, app.js:8579-8580), y su fuente es el borrador (`Borrador actual`
+      // medido en pantalla). Que la semana que se mira sea la semana del plan se comprueba con
+      // los datos, no con la suposicion de que el reporte se alinea solo: si la semana del
+      // reporte no contiene ninguna OT de la cola, el cuadre no se puede pedir y el paso debe
+      // decirlo en vez de contar un desacuerdo que no existe.
+      const semanaDelPlan = detalle.filas.some((fila) => planOts.has(fila.ot));
+      check("la semana que muestra el reporte tiene OTs del plan", semanaDelPlan, semanaDelPlan ? `el reporte de la semana ${detalle.semana || "?"} incluye ${shared.length} OTs de la cola` : `el reporte de la semana ${detalle.semana || "?"} no trae ninguna OT de la cola; filas: ${JSON.stringify(detalle.filas.slice(0, 6))}`);
+      record("ok", "cuadre plan/reporte", `${detalle.totalFilas} filas en el reporte, ${shared.length} OTs en comun con la cola, ${detalle.totalBarras} barras en el Gantt`);
     });
 
     await step(page, "exportacion del plan a Excel", async () => {
@@ -812,8 +1484,12 @@ async function runProbe() {
       const realWarnings = consoleWarnings.filter((text) => !isEnvironmental(text));
       check("sin errores de consola propios", realErrors.length === 0, realErrors.slice(0, 3).join(" | "));
       check("sin excepciones no capturadas", pageErrors.length === 0, pageErrors.slice(0, 3).map((item) => item.message).join(" | "));
-      record(realWarnings.length ? "warn" : "ok", "consola", `${realErrors.length} errores propios, ${realWarnings.length} avisos, ${consoleErrors.length - realErrors.length} ambientales`);
-      summary.console = { realErrors, realWarnings, environmentalErrors: consoleErrors.length - realErrors.length, pageErrors, nativeDialogs };
+      // Los ambientales tambien se dejan escritos, pero SIN multiplicar: 180 veces el mismo
+      // "Failed to load resource" es una sola causa y no se distingue en un numero. Sin esto, un
+      // fallo de red nuevo se esconde dentro de una cuenta que siempre sale alta.
+      const ambientales = Array.from(new Set(consoleErrors.filter((text) => isEnvironmental(text))));
+      record(realWarnings.length ? "warn" : "ok", "consola", `${realErrors.length} errores propios, ${realWarnings.length} avisos, ${ambientales.length} ambientales distintos${ambientales.length ? `: ${ambientales[0].slice(0, 90)}` : ""}`);
+      summary.console = { realErrors, realWarnings, environmentalErrors: ambientales.length, environmentalSamples: ambientales.slice(0, 6), pageErrors, nativeDialogs };
       const unknown = await page.evaluate(() => window.__PROBE_UNKNOWN__ || []);
       if (unknown.length) record("warn", "metodos sin responder en el stub", Array.from(new Set(unknown)).join(", "));
       const calls = await page.evaluate(() => window.__PROBE_CALLS__ || []);
