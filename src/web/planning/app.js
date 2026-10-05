@@ -876,6 +876,17 @@ async function maybeRestoreSavedDraftOnBoot() {
     invalidateCurrentPlanOperationsCache();
     alignReportWeekStartToFirstScheduledOperation(restored, new Date());
     saveState("plan");
+    // ARREGLO B (RULE-PLAN-015, 2026-10-04): el reloj queda 1 ms por encima del generatedAt
+    // del borrador, PERO EN MEMORIA NOMBRE. El saveState de arriba ya escribio app_state con
+    // el reloj del borrador; este sello NO se guarda. Asi el import de fondo
+    // (applyImported) ve el plan como "de pantalla, mas nuevo" (importedIsStaleSchedule es
+    // verdadero) y lo deja intacto, y a la vez el rescate puede re-dispararse en la siguiente
+    // ingesta, porque el reloj guardado en el servidor sigue siendo el del borrador.
+    // Sin este sello el import vuelve a poner las operaciones del espejo a los ~120 s y el
+    // rescate dura dos minutos (MEDIDO 2026-10-04: el Gantt volvio a 15 ops para 2624).
+    if (savedGeneratedAtMs > 0 && state.lastSchedule) {
+      state.lastSchedule.generatedAt = new Date(savedGeneratedAtMs + 1).toISOString();
+    }
     render({ save: false });
     const changes = restored.filter(isToolChangeReportOperation).length;
     showToast(`Borrador restaurado al iniciar: ${restored.length} operaciones programadas (${changes} cambios de herramental)`, 3200);

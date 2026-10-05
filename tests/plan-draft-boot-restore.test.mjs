@@ -221,7 +221,7 @@ function correrRescate(app, { state, snapshot, planSnapshots = [{ snapshotId: "d
     normalizeState: () => {},
     invalidateCurrentPlanOperationsCache: () => {},
     alignReportWeekStartToFirstScheduledOperation: () => {},
-    saveState: (ambito) => { registro.guardados.push(ambito); },
+    saveState: (ambito) => { registro.guardados.push(ambito); registro.relojEnGuardado = state.lastSchedule && state.lastSchedule.generatedAt; },
     render: () => { registro.renders += 1; },
     showToast: (mensaje) => { registro.toasts.push(String(mensaje || "")); },
   };
@@ -278,7 +278,7 @@ test("el rescate del borrador restaura el plan y NO toca la cola ni los bloqueos
   assert.equal(porOt.get("3747")[0].locked, true, "el bloqueo viaja en la propia operacion");
 
   // 3. LO QUE SE DICE, y lo que se guarda.
-  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.000Z", "el reloj de frescura pasa al del snapshot");
+  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.001Z", "arreglo B: el reloj queda 1 ms por encima del generatedAt del borrador");
   assert.equal(estado.planStart, "2026-10-05");
   assert.deepEqual(registro.guardados, ["plan"]);
   assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)), `no se aviso del rescate: ${JSON.stringify(registro.toasts)}`);
@@ -317,8 +317,42 @@ test("el rescate entra aunque el borrador NO sea mas nuevo, si en pantalla no ha
   // su Array.prototype es de otro realm, entonces `deepEqual` estricto falla por eso y no por el dato.
   assert.deepEqual(structuredClone(estado.operations).map((op) => op.horaInicio), ["07:00", "07:15"], "el plan tiene que entrar igual: no hay nada programado en pantalla");
   assert.deepEqual(estado.selectedOts, ["3750"]);
-  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T18:58:00.000Z", "sin savedIsNewer el reloj NO se adelanta: no se inventa una hora mas nueva que la de app_state");
+  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T18:59:00.001Z", "arreglo B: el reloj queda 1 ms por encima del del borrador, aunque savedIsNewer sea falso");
   assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)));
+});
+
+test("arreglo B: el reloj sellado va en memoria y NO en app_state (el save es antes del sello)", async () => {
+  const app = await leerApp();
+  // Escenario igual al de produccion: los dos generatedAt salen del MISMO guardado de
+  // "Generar plan", o sea IGUALES (savedIsNewer falso). Por eso el import de fondo no
+  // dejaba el plan en paz y habia que sellar el reloj.
+  const state = {
+    selectedOts: ["3750"],
+    lockedOts: [],
+    planStart: "2026-06-29",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T19:00:00.000Z" },
+    operations: [operacion("3750", 10)],
+  };
+  const snapshot = {
+    snapshotId: "draft",
+    generatedAt: "2026-10-04T19:00:00.000Z",
+    planStart: "2026-10-05",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-10-04T19:00:00.000Z", scheduledOts: ["3750"] },
+    operations: [
+      operacion("3750", 10, { fechaInicio: "2026-10-05", horaInicio: "07:00", fechaFin: "2026-10-05", horaFin: "07:10" }),
+    ],
+  };
+
+  const { registro, estado } = await correrRescate(app, { state, snapshot });
+
+  // En memoria: 1 ms por encima del borrador.
+  assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.001Z", "el reloj de pantalla queda 1 ms por encima del borrador");
+  // En el guardado (app_state): el reloj del borrador, NO el sellado. Si el sello se
+  // escribiera, la puerta de entrada bloquearia el rescate en la siguiente ingesta.
+  assert.equal(registro.relojEnGuardado, "2026-10-04T19:00:00.000Z", "el saveState se hace ANTES del sello: app_state no lleva el sello");
+  assert.deepEqual(registro.guardados, ["plan"]);
 });
 
 test("el rescate NO entra si el borrador es mas viejo Y en pantalla ya hay plan", async () => {
