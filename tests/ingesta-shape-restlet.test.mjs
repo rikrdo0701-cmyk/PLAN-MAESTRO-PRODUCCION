@@ -32,7 +32,9 @@ const fuente = (await readFile(new URL("../src/server/19-appscript-ingesta-supab
  * Levanta la ingesta con un RESTlet y un Supabase de mentira.
  *
  * @param responder  que cuerpo JSON contesta el RESTlet
- * @param rpc        que responde el RPC ingesta_mirror (por defecto, todo bien)
+ * @param rpc        que responde el RPC ingesta_mirror (por defecto, todo bien). Si devuelve
+ *                   un objeto con `__status`, ese es el codigo HTTP de la respuesta, que es
+ *                   como se reproduce un 4xx de Postgres sin tener que fingir un `ok`.
  */
 function ingesta(responder, rpc) {
   const llamadas = { restlet: [], rpc: [], vaciados: [] };
@@ -82,7 +84,11 @@ function ingesta(responder, rpc) {
           const filas = cuerpo.p_filas || [];
           if (!filas.length) llamadas.vaciados.push(tabla);
           llamadas.rpc.push(tabla);
-          return respuesta(rpc ? rpc(tabla, filas) : { insertadas: filas.length, borradas: 99 }, 200);
+          const r = rpc ? rpc(tabla, filas) : { insertadas: filas.length, borradas: 99 };
+          if (r && typeof r === "object" && typeof r.__status === "number") {
+            return respuesta(r, r.__status);
+          }
+          return respuesta(r, 200);
         }
         llamadas.restlet.push(cuerpo);
         return respuesta(responder(cuerpo), 200);
@@ -207,4 +213,93 @@ test("un 200 cuyo cuerpo NO es objeto no se cuela por `respuesta.ok`", async () 
     assert.match(mensaje, /^RESTlet no ok: /, "cuerpo " + JSON.stringify(cuerpo) + ": sale por la puerta de ok, no por un TypeError");
     assert.deepEqual(llamadas.rpc, [], "cuerpo " + JSON.stringify(cuerpo) + " no puede escribir");
   }
+});
+
+// =============================================================================
+// EL 22P02 DE work_orders, Y POR QUE HACE FALTA QUE NADA LO RECORTE
+// =============================================================================
+
+const RPC_22P02 = {
+  code: "22P02",
+  message: 'invalid input syntax for type integer: ""',
+  details: null,
+  hint: null,
+};
+
+/**
+ * El RPC que acepta todo menos la escritura de UNA tabla, a la que le devuelve el 22P02 de
+ * Postgres. Las demas tablas y los vaciados van bien, que es como estuvo el 2026-10-05: seis
+ * tablas escritas y `work_orders` en 0.
+ */
+function rpcCon22P02En(rota) {
+  return function (tabla, filas) {
+    if (tabla === rota && filas.length) {
+      return { __status: 400, code: "22P02", message: RPC_22P02.message };
+    }
+    return { insertadas: filas.length, borradas: filas.length ? filas.length : 99 };
+  };
+}
+
+test("un 22P02 llega ENTERO al log: el valor que se quejo Postgres no se puede recortar", async () => {
+  // MEDIDO 2026-10-06 21:16, en produccion. El log traia:
+  //
+  //   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+  //   codigo 22P02 | invalid input syntax for type integer: "
+  //
+  // Cortado con `.slice(0, 100)`. El valor se come de ahi: el prefijo ocupa 60 caracteres y
+  // `invalid input syntax for type integer: ` ocupa 39, o sea que para el valor quedaban 1. Un
+  // recorte al principio se come la parte util SIEMPRE, porque Postgres pone la fila repetida
+  // en `details` y el valor culpable al FINAL, en `message` (ya se habia visto con el 23502 el
+  // 2026-10-02, PP_errorPostgREST_). Este test falla si alguien vuelve a recortar.
+  const { correr } = ingesta(() => respuestaBuena(), rpcCon22P02En("work_orders"));
+  const r = await correr(true);
+
+  const delLog = r.log.filter((l) => l.indexOf("ERROR al escribir") !== -1)[0] || "";
+  assert.ok(delLog, "tiene que haber una linea de error en el log");
+  assert.match(delLog, /integer: ""/, 'el valor "" tiene que llegar completo al log');
+  assert.doesNotMatch(delLog, /integer: "$/, "y no puede quedar cortado en la comilla, como el 2026-10-06 a las 21:16");
+  assert.ok(r.errores.indexOf(delLog) !== -1, "el mismo texto entero va tambien en `errores`");
+});
+
+test('el saneo de tipos deja la cantidad en cadena vacia en 0 y la escritura se hace', async () => {
+  // El caso medido del 2026-10-05: una fila de 513 con `cantidad` en cadena vacia tumba el
+  // `work_orders` entero (22P02) y RULE-SUP-048 vacia la tabla, dejando a la pagina sin una sola
+  // de las 213 que tenia. `work_orders.cantidad` es `integer not null default 0`
+  // (docs/schema-supabase.sql), asi que 0 es el valor por omision de la columna, no un dato
+  // inventado: es lo que ya tiene la fila cuando nadie escribe esa columna.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: "", estatus: "En curso", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "2", ot: "2", articulo: "B", descripcion: "e", cantidad: 480, estatus: "Cerrada", cliente: "", fecha_vencimiento: "2026-08-14" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  assert.equal(r.ok, true, "con el saneo, la escritura va: no hay 22P02");
+  const deWork = r.filas.work_orders;
+  assert.equal(deWork, 2, "las dos filas se escriben, la mala y la buena");
+  const aviso = r.log.filter((l) => l.indexOf("valores que no eran del tipo") !== -1)[0] || "";
+  assert.match(aviso, /work_orders: 1 valores? que no eran del tipo/, "y el log DICE que toco una, con el nombre de la columna");
+  assert.match(aviso, /cantidad 1/, "con el detalle por columna: 'cantidad 1'");
+  assert.deepEqual(llamadas.vaciados, [], "no se vacia nada");
+});
+
+test("sin el saneo, la MISMA fila tumba work_orders y vacia la tabla (por eso la prueba de al lado importa)", async () => {
+  // La contraprueba: este caso es el que se midio en produccion. No se puede ejecutar contra el
+  // archivo del repo porque el arreglo esta ahi, asi que se comprueba la FORMA del fallo: el RPC
+  // rechaza, el log lo dice entero, y la tabla se vacia igual (RULE-SUP-048). Si alguien decide
+  // que el RPC ya no se traga una fila mala, esta prueba se pone en rojo y le avisa de que
+  // cambio la regla de la que depende el vaciado.
+  const { correr, llamadas } = ingesta(() => respuestaBuena(), rpcCon22P02En("work_orders"));
+  const r = await correr(true);
+
+  assert.equal(r.ok, false, "la corrida se declara NO buena: una tabla no se escribio y quedo vacia");
+  assert.ok(!r.filas.work_orders, 'work_orders no tiene conteo de escritura: el throw ocurre antes de que se cuente');
+  assert.equal(r.filas.operations, 1, "las otras seis si se escribieron, como el 2026-10-06 a las 21:16");
+  assert.ok(llamadas.vaciados.includes("work_orders"), "y se VACIO, que es la mitad de RULE-SUP-048 que costo 213 OTs");
+  assert.match(
+    r.log.join(" | "),
+    /integer: ""/,
+    "el motivo del 22P02 queda en el log entero, sin el recorte de 100 caracteres"
+  );
 });

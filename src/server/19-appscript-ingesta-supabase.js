@@ -204,6 +204,39 @@ function PP_errorPostgREST_(res) {
   return texto.length > 300 ? '...' + texto.slice(-300) : texto;
 }
 
+/**
+ * Un error que se recorta por la FIN es un error del que no se sabe nada.
+ *
+ * MEDIDO 2026-10-06 21:16, en produccion. El log de la ingesta traia exactamente esto:
+ *
+ *   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+ *   codigo 22P02 | invalid input syntax for type integer: "
+ *
+ * Cortado con `.slice(0, 100)`, y el valor que se quejaba acaba de ahi: se veria el numero de la
+ * numero de la comilla. El prefijo `Supabase rpc ingesta_mirror work_orders 400: codigo 22P02 | `
+ * ocupa 60 caracteres, `invalid input syntax for type integer: ` ocupa 39, y solo quedan 1 para el
+ * valor. O sea que el recorte se comia EXACTAMENTE lo unico que decia que valor estaba malo, y
+ * por eso no se podia saber que era `""`.
+ *
+ * Y esto ya se habia resuelto una vez mas arriba, para el 23502 (PP_errorPostgREST_, 2026-10-02):
+ * Postgres pone la fila repetida en `details`, que ocupa cientos de caracteres, y la columna
+ * culpable al FINAL, en `message`. Recortar por el principio se come siempre la parte util.
+ *
+ * Aqui no se recorta nada: un mensaje de error de escritura se entrega entero. Si alguna vez hay
+ * que recortar, el recorte va POR LA RAZ y con `PP_recortaMedio_`, no a pelo.
+ */
+function PP_mensajeEntero_(e) {
+  return String((e && e.message) || e || '');
+}
+
+/** Recorta por la mitad, con puntos en los dos cortes, para lo que SI se quiere acortar. */
+function PP_recortaMedio_(texto, max) {
+  const t = String(texto === null || texto === undefined ? '' : texto);
+  if (t.length <= max) return t;
+  const mitad = Math.floor((max - 5) / 2);
+  return t.slice(0, mitad) + ' ... ' + t.slice(t.length - mitad);
+}
+
 function PP_supabaseMirror_(tabla, filas, config) {
   // MIRROR ATOMICO via el RPC public.ingesta_mirror (docs/rpc-ingesta-mirror.sql):
   // borra todas las filas e inserta las nuevas DENTRO de una sola transaccion de
@@ -537,7 +570,7 @@ function PP_ingesta_(forzado) {
   // `null.ok` es un TypeError que no dice nada del cuerpo. Con `!respuesta` primero, ese caso
   // cae en el mismo aviso que el resto y sale `RESTlet no ok: null`, que si lo dice.
   if (!respuesta || !respuesta.ok) {
-    throw new Error('RESTlet no ok: ' + JSON.stringify(respuesta).slice(0, 300));
+    throw new Error('RESTlet no ok: ' + PP_recortaMedio_(JSON.stringify(respuesta), 300));
   }
 
   const acciones = respuesta.acciones;
@@ -576,7 +609,7 @@ function PP_ingesta_(forzado) {
       .filter(function(k) { return k.slice(0, 2) !== '__'; });
     const msg = 'el RESTlet contesto ' + (respuesta && respuesta.__http ? respuesta.__http : 200) +
       ' SIN "acciones": claves que si trajo = [' + claves.join(', ') +
-      '], contenido = ' + JSON.stringify(respuesta).slice(0, 300) +
+      '], contenido = ' + PP_recortaMedio_(JSON.stringify(respuesta), 300) +
       '. Se espera { ok, acciones } para accion:"todas" (netsuite-restlet-unificado-supabase.js:27-33): ' +
       'lo que esta desplegado en NetSuite no es este archivo. No se toco ninguna tabla.';
     console.log(msg);
@@ -750,7 +783,7 @@ function PP_ingesta_(forzado) {
         }
       } catch (error) {
         const msg = def.tabla + ': el saneo de tipos NO se pudo correr (' +
-          String(error && error.message || error).slice(0, 120) + '); las filas van como vinieron';
+          PP_mensajeEntero_(error) + '); las filas van como vinieron';
         log.push(msg);
         errores.push(msg);
         console.log(msg);
@@ -764,7 +797,7 @@ function PP_ingesta_(forzado) {
       // los valores anteriores. Se intenta el vaciado con el mismo RPC. Lo que NO se hace es
       // tragarselo: si el vaciado tambien falla, la tabla queda en `noSePudoVaciar` con su
       // motivo, porque "queda lo anterior" es un dato que hay que poder leer.
-      const msg = def.tabla + ': ERROR al escribir: ' + String(e.message || e).slice(0, 100);
+      const msg = def.tabla + ': ERROR al escribir: ' + PP_mensajeEntero_(e);
       log.push(msg);
       errores.push(msg);
       console.log(msg);
@@ -775,7 +808,7 @@ function PP_ingesta_(forzado) {
         log.push(aviso);
         console.log(aviso);
       } catch (e2) {
-        const motivo = String(e2.message || e2).slice(0, 100);
+        const motivo = PP_mensajeEntero_(e2);
         const aviso = def.tabla + ': NO SE PUDO VACIAR, conserva lo anterior: ' + motivo;
         log.push(aviso);
         errores.push(aviso);
@@ -899,9 +932,9 @@ function doPost(e) {
       ejecutada: false,
       accion: String(cuerpo && cuerpo.accion || 'ingesta'),
       motivo: 'error',
-      mensaje: String(error && error.message || error).slice(0, 400),
+      mensaje: PP_recortaMedio_(PP_mensajeEntero_(error), 400),
       filas: {},
-      errores: [String(error && error.message || error).slice(0, 100)],
+      errores: [PP_mensajeEntero_(error)],
       log: [],
       // Una excepcion antes de entrar al bucle (configuracion a medias, o el RESTlet que no.ok)
       // deja las siete tablas SIN TOCAR. No es una corrida a medias: es que no hubo corrida, asi
