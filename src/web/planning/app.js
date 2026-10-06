@@ -11462,6 +11462,14 @@ async function applyImported(imported, options = {}) {
   else if (!preserveLocalPlanning) state.excludedCapabilities = [];
   if (imported.capacityModes) state.capacityModes = imported.capacityModes;
   if (imported.matrix) state.matrix = imported.matrix;
+  // La rejilla COMPLETA (marcada y sin marcar), el UNIVERSO de parejas que el escritor
+  // necesita para poder mandar un false. MEDIDO 2026-10-06: el lector ya la traia
+  // (supabase-reader.js:1538) y clavesLeidas ya la usaba para calcular las claves, pero
+  // AQUI faltaba el mapeo: el escritor veia state.matrixFull undefined, mapeaba 0 filas
+  // y las claves leidas salian enteras como "filas que el navegador ya no tiene".
+  // `Array.isArray` y no un simple `if`: un puente que no trae la rejilla
+  // (PP_buildState_ no la incluye) tiene que dejar la que hay, no borrarla con undefined.
+  if (Array.isArray(imported.matrixFull)) state.matrixFull = imported.matrixFull;
   if (imported.operatorPerformance) state.operatorPerformance = imported.operatorPerformance;
   if (imported.ganttView) state.ganttView = imported.ganttView;
   if (Number.isFinite(Number(imported.ganttDayWidth))) state.ganttDayWidth = Number(imported.ganttDayWidth);

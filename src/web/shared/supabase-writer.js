@@ -739,30 +739,66 @@
       tabla: "matrix",
       // MEDIDO 2026-09-30 contra la base: clave unica (capability_key, operator), 97 filas.
       //
-      // ESTA ES LA QUE HACE QUE DESMARCAR EXISTA. Se mapea matrixFull, que trae la rejilla
-      // COMPLETA (marcada y sin marcar), y no state.matrix, que solo trae las marcadas. Un no
-      // no se puede expresar como una ausencia: con el borrado apagado, mandar solo las
-      // marcadas dejaria las desmarcadas marcadas para siempre. Mandando false, no hace
-      // falta borrar nada nunca.
+      // DOS FUENTES, Y POR QUE HACE FALTAN LAS DOS. El UNIVERSO (QUE parejas existen) sale
+      // de state.matrixFull, la rejilla COMPLETA que trae el lector al arrancar: un no no
+      // se puede expresar como una AUSENCIA, porque con el borrado apagado la fila vieja se
+      // quedaria marcada para siempre. El VALOR (marcada o no) sale de state.matrix, que es
+      // lo que edita la persona (toggleMatrix, removeCapability, removeOperator,
+      // renameOperator) y lo que la pantalla ensena.
+      //
+      // MEDIDO 2026-10-06, el bug que separo las dos fuentes: el valor se congelaba en la
+      // rejilla leida al arrancar (los editores tocan state.matrix y NUNCA matrixFull), y
+      // como applyImported ni siquiera mapeaba imported.matrixFull, la rejilla llegaba
+      // vacia: 0 filas subidas y las 97 leidas salian como "que el navegador ya no tiene".
+      // state.matrix no sirve como universo (no trae las DESMARCADAS) ni la rejilla como
+      // valor (no trae las MARCADAS nuevas: nace en el arranque y nadie la actualiza).
       clave: "capability_key,operator",
       mapear: function (state) {
         const rejilla = Array.isArray(state.matrixFull) ? state.matrixFull : [];
+        // Sin state.matrix no hay con que decidir el valor: se conserva el comportamiento
+        // viejo (la rejilla con su propio habilitado) en vez de mandar todo en false, que
+        // seria desmarcar la matriz entera sin que nadie lo pidiera.
+        const marcadas = state.matrix && typeof state.matrix === "object" ? state.matrix : null;
         const vistos = new Set();
-        return rejilla.map(function (celda) {
-          const key = texto(celda && celda.capabilityKey);
-          const operador = texto(celda && celda.operator);
-          if (!key || !operador) return null;
-          // Una pareja repetida se manda una vez. Sin esto, dos filas con la misma clave en el
-          // mismo POST darian 23505 y se perderia el guardado entero de la matriz.
+        const filas = [];
+        // Una pareja repetida se manda una vez. Sin esto, dos filas con la misma clave en el
+        // mismo POST darian 23505 y se perderia el guardado entero de la matriz.
+        function meter(key, operador, habilitado) {
+          if (!key || !operador) return;
           const id = key + "|" + operador;
-          if (vistos.has(id)) return null;
+          if (vistos.has(id)) return;
           vistos.add(id);
-          return {
+          filas.push({
             capability_key: key,
             operator: operador,
-            habilitado: Boolean(celda && celda.habilitado),
-          };
-        }).filter(Boolean);
+            habilitado: Boolean(habilitado),
+          });
+        }
+        rejilla.forEach(function (celda) {
+          const key = texto(celda && celda.capabilityKey);
+          const operador = texto(celda && celda.operator);
+          if (!key || !operador) return;
+          if (!marcadas) {
+            meter(key, operador, Boolean(celda && celda.habilitado));
+            return;
+          }
+          const lista = marcadas[key];
+          const marcada = Array.isArray(lista)
+            && lista.some(function (nombre) { return texto(nombre) === operador; });
+          meter(key, operador, marcada);
+        });
+        // Las parejas marcadas que el universo NO conoce: una casilla recien marcada, o una
+        // rejilla que no se pudo leer. Sin esto la marca nueva nunca se subiria.
+        if (marcadas) {
+          Object.keys(marcadas).forEach(function (key) {
+            const lista = marcadas[key];
+            if (!Array.isArray(lista)) return;
+            const k = texto(key);
+            if (!k) return;
+            lista.forEach(function (operador) { meter(k, texto(operador), true); });
+          });
+        }
+        return filas;
       },
     },
     {
