@@ -246,8 +246,8 @@ export function filasDesdeFixture(state) {
     // `excluida = false`, y la sobrante (`90`) es una maquina que ya no esta en `machine_catalog`.
     // O sea que hay una fila por maquina (las escribe el espejo de la hoja MAQUINAS con su columna
     // EXCLUIDA) y la fila se queda cuando la maquina sale del catalogo: `guardarCatalogos` sube en
-    // ANEXO y su borrado esta apagado (`BorradoDeCatalogosHabilitado`, apagado el 2026-09-30
-    // cuando borro 76 filas de `ot_configurations`). Se reproduce esa forma -una fila por maquina
+    // ANEXO y el borrado es POR INTENCION (RULE-SUP-061): solo borra claves registradas por quien
+    // las quito a proposito: esta fila sobrante no se toca. Se reproduce esa forma -una fila por maquina
     // del catalogo con `excluida` en falso, mas una fila cuya maquina no esta en el catalogo- para
     // que la sonda mida el lector de verdad (`mapMachines`, supabase-reader.js:636, que ignora la
     // que no corresponde) en vez de un `errors` por 404.
@@ -262,8 +262,8 @@ export function filasDesdeFixture(state) {
     // MEDIDO 2026-10-05 en produccion: 8 filas para 7 maquinas del catalogo, todas
     // `excluida = false`, y la sobrante (`90`) es una maquina que ya no esta en `machine_catalog`.
     // O sea que la fila se queda cuando la maquina sale del catalogo: `guardarCatalogos` sube en
-    // ANEXO y su borrado esta apagado (`BorradoDeCatalogosHabilitado`, apagado el 2026-09-30
-    // cuando borro 76 filas de `ot_configurations`). Se reproduce esa forma -una fila por maquina
+    // ANEXO y el borrado es POR INTENCION (RULE-SUP-061): solo borra claves registradas por quien
+    // las quito a proposito: esta fila sobrante no se toca. Se reproduce esa forma -una fila por maquina
     // con `excluida` en falso, mas una fila cuya maquina no esta en el catalogo- para que la sonda
     // mida el lector de verdad (`mapMachines`, supabase-reader.js:636, que ignora la que no
     // corresponde) en vez de un `errors` por 404.

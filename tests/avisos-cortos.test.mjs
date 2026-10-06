@@ -51,6 +51,32 @@ test("el aviso de la matriz cabe y nombra las DOS que no se guardan", () => {
   assert.match(escritor, /DE NETSUITE/, "y el de operation_catalog tambien");
 });
 
+test("los dos avisos del borrado a proposito caben", () => {
+  // RULE-SUP-061 separa dos especies en el toast: lo que se BORRO a proposito de la base y lo
+  // que el navegador NO tiene y por lo tanto NO se toca. Los dos se miden en su PEOR caso: la
+  // tabla mas larga (hoy machine_planning_overrides) con el conteo a cuatro cifras, que es
+  // mas de lo que hoy se ha medido (la mas grande medida son 221 filas de ot_configurations).
+  const tablas = [...escritor.matchAll(/tabla: "([a-z_]+)"/g)].map((m) => m[1]);
+  assert.ok(tablas.length >= 9, "no se encontraron las nueve tablas del escritor: " + tablas.length);
+  const prefijo = Math.max(...tablas.map((t) => t.length)) + ": ".length + "9999".length;
+
+  const borrado = textoDelAviso(" fila(s) borrada(s)");
+  assert.ok(borrado, "no se encontro el fragmento del aviso de lo borrado");
+  assert.match(borrado, /A PROPOSITO/,
+    "lo borrado tiene que decir que fue a proposito, que es lo que lo distingue del resto");
+  assert.ok(prefijo + borrado.length <= LIMITE,
+    "el aviso de lo borrado a proposito llega a " + (prefijo + borrado.length) +
+    " caracteres en su peor caso y no cabe en un toast: " + borrado);
+
+  const noTocado = textoDelAviso(" fila(s) leidas");
+  assert.ok(noTocado, "no se encontro el fragmento del aviso de lo no tocado");
+  assert.match(noTocado, /NO se tocan/,
+    "lo que el navegador no tiene tiene que decir claramente que NO se toca");
+  assert.ok(prefijo + noTocado.length <= LIMITE,
+    "el aviso de lo no tocado llega a " + (prefijo + noTocado.length) +
+    " caracteres en su peor caso y no cabe en un toast: " + noTocado);
+});
+
 test("los tres avisos del ERP caben", () => {
   // Los mide tests/aviso-por-tabla.test.mjs, uno por uno, con su texto exacto. Aqui esta el
   // que faltan no: el aviso de "Tablas vacias en Supabase", que lo emite

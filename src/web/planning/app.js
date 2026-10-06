@@ -5716,6 +5716,10 @@ function renderToolCatalog() {
   els.toolCatalogTable.innerHTML = `<thead><tr><th>Parte</th><th>Herramental</th><th>Kit</th><th>Cambio herr.</th><th>Cambio kit</th><th></th></tr></thead><tbody>${rows || emptyTableRow(6, "Sin herramentales configurados")}</tbody>`;
   els.toolCatalogTable.querySelectorAll("[data-delete-tool]").forEach((button) => {
     button.addEventListener("click", () => {
+      // La intencion ANTES de quitarla del estado: registrarBorrado deriva la clave de la
+      // fila tal como esta hoy (RULE-SUP-061).
+      const quitado = state.toolCatalog.find((item) => item.id === button.dataset.deleteTool);
+      if (quitado) registrarBorradoDeCatalogo("tools", quitado);
       state.toolCatalog = state.toolCatalog.filter((item) => item.id !== button.dataset.deleteTool);
       saveAndRender("Herramental retirado del catalogo", "catalogs");
     });
@@ -5751,6 +5755,12 @@ function renderMachines() {
       // Apartar NO borra la maquina: la deja de agendar aunque NetSuite la de activa
       // (RULE-SUP-017). Borrarla ya no serviria de nada, porque `machines` la reescribe
       // el RESTlet 2246 cada 15 minutos.
+      // REINCLUIR si borra: la fila de machine_planning_overrides deja de existir en lo
+      // que la pagina mapea, y sin esta intencion se quedaria excluida = true para siempre
+      // (RULE-MAQ-005). Se registra ANTES de voltear la bandera, porque registrarBorrado
+      // solo produce la fila de overrides si la maquina sigue apartada.
+      const estabaApartada = item.excluded === true;
+      if (estabaApartada) registrarBorradoDeCatalogo("machine_planning_overrides", item);
       item.excluded = item.excluded !== true;
       item.active = item.excluded !== true;
       saveAndRender(`Maquina ${item.id} ${item.excluded ? "apartada" : "reincluida"} de la planificacion`, "catalogs");
@@ -5758,6 +5768,13 @@ function renderMachines() {
   });
   els.machineTable.querySelectorAll("[data-delete-machine]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitada = state.machines.find((machine) => machine.id === button.dataset.deleteMachine);
+      if (quitada) {
+        registrarBorradoDeCatalogo("machine_catalog", quitada);
+        // Su fila de overrides solo existe si estaba apartada; si no, la intencion no
+        // produce clave y no se registra nada.
+        if (quitada.excluded === true) registrarBorradoDeCatalogo("machine_planning_overrides", quitada);
+      }
       state.machines = state.machines.filter((item) => item.id !== button.dataset.deleteMachine);
       saveAndRender("Maquina retirada del catalogo", "catalogs");
     });
@@ -5797,6 +5814,8 @@ function renderCalendarExceptions() {
   els.calendarTable.innerHTML = `<thead><tr><th>Concepto</th><th>Recurso</th><th>Periodo no laborable</th><th>Motivo</th><th></th></tr></thead><tbody>${rows || emptyTableRow(5, "Sin periodos no laborales")}</tbody>`;
   els.calendarTable.querySelectorAll("[data-delete-calendar]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitada = state.calendarExceptions.find((item) => item.id === button.dataset.deleteCalendar);
+      if (quitada) registrarBorradoDeCatalogo("calendar_exceptions", quitada);
       state.calendarExceptions = state.calendarExceptions.filter((item) => item.id !== button.dataset.deleteCalendar);
       saveAndRender("Excepcion retirada del calendario", "catalogs");
     });
@@ -5852,6 +5871,8 @@ function renderSubcontracts() {
   els.subcontractTable.innerHTML = `<thead><tr><th>Parte</th><th>Tipo</th><th>Dias habiles</th><th></th></tr></thead><tbody>${rows || emptyTableRow(4, "Sin subcontratos configurados")}</tbody>`;
   els.subcontractTable.querySelectorAll("[data-delete-subcontract]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitado = state.subcontracts.find((item) => item.id === button.dataset.deleteSubcontract);
+      if (quitado) registrarBorradoDeCatalogo("subcontracts", quitado);
       state.subcontracts = state.subcontracts.filter((item) => item.id !== button.dataset.deleteSubcontract);
       saveAndRender("Regla de subcontrato eliminada", "catalogs");
     });
@@ -9668,6 +9689,12 @@ function removeOperator(operator) {
   if (!state.operators.includes(operator)) return;
   if (typeof window !== "undefined" && !window.confirm(`Eliminar operador ${operator} de la matriz de habilidades?`)) return;
   checkpointState();
+  // Borrado a proposito de la fila en `operators` (RULE-SUP-061), y SI el ambito de
+  // catalogos: esta accion vive en la pestana de matriz, y saveAndRender por omision
+  // guarda solo el plan, con lo que guardarCatalogos no correria y la fila se quedaria
+  // en la base reapareciendo al refrescar.
+  registrarBorradoDeCatalogo("operators", operator);
+  appSheetMarkDirtyScope("catalogs");
   state.operators = state.operators.filter((name) => name !== operator);
   for (const key of Object.keys(state.matrix)) {
     state.matrix[key] = (state.matrix[key] || []).filter((name) => name !== operator);
@@ -9711,6 +9738,10 @@ function renameOperator(operator, requestedName) {
   }
 
   checkpointState();
+  // Borrado a proposito del NOMBRE VIEJO en `operators` (el nuevo entra por el upsert
+  // normal) y ambito de catalogos, por el mismo motivo que removeOperator (RULE-SUP-061).
+  registrarBorradoDeCatalogo("operators", operator);
+  appSheetMarkDirtyScope("catalogs");
   state.operators = state.operators.map((name) => name === operator ? nextName : name);
   for (const key of Object.keys(state.matrix)) {
     state.matrix[key] = uniq((state.matrix[key] || []).map((name) => name === operator ? nextName : name));
@@ -14322,6 +14353,32 @@ async function guardarSyncDeOrdenesTrabajoEnSupabase() {
  * en el camino bueno: el aviso de la pestana de Matriz no escrita es informacion que
  * la persona necesita, no un fallo.
  */
+/**
+ * La INTENCION de borrar una fila de catalogo, registrada por el handler que la quito.
+ *
+ * Es el unico camino de borrado (RULE-SUP-061): sin este registro, guardarCatalogos no
+ * manda ningun DELETE por mucho que la fila haya desaparecido del estado. La clave la
+ * deriva el escritor con el mismo mapeo de la subida, y el registro vive en
+ * state.__borradosPendientes (prefijo `__`: persistableState lo saca del payload, o sea
+ * que el registro es SOLO de la sesion y no puede resucitar de app_state) hasta que el
+ * DELETE tiene exito; si el guardado falla, la
+ * intencion queda pendiente para el siguiente.
+ *
+ * Si el escritor no esta disponible no se registra nada (la fila solo no se borra de la
+ * base, que es el comportamiento viejo conocido) y NUNCA se lanza: perder el click
+ * entero por no poder registrar la intencion seria peor que no borrar.
+ */
+function registrarBorradoDeCatalogo(tabla, item) {
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.registrarBorrado !== "function") return null;
+  try {
+    return writer.registrarBorrado(state, tabla, item);
+  } catch (error) {
+    console.warn(`No se pudo registrar el borrado en ${tabla}: ` + (error && error.message ? error.message : error));
+    return null;
+  }
+}
+
 async function guardarCatalogosEnSupabase(ambito) {
   const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
   if (!writer || typeof writer.guardarCatalogos !== "function") {

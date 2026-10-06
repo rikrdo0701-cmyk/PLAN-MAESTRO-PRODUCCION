@@ -239,12 +239,6 @@
   // El codigo con el que la funcion dice "la revision no es la que traias". No es
   // un fallo: es una respuesta buena a una pregunta rara, y por eso viaja hasta
   // el informe con su nombre.
-  // MEDIDO 2026-09-30: el borrado automatico de filas de catalogo esta APAGADO, y esta bandera
-  // es la unica que lo manda. El bloque del borrado en guardarCatalogos explica por que se
-  // apago (76 filas de ot_configurations borradas) y que hace falta para reactivarlo: llevar la
-  // cuenta de lo que se borro A PROPOSITO en esta sesion.
-  const BorradoDeCatalogosHabilitado = false;
-
   const CONFLICTO_REVISION = "CONFLICT_REVISION";
   // Con un solo POST el corte deja de ser de tiempo y pasa a ser de tamano. Sin
   // tope, un plan con 1000 operaciones y tres entradas de log cada una mete 3000
@@ -587,6 +581,9 @@
     {
       tabla: "tools",
       clave: "codigo",
+      // De donde sale el item para registrar un borrado a proposito (registrarBorrado).
+      // Solo lo traen las tablas con puerta de borrado en la pantalla.
+      campoEstado: "toolCatalog",
       mapear: function (state) {
         return (Array.isArray(state.toolCatalog) ? state.toolCatalog : []).map(function (item) {
           return {
@@ -604,6 +601,7 @@
     {
       tabla: "subcontracts",
       clave: "codigo",
+      campoEstado: "subcontracts",
       mapear: function (state) {
         return (Array.isArray(state.subcontracts) ? state.subcontracts : []).map(function (item) {
           return {
@@ -634,6 +632,7 @@
       // mismo, y el segundo se llenaria de NULL, que en PostgreSQL no se consideran iguales
       // entre si (NULL != NULL), o sea que no habria deduplicado nada.
       clave: "fecha,concepto,maquina",
+      campoEstado: "calendarExceptions",
       mapear: function (state) {
         return (Array.isArray(state.calendarExceptions) ? state.calendarExceptions : []).map(function (item) {
           const inicio = texto(item.startDate);
@@ -710,6 +709,7 @@
       // MEDIDO 2026-09-30 contra la base: clave unica nombre, 18 filas, con politica de
       // escritura para authenticated. La base estaba preparada; faltaba el escritor.
       clave: "nombre",
+      campoEstado: "operators",
       mapear: function (state) {
         const nombres = Array.isArray(state.operators) ? state.operators : [];
         const capacidad = state.operatorCapacity || {};
@@ -725,9 +725,11 @@
             // vacio, asi que se devuelve igual para no perder el nombre real.
             nombre_real: texto(perfil.name) || n,
             categoria: texto(perfil.category),
-            // activo: el estado.trae SOLO los activos, asi que la lista ES la lista de
-            // activos. Un operador que se desmarco no esta en state.operators y su fila se
-            // queda como estaba, que es lo correcto con el borrado apagado.
+            // activo: el estado trae SOLO los activos, asi que la lista ES la lista de
+            // activos. Un operador que se quito de la matriz ya no esta en state.operators,
+            // y su fila SE BORRA solo si el handler registro la intencion con
+            // registrarBorrado (removeOperator / renameOperator): quien solo deja de verla
+            // sin pasar por el handler no recibe ningun DELETE.
             activo: true,
             minutos_capacidad: Math.round(numero(capacidad[n], 2400)),
             rendimiento_pct: Math.round(numero(rendimiento[n], 100)),
@@ -741,10 +743,11 @@
       //
       // DOS FUENTES, Y POR QUE HACE FALTAN LAS DOS. El UNIVERSO (QUE parejas existen) sale
       // de state.matrixFull, la rejilla COMPLETA que trae el lector al arrancar: un no no
-      // se puede expresar como una AUSENCIA, porque con el borrado apagado la fila vieja se
-      // quedaria marcada para siempre. El VALOR (marcada o no) sale de state.matrix, que es
-      // lo que edita la persona (toggleMatrix, removeCapability, removeOperator,
-      // renameOperator) y lo que la pantalla ensena.
+      // se puede expresar como una AUSENCIA, porque matrix NO tiene puerta de borrado
+      // (registrarBorrado no le declara campoEstado): una pareja ausente del estado nunca
+      // recibe DELETE y la fila vieja se quedaria marcada para siempre. El VALOR (marcada
+      // o no) sale de state.matrix, que es lo que edita la persona (toggleMatrix,
+      // removeCapability, removeOperator, renameOperator) y lo que la pantalla ensena.
       //
       // MEDIDO 2026-10-06, el bug que separo las dos fuentes: el valor se congelaba en la
       // rejilla leida al arrancar (los editores tocan state.matrix y NUNCA matrixFull), y
@@ -804,6 +807,7 @@
     {
       tabla: "machine_planning_overrides",
       clave: "machine_nombre",
+      campoEstado: "machines",
       // Una fila por maquina APARTADA, y solo esas: la tabla registra la decision de
       // no agendar en una maquina (RULE-SUP-017). `machine_catalog` NO se escribe
       // desde aqui: la pagina es la unica escritora del catalogo (guardarCatalogos).
@@ -830,6 +834,7 @@
       // decision de no agendar.
       tabla: "machine_catalog",
       clave: "nombre",
+      campoEstado: "machines",
       mapear: function (state) {
         return (Array.isArray(state.machines) ? state.machines : []).map(function (item) {
           return {
@@ -961,12 +966,62 @@
   }
 
   /**
+   * REGISTRA LA INTENCION de borrar UNA fila de catalogo y devuelve su clave natural
+   * (o null si no hay nada que borrar). Es la UNICA puerta de entrada del borrado
+   * (RULE-SUP-061): guardarCatalogos solo borra claves que esten aqui registradas.
+   *
+   * POR QUE POR INTENCION Y NO POR DIFERENCIA. MEDIDO 2026-09-30: comparar las claves
+   * leidas al arrancar contra las que hay ahora borro 76 filas de ot_configurations,
+   * porque las DOS salen del mismo estado y aqui no se puede distinguir "la persona la
+   * quito" de "el navegador simplemente no la tiene". La diferencia sigue calculandose
+   * en guardarCatalogos, pero solo para un aviso que NO toca la red.
+   *
+   * COMO DERIVA LA CLAVE. Aisla el item dentro de una copia del estado y pasa por el
+   * MISMO mapeo y la MISMA claveDeFila que la subida: la clave que se registra es, por
+   * construccion, la misma que tiene escrita la fila. Si el mapeo no produce fila (una
+   * maquina no apartada no tiene fila en machine_planning_overrides) o la clave sale
+   * vacia, no se registra nada: no hay nada que borrar.
+   *
+   * SOLO con campoEstado declarado. ot_configurations y article_configurations son
+   * objetos (no listas) y matrix se edita con banderas: esas tres no tienen puerta de
+   * borrado en la pantalla, y aqui no se les inventa una.
+   *
+   * Devuelve la clave registrada, o null. Registra una sola vez la misma clave.
+   */
+  function registrarBorrado(state, tabla, item) {
+    const datos = state && typeof state === "object" ? state : {};
+    let def = null;
+    CATALOGOS.forEach(function (c) { if (c.tabla === tabla) def = c; });
+    if (!def || !def.campoEstado) return null;
+    const original = datos[def.campoEstado];
+    if (!Array.isArray(original)) return null;
+    const semilla = {};
+    semilla[def.campoEstado] = [item];
+    const aislado = Object.assign({}, datos, semilla);
+    let filas = [];
+    try { filas = def.mapear(aislado) || []; } catch (error) { filas = []; }
+    if (!filas.length) return null;
+    const clave = claveDeFila(def, filas[0]);
+    if (!clave) return null;
+    if (!datos.__borradosPendientes || typeof datos.__borradosPendientes !== "object") {
+      datos.__borradosPendientes = {};
+    }
+    const lista = Array.isArray(datos.__borradosPendientes[tabla])
+      ? datos.__borradosPendientes[tabla]
+      : [];
+    if (lista.indexOf(clave) === -1) lista.push(clave);
+    datos.__borradosPendientes[tabla] = lista;
+    return clave;
+  }
+
+  /**
    * ESCRIBE LOS CATALOGOS. Devuelve el informe con la misma forma que el del plan
    * (ok, tablas, avisos, ms) para que quien llama no tenga dos caminos distintos
    * para leer un resultado.
    *
    * `opciones.clavesLeidas` es lo que el lector vio al arrancar: { tabla: [claves] }.
-   * Sin el, no se borra nada (ver el bloque de arriba).
+   * Sirve SOLO para el aviso de "leidas que aqui NO estan; NO se tocan": el borrado
+   * no depende de ella, sino de state.__borradosPendientes (registrarBorrado).
    */
   async function guardarCatalogos(state, opciones) {
     const opts = opciones || {};
@@ -994,79 +1049,96 @@
       // Subir lo que hay. Anexo, no espejo: nunca borra (ver el bloque de arriba).
       informe.tablas[tabla] = await escribirAnexo(ctx, tabla, parte.filas, def.clave);
 
-      // Borrar lo que la persona quito, y solo eso.
-      const leidas = opts.clavesLeidas && opts.clavesLeidas[tabla];
-      if (!Array.isArray(leidas)) {
-        if (parte.filas.length) {
-          informe.avisos.push(
-            tabla + ": se.subieron " + parte.filas.length + " fila(s), pero NO se borro ninguna: esta pagina no " +
-            "tiene la lista de lo que se leyo al arrancar, y borrar a ciegas se llevaria filas que la persona " +
-            "todavia no ha visto. Quitar una fila del catalogo en esta carga no se refleja hasta recargar."
-          );
-        }
-        continue;
-      }
-      // -----------------------------------------------------------------------------
-      // BORRADO APAGADO. MEDIDO 2026-09-30: borro 76 filas de ot_configurations.
+      // ---------------------------------------------------------------------------
+      // BORRADO A PROPOSITO, POR INTENCION (RULE-SUP-061). El unico DELETE que sale
+      // de aqui es el de una clave registrada en state.__borradosPendientes[tabla] por
+      // el handler que quito la fila (registrarBorrado), y solo en la sesion que la
+      // quito. Sin intencion registrada no se borra NADA, por mucho que difieran las
+      // claves leidas al arrancar y las que hay ahora.
       //
-      // La comparacion de abajo decidia que filas borrar comparando las claves que el
-      // navegador leyo al arrancar contra las que tiene ahora, y las DOS SALEN DEL MISMO
-      // ESTADO. Si el estado pierde 76 otConfigurations entre la carga y el guardado, esas 76
-      // se ven como "la persona las quito" y se borran. No hay forma de distinguirlo aqui: el
-      // estado tiene el resultado, no la intencion.
+      // POR QUE NO POR DIFERENCIA (el modelo viejo, medido 2026-09-30): comparar lo
+      // leido contra lo que hay borro 76 filas de ot_configurations, porque las dos
+      // listas salen del MISMO estado y aqui no se puede distinguir "la persona la
+      // quito" de "el navegador simplemente no la tiene". La diferencia se calcula mas
+      // abajo, pero solo para un aviso que no toca la red.
       //
-      // Esto funcionaba por accidente hasta hoy, porque el DELETE fallaba con 42703 en todas
-      // las tablas: el filtro usaba el valor de la clave como nombre de columna. Arreglar ese
-      // bug quito la red. Un fallo documentado como riesgo y no apagado es un fallo que espera
-      // a que alguien lo arregle.
+      // UNA FILA QUE VOLVIO NO SE BORRA: si la clave esta en parte.claves (se quito y
+      // se volvio a agregar antes de guardar), la intencion queda anulada.
       //
-      // Para reactivarlo hace falta un modelo que lleve la cuenta de lo que se borro A
-      // PROPOSITO en esta sesion, no de lo que falta. Es un cambio de modelo, no un parche, y
-      // no se hace a las carreras con 76 filas ya perdidas de por medio.
-      const fuera = leidas.filter(function (clave) { return !parte.claves[clave]; });
-      if (!BorradoDeCatalogosHabilitado) {
-        if (fuera.length) {
-          informe.avisos.push(
-            tabla + ": se.subieron " + parte.filas.length + " fila(s). NO se borro ninguna, y hay " +
-              fuera.length + " fila(s) que el navegador ya no tiene. El borrado automatico esta apagado: "
-              + "el 2026-09-30 borro 76 filas de ot_configurations con el comparativo anterior, porque "
-              + "comparar lo leido con lo que hay no distingue que la persona haya quitado una fila "
-              + "de que el navegador simplemente no la tenga. La proxima subida vuelve a mandar las que "
-              + "hay, y las que faltan vuelven con el siguiente espejo de la ingesta."
-          );
-        }
-        continue;
-      }
-      if (!fuera.length) continue;
-      // Una condicion por fila, y cada una con su propia peticion: un `or=(...)` con
-      // claves compuestas se pone ilegible rapido, y borrar de mas es el fallo caro.
+      // SI EL DELETE FALLA, LA CLAVE QUEDA PENDIENTE: sale de __borradosPendientes solo
+      // cuando se resolvio (borrada, anulada, o ilegible ya para siempre). El fallo
+      // deja la intencion viva para el proximo guardado y pone el error en el informe
+      // con su paso, para que el toast diga que fallo el BORRADO y no la subida.
+      const pendientes = datos.__borradosPendientes && typeof datos.__borradosPendientes === "object"
+        && Array.isArray(datos.__borradosPendientes[tabla])
+        ? datos.__borradosPendientes[tabla]
+        : [];
       let borradas = 0;
-      let error = null;
-      for (const clave of fuera) {
+      let errorBorrado = null;
+      const resueltas = [];
+      for (const clave of pendientes) {
+        if (parte.claves[clave]) { resueltas.push(clave); continue; }
+        // Una condicion por fila, y cada una con su propia peticion: un `or=(...)` con
+        // claves compuestas se pone ilegible rapido, y borrar de mas es el fallo caro.
         const cond = condicionDeClave(def, clave);
-        if (!cond) { error = "clave natural ilegible: " + recorte(clave, 60); continue; }
+        if (!cond) {
+          // Una clave ilegible no se vuelve legible con el tiempo: si quedara pendiente,
+          // reintentaria para siempre un filtro que nunca se puede armar.
+          errorBorrado = "clave natural ilegible: " + recorte(clave, 60);
+          resueltas.push(clave);
+          continue;
+        }
         try {
           await pedir(ctx.token, "DELETE", tabla, { condicion: cond });
           borradas += 1;
+          resueltas.push(clave);
         } catch (e) {
-          error = sano((e && e.message) || e, ctx.secretos);
+          errorBorrado = sano((e && e.message) || e, ctx.secretos);
+          // Sin resueltas: esta clave y las que siguen quedan pendientes para el
+          // proximo guardado.
           break;
         }
       }
-      const previo = informe.tablas[tabla];
-      // MEDIDO 2026-09-30: esto era un solo campo, `error: error || previo.error`, que
-      // mezclaba el fallo del POST con el del DELETE. Con un 42P01 del POST tapado, el 42703
-      // del DELETE no se veia. Dos escrituras, un campo: el toast senalaba al sistema
-      // equivocado. Ahora los dos van por separado y el de arriba sigue siendo el primero que
-      // fallo, para que el toast no cambie de lo que ya se acostumbro la gente.
-      informe.tablas[tabla] = {
-        insertadas: previo.insertadas,
-        borradas: borradas,
-        error: error || previo.error || null,
-        errorPost: previo.error || null,
-        errorDelete: error || null,
-        paso: error ? "borrado de lo que quitaste" : (previo.error ? "subida de lo que hay" : null),
-      };
+      if (pendientes.length) {
+        const restantes = pendientes.filter(function (clave) { return resueltas.indexOf(clave) === -1; });
+        if (restantes.length) datos.__borradosPendientes[tabla] = restantes;
+        else delete datos.__borradosPendientes[tabla];
+        const previo = informe.tablas[tabla];
+        // MEDIDO 2026-09-30: esto era un solo campo, `error: error || previo.error`, que
+        // mezclaba el fallo del POST con el del DELETE. Con un 42P01 del POST tapado, el 42703
+        // del DELETE no se veia. Dos escrituras, un campo: el toast senalaba al sistema
+        // equivocado. Ahora los dos van por separado y el de arriba sigue siendo el primero que
+        // fallo, para que el toast no cambie de lo que ya se acostumbro la gente.
+        informe.tablas[tabla] = {
+          insertadas: previo.insertadas,
+          borradas: borradas,
+          error: errorBorrado || previo.error || null,
+          errorPost: previo.error || null,
+          errorDelete: errorBorrado || null,
+          paso: errorBorrado ? "borrado de lo que quitaste" : (previo.error ? "subida de lo que hay" : null),
+        };
+        if (borradas && !errorBorrado) {
+          informe.avisos.push(tabla + ": " + borradas + " fila(s) borrada(s) A PROPOSITO de la base");
+        }
+      }
+
+      // LO QUE LA PAGINA NO TIENE, DICHO Y NO TOCADO. Las claves leidas al arrancar que
+      // no estan en lo que la pagina mapea ahora pueden ser filas que la persona quito
+      // (ya salieron arriba, con su intencion) o filas que el navegador simplemente no
+      // tiene (ot_configurations las pierde normalizeOtResourceAssignments: 28 filas
+      // medidas 2026-10-06). Aqui NO se borra ninguna: sin intencion registrada la
+      // diferencia es solo un aviso, y el aviso lo dice.
+      const leidas = opts.clavesLeidas && opts.clavesLeidas[tabla];
+      if (Array.isArray(leidas)) {
+        const fuera = leidas.filter(function (clave) {
+          return !parte.claves[clave] && pendientes.indexOf(clave) === -1;
+        });
+        if (fuera.length) {
+          informe.avisos.push(
+            tabla + ": " + fuera.length + " fila(s) leidas que aqui NO estan; NO se tocan"
+          );
+        }
+      }
     }
 
     // Lo que NO se escribe, dicho. La pagina lo muestra: un "guardado" que se
@@ -2630,6 +2702,10 @@
   root.PPSupabaseWriter = {
     guardar: guardar,
     guardarCatalogos: guardarCatalogos,
+    // La UNICA puerta de entrada del borrado de catalogos: registra la intencion de
+    // borrar una fila y devuelve su clave natural. guardarCatalogos solo borra claves
+    // que pasaron por aqui (RULE-SUP-061).
+    registrarBorrado: registrarBorrado,
     // MEDIDO 2026-10-01: el UNICO escritor de `inspection_routes` (tramos de
     // inspeccion). No entra por guardarCatalogos porque esa funcion es un espejo
     // del estado del plan y los tramos no son parte de ese estado; y no esta en
