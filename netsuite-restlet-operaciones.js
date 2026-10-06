@@ -63,8 +63,18 @@ define(['N/query'], (query) => {
   function post(body) {
     body = body || {};
 
-    const pageSize = clamp(Number(body.pageSize ?? 200), 50, 5000);
-    const pageIndex = Math.max(0, Number(body.pageIndex ?? 0));
+    // POR QUE NO HAY `??` (MEDIDO 2026-10-06). Este archivo tenia `body.pageSize ?? 200` en
+    // estas cuatro lineas. `??` es ES2020 y el parser de SuiteScript no lo tiene: al cargar
+    // el archivo responde "SyntaxError: missing ; before statement", porque despues de
+    // `body.pageSize` el parser espera un `;` y se encuentra un `?`. A diferencia de V8 (con
+    // el que `node --check` da OK) el parser de NetSuite es el que decide si el archivo carga,
+    // y por eso un `node --check` en verde NO prueba que el RESTlet cargue.
+    //
+    // `??` NO se cambia por `||`: no son lo mismo. `||` tambien se come el 0 y el "" que si
+    // son valores, y con `pageSize: 0` daria 200 en vez de 0. Se escribe la forma explicita
+    // `== null`, que es exactamente lo que `??` quiere decir: solo null y undefined.
+    const pageSize = clamp(Number(body.pageSize == null ? 200 : body.pageSize), 50, 5000);
+    const pageIndex = Math.max(0, Number(body.pageIndex == null ? 0 : body.pageIndex));
 
     // La ultima estrategia es LITERALMENTE el SQL que estaba en produccion antes de este
     // cambio (mismas columnas, sin tl.location, sin FETCH NEXT). Esa es la red de seguridad:
@@ -109,12 +119,12 @@ define(['N/query'], (query) => {
     const page = consultada.filas;
 
     const rows = page.map((r) => ({
-      id: String(r.id ?? ''),
+      id: String(r.id == null ? '' : r.id),
       workorder_id: String(r.workorder_id || ''),
       workorder_tranid: String(r.workorder_tranid || ''),
       item_name: String(r.item_name || ''),
       operation: String(r.operation || ''),
-      sequence: String(r.sequence ?? ''),
+      sequence: String(r.sequence == null ? '' : r.sequence),
       qty_to_process: String(r.qty_to_process || ''),
       start_planned: fmtDate_(r.start_planned),
       end_planned: fmtDate_(r.end_planned),
