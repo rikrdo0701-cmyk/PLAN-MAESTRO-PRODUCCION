@@ -138,7 +138,20 @@
     const informe = await boot.correr();
     boot.aviso(informe);
     if (!informe.activo) return { aplicado: false, motivo: informe.motivo };
-    if (informe.fallo) return { aplicado: false, motivo: informe.fallo };
+    // MEDIDO 2026-10-05: antes aqui habia `if (informe.fallo) return { aplicado: false }`, o sea
+    // que UNA tabla que fallaba (404, 400, 500) abortaba TODO el guardado de catalogos: la pagina
+    // se quedaba sin operadores, sin matriz y sin maquinas aunque las otras 24 tablas se leyeran
+    // bien. El usuario lo pidio textual: "DEBE REINTENTAR O MARCAR MENSAJE DE FALLO DE
+    // SINCRONIZACION". El reintento ya esta en el lector (readTableConReintentos, 3 intentos con
+    // backoff por tabla); aqui se cambia el aborto por "aplica lo que si se leyo y reporta las
+    // tablas que fallaron". El aviso del boot ya muestra las tablas vacias y las viejas; ahora
+    // tambien se muestran las que fallaron.
+    const fallidas = Object.keys(informe.errors || {});
+    if (fallidas.length) {
+      // No se aborta: se aplica lo que se leyo y se reporta el fallo. La pagina funciona con
+      // lo que tiene, y el aviso dice que tablas faltan.
+      console.warn("[catalogos] tablas que fallaron tras reintentar:", fallidas.join(", "));
+    }
 
     const entrada = normaliza(informe.catalogs);
     // El plan y las tablas de la persona, al lado de los catalogos y en el MISMO
@@ -176,6 +189,9 @@
       ms: informe.ms,
       viejo: informe.viejo,
       vacias: informe.vacias,
+      // Las tablas que fallaron tras reintentar. El aviso las muestra para que la persona
+      // sepa que faltan, en vez de que la pagina las tenga vacias sin decir por que.
+      fallidas,
     };
   }
 

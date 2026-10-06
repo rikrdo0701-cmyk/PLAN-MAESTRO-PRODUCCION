@@ -403,7 +403,14 @@
     if (!resultado) return informe;
 
     for (const t of (resultado.missing || [])) informe.vacias.push(t);
-    for (const [t, e] of Object.entries(resultado.errors || {})) informe.fallo = `${t}: ${e}`;
+    // MEDIDO 2026-10-05: antes esto era `for (const [t, e] of ...) informe.fallo = ...`, o sea que
+    // SOBREESCRIBIA el fallo con el ultimo error y se perdia el de las demas tablas. Ahora se
+    // acumulan todos y se pasan al apply para que el aviso los muestre.
+    const errores = Object.entries(resultado.errors || {});
+    if (errores.length) {
+      informe.fallo = errores.map(([t, e]) => `${t}: ${e}`).join(" | ");
+      informe.errors = resultado.errors;
+    }
 
     // Antiguedad por tabla, en paralelo y sin reintentos: es informacion, no el
     // camino critico, y no tiene por que retrasar la pantalla. Va con el MISMO token

@@ -294,6 +294,39 @@
   }
 
   /**
+   * Lectura de UNA tabla con reintentos. `readCatalogs` lee las 25 en paralelo y ataja el
+   * error de cada una, pero no reintenta: un 500 transitorio de una tabla la deja sin
+   * datos para siempre en ese arranque. Aqui se reintenta por tabla, con backoff, y solo
+   * se rinde despues de INTENTOS intentos.
+   *
+   * QUE NO SE REINTENTA: 401/403 (sesion) y 404 (la tabla no existe). Reintentarlos es
+   * gastar tiempo en algo que no va a cambiar: la tabla que no existe hoy no existe en
+   * el segundo intento, y la sesion no se arregla reintentando.
+   */
+  const INTENTOS_TABLA = 3;
+  const ESPERAS_TABLA_MS = [300, 900];
+
+  function noReintentarTabla(status) {
+    return status === 401 || status === 403 || status === 404;
+  }
+
+  async function readTableConReintentos(table, options) {
+    let ultimo = null;
+    for (let intento = 0; intento < INTENTOS_TABLA; intento += 1) {
+      try {
+        return await readTable(table, options);
+      } catch (error) {
+        ultimo = error;
+        const status = Number((error && (error.status || error.statusCode)) || 0);
+        if (noReintentarTabla(status)) throw error;
+        if (intento === INTENTOS_TABLA - 1) break;
+        await new Promise((r) => root.setTimeout(r, ESPERAS_TABLA_MS[intento] || ESPERAS_TABLA_MS[ESPERAS_TABLA_MS.length - 1]));
+      }
+    }
+    throw ultimo;
+  }
+
+  /**
    * Lee una tabla ENTERA, paginando, y devuelve las filas crudas.
    *
    * POR QUE EXISTE. MEDIDO 2026-10-05 en produccion: `operations` tiene 2275 filas y la
@@ -1435,7 +1468,7 @@
       try {
         rows[table] = ORDEN_PAGINADO[table]
           ? await readTableEntero(table, { order: ORDEN_PAGINADO[table] })
-          : await readTable(table);
+          : await readTableConReintentos(table);
       } catch (error) {
         rows[table] = null;
         errors[table] = String((error && error.message) || error);
