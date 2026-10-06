@@ -357,7 +357,7 @@ function PP_saneaTipos_(tabla, filas) {
       const v = copia[col];
       // Solo un numero, o un TEXTO que sea un numero. Un booleano no: `Number(true)` es 1, y
       // escribir 1 en una columna de cantidad porque llego un `true` es inventar un dato.
-      const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+      const n = typeof v === 'number' ? v : (typeof v === 'string' ? (v.trim() !== '' ? Number(v) : 0) : NaN);
       if (typeof n === 'number' && isFinite(n)) {
         if (typeof v !== 'number') { copia[col] = n; marcar(col); }
       } else {
