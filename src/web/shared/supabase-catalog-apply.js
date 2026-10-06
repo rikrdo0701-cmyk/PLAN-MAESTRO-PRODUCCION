@@ -138,6 +138,24 @@
     const informe = await boot.correr();
     boot.aviso(informe);
     if (!informe.activo) return { aplicado: false, motivo: informe.motivo };
+    // SI LA LECTURA ENTERA FALLO, NO HAY CON QUE APLICAR, Y NO SE APLICA NADA.
+    // MEDIDO 2026-10-06: al cambiar el aborto por tabla por "aplica lo que si se leyo"
+    // (abajo) se perdio esta puerta y el apply entraba a `aplicarEstadoDesdeSupabase` con
+    // una entrada vacia, declaraba `aplicado:true` y la persona perdia los catalogos que
+    // la pagina ya tenia, cuando el aviso de una linea mas abajo dice "se conserva lo que
+    // ya tenia". Dos pruebas fijaban esto y estaban en rojo: "si la lectura falla, no se
+    // aplica nada" (supabase-catalog-apply.test.mjs y supabase-catalog-boot.test.mjs).
+    //
+    // LA SENAL ES `catalogs`, NO `fallo`: el boot vuelve a poner `fallo` cuando falla UNA
+    // tabla (supabase-catalog-boot.js:411), asi que `fallo` ya no significa "no se leyo
+    // nada". `catalogs` solo se asigna cuando `readCatalogs` devolvio algo
+    // (supabase-catalog-boot.js:425), y es la unica condicion que distingue las dos cosas.
+    if (!informe.catalogs || typeof informe.catalogs !== "object") {
+      // El motivo lleva el `fallo` del boot: quien lee este resultado (la pagina, el aviso)
+      // tiene que ver POR QUE no se aplico, no solo que no se aplico. Un motivo generico
+      // obligaria a abrir el log para descubrir que fue la red.
+      return { aplicado: false, motivo: "la lectura de Supabase no devolvio catalogos: " + (informe.fallo || "sin detalle") };
+    }
     // MEDIDO 2026-10-05: antes aqui habia `if (informe.fallo) return { aplicado: false }`, o sea
     // que UNA tabla que fallaba (404, 400, 500) abortaba TODO el guardado de catalogos: la pagina
     // se quedaba sin operadores, sin matriz y sin maquinas aunque las otras 24 tablas se leyeran

@@ -289,7 +289,16 @@
   async function readTable(table, options) {
     if (!isConfigured()) throw new Error("Supabase sin configurar (faltan SUPABASE_URL/SUPABASE_ANON_KEY)");
     const response = await root.fetch(restUrl(table, options), { headers: await headers(), cache: "no-store" });
-    if (!response.ok) throw new Error("Supabase " + table + ": HTTP " + response.status);
+    if (!response.ok) {
+      // El status VIAJA con el error, no solo escrito en el mensaje. MEDIDO 2026-10-06:
+      // `readTableConReintentos` decide con `error.status` si reintenta, y como este
+      // `new Error(...)` no lo traia, un 404 se leia como status 0, la regla de "no
+      // reintentar 404/401/403" NUNCA se cumplia y la tabla inexistente se reintentaba 3
+      // veces (peor: en el stub de las pruebas reventaba y tapaba el error real).
+      const error = new Error("Supabase " + table + ": HTTP " + response.status);
+      error.status = response.status;
+      throw error;
+    }
     return response.json();
   }
 
@@ -310,6 +319,26 @@
     return status === 401 || status === 403 || status === 404;
   }
 
+  // De donde sale el status. Primero del property; si no esta, del mensaje ("... HTTP 404").
+  // Sin este fallback un error lanzado como `new Error(texto)` se leeria status 0, que no es
+  // ningun 401/403/404, y la regla de no-reintentar se desmentiria sola.
+  function statusDeError(error) {
+    const directo = Number((error && (error.status || error.statusCode)) || 0);
+    if (directo) return directo;
+    const enMensaje = /HTTP\s+(\d{3})/.exec(String((error && error.message) || ""));
+    return enMensaje ? Number(enMensaje[1]) : 0;
+  }
+
+  // El reloj NO se le pide solo a `root`. MEDIDO 2026-10-06: si `root` no lo trae, la espera
+  // reventaba con `TypeError: root.setTimeout is not a function` y ESE error tapaba el error
+  // HTTP real de la tabla que se estaba reintentando: el mensaje que veia el llamador era del
+  // reloj, no de Supabase. Aqui, si no hay ningun reloj, se sigue de largo sin esperar.
+  function esperarTabla(ms) {
+    if (root && typeof root.setTimeout === "function") return new Promise((r) => root.setTimeout(r, ms));
+    if (typeof setTimeout === "function") return new Promise((r) => setTimeout(r, ms));
+    return Promise.resolve();
+  }
+
   async function readTableConReintentos(table, options) {
     let ultimo = null;
     for (let intento = 0; intento < INTENTOS_TABLA; intento += 1) {
@@ -317,10 +346,10 @@
         return await readTable(table, options);
       } catch (error) {
         ultimo = error;
-        const status = Number((error && (error.status || error.statusCode)) || 0);
+        const status = statusDeError(error);
         if (noReintentarTabla(status)) throw error;
         if (intento === INTENTOS_TABLA - 1) break;
-        await new Promise((r) => root.setTimeout(r, ESPERAS_TABLA_MS[intento] || ESPERAS_TABLA_MS[ESPERAS_TABLA_MS.length - 1]));
+        await esperarTabla(ESPERAS_TABLA_MS[intento] || ESPERAS_TABLA_MS[ESPERAS_TABLA_MS.length - 1]);
       }
     }
     throw ultimo;

@@ -24,7 +24,7 @@ import { readFile } from "node:fs/promises";
 const readerSource = await readFile(new URL("../src/web/shared/supabase-reader.js", import.meta.url), "utf8");
 
 /** Levanta el lector con un fetch de mentira que devuelve `filas` por tabla. */
-function lector(filas) {
+function lector(filas, estados) {
   const pedido = [];
   const contexto = {
     console,
@@ -38,13 +38,17 @@ function lector(filas) {
     Boolean,
     Error,
     encodeURIComponent,
+    // OJO: este contexto de vm NO tiene `setTimeout`, a proposito. El lector corre en la
+    // pagina (si lo tiene) y aqui (no lo tiene), y si el reintento exige un reloj que
+    // puede faltar, revienta con un TypeError del reloj y TAPA el error de Supabase.
     fetch: async (url) => {
       const tabla = decodeURIComponent(String(url).split("/rest/v1/")[1].split("?")[0]);
       pedido.push(tabla);
       const hay = Object.prototype.hasOwnProperty.call(filas, tabla);
+      const status = estados && estados[tabla] != null ? estados[tabla] : (hay ? 200 : 404);
       return {
-        ok: hay,
-        status: hay ? 200 : 404,
+        ok: status >= 200 && status < 300,
+        status,
         json: async () => (hay ? filas[tabla] : []),
       };
     },
@@ -120,6 +124,39 @@ test("sin la tabla del override el lector sigue entregando maquinas utilizables"
   assert.equal(leido.catalogs.machines[0].active, true);
   assert.equal(leido.errors.machine_planning_overrides, "Supabase machine_planning_overrides: HTTP 404");
   assert.ok(leido.missing.includes("machine_planning_overrides"));
+});
+
+test("un 404 NO se reintenta y el error que sale es el de Supabase, no el del reloj", () => {
+  // MEDIDO 2026-10-06. La regla "no reintentar 401/403/404" estaba escrita en el comentario
+  // de `readTableConReintentos` y NO se cumplia: `readTable` lanzaba `new Error(texto)` sin
+  // `error.status`, el status se leia 0, `noReintentarTabla(0)` era falso y la tabla se
+  // pedia 3 veces. Peor: la espera usaba `root.setTimeout`, que este contexto de vm no
+  // tiene, y el `TypeError` del reloj salia en vez del error de Supabase
+  // ("root.setTimeout is not a function" en vez de "HTTP 404"). Las dos cosas se miden:
+  // cuantas veces se pide, y QUE error ve el llamador.
+  return (async () => {
+    const { reader, pedido } = lector({ machine_catalog: [{ nombre: "AB11 : TROQUELADO", activa: true }] });
+    const leido = await reader.readCatalogs({ tables: ["machine_catalog", "machine_planning_overrides"] });
+    const pedidos = pedido.filter((t) => t === "machine_planning_overrides");
+    assert.equal(pedidos.length, 1, "un 404 se pide una vez: la tabla que no existe no va a existir al segundo intento");
+    assert.equal(
+      leido.errors.machine_planning_overrides,
+      "Supabase machine_planning_overrides: HTTP 404",
+      "el error que ve el llamador es el de Supabase, no el del reloj del reintento"
+    );
+  })();
+});
+
+test("un 500 SI se reintenta (3 intentos) y al final tambien se reporta el error de Supabase", () => {
+  // La otra mitad de la regla: un 5xx es transitorio y SI vale la pena reintentarlo, que es
+  // justo para lo que existe `readTableConReintentos` (MEDIDO 2026-10-05: un 500 de una
+  // sola tabla dejaba la pagina sin operadores, sin matriz y sin maquinas para siempre).
+  return (async () => {
+    const { reader, pedido } = lector({ machine_catalog: [] }, { machine_catalog: 500 });
+    const leido = await reader.readCatalogs({ tables: ["machine_catalog"] });
+    assert.equal(pedido.filter((t) => t === "machine_catalog").length, 3, "un 500 se pide 3 veces");
+    assert.match(leido.errors.machine_catalog, /HTTP 500/, "y el error que se reporta es el del ultimo intento");
+  })();
 });
 
 test("el override NO puede forzar el uso de una maquina que NetSuite da por inactiva", async () => {
