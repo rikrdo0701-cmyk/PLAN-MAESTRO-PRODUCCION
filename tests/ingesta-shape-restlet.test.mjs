@@ -1,0 +1,210 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createContext, runInContext } from "node:vm";
+import { readFile } from "node:fs/promises";
+
+// QUE HACE ESTE ARCHIVO, Y POR QUE HACE FALTA.
+//
+// MEDIDO 2026-10-06 20:59, en produccion: la corrida de la ingesta se murio con
+//   TypeError: Cannot read properties of undefined (reading 'workorders')
+//   (anónimo) @ 19-appscript-ingesta-supabase.gs:575
+//   PP_ingesta_  @ 19-appscript-ingesta-supabase.gs:574
+//   ingesta      @ 19-appscript-ingesta-supabase.gs:477
+// o sea: `acciones[nombre]`, con `acciones` en `undefined`. El `if (!respuesta.ok)` de una
+// linea mas arriba NO habia saltado: el RESTlet contesto HTTP 200 con un cuerpo que no trae
+// la clave `acciones`. `acciones` no se comprobaba nunca antes de indexarse, y su unico filtro
+// era `ok`, que no dice nada de la FORMA que esta corrida necesita.
+//
+// NADA DE LA SUITE LO DETECTABA, y ese es el punto. Los tests de este repo miraban el texto de
+// los archivos o el `post` del RESTlet por separado (tests/restlet-unificado-workorders-cerradas.test.mjs
+// corre el 2246 con un N/query de mentira), pero NINGUNO ejecutaba `PP_ingesta_` de verdad: la
+// parte que recibe la respuesta y decide que escribir no tenia ninguna prueba. Un TypeError en
+// esa linea es invisible para una suite que no corre la funcion.
+//
+// ESTE ARCHIVO CORRE `PP_ingesta_` en un `vm` con el runtime de Apps Script de mentira: solo se
+// falsea lo que NO es el camino (UrlFetchApp, PropertiesService, las constantes de
+// supabase-config.gs). El codigo que se prueba es el del archivo, sin copiar ni reescribir.
+
+const fuente = (await readFile(new URL("../src/server/19-appscript-ingesta-supabase.js", import.meta.url), "utf8"))
+  .replace(/\r\n/g, "\n");
+
+/**
+ * Levanta la ingesta con un RESTlet y un Supabase de mentira.
+ *
+ * @param responder  que cuerpo JSON contesta el RESTlet
+ * @param rpc        que responde el RPC ingesta_mirror (por defecto, todo bien)
+ */
+function ingesta(responder, rpc) {
+  const llamadas = { restlet: [], rpc: [], vaciados: [] };
+  const props = {
+    NS_ACCOUNT_ID: "11103874",
+    NS_CONSUMER_KEY: "ck",
+    NS_CONSUMER_SECRET: "cs",
+    NS_TOKEN: "tk",
+    NS_TOKEN_SECRET: "ts",
+  };
+
+  const respuesta = (cuerpo, code) => ({
+    getResponseCode: () => code,
+    getContentText: () => JSON.stringify(cuerpo),
+  });
+
+  const contexto = {
+    console: { log() {}, warn() {}, error() {} },
+    JSON,
+    Math,
+    String,
+    Number,
+    Boolean,
+    Date,
+    Error,
+    isFinite,
+    parseInt,
+    parseFloat,
+    isNaN,
+    // supabase-config.gs del proyecto: lo falseado, no el camino.
+    SUPABASE_URL: "https://ejemplo.supabase.co",
+    SUPABASE_KEY: "sb_secret_de_pruebas",
+    UBICACION: "1",
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] }) },
+    // Las dos de OAuth viven en 08-netsuite.js, no en este archivo (lo dice su propio header:
+    // "este archivo usa las que ya hay... si alguien copia este archivo a un proyecto que NO
+    // tiene 08-netsuite.js, tiene que copiar tambien esas dos funciones"). No son el camino que
+    // se prueba, asi que se falsean en vez de arrastrar el archivo entero. Si el codigo bajo
+    // prueba empieza a depender de ellas, este stub se ve.
+    PP_oauthEncode_: (v) => encodeURIComponent(String(v)),
+    PP_oauthHeader_: () => "OAuth de pruebas",
+    UrlFetchApp: {
+      fetch(url, opciones) {
+        const cuerpo = opciones && opciones.payload ? JSON.parse(opciones.payload) : {};
+        if (String(url).indexOf("/rest/v1/rpc/ingesta_mirror") !== -1) {
+          const tabla = cuerpo.p_tabla;
+          const filas = cuerpo.p_filas || [];
+          if (!filas.length) llamadas.vaciados.push(tabla);
+          llamadas.rpc.push(tabla);
+          return respuesta(rpc ? rpc(tabla, filas) : { insertadas: filas.length, borradas: 99 }, 200);
+        }
+        llamadas.restlet.push(cuerpo);
+        return respuesta(responder(cuerpo), 200);
+      },
+    },
+  };
+  contexto.globalThis = contexto;
+  createContext(contexto);
+  runInContext(fuente, contexto, { filename: "19-appscript-ingesta-supabase.js" });
+  return { correr: (forzado) => contexto.PP_ingesta_(forzado === true), llamadas, contexto };
+}
+
+/** Una accion util con una fila, que es lo que el 2246 da de una tabla que si tiene datos. */
+function accionBuena(fila) {
+  return { ok: true, headers: ["ot"], rows: [fila || { ot: "1", cantidad: 1 }], totalRows: 1 };
+}
+
+/**
+ * La respuesta que el 2246 da de verdad para `accion: 'todas'`: `{ ok, acciones }` con las
+ * SIETE acciones (netsuite-restlet-unificado-supabase.js:27-33). Los nombres de las acciones
+ * no son los nombres de tabla, por eso van a mano.
+ */
+function respuestaBuena() {
+  return {
+    ok: true,
+    acciones: {
+      workorders: accionBuena({
+        wo_internal_id: "1",
+        ot: "1",
+        articulo: "A",
+        descripcion: "d",
+        cantidad: 1,
+        estatus: "En curso",
+        cliente: "",
+        fecha_vencimiento: "2026-10-01",
+      }),
+      operaciones: accionBuena(),
+      materiales: accionBuena(),
+      items: accionBuena(),
+      centros: accionBuena(),
+      inventario: accionBuena(),
+      ordenes_venta: accionBuena(),
+    },
+  };
+}
+
+/** Las siete tablas que la ingesta escribe, en el orden en que las escribe. */
+const TABLAS = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders"];
+
+test("un 200 SIN `acciones` se dice y NO se toca ninguna tabla", async () => {
+  // El caso medido. Antes esto reventaba con un TypeError que no decia ni el codigo HTTP ni
+  // el cuerpo recibido; ahora devuelve un motivo que si los dice.
+  const { correr, llamadas } = ingesta(() => ({ ok: true }));
+  const r = await correr(true);
+
+  assert.equal(r.ok, false, "una respuesta sin acciones NO es una corrida buena");
+  assert.equal(r.ejecutada, false);
+  assert.equal(r.motivo, "restlet_sin_acciones");
+  assert.match(r.mensaje, /SIN "acciones"/);
+  assert.match(r.mensaje, /claves que si trajo = \[ok\]/, "el mensaje tiene que decir QUE trajo, no solo que faltaba algo");
+  assert.match(r.mensaje, /no es este archivo/, "tiene que senalar que lo desplegado no es este 2246");
+  assert.deepEqual(llamadas.rpc, [], "RULE-SUP-048: sin una sola tabla que reescribir, no se vacia ninguna");
+  assert.deepEqual(llamadas.vaciados, [], "y menos se vacian: vaciar las siete es el incidente del 2026-10-05");
+});
+
+test("la misma guarda cubre `acciones` ausente, no-objeto y array", async () => {
+  // Un array es truthy y tiene indices, asi que `acciones[nombre]` NO reventaria: pasaria de largo
+  // con `undefined` en las siete acciones y caeria en `sin_acciones` por otra ruta. Se comprueba
+  // que las tres formas salgan por la misma puerta y con el mismo motivo.
+  for (const cuerpo of [{ ok: true }, { ok: true, acciones: null }, { ok: true, acciones: [] }, { ok: true, acciones: "todas" }]) {
+    const { correr, llamadas } = ingesta(() => cuerpo);
+    const r = await correr(true);
+    assert.equal(r.motivo, "restlet_sin_acciones", "cuerpo " + JSON.stringify(cuerpo) + " tiene que dar restlet_sin_acciones");
+    assert.deepEqual(llamadas.rpc, [], "cuerpo " + JSON.stringify(cuerpo) + " no puede escribir");
+  }
+});
+
+test("la forma correcta SI pasa la guarda y entra a escribir", async () => {
+  // La otra mitad: la guarda no puede tragarse la respuesta buena. Si `acciones` esta bien, la
+  // corrida sigue y escribe por el RPC las siete tablas, en orden, y NO vacia ninguna.
+  const { correr, llamadas } = ingesta(() => respuestaBuena());
+  const r = await correr(true);
+
+  assert.equal(r.motivo, undefined, "una respuesta con acciones no puede decir restlet_sin_acciones");
+  assert.equal(r.ok, true);
+  assert.deepEqual(llamadas.rpc, TABLAS, "escribe las siete, en el orden del modulo");
+  assert.deepEqual(llamadas.vaciados, [], "y no vacia ninguna: todas traen filas, aunque vacias");
+});
+
+test("un RESTlet con `ok:false` sigue tirandose como error, sin cambiar", async () => {
+  // La guarda nueva NO puede tapar la de `ok`. Este camino ya existia y dice RESTlet + codigo.
+  //
+  // MEDIDO al escribir esta prueba: `PP_ingesta_` NO es `async` (19-appscript:516) y el `throw`
+  // del `ok:false` ocurre en codigo SINCRONO, porque `UrlFetchApp.fetch` en Apps Script es
+  // sincrono. O sea que la excepcion se tira antes de que la funcion devuelva nada: no la
+  // atrapa un `.catch()` puesto a la llamada, hay que usar try/catch. Por eso aqui no se usa
+  // `assert.rejects`, que ademas no reconoce la promesa de otro realm del `vm`.
+  const { correr, llamadas } = ingesta(() => ({ ok: false, error: "accion no soportada: todas" }));
+  let mensaje = null;
+  try {
+    await correr(true);
+  } catch (error) {
+    mensaje = String((error && error.message) || error);
+  }
+  assert.match(mensaje, /RESTlet no ok/, "la respuesta con ok:false sigue siendo un error, no un aviso");
+  assert.deepEqual(llamadas.rpc, [], "y no escribe nada: se tira antes de tocar tablas");
+});
+
+test("un 200 cuyo cuerpo NO es objeto no se cuela por `respuesta.ok`", async () => {
+  // MEDIDO 2026-10-06: `PP_restletUnificado_` devuelve lo que parseo, y un 200 puede traer un
+  // cuerpo que no es objeto (`null` literal, un string, un numero). `null.ok` era un TypeError
+  // sin decir nada; con `!respuesta` primero, todos caen en la puerta de `ok`, que si dice el
+  // cuerpo. Aqui se comprueba que ninguno revienta con el TypeError de la propiedad.
+  for (const cuerpo of ["texto plano", 42, null, true]) {
+    const { correr, llamadas } = ingesta(() => cuerpo);
+    let mensaje = null;
+    try {
+      await correr(true);
+    } catch (error) {
+      mensaje = String((error && error.message) || error);
+    }
+    assert.match(mensaje, /^RESTlet no ok: /, "cuerpo " + JSON.stringify(cuerpo) + ": sale por la puerta de ok, no por un TypeError");
+    assert.deepEqual(llamadas.rpc, [], "cuerpo " + JSON.stringify(cuerpo) + " no puede escribir");
+  }
+});

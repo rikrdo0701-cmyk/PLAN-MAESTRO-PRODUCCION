@@ -153,10 +153,22 @@ function PP_restletUnificado_(accion, config) {
     payload: JSON.stringify({ accion: accion }),
     muteHttpExceptions: true
   });
-  const json = JSON.parse(res.getContentText());
+  const cuerpo = res.getContentText();
+  const json = JSON.parse(cuerpo);
   if (res.getResponseCode() !== 200) {
-    throw new Error('RESTlet ' + res.getResponseCode() + ': ' + JSON.stringify(json).slice(0, 300));
+    // MEDIDO 2026-10-06: el mensaje usa el cuerpo CRUDO, no el parseado, para que lo que NetSuite
+    // contesto se lea tal cual. Antes de agregar `__http` (abajo) era indistinguible; ahora, si se
+    // imprimiera el parseado, el `__http` que se le pega al objeto apareceria dentro del mensaje
+    // de error y taparia parte de lo que la cuenta de verdad dijo.
+    throw new Error('RESTlet ' + res.getResponseCode() + ': ' + cuerpo.slice(0, 300));
   }
+  // MEDIDO 2026-10-06: el codigo HTTP viaja con la respuesta. La corrida del 20:59 recibio un
+  // 200 con un cuerpo que no era `{ ok, acciones }` y el unico sintoma fue un TypeError mas
+  // abajo, que no decia ni el codigo ni el cuerpo. Con `__http` aqui, el aviso que arma
+  // `PP_ingesta_` puede decir los dos. Es una propiedad con prefijo `__` a proposito: no puede
+  // chocar con un campo del RESTlet, y el aviso de "SIN acciones" la saca de la lista de claves
+  // que si trajo, porque ahi solo interesa lo que puso el otro lado.
+  if (json && typeof json === 'object') json.__http = res.getResponseCode();
   return json;
 }
 
@@ -520,7 +532,11 @@ function PP_ingesta_(forzado) {
   // Una sola llamada al RESTlet unificado
   console.log('Llamando al RESTlet unificado (2246)...');
   const respuesta = PP_restletUnificado_('todas', config);
-  if (!respuesta.ok) {
+  // MEDIDO 2026-10-06, escribiendo la prueba que faltaba: `!respuesta` va primero porque
+  // `PP_restletUnificado_` puede devolver `null` si el 200 trae un cuerpo `null` literal, y
+  // `null.ok` es un TypeError que no dice nada del cuerpo. Con `!respuesta` primero, ese caso
+  // cae en el mismo aviso que el resto y sale `RESTlet no ok: null`, que si lo dice.
+  if (!respuesta || !respuesta.ok) {
     throw new Error('RESTlet no ok: ' + JSON.stringify(respuesta).slice(0, 300));
   }
 
@@ -538,6 +554,36 @@ function PP_ingesta_(forzado) {
   // datos VIEJOS, que es lo que hay que avisar.
   const vaciadas = [];
   const noSePudoVaciar = [];
+
+  // MEDIDO 2026-10-06 20:59 (produccion). La corrida se murio con "TypeError: Cannot read
+  // properties of undefined (reading 'workorders')" en la linea donde se indexa
+  // `acciones[nombre]`. El `if (!respuesta.ok)` de mas arriba NO habia saltado, o sea que el
+  // RESTlet contesto 200 con un cuerpo que no trae `acciones`: `acciones` no se comprobaba
+  // nunca antes de indexarlo, y el unico filtro era `respuesta.ok`, que no dice nada de la
+  // forma que esta corrida necesita.
+  //
+  // POR QUE NO SE DELEGA EL TypeError. Su mensaje no dice que se recibio, solo que falta una
+  // clave, y con la traza parece un bug de la ingesta cuando lo mas probable es que lo
+  // desplegado en NetSuite no sea este 2246. Este mensaje dice que se recibio, cuantas claves
+  // trajo y que se esperaba, que es lo que hace falta para seguir sin adivinar.
+  //
+  // QUE SE HACE, Y QUE NO. Se avisa y se devuelve `ok:false` SIN escribir nada, igual que la
+  // rama `sin_acciones` de mas abajo: no hay una sola tabla que reescribir, y vaciar las siete
+  // seria el incidente de RULE-SUP-048. Se exige `{ ok, acciones }` porque eso es lo que
+  // `accion: 'todas'` devuelve (netsuite-restlet-unificado-supabase.js:27-33).
+  if (!acciones || typeof acciones !== 'object' || Array.isArray(acciones)) {
+    const claves = (respuesta && typeof respuesta === 'object' ? Object.keys(respuesta) : [])
+      .filter(function(k) { return k.slice(0, 2) !== '__'; });
+    const msg = 'el RESTlet contesto ' + (respuesta && respuesta.__http ? respuesta.__http : 200) +
+      ' SIN "acciones": claves que si trajo = [' + claves.join(', ') +
+      '], contenido = ' + JSON.stringify(respuesta).slice(0, 300) +
+      '. Se espera { ok, acciones } para accion:"todas" (netsuite-restlet-unificado-supabase.js:27-33): ' +
+      'lo que esta desplegado en NetSuite no es este archivo. No se toco ninguna tabla.';
+    console.log(msg);
+    console.log('=== INGESTA END ===');
+    return { ok: false, ejecutada: false, motivo: 'restlet_sin_acciones', mensaje: msg,
+      filas: {}, errores: [msg], log: [msg], vaciadas: vaciadas, noSePudoVaciar: noSePudoVaciar };
+  }
 
   // Mapeo de accion -> tabla, clave natural, y funcion de transformacion
   const TABLAS = {
