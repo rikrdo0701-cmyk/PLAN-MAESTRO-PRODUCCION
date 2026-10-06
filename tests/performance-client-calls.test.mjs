@@ -2779,7 +2779,11 @@ test("un cambio remoto a estatus no elegible durante la espera impide preparar y
   assert.equal(preparations, 0);
   assert.equal(checkpoints, 0);
   assert.deepEqual(state.selectedOts, []);
-  assert.deepEqual(toasts, ["OT 100 no puede agregarse al plan por estatus Cerrada"]);
+  // El texto sale de `jobNoProgramablePor_` desde el 2026-10-06, asi que el "por estatus" es el
+  // MOTIVO que el helper eligio, no una frase fija. La OT 100 tiene ficha y esta Cerrada: el
+  // motivo es el estatus, y por eso sale asi. Si la OT no tuviera ficha el texto seria otro, y
+  // culpar al estatus seria mentir (tests/ot-sin-ficha.test.mjs lo mide).
+  assert.deepEqual(toasts, ["OT 100 no puede agregarse al plan: por estatus Cerrada"]);
   assert.deepEqual(changes, ["busy", "ready"]);
 });
 

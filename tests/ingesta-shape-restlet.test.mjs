@@ -37,7 +37,7 @@ const fuente = (await readFile(new URL("../src/server/19-appscript-ingesta-supab
  *                   como se reproduce un 4xx de Postgres sin tener que fingir un `ok`.
  */
 function ingesta(responder, rpc) {
-  const llamadas = { restlet: [], rpc: [], vaciados: [] };
+  const llamadas = { restlet: [], rpc: [], vaciados: [], filas: [] };
   const props = {
     NS_ACCOUNT_ID: "11103874",
     NS_CONSUMER_KEY: "ck",
@@ -84,6 +84,10 @@ function ingesta(responder, rpc) {
           const filas = cuerpo.p_filas || [];
           if (!filas.length) llamadas.vaciados.push(tabla);
           llamadas.rpc.push(tabla);
+          // `rpc` guarda solo el NOMBRE (hay pruebas que lo comparan con la lista de las siete),
+          // asi que las filas que salieron por el hilo se guardan aparte, para poder afirmar sobre
+          // lo que llego a Postgres y no solo sobre cuantas llamadas hubo.
+          llamadas.filas.push({ tabla: tabla, filas: filas });
           const r = rpc ? rpc(tabla, filas) : { insertadas: filas.length, borradas: 99 };
           if (r && typeof r === "object" && typeof r.__status === "number") {
             return respuesta(r, r.__status);
@@ -263,10 +267,10 @@ test("un 22P02 llega ENTERO al log: el valor que se quejo Postgres no se puede r
 
 test('el saneo de tipos deja la cantidad en cadena vacia en 0 y la escritura se hace', async () => {
   // El caso medido del 2026-10-05: una fila de 513 con `cantidad` en cadena vacia tumba el
-  // `work_orders` entero (22P02) y RULE-SUP-048 vacia la tabla, dejando a la pagina sin una sola
-  // de las 213 que tenia. `work_orders.cantidad` es `integer not null default 0`
+  // `work_orders` entero (22P02). `work_orders.cantidad` es `integer not null default 0`
   // (docs/schema-supabase.sql), asi que 0 es el valor por omision de la columna, no un dato
-  // inventado: es lo que ya tiene la fila cuando nadie escribe esa columna.
+  // inventado: es lo que ya tiene la fila cuando nadie escribe esa columna. Lo que paso
+  // ademas es que la tabla se vaciaba, y eso se decidio el 2026-10-06 (ya no se vacia).
   const cuerpo = respuestaBuena();
   cuerpo.acciones.workorders.rows = [
     { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: "", estatus: "En curso", cliente: "", fecha_vencimiento: "2026-10-01" },
@@ -284,19 +288,101 @@ test('el saneo de tipos deja la cantidad en cadena vacia en 0 y la escritura se 
   assert.deepEqual(llamadas.vaciados, [], "no se vacia nada");
 });
 
-test("sin el saneo, la MISMA fila tumba work_orders y vacia la tabla (por eso la prueba de al lado importa)", async () => {
+// =============================================================================
+// LA COLUMNA AUSENTE: EL 23502 QUE NO SE HABIA VISTO NUNCA
+// =============================================================================
+
+test('una fila SIN `cantidad` la recibe con el default del DDL y el log lo dice aparte', async () => {
+  // ESTE FALLO NO SE HABIA VISTO, Y ES EL MISMO QUE EL DE `foto_url` DEL 2026-10-02.
+  // El RPC arma el INSERT con la UNION de claves del arreglo (docs/rpc-ingesta-mirror.sql:130,
+  // `jsonb_object_keys(p_filas -> 0)`), y `jsonb_populate_recordset` pone NULL en lo que a una
+  // fila le falte. Un NULL contra `cantidad integer not null` es 23502, no 22P02: otro codigo,
+  // otra causa, y el mismo final.
+  //
+  // Y no lo tapa el saneo de TIPOS, porque ese hace `if (!(col in copia)) continue;`: una columna
+  // que no vino no se inventa, se salta. O sea que `PP_saneaTipos_` cubria el "" y no cubria el
+  // "falta", que son las dos formas del mismo 23502.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: 480, estatus: "En curso", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "2", ot: "2", articulo: "B", descripcion: "e", estatus: "Cerrada", cliente: "", fecha_vencimiento: "2026-08-14" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  assert.equal(r.ok, true, "la escritura va: la segunda fila ya no llega con cantidad en NULL");
+  assert.equal(r.filas.work_orders, 2, "las dos filas se escriben");
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  const segunda = enviada.filas[1];
+  assert.equal(segunda.cantidad, 0, 'la fila que no traia `cantidad` sale con 0, el default de la columna');
+  assert.ok("cantidad" in segunda, "y la clave EXISTE en el JSON: es lo que evita el NULL del RPC");
+
+  // El aviso va SEPARADO del de los tipos, porque es otro hecho: aqui la fila no traia el campo.
+  const aviso = r.log.filter((l) => l.indexOf("no venian en su fila") !== -1)[0] || "";
+  assert.ok(aviso, "el log dice que hubo celdas rellenadas por ausencia: " + JSON.stringify(r.log));
+  assert.match(aviso, /work_orders: 1 celdas? de columnas not null/, "con el conteo exacto");
+  assert.match(aviso, /cantidad 1/, "y el detalle por columna");
+  assert.equal(r.log.filter((l) => l.indexOf("valores que no eran del tipo") !== -1).length, 0,
+    "y NO se cuenta como correccion de tipo: 0 por ausencia no es lo mismo que un 480 mal escrito");
+});
+
+test('cuando NINGUNA fila trae la columna, NO se rellena nada (ahi el DEFAULT lo pone Postgres)', async () => {
+  // La distincion que hace que el relleno no sea ruido. Si las 513 filas vienen sin
+  // `cant_ensamblada`, el RPC no la nombra en el INSERT y Postgres aplica el DEFAULT solo: no hay
+  // nada que arreglar. Rellenar tambien ahi solo sumaria una columna al INSERT sin cambiar el
+  // resultado, y haria que CADA corrida gritara "rellene 513 celdas" de algo que no es un fallo.
+  const cuerpo = respuestaBuena();
+  const base = cuerpo.acciones.workorders.rows[0];
+  cuerpo.acciones.workorders.rows = [
+    Object.assign({}, base, { ot: "1" }),
+    Object.assign({}, base, { ot: "2" }),
+  ];
+  delete cuerpo.acciones.workorders.rows[0].cant_ensamblada;   // no venia, y se asegura
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  assert.equal(r.ok, true);
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  assert.ok(!("cant_ensamblada" in enviada.filas[0]),
+    'la columna que nadie trae no se agrega al JSON: la deja el DEFAULT de Postgres');
+  assert.equal(r.log.filter((l) => l.indexOf("no venian en su fila") !== -1).length, 0,
+    "y el log no reporta un relleno que no es un fallo");
+});
+
+test('una clave natural que falta NO se rellena: ahi el espeje tiene que fallar y decir cual', async () => {
+  // `work_orders.ot` es `not null` SIN default, y es la clave natural (UNIQUE). Si una fila llega
+  // sin `ot`, completarla con "" haria que dos filas sin folio colisionaran en el UNIQUE, o peor,
+  // que una OT se escribiera con el folio de otra. A una clave natural no se le inventa valor:
+  // el espejo tiene que rechazarla y el aviso tiene que nombrar la columna.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1905", articulo: "A", descripcion: "d", cantidad: 1, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "2", articulo: "B", descripcion: "e", cantidad: 1, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  assert.equal(enviada.filas[1].ot, undefined,
+    "la fila sin folio sigue sin folio: no se le inventa un valor para una clave natural");
+});
+
+test("si el RPC rechaza una fila, work_orders conserva lo anterior y el motivo viaja entero", async () => {
   // La contraprueba: este caso es el que se midio en produccion. No se puede ejecutar contra el
   // archivo del repo porque el arreglo esta ahi, asi que se comprueba la FORMA del fallo: el RPC
-  // rechaza, el log lo dice entero, y la tabla se vacia igual (RULE-SUP-048). Si alguien decide
-  // que el RPC ya no se traga una fila mala, esta prueba se pone en rojo y le avisa de que
-  // cambio la regla de la que depende el vaciado.
+  // rechaza, el log lo dice entero, y la tabla NO se toca. Antes de la decision del usuario del
+  // 2026-10-06 esto terminaba en `se VACIO igual`, que fue lo que borro las 213 OTs del 05-10.
+  // Si alguien vuelve a vaciar en este camino, esta prueba se pone en rojo.
   const { correr, llamadas } = ingesta(() => respuestaBuena(), rpcCon22P02En("work_orders"));
   const r = await correr(true);
 
-  assert.equal(r.ok, false, "la corrida se declara NO buena: una tabla no se escribio y quedo vacia");
+  assert.equal(r.ok, false, "la corrida se declara NO buena: una tabla no se escribio");
   assert.ok(!r.filas.work_orders, 'work_orders no tiene conteo de escritura: el throw ocurre antes de que se cuente');
   assert.equal(r.filas.operations, 1, "las otras seis si se escribieron, como el 2026-10-06 a las 21:16");
-  assert.ok(llamadas.vaciados.includes("work_orders"), "y se VACIO, que es la mitad de RULE-SUP-048 que costo 213 OTs");
+  assert.ok(!llamadas.vaciados.includes("work_orders"),
+    "y NO se vacia: una escritura que falla no borra lo que ya estaba (decision del usuario 2026-10-06)");
+  assert.ok(r.noSePudoVaciar.some((t) => t.tabla === "work_orders"),
+    "va en la lista de 'conserva lo anterior', que es la que la pagina nombra");
   assert.match(
     r.log.join(" | "),
     /integer: ""/,

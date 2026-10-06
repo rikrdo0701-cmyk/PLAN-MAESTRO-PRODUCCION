@@ -103,16 +103,68 @@ const ddlPorArchivo = {
  */
 function listasDeLaIngesta() {
   const desde = ingesta.indexOf("const COLUMNAS_NUMERICAS_ =");
-  const hasta = ingesta.indexOf("};", ingesta.indexOf("const COLUMNAS_BOOL_ =")) + 2;
-  assert.ok(desde > 0 && hasta > desde, "la ingesta tiene que seguir declarando las tres listas");
+  // El bloque va hasta el FIN de `COLUMNAS_POR_OMISION_`, que es la ultima de las cuatro tablas
+  // de columnas. Terminar en `COLUMNAS_BOOL_` la dejaba fuera y esta prueba compararia una lista
+  // que el archivo ya no tiene: un vacio que no falla, que es la peor forma de fallar.
+  const hasta = ingesta.indexOf("\n};", ingesta.indexOf("const COLUMNAS_POR_OMISION_ =")) + 3;
+  assert.ok(desde > 0 && hasta > desde, "la ingesta tiene que seguir declarando las cuatro listas");
   const ctx = {};
   createContext(ctx);
   runInContext(ingesta.slice(desde, hasta) +
-    "\nglobalThis.__salida = { COLUMNAS_NUMERICAS_, COLUMNAS_FECHA_, COLUMNAS_BOOL_ };", ctx);
+    "\nglobalThis.__salida = { COLUMNAS_NUMERICAS_, COLUMNAS_FECHA_, COLUMNAS_BOOL_, COLUMNAS_POR_OMISION_ };", ctx);
   // Se vuelve a pasar por JSON por una razon tonta pero real: los arreglos que salen de un `vm`
   // tienen otro `Array.prototype`, y `deepEqual` en modo estricto compara el prototipo tambien.
   // Sin esto, dos listas identicas se declaran distintas.
   return JSON.parse(JSON.stringify(ctx.__salida));
+}
+
+/**
+ * Las columnas `not null` QUE TIENEN UN DEFAULT LITERAL en el DDL, con el valor del default.
+ *
+ * "LITERAL" es la palabra que importa, y por que: `now()` y `gen_random_uuid()` son valores que
+ * la BASE pone cada vez, y meterlos en una tabla de omisiones seria congelarlos en el instante del
+ * INSERT (y `id` ni siquiera es una columna que se pueda escribir). Un default que sale de una
+ * funcion no se puede copiar al JSON: se excluye. Y eso solo son `id`, `created_at` y
+ * `updated_at`, los tres que la base es duena.
+ *
+ * Se leer en los DOS archivos de DDL porque las siete tablas no estan todas en el primero.
+ */
+function columnasConDefaultLiteral(tabla) {
+  const salida = {};
+  for (const texto of Object.values(ddlPorArchivo)) {
+    const re = new RegExp("create table (?:if not exists )?public\\." + tabla + " \\(([\\s\\S]*?)\\n\\);", "g");
+    let m;
+    while ((m = re.exec(texto)) !== null) {
+      for (const linea of m[1].split("\n")) {
+        const limpio = linea.replace(/--.*$/, "").trim().replace(/,$/, "");
+        const c = /^([a-z_][a-z0-9_]*)\s+([a-z0-9_]+(?:\([^)]*\))?)\s+(.*)$/i.exec(limpio);
+        if (!c) continue;
+        const resto = c[3].toLowerCase();
+        if (resto.indexOf("not null") === -1 || resto.indexOf("default") === -1) continue;
+        const d = /default\s+(.+)$/i.exec(c[3].trim());
+        if (!d) continue;
+        const crudo = d[1].trim();
+        if (/\(\s*\)$/.test(crudo)) continue;              // now() / gen_random_uuid(): valor de la base
+        // `'[]'::jsonb` y `'PLAN'` y `0` y `true`: se quita el cast y se lee el literal de verdad.
+        const sinCast = crudo.replace(/::[a-z0-9_ ]+$/i, "").trim();
+        let valor;
+        if (/^'.*'$/s.test(sinCast)) {
+          const texto = sinCast.slice(1, -1).replace(/''/g, "'");
+          // En una columna `jsonb` el default es TEXTO que Postgres va a interpretar como JSON:
+          // `'[]'` quiere decir "el array vacio", no "la cadena con dos corchetes". Mandarle la
+          // cadena escribiria un jsonb que es el texto `[]`, que no es lo mismo y no se lee igual.
+          if (/^(jsonb|json)$/i.test(c[2])) valor = JSON.parse(texto);
+          else valor = texto;
+        }
+        else if (sinCast === "true") valor = true;
+        else if (sinCast === "false") valor = false;
+        else if (/^-?[0-9]+(\.[0-9]+)?$/.test(sinCast)) valor = Number(sinCast);
+        else continue;                                      // otro default: ni es literal ni es mio
+        salida[c[1]] = valor;
+      }
+    }
+  }
+  return salida;
 }
 
 function restlet(alResponder) {
@@ -285,6 +337,71 @@ test("las fechas y los booleanos que la ingesta sanea existen en el DDL de su ta
     }
     for (const col of COLUMNAS_BOOL_[tabla]) {
       assert.ok(columnas.has(col), "la ingesta sanea el booleano " + tabla + "." + col + " y el DDL no la tiene");
+    }
+  }
+});
+
+// =============================================================================
+// LA COLUMNA AUSENTE: EL 23502 QUE EL SANEO DE TIPOS NO CUBRIA
+// =============================================================================
+
+test("las columnas que la ingesta RELLENA son exactamente las `not null` con default del DDL", () => {
+  // `COLUMNAS_POR_OMISION_` se escribe a mano y su valor es lo que se manda a Postgres cuando una
+  // fila no trae la clave. Si la lista se desincroniza del DDL pasa una de dos cosas, y las dos
+  // son malas: o se rellena una columna que ya no existe (el RPC la levanta con su `raise` y tumba
+  // la corrida entera), o se deja sin rellenar una que si existe (23502, y desde el 2026-10-06 la
+  // tabla ya no se vacia pero la corrida tampoco sale buena).
+  const { COLUMNAS_POR_OMISION_ } = listasDeLaIngesta();
+  assert.deepEqual(Object.keys(COLUMNAS_POR_OMISION_).sort(), TABLAS_DEL_ESPEJO.slice().sort(),
+    "la tabla de omisiones tiene que traer las siete tablas del espejo, ni una mas ni una menos");
+  for (const tabla of TABLAS_DEL_ESPEJO) {
+    assert.deepEqual(COLUMNAS_POR_OMISION_[tabla], columnasConDefaultLiteral(tabla),
+      "las columnas que la ingesta rellena de " + tabla + " no son las `not null` con default del DDL");
+  }
+});
+
+test("una CLAVE NATURAL `not null` sin default NO se rellena en ninguna de las siete", () => {
+  // La parte de la tabla de omisiones que NO se deduce del DDL, y por eso necesita su propia prueba.
+  //
+  // Una clave natural es `not null` SIN default: `work_orders.ot`, `operations.operation_id`,
+  // `operations.ot`, `materials.ot`, `items.codigo`, `machines.nombre`, `inventory.item`,
+  // `inventory.ubicacion`, `sales_orders.folio`. A esas no se les puede inventar un valor, porque
+  // el valor inventado no es "un dato que falta": es OTRA fila. Rellenar `ot` con `""` haria que
+  // dos OTs sin folio colisionaran en el UNIQUE, o peor, que una OT se escribiera con el folio de
+  // otra y el plan programara el material equivocado sin que nada lo diga.
+  const { COLUMNAS_POR_OMISION_ } = listasDeLaIngesta();
+  const naturales = {
+    work_orders: ["ot"],
+    operations: ["operation_id", "ot"],
+    materials: ["ot"],
+    items: ["codigo"],
+    machines: ["nombre"],
+    inventory: ["item", "ubicacion"],
+    sales_orders: ["folio"],
+  };
+  for (const tabla of TABLAS_DEL_ESPEJO) {
+    for (const col of naturales[tabla]) {
+      assert.ok(!(col in COLUMNAS_POR_OMISION_[tabla]),
+        tabla + "." + col + " es clave natural y el DDL no le da default: si la ingesta la rellena, " +
+        "una fila sin folio se escribe con el folio de otra");
+      // Y la prueba se apoya en que la ausencia es real, no en que la lista este vieja.
+      assert.ok(!(col in columnasConDefaultLiteral(tabla)),
+        "si el DDL le pondria un default a " + tabla + "." + col + ", hay que quitarlo de naturales " +
+        "y ponerlo en la tabla de omisiones: la primera prueba lo diria con menos palabras");
+    }
+  }
+});
+
+test("las tres columnas que la BASE pone (id, created_at, updated_at) no estan en la de omisiones", () => {
+  // `now()` y `gen_random_uuid()` no son valores que se puedan mandar en un INSERT: el instante
+  // tiene que ser el de la escritura y el id tiene que ser el de la fila. Si aparecieran en la
+  // tabla, el relleno congelaria el `created_at` de cada fila en el momento en que se escribio por
+  // ultima vez, que es exactamente el campo que sirve para saber cuando se escribio.
+  const { COLUMNAS_POR_OMISION_ } = listasDeLaIngesta();
+  for (const tabla of TABLAS_DEL_ESPEJO) {
+    for (const col of ["id", "created_at", "updated_at"]) {
+      assert.ok(!(col in COLUMNAS_POR_OMISION_[tabla]),
+        tabla + "." + col + " la pone la base en cada escritura; rellenarla la congelaria");
     }
   }
 });

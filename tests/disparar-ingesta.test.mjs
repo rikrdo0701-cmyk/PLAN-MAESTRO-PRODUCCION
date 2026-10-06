@@ -671,24 +671,42 @@ test("una tabla que NetSuite NO devuelve se VACIA: no conserva lo anterior", () 
     "y la ingesta no tiene un DELETE propio: el unico que borra es el RPC (si lo tuviera, seria otra regla)");
 });
 
-test("una escritura que se cae tambien vacia la tabla, y lo dice de otra manera", () => {
+test("una escritura que se cae NO vacia la tabla: conserva lo anterior y lo nombra (decision del usuario 2026-10-06)", () => {
+  // MEDIDO lo que costaba lo contrario: el 2026-10-05 una sola fila de 513 con `cantidad` en ""
+  // dio 22P02, y el vaciado borro las 213 OTs que estaban bien. El dato viejo que la regla
+  // queria evitar era la foto de las OTs que la persona estaba trabajando. Volvio a pasar el
+  // 2026-10-06 a las 21:16. CORTA LA SEGUNDA MITAD DE RULE-SUP-048: una escritura que falla no
+  // toca la tabla. La PRIMERA mitad se queda: si NetSuite no trae la tabla, se vacia (test de
+  // arriba), porque ahi vacio es la verdad.
   const { r, base } = correrIngesta({
     acciones: accionesCompletas(), previas: { operations: 2232 }, escribirFalla: ["operations"],
   });
-  assert.equal(base.operations, 0,
-    "el espejo de operations se cayo y la tabla quedo vacia, no con las 2232 filas viejas");
-  assert.ok(r.vaciadas.includes("operations"));
-  assert.equal(r.ok, false);
+  assert.equal(base.operations, 2232,
+    "el espejo de operations se cayo y la tabla CONSERVA las 2232 filas que tenia");
+  assert.ok(!r.vaciadas.includes("operations"),
+    "y no se reporta como vaciada: no se vacio, seria mentira");
+  assert.equal(r.noSePudoVaciar.length, 1, "va en la lista de 'conserva lo anterior'");
+  assert.equal(r.noSePudoVaciar[0].tabla, "operations");
+  assert.equal(r.ok, false, "y la corrida se declara NO buena");
   assert.ok(r.errores.some((e) => /operations/.test(e) && /ERROR al escribir/.test(e)),
-    "y el aviso distingue 'no se pudo escribir' de 'NetSuite no la devolvio': " + JSON.stringify(r.errores));
+    "el aviso distingue 'no se pudo escribir' de 'NetSuite no la devolvio': " + JSON.stringify(r.errores));
+  assert.ok(r.log.some((e) => /operations/.test(e) && /NO se toco la tabla/.test(e)),
+    "y el aviso DICE que la tabla no se toco: " + JSON.stringify(r.log));
+  assert.ok(r.log.some((l) => /operations/.test(l) && /\(2 filas de esta corrida quedaron sin escribir\)/.test(l)),
+    "el aviso dice cuantas filas TRAJO la corrida y no se pudieron escribir (2), no cuantas "
+    + "quedaron en la tabla (2232): son dos numeros distintos y confundirlos seria el diagnostico "
+    + "equivocado: " + JSON.stringify(r.log.filter((l) => /operations/.test(l))));
 });
 
 test("si NI el vaciado se puede hacer, la tabla conserva lo anterior y APARECE CON SU NOMBRE", () => {
   // Este es el unico estado peligroso: en pantalla hay datos y parecen frescos. Por eso la
-  // corrida lo lleva en una lista propia y la pagina lo nombra (RULE-SUP-048).
+  // corrida lo lleva en una lista propia y la pagina lo nombra (RULE-SUP-048). Sigue siendo
+  // alcanzable, pero ya NO por una escritura que se cae (esa no vacia nada desde el
+  // 2026-10-06): llega cuando NetSuite no devuelve la tabla y el vaciado a proposito falla.
+  const acciones = accionesCompletas();
+  delete acciones.operaciones;                                     // NetSuite no la devolvio
   const { r, base } = correrIngesta({
-    acciones: accionesCompletas(), previas: { operations: 2232 },
-    escribirFalla: ["operations"], vaciarFalla: ["operations"],
+    acciones, previas: { operations: 2232 }, vaciarFalla: ["operations"],
   });
   assert.equal(base.operations, 2232, "no se pudo borrar nada: la tabla sigue con lo que tenia");
   assert.ok(!r.vaciadas.includes("operations"), "y NO se reporta como vaciada: seria mentira");
@@ -697,6 +715,22 @@ test("si NI el vaciado se puede hacer, la tabla conserva lo anterior y APARECE C
   assert.match(r.noSePudoVaciar[0].motivo, /Supabase no responde/,
     "el motivo viaja con la tabla: 'conserva lo anterior' sin motivo no se puede corregir");
   assert.equal(r.ok, false);
+});
+
+test("una escritura que se cae NO intenta vaciar: vaciarFalla no puede tocar esa tabla", () => {
+  // Antes de la decision del 2026-10-06 este camino vaciaba, asi que `vaciarFalla` alcanzaba a
+  // dispararse. Ahora no: si la escritura se cae, no hay ni un segundo intento de borrar. Esta
+  // prueba es la que vigila que `PP_vaciaTabla_` no vuelva a aparecer en el `catch`.
+  const { r, base, escrituras } = correrIngesta({
+    acciones: accionesCompletas(), previas: { operations: 2232 },
+    escribirFalla: ["operations"], vaciarFalla: ["operations"],
+  });
+  assert.equal(base.operations, 2232, "la tabla conserva sus 2232 filas");
+  assert.equal(r.noSePudoVaciar[0].motivo, "columna no existe en materials",
+    "y el motivo es el de la ESCRITURA, no el del vaciado: el vaciado no se intento");
+  const deOperations = escrituras.filter((e) => e.tabla === "operations");
+  assert.equal(deOperations.length, 0,
+    "no hubo ni una llamada al RPC para operations: ni escritura ni vaciado, porque la escritura revento");
 });
 
 test("si NINGUNA accion vino bien, no se toca ninguna tabla y se dice por que", () => {

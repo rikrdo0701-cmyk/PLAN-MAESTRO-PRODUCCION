@@ -2630,7 +2630,8 @@ function renderPriorityList() {
   for (const job of visibleJobs) {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
-    const article = job.parte || "SIN ARTICULO";
+    const article = job.sinFicha ? "SIN FICHA" : job.parte || "SIN ARTICULO";
+    const noProgramablePor = jobNoProgramablePor_(job);
     const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
     const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
     const toolMini = jobToolMiniHtml(job);
@@ -2650,7 +2651,7 @@ function renderPriorityList() {
     card.title = `${job.ot} - ${job.ops.length} operaciones - ${formatMinutes(job.minutes)}`;
     card.innerHTML = `
       <div class="priority-card-main">
-        <button class="job-add" type="button"${job.movable ? "" : " disabled"} aria-label="Agregar OT ${escapeHtml(job.ot)} al plan" title="${job.movable ? "Agregar al plan" : `No disponible por estatus ${escapeHtml(job.status)}`}">+</button>
+        <button class="job-add" type="button"${job.movable ? "" : " disabled"} aria-label="Agregar OT ${escapeHtml(job.ot)} al plan" title="${job.movable ? "Agregar al plan" : `No se puede agregar: ${escapeHtml(noProgramablePor)}`}">+</button>
         <span class="drag-handle" aria-hidden="true">&#8942;&#8942;</span>
         <div class="priority-photo${fotoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
@@ -2826,7 +2827,7 @@ if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt 
     const cannotMove = job.programmed || job.locked;
     const isMoveSource = activeMoveOt === job.ot;
     const canPlaceHere = activeMoveOt && activeMoveOt !== job.ot && canReorderSelectedJobs(activeMoveOt, job.ot, { silent: true });
-    const article = job.parte || "SIN ARTICULO";
+    const article = job.sinFicha ? "SIN FICHA" : job.parte || "SIN ARTICULO";
     const workOrder = workOrderForOt(job.ot);
     const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
     const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
@@ -3114,6 +3115,30 @@ function individualPlanningUnavailableReason(ot) {
   return /completada|no apta para programarse/i.test(message) ? message : "";
 }
 
+/**
+ * POR QUE UNA TARJETA DEL BACKLOG NO SE PUEDE AGREGAR AL PLAN, EN SU PALABRAS.
+ *
+ * MEDIDO 2026-10-05: el `title` del boton `+` de una OT sin ficha decia "No disponible por
+ * estatus En curso". El estatus era CORRECTO y la razon estaba COMPLETAMENTE FUERA: la OT no
+ * estaba bloqueada por su estatus, estaba porque no tiene fila en `work_orders`, o sea que no
+ * tiene articulo, ni descripcion, ni fecha, ni cantidad. Un aviso que nombra una causa que no
+ * es la manda a buscar un problema de estatus que no existe.
+ *
+ * Y no es solo el `title`: el camino que ejecuta la accion (performSelectJob) decia
+ * "no puede agregarse al plan por estatus En curso" y despues la sacaba del plan. Tres textos
+ * para un hecho, y ninguno era el hecho.
+ *
+ * Por eso la razon vive en UNA funcion. Los tres lugares la llaman y no pueden divergir.
+ */
+function jobNoProgramablePor_(job) {
+  if (!job || job.movable) return "";
+  if (job.sinFicha) {
+    return "no tiene ficha de la OT en NetSuite (esta en el plan por sus operaciones, pero no "
+      + "llego en `work_orders`), asi que no hay articulo, fecha ni cantidad con que programarla";
+  }
+  return "por estatus " + (job.status || "desconocido");
+}
+
 function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
   const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
     .find((item) => item.dataset.ot === ot);
@@ -3172,7 +3197,7 @@ async function performSelectJob(ot, selected, outcome = {}) {
   const otKey = materialOtKey(ot);
   let job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
   if (selected && job && !job.movable && !job.programmed) {
-    showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
+    showToast(`OT ${ot} no puede agregarse al plan: ${jobNoProgramablePor_(job)}`);
     return false;
   }
   if (!selected && job?.programmed) {
@@ -3208,7 +3233,7 @@ async function performSelectJob(ot, selected, outcome = {}) {
       if (job && !job.movable && !job.programmed) {
         outcome.errorMessage = "";
         if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
-        showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
+        showToast(`OT ${ot} no puede agregarse al plan: ${jobNoProgramablePor_(job)}`);
         return false;
       }
       if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
@@ -12911,7 +12936,28 @@ function getPriorityJobs() {
         materials,
         materialBase: materials[0]?.component || "",
         status: jobStatusForOt(job.ot),
-        movable: isMovablePlanningStatus(jobStatusForOt(job.ot)),
+        // DECISION DEL USUARIO 2026-10-06: una OT SIN FICHA en `work_orders` no se programa, y
+        // la tarjeta lo dice. No es una preferencia de estilo, son tres hechos medidos.
+        //
+        // MEDIDO 2026-10-05 (sonda): la OT 3092 tiene operaciones en `operations` y NO tiene fila
+        // en `work_orders`, y salia en el backlog como "PLAN SIN ARTICULO" con el boton `+` ACTIVO.
+        // Al pulsarlo, el camino de "Generar plan" (app.js:6057-6077) la saca del plan y avisa
+        // "ya no esta en NetSuite": o sea que el boton ofrecia una accion que su propio resultado
+        // revoca. El boton.enabled era un dato falso.
+        //
+        // Y la ausencia de fila NO significa "cerrada". Significa una de dos cosas: cerrada, o el
+        // espejo la perdio. MEDIDO las dos: el 2026-10-05 con las 513 filas de RULE-SUP-051, y el
+        // vaciado de RULE-SUP-048, `work_orders` quedo en 0 y desaparecieron TODAS. Tratar la
+        // ausencia como cierre es la opcion (a) de la nota de RULES.md:257 y es la que borra el
+        // taller entero, asi que no se puede automatizar. Marcar y excluir es la unica salida que
+        // no inventa un dato.
+        //
+        // `sinFicha` sale de `workOrder`, que viene del MISMO `state.workOrders` que la pagina
+        // lee; no hay una segunda consulta ni un segundo predicado. Y NO se confunde con
+        // "cerrada": una OT cerrada con su fila (`cerrada: true`) sigue teniendo ficha, asi que
+        // su causa sale por `status`, que es lo que ya decia el boton.
+        sinFicha: !workOrder,
+        movable: Boolean(workOrder) && isMovablePlanningStatus(jobStatusForOt(job.ot)),
         programmed: isProgrammedJobStatus(jobStatusForOt(job.ot)),
         closed: isClosedJobStatus(jobStatusForOt(job.ot)),
         locked: isJobLocked(job.ot),

@@ -365,6 +365,65 @@ const COLUMNAS_BOOL_ = {
 };
 
 /**
+ * COLUMNAS `not null` QUE TIENEN UN DEFAULT LITERAL EN EL DDL, con ese default.
+ *
+ * ESTA TABLA ES UNA COPIA DEL DDL, NO UN ANCHO DE CONSENTIMIENTO. Cada valor de aqui es el que
+ * `create table` declara, leido de docs/schema-supabase.sql (work_orders, operations, materials,
+ * machines) y docs/schema-supabase-sync-netsuite.sql (items, inventory, sales_orders). Si el DDL
+ * cambia, esta tabla cambia con el: tests/espejo-tipos-ddl.test.mjs la compara contra el archivo.
+ *
+ * QUE COLUMNAS NO ESTAN Y POR QUE. Las que la base pone (id, created_at, updated_at): el RPC las
+ * saca del INSERT a proposito. Y las que son `not null` SIN default, que son las CLAVES NATURALES
+ * (`work_orders.ot`, `operations.operation_id`, `operations.ot`, `materials.ot`, `items.codigo`,
+ * `machines.nombre`, `inventory.item`, `inventory.ubicacion`, `sales_orders.folio`): a esas no se
+ * les puede inventar un valor, porque el valor inventado seria OTRA fila. Si una de esas falta, el
+ * espejo tiene que fallar y decir cual es.
+ *
+ * MEDIDO 2026-10-06, Y POR QUE ESTA TABLA EXISTE. El RPC arma el INSERT con la UNION de claves
+ * que aparece en el arreglo y las filas que no traen una clave caen en NULL, no en el default
+ * (docs/rpc-ingesta-mirror.sql:130, `jsonb_object_keys(p_filas -> 0)`), y un NULL contra una
+ * columna `not null` es 23502. Ya se habia medido y arreglado una vez con `foto_url` el
+ * 2026-10-02, donde el fallo fue EXACTAMENTE este: la funcion que pegaba las fotos puso la clave
+ * en 64 filas y las otras 149 llegaron como NULL. La leccion de ahi esta escrita en
+ * PP_enrichPhotoRows_ (09-photos.js:157).
+ *
+ * OJO CON LO QUE ESTO NO DICE: si NINGUNA fila trae la columna, no se rellena nada. En ese caso
+ * el RPC no la nombra en el INSERT y el DEFAULT de Postgres la pone solo, que es lo correcto.
+ * Rellenar tambien ahi solo anadiria una columna al INSERT sin cambiar el resultado, y haria que
+ * CADA corrida dijera "rellene 513 filas" de algo que no es un fallo. Solo se rellena cuando las
+ * filas NO COINCIDEN entre si, que es el unico caso que rompe.
+ */
+const COLUMNAS_POR_OMISION_ = {
+  work_orders: {
+    wo_internal_id: '', articulo: '', descripcion: '', foto_url: '', cantidad: 0,
+    estatus: '', cliente: '', cant_ensamblada: 0, cant_pendiente: 0,
+    precio_promedio_venta: 0, precio_ultima_venta: 0, revision: 0
+  },
+  operations: {
+    secuencia: 0, ct: '', descripcion: '', operador: '', maquina: '', herramental: '', kit: '',
+    cant_total: 0, cant_pendiente: 0, tiempo_ciclo: 0, tiempo_setup: 0, tiempo_prod: 0,
+    tipo_insercion: 'OPERACION', estatus: 'PLAN', locked: false, auto_frozen: false,
+    subcontract_type: '', subcontract_days: 0, revision: 0
+  },
+  materials: {
+    wo_internal_id: '', ensamble: '', componente_id: '', componente: '', descripcion: '',
+    unidad: '', requerido: 0, emitido: 0, pendiente: 0, revision: 0
+  },
+  items: {
+    descripcion: '', descripcion_compra: '', nombre_mostrado: '', tipo: '', clase: 0,
+    es_ensamblaje: false, inactivo: false, revision: 0
+  },
+  machines: { activa: true },
+  inventory: {
+    disponible: 0, fisico: 0, comprometido: 0, pickeado: 0, en_transito: 0, revision: 0
+  },
+  sales_orders: {
+    sales_order_id: '', cliente: '', cliente_id: 0, estatus: '', aprobacion: '', total: 0,
+    moneda: 0, memo: '', lineas: [], revision: 0
+  }
+};
+
+/**
  * Una fecha solo pasa si es ISO. Un "01/10/2026" SI se parsea en un motor de JS (como octubre) y
  * se escribiria la FECHA EQUIVOCADA, que es peor que no tenerla: null es lo que ya hay en la
  * columna cuando no se sabe.
@@ -384,19 +443,48 @@ function PP_fechaISO_(valor) {
 // como valor cuando no se sabe: en el espejo, un booleano ilegible no se inventa.
 
 /**
- * Deja las filas con el tipo que el DDL declara. Devuelve las filas nuevas (las de entrada NO se
- * tocan) y el conteo de lo que se corrigio, con el detalle por columna para el log.
+ * Deja las filas con el tipo que el DDL declara, y completa con el default del DDL las columnas
+ * `not null` que OTRAS FILAS DEL LOTE SI trae y esta no.
+ *
+ * Devuelve las filas nuevas (las de entrada NO se tocan), el conteo de lo que se corrigio de
+ * TIPO, el conteo de lo que se RELLENO por ausencia, y el detalle por columna de ambos, para el
+ * log. Son dos numeros y no uno porque son dos cosas distintas: "esta fila traia '480'" y "esta
+ * fila no traia el campo" piden arreglos distintos y un 0 puesto por el segundo no explica nada
+ * del primero.
  */
 function PP_saneaTipos_(tabla, filas) {
   const numeros = COLUMNAS_NUMERICAS_[tabla] || [];
   const fechas = COLUMNAS_FECHA_[tabla] || [];
   const bools = COLUMNAS_BOOL_[tabla] || [];
+  const omision = COLUMNAS_POR_OMISION_[tabla] || {};
   const tocadas = {};
+  const rellenadas = {};
   let corregidas = 0;
+  let rellenadasTotal = 0;
   const marcar = function (col) { tocadas[col] = (tocadas[col] || 0) + 1; corregidas++; };
+  const marcarRelleno = function (col) {
+    rellenadas[col] = (rellenadas[col] || 0) + 1; rellenadasTotal++;
+  };
+
+  // LA UNION DE CLAVES DEL LOTE, medida sobre las filas DE ENTRADA y no sobre las de salida: si se
+  // midiera sobre las de salida, la primera fila que se rellena agregaria su clave al conjunto y
+  // las demas se rellenarian aunque todas trajeran sus claves por su cuenta. Esta es la unica
+  // parte del paso que depende del orden, y por eso esta antes del `map`.
+  const enElLote = {};
+  for (const fila of (filas || [])) {
+    if (!fila || typeof fila !== 'object') continue;
+    for (const col in omision) if (col in fila) enElLote[col] = true;
+  }
 
   const salida = (filas || []).map(function (fila) {
     const copia = Object.assign({}, fila);
+    // Primero lo que FALTA, para que el saneo de tipos de abajo vea un valor ya del tipo bueno y
+    // no cuente como correccion un default que acaba de poner este mismo paso.
+    for (const col in enElLote) {
+      if (col in copia) continue;
+      copia[col] = omision[col];
+      marcarRelleno(col);
+    }
     for (const col of numeros) {
       if (!(col in copia)) continue;
       const v = copia[col];
@@ -423,7 +511,11 @@ function PP_saneaTipos_(tabla, filas) {
   });
 
   const detalle = Object.keys(tocadas).sort().map(function (c) { return c + ' ' + tocadas[c]; }).join(', ');
-  return { filas: salida, corregidas: corregidas, detalle: detalle };
+  const detalleRelleno = Object.keys(rellenadas).sort().map(function (c) { return c + ' ' + rellenadas[c]; }).join(', ');
+  return {
+    filas: salida, corregidas: corregidas, detalle: detalle,
+    rellenadas: rellenadasTotal, detalleRelleno: detalleRelleno
+  };
 }
 
 // =============================================================================
@@ -669,6 +761,12 @@ function PP_ingesta_(forzado) {
 
   for (const nombre in TABLAS) {
     const def = TABLAS[nombre];
+    // CUANTAS FILAS IBIAN A ESCRIBIRSE DE ESTA TABLA. Vive fuera del `try` porque el `catch` lo
+    // necesita y `filas` NO sirve para eso: en la rama de "NetSuite no la devolvio" (que tambien
+    // cae aqui si el vaciado falla) `filas` todavia es la del renglon ANTERIOR del bucle, o no
+    // existe. Decir "conserva lo anterior (0 filas que trajo la corrida)" cuando la corrida
+    // trajo 513 seria un dato falso en el aviso que reemplaza al que no decia nada.
+    let filasParaEscribir = 0;
     try {
       const accion = acciones[nombre];
       if (!accion || !accion.ok) {
@@ -762,19 +860,31 @@ function PP_ingesta_(forzado) {
       // anteriores ni ventanas con la tabla vacía.
       //
       // ANTES de escribir, y por lo que paso el 2026-10-05: una fila con `cantidad` en "" hizo
-      // que Postgres tirara 22P02 y que la tabla quedara VACIA (arriba, el porque). El saneo no
-      // adivina el dato: le da a Postgres el TIPO que el DDL declara, y avisa cuantos valores toco.
+      // que Postgres tirara 22P02 y que la corrida se declarara NO buena (y, hasta el 2026-10-06,
+      // que la tabla quedara VACIA: mas abajo esta el porque). El saneo no adivina el dato: le da a
+      // Postgres el TIPO que el DDL declara, y avisa cuantos valores toco.
       //
-      // Va en SU PROPIO try/catch, y no es paranoia. Este bloque esta dentro del try cuya falla
-      // VACIA la tabla (RULE-SUP-048, segunda mitad): si el saneo llegara a fallar -un despliegue
-      // a medias donde `PP_bool_` todavia no existe, o una fila que no es un objeto- fallaria por
-      // lo mismo que fallo el 22P02, o sea por su propia cuenta. Un arreglo de la escritura que
-      // puede tumbar la escritura no es un arreglo. Si falla, las filas van COMO VINIERON (que es
-      // como se comportaba antes) y el log lo dice con el motivo: un saneo que no corrio tiene que
-      // ser visible, no un 22P02 a los dos segundos.
+      // Va en SU PROPIO try/catch, y no es paranoia. Este bloque esta dentro del try de la
+      // escritura, asi que un saneo que fallara por su propia cuenta (un despliegue a medias donde
+      // `PP_bool_` todavia no existe, o una fila que no es un objeto) se comeria el arreglo: un
+      // arreglo de la escritura que puede tumbar la escritura no es un arreglo. Si falla, las
+      // filas van COMO VINIERON (que es como se comportaba antes) y el log lo dice con el motivo:
+      // un saneo que no corrio tiene que ser visible, no un 22P02 a los dos segundos.
       try {
         const saneadas = PP_saneaTipos_(def.tabla, filas);
         filas = saneadas.filas;
+        if (saneadas.rellenadas) {
+          // MEDIDO 2026-10-06: una fila sin `cantidad` la mandaba como NULL y Postgres la
+          // rechazaba con 23502, que es el mismo fallo del `foto_url` del 2026-10-02. Se dice
+          // por separado de las correcciones de TIPO porque es otro hecho: aqui la fila NO
+          // traia el campo, y el valor con el que se completo es el DEFAULT del DDL, no un 0
+          // para disimular un dato malo.
+          const avisoRelleno = def.tabla + ': ' + saneadas.rellenadas + ' celdas de columnas not null ' +
+            'que el DDL declara con default (' + saneadas.detalleRelleno + ') no venian en su fila y se ' +
+            'escribieron con ese default; si no vinieron es porque las filas del lote no coinciden entre si';
+          log.push(avisoRelleno);
+          console.log(avisoRelleno);
+        }
         if (saneadas.corregidas) {
           const aviso = def.tabla + ': ' + saneadas.corregidas + ' valores que no eran del tipo que el DDL declara (' +
             saneadas.detalle + ') se escribieron con el valor por omision de la columna; el espejo es exacto y no se corrige a mano';
@@ -788,33 +898,41 @@ function PP_ingesta_(forzado) {
         errores.push(msg);
         console.log(msg);
       }
+      filasParaEscribir = filas.length;
       const r = PP_supabaseMirror_(def.tabla, filas, config);
       conteo[def.tabla] = r.escritas;
       log.push(def.tabla + ': ' + r.escritas + ' filas (mirror, ' + r.borradas + ' borradas)');
       console.log(def.tabla + ': ' + r.escritas + ' escritas / ' + r.borradas + ' borradas (mirror atomico)');
     } catch (e) {
-      // RULE-SUP-048, segunda mitad: la escritura de esta tabla se cayo, y tampoco se conservan
-      // los valores anteriores. Se intenta el vaciado con el mismo RPC. Lo que NO se hace es
-      // tragarselo: si el vaciado tambien falla, la tabla queda en `noSePudoVaciar` con su
-      // motivo, porque "queda lo anterior" es un dato que hay que poder leer.
+      // DECISION DEL USUARIO 2026-10-06, Y CORTA LA SEGUNDA MITAD DE RULE-SUP-048.
+      //
+      // ANTES: si la escritura de esta tabla fallaba, se intentaba VACIARLA igual, "para que no
+      // quedaran datos viejos". MEDIDO lo que costo: el 2026-10-05 una sola fila de 513 con
+      // `cantidad` en cadena vacia dio 22P02, y el vaciado borro las 213 OTs que si estaban
+      // bien. O sea que el dato viejo que se queria evitar ERA la foto de las OTs que la persona
+      // estaba trabajando, y la pagina se quedo sin una sola. Volvio a pasar el 2026-10-06 a las
+      // 21:16 (`work_orders: se intento escribir y no se pudo; se VACIO igual`).
+      //
+      // AHORA: una escritura que falla NO toca la tabla. Se conserva lo anterior y se dice, con
+      // el motivo entero para que se pueda diagnosticar. Un dato viejo con una etiqueta que lo
+      // dice es info; un dato viejo sin etiqueta, para la persona que mira la pagina, es mentira.
+      // Y el espejo EXACTO sigue valiendo para el caso en que si aplica: cuando NetSuite de
+      // verdad no trae la tabla, la tabla se vacia (mas abajo, rama de las 0 filas).
+      //
+      // El aviso va a `noSePudoVaciar` porque es la lista que la pagina ya sabe pintar como
+      // "Estas tablas conservan lo anterior", que es exactamente lo que pasa ahora. El nombre del
+      // campo es el del contrato viejo y se deja: cambiarlo seria tocar la pagina y las pruebas
+      // para renombrar algo que el texto que ve la persona ya dice bien.
       const msg = def.tabla + ': ERROR al escribir: ' + PP_mensajeEntero_(e);
       log.push(msg);
       errores.push(msg);
       console.log(msg);
-      try {
-        const r = PP_vaciaTabla_(def.tabla, config);
-        vaciadas.push(def.tabla);
-        const aviso = def.tabla + ': se intento escribir y no se pudo; se VACIO igual (' + r.borradas + ' filas borradas)';
-        log.push(aviso);
-        console.log(aviso);
-      } catch (e2) {
-        const motivo = PP_mensajeEntero_(e2);
-        const aviso = def.tabla + ': NO SE PUDO VACIAR, conserva lo anterior: ' + motivo;
-        log.push(aviso);
-        errores.push(aviso);
-        noSePudoVaciar.push({ tabla: def.tabla, motivo: motivo });
-        console.log(aviso);
-      }
+      const aviso = def.tabla + ': NO se toco la tabla, conserva lo anterior'
+        + (filasParaEscribir ? ' (' + filasParaEscribir + ' filas de esta corrida quedaron sin escribir)' : '')
+        + ': ' + PP_mensajeEntero_(e);
+      log.push(aviso);
+      noSePudoVaciar.push({ tabla: def.tabla, motivo: PP_mensajeEntero_(e) });
+      console.log(aviso);
     }
   }
   console.log('Ingesta: ' + log.join(' | '));
