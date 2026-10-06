@@ -349,7 +349,142 @@ test('cuando NINGUNA fila trae la columna, NO se rellena nada (ahi el DEFAULT lo
     "y el log no reporta un relleno que no es un fallo");
 });
 
-test('una clave natural que falta NO se rellena: ahi el espeje tiene que fallar y decir cual', async () => {
+// =============================================================================
+// EL DECIMAL EN UNA COLUMNA ENTERA: EL 22P02 DEL 2026-10-06 22:09
+// =============================================================================
+
+test('una cantidad con parte decimal se REDONDEA y el log dice que valor traia', async () => {
+  // MEDIDO 2026-10-06 22:09, en produccion, con las 520 filas reales:
+  //
+  //   workorders: columnas = wo_internal_id, ot, articulo, descripcion, cantidad, estatus,
+  //                cliente, fecha_vencimiento, foto_url
+  //   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+  //   codigo 22P02 | invalid input syntax for type integer: "0.01"
+  //
+  // El `""` del 2026-10-05 ya estaba cubierto. Este es el OTRO caso del mismo codigo, y el
+  // saneo lo dejaba pasar: comprobaba `typeof n === "number" && isFinite(n)`, y 0.01 cumple las
+  // dos cosas. `work_orders.cantidad` es `integer not null default 0` (docs/schema-supabase.sql),
+  // y Postgres no castea un decimal a entero.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1905", articulo: "P-12668", descripcion: "ONE STOP TRUCK PART", cantidad: 0.01, estatus: "En curso", cliente: "", fecha_vencimiento: "2026-08-14" },
+    { wo_internal_id: "2", ot: "1906", articulo: "B", descripcion: "e", cantidad: 480, estatus: "Cerrada", cliente: "", fecha_vencimiento: "2026-08-14" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  assert.equal(r.ok, true, "con el redondeo, la escritura va: no hay 22P02");
+  assert.equal(r.filas.work_orders, 2, "las dos filas se escriben");
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  assert.equal(enviada.filas[0].cantidad, 0, 'la fila con 0.01 sale con el entero 0, no con el decimal');
+  assert.equal(enviada.filas[1].cantidad, 480, "y la que ya era entera no se toca");
+
+  // El aviso tiene que decir el VALOR que traia, no solo cuantos valores hubo: sin el, no hay
+  // forma de saber que fila buscar en NetSuite, que es donde se arregla.
+  const aviso = r.log.filter((l) => l.indexOf("parte decimal") !== -1)[0] || "";
+  assert.ok(aviso, "el log dice que hubo redondeos: " + JSON.stringify(r.log));
+  assert.match(aviso, /work_orders: 1 valores? con parte decimal/, "con el conteo exacto");
+  assert.match(aviso, /cantidad: 0\.01->0 x1/, "y con el valor original, que es lo que hace falta para corregirlo alla");
+  assert.match(aviso, /NetSuite/, "y dice DONDE se corrige, que no es el espejo");
+  assert.equal(r.log.filter((l) => l.indexOf("valores que no eran del tipo") !== -1).length, 0,
+    "y NO se cuenta como correccion de TIPO: 0.01 era un numero bien escrito, solo que con decimal");
+});
+
+test("una columna `numeric` NO se redondea: el 123.9504 de un tubo llega tal cual", async () => {
+  // La contraprueba, y es la importante. `materials.requerido` es `numeric(18,6)` A PROPOSITO:
+  // el DDL la cambio de `integer` porque el 2246 redondeaba a 0 y un tubo de 6 metros llegaba como
+  // 0 piezas (RULE-SUP-046). Lo mismo con `inventory.disponible` y `operations.tiempo_prod`.
+  // Un arreglo de "redondea los enteros" que se tragara estas columnas seria ese mismo fallo.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.materiales.rows = [
+    { wo_internal_id: "22983", ot: "1905", ensamble: "P-12668", line_id: "2", componente_id: "18368", componente: "MP00219", descripcion: "Tubo Inox 304", unidad: "", requerido: 123.9504, emitido: 131, pendiente: 0 },
+  ];
+  cuerpo.acciones.inventario.rows = [
+    { item: "EM00006", ubicacion: "Planta MM del Llano", disponible: 12, fisico: 12.75, comprometido: 0, en_transito: 0 },
+  ];
+  cuerpo.acciones.operaciones.rows = [
+    { operation_id: "ns-17654", ot: "1905", secuencia: 1, ct: "5458", descripcion: "CORTE DE TUBO", operador: "1", maquina: "1", cant_total: 480, cant_pendiente: 0, tiempo_ciclo: 0, tiempo_setup: 6, tiempo_prod: 2.82, fecha_inicio: "2026-07-24T00:00:00.000Z", fecha_fin: "2026-07-24T00:00:00.000Z" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  assert.equal(r.ok, true);
+  const porTabla = (t) => llamadas.filas.find((e) => e.tabla === t).filas[0];
+  assert.equal(porTabla("materials").requerido, 123.9504, "el requerido conserva sus decimales: es `numeric(18,6)`");
+  assert.equal(porTabla("inventory").fisico, 12.75, "y el fisico del inventario tambien");
+  assert.equal(porTabla("operations").tiempo_prod, 2.82, "y el tiempo de produccion, que son minutos con decimales de verdad");
+  assert.equal(porTabla("operations").cant_total, 480, "mientras `cant_total`, que SI es integer, sigue entero");
+  assert.equal(r.log.filter((l) => l.indexOf("parte decimal") !== -1).length, 0,
+    "ninguna de esas produce un aviso de redondeo: no se toco nada que no debiera");
+});
+
+test("el aviso de redondeo agrupa por valor y NO se pasa del tope", async () => {
+  // Con el tope de 4 (PP_MAX_VALORES_REDONDEADOS_): 6 filas, 6 decimales distintos. El total tiene
+  // que decir 6, y el detalle los cuatro primeros con "y 2 mas". Un aviso que se traga los
+  // valores para que el log no crezca miente sobre lo que se perdio; uno que los lista todos
+  // tarda mas en leerse de lo que vale, y el que se lee entero es el que dice cuantos son.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: 0.01, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "2", ot: "2", articulo: "A", descripcion: "d", cantidad: 0.02, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "3", ot: "3", articulo: "A", descripcion: "d", cantidad: 0.03, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "4", ot: "4", articulo: "A", descripcion: "d", cantidad: 0.04, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "5", ot: "5", articulo: "A", descripcion: "d", cantidad: 0.05, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    // El sexto repite el primero: tiene que contar DOS, no uno, y por eso el detalle dice "x2".
+    { wo_internal_id: "6", ot: "6", articulo: "A", descripcion: "d", cantidad: 0.01, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+  ];
+  const { correr } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  const aviso = r.log.filter((l) => l.indexOf("parte decimal") !== -1)[0] || "";
+  assert.match(aviso, /work_orders: 6 valores? con parte decimal/, "el total SIEMPRE va completo: son 6 celdas");
+  assert.match(aviso, /0\.01->0 x2/, "y el valor repetido cuenta las dos filas, no una");
+  // 6 filas, 5 valores DISTINTOS (0.01 va dos veces): caben 4 y sobra uno. El "cuantos" que se
+  // reporta son 6 CELDA, no 5 valores, que es lo que se perdio.
+  assert.match(aviso, /y 1 valor\(es\) mas/, "los que no caben se dicen como numero, no se inventan ni se callan");
+  assert.doesNotMatch(aviso, /0\.05/, "0.05 no se lista: el tope es 4 y es el quinto valor distinto");
+});
+
+test("un entero con decimales CERO no cuenta como redondeo", async () => {
+  // `480.0` y `"480"` son enteros y van como tales. Si un `!Number.isInteger` mal hecho los
+  // contara, CADA corrida diria que redondeo algo, y un aviso que aparece siempre sin que haya
+  // pasado nada es un aviso que nadie lee (RULE-SUP-057: el relleno sin motivo es ruido).
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: 480.0, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "2", ot: "2", articulo: "A", descripcion: "d", cantidad: "480", estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+    { wo_internal_id: "3", ot: "3", articulo: "A", descripcion: "d", cantidad: -0.0, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  assert.equal(enviada.filas[0].cantidad, 480, "480.0 sale como 480");
+  assert.equal(enviada.filas[1].cantidad, 480, 'y "480" se convierte, que es una correccion de TIPO');
+  assert.equal(r.log.filter((l) => l.indexOf("parte decimal") !== -1).length, 0,
+    "ninguno de los tres es un redondeo: o no traia decimal o traia texto");
+  assert.match(r.log.join(" | "), /1 valores? que no eran del tipo/,
+    "el \"480\" con comillas sigue siendo una correccion de tipo, que es lo que es");
+});
+
+test("un entero que se redondea a 0 con valor negativo NO se reporta como si fuera 0", async () => {
+  // `Math.round(-0.4)` es `-0`, y `String(-0)` es `"0"`. Ahi el log diria `0.4->0 x1` para un valor
+  // NEGATIVO, que es una lectura equivocada en la direccion que mas confunde (parece que faltaba
+  // una pieza cuando en realidad venia de menos). El aviso lleva el original tal cual vino.
+  const cuerpo = respuestaBuena();
+  cuerpo.acciones.workorders.rows = [
+    { wo_internal_id: "1", ot: "1", articulo: "A", descripcion: "d", cantidad: -0.4, estatus: "E", cliente: "", fecha_vencimiento: "2026-10-01" },
+  ];
+  const { correr, llamadas } = ingesta(() => cuerpo);
+  const r = await correr(true);
+
+  const enviada = llamadas.filas.find((e) => e.tabla === "work_orders");
+  assert.equal(enviada.filas[0].cantidad, 0, "-0.4 se escribe como 0: la columna es integer y no admite -0.4");
+  const aviso = r.log.filter((l) => l.indexOf("parte decimal") !== -1)[0] || "";
+  assert.match(aviso, /-0\.4->0 x1/, "el aviso nombra el valor NEGATIVO que traia, no un 0 que no vino");
+});
+
+test('una clave natural que falta NO se rellena: ahi el espejo tiene que fallar y decir cual', async () => {
   // `work_orders.ot` es `not null` SIN default, y es la clave natural (UNIQUE). Si una fila llega
   // sin `ot`, completarla con "" haria que dos filas sin folio colisionaran en el UNIQUE, o peor,
   // que una OT se escribiera con el folio de otra. A una clave natural no se le inventa valor:

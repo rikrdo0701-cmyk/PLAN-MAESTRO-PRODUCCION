@@ -552,12 +552,20 @@ test("una cantidad que llega como TEXTO se convierte, y una que no es numero va 
     { ot: "3", cantidad: "48.5" },
     { ot: "4", cantidad: true },
   ];
-  const { escrituras } = correrIngesta({ acciones });
+  const { r, escrituras } = correrIngesta({ acciones });
   const f = escrituras.find((e) => e.tabla === "work_orders").filas;
   assert.equal(f[0].cantidad, 480, "el texto que SI es numero se vuelve numero, no cadena");
   assert.equal(f[1].cantidad, 0, "y lo que no es numero no se inventa: 0 con el aviso en el log");
-  assert.equal(f[2].cantidad, 48.5);
+  // ESTA AFIRMACION CAMBIO EL 2026-10-06, Y POR QUE. Antes decia 48.5, y ese 48.5 es lo que
+  // mato la corrida del 22:09 con el 22P02 `invalid input syntax for type integer: "0.01"`:
+  // `work_orders.cantidad` es `integer not null default 0`, y Postgres no castea un decimal. Que
+  // la prueba pasara antes no queria decir que estuviera bien: queria decir que la prueba fijaba
+  // el comportamiento quetodavia no habia llegado a produccion.
+  assert.equal(f[2].cantidad, 49, 'el "48.5" se redondea al entero mas cercano: la columna es integer (RULE-SUP-059)');
   assert.equal(f[3].cantidad, 0, "un booleano en una columna entera tampoco es un entero");
+  assert.ok(r.log.some((l) => /work_orders/.test(l) && /parte decimal/.test(l) && /48\.5->49/.test(l)),
+    "y el log dice el valor que traia y en que quedo, porque el decimal se perdio al escribir: "
+    + JSON.stringify(r.log));
 });
 
 test("las fechas ilegibles van a null, y una fecha en dd/mm/aaaa NO se convierte (seria la fecha equivocada)", () => {

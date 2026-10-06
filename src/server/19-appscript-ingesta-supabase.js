@@ -330,6 +330,17 @@ function deduplicar_(filas, claveFn) {
  * y `docs/schema-supabase-sync-netsuite.sql` (las siete tablas del espejo estan repartidas en los
  * dos). `tests/espejo-tipos-ddl.test.mjs` la COMPARA con esos DDL, asi que si el esquema gana una
  * columna numerica y esta lista no, ese test se cae.
+ *
+ * MEDIDO 2026-10-06 22:09, Y ESTE FALLO NO LO TAPABA ESTE PASO:
+ *
+ *   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+ *   codigo 22P02 | invalid input syntax for type integer: "0.01"
+ *
+ * El `""` del 2026-10-05 ya estaba arreglado, y este es el OTRO caso del mismo codigo: aqui el
+ * valor es un decimal, y `Number("0.01")` es 0.01, o sea un numero FINITO. El `typeof n ===
+ * "number" && isFinite(n)` de abajo lo daba por bueno y lo dejaba pasar tal cual, y Postgres no
+ * castea 0.01 a `integer`. A Postgres nunca le llegaba un valor del tipo que la columna declara:
+ * ya no es cierto. Y no lo tapa `COLUMNAS_ENTERAS_` mas abajo, que es lo que lo arregla.
  */
 const COLUMNAS_NUMERICAS_ = {
   work_orders: ['cantidad', 'cant_ensamblada', 'cant_pendiente', 'precio_promedio_venta', 'precio_ultima_venta', 'revision'],
@@ -340,6 +351,38 @@ const COLUMNAS_NUMERICAS_ = {
   inventory: ['disponible', 'fisico', 'comprometido', 'pickeado', 'en_transito', 'revision'],
   sales_orders: ['cliente_id', 'total', 'moneda', 'revision']
 };
+
+/**
+ * De `COLUMNAS_NUMERICAS_`, las que el DDL declara ENTERAS de verdad (`integer`), no `numeric`.
+ *
+ * MEDIDO 2026-10-06 22:09, y la razon de que esta lista exista es una sola: `numeric` y `integer`
+ * son cosas distintas y el paso de arriba las trataba IGUALES. Por eso `materials` se escribia
+ * bien (su `requerido` es `numeric(18,6)` y trae 123.9504) mientras `work_orders` no: su `cantidad`
+ * es `integer` y una fila traia 0.01.
+ *
+ * LO QUE NO HAY QUE HACER, Y YA SE HIZO UNA VEZ: redondear TODO lo numerico. `materials.requerido`,
+ * `emitido` y `pendiente` SON fraccionarias a proposito (RULE-SUP-046: el DDL las cambio de
+ * `integer` a `numeric(18,6)` justamente porque el 2246 las redondeaba a 0 y el tubo de 6 metros
+ * llegaba como 0 piezas). Lo mismo con `inventory.disponible`/`fisico`/`comprometido`/`en_transito`,
+ * que el DDL deja en `numeric`. Un arreglo de "redondea los enteros" que se tragara esas columnas
+ * seria el RULE-SUP-046 al reves, y por eso la lista sale del DDL y
+ * `tests/espejo-tipos-ddl.test.mjs` la compara con los dos archivos de esquema.
+ */
+const COLUMNAS_ENTERAS_ = {
+  work_orders: ['cantidad', 'cant_ensamblada', 'cant_pendiente', 'revision'],
+  operations: ['secuencia', 'cant_total', 'cant_pendiente', 'subcontract_days', 'revision'],
+  materials: ['revision'],
+  items: ['clase', 'revision'],
+  machines: [],
+  inventory: ['revision'],
+  sales_orders: ['cliente_id', 'moneda', 'revision']
+};
+
+// CUANTOS VALORES DISTINTOS POR COLUMNA se nombran en el log antes de decir "y N mas". Un dato
+// malo de NetSuite puede traer 300 decimales distintos en una columna, y un aviso de 3000
+// caracteres es un aviso que nadie lee entero: el que se lea es el que dice cuantos son y da los
+// primeros. El total SIEMPRE va completo, que es lo que se cuenta.
+const PP_MAX_VALORES_REDONDEADOS_ = 4;
 
 // Las fechas de las siete tablas del espejo son todas NULLABLE (docs/schema-supabase.sql:208-210
 // y 231-232, `schema-supabase-sync-netsuite.sql` `fecha` y `ultima_modificacion`), asi que aqui un
@@ -443,27 +486,52 @@ function PP_fechaISO_(valor) {
 // como valor cuando no se sabe: en el espejo, un booleano ilegible no se inventa.
 
 /**
- * Deja las filas con el tipo que el DDL declara, y completa con el default del DDL las columnas
- * `not null` que OTRAS FILAS DEL LOTE SI trae y esta no.
+ * Deja las filas con el tipo que el DDL declara, completa con el default del DDL las columnas
+ * `not null` que OTRAS FILAS DEL LOTE SI trae y esta no, y redondea al entero las que son
+ * `integer` y llegaron con parte decimal.
  *
- * Devuelve las filas nuevas (las de entrada NO se tocan), el conteo de lo que se corrigio de
- * TIPO, el conteo de lo que se RELLENO por ausencia, y el detalle por columna de ambos, para el
- * log. Son dos numeros y no uno porque son dos cosas distintas: "esta fila traia '480'" y "esta
- * fila no traia el campo" piden arreglos distintos y un 0 puesto por el segundo no explica nada
- * del primero.
+ * Devuelve las filas nuevas (las de entrada NO se tocan) y TRES conteos con su detalle por
+ * columna, para el log. Son tres numeros y no uno porque son tres hechos distintos, y cada uno
+ * pide un arreglo distinto:
+ *
+ *   - `corregidas`: el valor NO se podia leer ("480" con comillas, "", un true) y se puso el que
+ *     la columna declara por omision.
+ *   - `rellenadas`: la fila NO traia la columna y se completo con el DEFAULT del DDL.
+ *   - `redondeadas`: el valor se leia bien pero traia parte decimal en una columna que es
+ *     `integer` (MEDIDO 2026-10-06 22:09 con `cantidad: 0.01`).
+ *
+ * Mezclarlos seria peor que no reportarlos: un entero redondeado a 0 y un "" convertido a 0 se
+ * ven IGUAL en la tabla, y solo el log dice cual de los dos fue.
  */
 function PP_saneaTipos_(tabla, filas) {
   const numeros = COLUMNAS_NUMERICAS_[tabla] || [];
   const fechas = COLUMNAS_FECHA_[tabla] || [];
   const bools = COLUMNAS_BOOL_[tabla] || [];
   const omision = COLUMNAS_POR_OMISION_[tabla] || {};
+  // Set de lookup, no un `indexOf` por celda: son siete tablas con hasta siete columnas numericas
+  // y 520 filas, y `Array.prototype.includes` en el lazo interior se lee mas lento de lo que dice.
+  const enteras = {};
+  for (const col of (COLUMNAS_ENTERAS_[tabla] || [])) enteras[col] = true;
   const tocadas = {};
   const rellenadas = {};
+  // Una columna -> valor original -> { n: veces, a: entero al que quedo }. Se guarda el detalle y
+  // no solo el conteo porque el conteo no alcanza para arreglar nada: hay que saber QUE decimal
+  // traia y en cuantas filas, que es justo lo que hace falta para ir a buscarlo en NetSuite.
+  const redondeadas = {};
   let corregidas = 0;
   let rellenadasTotal = 0;
+  let redondeadasTotal = 0;
   const marcar = function (col) { tocadas[col] = (tocadas[col] || 0) + 1; corregidas++; };
   const marcarRelleno = function (col) {
     rellenadas[col] = (rellenadas[col] || 0) + 1; rellenadasTotal++;
+  };
+  const marcarRedondeo = function (col, original, entero) {
+    const porCol = redondeadas[col] || (redondeadas[col] = {});
+    const clave = String(original);
+    const previo = porCol[clave];
+    if (previo) previo.n++;
+    else porCol[clave] = { n: 1, a: entero };
+    redondeadasTotal++;
   };
 
   // LA UNION DE CLAVES DEL LOTE, medida sobre las filas DE ENTRADA y no sobre las de salida: si se
@@ -492,7 +560,18 @@ function PP_saneaTipos_(tabla, filas) {
       // escribir 1 en una columna de cantidad porque llego un `true` es inventar un dato.
       const n = typeof v === 'number' ? v : (typeof v === 'string' ? (v.trim() !== '' ? Number(v) : 0) : NaN);
       if (typeof n === 'number' && isFinite(n)) {
-        if (typeof v !== 'number') { copia[col] = n; marcar(col); }
+        // MEDIDO 2026-10-06 22:09: este `if` era la puerta por donde se colaba el 22P02. Un
+        // decimal es un numero FINITO, asi que la comprobacion de arriba lo daba por bueno y
+        // `work_orders.cantidad` (que es `integer`) se llevaba un 0.01 a Postgres, que no castea
+        // un decimal a entero. El arreglo es HERE y no en la lista: una columna `numeric` recibe
+        // su decimal intacto, que es lo que quiere (RULE-SUP-046), y una `integer` se redondea al
+        // entero mas cercano.
+        if (enteras[col] && !Number.isInteger(n)) {
+          copia[col] = Math.round(n);
+          marcarRedondeo(col, n, copia[col]);
+        } else if (typeof v !== 'number') {
+          copia[col] = n; marcar(col);
+        }
       } else {
         copia[col] = 0; marcar(col);
       }
@@ -512,9 +591,19 @@ function PP_saneaTipos_(tabla, filas) {
 
   const detalle = Object.keys(tocadas).sort().map(function (c) { return c + ' ' + tocadas[c]; }).join(', ');
   const detalleRelleno = Object.keys(rellenadas).sort().map(function (c) { return c + ' ' + rellenadas[c]; }).join(', ');
+  const detalleRedondeo = Object.keys(redondeadas).sort().map(function (c) {
+    const porCol = redondeadas[c];
+    const claves = Object.keys(porCol).sort();
+    const pocos = claves.slice(0, PP_MAX_VALORES_REDONDEADOS_).map(function (k) {
+      return k + '->' + porCol[k].a + ' x' + porCol[k].n;
+    }).join(', ');
+    const sobrantes = claves.length - Math.min(claves.length, PP_MAX_VALORES_REDONDEADOS_);
+    return c + ': ' + pocos + (sobrantes > 0 ? ' y ' + sobrantes + ' valor(es) mas' : '');
+  }).join('; ');
   return {
     filas: salida, corregidas: corregidas, detalle: detalle,
-    rellenadas: rellenadasTotal, detalleRelleno: detalleRelleno
+    rellenadas: rellenadasTotal, detalleRelleno: detalleRelleno,
+    redondeadas: redondeadasTotal, detalleRedondeo: detalleRedondeo
   };
 }
 
@@ -890,6 +979,17 @@ function PP_ingesta_(forzado) {
             saneadas.detalle + ') se escribieron con el valor por omision de la columna; el espejo es exacto y no se corrige a mano';
           log.push(aviso);
           console.log(aviso);
+        }
+        if (saneadas.redondeadas) {
+          // MEDIDO 2026-10-06 22:09: `work_orders.cantidad` es `integer` y una fila traia 0.01, que
+          // Postgres no castea (22P02). Se redondea al entero mas cercano, y se dice POR QUE y
+          // QUE, porque la fraccion se perdio en el espejo y eso no se puede arreglar del lado
+          // de la pagina: hay que ir a NetSuite. El aviso lleva el valor original porque sin el
+          // no hay forma de saber que fila buscar.
+          const avisoRedondeo = def.tabla + ': ' + saneadas.redondeadas + ' valores con parte decimal en columnas que el DDL declara ENTERAS (' +
+            saneadas.detalleRedondeo + ') se redondearon al entero mas cercano; el decimal se perdio al escribir, y eso se corrige en NetSuite, no en el espejo';
+          log.push(avisoRedondeo);
+          console.log(avisoRedondeo);
         }
       } catch (error) {
         const msg = def.tabla + ': el saneo de tipos NO se pudo correr (' +

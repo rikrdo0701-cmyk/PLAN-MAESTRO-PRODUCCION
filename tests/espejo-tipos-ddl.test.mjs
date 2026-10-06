@@ -111,11 +111,41 @@ function listasDeLaIngesta() {
   const ctx = {};
   createContext(ctx);
   runInContext(ingesta.slice(desde, hasta) +
-    "\nglobalThis.__salida = { COLUMNAS_NUMERICAS_, COLUMNAS_FECHA_, COLUMNAS_BOOL_, COLUMNAS_POR_OMISION_ };", ctx);
+    "\nglobalThis.__salida = { COLUMNAS_NUMERICAS_, COLUMNAS_FECHA_, COLUMNAS_BOOL_, COLUMNAS_POR_OMISION_, COLUMNAS_ENTERAS_, PP_MAX_VALORES_REDONDEADOS_ };", ctx);
   // Se vuelve a pasar por JSON por una razon tonta pero real: los arreglos que salen de un `vm`
   // tienen otro `Array.prototype`, y `deepEqual` en modo estricto compara el prototipo tambien.
   // Sin esto, dos listas identicas se declaran distintas.
   return JSON.parse(JSON.stringify(ctx.__salida));
+}
+
+/**
+ * Las columnas de TIPO NUMERICO del DDL, con el tipo exacto que declara.
+ *
+ * MEDIDO 2026-10-06 22:09: `numeric` y `integer` son cosas distintas, y tratar igual a las dos
+ * llevo el 22P02 de `work_orders.cantidad`. Por eso el DDL se lee aqui con el TIPO, no solo con
+ * el nombre: la pregunta que hace la prueba de abajo es "de las columnas numericas que la ingesta
+ * sanea, cuales son enteras", y eso no se puede responder con una lista escrita a mano.
+ */
+function columnasNumericasDelDdl(tabla) {
+  const salida = {};
+  for (const texto of Object.values(ddlPorArchivo)) {
+    const re = new RegExp("create table (?:if not exists )?public\\." + tabla + " \\(([\\s\\S]*?)\\n\\);", "g");
+    let m;
+    while ((m = re.exec(texto)) !== null) {
+      for (const linea of m[1].split("\n")) {
+        const limpio = linea.replace(/--.*$/, "").trim().replace(/,$/, "");
+        const c = /^([a-z_][a-z0-9_]*)\s+([a-z0-9_]+(?:\([^)]*\))?)\s+(.*)$/i.exec(limpio);
+        if (!c) continue;
+        // Un tipo numerico es `integer`/`int`/`bigint`/`smallint` o `numeric`/`decimal`/`real`,
+        // con o sin escala. `serial` NO se cuenta: es un `integer` con un default de secuencia, y
+        // sus valores los pone la secuencia, no el espejo.
+        if (/^(int|integer|bigint|smallint|numeric|decimal|real|double precision)$/i.test(c[2])) {
+          salida[c[1]] = c[2].toLowerCase();
+        }
+      }
+    }
+  }
+  return salida;
 }
 
 /**
@@ -339,6 +369,95 @@ test("las fechas y los booleanos que la ingesta sanea existen en el DDL de su ta
       assert.ok(columnas.has(col), "la ingesta sanea el booleano " + tabla + "." + col + " y el DDL no la tiene");
     }
   }
+});
+
+// =============================================================================
+// ENTERA CONTRA NUMERICA: EL 22P02 QUE EL SANEO DE TIPOS DEJABA PASAR
+// =============================================================================
+
+test("de las columnas que la ingesta sanea, las ENTERAS son las que el DDL declara `integer`", () => {
+  // MEDIDO 2026-10-06 22:09, en produccion:
+  //
+  //   work_orders: ERROR al escribir: Supabase rpc ingesta_mirror work_orders 400:
+  //   codigo 22P02 | invalid input syntax for type integer: "0.01"
+  //
+  // El `""` del 2026-10-05 ya estaba cubierto; este es el otro caso del MISMO codigo. El saneo
+  // comprobaba `typeof n === "number" && isFinite(n)`, y 0.01 es las dos cosas: un decimal es un
+  // numero finito, asi que pasaba de largo y `work_orders.cantidad` (`integer`) recibia un 0.01.
+  //
+  // La lista sale del DDL y no de memoria, porque el riesgo real es en la OTRA direccion: si
+  // alguien mete `materials.requerido` o `inventory.disponible` en la lista de enteras, el
+  // redondeo traga el 123.9504 de un tubo de 6 metros y es el RULE-SUP-046 al reves.
+  const { COLUMNAS_NUMERICAS_, COLUMNAS_ENTERAS_ } = listasDeLaIngesta();
+  for (const tabla of TABLAS_DEL_ESPEJO) {
+    const delDdl = columnasNumericasDelDdl(tabla);
+    const enterasDelDdl = Object.keys(delDdl)
+      .filter((col) => delDdl[col] === "integer")
+      .filter((col) => (COLUMNAS_NUMERICAS_[tabla] || []).indexOf(col) !== -1)
+      .sort();
+    assert.deepEqual((COLUMNAS_ENTERAS_[tabla] || []).slice().sort(), enterasDelDdl,
+      "las columnas enteras que redondea la ingesta de " + tabla +
+      " no son las `integer` del DDL (de sus " + Object.keys(delDdl).length + " columnas numericas)");
+  }
+});
+
+test("NINGUNA columna `numeric` del DDL entra en la de enteras, en las siete tablas", () => {
+  // El RULE-SUP-046 al reves, escrito por nombre porque es el fallo que de verdad da miedo:
+  // `materials.requerido`/`emitido`/`pendiente` son `numeric(18,6)` A PROPOSITO (el DDL las
+  // cambio de `integer` justamente porque el 2246 las redondeaba a 0 y el tubo llegaba como 0
+  // piezas), y `inventory` deja sus cinco cantidades en `numeric` a proposito tambien.
+  const { COLUMNAS_ENTERAS_ } = listasDeLaIngesta();
+  const fraccionarias = {
+    materials: ["requerido", "emitido", "pendiente"],
+    inventory: ["disponible", "fisico", "comprometido", "pickeado", "en_transito"],
+    work_orders: ["precio_promedio_venta", "precio_ultima_venta"],
+    operations: ["tiempo_ciclo", "tiempo_setup", "tiempo_prod"],
+    sales_orders: ["total"],
+  };
+  for (const tabla of Object.keys(fraccionarias)) {
+    for (const col of fraccionarias[tabla]) {
+      assert.equal((COLUMNAS_ENTERAS_[tabla] || []).indexOf(col), -1,
+        tabla + "." + col + " es `numeric` en el DDL y redondearla perderia el decimal a proposito (RULE-SUP-046)");
+    }
+  }
+});
+
+test("la lista de enteras no se come ninguna columna que la ingesta no sanee", () => {
+  // Las dos listas tienen que estar anidadas: una columna entera que `COLUMNAS_NUMERICAS_` no
+  // lista nunca pasa por el saneo, asi que buscarla en la de enteras es una columna que no hace
+  // nada. Y al reves tampoco: una columna de `COLUMNAS_ENTERAS_` que no sea numerica de verdad
+  // significa que la tabla y el DDL ya no cuentan la misma historia.
+  const { COLUMNAS_NUMERICAS_, COLUMNAS_ENTERAS_ } = listasDeLaIngesta();
+  for (const tabla of TABLAS_DEL_ESPEJO) {
+    const enteras = COLUMNAS_ENTERAS_[tabla] || [];
+    const numeros = COLUMNAS_NUMERICAS_[tabla] || [];
+    for (const col of enteras) {
+      assert.ok(numeros.indexOf(col) !== -1,
+        tabla + "." + col + " esta en la lista de enteras pero NO en la de numericas: nunca se sanea");
+    }
+    assert.ok(enteras.length <= numeros.length,
+      tabla + " tiene mas columnas enteras que columnas numericas");
+  }
+});
+
+test("`work_orders.cantidad` esta en la de enteras (es la columna del 22P02 medido)", () => {
+  // Una asercion sobre un nombre puntual. Su valor esta en que si alguien renombra la columna o la
+  // saca de la lista por una buena razon, esta prueba obliga a que la razon quede escrita EN LA
+  // PRUEBA, en vez de desaparecer en un commit sin comentario.
+  const { COLUMNAS_ENTERAS_ } = listasDeLaIngesta();
+  assert.ok((COLUMNAS_ENTERAS_.work_orders || []).indexOf("cantidad") !== -1,
+    "cantidad es `integer not null default 0` en el DDL y necesita el redondeo; si esto cambia, "
+    + "el 22P02 del 2026-10-06 vuelve");
+});
+
+test("el tope de valores del log es un numero entero y pequeno", () => {
+  // Un tope de 0 o negativo dejaria el detalle vacio (un `slice(0, -1)` de un arreglo de 3 quita
+  // el ultimo), que es peor que no tener tope: el aviso diria "0 celdas". Y uno enorme devuelve
+  // al problema que el tope evita, que es un log de 3000 caracteres que nadie lee entero.
+  const { PP_MAX_VALORES_REDONDEADOS_ } = listasDeLaIngesta();
+  assert.equal(typeof PP_MAX_VALORES_REDONDEADOS_, "number", "tiene que ser un numero");
+  assert.ok(PP_MAX_VALORES_REDONDEADOS_ >= 1 && PP_MAX_VALORES_REDONDEADOS_ <= 20,
+    "el tope tiene que estar entre 1 y 20, y es " + PP_MAX_VALORES_REDONDEADOS_);
 });
 
 // =============================================================================
