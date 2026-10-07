@@ -730,6 +730,23 @@ test("el guardado avisa en el informe de que operations no se borro", async () =
   assert.match(avisos, /NO se borro|actualizo fila por fila/i);
 });
 
+test("el aviso de que se escribio NO sale con la tabla en 0 filas", async () => {
+  // MEDIDO 2026-10-06 en produccion: el guardado de arranque cae al camino viejo por el
+  // freno del vacio (el payload todavia no trae la cola: selected_ots, locked_ots y
+  // operation_plan_statuses llegan vacios sin vaciarSiEstaVacio). En el camino viejo,
+  // operations/work_orders/materials NO se escriben (escribirEspejo con 0 filas devuelve
+  // la nota "sin filas"), pero el aviso de "que se escribio" salia igual, y el toast solo
+  // deja ver el ultimo: materials, diciendo que se marco un emitido cuando no se marco
+  // nada. El aviso solo tiene sentido cuando la tabla lleva filas.
+  const { writer } = escritor();
+  const informe = await writer.guardar(estadoVacio());
+  const avisos = (informe.avisos || []).join(" ");
+  assert.match(avisos, /No se llamo a plan_guardar/, "el freno del vacio si se anuncia: es lo que hay que ver");
+  assert.doesNotMatch(avisos, /solo se marco que material se emitio/, "materials con 0 filas no se escribio: no hay aviso");
+  assert.doesNotMatch(avisos, /se actualizaron solo fechas y precio/, "work_orders con 0 filas tampoco");
+  assert.doesNotMatch(avisos, /no se borro nada; la ingesta de NetSuite/, "ni operations");
+});
+
 test("el opt-in se llama permitirBorradoErp y hace lo que dice", async () => {
   const { writer, llamadas } = escritor();
   await writer.guardar(estado(), { permitirBorradoErp: true });

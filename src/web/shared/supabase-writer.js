@@ -2504,7 +2504,7 @@
       // `permitirBorradoErp` justamente para que en el codigo se lea que es una
       // decision y no un olvido.
       const borrar = !ERP_COMPARTIDA[tabla] || opts.permitirBorradoErp === true;
-      if (!borrar) {
+      if (!borrar && filas.length > 0) {
         // MEDIDO 2026-09-30: este texto era UNO para operations, work_orders y materials, y
         // para materials era FALSO. Decia "Una operacion que la persona haya quitado del plan
         // NO se borra", pero de materials la pagina escribe UNA columna, emitido (lo dice
@@ -2512,6 +2512,14 @@
         // No hay operaciones de plan en esa tabla, y quitar un material no es una decision de
         // la pagina. Un aviso que describe mal lo que la pagina controla hace que la persona
         // sospeche de algo que no esta pasando.
+        //
+        // MEDIDO 2026-10-06 en produccion: con la tabla en 0 filas el aviso era IGUALMENTE
+        // falso. EscribirEspejo con 0 filas y sin vaciarSiEstaVacio no escribe nada (devuelve
+        // la nota "sin filas"), y este aviso de "que se escribio" salia igual. El guardado de
+        // arranque cae al camino viejo por el freno del vacio (el payload todavia no trae la
+        // cola), y por eso al abrir la pagina aparecia el toast de materials diciendo que se
+        // marco un emitido cuando no se marco nada. El aviso solo tiene sentido con filas:
+        // que se escribio, se escribio; con 0 filas no hay nada que anunciar.
         informe.avisos.push(queSeEscribioDe(tabla));
       }
       informe.tablas[tabla] = await escribirEspejo(ctx, tabla, filas, vaciar && borrar, borrar);
