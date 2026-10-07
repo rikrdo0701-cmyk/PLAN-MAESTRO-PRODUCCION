@@ -319,7 +319,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       pintar(Boolean(t));
     } else if (!configurado) {
       // Fail open, y dicho en la pagina y no solo en la consola. Ver la cabecera.
-      console.warn("[pp-auth] Supabase sin configurar en este build: la pantalla de entrada se queda apagada y la pagina sigue por el puente de Apps Script.");
+      console.warn("[pp-auth] Supabase sin configurar en este build: no hay login, no hay JWT y con RLS `to authenticated` no se lee ni se escribe nada. No existe respaldo por puente (desde RULE-SUP-030): publica este build con credenciales.");
       return;
     } else {
       asegurarNodo();

@@ -2894,21 +2894,29 @@ test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae e
   assert.equal(rawLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
 });
 
-test("skills.html se publica conectado al bridge con resaltado de operaciones sin operador", async () => {
+test("skills.html se publica conectado a Supabase (reemplazo del puente) con resaltado de operaciones sin operador", async () => {
   const result = await buildProject(SIN_PORTAPAPELES);
   const skills = await readFile(path.join(result.siteDir, "skills.html"), "utf8");
   const distSkills = await readFile(path.join(result.distDir, "IndexSkills.html"), "utf8");
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
 
-  assert.match(skills, /PPAppsScriptBridge/);
-  assert.match(skills, /getAppState/);
+  // Desde RULE-SUP-030 el puente esta deshabilitado y skills ya NO lo monta: la pagina
+  // lee y escribe por Supabase, igual que la principal (RULE-MAT-012, migrada 2026-10-07).
+  assert.match(skills, /PPSupabaseBridgeReplacement/);
+  assert.match(skills, /PPSupabaseReader/);
+  assert.match(skills, /PPSupabaseWriter/);
+  assert.match(skills, /getAppStateIfChanged/);
+  assert.match(skills, /getAppState\(\)/);
   assert.match(skills, /saveSkillState/);
+  assert.doesNotMatch(skills, /PPAppsScriptBridge/);
+  assert.doesNotMatch(skills, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
   assert.match(skills, /matrix-row-no-operator/);
-  assert.match(skills, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
   assert.doesNotMatch(skills, /\{\{[A-Z0-9_]+\}\}/);
   assert.doesNotMatch(skills, /__PP_APPS_SCRIPT_WEB_APP_URL__/);
-  assert.match(distSkills, /PPAppsScriptBridge/);
+  assert.doesNotMatch(skills, /__PP_SUPABASE_(URL|ANON_KEY)__/);
+  assert.match(distSkills, /PPSupabaseBridgeReplacement/);
+  assert.doesNotMatch(distSkills, /PPAppsScriptBridge/);
   assert.match(distSkills, /matrix-row-no-operator/);
   assert.doesNotMatch(distSkills, /\{\{[A-Z0-9_]+\}\}/);
   assert.match(app, /hasAssignedOperator/);
@@ -2934,6 +2942,8 @@ test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", asyn
   assert.match(performanceClient, /function matrixSavePayload\(\)\s*\{[^}]*\.\.\.baseSavePayload\(\)/);
   assert.match(skills, /CONFLICT_REVISION/);
   assert.match(skills, /getAppStateIfChanged/);
+  assert.doesNotMatch(skills, /PPAppsScriptBridge/);
+  assert.match(skills, /PPSupabaseBridgeReplacement/);
   assert.match(skills, /hydrateSkillsCache|pp-skills-matrix-v1/);
   assert.doesNotMatch(skills, /legacy-note/);
   assert.doesNotMatch(skills, /Vista independiente/);
@@ -3167,14 +3177,16 @@ test("el bundle sale con la credencial del portapapeles en los TRES modulos que 
       path.join(result.siteDir, "skills.html"),
       path.join(result.siteDir, "operator.html"),
     ];
-    // MEDIDO 2026-10-02: solo DOS de esos cuatro archivos montan los clientes. `skills.html` y
-    // `operator.html` van por su propia plantilla (skillsSource e IndexOperator.html) y no llevan
-    // lector ni escritor. La primera version de esta prueba exigia las credenciales en los cuatro y
-    // fallaba con "aparecio 0" en skills.html, o sea que estaba pidiendo una credencial en una
-    // pagina que no la usa.
+    // MEDIDO 2026-10-07: TRES de esos cuatro archivos montan los clientes. `skills.html`
+    // tambien los monta desde la migracion a Supabase (RULE-MAT-012, 2026-10-07); solo
+    // `operator.html` va por su propia plantilla (IndexOperator.html) y no lleva lector ni
+    // escritor. La primera version de esta prueba exigia las credenciales en los cuatro y
+    // fallaba con "aparecio 0" en skills.html, o sea que estaba pidiendo una credencial en
+    // una pagina que no la usa.
     const conClientes = [
       path.join(result.distDir, "Index.html"),
       path.join(result.siteDir, "index.html"),
+      path.join(result.siteDir, "skills.html"),
     ];
     // MEDIDO 2026-10-02: son TRES, no cuatro. `catalog-boot` no lleva marcador: pide url y clave a
     // `PPSupabaseReader.config()` (supabase-catalog-boot.js:200), o sea que hereda la credencial. La
@@ -3188,9 +3200,13 @@ test("el bundle sale con la credencial del portapapeles en los TRES modulos que 
       assert.equal(urls.length, 3, `${path.basename(archivo)}: la URL debe aparecer en lector, auth y escritor (3 veces), aparecio ${urls.length}`);
       assert.equal(claves.length, 3, `${path.basename(archivo)}: la clave debe aparecer en lector, auth y escritor (3 veces), aparecio ${claves.length}`);
       assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/);
-      // catalog-boot tiene que seguir TOMANDO la config del lector. Si algum dia le ponen su
-      // propio marcador, el conteo de arriba no lo nota, pero esta linea si: seria una quinta
-      // fuente de credencial, y de las que se contradicen solas.
+    }
+    // catalog-boot tiene que seguir TOMANDO la config del lector. Si algum dia le ponen su
+    // propio marcador, el conteo de arriba no lo nota, pero esta linea si: seria una quinta
+    // fuente de credencial, y de las que se contradicen solas. Solo va en las dos paginas de
+    // planeacion: skills.html no monta catalog-boot (RULE-MAT-012, 2026-10-07).
+    for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+      const txt = await readFile(archivo, "utf8");
       assert.match(txt, /PPSupabaseReader[\s\S]{0,400}?\bconfig\(\)|\bconfig\(\)[\s\S]{0,200}?PPSupabaseReader/);
     }
     // En las cuatro, en cambio, no puede quedar ni un marcador sin reemplazar: publicar una pagina

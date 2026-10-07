@@ -1075,13 +1075,69 @@
   }
 
   /**
+   * saveSkillState -> guarda la matriz (y el plan) desde el payload de la vista skills.
+   *
+   * (migracion skills.html, RULE-MAT-012, 2026-10-07). Replica el contrato del metodo del
+   * puente: recibe el payload completo que arma la pagina (matrixSavePayload, el MISMO
+   * shape que manda la web principal) y devuelve `{ revision, savedAt }`. La vista skills
+   * guarda TODO en cada toque, como hacia saveSkillState con las Hojas; por eso son DOS
+   * escrituras, en el mismo orden que saveAppSheet de la web principal (app.js:14446):
+   * primero el plan (writer.guardar sube la revision en app_state y detecta
+   * CONFLICT_REVISION) y, solo si entro, los catalogos de la matriz (writer.guardarCatalogos
+   * con ambito matrix: sube operators y matrix, y NO capabilities/operation_catalog, que
+   * son de NetSuite -- el mismo recorte de la pestana de Matriz). Si el plan falla por
+   * conflicto NO se escriben catalogos: una matriz encima de un plan que no entro seria
+   * guardar lo que no ocurrio.
+   *
+   * CONFLICT_REVISION se RE-LANZA como Error cuyo mensaje tiene la palabra: el catch de
+   * saveNow (IndexSkills.html) la reconoce con /CONFLICT_REVISION/ y recarga con force,
+   * que es el flujo de siempre.
+   */
+  async function saveSkillState(payload) {
+    const data = payload && typeof payload === "object" ? payload : null;
+    if (!data) throw new Error("El plan no contiene matriz");
+    const w = exigirMetodo("guardar", "guarda la matriz");
+    const plan = await w.guardar(data);
+    if (!plan) throw new Error("No se pudo guardar la matriz: el escritor no devolvio informe");
+    if (plan.conflicto) {
+      throw new Error(
+        "CONFLICT_REVISION: " + ((plan.conflicto && plan.conflicto.mensaje)
+          || "El plan cambio desde la ultima carga.")
+      );
+    }
+    if (plan.ok === false) throw new Error(plan.motivo || "No se pudo guardar la matriz");
+    if (typeof w.guardarCatalogos === "function") {
+      const catalogo = await w.guardarCatalogos(data, { ambito: "matrix" });
+      if (catalogo && catalogo.ok === false) {
+        throw new Error(catalogo.motivo || "No se pudieron guardar los catalogos de la matriz");
+      }
+    }
+    return {
+      revision: Number(plan.revision || data.revision || 0),
+      savedAt: plan.savedAt || new Date().toISOString(),
+      ok: true,
+    };
+  }
+
+  /**
    * getAppState -> lee de Supabase (app_state + catalogos)
+   *
+   * MEDIDO 2026-10-07 al migrar skills.html (RULE-MAT-012): esta funcion NO devolvia
+   * `revision` ni `savedAt`, y el contrato del puente que reemplaza SI los traia
+   * (getAppState leyó el estado con su revision). Nadie lo habia notado porque la web
+   * principal arranca por getAppStateIfChanged (que si los trae) y esta funcion solo la
+   * usaba la vista de skills, que seguia en el puente. La revision vive en app_state y
+   * se lee aqui, como en getAppStateIfChanged.
    */
   async function getAppState() {
     const r = getReader();
+    const rows = await r.readTable("app_state", { limit: 1 });
+    const appState = r.mapAppState(rows);
     const catalogs = await r.readCatalogs();
     return {
       ...catalogs,
+      revision: Number(appState?.revision || 0),
+      savedAt: appState?.savedAt || "",
       source: "supabase",
     };
   }
@@ -1171,6 +1227,7 @@
     listPlanSnapshots,
     getPlanSnapshotLight,
     saveOperationPlanStatus,
+    saveSkillState,
     getAppState,
     getAppStateRevision,
     getAppStateIfChanged,

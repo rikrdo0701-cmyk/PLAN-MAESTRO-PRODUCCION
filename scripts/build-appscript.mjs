@@ -587,12 +587,6 @@ export async function buildProject(opciones = {}) {
   const supabaseReader = supabaseReaderRaw
     .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
     .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
-  let skillsHtml = skillsSource
-    .replace("{{BRIDGE_CLIENT}}", () => backendBridge.trimEnd())
-    .replace("{{PLANNER_CORE}}", () => plannerCore.trimEnd());
-  if (/{{[A-Z0-9_]+}}/.test(skillsHtml)) {
-    throw new Error("Quedaron marcadores sin reemplazar en IndexSkills.html");
-  }
   const app = patchPlanningApp(appSource);
   const appRuntimeClient = patchPerformanceClient(performanceClient);
   // MEDIDO 2026-09-29: la pagina sigue arrancando por el puente, asi que la sesion
@@ -629,6 +623,23 @@ export async function buildProject(opciones = {}) {
   const catalogWrite = supabaseWriterRaw
     .replace("__PP_SUPABASE_URL__", supabaseUrl.valor)
     .replace("__PP_SUPABASE_ANON_KEY__", supabaseAnonKey.valor);
+  // MEDIDO 2026-10-07, MIGRACION DE skills.html A SUPABASE. Antes este marcador inyectaba
+  // el cliente del PUENTE (apps-script-bridge-client.js) y la pagina lo llamaba con
+  // getAppState/getAppStateIfChanged/saveSkillState. El puente lleva deshabilitado desde
+  // RULE-SUP-030 (2026-09-30), y skills era la UNICA pagina que quedaba atada a el: al
+  // abrir skills.html fallaba con "El puente de Apps Script esta deshabilitado. Metodo:
+  // getAppState". Ahora monta los MISMOS clientes runtime que la pagina principal, en el
+  // mismo orden (sesion -> lector -> escritor -> reemplazo del puente), y lee y escribe en
+  // Supabase; el reemplazo expone getAppState/getAppStateIfChanged/saveSkillState con el
+  // contrato del puente (RULE-MAT-012). `catalog-boot`, `catalog-apply`, ingesta y eventos
+  // son de la pagina de planeacion y skills no los necesita: solo lectura + guardado.
+  const skillsRuntimeClients = `${supabaseAuth.trimEnd()}\n${supabaseReader.trimEnd()}\n${catalogWrite.trimEnd()}\n${supabaseBridgeReplacementRaw.trimEnd()}`;
+  const skillsHtml = skillsSource
+    .replace("{{BRIDGE_CLIENT}}", () => skillsRuntimeClients)
+    .replace("{{PLANNER_CORE}}", () => plannerCore.trimEnd());
+  if (/{{[A-Z0-9_]+}}/.test(skillsHtml)) {
+    throw new Error("Quedaron marcadores sin reemplazar en IndexSkills.html");
+  }
   // La vista de eventos no trae marcadores de configuracion: la URL y la clave las
   // pide al lector (un solo sitio las sabe) y el JWT a la sesion.
   const eventLog = eventLogRaw;

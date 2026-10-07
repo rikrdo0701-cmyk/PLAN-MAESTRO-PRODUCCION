@@ -979,7 +979,7 @@ async function saveNow() {
   dirty = false;
   setStatus("Guardando…", "saving");
   try {
-    const saved = await window.PPAppsScriptBridge.call("saveSkillState", [matrixSavePayload()]);
+    const saved = await window.PPSupabaseBridgeReplacement.saveSkillState(matrixSavePayload());
     state.revision = Number(saved?.revision || state.revision);
     state.savedAt = saved?.savedAt || state.savedAt;
     if (!dirty) {
@@ -1010,18 +1010,24 @@ async function loadState({ silent = false, force = false } = {}) {
   const seq = ++loadSeq;
   if (!silent) setStatus("Cargando…");
   try {
-    const bridge = window.PPAppsScriptBridge;
+    const bridge = window.PPSupabaseBridgeReplacement;
+    if (!bridge || typeof bridge.getAppState !== "function") {
+      if (seq !== loadSeq) return;
+      setStatus("Supabase no esta disponible en este build: revisa la configuracion y recarga", "error");
+      els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">No se pudo cargar la matriz: falta el lector de Supabase.</div>';
+      return;
+    }
     const knownRevision = Number(state?.revision || 0);
     let imported;
     if (!force && knownRevision > 0) {
-      imported = await bridge.call("getAppStateIfChanged", [knownRevision, { includeMaterials: false }]);
+      imported = await bridge.getAppStateIfChanged(knownRevision, { includeMaterials: false });
       if (imported?.unchanged) {
         if (seq !== loadSeq) return;
         if (!silent) setStatus(`rev ${Number(imported.revision || knownRevision)}`, "ok");
         return;
       }
     } else {
-      imported = await bridge.call("getAppState");
+      imported = await bridge.getAppState();
     }
     if (seq !== loadSeq) return;
     state = normalizeImportedState(imported);

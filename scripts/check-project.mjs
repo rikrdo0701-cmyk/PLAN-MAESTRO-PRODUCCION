@@ -116,16 +116,15 @@ for (const [nombre, texto] of [["dist/Index.html", index], ["site/index.html", p
   }
 }
 for (const skills of [distSkills, pagesSkills]) {
-  if (!skills.includes("PPAppsScriptBridge")) throw new Error("skills.html no contiene el cliente del puente remoto");
+  if (!skills.includes("PPSupabaseBridgeReplacement")) throw new Error("skills.html no monta el reemplazo del puente por Supabase");
+  if (!skills.includes("PPSupabaseReader")) throw new Error("skills.html no monta el lector de Supabase");
   if (!skills.includes("getAppState")) throw new Error("skills.html no contiene carga del estado");
   if (!skills.includes("saveSkillState")) throw new Error("skills.html no contiene guardado de la matriz");
+  if (skills.includes("PPAppsScriptBridge")) throw new Error("skills.html sigue montando el cliente del puente de Apps Script");
   if (!skills.includes("matrix-row-no-operator")) throw new Error("skills.html no resalta operaciones sin operador");
-  if (/{{[A-Z0-9_]+}}/.test(skills) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(skills)) {
+  if (/{{[A-Z0-9_]+}}/.test(skills) || /__PP_APPS_SCRIPT_WEB_APP_URL__/.test(skills) || /__PP_SUPABASE_(URL|ANON_KEY)__/.test(skills)) {
     throw new Error("skills.html contiene marcadores sin reemplazar");
   }
-}
-if (!pagesSkills.includes("AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q")) {
-  throw new Error("skills.html de Pages no contiene la URL del backend configurada");
 }
 
 const manifest = JSON.parse(await readFile(path.join(distDir, "appsscript.json"), "utf8"));
