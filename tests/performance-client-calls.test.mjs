@@ -3347,8 +3347,10 @@ test("la limpieza inicial renderiza sin solicitar guardado remoto", () => {
   // RULE-SUP-062: el arranque NO marca el plan sucio. ffdbd1b lo hacia (guarda borrador y
   // muestra progreso) pero con la hidratacion en curso el debounce de 850 ms guardaba un
   // estado sin hidratar, el camino viejo avisaba el freno y parcheaba app_state en cada
-  // carga. El estado se guarda cuando cambia el usuario, cuando se restaura un borrador
-  // (maybeRestoreSavedDraftOnBoot) o cuando el sync del arranque lo pide.
+  // carga. El estado se guarda cuando cambia la persona o cuando el sync del arranque lo
+  // pide; el rescate del borrador (maybeRestoreSavedDraftOnBoot) restaura en memoria y ya NO
+  // guarda (2026-10-07: su saveState("plan") re-marcaba el plan sucio y el debounce guardaba
+  // el plan entero con la cascada de avisos por tabla —materials incluido— al abrir).
   assert.deepEqual(saveStateCalls, ["ui"], "el boot solo persiste el ambito ui, no marca el plan sucio");
 });
 

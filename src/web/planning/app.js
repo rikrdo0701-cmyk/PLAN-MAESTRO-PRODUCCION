@@ -874,15 +874,22 @@ async function maybeRestoreSavedDraftOnBoot() {
     normalizeState();
     invalidateCurrentPlanOperationsCache();
     alignReportWeekStartToFirstScheduledOperation(restored, new Date());
-    saveState("plan");
+    // EL RESCATE NO GUARDA EL PLAN. MEDIDO 2026-10-07 (usuario, en produccion): el
+    // `saveState("plan")` que habia aqui re-marcaba el plan sucio y el debounce de 850-900 ms
+    // guardaba el plan entero en CADA arranque con borrador; ese guardado cae al camino viejo
+    // por el freno (RULE-SUP-062: una lista vacia sin vaciarSiEstaVacio) y sacaba la cascada
+    // de avisos por tabla (materials incluido) como toasts que no distinguian confirmacion de
+    // error, y parcheaba app_state y su revision en cada carga. Restaurar es VER, no guardar:
+    // el plan restaurado se sube cuando la persona cambia algo o pulsa Guardar, con el estado
+    // ya completo.
     // ARREGLO B (RULE-PLAN-015, 2026-10-04): el reloj queda 1 ms por encima del generatedAt
-    // del borrador, PERO EN MEMORIA NOMBRE. El saveState de arriba ya escribio app_state con
-    // el reloj del borrador; este sello NO se guarda. Asi el import de fondo
+    // del borrador, PERO EN MEMORIA NOMBRE: la base ni lo ve. Asi el import de fondo
     // (applyImported) ve el plan como "de pantalla, mas nuevo" (importedIsStaleSchedule es
     // verdadero) y lo deja intacto, y a la vez el rescate puede re-dispararse en la siguiente
-    // ingesta, porque el reloj guardado en el servidor sigue siendo el del borrador.
-    // Sin este sello el import vuelve a poner las operaciones del espejo a los ~120 s y el
-    // rescate dura dos minutos (MEDIDO 2026-10-04: el Gantt volvio a 15 ops para 2624).
+    // ingesta, porque el reloj de la base sigue siendo el del ultimo guardado real (no el del
+    // rescate). Sin este sello el import vuelve a poner las operaciones del espejo a los
+    // ~120 s y el rescate dura dos minutos (MEDIDO 2026-10-04: el Gantt volvio a 15 ops para
+    // 2624).
     if (savedGeneratedAtMs > 0 && state.lastSchedule) {
       state.lastSchedule.generatedAt = new Date(savedGeneratedAtMs + 1).toISOString();
     }
@@ -6260,19 +6267,19 @@ onProgress: (event) => {
     const snapshot = await persistPlanSnapshot();
     if (!snapshot?.snapshotId) throw new Error("el plan se calculo, pero no se pudo guardar el borrador");
     state.draftVersionId = snapshot.snapshotId;
-    setScheduleStatus("Guardando plan...");
-    appSheetMarkDirtyScope("plan");
-    const planSubio = await saveAppSheet(false);
-    // MEDIDO 2026-10-03: antes esto era `await saveAppSheet(false)` sin mirar el retorno. El
-    // borrador ya habia vivido en persistPlanSnapshot (arriba), o sea que si ESTE guardado
-    // falla no se pierde el plan calculado; lo que queda atras es app_state/revision, y el
-    // mensaje de abajo salia igual ("borrador guardado"), que es a medias: el borrador SÍ,
-    // pero el estado del plan no. Se avisa aparte y sin volver a decir "No se pudo programar"
-    // (eso seria falso: el plan se calculo y el borrador se guardo). El scope de plan queda
-    // re-marcado por dentro de saveAppSheet, que es lo que permite el reintento.
-    if (!planSubio) {
-      showToast("El plan se genero y el borrador se guardo, pero el estado (app_state) no subio: recarga o vuelve a guardar", 9000);
-    }
+    // EL ESTADO ENTERO YA SUBIO CON EL SNAPSHOT: `persistPlanSnapshot` llama a
+    // `guardarPlanEnSupabase({snapshots})`, que escribe TODAS las tablas con el `state`
+    // actual — el payload del RPC lleva app_state (armarPayload -> appStateRpc) y el DDL
+    // de `plan_guardar` lo actualiza al final de su transaccion, y el camino viejo hace
+    // `parchearAppState`. Hasta 2026-10-07 habia AQUI un segundo guardado
+    // (`appSheetMarkDirtyScope("plan")` + `saveAppSheet(false)`) que volvia a escribir todo
+    // lo mismo y subia la revision dos veces por generacion. MEDIDO (usuario, en
+    // produccion): los fallos transitorios de ese segundo guardado (429, 5xx, red; error
+    // agravado por el camino viejo, sin transaccion) sacaban el toast "No se pudo guardar
+    // el plan..." con el plan YA guardado — "pero si se guardo" al recargar — y se sumaban
+    // a la cascada de avisos por tabla. Una sola escritura, la del snapshot, deja el estado,
+    // la revision y las tablas en la base; el proximo guardado normal reescribe con la
+    // revision nueva.
     saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`, "ui");
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
@@ -14299,7 +14306,19 @@ async function guardarPlanEnSupabase(opciones = {}) {
     return false;
   }
   if (Array.isArray(informe.avisos) && informe.avisos.length) {
-    informe.avisos.forEach((aviso) => showToast(aviso, 5000));
+    // MEDIDO 2026-10-07 (usuario, en produccion): antes esto ponia TODOS los avisos como
+    // toasts en cascada — showToast reemplaza el unico #toast, los avisos se pisaban unos a
+    // otros y nunca quedaba claro si lo que se vio era un error o la confirmacion. Los avisos
+    // de "que se escribio en la tabla X" (operations:/work_orders:/materials:, los que arma
+    // queSeEscribioDe en supabase-writer.js) no salen a pantalla: son ruido de confirmacion
+    // que la cascada tapaba con el toast real ("Plan guardado en Supabase", "borrador
+    // guardado"), y el de materials ademas describe una tabla que la pagina no controla. Solo
+    // los avisos de ACCION llegan al toast — freno del estado vacio, DDL ausente, eventos
+    // omitidos — y con el prefijo "Aviso: " para que no lean ni como error ni como
+    // confirmacion. Cuando `informe.ok` es falso, el toast de error unico de arriba ya dice
+    // que no se guardo y por que.
+    const avisosDeAccion = informe.avisos.filter((aviso) => !/^(operations|work_orders|materials):/.test(String(aviso || "")));
+    if (avisosDeAccion.length) showToast("Aviso: " + avisosDeAccion.join(" | "), 7000);
   }
   return true;
 }

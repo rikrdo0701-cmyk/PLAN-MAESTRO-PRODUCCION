@@ -277,10 +277,14 @@ test("el rescate del borrador restaura el plan y NO toca la cola ni los bloqueos
   assert.equal(sec10.operador, "ANA", "el plan se restaura con la asignacion del borrador, no con la del espejo");
   assert.equal(porOt.get("3747")[0].locked, true, "el bloqueo viaja en la propia operacion");
 
-  // 3. LO QUE SE DICE, y lo que se guarda.
+  // 3. LO QUE SE DICE, y lo que se guarda. El rescate RENDERIZA el plan y avisa, pero NO
+  //    solicita guardado remoto (RULE-SUP-062, 2026-10-07): un `saveState("plan")` aqui
+  //    re-marcaba el plan sucio, el debounce de 850-900 ms guardaba el plan entero en cada
+  //    arranque con borrador, y ese guardado caia al camino viejo por el freno y sacaba la
+  //    cascada de avisos por tabla (materials incluido) sin distinguir confirmacion de error.
   assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.001Z", "arreglo B: el reloj queda 1 ms por encima del generatedAt del borrador");
   assert.equal(estado.planStart, "2026-10-05");
-  assert.deepEqual(registro.guardados, ["plan"]);
+  assert.deepEqual(registro.guardados, [], "el rescate no solicita guardado remoto");
   assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)), `no se aviso del rescate: ${JSON.stringify(registro.toasts)}`);
 });
 
@@ -321,7 +325,7 @@ test("el rescate entra aunque el borrador NO sea mas nuevo, si en pantalla no ha
   assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)));
 });
 
-test("arreglo B: el reloj sellado va en memoria y NO en app_state (el save es antes del sello)", async () => {
+test("arreglo B: el sello del reloj queda solo en memoria; el rescate ya no guarda nada", async () => {
   const app = await leerApp();
   // Escenario igual al de produccion: los dos generatedAt salen del MISMO guardado de
   // "Generar plan", o sea IGUALES (savedIsNewer falso). Por eso el import de fondo no
@@ -349,10 +353,10 @@ test("arreglo B: el reloj sellado va en memoria y NO en app_state (el save es an
 
   // En memoria: 1 ms por encima del borrador.
   assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T19:00:00.001Z", "el reloj de pantalla queda 1 ms por encima del borrador");
-  // En el guardado (app_state): el reloj del borrador, NO el sellado. Si el sello se
-  // escribiera, la puerta de entrada bloquearia el rescate en la siguiente ingesta.
-  assert.equal(registro.relojEnGuardado, "2026-10-04T19:00:00.000Z", "el saveState se hace ANTES del sello: app_state no lleva el sello");
-  assert.deepEqual(registro.guardados, ["plan"]);
+  // Sin guardado, el sello NO puede viajar a app_state por construccion: el reloj de la base
+  // sigue siendo el del ultimo guardado real, y la puerta de entrada puede volver a entrar en
+  // la siguiente ingesta (importedIsStaleSchedule) si el borrador vuelve a ser el mas nuevo.
+  assert.deepEqual(registro.guardados, [], "el rescate ya no escribe app_state: el sello +1 ms ni siquiera tiene oportunidad de guardarse");
 });
 
 test("el rescate NO entra si el borrador es mas viejo Y en pantalla ya hay plan", async () => {

@@ -344,6 +344,52 @@ test("los dos caminos de guardado usan el motivo del informe, no un texto fijo",
   }
 });
 
+test("un guardado OK no vuelca la cascada de avisos por tabla como toasts", async () => {
+  // MEDIDO 2026-10-07 (usuario, en produccion): `guardarPlanEnSupabase` ponia TODOS los
+  // `informe.avisos` como toasts en cascada (showToast reemplaza el unico #toast, se
+  // pisaban) y no quedaba claro si eran un error o la confirmacion. El camino viejo empuja
+  // un aviso por tabla con filas (queSeEscribioDe: operations:/work_orders:/materials:), y
+  // el de materials ademas describe una tabla que la pagina no controla. El fix: esos avisos
+  // NO llegan al toast; solo los de ACCION (freno, DDL ausente, eventos omitidos), con el
+  // prefijo "Aviso: " para que no lean ni como error ni como confirmacion.
+  const cuerpo = (() => {
+    const i = app.indexOf("async function guardarPlanEnSupabase(");
+    assert.ok(i > 0, "no se encontro guardarPlanEnSupabase");
+    const f = app.indexOf("async function guardarSyncDeOrdenesTrabajoEnSupabase()", i);
+    assert.ok(f > i, "no se encontro el final de guardarPlanEnSupabase");
+    return app.slice(i, f);
+  })();
+  const toasts = [];
+  const guardado = {
+    ok: true,
+    revision: 9,
+    savedAt: "2026-10-07T12:00:00.000Z",
+    tablas: {},
+    avisos: [
+      "operations: no se borro nada; la ingesta de NetSuite tambien escribe aqui",
+      "work_orders: se actualizaron solo fechas y precio; el resto es de NetSuite",
+      "materials: solo se marco que material se emitio; la lista es de NetSuite",
+      "se omitieron 3 evento(s) del log: un guardado manda como mucho 50 eventos por peticion.",
+    ],
+  };
+  const ctx = {
+    showToast: (mensaje) => toasts.push(String(mensaje || "")),
+    PPSupabaseWriter: { guardar: async () => guardado },
+    state: { revision: 4 },
+    String, Object, Array, Number,
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(cuerpo, ctx);
+
+  await ctx.guardarPlanEnSupabase();
+
+  assert.equal(ctx.state.revision, 9, "la revision del informe se aplica igual que siempre");
+  assert.deepEqual(toasts, [
+    "Aviso: se omitieron 3 evento(s) del log: un guardado manda como mucho 50 eventos por peticion.",
+  ], "solo los avisos de ACCION llegan al toast, consolidados y con prefijo 'Aviso: '; los de 'que se escribio en la tabla' no");
+});
+
 // ---------------------------------------------------------------------------
 // EL FALLO DE CATALOGOS NO PUEDE DECIR "GUARDADO" (regresion del 2026-10-03)
 // ---------------------------------------------------------------------------
