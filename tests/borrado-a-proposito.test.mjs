@@ -24,6 +24,9 @@
 //   7. los dos avisos de un mismo guardado se separan: lo borrado a proposito dice
 //      "A PROPOSITO", lo que el navegador no tiene dice "NO se tocan" y no lo incluye.
 //   8. sin puerta no hay intencion: matrix, ot_configurations y tablas inexistentes dan null.
+//   9. ot_configurations NO persiste el residuo derivado (config sin contenido y sin marca
+//      de edicion: la deriva normalize de una OT que nunca tuvo fila), pero SI escribe la
+//      config que la persona VACIO a proposito (updatedAt la marca) y la que tiene contenido.
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
@@ -318,4 +321,44 @@ test("sin puerta de borrado no hay intencion: matrix y ot_configurations registr
   assert.equal(writer.registrarBorrado(estado, "no-existe", {}), null, "tabla desconocida");
   assert.equal(writer.registrarBorrado(null, "subcontracts", {}), null, "estado nulo");
   assert.equal(estado.__borradosPendientes, undefined, "nada de lo anterior crea el registro");
+});
+
+test("ot_configurations no persiste el residuo derivado pero SI el vaciado a proposito", async () => {
+  const { writer, llamadas } = escritor();
+  const estado = estadoCatalogos();
+  // Como las deja normalizeOtResourceAssignments: la derivada de una OT que nunca tuvo
+  // fila ni edicion va SIN updatedAt; la que la persona VACIO lleva la marca de edicion
+  // (app.js sella new Date().toISOString()); la de contenido se escribe siempre; y el kit
+  // pendiente tampoco es residuo aunque todo lo demas este vacio.
+  estado.otConfigurations = {
+    "1000": { ot: "1000", machine: "", herramental: "", kitHerramental: "", kitPending: false,
+      subcontractType: "", subcontractDays: 0, additionalHerramentales: [] },
+    "2000": { ot: "2000", machine: "", herramental: "", kitHerramental: "", kitPending: false,
+      subcontractType: "", subcontractDays: 0, additionalHerramentales: [],
+      updatedAt: "2026-10-06T14:00:00.000Z" },
+    "3000": { ot: "3000", machine: "42", herramental: "5 x 6", kitHerramental: "K1",
+      kitPending: true, subcontractType: "", subcontractDays: 0, additionalHerramentales: [] },
+    "4000": { ot: "4000", machine: "", herramental: "", kitHerramental: "", kitPending: true,
+      subcontractType: "", subcontractDays: 0, additionalHerramentales: [] },
+  };
+
+  const armado = writer.armarCatalogos(estado);
+  const ots = armado.ot_configurations.filas.map((f) => f.ot);
+  assert.ok(!ots.includes("1000"), "el residuo derivado sin marca no se mapea: " + JSON.stringify(ots));
+  assert.ok(ots.includes("2000"), "la config que se vacio a proposito SI se escribe (la marca lo distingue)");
+  assert.ok(ots.includes("3000"), "la config con contenido se escribe");
+  assert.ok(ots.includes("4000"), "kit pendiente no es residuo aunque el resto este vacio");
+  assert.equal(armado.ot_configurations.claves["1000"], undefined, "el residuo tampoco queda en las claves");
+  assert.ok(armado.ot_configurations.claves["2000"], "la vaciada si queda en las claves");
+
+  // El guardado real: el POST de ot_configurations no lleva la 1000, si lleva las otras tres.
+  const informe = await writer.guardarCatalogos(estado);
+  const post = de(llamadas, "POST", "ot_configurations");
+  assert.ok(post.length >= 1, "ot_configurations si sube");
+  const subidas = post.pop().cuerpo.map((f) => f.ot);
+  assert.ok(!subidas.includes("1000"), "la 1000 no sube: " + JSON.stringify(subidas));
+  assert.ok(
+    subidas.includes("2000") && subidas.includes("3000") && subidas.includes("4000"),
+    "suben la vaciada, la de contenido y la del kit pendiente: " + JSON.stringify(subidas));
+  assert.equal(informe.ok, true);
 });

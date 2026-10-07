@@ -663,7 +663,7 @@
           if (!item || typeof item !== "object") return;
           const ot = texto(item.ot || k);
           if (!ot) return;
-          out.push({
+          const fila = {
             ot: ot,
             maquina: texto(item.machine),
             kit: texto(item.kitHerramental),
@@ -675,7 +675,23 @@
             // es JSON revienta el INSERT de la tabla entera (ver jsonb()).
             herramentales_extra: listaDeHerramentales(item.additionalHerramentales),
             actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
-          });
+          };
+          // RESIDUO DERIVADO, NO SE PERSISTE (medido 2026-10-06: 243 skeleton en la base).
+          // Una fila sin contenido real (sin maquina/kit/herramental/subcontrato) y SIN
+          // marca de actualizado es una config que normalizeOtResourceAssignments derivo de
+          // una OT que nunca tuvo fila ni edicion: persistirla solo acumula filas en
+          // ot_configurations (medido 2026-10-06: 154 -> 249 en un dia) y engorda el aviso
+          // de "leidas que aqui NO estan". La marca distingue el caso legitimo: editar
+          // SIEMPRE sella updatedAt (app.js escribe new Date().toISOString()), asi que una
+          // config que la persona VACIO a proposito tiene marca y se escribe con sus vacios
+          // (borrando lo viejo). Solo aplica a ot_configurations: es la unica tabla de
+          // catalogos que la pagina re-deriva de operations.
+          const esResiduo = !fila.maquina && !fila.kit && !fila.herramental &&
+            fila.herramentales_extra.length === 0 && !fila.kit_pendiente &&
+            !fila.tipo_subcontrato && fila.dias_subcontrato <= 0 &&
+            !texto(item.updatedAt);
+          if (esResiduo) return;
+          out.push(fila);
         });
         return out;
       },
@@ -1125,8 +1141,10 @@
       // LO QUE LA PAGINA NO TIENE, DICHO Y NO TOCADO. Las claves leidas al arrancar que
       // no estan en lo que la pagina mapea ahora pueden ser filas que la persona quito
       // (ya salieron arriba, con su intencion) o filas que el navegador simplemente no
-      // tiene (ot_configurations las pierde normalizeOtResourceAssignments: 28 filas
-      // medidas 2026-10-06). Aqui NO se borra ninguna: sin intencion registrada la
+      // tiene (ot_configurations las pierde normalizeOtResourceAssignments; desde
+      // 2026-10-06 el mapear tampoco PERSISTE ese residuo: una config derivada sin marca
+      // de edicion es un skeleton sin contenido y no se escribe, asi la tabla deja de
+      // crecer por eso). Aqui NO se borra ninguna: sin intencion registrada la
       // diferencia es solo un aviso, y el aviso lo dice.
       const leidas = opts.clavesLeidas && opts.clavesLeidas[tabla];
       if (Array.isArray(leidas)) {
