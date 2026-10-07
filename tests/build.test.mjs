@@ -2935,6 +2935,10 @@ test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", asyn
   assert.match(payload, /settings: clone\(state\.settings \|\| \{\}\)/);
   assert.match(payload, /capacityMinutes: state\.capacityMinutes/);
   assert.match(payload, /operationCatalog: clone\(state\.operationCatalog \|\| \[\]\)/);
+  assert.match(payload, /matrix: clone\(state\.matrix \|\| \{\}\)/);
+  // La rejilla completa viaja en el payload: sin ella el mapear de la tabla `matrix`
+  // no escribe habilitado=false y DESMARCAR no persiste (RULE-MAT-012, medido 2026-10-07).
+  assert.match(payload, /matrixFull: clone\(state\.matrixFull \|\| \[\]\)/);
   assert.match(payload, /operators: \[\.\.\.\(state\.operators \|\| \[\]\)\]/);
   assert.match(payload, /excludedCapabilities: normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
   assert.match(payload, /revision: Number\(state\.revision \|\| 0\)/);

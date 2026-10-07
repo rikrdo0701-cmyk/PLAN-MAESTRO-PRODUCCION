@@ -790,6 +790,13 @@ function matrixSavePayload() {
     operationRules: clone(state.operationRules || {}),
     operationCatalog: clone(state.operationCatalog || []),
     matrix: clone(state.matrix || {}),
+    // La rejilla COMPLETA (marcada y sin marcar) que trae el lector. El mapear de la
+    // tabla `matrix` (supabase-writer.js) usa matrixFull como UNIVERSO para escribir
+    // el valor de cada pareja, incluido habilitado=false: sin el universo, DESMARCAR
+    // una casilla no genera ninguna fila (el valor se congela en true en la base y la
+    // recarga la muestra marcada) -- MEDIDO 2026-10-07 en produccion: la tabla matrix
+    // tenia 98 filas, todas en true, 0 en false.
+    matrixFull: clone(state.matrixFull || []),
     excludedCapabilities: normalizeCapabilityKeys(state.excludedCapabilities),
   };
 }
