@@ -3333,16 +3333,23 @@ test("DENTRO de Apps Script el guardado optimized tambien va a Supabase", async 
 
 test("la limpieza inicial renderiza sin solicitar guardado remoto", () => {
   const renders = [];
+  const saveStateCalls = [];
   const initializePlanningApp = Function(
     "bindElements", "bindEvents", "purgeClosedWorkOrderRetention", "resetDailyReportFiltersToToday", "render", "bindBacklogLoadMoreObserver", "saveState", "applyInitialWorkspaceView", "loadAppStateInBackground",
     `${initializeSource}; return initializePlanningApp;`,
   )(
-    () => {}, () => {}, () => {}, () => {}, (options) => renders.push(options), () => {}, () => {}, () => {}, () => {},
+    () => {}, () => {}, () => {}, () => {}, (options) => renders.push(options), () => {}, (scope) => saveStateCalls.push(scope), () => {}, () => {},
   );
 
   initializePlanningApp();
 
   assert.deepEqual(renders, [{ save: false }]);
+  // RULE-SUP-062: el arranque NO marca el plan sucio. ffdbd1b lo hacia (guarda borrador y
+  // muestra progreso) pero con la hidratacion en curso el debounce de 850 ms guardaba un
+  // estado sin hidratar, el camino viejo avisaba el freno y parcheaba app_state en cada
+  // carga. El estado se guarda cuando cambia el usuario, cuando se restaura un borrador
+  // (maybeRestoreSavedDraftOnBoot) o cuando el sync del arranque lo pide.
+  assert.deepEqual(saveStateCalls, ["ui"], "el boot solo persiste el ambito ui, no marca el plan sucio");
 });
 
 test("la edicion pendiente antes y durante el sync se guarda despues del acuse", async () => {

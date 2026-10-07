@@ -679,7 +679,6 @@ function initializePlanningApp() {
   bindBacklogLoadMoreObserver();
   saveState("ui");
   applyInitialWorkspaceView();
-  saveState("plan");
   loadAppStateInBackground();
 }
 
