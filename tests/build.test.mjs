@@ -2956,6 +2956,57 @@ test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", asyn
   assert.doesNotMatch(skills, /operator-name-input/);
 });
 
+test("skills.html aplana la importacion de Supabase (catalogs bajo raiz) y reintenta al entrar", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+
+  // El aplanado existe y la vista de la matriz lo consume antes de normalizar.
+  assert.match(skills, /function aplanarImportacion\(/);
+  assert.match(skills, /Object\.assign\(\{\}, catalogs, imported\)/);
+  assert.match(skills, /state = normalizeImportedState\(aplanarImportacion\(imported\)\)/);
+
+  // La lectura anonima (sin JWT) con RLS `to authenticated` responde 200 con cero
+  // filas: la vista avisa y espera a que entren para releer, como la web principal.
+  assert.match(skills, /sessionRequired/);
+  assert.match(skills, /"pp:sesion"/);
+  assert.match(skills, /void loadState\(\{ silent: false, force: true \}\)/);
+
+  // Comportamiento: se extrae la funcion del fuente y se ejecuta con la forma del
+  // lector (catalogs anidados + raiz) para probar el mismo contrato.
+  const inicio = skills.indexOf("function aplanarImportacion(");
+  assert.ok(inicio >= 0, "aplanarImportacion esta definida");
+  const fin = skills.indexOf("\n}\n", inicio) + 3;
+  const aplanar = new Function(`return (${skills.slice(inicio, fin)});`)();
+
+  const plano = aplanar({
+    catalogs: {
+      matrix: { "CT CORTE::CORTE": ["FORMADO 1"] },
+      operators: ["FORMADO 1"],
+      operationCatalog: [{ key: "CT CORTE::CORTE", ct: "CORTE", label: "CORTE" }],
+      capacityModes: { "CT CORTE::CORTE": "FINITA" },
+      operationRules: {},
+      operatorPerformance: {},
+      configuredCapabilities: ["CT CORTE::CORTE"],
+    },
+    operations: [{ id: "op-1" }],
+    revision: 7,
+    savedAt: "2026-10-07T00:00:00Z",
+    source: "supabase",
+  });
+  assert.deepEqual(plano.matrix, { "CT CORTE::CORTE": ["FORMADO 1"] }, "matrix pasa a la raiz");
+  assert.deepEqual(plano.operators, ["FORMADO 1"], "operators pasa a la raiz");
+  assert.deepEqual(plano.operationCatalog, [{ key: "CT CORTE::CORTE", ct: "CORTE", label: "CORTE" }], "operationCatalog pasa a la raiz");
+  assert.equal(plano.revision, 7, "revision de la raiz se conserva");
+  assert.equal(plano.operations[0].id, "op-1", "operations de la raiz se conserva");
+
+  // La raiz gana sobre catalogs si las dos traen la misma clave (revision, savedAt...).
+  const gananRaiz = aplanar({ catalogs: { matrix: "de-catalogos" }, matrix: "de-raiz" });
+  assert.equal(gananRaiz.matrix, "de-raiz", "la raiz gana sobre catalogs");
+
+  // Sin `catalogs` (estado ya plano o cached), no se toca nada.
+  const yaPlano = aplanar({ matrix: "plana", operators: [] });
+  assert.deepEqual(yaPlano, { matrix: "plana", operators: [] }, "sin catalogs se devuelve igual");
+});
+
 test("el payload de guardado por puente no deep-clona el estado: el postMessage ya lo copia", async () => {
   const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
   const bridgeClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "apps-script-bridge-client.js"), "utf8");

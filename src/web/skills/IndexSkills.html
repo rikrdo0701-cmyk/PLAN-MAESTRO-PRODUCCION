@@ -531,6 +531,7 @@ let saveQueued = false;
 let dirty = false;
 let loadSeq = 0;
 let cacheHydrated = false;
+let esperandoSesion = false;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -550,6 +551,24 @@ function normalizeImportedState(imported) {
   next.operationCatalog = Array.isArray(next.operationCatalog) ? next.operationCatalog : [];
   next.operations = Array.isArray(next.operations) ? next.operations : [];
   return next;
+}
+
+/**
+ * El lector de Supabase devuelve los catalogos anidados bajo `catalogs` y el resto
+ * (operations, selectedOts, revision, savedAt...) al nivel raiz. El puente que
+ * migramos (RULE-MAT-012) devolvia TODO plano, y la vista consume UNA sola forma, la
+ * plana. MEDIDO 2026-10-07 en produccion: sin este aplanado la vista pintaba una
+ * matriz vacia "correcta" (rev 0, 0 de 0 operaciones, 0 capacidades) porque matrix,
+ * operators y operationCatalog llegaban como undefined en la raiz. La web principal
+ * no lo notaba porque ella aplana informe.catalogs en supabase-catalog-apply.js.
+ */
+function aplanarImportacion(imported) {
+  if (!imported || typeof imported !== "object") return imported;
+  const catalogs = imported.catalogs;
+  if (!catalogs || typeof catalogs !== "object") return imported;
+  // catalogos primero, raiz despues: la raiz gana (revision/savedAt/operations no
+  // estan dentro de catalogs, asi que ningun catalogo se pisa).
+  return Object.assign({}, catalogs, imported);
 }
 
 function skillsCachePayload(source) {
@@ -1030,13 +1049,33 @@ async function loadState({ silent = false, force = false } = {}) {
       imported = await bridge.getAppState();
     }
     if (seq !== loadSeq) return;
-    state = normalizeImportedState(imported);
+    state = normalizeImportedState(aplanarImportacion(imported));
     dirty = false;
     saveQueued = false;
     cacheHydrated = true;
     renderMatrix();
     persistSkillsCache();
     setStatus(`rev ${state.revision || 0}`, "ok");
+    // La lectura salio como ANONIMA (sin JWT): con RLS `to authenticated` Supabase
+    // responde HTTP 200 con CERO filas, y eso pinta una matriz vacia que parece
+    // correcta. El lector lo dice con sessionRequired(); aqui se avisa y se espera a
+    // que entren (pp:sesion) para releer, como hace la web principal (catalog-apply).
+    if (
+      !state.operators.length && !state.operations.length
+      && window.PPSupabaseReader
+      && typeof window.PPSupabaseReader.sessionRequired === "function"
+      && window.PPSupabaseReader.sessionRequired()
+    ) {
+      setStatus("Entra con tu correo para leer la matriz desde Supabase", "error");
+      if (!esperandoSesion) {
+        esperandoSesion = true;
+        window.addEventListener("pp:sesion", (event) => {
+          if (!event || !event.detail || !event.detail.activo) return;
+          esperandoSesion = false;
+          void loadState({ silent: false, force: true });
+        }, { once: true });
+      }
+    }
   } catch (error) {
     if (seq !== loadSeq) return;
     if (state) {
