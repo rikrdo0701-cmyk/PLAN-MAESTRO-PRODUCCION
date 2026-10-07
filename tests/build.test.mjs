@@ -2247,6 +2247,35 @@ test("exportCsv exporta las operaciones del plan publicado seleccionado", async 
   assert.match(exported, /300/);
 });
 
+test("exportCsv antepone el BOM UTF-8 para que Excel abra los acentos bien", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
+  );
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
+    `${exportSource}; return exportCsv;`,
+  )(
+    {},
+    { PlanningWorkflowCore: {} },
+    () => [],
+    ["DESCRIPCION"],
+    (op) => [op.descripcion],
+    (value) => String(value),
+    (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "draft" } },
+    () => [{ descripcion: "INSPECCIÓN DE PIEZAS" }],
+  );
+
+  await exportCsv();
+
+  assert.ok(exported.startsWith("\uFEFF"), "el CSV debe arrancar con BOM UTF-8");
+  assert.match(exported, /INSPECCIÓN/);
+});
+
 test("PLAN_HEADERS documenta las columnas del CSV exportado", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const headersSource = app.slice(app.indexOf("const PLAN_HEADERS = ["), app.indexOf("const FIELD_MAP =", app.indexOf("const PLAN_HEADERS = [")));
@@ -2341,6 +2370,39 @@ test("operationToRow resuelve CT por descripcion y cantidad desde la OT cuando l
 
   const preserved = operationToRow({ ot: "3298", ct: "5458", descripcion: "3OTD : CORTE DE TUBO", cantPendiente: 12, cantTotal: 15 });
   assert.deepEqual(preserved, ["5458", 12, 15]);
+});
+
+test("operationToRow rellena PARTE desde la ficha de la OT cuando la operacion no trae articulo", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt", "window", "state",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PARTE"],
+    { PARTE: "parte" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+    {},
+    {},
+    () => 0,
+    (ot) => (ot === "2624" ? { item: "F66-2767-200" } : null),
+  );
+
+  const fromOp = operationToRow({ ot: "2624", parte: "TRL 200" });
+  assert.deepEqual(fromOp, ["TRL 200"]);
+
+  const fromWorkOrder = operationToRow({ ot: "2624" });
+  assert.deepEqual(fromWorkOrder, ["F66-2767-200"]);
+
+  const blank = operationToRow({ ot: "9999" });
+  assert.deepEqual(blank, [""]);
 });
 
 test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPriceForOt cae a precio manual si ambos son 0", async () => {

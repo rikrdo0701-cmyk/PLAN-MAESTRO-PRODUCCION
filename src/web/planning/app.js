@@ -11831,7 +11831,9 @@ async function exportCsv() {
   const generatedAt = lastScheduleGeneratedAt(sourceId);
   const rows = [PLAN_HEADERS, ...operations.map((op) => operationToRow(op, generatedAt))];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
+  // BOM UTF-8 (\\uFEFF): sin el, Excel en Windows abre el CSV con cp1252 y los
+  // acentos (INSPECCION, LIBERACION, EXPANSION) se ven como caracteres raros.
+  downloadBlob("\uFEFF" + csv, "plan-produccion.csv", "text/csv;charset=utf-8");
 }
 
 const XLSX_BACKLOG_HEADERS = ["OT", "Articulo", "Descripcion", "Cantidad", "Fecha entrega"];
@@ -12077,6 +12079,7 @@ function operationToRow(op, generatedAt) {
     if (header === "MONTO") return Number(op.amount) >= 1 ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
     const value = op[field];
+    if (header === "PARTE") return String(op.parte || workOrderForOt(op.ot)?.item || "").trim();
     if (header === "CT") return exportCtForOperation(op, value);
     if (header === "CANT_PENDIENTE" || header === "CANT_TOTAL") return exportQuantityForOperation(op, value);
     return value ?? "";
