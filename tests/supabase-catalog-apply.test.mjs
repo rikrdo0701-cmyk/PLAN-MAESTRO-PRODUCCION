@@ -68,6 +68,7 @@ function correrPuerta(entrada) {
       "}",
       bloquePuerta(),
       "globalThis.__puerta = aplicarEstadoDesdeSupabase;",
+      "globalThis.__colaLeidaSinFallo = () => colaLeidaSinFallo;",
     ].join("\n"),
     ctx,
   );
@@ -204,4 +205,23 @@ test("la puerta pinta una vez, sin guardar", async () => {
   const { ctx } = await correrPuerta({ operations: [] });
   // El objeto es del realm del vm, asi que se compara por su forma y no por prototipo.
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.renderCon)), { save: false });
+});
+
+test("la puerta enciende la senal de cola leida SOLO cuando selectedOts viene de una lectura buena (RULE-SUP-068)", async () => {
+  // La senal es lo que permite a guardarPlanEnSupabase distinguir "la cola esta
+  // vacia porque se leyo vacia" de "la cola esta vacia porque la lectura fallo" —
+  // el lector produce las dos cosas y solo la primera deja el aviso del freno sin
+  // verdad. MEDIDO 2026-10-08: sin esta distincion, cada recarga con el plan en
+  // cero mostraba "Aviso: No se llamo a plan_guardar porque llego vacia...".
+  const { ctx: leidaVacia } = await correrPuerta({ selectedOts: [] });
+  assert.equal(leidaVacia.__colaLeidaSinFallo(), true,
+    "lectura OK con 0 filas: la bandera se enciende; 'no hay' es informacion real");
+
+  const { ctx: leidaConOts } = await correrPuerta({ selectedOts: ["2844"] });
+  assert.equal(leidaConOts.__colaLeidaSinFallo(), true,
+    "la bandera certifica 'leyo la cola sin fallo', no 'la cola estaba vacia': el vacio lo comprueba quien guarda");
+
+  const { ctx: leidaFallida } = await correrPuerta({ operations: [] });
+  assert.equal(leidaFallida.__colaLeidaSinFallo(), false,
+    "sin la clave — lectura fallida, undefined que el apply descarta — la bandera queda apagada");
 });

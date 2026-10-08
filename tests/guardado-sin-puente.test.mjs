@@ -376,6 +376,9 @@ test("un guardado OK no vuelca la cascada de avisos por tabla como toasts", asyn
     showToast: (mensaje) => toasts.push(String(mensaje || "")),
     PPSupabaseWriter: { guardar: async () => guardado },
     state: { revision: 4 },
+    // RULE-SUP-068: la senal de "la cola se leyo sin fallo"; apagada, como en la
+    // pagina antes de que corra la puerta del arranque.
+    colaLeidaSinFallo: false,
     String, Object, Array, Number,
   };
   ctx.globalThis = ctx;
@@ -416,6 +419,7 @@ test("el retiro manual de la ultima OT pide vaciarSiEstaVacio; el vacio del arra
       },
     },
     state: {},
+    colaLeidaSinFallo: false,
     String, Object, Array, Number,
   };
   ctx.globalThis = ctx;
@@ -443,6 +447,81 @@ test("el retiro manual de la ultima OT pide vaciarSiEstaVacio; el vacio del arra
   await ctx.guardarPlanEnSupabase();
   assert.notEqual(corridas[2].vaciarSiEstaVacio, true,
     "cola que todavia tiene OTs: el freno sigue mandando");
+});
+
+test("el aviso del freno con el vacio probado no sale; sin probar, sigue saliendo (RULE-SUP-068)", async () => {
+  // MEDIDO 2026-10-08 (usuario, en produccion, tras desplegar RULE-SUP-066): con el
+  // plan en cero de verdad, CADA recarga mostraba "Aviso: No se llamo a plan_guardar
+  // porque llego vacia... guardalo con vaciarSiEstaVacio" (7 s, toast de accion). El
+  // freno tenia razon en no llamar a plan_guardar — nadie pidio vaciar — pero el
+  // vacio estaba probado (la lectura de la cola salio bien con 0 filas) y el aviso
+  // quedo como alarma falsa de cada arranque. El filtro es SOLO del texto del freno
+  // y SOLO con la probanza: con la senal apagada (lectura fallida o guardado previo
+  // al arranque) el aviso sigue saliendo tal cual, porque ahi el freno protege.
+  const cuerpo = (() => {
+    const i = app.indexOf("async function guardarPlanEnSupabase(");
+    assert.ok(i > 0, "no se encontro guardarPlanEnSupabase");
+    const f = app.indexOf("async function guardarSyncDeOrdenesTrabajoEnSupabase()", i);
+    assert.ok(f > i, "no se encontro el final de guardarPlanEnSupabase");
+    return app.slice(i, f);
+  })();
+  const AVISO_FRENO =
+    "No se llamo a plan_guardar porque llego vacia y sin que nadie lo pidiera con " +
+    "vaciarSiEstaVacio: selected_ots. La funcion borra esas tablas antes de " +
+    "reinsertarlas, y un guardado que fallo al leer no puede vaciar el plan entero " +
+    "(RULE-SUP-021). Se fue por el camino viejo, que si respeta el freno. Si el " +
+    "vacio es de verdad, guardalo con vaciarSiEstaVacio.";
+  const AVISO_REAL =
+    "se omitieron 1 evento(s) del log: un guardado manda como mucho 50 eventos por peticion.";
+  const toasts = [];
+  const ctx = {
+    showToast: (mensaje) => toasts.push(String(mensaje || "")),
+    PPSupabaseWriter: {
+      guardar: async () => ({
+        ok: true, revision: 6, savedAt: "2026-10-08T12:00:00.000Z", tablas: {},
+        avisos: [AVISO_FRENO, AVISO_REAL],
+      }),
+    },
+    state: {},
+    colaLeidaSinFallo: false,
+    String, Object, Array, Number,
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(cuerpo, ctx);
+
+  // 1. VACIO PROBADO por lectura buena: el aviso del freno NO sale; el otro aviso
+  //    de accion, que es verdad, pasa igual.
+  ctx.state = { selectedOts: [], revision: 5 };
+  ctx.colaLeidaSinFallo = true;
+  await ctx.guardarPlanEnSupabase();
+  assert.deepEqual(toasts, ["Aviso: " + AVISO_REAL],
+    "cola leida vacia sin fallo: el freno no tiene nada que advertir y su consejo no es accion posible");
+
+  // 2. SENAL APAGADA (lectura fallida, o guardado anterior a la puerta del arranque):
+  //    el aviso del freno sale tal cual — ahi sigue protegiendo la base.
+  toasts.length = 0;
+  ctx.colaLeidaSinFallo = false;
+  await ctx.guardarPlanEnSupabase();
+  assert.match(toasts[0], /^Aviso: No se llamo a plan_guardar porque llego vacia/,
+    "sin la senal de lectura buena el aviso no se puede filtrar: seria esconder una advertencia cierta");
+
+  // 3. VACIO PROBADO por retiro manual (la otra mitad de la probanza, RULE-SUP-066):
+  //    ese caso tambien se silencia, con la senal apagada.
+  toasts.length = 0;
+  ctx.state = { selectedOts: [], _locallyRemovedDraftOts: ["2844"], revision: 5 };
+  await ctx.guardarPlanEnSupabase();
+  assert.deepEqual(toasts, ["Aviso: " + AVISO_REAL],
+    "el retiro manual de la ultima OT prueba el vacio aunque la lectura no la haya encendido");
+
+  // 4. CON OTS EN LA COLA no hay vacio que probar: aunque la senal este encendida
+  //    (se enciende al leer, con OTs o sin ellas), el filtro no aplica.
+  toasts.length = 0;
+  ctx.state = { selectedOts: ["2844"], revision: 5 };
+  ctx.colaLeidaSinFallo = true;
+  await ctx.guardarPlanEnSupabase();
+  assert.match(toasts[0], /^Aviso: No se llamo a plan_guardar porque llego vacia/,
+    "la senal sola no basta: vacioProbado exige la cola en cero");
 });
 
 // ---------------------------------------------------------------------------

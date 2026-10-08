@@ -90,6 +90,10 @@ function escenario({ guardar = null, esRuntimeDeAppsScript = false } = {}) {
     resolveAppSheetSaveCompletion: null,
     planningActionsBusy: "",
     planStateMutationVersion: 0,
+    // RULE-SUP-068: la senal de "la cola se leyo sin fallo" que la puerta del
+    // arranque enciende en app.js; en los dobles arranca apagada, como en la
+    // pagina antes de que corra la puerta.
+    colaLeidaSinFallo: false,
     // syncNetSuiteTwoPhase multiplica este tiempo por 24 para el batch de planeacion.
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
     backlogSyncInFlight: false,

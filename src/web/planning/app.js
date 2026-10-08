@@ -11657,6 +11657,20 @@ async function applyImported(imported, options = {}) {
 /* PP-APPLY-DESDE-SUPABASE:INICIO */
 const CAMPOS_SIN_MAPEO = ["savedAt", "syncedAt", "reportFilters", "otTypes"];
 
+// RULE-SUP-068: LA SENAL DE "LA COLA SE LEYO BIEN". La puerta de arriba (abajo, la
+// funcion) la enciende cuando la entrada trae `selectedOts` como lista, que es
+// EXACTAMENTE lo que el lector solo produce cuando la lectura salio: si fallo,
+// siSePudoLeer devuelve undefined (supabase-reader.js:1457-1463, "UNA TABLA QUE NO
+// SE PUDO LEER NO ES UNA TABLA VACIA") y el apply ni siquiera pone la clave (test
+// "undefined NO se pasa" de tests/supabase-catalog-apply.test.mjs). La bandera
+// certifica "la cola se leyo sin fallo, vacia o con OTs"; que ademas este VACIA la
+// comprueba quien guarda. En `let` de modulo y no en `state`: es memoria de sesion
+// de ESTA pagina — no viaja a Supabase ni se persiste en localStorage. Consumidor:
+// guardarPlanEnSupabase, para no gritar el aviso del freno cuando el vacio esta
+// probado (cola en cero + esta senal, o los tombstones de RULE-SUP-066). El freno
+// en si no se toca: sin la senal, sigue frenando y sigue avisando.
+let colaLeidaSinFallo = false;
+
 /**
  * LA PUERTA DE ENTRADA DEL ESTADO QUE VIENE DE SUPABASE. Un solo lugar por donde
  * el arranque de Supabase entra a la pagina, y lo mete por applyImported.
@@ -11693,6 +11707,12 @@ async function aplicarEstadoDesdeSupabase(imported) {
   if (entrada.excludedCapabilities === undefined) entrada.excludedCapabilities = state.excludedCapabilities;
   const aplicadas = Object.keys(entrada).filter((clave) => entrada[clave] !== undefined);
   await applyImported(entrada, { preserveLocalPlanning: false, preferRemotePlanning: true });
+  // RULE-SUP-068: solo puede encenderse AQUI, dentro de la puerta y tras aplicar:
+  // la entrada trajo selectedOts como lista (lectura OK: el fallo llega como
+  // undefined y la clave ni se pone) y la reconciliacion no tiro. Si la lectura
+  // fallo, la bandera queda como estaba — apagada en el arranque — y ahi el freno
+  // del escritor conserva su aviso completo (RULE-SUP-021).
+  if (Array.isArray(entrada.selectedOts)) colaLeidaSinFallo = true;
   for (const clave of CAMPOS_SIN_MAPEO) {
     if (entrada[clave] !== undefined) state[clave] = entrada[clave];
   }
@@ -14308,9 +14328,23 @@ async function guardarPlanEnSupabase(opciones = {}) {
   // el opt-in que se pasa es el que el propio freno documenta: "Si el vacio es de
   // verdad, guardalo con vaciarSiEstaVacio". La revision del RPC sigue frenando a
   // una pagina atrasada: vaciar aqui no vacia encima de otro escritor.
+  const colaVacia = (state.selectedOts || []).length === 0;
   const colaVaciadaPorRetiro =
-    (state.selectedOts || []).length === 0 &&
+    colaVacia &&
     (state._locallyRemovedDraftOts || []).length > 0;
+  // RULE-SUP-068: VACIO PROBADO = la cola esta en cero Y ese cero vino de un origen
+  // que esta pagina puede certificar: un retiro manual de AQUI (tombstones,
+  // RULE-SUP-066) o una lectura de la cola que salio bien y se aplico
+  // (colaLeidaSinFallo, encendida por aplicarEstadoDesdeSupabase arriba). MEDIDO
+  // 2026-10-08 en produccion tras RULE-SUP-066: con el plan en cero de verdad,
+  // CADA recarga mostraba "Aviso: No se llamo a plan_guardar porque llego vacia...
+  // guardalo con vaciarSiEstaVacio" — el freno tenia razon en no llamar a
+  // plan_guardar (nadie pidio vaciar), pero no habia nada que proteger ni algo que
+  // la persona pueda pedir distinto, y el aviso quedo como alarma falsa de cada
+  // arranque. Aqui solo se CALCULA la probanza; el filtro del aviso esta mas abajo.
+  // Sin la senal (lectura fallida o guardado previo al arranque) vacioProbado es
+  // false y todo sigue como antes: el freno no se toca, solo su voz.
+  const vacioProbado = colaVaciadaPorRetiro || (colaVacia && colaLeidaSinFallo);
   let informe;
   try {
     informe = await writer.guardar(
@@ -14367,7 +14401,21 @@ async function guardarPlanEnSupabase(opciones = {}) {
     // omitidos — y con el prefijo "Aviso: " para que no lean ni como error ni como
     // confirmacion. Cuando `informe.ok` es falso, el toast de error unico de arriba ya dice
     // que no se guardo y por que.
-    const avisosDeAccion = informe.avisos.filter((aviso) => !/^(operations|work_orders|materials):/.test(String(aviso || "")));
+    const avisosDeAccion = informe.avisos.filter((aviso) => {
+      const texto = String(aviso || "");
+      if (/^(operations|work_orders|materials):/.test(texto)) return false;
+      // RULE-SUP-068: el unico aviso que se silencia aqui es el del freno del vacio
+      // (avisoDeFreno, el unico empuje de ese texto en supabase-writer.js), y solo
+      // cuando el vacio de la cola esta PROBADO (vacioProbado, arriba): lectura de
+      // la cola sin fallo o retiro manual de esta pagina. Ese freno no tenia nada
+      // que proteger y su consejo ("guardalo con vaciarSiEstaVacio") no es accion
+      // que la persona pueda hacer desde la pagina. Con la probanza sin senal —
+      // lectura fallida o guardado previo al arranque — el aviso pasa igual: ahi
+      // sigue protegiendo la base y la advertencia es cierta. El DDL ausente y los
+      // eventos omitidos no se tocan.
+      if (vacioProbado && /^No se llamo a plan_guardar porque /.test(texto)) return false;
+      return true;
+    });
     if (avisosDeAccion.length) showToast("Aviso: " + avisosDeAccion.join(" | "), 7000);
   }
   return true;
