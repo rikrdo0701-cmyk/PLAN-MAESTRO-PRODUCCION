@@ -14283,6 +14283,10 @@ function motivoDelInforme(informe) {
  *
  * `opciones` se pasa tal cual a guardar(): {snapshots} para guardar un
  * snapshot de plan_snapshots, {vaciarSiEstaVacio} para el borrado explicito.
+ * Ademas se AÑADE vaciarSiEstaVacio cuando la cola quedo en cero por un retiro
+ * manual de esta pagina; el calculo vive aqui y no en el llamador para que las
+ * TRES puertas de guardado (flush, debounce e reintento tras conflicto) lo
+ * arrastren sin acordarse de el. Ver el cuerpo.
  */
 async function guardarPlanEnSupabase(opciones = {}) {
   const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
@@ -14290,9 +14294,29 @@ async function guardarPlanEnSupabase(opciones = {}) {
     showToast("Supabase no esta disponible en este build: no se puede guardar el plan");
     return false;
   }
+  // LA COLA VACIA QUE SI HAY QUE ESCRIBIR. RULE-SUP-062 frena un estado vacio
+  // (frenoDelRpc antes de llamar a plan_guardar, y escribirEspejo con 0 filas en
+  // el camino viejo) porque una lectura fallida no puede vaciar el plan entero.
+  // Pero el retiro manual de la ULTIMA OT deja selected_ots vacio de verdad, y ahi
+  // el freno convertia un retiro legitimo en un guardado que no persistia:
+  // MEDIDO 2026-10-07 (usuario, en produccion, con la OT 2844): el informe salia
+  // ok:true, la app mostraba "OT devuelta al backlog" y al recargar la OT seguia
+  // en la cola. La senal de que el vacio vino de una accion de la persona y no de
+  // una lectura fallida son los tombstones del retiro de ESTA pagina
+  // (_locallyRemovedDraftOts: memoria, se borra al guardar y no sobrevive a
+  // recarga — app.js:7045, asi que un arranque con cola vacia nunca lo cumple), y
+  // el opt-in que se pasa es el que el propio freno documenta: "Si el vacio es de
+  // verdad, guardalo con vaciarSiEstaVacio". La revision del RPC sigue frenando a
+  // una pagina atrasada: vaciar aqui no vacia encima de otro escritor.
+  const colaVaciadaPorRetiro =
+    (state.selectedOts || []).length === 0 &&
+    (state._locallyRemovedDraftOts || []).length > 0;
   let informe;
   try {
-    informe = await writer.guardar(state, opciones);
+    informe = await writer.guardar(
+      state,
+      colaVaciadaPorRetiro ? { ...opciones, vaciarSiEstaVacio: true } : opciones
+    );
   } catch (error) {
     showToast("No se pudo guardar el plan: " + (error && error.message ? error.message : error));
     return false;

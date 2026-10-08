@@ -390,6 +390,61 @@ test("un guardado OK no vuelca la cascada de avisos por tabla como toasts", asyn
   ], "solo los avisos de ACCION llegan al toast, consolidados y con prefijo 'Aviso: '; los de 'que se escribio en la tabla' no");
 });
 
+test("el retiro manual de la ultima OT pide vaciarSiEstaVacio; el vacio del arranque no", async () => {
+  // MEDIDO 2026-10-07 (usuario, en produccion, con la OT 2844): mover la ultima tarjeta a
+  // backlog dejaba selected_ots vacio, el freno de RULE-SUP-062 impedia llamar a
+  // plan_guardar y el camino viejo no borraba la tabla (supabase-writer.js:483 "sin filas:
+  // no se borra la tabla (vaciarSiEstaVacio lo hace explicito)"), pero el informe salia
+  // ok:true y la app mostraba "OT devuelta al backlog". Al recargar, la OT seguia en la
+  // cola. El fix añade vaciarSiEstaVacio SOLO cuando el vacio vino de un retiro manual de
+  // esta pagina (tombstones _locallyRemovedDraftOts): sin ellos, un estado vacio sigue
+  // siendo una lectura fallida o el arranque, y ahi el freno sigue protegiendo la base.
+  const cuerpo = (() => {
+    const i = app.indexOf("async function guardarPlanEnSupabase(");
+    assert.ok(i > 0, "no se encontro guardarPlanEnSupabase");
+    const f = app.indexOf("async function guardarSyncDeOrdenesTrabajoEnSupabase()", i);
+    assert.ok(f > i, "no se encontro el final de guardarPlanEnSupabase");
+    return app.slice(i, f);
+  })();
+  const corridas = [];
+  const ctx = {
+    showToast: () => {},
+    PPSupabaseWriter: {
+      guardar: async (_state, opciones) => {
+        corridas.push(opciones);
+        return { ok: true, revision: 6, tablas: {}, avisos: [] };
+      },
+    },
+    state: {},
+    String, Object, Array, Number,
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(cuerpo, ctx);
+
+  // 1. Retiro manual de la ULTIMA OT: cola vacia CON tombstones de retiro de esta
+  //    pagina -> hay que vaciar, sin perder lo que pida el llamador.
+  ctx.state = { selectedOts: [], _locallyRemovedDraftOts: ["2844"], revision: 5 };
+  await ctx.guardarPlanEnSupabase({ snapshots: ["s1"] });
+  assert.equal(corridas[0].vaciarSiEstaVacio, true,
+    "cola vacia por retiro manual: pide el opt-in que documenta el propio freno");
+  assert.deepEqual(corridas[0].snapshots, ["s1"], "las opciones del llamador no se pierden");
+
+  // 2. El vacio del arranque (o de una lectura fallida) NO lleva el opt-in: ahi el
+  //    freno de RULE-SUP-062 sigue protegiendo la base de un estado que nadie quito.
+  ctx.state = { selectedOts: [], revision: 5 };
+  await ctx.guardarPlanEnSupabase();
+  assert.notEqual(corridas[1].vaciarSiEstaVacio, true,
+    "cola vacia sin retiro en esta pagina: el freno sigue mandando");
+
+  // 3. Un retiro que NO vacia la cola tampoco lleva el opt-in: el freno solo se
+  //    levanta cuando la cola quedo en cero por un retiro de esta pagina.
+  ctx.state = { selectedOts: ["2844"], _locallyRemovedDraftOts: ["2926"], revision: 5 };
+  await ctx.guardarPlanEnSupabase();
+  assert.notEqual(corridas[2].vaciarSiEstaVacio, true,
+    "cola que todavia tiene OTs: el freno sigue mandando");
+});
+
 // ---------------------------------------------------------------------------
 // EL FALLO DE CATALOGOS NO PUEDE DECIR "GUARDADO" (regresion del 2026-10-03)
 // ---------------------------------------------------------------------------
