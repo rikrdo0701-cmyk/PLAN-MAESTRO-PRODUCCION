@@ -69,6 +69,7 @@ function correrPuerta(entrada) {
       bloquePuerta(),
       "globalThis.__puerta = aplicarEstadoDesdeSupabase;",
       "globalThis.__colaLeidaSinFallo = () => colaLeidaSinFallo;",
+      "globalThis.__primeraLecturaConcluida = () => primeraLecturaConcluida;",
     ].join("\n"),
     ctx,
   );
@@ -99,6 +100,10 @@ function crearCtx({ boot = {}, puerta = true } = {}) {
       ctx.entrada = entrada;
       return { aplicado: true, claves: Object.keys(entrada) };
     },
+    // RULE-SUP-069: el abridor de la compuerta de guardados de app.js. El modulo lo
+    // llama en el `finally` de su primer intento de lectura; aqui se cuenta para poder
+    // fijar que la compuerta se abre en TODOS los desenlaces de la lectura.
+    concluirPrimeraLecturaDeSupabase: () => { ctx.concluida = (ctx.concluida || 0) + 1; },
   };
   // El modulo se instala solo al cargarse (document.readyState "complete"), y esa
   // primera corrida es la que esta en vuelo cuando el test llama a aplicarUnaVez.
@@ -160,6 +165,26 @@ test("las claves leidas las calcula el ESCRITOR, no una copia de la regla", asyn
   const ctx = crearCtx({ boot: { catalogs: { toolCatalog: [{ id: "T1" }, { id: "T2" }] } } });
   await ctx.PPCatalogApply.aplicarUnaVez();
   assert.deepEqual(ctx.PPCatalogApply.claves.tools, ["T1", "T2"]);
+});
+
+test("el primer intento de lectura abre la compuerta de los guardados de arranque (RULE-SUP-069)", async () => {
+  // La compuerta (app.js) detiene los guardados de arranque hasta que la primera
+  // lectura concluya. La conclusion la avisa ESTE modulo en el `finally` de su intento,
+  // porque la via fuerte (aplicarEstadoDesdeSupabase) no corre cuando la lectura falla,
+  // cuando no hay sesion o cuando no hay boot: sin este aviso, los guardados se
+  // quedarian esperando para siempre (nadie guarda estado que no leyo, pero tampoco
+  // puede quedarse sin guardar nunca).
+  const trasLecturaBuena = crearCtx({ boot: { catalogs: { operators: ["A"] } } });
+  await trasLecturaBuena.PPCatalogApply.aplicarUnaVez();
+  assert.equal(trasLecturaBuena.concluida, 1, "lectura que aplica: la compuerta se abre");
+
+  const trasLecturaFallida = crearCtx({ boot: { fallo: "red caida", catalogs: null } });
+  await trasLecturaFallida.PPCatalogApply.aplicarUnaVez();
+  assert.equal(trasLecturaFallida.concluida, 1, "lectura fallida: tambien se abre, o los guardados no correrian nunca");
+
+  const sinSesion = crearCtx({ boot: { activo: false, motivo: "sin sesion", catalogs: null } });
+  await sinSesion.PPCatalogApply.aplicarUnaVez();
+  assert.equal(sinSesion.concluida, 1, "sin sesion: se abre igual; entrar despues reintenta la lectura");
 });
 
 // ---------------------------------------------------------------------------
@@ -224,4 +249,12 @@ test("la puerta enciende la senal de cola leida SOLO cuando selectedOts viene de
   const { ctx: leidaFallida } = await correrPuerta({ operations: [] });
   assert.equal(leidaFallida.__colaLeidaSinFallo(), false,
     "sin la clave — lectura fallida, undefined que el apply descarta — la bandera queda apagada");
+});
+
+test("la puerta abre la compuerta de guardados al terminar de aplicar (RULE-SUP-069)", async () => {
+  // La via fuerte del arranque: cuando la lectura aplica, la propia puerta suelta a los
+  // guardados que esperaban por ella. El `finally` del modulo (probado arriba) cubre el
+  // caso en que la puerta no corre.
+  const { ctx } = await correrPuerta({ operations: [] });
+  assert.equal(ctx.__primeraLecturaConcluida(), true, "aplicar abre la compuerta: guardar deja de esperar");
 });

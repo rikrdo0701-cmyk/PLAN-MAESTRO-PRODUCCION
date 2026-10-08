@@ -216,7 +216,19 @@
   /** No se solapan dos lecturas: si ya hay una en marcha, se espera esa. */
   function unaVez() {
     if (!enMarcha) {
-      enMarcha = trabajar().finally(() => { enMarcha = null; });
+      enMarcha = trabajar().finally(() => {
+        enMarcha = null;
+        // RULE-SUP-069: el PRIMER intento de lectura ya concluyo —leyo y aplico, fallo,
+        // no habia sesion, o el modulo de boot no estaba—. Los guardados de arranque
+        // que se dispararon mientras tanto estan esperando esta senal en app.js
+        // (esperarPrimeraLecturaDeSupabase): no se puede dejar la pagina sin guardar
+        // por una lectura que no va a volver. Cuando la lectura SI aplico, la via
+        // fuerte (aplicarEstadoDesdeSupabase) ya la abrio y esta no hace nada. En una
+        // pagina sin app.js (skills) el abridor no existe y el typeof lo salta.
+        if (typeof root.concluirPrimeraLecturaDeSupabase === "function") {
+          root.concluirPrimeraLecturaDeSupabase();
+        }
+      });
     }
     return enMarcha;
   }

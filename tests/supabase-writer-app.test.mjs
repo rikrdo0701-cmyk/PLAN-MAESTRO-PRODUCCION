@@ -94,6 +94,9 @@ function escenario({ guardar = null, esRuntimeDeAppsScript = false } = {}) {
     // arranque enciende en app.js; en los dobles arranca apagada, como en la
     // pagina antes de que corra la puerta.
     colaLeidaSinFallo: false,
+    // RULE-SUP-069: la compuerta de la primera lectura; en este arnes ya concluyo (el
+    // doble resuelve al instante), como en la pagina despues del arranque.
+    esperarPrimeraLecturaDeSupabase: async () => {},
     // syncNetSuiteTwoPhase multiplica este tiempo por 24 para el batch de planeacion.
     NETSUITE_PLANNING_TIMEOUT_MS: 1000,
     backlogSyncInFlight: false,

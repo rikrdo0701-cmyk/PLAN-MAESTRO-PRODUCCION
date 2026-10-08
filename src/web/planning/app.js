@@ -11671,6 +11671,48 @@ const CAMPOS_SIN_MAPEO = ["savedAt", "syncedAt", "reportFilters", "otTypes"];
 // en si no se toca: sin la senal, sigue frenando y sigue avisando.
 let colaLeidaSinFallo = false;
 
+// RULE-SUP-069: LA PUERTA DE LA PRIMERA LECTURA. NADIE GUARDA ESTADO QUE NO LEYO.
+//
+// MEDIDO 2026-10-08 (usuario, en produccion, con RULE-SUP-066/067/068 ya desplegadas): el
+// aviso residual del arranque seguia saliendo, y el diagnostico en vivo mostro por que. El
+// guardado que disparaba el arranque (el sync, las confirmaciones, los precios) corria
+// ANTES de que la lectura de Supabase terminara de aplicar, asi que subia el estado local
+// de la pagina (selected_ots viejo de localStorage) por encima de lo que la base tenia:
+// ademas del aviso falso, un guardado asi BORRA y REESCRIBE la cola con estado obsoleto y
+// puede resucitar OTs que ya se habian retirado. El freno (RULE-SUP-062) y el filtro del
+// aviso (RULE-SUP-068) tratan el sintoma; esto apaga la causa.
+//
+// COMO. Esta compuerta se abre cuando ha concluido el primer intento de lectura, sea
+// aplicando o fallando, y `guardarPlanEnSupabase` espera por ella antes de escribir: los
+// guardados que se disparan durante el arranque no se pierden ni fallan, se DIFIEREN —
+// esperan unos segundos y despues escriben con el estado YA LEIDO, o con el estado local
+// de siempre si la lectura fallo (ahi el freno conserva su aviso). No es memoria de sesion
+// como colaLeidaSinFallo: es una compuerta de una sola vez, y vive aqui porque es parte
+// del contrato de la puerta el estado que viene de Supabase.
+//
+// QUIEN LA ABRE. (1) aplicarEstadoDesdeSupabase, al terminar de aplicar: la senal fuerte.
+// (2) El `finally` del primer intento de lectura (supabase-catalog-apply.js), porque si la
+// lectura falla, no hay sesion o el modulo de boot no esta, la via (1) no corre y los
+// guardados esperarian para siempre. Sin app.js (pagina de skills) el modulo no encuentra
+// el abridor y no hace nada. Sin el modulo de aplicacion en el build, `esperar` no bloquea
+// (nadie va a leer) y el comportamiento es el de siempre, con el freno intacto.
+let primeraLecturaConcluida = false;
+let resolverPrimeraLectura = () => {};
+const primeraLecturaDeSupabase = new Promise((resolver) => { resolverPrimeraLectura = resolver; });
+
+function concluirPrimeraLecturaDeSupabase() {
+  if (primeraLecturaConcluida) return false;
+  primeraLecturaConcluida = true;
+  resolverPrimeraLectura();
+  return true;
+}
+
+function esperarPrimeraLecturaDeSupabase() {
+  if (primeraLecturaConcluida) return Promise.resolve();
+  if (typeof PPCatalogApply === "undefined") return Promise.resolve();
+  return primeraLecturaDeSupabase;
+}
+
 /**
  * LA PUERTA DE ENTRADA DEL ESTADO QUE VIENE DE SUPABASE. Un solo lugar por donde
  * el arranque de Supabase entra a la pagina, y lo mete por applyImported.
@@ -11717,6 +11759,13 @@ async function aplicarEstadoDesdeSupabase(imported) {
     if (entrada[clave] !== undefined) state[clave] = entrada[clave];
   }
   render({ save: false });
+  // RULE-SUP-069: la lectura aplico — se abre la compuerta de los guardados de arranque
+  // para que de aqui en adelante escriban con ESTE estado y no con el local previo. Se
+  // abre DESPUES de aplicar y de los campos sin mapeo: un guardado que despierta con la
+  // compuerta tiene que ver el estado ya reconciliado, no a medias. Si applyImported
+  // tira, esta linea no corre y el `finally` del primer intento (supabase-catalog-apply.js)
+  // abre la compuerta igual.
+  concluirPrimeraLecturaDeSupabase();
   return { aplicado: true, claves: aplicadas };
 }
 /* PP-APPLY-DESDE-SUPABASE:FIN */
@@ -14309,6 +14358,15 @@ function motivoDelInforme(informe) {
  * arrastren sin acordarse de el. Ver el cuerpo.
  */
 async function guardarPlanEnSupabase(opciones = {}) {
+  // RULE-SUP-069: NADIE GUARDA ESTADO QUE NO LEYO. Esperar aqui, y no en cada uno de
+  // los que llaman, es lo que hace que la compuerta cubra TODOS los caminos con un solo
+  // punto: el temporizador de queueAppSheetSave, flushPlanSave (el drag), el boton
+  // guardar, el reintento de performance-client, el guardado directo del sync
+  // (guardarSyncDeOrdenesTrabajoEnSupabase), publicar y programar. Mientras el primer
+  // intento de lectura no concluya, estos guardados esperan y despues escriben con el
+  // estado ya aplicado; si la lectura falla o no hay sesion, se abren igual y escriben
+  // el estado local de siempre, con el freno (RULE-SUP-062) intacto.
+  await esperarPrimeraLecturaDeSupabase();
   const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
   if (!writer || typeof writer.guardar !== "function") {
     showToast("Supabase no esta disponible en este build: no se puede guardar el plan");

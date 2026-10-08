@@ -379,6 +379,9 @@ test("un guardado OK no vuelca la cascada de avisos por tabla como toasts", asyn
     // RULE-SUP-068: la senal de "la cola se leyo sin fallo"; apagada, como en la
     // pagina antes de que corra la puerta del arranque.
     colaLeidaSinFallo: false,
+    // RULE-SUP-069: la compuerta de la primera lectura; en estos escenarios ya
+    // concluyo (el doble resuelve al instante), como en la pagina despues del arranque.
+    esperarPrimeraLecturaDeSupabase: async () => {},
     String, Object, Array, Number,
   };
   ctx.globalThis = ctx;
@@ -420,6 +423,8 @@ test("el retiro manual de la ultima OT pide vaciarSiEstaVacio; el vacio del arra
     },
     state: {},
     colaLeidaSinFallo: false,
+    // RULE-SUP-069: la compuerta de la primera lectura ya concluyo en este escenario.
+    esperarPrimeraLecturaDeSupabase: async () => {},
     String, Object, Array, Number,
   };
   ctx.globalThis = ctx;
@@ -484,6 +489,8 @@ test("el aviso del freno con el vacio probado no sale; sin probar, sigue saliend
     },
     state: {},
     colaLeidaSinFallo: false,
+    // RULE-SUP-069: la compuerta de la primera lectura ya concluyo en este escenario.
+    esperarPrimeraLecturaDeSupabase: async () => {},
     String, Object, Array, Number,
   };
   ctx.globalThis = ctx;
@@ -572,4 +579,72 @@ test("el plan falla: todos los ambitos vuelven a marcarse, como siempre", async 
   assert.ok(ctx.appSheetDirtyScopes.has("catalogs"), "el ambito de catalogo quedo re-marcado junto con el de plan");
   assert.match(toasts.join(" "), /No se pudo guardar/, "se dice que no se pudo guardar, con el motivo del informe");
   assert.equal(ctx.appSheetSaveInFlight, false);
+});
+
+// ---------------------------------------------------------------------------
+// RULE-SUP-069: NADIE GUARDA ESTADO QUE NO LEYO
+// ---------------------------------------------------------------------------
+//
+// MEDIDO 2026-10-08 (usuario, en produccion, con RULE-SUP-066/067/068 ya desplegadas): el
+// guardado que dispara el arranque corria ANTES de que la lectura de Supabase aplicara, y
+// subia el estado local (selected_ots viejo de localStorage) por encima de la base: el
+// aviso residual del freno y el riesgo de resucitar OTs ya retiradas. El fix no toca el
+// freno ni el filtro del aviso: difiere el guardado hasta que el primer intento de lectura
+// concluye, esperandolo en guardarPlanEnSupabase. Estos tests corren la compuerta REAL
+// (el bloque PP-APPLY-DESDE-SUPABASE de app.js) con el cuerpo REAL del guardado.
+
+/** El bloque real de la compuerta, entre los dos centinelas de app.js. */
+function bloqueCompuerta() {
+  const desde = app.indexOf("/* PP-APPLY-DESDE-SUPABASE:INICIO */");
+  const hasta = app.indexOf("/* PP-APPLY-DESDE-SUPABASE:FIN */");
+  assert.ok(desde >= 0 && hasta > desde, "app.js conserva el bloque PP-APPLY-DESDE-SUPABASE");
+  return app.slice(desde, hasta);
+}
+
+/** Monta la compuerta real + el guardado real, con la compuerta en el estado pedido. */
+function montarCompuerta({ conModulo = true } = {}) {
+  const llamadas = [];
+  const ctx = {
+    showToast: () => {},
+    PPSupabaseWriter: {
+      guardar: async () => {
+        llamadas.push(ctx.state.revision);
+        return { ok: true, revision: 1, tablas: {}, avisos: [] };
+      },
+    },
+    state: { revision: 4, selectedOts: ["leida"] },
+    colaLeidaSinFallo: false,
+    String, Object, Array, Number,
+  };
+  // Con el modulo de aplicacion en el build, la compuerta bloquea; sin el, no hay quien
+  // vaya a leer y esperar seria no guardar nunca.
+  if (conModulo) ctx.PPCatalogApply = {};
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(
+    bloqueCompuerta() + "\n" + bloque("async function guardarPlanEnSupabase(", "async function guardarSyncDeOrdenesTrabajoEnSupabase"),
+    ctx,
+  );
+  return { ctx, llamadas };
+}
+
+test("con la compuerta cerrada el guardado espera; al abrirla escribe con el estado leido (RULE-SUP-069)", async () => {
+  const { ctx, llamadas } = montarCompuerta({ conModulo: true });
+  const pendiente = ctx.guardarPlanEnSupabase();
+  await Promise.resolve();
+  assert.deepEqual(llamadas, [], "compuerta cerrada: el guardado de arranque espera, no escribe estado que nadie leyo");
+
+  assert.equal(ctx.concluirPrimeraLecturaDeSupabase(), true, "el primer intento de lectura abre la compuerta");
+  await pendiente;
+  assert.deepEqual(llamadas, [4], "compuerta abierta: el guardado diferido escribe UNA vez, con el estado ya leido");
+  assert.equal(ctx.concluirPrimeraLecturaDeSupabase(), false,
+    "abrir dos veces no vuelve a soltar a nadie: es una compuerta de una sola vez");
+});
+
+test("sin el modulo de aplicacion en el build la compuerta no bloquea (RULE-SUP-069)", async () => {
+  // No hay quien abra la compuerta si nadie va a leer: esperar seria no guardar nunca.
+  // Se deja pasar y el comportamiento es el de siempre, con el freno intacto.
+  const { ctx, llamadas } = montarCompuerta({ conModulo: false });
+  await ctx.guardarPlanEnSupabase();
+  assert.deepEqual(llamadas, [4], "sin modulo de aplicacion el guardado pasa como siempre");
 });
