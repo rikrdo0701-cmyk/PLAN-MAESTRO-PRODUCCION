@@ -1028,6 +1028,39 @@ test("con vaciarSiEstaVacio si se llama a la funcion, porque el vacio es explici
   assert.deepEqual(llamadas[0].cuerpo.p_payload.locked_ots, []);
 });
 
+test("locked_ots vacia legitima NO frena: con la cola y los estatus poblados si se llama a plan_guardar", async () => {
+  // MEDIDO 2026-10-07 en produccion (fix RULE-SUP-064): una cuenta sin OTs
+  // bloqueadas SIEMPRE manda locked_ots: [] en el guardado completo. El freno lo
+  // confundia con un guardado que fallo al leer, caia al camino viejo y avisaba
+  // "No se llamo a plan_guardar ... locked_ots". La señal de lectura fallida la
+  // dan selected_ots y operation_plan_statuses: vienen vacias en la MISMA pasada
+  // que locked_ots. El vacio de locked_ots es el estado normal, no una señal.
+  const estadoSinBloqueadas = estado();
+  estadoSinBloqueadas.lockedOts = [];
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estadoSinBloqueadas);
+  assert.equal(llamadas.filter((c) => c.url.includes("/rpc/")).length, 1, "con la cola y los estatus poblados si se llama a la funcion");
+  assert.match(llamadas[0].url, /plan_guardar$/);
+  assert.deepEqual(llamadas[0].cuerpo.p_payload.locked_ots, [], "locked_ots va vacia, que es el estado verdadero");
+  assert.doesNotMatch((informe.avisos || []).join(" "), /No se llamo a plan_guardar/, "el freno ya no la toma por señal de lectura fallida");
+});
+
+test("con locked_ots vacia el freno sigue saltando si selected_ots lo esta: la señal del fallo de lectura sigue viva", async () => {
+  // El fix solo saco locked_ots de la vigilancia: si la lectura se cayo, selected_ots
+  // (y/o operation_plan_statuses) viene vacia en la misma pasada y el freno tiene que
+  // seguir protegiendo el plan entero (RULE-SUP-021).
+  const estadoSinCola = estado();
+  estadoSinCola.selectedOts = [];
+  estadoSinCola.lockedOts = [];
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  const informe = await writer.guardar(estadoSinCola);
+  assert.equal(llamadas.filter((c) => c.url.includes("/rpc/")).length, 0, "selected_ots vacia si frena, aunque locked_ots este igual de vacia");
+  const avisos = informe.avisos.join(" ");
+  assert.match(avisos, /No se llamo a plan_guardar/i);
+  assert.match(avisos, /selected_ots/);
+  assert.doesNotMatch(avisos, /locked_ots/, "locked_ots ya no aparece en el aviso del freno");
+});
+
 test("los eventos y los snapshots van con la forma que espera la funcion", async () => {
   const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
   await writer.guardar(estado(), {

@@ -2622,6 +2622,19 @@
         "src/web/shared/supabase-auth.js"
       ],
       "updated_at": "2026-10-07"
+    },
+    {
+      "rule_id": "RULE-SUP-064",
+      "name": "El freno del vacio ya no vigila locked_ots: su vacio es legitimo cuando no hay OTs bloqueadas; la senal de lectura fallida la dan selected_ots y operation_plan_statuses",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "MEDIDO 2026-10-07 en produccion: tras el fix de toasts de guardado (27882fa, RULE-SUP-062), al recargar la app salio por PRIMERA VEZ visible el aviso del freno 'No se llamo a plan_guardar... locked_ots'. El usuario confirmo que no tiene OTs bloqueadas (locked_ots vacia es su estado legitimo y permanente), que el aviso salio UNA sola vez y que no hizo nada antes de recargar. CADENA CONFIRMADA: (1) disparador puntual del guardado: el sync de fondo del arranque llama confirmUnconfirmedWorkOrderClosures (app.js:10627); habia marcas unconfirmed_work_orders de un sync anterior y NetSuite confirmo el cierre de alguna OT --> reconcileActiveWorkOrders + queueAppSheetSave('plan') (app.js:10607) --> guardado completo del plan ~850-900ms despues. Al confirmarse los cierres las marcas se borran (planning-workflow-core.js reconcileActiveWorkOrders :1042), por eso fue UNA sola vez. (2) raiz estructural: sin OTs bloqueadas, filasLockedOts arma locked_ots: [] y frenoDelRpc (supabase-writer.js:2381) la tomaba por senal de un guardado que fallo al leer (RULE-SUP-021) --> no llamaba al RPC plan_guardar, caia al camino viejo (guardarPorTablas) y empujaba su aviso. (3) por que era invisible antes: la cascada de avisos por tabla pisaba el toast (showToast deja visible el ultimo); la pieza 2 del fix de toasts dejo visible el aviso del freno. FIX 2026-10-07 (opcion A aprobada por el usuario): ESPEJO_QUE_SE_VACIA (supabase-writer.js:284) pasa a ['selected_ots','operation_plan_statuses']. La constante tiene UN solo consumidor (frenoDelRpc :2384), no participa en el vaciado del RPC, que lo hace la funcion remota plan_guardar. La proteccion del freno queda intacta: si una lectura se cae, selected_ots y operation_plan_statuses vienen vacias en la MISMA pasada del lector que locked_ots, asi que el freno salta igual y no se llama al RPC; locked_ots se diferencia de esas dos solo en que SU vacio es legitimo (no hay OTs bloqueadas). El aviso del freno sigue existiendo para selected_ots/operation_plan_statuses vacias (ahi si es senal de fallo). Tests nuevos en tests/supabase-writer.test.mjs: 'locked_ots vacia legitima NO frena...' (estado con lockedOts [] y cola/estatus poblados --> UN POST a plan_guardar y sin aviso de freno) y 'con locked_ots vacia el freno sigue saltando si selected_ots lo esta...' (selectedOts [] --> no se llama al RPC, el aviso nombra selected_ots y ya no locked_ots). Suite 1589/1589 verde; npm run check correcto.",
+      "source": "bug usuario 2026-10-07 (aviso 'No se llamo a plan_guardar... locked_ots' al recargar, una vez, sin OTs bloqueadas); trazado: supabase-writer.js frenoDelRpc :2381-2389 y ESPEJO_QUE_SE_VACIA :284 y filasLockedOts :2016; app.js confirmUnconfirmedWorkOrderClosures :10572-10610 y syncNetSuiteData :10627; planning-workflow-core.js reconcileActiveWorkOrders :1042; decision usuario 2026-10-07 (recomendo e implemento opcion A: sacar locked_ots del freno); RULE-SUP-021 (el freno del vacio), RULE-SUP-062 (fix de toasts previo que dejo el aviso visible)",
+      "applies_to": [
+        "src/web/shared/supabase-writer.js",
+        "tests/supabase-writer.test.mjs"
+      ],
+      "updated_at": "2026-10-07"
     }
   ]
 }

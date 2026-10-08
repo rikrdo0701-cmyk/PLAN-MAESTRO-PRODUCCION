@@ -276,12 +276,20 @@
    */
   const ESPEJO = ["operations", "work_orders", "materials", "selected_ots", "locked_ots", "operation_plan_statuses"];
   /**
-   * Las TRES de las que plan_guardar hace `delete` y luego `insert` SIN CONDICION
-   * (docs/schema-supabase-plan.sql:664), o sea las unicas que un estado vacio
-   * puede dejar vacias. Las tres del ERP son modo `actualiza` (UPDATE y nada mas)
-   * y no necesitan freno: una lista vacia ahi no toca una sola fila.
+   * De las que plan_guardar hace `delete` y luego `insert` SIN CONDICION
+   * (docs/schema-supabase-plan.sql:664), las que vigila el freno son selected_ots
+   * y operation_plan_statuses: son las unicas que un estado vacio puede dejar
+   * vacias. Las tres del ERP son modo `actualiza` (UPDATE y nada mas) y no
+   * necesitan freno: una lista vacia ahi no toca una sola fila.
+   *
+   * locked_ots SALE de aqui (fix 2026-10-07, RULE-SUP-064): su vacio es legitimo
+   * y permanente cuando la persona no tiene OTs bloqueadas, y la senal de que
+   * una lectura se cayo la dan las otras dos, que vienen vacias en la MISMA
+   * pasada del lector. Con esto el freno saco locked_ots de su aviso y los
+   * guardados de plan de una cuenta sin bloqueadas vuelven a plan_guardar
+   * (transaccion atomica) en vez de caer al camino viejo.
    */
-  const ESPEJO_QUE_SE_VACIA = ["selected_ots", "locked_ots", "operation_plan_statuses"];
+  const ESPEJO_QUE_SE_VACIA = ["selected_ots", "operation_plan_statuses"];
 
   /**
    * La clave con la que cada tabla hace UPSERT en el camino viejo (la Data API). Es la MISMA
@@ -2377,6 +2385,12 @@
    *
    * Las tres del ERP no se miran: en la funcion son modo `actualiza` (UPDATE y
    * nada mas), asi que una lista vacia ahi no toca una sola fila.
+   *
+   * locked_ots tampoco se vigila (fix 2026-10-07, RULE-SUP-064): es espejo del
+   * estado y su vacio es legitimo cuando no hay OTs bloqueadas. Si la lectura se
+   * cayo, selected_ots y operation_plan_statuses llegan vacias en la misma
+   * pasada y el freno salta por ellas: la proteccion del plan entero no depende
+   * de locked_ots.
    */
   function frenoDelRpc(payload, opciones) {
     if ((opciones || {}).vaciarSiEstaVacio === true) return null;
