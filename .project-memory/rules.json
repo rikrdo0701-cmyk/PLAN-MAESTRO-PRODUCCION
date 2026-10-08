@@ -2635,6 +2635,21 @@
         "tests/supabase-writer.test.mjs"
       ],
       "updated_at": "2026-10-07"
+    },
+    {
+      "rule_id": "RULE-UI-014",
+      "name": "Retiro manual de una OT programada o con operaciones completadas: solo por arrastre de la tarjeta o el boton del detalle, tras confirmar un aviso adaptativo; el candado manual y el boton global Backlog no cambian",
+      "status": "implementada",
+      "domain": "UI",
+      "rule": "DECISION usuario 2026-10-07: una OT programada (isProgrammedJobStatus) o con operaciones completadas (COMPLETADA_PLAN) puede salir del plan a backlog de forma INTENCIONAL, pero SOLO por (a) el arrastre de la tarjeta en la cola soltandola sobre el panel Backlog (finishQueueDrag -> selectJob(ot,false)) o (b) el boton 'Regresar a backlog' del panel de detalle (els.returnToBacklogBtn -> selectJob(ot,false)); en ambos casos se pide ventana.confirm con un aviso ADAPTATIVO que dice lo que la OT realmente tenga: 'operaciones programadas cuya programacion se perdera' y/o 'operaciones completadas que quedaran fuera del plan' (La OT X tiene ... . Aun asi, desea moverla a backlog?). Si el usuario no confirma, no se mueve y se muestra 'La OT X no se movio a backlog'. Lo que NO cambia: (1) el boton global 'Backlog' (returnUnlockedJobsToBacklog) sigue sin efecto para estas OTs (filtra isProgrammedJobStatus y canRemoveSelectedOt); (2) las OTs con candado manual (lockedOts) siguen frenadas en TODAS las vias con 'Desbloquea la OT antes de retirarla del plan' (performSelectJob re-chequea isOtLockedInState aunque tenga completadas); (3) el reordenamiento interno de la cola y el teclado siguen bloqueando programadas (canReorderSelectedJobs y el keydown de la tarjeta no cambian). IMPLEMENTACION: la rama !selected de performSelectJob (app.js:3214) usa canRemoveSelectedOt + hasCompletedPlanOperations (nueva exportacion publica del core: wrapper de otHasCompletedOperation_ que normaliza la OT, planning-workflow-core.js) y, si no hay advertencias (OT libre), no pide confirmacion (comportamiento previo intacto). La decision del aviso vive en confirmarRetiroManualDeOT (app.js, junto a performSelectJob): construye las advertencias y hace window.confirm; solo toca window.confirm cuando hay advertencias. El drag de la cola ahora inicia en tarjetas programadas (pointerdown de renderPriorityQueue: solo job?.locked impide iniciar); antes job?.programmed tambien frenaba, por lo que una programada no se podia arrastrar. La remocion tras confirmar usa el mismo camino que las libres (removeOtFromDraft + rememberDraftRemovedOts + invalidatePriorityJobsCache + applyQueuePriorities + renders + flushPlanSave), que desprograma las operaciones pendientes (vacia fechas/operador, planStatus PENDIENTE, needsReschedule) y conserva completadas/historicas en el estado. Relacionado: RULE-OT-046 (estatus programado fija la OT), RULE-UI-005 (drag de la cola), RULE-REP-006.",
+      "source": "decision usuario 2026-10-07 (aprobo: aviso adaptativo, candado manual sigue frenado, boton del detalle tambien mueve con aviso); src/web/planning/app.js performSelectJob :3214-3230, confirmarRetiroManualDeOT :3403, renderPriorityQueue pointerdown :2906-2910, finishQueueDrag :2995, els.returnToBacklogBtn :1261-1265, returnUnlockedJobsToBacklog (sin cambio), canReorderSelectedJobs :4320; src/web/planning/planning-workflow-core.js export hasCompletedPlanOperations (wrapper de otHasCompletedOperation_ :217); tests/planning-workflow-core.test.mjs (hasCompletedPlanOperations), tests/build.test.mjs ('el retiro manual de una OT programada o completada pide confirmacion adaptativa (RULE-UI-014)')",
+      "applies_to": [
+        "src/web/planning/app.js",
+        "src/web/planning/planning-workflow-core.js",
+        "tests/planning-workflow-core.test.mjs",
+        "tests/build.test.mjs"
+      ],
+      "updated_at": "2026-10-07"
     }
   ]
 }

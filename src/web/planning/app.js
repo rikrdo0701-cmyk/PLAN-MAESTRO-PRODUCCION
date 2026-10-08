@@ -2905,7 +2905,12 @@ if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt 
     });
     item.addEventListener("pointerdown", (event) => {
       const job = jobsByOt.get(item.dataset.queueOt);
-      if (job?.programmed || job?.locked) return;
+      // RULE-UI-014: una OT programada ahora puede arrastrarse para llevarla a
+      // backlog (performSelectJob pide la confirmacion del aviso al soltar).
+      // El candado manual sigue impidiendo iniciar el arrastre, y el
+      // reordenamiento interno de una programada sigue bloqueado por
+      // canReorderSelectedJobs y por el teclado (keydown de arriba).
+      if (job?.locked) return;
       if (event.button !== 0 || event.target.closest("button, input, select")) return;
       queuePointerDrag = {
         pointerId: event.pointerId,
@@ -3206,16 +3211,22 @@ async function performSelectJob(ot, selected, outcome = {}) {
     showToast(`OT ${ot} no puede agregarse al plan: ${jobNoProgramablePor_(job)}`);
     return false;
   }
-  if (!selected && job?.programmed) {
-    showToast(`OT ${ot} esta programada y debe permanecer en el plan`);
-    return false;
-  }
   if (!selected) {
+    // RULE-UI-014: una OT programada o con operaciones completadas puede salir
+    // del plan, pero solo tras confirmar el aviso de lo que se pierde (la
+    // programacion de las pendientes y/o las completadas que quedan fuera del
+    // plan). El candado manual sigue frenando igual que antes.
     const removal = window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot);
-    if (!removal.allowed) {
+    const completadas = window.PlanningWorkflowCore.hasCompletedPlanOperations(state, ot);
+    if (!removal.allowed && !completadas) {
       showToast(removal.reason);
       return false;
     }
+    if (window.PlanningWorkflowCore.isOtLockedInState(state, ot)) {
+      showToast(removal.reason);
+      return false;
+    }
+    if (!confirmarRetiroManualDeOT(ot, job, completadas)) return false;
   }
   const alreadySelected = state.selectedOts.includes(ot);
   if (selected && !alreadySelected) {
@@ -3386,6 +3397,19 @@ async function prepareJobForPlanning(job, options = {}) {
   ));
   if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
   if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+  return true;
+}
+
+function confirmarRetiroManualDeOT(ot, job, completadas) {
+  const advertencias = [];
+  if (job?.programmed) advertencias.push("operaciones programadas cuya programacion se perdera");
+  if (completadas) advertencias.push("operaciones completadas que quedaran fuera del plan");
+  if (!advertencias.length) return true;
+  const mensaje = `La OT ${ot} tiene ${advertencias.join(" y ")}. Aun asi, desea moverla a backlog?`;
+  if (!window.confirm(mensaje)) {
+    showToast(`La OT ${ot} no se movio a backlog`);
+    return false;
+  }
   return true;
 }
 

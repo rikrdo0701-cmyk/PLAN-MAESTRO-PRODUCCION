@@ -170,6 +170,70 @@ test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion",
   assert.equal(noneFlow.calls.toasts.at(-1), "No hay trabajos no bloqueados para enviar a backlog");
 });
 
+test("el retiro manual de una OT programada o completada pide confirmacion adaptativa (RULE-UI-014)", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+
+  // El drag de la tarjeta ahora inicia en programadas (solo el candado lo frena);
+  // el teclado y el reordenamiento interno siguen bloqueando programadas.
+  const pointerStart = planningApp.indexOf("item.addEventListener(\"pointerdown\", (event) => {");
+  const pointerEnd = planningApp.indexOf("item.setPointerCapture", pointerStart);
+  const pointerSlice = planningApp.slice(pointerStart, pointerEnd);
+  assert.match(pointerSlice, /if \(job\?\.locked\) return;/);
+  assert.doesNotMatch(pointerSlice, /if \(job\?\.programmed \|\| job\?\.locked\) return;/);
+
+  // La rama de remocion de performSelectJob usa la senal de completadas y el aviso.
+  const selectStart = planningApp.indexOf("async function performSelectJob(");
+  const selectEnd = planningApp.indexOf("function confirmarRetiroManualDeOT(", selectStart);
+  const selectSlice = planningApp.slice(selectStart, selectEnd);
+  assert.match(selectSlice, /hasCompletedPlanOperations\(state, ot\)/);
+  assert.match(selectSlice, /if \(!removal\.allowed && !completadas\)/);
+  assert.match(selectSlice, /confirmarRetiroManualDeOT\(ot, job, completadas\)/);
+
+  // El aviso adaptativo solo aparece cuando la OT tiene programadas/completadas.
+  const helperStart = planningApp.indexOf("function confirmarRetiroManualDeOT(");
+  const helperEnd = planningApp.indexOf("function showPlanningPreparationLoading(", helperStart);
+  const helper = planningApp.slice(helperStart, helperEnd);
+  const createHelper = (options = {}) => {
+    const calls = { confirm: 0, confirmMessages: [], toasts: [] };
+    const fn = Function("window", "showToast", `${helper}; return confirmarRetiroManualDeOT;`)(
+      {
+        confirm(message) {
+          calls.confirm += 1;
+          calls.confirmMessages.push(message);
+          return options.confirm !== false;
+        },
+      },
+      (message) => calls.toasts.push(message),
+    );
+    return { fn, calls };
+  };
+
+  const programada = createHelper();
+  assert.equal(programada.fn("100", { programmed: true }, false), true);
+  assert.equal(programada.calls.confirm, 1);
+  assert.match(programada.calls.confirmMessages[0], /La OT 100 tiene operaciones programadas cuya programacion se perdera/);
+  assert.match(programada.calls.confirmMessages[0], /Aun asi, desea moverla a backlog\?/);
+
+  const completadas = createHelper();
+  assert.equal(completadas.fn("200", {}, true), true);
+  assert.match(completadas.calls.confirmMessages[0], /operaciones completadas que quedaran fuera del plan/);
+
+  const ambas = createHelper();
+  assert.equal(ambas.fn("300", { programmed: true }, true), true);
+  assert.match(
+    ambas.calls.confirmMessages[0],
+    /operaciones programadas cuya programacion se perdera y operaciones completadas que quedaran fuera del plan/,
+  );
+
+  const libre = createHelper();
+  assert.equal(libre.fn("400", {}, false), true);
+  assert.equal(libre.calls.confirm, 0);
+
+  const cancelado = createHelper({ confirm: false });
+  assert.equal(cancelado.fn("100", { programmed: true }, false), false);
+  assert.equal(cancelado.calls.toasts.at(-1), "La OT 100 no se movio a backlog");
+});
+
 test("la configuracion de flujo expone controles y diagnostico sin render global", async () => {
   const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
   const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
@@ -515,7 +579,12 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /scheduleCurrentPlan/);
   assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
   assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
-  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed\)[\s\S]{0,180}showToast\(removal\.reason\)/);
+  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed && !completadas\)[\s\S]{0,180}showToast\(removal\.reason\)/);
+  // RULE-UI-014: el retiro manual de una OT programada/completada solo procede
+  // tras el aviso adaptativo; el candado manual sigue frenando en performSelectJob.
+  assert.match(pagesIndex, /if \(window\.PlanningWorkflowCore\.isOtLockedInState\(state, ot\)\)[\s\S]{0,40}showToast\(removal\.reason\)/);
+  assert.match(pagesIndex, /if \(!confirmarRetiroManualDeOT\(ot, job, completadas\)\) return false;/);
+  assert.match(pagesIndex, /La OT \$\{ot\} tiene \$\{advertencias\.join\(" y "\)\}\. Aun asi, desea moverla a backlog\?/);
   assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*if \(typeof rememberDraftRemovedOts === "function"\) rememberDraftRemovedOts\(\[ot\]\);\s*\}/);
   assert.match(pagesIndex, /prepareDraftForReschedule/);
   assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state, closedOts\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);

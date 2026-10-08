@@ -1265,6 +1265,23 @@ test("otHasCompletedOperations y pendingOperationsForOt separan operaciones comp
   assert.deepEqual(structuredClone(core.pendingOperationsForOt(state, "OT-1").map((op) => op.secuencia)), ["20", "30"]);
 });
 
+test("hasCompletedPlanOperations expone la misma senal de completadas que bloquea canRemoveSelectedOt", () => {
+  const state = {
+    operations: [
+      { ot: "OT-1", secuencia: "10", ct: "M1", planStatus: "COMPLETADA_PLAN" },
+      { ot: "OT-1", secuencia: "20", ct: "M2", planStatus: "PENDIENTE_PLAN" },
+      { ot: "OT-2", secuencia: "10", ct: "M1", planStatus: "PENDIENTE_PLAN" },
+    ],
+    operationPlanStatuses: { k1: { ot: "OT-3", status: "COMPLETADA_PLAN" } },
+  };
+  assert.equal(core.hasCompletedPlanOperations(state, "ot-1"), true);
+  assert.equal(core.hasCompletedPlanOperations(state, "ot-3"), true);
+  assert.equal(core.hasCompletedPlanOperations(state, "ot-2"), false);
+  assert.equal(core.hasCompletedPlanOperations({}, "ot-1"), false);
+  assert.equal(core.canRemoveSelectedOt({ operations: state.operations }, "ot-1").allowed, false);
+  assert.equal(core.canRemoveSelectedOt({ operations: state.operations }, "ot-2").allowed, true);
+});
+
 test("operationsRouteSignature ordena y omite entradas sin secuencia o CT", () => {
   const signature = core.operationsRouteSignature([
     { ot: "OT-1", secuencia: "20", ct: "M2" },
