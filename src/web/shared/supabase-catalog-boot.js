@@ -402,7 +402,15 @@
     };
     if (!resultado) return informe;
 
-    for (const t of (resultado.missing || [])) informe.vacias.push(t);
+    // RULE-SUP-064 (la misma decision, del lado del arranque): locked_ots VACIA es
+    // su estado legitimo y permanente cuando no hay OTs con candado, asi que el
+    // arranque no puede reportarla como "tabla vacia" en cada carga. El lector la
+    // sigue trayendo en `missing` (ese es el hecho de la lectura); la politica de
+    // no alarmar por ella vive aqui, donde se arma el aviso.
+    for (const t of (resultado.missing || [])) {
+      if (t === "locked_ots") continue;
+      informe.vacias.push(t);
+    }
     // MEDIDO 2026-10-05: antes esto era `for (const [t, e] of ...) informe.fallo = ...`, o sea que
     // SOBREESCRIBIA el fallo con el ultimo error y se perdia el de las demas tablas. Ahora se
     // acumulan todos y se pasan al apply para que el aviso los muestre.

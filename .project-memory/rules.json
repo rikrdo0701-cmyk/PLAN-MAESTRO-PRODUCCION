@@ -2637,6 +2637,19 @@
       "updated_at": "2026-10-07"
     },
     {
+      "rule_id": "RULE-SUP-065",
+      "name": "El arranque no reporta locked_ots como 'tabla vacia': su vacio es legitimo cuando no hay OTs con candado (continuacion de RULE-SUP-064 del lado de la lectura)",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "MEDIDO 2026-10-07 en produccion con sesion real, al probar el retiro manual (RULE-UI-014): el usuario reporto el aviso 'Tablas vacias en Supabase locked_ots. Sin respaldo, la pagina se queda sin eso.' al intentar arrastrar la tarjeta 2752. VERIFICADO EN LA PAGINA EN VIVO: el banner aparece en CADA arranque con UNICAMENTE locked_ots y sin linea de fallo, o sea que la lectura de locked_ots tuvo EXITO y devolvio 0 filas: es el mismo falso positivo que RULE-SUP-064 arreglo del lado del ESCRITOR, pero del lado del LECTOR/arranque. CADENA: readCatalogs (supabase-reader.js:1507-1510) marca como missing toda tabla que llega con 0 filas (vacio exitoso y lectura fallida caen en la misma lista); supabase-catalog-boot.js:405 la pasa a informe.vacias; lineasDelAviso (:447) pinta 'Tablas vacias en Supabase ... Sin respaldo, la pagina se queda sin eso.' DECISION (usuario, 2026-10-07, continuacion de RULE-SUP-064): locked_ots vacia es legitima y permanente cuando no hay OTs con candado, asi que no puede alarmar en cada carga. FIX: el boot filtra locked_ots al armar informe.vacias (supabase-catalog-boot.js:405); el lector SIGUE marcandola en missing porque ese es el hecho de la lectura (0 filas), y la politica de no alarmar vive en el boot, donde se arma el aviso. La distincion lectura-fallida vs vacio-legitimo de las demas tablas no cambia.",
+      "source": "bug usuario 2026-10-07 (aviso 'Tablas vacias en Supabase locked_ots' al arrastrar 2752; verificado en vivo: lectura exitosa con 0 filas y sin linea de fallo); trazado: supabase-reader.js readCatalogs missing :1507-1510, supabase-catalog-boot.js correr :405 y lineasDelAviso :447, supabase-catalog-apply.js trabajar :135-139 (cuando corre el aviso); decision usuario 2026-10-07 (opcion 'aplica el fix'); RULE-SUP-064 (locked_ots vacia legitima, ya decidido para el freno del escritor)",
+      "applies_to": [
+        "src/web/shared/supabase-catalog-boot.js",
+        "tests/supabase-catalog-boot.test.mjs"
+      ],
+      "updated_at": "2026-10-07"
+    },
+    {
       "rule_id": "RULE-UI-014",
       "name": "Retiro manual de una OT programada o con operaciones completadas: solo por arrastre de la tarjeta o el boton del detalle, tras confirmar un aviso adaptativo; el candado manual y el boton global Backlog no cambian",
       "status": "implementada",

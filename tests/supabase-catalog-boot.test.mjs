@@ -185,6 +185,17 @@ test("tablas vacias y datos viejos llegan en el informe, para que el aviso los p
   assert.deepEqual([...informe.vacias].sort(), ["matrix", "tools"]);
 });
 
+test("locked_ots vacia no se reporta como tabla vacia del arranque (RULE-SUP-064)", async () => {
+  const ctx = correrBoot({
+    lecturas: async () => ({ catalogs: {}, missing: ["locked_ots", "matrix", "tools"], errors: {} }),
+  });
+  const informe = await ctx.PPCatalogBoot.correr();
+  // El lector la sigue marcando como missing: es un hecho de la lectura (0 filas).
+  // La politica de RULE-SUP-064 es que su vacio es legitimo, asi que el aviso del
+  // arranque ("Tablas vacias en Supabase ... sin respaldo") no la puede nombrar.
+  assert.deepEqual([...informe.vacias].sort(), ["matrix", "tools"]);
+});
+
 /**
  * Monta el modulo de apply con una PUERTA de doble, y devuelve lo que la puerta
  * recibio. La puerta es `aplicarEstadoDesdeSupabase` de app.js: desde el modulo no
