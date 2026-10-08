@@ -1328,8 +1328,8 @@
   }
 
   /** La fecha que la hoja ponia en `Ultima modificacion`, en el mismo formato. */
-  function momentoDeGuardado() {
-    const ahora = new Date();
+  function momentoDeGuardado(reloj) {
+    const ahora = reloj || new Date();
     const dos = function (n) { return String(n).padStart(2, "0"); };
     return dos(ahora.getDate()) + "/" + dos(ahora.getMonth() + 1) + "/" + ahora.getFullYear()
       + " " + dos(ahora.getHours()) + ":" + dos(ahora.getMinutes()) + ":" + dos(ahora.getSeconds());
@@ -1425,9 +1425,18 @@
         return texto(item && (item.material || item.componente || item.MATERIAL)) + ":" + texto(valorDe(item));
       }).filter(function (linea) { return linea.charAt(0) !== ":"; }).join(" | ");
     };
+    // `fecha_hora` y `printed_at` salen del MISMO reloj de la misma llamada, como
+    // promete el comentario de arriba: si la pagina no manda texto, el texto es la
+    // representacion local de `ahora` y el instante es `ahora.toISOString()`. Antes
+    // solo se escribia el texto y `printed_at` quedaba NULL (MEDIDO 2026-10-08 leyendo
+    // el cuerpo que se manda): el lector ordena por `printed_at.desc.nullslast`, asi
+    // que cualquier migracion de la hoja vieja mezclada con filas nuevas pondria las
+    // nuevas despues de las viejas sin importar la fecha real.
+    const ahora = new Date();
     const cuerpo = {
       ot: folio.slice(0, 80),
-      fecha_hora: texto(fila && fila.fecha_hora) || momentoDeGuardado(),
+      fecha_hora: texto(fila && fila.fecha_hora) || momentoDeGuardado(ahora),
+      printed_at: ahora.toISOString(),
       articulo: texto(fila && (fila.articulo || fila.ARTICULO || fila.article)).slice(0, 200),
       cantidad: numero(fila && (fila.cantidad !== undefined ? fila.cantidad : fila.quantity)),
       estado_trabajo: texto(fila && (fila.estado_trabajo || fila.estadoTrabajo || fila.ESTADO_TRABAJO || fila.status)).slice(0, 80),

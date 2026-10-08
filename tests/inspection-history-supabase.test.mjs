@@ -359,7 +359,7 @@ test("sin folio NO se escribe: un historial sin OT no se puede leer despues", as
   assert.equal(llamadas.length, 0);
 });
 
-test("escribe UNA fila con las doce columnas de la hoja", async () => {
+test("escribe UNA fila con las doce columnas de la hoja mas `printed_at`", async () => {
   const { writer, llamadas } = escritor({
     responder: (registro) => (registro.metodo === "POST"
       ? contestando(200, [{ ot: "OT-1234", fecha_hora: "01/10/2026 09:15:00" }])
@@ -391,7 +391,21 @@ test("escribe UNA fila con las doce columnas de la hoja", async () => {
   // MEDIDO 2026-10-01: `deepEqual` tampoco sirve aca, por el `Object.prototype` de la vm.
   assert.equal(JSON.stringify(cuerpo.detalle.operations), JSON.stringify(["ns-10", "ns-20"]));
   assert.equal(cuerpo.detalle.materials[0].material, "MP1");
-  assert.equal(Object.keys(cuerpo).length, 12, `la hoja declara doce columnas y se mandan ${Object.keys(cuerpo).length}`);
+  // La treceava es `printed_at`, el instante con tipo: la hoja declara DOCE columnas y
+  // la fila lleva las doce, pero el lector ORDENA por printed_at y el DDL lo declara
+  // timestamptz. MEDIDO 2026-10-08: el cuerpo no lo mandaba y quedaba NULL siempre; sin
+  // el instante, una migracion de la hoja vieja mezclada con filas nuevas pondria las
+  // nuevas despues de las viejas (los NULLS LAST de una columna ordenada por ella).
+  assert.equal(Object.keys(cuerpo).length, 13, `la hoja manda doce columnas mas printed_at y se mandan ${Object.keys(cuerpo).length}`);
+  // Y las dos salen del MISMO instante: el texto es la representacion del ISO, no dos
+  // relojes que pueden discrepar (el contrato del comentario del escritor).
+  assert.equal(typeof cuerpo.printed_at, "string");
+  assert.equal(Number.isNaN(Date.parse(cuerpo.printed_at)), false, `printed_at no es un instante valido: ${cuerpo.printed_at}`);
+  const texto = cuerpo.fecha_hora;      // dd/MM/yyyy HH:mm:ss, en HORA LOCAL (getHours)
+  const desdeIso = new Date(cuerpo.printed_at);
+  const dos = (n) => String(n).padStart(2, "0");
+  const esperado = `${dos(desdeIso.getDate())}/${dos(desdeIso.getMonth() + 1)}/${desdeIso.getFullYear()} ${dos(desdeIso.getHours())}:${dos(desdeIso.getMinutes())}:${dos(desdeIso.getSeconds())}`;
+  assert.equal(texto, esperado, `fecha_hora (${texto}) y printed_at (${cuerpo.printed_at}) deben ser el MISMO instante, el texto en hora local del ISO`);
 });
 
 test("`sin_dibujo` y `falta_tramo` se guardan como 'SI'/'NO', igual que la hoja", async () => {
