@@ -594,7 +594,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
   assert.match(pagesIndex, /netSuiteSyncOutcome/);
   assert.match(pagesIndex, /subcontractWindowEnd/);
-  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="1" step="0\.01" required/);
+  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0" step="0\.01"/);
   assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
   assert.match(pagesIndex, /const description = String\(job\?\.descripcion \|\| workOrderForOt\(ot\)\?\.description \|\| ""\)\.trim\(\);/);
   assert.match(pagesIndex, /const detail = \[article, description, quantity \? `\$\{formatMaterialQuantity\(quantity\)\} pzas` : ""\]\.filter\(Boolean\)\.join\(" - "\);/);
@@ -751,7 +751,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
   assert.match(pagesIndex, /const hasRequiredGaps = requirements\.some\(\(item\) => \["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"\]\s*\.some\(\(code\) => item\.codes\.has\(code\)\)\) \|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
   assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);
-  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*las tres fuentes de precio estan en cero/);
+  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*no puede ser negativo/);
   assert.match(pagesIndex, /if \(!confirmZeroManualPrice\(els\.planningDialogForm\)\) return;[\s\S]*closePlanningDialog/);
   assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
   assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
@@ -2648,14 +2648,15 @@ test("RULE-REP-022: applyCommercialPlanningRequirement no escribe precio en un C
   assert.equal(configC.manualUnitPrice, 840.5, "una linea si se valora");
 });
 
-test("RULE-REP-022: el piso de $1 no bloquea cuando el tipo es COMPONENTE", async () => {
+test("RULE-REP-025: el precio unitario temporal puede quedar en 0 o vacio; solo un negativo bloquea", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const start = app.indexOf("function confirmZeroManualPrice(");
   const end = app.indexOf("function closePlanningDialog(", start) > start
     ? app.indexOf("function closePlanningDialog(", start)
     : start + 1200;
   const source = app.slice(start, end);
-  assert.match(source, /isComponentCommercialType\(form\?\.elements\?\.namedItem\("ot_job_type"\)\?\.value\)/);
+  assert.match(source, /Number\(input\.value \|\| 0\) >= 0/);
+  assert.match(source, /no puede ser negativo/);
 
   const confirm = Function("showToast", "isComponentCommercialType", `${source}; return confirmZeroManualPrice;`)(
     () => {}, (value) => String(value || "").trim().toUpperCase() === "COMPONENTE",
@@ -2668,9 +2669,9 @@ test("RULE-REP-022: el piso de $1 no bloquea cuando el tipo es COMPONENTE", asyn
     },
   });
 
-  assert.equal(confirm(form("0", "COMPONENTE")), true, "COMPONENTE con el campo en 0 no bloquea");
-  assert.equal(confirm(form("", "COMPONENTE")), true, "tambien con el campo vacio");
-  assert.equal(confirm(form("0", "LINEA")), false, "una linea en 0 si bloquea");
+  assert.equal(confirm(form("0", "LINEA")), true, "una linea en 0 avanza (RULE-REP-025)");
+  assert.equal(confirm(form("", "LINEA")), true, "una linea con el campo vacio avanza");
+  assert.equal(confirm(form("0", "COMPONENTE")), true);
   assert.equal(confirm(form("1", "LINEA")), true);
   assert.equal(confirm({}), true, "sin campo de precio no hay nada que confirmar");
 });
@@ -2683,8 +2684,8 @@ test("RULE-REP-022: el dialogo esconde el precio en el acto al elegir COMPONENTE
   assert.match(app, /const typeSelect = els\.planningDialogBody\.querySelector\('select\[name="ot_job_type"\]'\);/);
   assert.match(app, /const priceLabel = els\.planningDialogBody\.querySelector\("\.planning-price-field"\);/);
   assert.match(app, /typeSelect\.addEventListener\("change", syncPriceField\);/);
-  assert.match(app, /input\.required = !componente;/);
-  assert.match(app, /input\.min = componente \? "" : "1";/);
+  assert.match(app, /input\.required = false;/);
+  assert.match(app, /input\.min = componente \? "" : "0";/);
   // El marcador de abajo ya no lista solo tres tipos: COMPONENTE tambien es opcion valida.
   assert.match(app, /<option value="">Selecciona el tipo comercial<\/option>/);
 });

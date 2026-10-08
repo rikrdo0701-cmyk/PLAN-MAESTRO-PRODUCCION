@@ -186,18 +186,19 @@ Headers: `ARTICULO, TIPO_OT, TIPO_TRABAJO, PRECIO_MANUAL, PRECIO_REF_VENTA, ACTU
   escriba). Con el shim, el próximo `PP_writeTable_` deja la hoja alineada de verdad.
   **Regla para quien agregue una columna:** añadirla al final es siempre seguro; añadirla en
   medio desplaza los datos de las columnas posteriores y hay que insertarla.
-- Restricción (RULE-FIN-001): si `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`,
-  `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL` en 0 y la operación de la OT no tiene
-  `unitPrice`/`amount` ≥ $1, la preparación de la OT abre el
-  modal con `ot_manual_price` obligatorio (`required`, `min="1"`; piso $1 MXN, RULE-MON-001);
-  si la ops ya trae precio/monto ≥ $1 no se pide precio.
+- Restricción (RULE-FIN-001, matizada por RULE-REP-025 desde 2026-10-07): si
+  `ORDENES_TRABAJO` tiene `PRECIO_ULTIMA_VENTA`, `PRECIO_PROMEDIO_VENTA` y `PRECIO_MANUAL`
+  en 0 y la operación de la OT no tiene `unitPrice`/`amount` ≥ $1, la preparación de la OT
+  abre el modal con el campo `ot_manual_price` (precio unitario temporal), pero el campo
+  **ya no es obligatorio**: viene con `min="0"`, sin `required`, y dejarlo en 0 o vacío deja
+  avanzar; si la ops ya trae precio/monto ≥ $1 no se pide precio.
 - Excepción (RULE-REP-022): si `TIPO_OT` es `COMPONENTE` **no se pide precio y no se escribe
   ninguno**, aunque las tres fuentes estén en 0. Es una pieza que se compra, no un artículo que
   la planta vende, así que no hay precio de venta del cual sacarlo y el piso de $1 solo servía
   para que alguien escribiera 1.00. El `TIPO_OT` que manda es el guardado **o el que se elige en
-  el propio diálogo** (`options.commercialType`), para que el campo se esconda al elegirlo. El
-  diálogo quita `required` y `min` del campo cuando el tipo es `COMPONENTE`, y `confirmZeroManualPrice`
-  no bloquea el envío. Valores atrapados medidos el 2026-09-26: 4 de exactamente $1.00 (el piso) y
+  el propio diálogo** (`options.commercialType`), para que el campo se esconda al elegirlo.
+  `confirmZeroManualPrice` no bloquea el envío (RULE-REP-025: solo un negativo lo frena).
+  Valores atrapados medidos el 2026-09-26: 4 de exactamente $1.00 (el piso) y
   5 que coinciden al 0.00% con `max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA)` (el ratchet viejo);
   ninguno lo escribió una persona. No se borran solos: `scripts/diagnosticos/LISTA_PRECIOS_COMPONENTE.gs`
   los lista clasificados y no escribe nada.

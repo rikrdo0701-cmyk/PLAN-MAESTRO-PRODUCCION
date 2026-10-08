@@ -3938,7 +3938,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona el tipo comercial</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label class="planning-price-field">Precio unitario temporal<input name="ot_manual_price" type="number" min="1" step="0.01" required value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura un precio unitario de al menos $1.00</small></label>`
+    ? `<label class="planning-price-field">Precio unitario temporal<input name="ot_manual_price" type="number" min="0" step="0.01" value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura uno temporal o dejalo en 0</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -4013,8 +4013,10 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
               priceLabel.hidden = componente;
               const input = priceLabel.querySelector('input[name="ot_manual_price"]');
               if (input) {
-                input.required = !componente;
-                input.min = componente ? "" : "1";
+                // RULE-REP-025 (2026-10-07): el precio temporal nunca es obligatorio; puede
+                // quedar en 0 o vacio. Para COMPONENTE ademas el campo queda escondido.
+                input.required = false;
+                input.min = componente ? "" : "0";
               }
             };
             typeSelect.addEventListener("change", syncPriceField);
@@ -4193,12 +4195,12 @@ function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible,
 function confirmZeroManualPrice(form) {
   const input = form?.elements?.namedItem("ot_manual_price");
   if (!input) return true;
-  if (Number(input.value || 0) >= 1) return true;
-  // Si el articulo quedo como COMPONENTE no se captura precio: no se valora. El campo se
-  // ocultaria, pero si el usuario lo cambio a COMPONENTE con el dialogo abierto puede seguir
-  // ahi, y en ese caso el piso de $1.00 no debe bloquear (RULE-REP-022).
-  if (isComponentCommercialType(form?.elements?.namedItem("ot_job_type")?.value)) return true;
-  showToast("Captura un precio unitario de al menos $1.00; las tres fuentes de precio estan en cero", 9000);
+  // RULE-REP-025 (2026-10-07): el precio unitario temporal puede quedar en 0 o vacio; el
+  // reporte trata < $1 como "sin precio registrado" (RULE-REP-021/022), asi que un 0 y un
+  // vacio no inflan montos ni bloquean el avance. Solo se rechaza un numero negativo, que
+  // de todos modos reportValidity() ya frena por min="0"; este guard queda por robustez.
+  if (Number(input.value || 0) >= 0) return true;
+  showToast("El precio unitario no puede ser negativo", 9000);
   input.focus();
   return false;
 }
