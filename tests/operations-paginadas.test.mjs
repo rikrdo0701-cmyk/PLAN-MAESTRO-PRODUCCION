@@ -19,6 +19,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const readerSource = await readFile(new URL("../src/web/shared/supabase-reader.js", import.meta.url), "utf8");
+const bridgeSource = await readFile(new URL("../src/web/shared/supabase-bridge-replacement.js", import.meta.url), "utf8");
 
 const MAX_ROWS = 1000;
 
@@ -37,7 +38,9 @@ function lectorConDbMaxRows(filasPorTabla, { maxRows = MAX_ROWS } = {}) {
       const orden = params.get("order") || "";
       const limite = params.has("limit") ? Number(params.get("limit")) : null;
       const offset = params.has("offset") ? Number(params.get("offset")) : 0;
-      peticiones.push({ tabla, orden, limite, offset });
+      const filtroRaw = params.get("ot");
+      const filtro = filtroRaw ? filtroRaw.replace(/^eq\./, "") : null;
+      peticiones.push({ tabla, orden, limite, offset, filtro });
 
       let filas = [...(filasPorTabla[tabla] || [])];
       // PostgREST ordena cuando se le pide; para estas pruebas el orden de la tabla ya es el
@@ -51,6 +54,9 @@ function lectorConDbMaxRows(filasPorTabla, { maxRows = MAX_ROWS } = {}) {
           return x < y ? -1 : x > y ? 1 : 0;
         });
       }
+      // PostgREST filtra por `ot` cuando se le pide; sin esto, una lectura filtrada devolveria
+      // la tabla entera y la prueba no estaria probando el camino real.
+      if (filtro) filas = filas.filter((f) => String(f.ot == null ? "" : f.ot) === filtro);
       // ESTE es el defecto que hay que reproducir: sin `limit` PostgREST corta y no avisa.
       const tope = limite == null ? maxRows : limite;
       const ventana = filas.slice(offset, offset + tope);
@@ -67,7 +73,11 @@ function lectorConDbMaxRows(filasPorTabla, { maxRows = MAX_ROWS } = {}) {
   vm.runInContext(readerSource, contexto, { filename: "supabase-reader.js" });
   const reader = contexto.PPSupabaseReader;
   reader.configure({ url: "https://ejemplo.supabase.co", anonKey: "publicable-de-pruebas" });
-  return { reader, peticiones };
+  // El bridge se levanta en el MISMO contexto, contra el MISMO lector real: la regresion que
+  // aqui se cubre es que el sync del plan ya no lea `operations` sin paginar.
+  vm.runInContext(bridgeSource, contexto, { filename: "supabase-bridge-replacement.js" });
+  const bridge = contexto.PPSupabaseBridgeReplacement;
+  return { reader, bridge, peticiones };
 }
 
 function operaciones(n, desde = 0) {
@@ -145,4 +155,54 @@ test("`ORDEN_PAGINADO` declara `operations`, que es la tabla que rebasa `db-max-
   // prueba que la leyera sola no dejaria ver el olvido.
   assert.deepEqual(Object.keys(reader.ORDEN_PAGINADO), ["operations"]);
   assert.match(reader.ORDEN_PAGINADO.operations, /^ot\.asc/);
+});
+
+test("el sync del plan (syncNetSuitePlanningData) pagina `operations`: 2275 filas enteras, sin recorte", async () => {
+  // MEDIDO 2026-10-08 en produccion: el boot del plan leia por este camino (no por readCatalogs)
+  // y la lectura sin `limit` dejaba la tabla en 1000 filas -> 112 OTs (3668..3863) en 0.0h/0ops
+  // en sus tarjetas aunque el detalle trajera las operaciones. Este gate es la regresion.
+  const { reader, bridge, peticiones } = lectorConDbMaxRows({
+    operations: operaciones(2275),
+    materials: [],
+    work_orders: [],
+  });
+  const payload = await bridge.syncNetSuitePlanningData();
+
+  assert.equal(payload.operations.length, 2275);
+  assert.equal(payload.operations[0].ot, "1000");
+  assert.equal(payload.operations[2274].ot, "3274");
+  const lecturasDeOperations = peticiones.filter((p) => p.tabla === "operations");
+  assert.equal(lecturasDeOperations.length, 3, "2275 filas son tres viajes de 1000");
+  assert.deepEqual(lecturasDeOperations.map((p) => [p.limite, p.offset]), [[1000, 0], [1000, 1000], [1000, 2000]]);
+  assert.ok(lecturasDeOperations.every((p) => p.limite === 1000), "ninguna lectura queda sujeta a db-max-rows");
+  assert.ok(lecturasDeOperations.every((p) => p.orden === reader.ORDEN_PAGINADO.operations), "cada viaje lleva el orden estable de ORDEN_PAGINADO, la decision del lector");
+});
+
+test("el batch de VARIAS OTs pagina `operations`; la OT unica se lee filtrada", async () => {
+  const { bridge, peticiones } = lectorConDbMaxRows({ operations: operaciones(2275) });
+
+  // Varias OTs: sin filtro, la lectura completa tiene que paginar o se recorta en 1000.
+  const varias = await bridge.getPlanningWorkOrderDataBatch(["1500", "2400"]);
+  assert.equal(varias.ok, true);
+  assert.equal(varias.data.length, 2);
+  assert.equal(varias.data[0].data.operations.length, 1);
+  assert.equal(varias.data[1].data.operations.length, 1);
+  let lecturas = peticiones.filter((p) => p.tabla === "operations");
+  assert.equal(lecturas.length, 3);
+  assert.ok(lecturas.every((p) => p.limite === 1000));
+  assert.ok(lecturas.every((p) => p.filtro === null), "sin filtro: es la tabla completa la que se pagina");
+  // materiales y work_orders se leen una vez cada una (tablas chicas), no paginadas.
+  assert.equal(peticiones.filter((p) => p.tabla === "materials").length, 1);
+  assert.equal(peticiones.filter((p) => p.tabla === "work_orders").length, 1);
+
+  // Una sola OT: sigue la lectura filtrada, una sola peticion, no pagina (las filas de una OT caben).
+  peticiones.length = 0;
+  const una = await bridge.getPlanningWorkOrderDataBatch(["2400"]);
+  assert.equal(una.ok, true);
+  assert.equal(una.data.length, 1);
+  assert.equal(una.data[0].data.operations.length, 1);
+  lecturas = peticiones.filter((p) => p.tabla === "operations");
+  assert.equal(lecturas.length, 1);
+  assert.equal(lecturas[0].filtro, "2400");
+  assert.equal(lecturas[0].limite, null, "la lectura filtrada por OT no lleva `limit`: PostgREST la recorta solo si esa OT pasara de 1000, que no ocurre");
 });

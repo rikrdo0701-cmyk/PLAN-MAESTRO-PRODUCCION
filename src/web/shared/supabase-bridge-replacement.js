@@ -126,10 +126,15 @@
     const otList = Array.isArray(ots) ? ots : [];
     if (!otList.length) return { ok: true, data: [] };
 
-    const operations = await r.readTable("operations", {
-      filters: otList.length === 1 ? { ot: otList[0] } : undefined,
-      order: "ot.asc,secuencia.asc",
-    });
+    // UNA sola OT se lee filtrada (las filas de una OT siempre caben). Con VARIAS no hay
+    // filtro y la tabla completa, leida con `readTable`, quedaria sujeta a `db-max-rows`
+    // (1000) con HTTP 200 silencioso: MEDIDO 2026-10-08 (2138 filas; la OT 3863 caia fuera
+    // de la ventana y su tarjeta quedaba en 0.0h/0ops aunque el detalle trajera sus 19
+    // operaciones). Por eso la lectura completa pagina, igual que el arranque.
+    const unicaOt = otList.length === 1;
+    const operations = unicaOt
+      ? await r.readTable("operations", { filters: { ot: otList[0] }, order: r.ORDEN_PAGINADO.operations })
+      : await r.readTableEntero("operations", { order: r.ORDEN_PAGINADO.operations });
     const materials = await r.readTable("materials", {
       order: "ot.asc",
     });
@@ -233,7 +238,13 @@
    */
   async function syncNetSuitePlanningData() {
     const r = getReader();
-    const operations = await r.readTable("operations", { order: "ot.asc,secuencia.asc" });
+    // `operations` REBASA `db-max-rows` (1000) y la lectura sin `limit` llega CORTADA sin
+    // avisar (MEDIDO 2026-10-05; el 2026-10-08 con 2138 filas la OT 3863 caia fuera de la
+    // ventana y su tarjeta quedaba en 0.0h/0ops aunque el detalle trajera sus 19
+    // operaciones). El arranque de readCatalogs pagina con `readTableEntero`; este sync
+    // del plan usa el MISMO camino y el MISMO orden (ORDEN_PAGINADO: la decision de que
+    // tablas rebasan el limite vive en el lector).
+    const operations = await r.readTableEntero("operations", { order: r.ORDEN_PAGINADO.operations });
     const materials = await r.readTable("materials", { order: "ot.asc" });
     return {
       operations: r.mapOperations(operations),
