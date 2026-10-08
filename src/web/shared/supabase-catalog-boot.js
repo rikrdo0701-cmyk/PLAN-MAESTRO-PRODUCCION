@@ -407,8 +407,22 @@
     // arranque no puede reportarla como "tabla vacia" en cada carga. El lector la
     // sigue trayendo en `missing` (ese es el hecho de la lectura); la politica de
     // no alarmar por ella vive aqui, donde se arma el aviso.
+    //
+    // RULE-SUP-067 (el mismo veto para el par del plan): selected_ots y
+    // operation_plan_statuses VACIAS es el estado legitimo de un plan en cero, y
+    // desde RULE-SUP-066 el retiro manual de la ultima OT si persiste, asi que un
+    // plan vacio es ahora un estado real de la base. MEDIDO 2026-10-08 en
+    // produccion tras ese fix: con la cola genuinamente vacia, CADA recarga salia
+    // "Tablas vacias en Supabase: selected_ots. Sin respaldo, la pagina se queda sin
+    // eso." mientras la base y la pagina concuerdan en que no hay cola: falso
+    // positivo de la familia de RULE-SUP-064/065. El veto no esconde fallos: (1) si
+    // la lectura FALLO, la tabla esta en `errors` y la linea de fallo del MISMO
+    // aviso (informe.fallo, abajo) la nombra con su error — llamarla "vacia" ademas
+    // diria lo contrario de lo que paso; (2) en la caida total por sesion/RLS (0
+    // filas en TODAS las tablas), el resto (work_orders, materials, operations...)
+    // sigue en `missing` y sigue alarmando: la senal de caida no se pierde.
     for (const t of (resultado.missing || [])) {
-      if (t === "locked_ots") continue;
+      if (t === "locked_ots" || t === "selected_ots" || t === "operation_plan_statuses") continue;
       informe.vacias.push(t);
     }
     // MEDIDO 2026-10-05: antes esto era `for (const [t, e] of ...) informe.fallo = ...`, o sea que

@@ -196,6 +196,28 @@ test("locked_ots vacia no se reporta como tabla vacia del arranque (RULE-SUP-064
   assert.deepEqual([...informe.vacias].sort(), ["matrix", "tools"]);
 });
 
+test("selected_ots y operation_plan_statuses vacias no se reportan como tabla vacia del arranque (RULE-SUP-067)", async () => {
+  // MEDIDO 2026-10-08 en produccion tras RULE-SUP-066 (el retiro manual de la
+  // ultima OT SI persiste): con la cola genuinamente vacia en la base, CADA
+  // recarga salia "Tablas vacias en Supabase: selected_ots. Sin respaldo", mientras
+  // la base y la pagina concuerdan en que no hay cola. El vacio del plan es un
+  // estado real, igual que locked_ots (RULE-SUP-064).
+  const ctx = correrBoot({
+    lecturas: async () => ({
+      catalogs: {},
+      missing: ["selected_ots", "operation_plan_statuses", "matrix"],
+      // Si la lectura FALLO, la informacion no se pierde por el veto: la linea de
+      // fallo del MISMO aviso nombra la tabla con su error (informe.fallo).
+      errors: { selected_ots: "401 unauthorized" },
+    }),
+  });
+  const informe = await ctx.PPCatalogBoot.correr();
+  assert.deepEqual([...informe.vacias].sort(), ["matrix"],
+    "el vacio legitimo del plan no alarma; las demas tablas vacias siguen nombradas");
+  assert.match(String(informe.fallo), /selected_ots: 401 unauthorized/,
+    "una lectura FALLIDA de selected_ots si se dice, por la linea de fallo");
+});
+
 /**
  * Monta el modulo de apply con una PUERTA de doble, y devuelve lo que la puerta
  * recibio. La puerta es `aplicarEstadoDesdeSupabase` de app.js: desde el modulo no

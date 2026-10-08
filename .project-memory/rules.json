@@ -2686,6 +2686,20 @@
         "tests/guardado-sin-puente.test.mjs"
       ],
       "updated_at": "2026-10-07"
+    },
+    {
+      "rule_id": "RULE-SUP-067",
+      "name": "El arranque no reporta selected_ots ni operation_plan_statuses como 'tabla vacia': su vacio es el estado legitimo de un plan en cero (cara lector/arranque del mismo veto que RULE-SUP-066 abrio en el escritor)",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "MEDIDO 2026-10-08 en produccion tras el fix RULE-SUP-066 (el retiro manual de la ultima OT si persiste): con la cola genuinamente vacia en la base, CADA recarga mostraba el banner 'Tablas vacias en Supabase: selected_ots. Sin respaldo, la pagina se queda sin eso.' — falso positivo de la misma familia que RULE-SUP-064/065, que ahora salia porque el fix habia hecho alcanzable el plan en cero. CADENA: readCatalogs (supabase-reader.js:1507-1510) marca como missing TODA tabla que llega con 0 filas (vacio exitoso y lectura fallida caen en la misma lista; PERSON_TABLES :100-103 incluye selected_ots y operation_plan_statuses, asi que las dos se leen en cada arranque); supabase-catalog-boot.js:410-413 solo vetaba locked_ots y volcaba el resto a informe.vacias; lineasDelAviso (:454-455) lo pintaba como 'Sin respaldo, la pagina se queda sin eso'. DECISION: vetar tambien selected_ots y operation_plan_statuses — el MISMO par que el freno del escritor (ESPEJO_QUE_SE_VACIA, RULE-SUP-066) ya acepta como vacio legitimo: un plan en cero es un estado real persistido, no una lectura a medias, y la pagina y la base concuerdan, asi que no hay respaldo que falte. EL VETO NO ESCONDE FALLOS: (1) si la lectura FALLO, la tabla esta en resultado.errors y la linea de fallo del MISMO aviso (supabase-catalog-boot.js:417-421: 'No se pudieron leer los catalogos de Supabase... tabla: error') la nombra con su error; llamarla 'vacia' ademas diria lo contrario de lo que paso; (2) en la caida total por sesion/RLS (0 filas en TODAS las tablas), las demas (work_orders, materials, operations, machines...) siguen en missing y siguen alarmando — la senal de caida no se pierde. Alcance del cambio:el unico consumidor de informe.vacias que decide algo visible es el banner (lineasDelAviso); supabase-catalog-apply.js:209 solo lo propaga como campo informativo y app.js no lo lee. TEST: 'selected_ots y operation_plan_statuses vacias no se reportan como tabla vacia del arranque (RULE-SUP-067)' (tests/supabase-catalog-boot.test.mjs): missing con las dos mas matrix -> vacias solo [matrix]; y con errors {selected_ots: 401} -> la linea de fallo SI las nombra (el veto no tapa un fallo).",
+      "source": "bug derivado medido en produccion 2026-10-08 tras desplegar RULE-SUP-066 (banner en cada recarga con el plan vacio); supabase-reader.js readCatalogs :1486-1510 y PERSON_TABLES :100-103; supabase-catalog-boot.js :410-413 (veto previo solo locked_ots) y :454-455 (aviso), :417-421 (linea de fallo); supabase-catalog-apply.js :209 (pase informativo); decision usuario 2026-10-08 (aprobo implementar y desplegar); RULE-SUP-064/065 (locked_ots), RULE-SUP-066 (escritura del vacio por retiro manual)",
+      "applies_to": [
+        "src/web/shared/supabase-catalog-boot.js",
+        "src/web/shared/supabase-reader.js",
+        "tests/supabase-catalog-boot.test.mjs"
+      ],
+      "updated_at": "2026-10-08"
     }
   ]
 }
