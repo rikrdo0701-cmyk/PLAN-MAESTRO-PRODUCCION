@@ -11335,6 +11335,18 @@ function refreshPlanningActionControls() {
   setPlanningControlBusy(els.loadNsExerciseBtn, busy);
   setPlanningControlBusy(els.syncBacklogOtsBtn, backlogSyncInFlight);
   setPlanningControlBusy(els.restoreDraftBtn, busy);
+  // RULE-PERF-020: la etiqueta del boton Sincronizar se quedaba PEGADA con el texto de una fase
+  // cuando el flujo que la puso terminaba sin limpiarla. MEDIDO 2026-10-08: el boton "Sincronizar
+  // OTs" llama a correrIngestaPorBoton, cuyo setNetSuiteSyncPhaseLabel("Actualizando desde
+  // NetSuite...") pisa el etiqueta del boton PRINCIPAL; syncBacklogWorkOrders solo hace
+  // setBacklogSyncInFlight(false) en su finally y nunca restauraba. Se garantiza aqui la
+  // invariante: en reposo completo la etiqueta vuelve a "Sincronizar", con el MISMO criterio del
+  // boton mas el sync de OTs (backlogSyncInFlight), que es el flujo que exponia el hueco. Las
+  // fases ("Actualizando...", "Sincronizando OTs...", "Sincronizando operaciones...") solo se
+  // escriben con planningActionsBusy=="sync", asi que un reposo real nunca tiene un texto de fase
+  // legitimo que pisar; este restore es el mismo que ya hacia setPlanningActionsBusy en su rama
+  // !inProgress && !netSuiteSyncInFlight, ahora para cualquier camino de terminacion.
+  if (!busy && !backlogSyncInFlight) setNetSuiteSyncPhaseLabel("");
 }
 
 function setBacklogSyncInFlight(inProgress) {

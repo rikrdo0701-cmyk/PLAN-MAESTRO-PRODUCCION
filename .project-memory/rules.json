@@ -2795,6 +2795,19 @@
         "tests/ot-marks-survive-reload.test.mjs"
       ],
       "updated_at": "2026-10-08"
+    },
+    {
+      "rule_id": "RULE-PERF-020",
+      "name": "La etiqueta del boton Sincronizar vuelve a 'Sincronizar' en reposo completo: un flujo que pisa la etiqueta con un texto de fase no puede dejarla pegada (refreshPlanningActionControls)",
+      "status": "implementada",
+      "domain": "PERF",
+      "rule": "SINTOMA REPORTADO 2026-10-08: la etiqueta del boton Sincronizar quedaba PEGADA mostrando 'Actualizando desde NetSuite...' despues de que la sincronizacion terminaba. CAUSA RAIZ EN EL CODIGO, no en la red:\n(1) El texto de fase lo pisa correrIngestaPorBoton() (app.js:9890) con setNetSuiteSyncPhaseLabel('Actualizando desde NetSuite...'), que escribe en la etiqueta del boton PRINCIPAL (#syncBtn, data-sync-label).\n(2) Ese texto lo limpian SOLO los finally del flujo del boton principal (loadNetSuiteExercise :9836 y syncNetSuiteTwoPhase :10279).\n(3) El boton 'Sincronizar OTs' (syncBacklogOtsBtn, app.js:1201 -> syncBacklogWorkOrders) TAMBIEN llama a correrIngestaPorBoton() (app.js:9972), pero su finally (app.js:10068-10076) solo hace setBacklogSyncInFlight(false) y el restore del label en setPlanningActionsBusy (:11355) estaba guardado con !netSuiteSyncInFlight, que en ese flujo es falso: la etiqueta del boton principal quedaba con el texto de fase para siempre, hasta otra sincronizacion o recarga.\nQUE SE HIZO, EN UN SOLO LUGAR. refreshPlanningActionControls() (app.js:11332), que YA es el punto comun por el que terminan todos los flujos (setPlanningActionsBusy, setNetSuiteSyncState, setNetSuitePlanningSyncState y setBacklogSyncInFlight lo llaman), ahora restaura la etiqueta a 'Sincronizar' cuando TODO quedo en reposo: !planningActionsBusy && !netSuiteSyncInFlight && !netSuitePlanningSyncInFlight && !backlogSyncInFlight. La compuerta incluye backlogSyncInFlight a proposito (es el flujo que exponia el hueco), y es seguro porque las fases solo se escriben con planningActionsBusy=='sync': un reposo real nunca tiene un texto de fase legitimo que pisar. El restore reemplaza la rama que vivia en setPlanningActionsBusy (:11355) y cubre cualquier camino de terminacion, no solo el del boton principal. Los botones 'Generar plan'/'Publicar plan' tienen su propia etiqueta (data-schedule-label, setNetSuitePlanningSyncState) y no se tocan.\nPRUEBA: tests/performance-client-calls.test.mjs (nuevo caso 'la etiqueta del boton Sincronizar no queda pegada cuando el sync de OTs termina'): con backlogSyncInFlight=true la etiqueta de fase se conserva, y con setBacklogSyncInFlight(false) vuelve a 'Sincronizar'. Antes del cambio, el caso dejaba el texto pegado. Suite 1607/1607.",
+      "source": "sintoma reportado 2026-10-08 (etiqueta pegada); causa raiz en el codigo, medida el mismo dia\nsrc/web/planning/app.js: refreshPlanningActionControls :11332 (restaura 'Sincronizar' en reposo completo), setPlanningActionsBusy :11352, setBacklogSyncInFlight :11340, correrIngestaPorBoton :9890, syncBacklogWorkOrders finally :10068-10076, syncNetSuiteTwoPhase :10254/:10262/:10279\ntests/performance-client-calls.test.mjs (caso nuevo RULE-PERF-020)",
+      "applies_to": [
+        "src/web/planning/app.js",
+        "tests/performance-client-calls.test.mjs"
+      ],
+      "updated_at": "2026-10-08"
     }
   ]
 }

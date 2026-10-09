@@ -3980,6 +3980,51 @@ test("el boton conserva aria-busy hasta que terminan sync de OTs y accion manual
   assert.equal(buttons.loadNsExerciseBtn.label.textContent, "Sincronizar");
 });
 
+test("la etiqueta del boton Sincronizar no queda pegada cuando el sync de OTs termina (RULE-PERF-020)", () => {
+  // MEDIDO 2026-10-08: el boton "Sincronizar OTs" llama a correrIngestaPorBoton, cuyo
+  // setNetSuiteSyncPhaseLabel("Actualizando desde NetSuite...") pisa la etiqueta del boton
+  // PRINCIPAL, y su finally solo hace setBacklogSyncInFlight(false), que antes no restauraba
+  // nada: la etiqueta quedaba pegada. La invariante la garantiza refreshPlanningActionControls:
+  // en reposo completo (ni planning ni sync de OTs) la etiqueta vuelve a "Sincronizar".
+  const createButton = () => ({
+    disabled: false,
+    attributes: new Set(),
+    label: { textContent: "" },
+    setAttribute(name) { this.attributes.add(name); },
+    removeAttribute(name) { this.attributes.delete(name); },
+    querySelector() { return this.label; },
+    classList: { toggle: () => {} },
+  });
+  const buttons = {
+    loadNsExerciseBtn: createButton(),
+    scheduleBtn: createButton(),
+    syncBacklogOtsBtn: createButton(),
+    restoreDraftBtn: createButton(),
+  };
+  const context = {
+    els: buttons,
+    planningActionsBusy: "",
+    netSuiteSyncInFlight: false,
+    netSuitePlanningSyncInFlight: false,
+    backlogSyncInFlight: true,
+    setNetSuiteSyncPhaseLabel(message) {
+      buttons.loadNsExerciseBtn.label.textContent = message || "Sincronizar";
+    },
+    Boolean,
+  };
+  vm.createContext(context);
+  vm.runInContext(busyStateSource, context, { filename: "planning-busy-state.js" });
+
+  buttons.loadNsExerciseBtn.label.textContent = "Actualizando desde NetSuite...";
+  context.setBacklogSyncInFlight(true);
+  assert.equal(buttons.loadNsExerciseBtn.label.textContent, "Actualizando desde NetSuite...",
+    "mientras el sync de OTs corre, la etiqueta de fase se conserva");
+
+  context.setBacklogSyncInFlight(false);
+  assert.equal(buttons.loadNsExerciseBtn.label.textContent, "Sincronizar",
+    "al terminar el sync de OTs, la etiqueta del boton Sincronizar vuelve a su texto: el texto de fase no queda pegada");
+});
+
 test("Reportes y Restaurar comparten snapshots y conservan la recarga explicita", async () => {
   const gate = deferredPromise();
   let snapshotCalls = 0;
