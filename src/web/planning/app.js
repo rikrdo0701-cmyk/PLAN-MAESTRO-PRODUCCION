@@ -3382,6 +3382,26 @@ async function prepareJobForPlanning(job, options = {}) {
     if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return true;
   }
+  // RULE-OT-056 — diagnostico temporal: con window.PLANNING_REASK_DIAG === true registra por OT
+  // re-pedida que gaps tiene y que componente de la firma difiere (deriva por datos comerciales
+  // compartidos vs perdida de captura). NO cambia el flujo.
+  if (typeof window !== "undefined" && window.PLANNING_REASK_DIAG === true) {
+    const gapCodes = [...new Set(requirements.flatMap((item) => [...(item.codes || [])]))];
+    const diag = {
+      ot: String(job?.ot || ""),
+      gapCodes,
+      commercial: {
+        needsType: commercial.needsType === true,
+        needsPlanningType: commercial.needsPlanningType === true,
+        needsManualPrice: commercial.needsManualPrice === true,
+      },
+      signatureDiff: planningSignatureDiff(state.preparedPlanningByOt?.[job?.ot], signature),
+    };
+    if (typeof console !== "undefined" && typeof console.log === "function") {
+      console.log("[PLANNING-REASK]", JSON.stringify(diag));
+    }
+    window.__planningReaskDiag = [...(window.__planningReaskDiag || []), diag];
+  }
   const values = await showPlanningRequirements(planningJob, requirements, commercial);
   if (!values) {
     options.onCancel?.();
@@ -3464,6 +3484,20 @@ function planningPreparationSignature(job, operations, commercial) {
   });
 }
 
+// Diagnostico temporal RULE-OT-056: lista los componentes de la firma de preparacion que difieren
+// entre lo almacenado y lo vigente, para distinguir derivas por datos comerciales compartidos de
+// perdidas de captura. Solo se usa con window.PLANNING_REASK_DIAG === true.
+function planningSignatureDiff(stored, current) {
+  try {
+    const left = JSON.parse(String(stored || "{}"));
+    const right = JSON.parse(String(current || "{}"));
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    return [...keys].filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key]));
+  } catch (_error) {
+    return ["signature-unparseable"];
+  }
+}
+
 function maxOperationPriceSignalForOt(ot) {
   const key = materialOtKey(ot);
   let best = 0;
@@ -3494,14 +3528,28 @@ function isComponentCommercialType(value) {
 
 function commercialPlanningRequirement(job, options = {}) {
   const configuration = articleConfigurationValue(job.parte);
+  // RULE-OT-056: lo que la persona confirmo en el dialogo de preparacion queda capturado POR OT
+  // (jobType/planningType/manualUnitPrice/commercialCapturedAt en otConfigurations[ot]) y manda
+  // sobre el config del articulo. El config del articulo es COMPARTIDO por todas las OTs del mismo
+  // PARTE y cualquier re-captura lo sobrescribe, lo que hacia "derivar" la firma de OTs capturadas
+  // antes y volvia a pedir en GENERAR detalles ya confirmados. El articulo sigue siendo la fuente
+  // del reporte/catalogo; la captura por OT es lo que la persona confirmo para ESA OT.
+  const otConfiguration = otCommercialConfigurationFor(job.ot);
+  const capturedCommercial = Boolean(otConfiguration?.commercialCapturedAt);
   const invoicePrice = invoiceUnitPriceForOt(job.ot);
-  const manualPrice = Math.max(0, Number(configuration.manualUnitPrice || 0));
+  const manualPrice = Math.max(0, Number(
+    capturedCommercial ? (otConfiguration.manualUnitPrice ?? 0) : (configuration.manualUnitPrice || 0)
+  ));
   const operationPrice = maxOperationPriceSignalForOt(job.ot);
-  const planningType = String(configuration.planningType || configuration.tipoTrabajo || "").trim().toUpperCase();
+  const planningType = String(
+    (capturedCommercial ? otConfiguration.planningType : "") || configuration.planningType || configuration.tipoTrabajo || ""
+  ).trim().toUpperCase();
   // El tipo comercial que manda es el guardado o el que el usuario acaba de elegir en este
   // mismo dialogo (options.commercialType), para que elegir COMPONENTE esconda el precio de
   // entrada y no despues de confirmar.
-  const commercialType = String(options.commercialType || configuration.jobType || "").trim().toUpperCase();
+  const commercialType = String(
+    options.commercialType || (capturedCommercial ? otConfiguration.jobType : "") || configuration.jobType || ""
+  ).trim().toUpperCase();
   return {
     currentType: commercialType,
     isComponent: isComponentCommercialType(commercialType),
@@ -3512,9 +3560,12 @@ function commercialPlanningRequirement(job, options = {}) {
     pendingPieces: pendingPiecesForWorkOrder(workOrderForOt(job.ot)),
     needsType: !commercialType,
     needsPlanningType: options.alwaysPlanningType === true || !planningType,
-    // Un COMPONENTE nunca pide precio, tenga o no precio de venta: no se valora.
+    // Un COMPONENTE nunca pide precio, tenga o no precio de venta: no se valora. Una OT que ya
+    // paso por el dialogo de preparacion (commercialCapturedAt) tiene el precio CONFIRMADO por la
+    // persona, incluido 0/vacio: no se vuelve a pedir en el mismo estado (RULE-OT-056).
     needsManualPrice: !isComponentCommercialType(commercialType)
-      && !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1),
+      && !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1)
+      && !capturedCommercial,
   };
 }
 
@@ -3537,6 +3588,19 @@ function applyCommercialPlanningRequirement(job, values, commercial) {
     if (manualPrice >= 0) configuration.manualUnitPrice = manualPrice;
   }
   configuration.updatedAt = new Date().toISOString();
+  // RULE-OT-056: captura comercial POR OT. El config del articulo es compartido y cualquier
+  // re-captura de otra OT del mismo PARTE sobrescribe valores que la firma de OTs anteriores
+  // embebe, volviendo a pedir sus datos en generar. Se guarda una copia por OT de lo que la
+  // persona confirmo (tipo, planeacion, precio y el instante de captura) y se anota la edicion
+  // local para que un conflicto de guardado la re-aplique igual que el resto de la config de la
+  // OT (RULE-GOV-013). commercialPlanningRequirement la lee primero.
+  const otConfiguration = otConfigurationFor(job?.ot);
+  otConfiguration.jobType = configuration.jobType || "";
+  otConfiguration.planningType = configuration.planningType || "";
+  otConfiguration.manualUnitPrice = Number(configuration.manualUnitPrice || 0);
+  otConfiguration.commercialCapturedAt = otConfiguration.commercialCapturedAt || new Date().toISOString();
+  otConfiguration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(job?.ot);
 }
 
 function buildPlanningRequirements(issues, operations) {
@@ -13345,6 +13409,18 @@ function otConfigurationFor(ot) {
   return state.otConfigurations[key];
 }
 
+// Lectura NO mutante de la captura comercial POR OT (RULE-OT-056): intenta con la clave cruda
+// (como se escribe en applyCommercialPlanningRequirement y prepareJobForPlanning) y cae a la
+// normalizada por si el estado llego con otra forma de llave.
+function otCommercialConfigurationFor(ot) {
+  const raw = String(ot || "").trim();
+  const direct = state.otConfigurations?.[raw];
+  if (direct && typeof direct === "object") return direct;
+  const normalized = materialOtKey(ot);
+  if (normalized && normalized !== raw) return state.otConfigurations?.[normalized] || null;
+  return null;
+}
+
 function normalizeArticleConfigurations(source) {
   const out = {};
   if (!source || typeof source !== "object") return out;
@@ -13494,6 +13570,12 @@ function normalizeOtResourceAssignments() {
         ? Math.max(0, Math.round(Number(stored.subcontractDays || stored.diasSubcontrato) || 0))
         : Math.max(0, Math.round(Number(subcontractOps.find((op) => Number(op.subcontractDays) > 0)?.subcontractDays || 0))),
       updatedAt: String(stored?.updatedAt || stored?.actualizado || ""),
+      // RULE-OT-056: la captura comercial POR OT se conserva en el rebuild de otConfigurations;
+      // normalizar corre al inicio de cada preparacion y no debe borrar lo confirmado por OT.
+      jobType: stored ? String(stored.jobType || "").trim().toUpperCase() : "",
+      planningType: stored ? String(stored.planningType || "").trim().toUpperCase() : "",
+      manualUnitPrice: stored ? Math.max(0, Number(stored.manualUnitPrice || 0)) : 0,
+      commercialCapturedAt: stored ? String(stored.commercialCapturedAt || "") : "",
     };
     if (configuration.kitPending) configuration.kitHerramental = "";
     nextConfigurations[ot] = configuration;

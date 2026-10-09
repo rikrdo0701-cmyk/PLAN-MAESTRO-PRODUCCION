@@ -2534,7 +2534,8 @@ test("commercialPlanningRequirement no pide precio si la operacion ya tiene unit
   const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
     "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
     "pendingPiecesForWorkOrder", "workOrderForOt",
-    `${source}; return commercialPlanningRequirement;`,
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
   )(
     { operations },
     (value) => String(value || "").trim().toUpperCase(),
@@ -2578,7 +2579,8 @@ test("RULE-REP-022: un COMPONENTE no pide precio en \"preparar trabajo\" y se qu
   const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
     "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
     "pendingPiecesForWorkOrder", "workOrderForOt",
-    `${source}; return commercialPlanningRequirement;`,
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
   )(
     { operations },
     (value) => String(value || "").trim().toUpperCase(),
@@ -2600,7 +2602,8 @@ test("RULE-REP-022: un COMPONENTE no pide precio en \"preparar trabajo\" y se qu
   const override = Function(
     "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
     "pendingPiecesForWorkOrder", "workOrderForOt",
-    `${source}; return commercialPlanningRequirement;`,
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
   )(
     { operations: [] },
     (value) => String(value || "").trim().toUpperCase(),
@@ -2623,7 +2626,9 @@ test("RULE-REP-022: applyCommercialPlanningRequirement no escribe precio en un C
 
   const apply = Function(
     "articleConfigurationFor", "isComponentCommercialType", "suggestedPlanningTypeForJob",
-    `${source}; return applyCommercialPlanningRequirement;`,
+    // RULE-OT-056: la captura por OT va a un objeto desechable; el assert mira el config del
+    // articulo como hasta ahora.
+    `const otConfigurationFor = () => ({}); const rememberLocalOtConfigurationEdit = () => {}; ${source}; return applyCommercialPlanningRequirement;`,
   );
 
   const base = { invoicePrice: 0, manualPrice: 0, currentType: "", currentPlanningType: "" };
