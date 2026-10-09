@@ -8854,8 +8854,9 @@ async function openOtDrawing(ot, part) {
 }
 
 function renderOperatorSelect() {
-  const operators = uniq([...state.operators, ...reportOperationsSource().map((op) => op.operador)])
-    .filter(isLoadBearingOperator);
+  // RULE-BAL-006: el selector de operador solo lista operadores de la matriz (altas
+  // activas), no valores crudos de `op.operador` que no esten dados de alta.
+  const operators = uniq(state.operators || []).filter(isLoadBearingOperator);
   const current = els.operatorReportSelect.value || operators[0] || "";
   els.operatorReportSelect.innerHTML = operators.map((op) => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join("");
   els.operatorReportSelect.value = operators.includes(current) ? current : operators[0] || "";
@@ -12542,8 +12543,10 @@ function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loa
   const range = selectedWeekRange(weekStartValue);
   const scheduledOts = getScheduledOts();
   const loadState = { ...state, selectedOts: scheduledOts, planStart: formatDate(range.start), horizonDays };
-  const loadOperators = uniq([...state.operators, ...(sourceOperations || []).map((op) => op.operador)])
-    .filter(isLoadBearingOperator);
+  // RULE-BAL-006: Cargas solo considera operadores de la matriz (altas activas). No
+  // se agregan valores crudos de `op.operador` (p.ej. el "1" que viene de NetSuite
+  // laborresources), que no existen en la matriz de habilidades y ensuciaban la vista.
+  const loadOperators = uniq(state.operators || []).filter(isLoadBearingOperator);
   return loadOperators
     .map((operator) => {
       const minutes = (sourceOperations || [])
