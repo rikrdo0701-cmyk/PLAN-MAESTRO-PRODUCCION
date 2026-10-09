@@ -251,7 +251,17 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
     "pendingPiecesForWorkOrder", "uniq", "materialsForOt", "materialBaseForOt",
     "jobStatusForOt", "isMovablePlanningStatus", "isProgrammedJobStatus",
     "isClosedJobStatus", "isJobLocked", "operationDuration", "compareJobs",
-    `${sourceBetween("function getPriorityJobs()", "function getSelectedPriorityJob()")}; return getPriorityJobs;`,
+    `const jobStatusParaTarjeta = (ot) => {
+         const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+         const s = String(ficha?.status || "").trim();
+         return s && !isClosedJobStatus(s) ? s : jobStatusForOt(ot);
+       };
+       const isConfirmedClosedWorkOrder = (ot) => {
+         const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+         const key = String(ot || "").trim().toUpperCase();
+         return Boolean(ficha && isClosedJobStatus(ficha.status)) || Boolean(state.closedWorkOrderSummaries && state.closedWorkOrderSummaries[key]?.ot);
+       };
+       ${sourceBetween("function getPriorityJobs()", "function getSelectedPriorityJob()")}; return getPriorityJobs;`,
   )(
     state,
     currentPlanOperations,
@@ -288,6 +298,84 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
   assert.equal(finish.getMonth(), 6);
   assert.equal(finish.getDate(), 27);
   assert.equal(finish.getHours(), 8);
+});
+
+test("una ficha abierta manda sobre una operacion 'Completado' (3583): el job se ve, es programable y su estatus es el de la ficha", () => {
+  const state = {
+    excludedCapabilities: [],
+    operations: [
+      { id: "3583-op1", ot: "3583", secuencia: 1, ct: "100", descripcion: "DOBLADO", estatus: "Completado", operador: "ANA", prioridad: 1, tiempoProd: 60, fechaInicio: "2026-07-27", horaInicio: "07:00", fechaFin: "2026-07-27", horaFin: "08:00", tipoInsercion: "PROCESO" },
+      { id: "3583-op2", ot: "3583", secuencia: 2, ct: "100", descripcion: "CORTE", estatus: "No iniciado", operador: "ANA", prioridad: 5, tiempoProd: 60, fechaInicio: "2026-07-27", horaInicio: "07:00", fechaFin: "2026-07-27", horaFin: "08:00", tipoInsercion: "PROCESO" },
+      { id: "5200-op1", ot: "5200", secuencia: 1, ct: "100", descripcion: "DOBLADO", estatus: "Completado", operador: "ANA", prioridad: 1, tiempoProd: 60, fechaInicio: "2026-07-27", horaInicio: "07:00", fechaFin: "2026-07-27", horaFin: "08:00", tipoInsercion: "PROCESO" },
+      { id: "6100-op1", ot: "6100", secuencia: 1, ct: "100", descripcion: "DOBLADO", estatus: "Completado", operador: "ANA", prioridad: 1, tiempoProd: 60, fechaInicio: "2026-07-27", horaInicio: "07:00", fechaFin: "2026-07-27", horaFin: "08:00", tipoInsercion: "PROCESO" },
+    ],
+    workOrders: [
+      { ot: "3583", status: "Orden de trabajo : En curso", item: "CP 548 CDE" },
+      { ot: "5200", status: "Orden de trabajo : Cerrada", item: "C 590 UADA" },
+    ],
+    closedWorkOrderSummaries: {},
+  };
+  const { currentPlanOperations } = loadCurrentPlanOperations(state);
+  const jobStatusSource = sourceBetween("function jobStatusFromOperations(", "function matchesStatusFilter(");
+  const { jobStatusFromOperations, jobStatusForOt } = Function(
+    "state", "currentPlanOperations", "workOrderForOt", "isClosedJobStatus",
+    "isProgrammedJobStatus", "isPlannedJobStatus", "materialOtKey",
+    `${jobStatusSource}; return { jobStatusFromOperations, jobStatusForOt };`,
+  )(
+    state,
+    currentPlanOperations,
+    (ot) => state.workOrders.find((item) => String(item.ot) === String(ot)),
+    isClosedJobStatus,
+    isProgrammedJobStatus,
+    isPlannedJobStatus,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+  const getPriorityJobs = Function(
+    "state", "currentPlanOperations", "sequenceSort", "opStart", "workOrderForOt",
+    "workOrderPlaceholderOperation", "jobPriority", "effectiveWorkOrderDueDate",
+    "pendingPiecesForWorkOrder", "uniq", "materialsForOt", "materialBaseForOt",
+    "jobStatusForOt", "isMovablePlanningStatus", "isProgrammedJobStatus",
+    "isClosedJobStatus", "isJobLocked", "operationDuration", "compareJobs",
+    `const jobStatusParaTarjeta = (ot) => {
+         const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+         const s = String(ficha?.status || "").trim();
+         return s && !isClosedJobStatus(s) ? s : jobStatusForOt(ot);
+       };
+       const isConfirmedClosedWorkOrder = (ot) => {
+         const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+         const key = String(ot || "").trim().toUpperCase();
+         return Boolean(ficha && isClosedJobStatus(ficha.status)) || Boolean(state.closedWorkOrderSummaries && state.closedWorkOrderSummaries[key]?.ot);
+       };
+       ${sourceBetween("function getPriorityJobs()", "function getSelectedPriorityJob()")}; return getPriorityJobs;`,
+  )(
+    state,
+    currentPlanOperations,
+    (a, b) => a.secuencia - b.secuencia,
+    (op) => op.fechaInicio ? new Date(`${op.fechaInicio}T${op.horaInicio}:00`) : null,
+    (ot) => state.workOrders.find((item) => String(item.ot) === String(ot)),
+    (wo) => ({ id: `placeholder-${wo.ot}`, ot: wo.ot }),
+    (ops) => Math.min(...ops.map((op) => op.prioridad), 999),
+    () => "",
+    () => 0,
+    (values) => [...new Set(values)],
+    () => [],
+    () => "",
+    jobStatusForOt,
+    (status) => !isClosedJobStatus(status) && !isProgrammedJobStatus(status),
+    isProgrammedJobStatus,
+    isClosedJobStatus,
+    () => false,
+    (op) => Number(op.tiempoProd || 0),
+    () => 0,
+  );
+
+  const jobs = getPriorityJobs();
+  const byOt = Object.fromEntries(jobs.map((job) => [String(job.ot), job]));
+  assert.equal(byOt["3583"].closed, false, "la ficha 'En curso' gana sobre la op 'Completado': el job se ve en el backlog");
+  assert.equal(byOt["3583"].movable, true, "y es programable");
+  assert.equal(byOt["3583"].status, "Orden de trabajo : En curso", "su estatus es el de la ficha");
+  assert.equal(byOt["5200"].closed, true, "una ficha cerrada sigue cerrada y oculta");
+  assert.equal(byOt["6100"].closed, true, "un job huerfano (op 'Completado' sin ficha) conserva el criterio de antes");
 });
 
 test("los consumidores del render comparten operaciones incluidas hasta invalidar cambios relevantes", () => {
@@ -355,6 +443,16 @@ test("getPriorityJobs reutiliza indices y se invalida al cambiar los datos base"
      let planningStateIndexesCache = null;
      let planAlertItemsCache = null;
      let operatorLoadsCache = null;
+     const jobStatusParaTarjeta = (ot) => {
+       const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+       const s = String(ficha?.status || "").trim();
+       return s && !isClosedJobStatus(s) ? s : jobStatusForOt(ot);
+     };
+     const isConfirmedClosedWorkOrder = (ot) => {
+       const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
+       const key = String(ot || "").trim().toUpperCase();
+       return Boolean(ficha && isClosedJobStatus(ficha.status)) || Boolean(state.closedWorkOrderSummaries && state.closedWorkOrderSummaries[key]?.ot);
+     };
      ${source};
      return { getPriorityJobs, invalidatePriorityJobsCache };`,
   )(

@@ -284,6 +284,11 @@ test("el bloque REAL de normalizeState: con la marca la OT sobrevive, sin la mar
   const f = new Function("selectedOts", "workOrders", "operations", "unconfirmedWorkOrders",
     "materialOtKey", "isClosedJobStatus", "isMovablePlanningStatus", "jobStatusForOt", "uniq",
     `const state = { selectedOts, workOrders, operations, unconfirmedWorkOrders };
+     const jobStatusParaTarjeta = (ot) => {
+       const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+       const s = String(ficha?.status || "").trim();
+       return s && !isClosedJobStatus(s) ? s : jobStatusForOt(ot);
+     };
      ${codigo}
      return state.selectedOts;`);
   const deps = [materialOtKey, isClosedJobStatus, isMovablePlanningStatus, () => "EN PROCESO", uniq];

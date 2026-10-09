@@ -1661,8 +1661,8 @@ function normalizeState() {
   const operationOts = state.operations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").map((op) => op.ot);
   const workOrderOts = state.workOrders.map((workOrder) => workOrder.ot);
   const jobOts = uniq([...operationOts, ...workOrderOts].filter(Boolean));
-  const visibleOts = new Set(jobOts.filter((ot) => !isClosedJobStatus(jobStatusForOt(ot))));
-  const movableOts = new Set(jobOts.filter((ot) => isMovablePlanningStatus(jobStatusForOt(ot))));
+  const visibleOts = new Set(jobOts.filter((ot) => !isClosedJobStatus(jobStatusParaTarjeta(ot))));
+  const movableOts = new Set(jobOts.filter((ot) => isMovablePlanningStatus(jobStatusParaTarjeta(ot))));
   // Una OT que esta POR CONFIRMAR no vino en el ultimo payload pero tampoco hay evidencia de
   // que este cerrada (RULE-OT-049). Antes se caia de la cola aqui, en cada normalize, porque
   // visibleOts se armaba solo con operaciones y workOrders: si su ficha faltaba, la OT
@@ -1672,7 +1672,7 @@ function normalizeState() {
   const sigueViva = (ot) => {
     if (visibleOts.has(ot) && movableOts.has(ot)) return true;
     if (!porConfirmar.has(materialOtKey(ot))) return false;
-    return !isClosedJobStatus(jobStatusForOt(ot));
+    return !isClosedJobStatus(jobStatusParaTarjeta(ot));
   };
   const configuredSelectedOts = Array.isArray(state.selectedOts)
     ? state.selectedOts.filter((ot) => visibleOts.has(ot) && movableOts.has(ot))
@@ -6102,7 +6102,7 @@ async function scheduleCurrentPlanImpl() {
 // Procesar todas las OTs en la lista de planeado/no planeado (incluye bloqueadas; el motor reprograma incompletas)
 const replannableOts = state.selectedOts.filter((ot) =>
     affected.has(normalizeStatus(ot)) &&
-    isMovablePlanningStatus(jobStatusForOt(ot)) &&
+    isMovablePlanningStatus(jobStatusParaTarjeta(ot)) &&
     !hasClosedWorkOrderSyncWarning(ot)
   );
 
@@ -6167,7 +6167,7 @@ const replannableOts = state.selectedOts.filter((ot) =>
   const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
   const readyOts = state.selectedOts.filter((ot) =>
     availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
-    isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+    isMovablePlanningStatus(jobStatusParaTarjeta(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
   // QUE CUENTA COMO "CERRADA" AQUI (RULE-OT-051). Antes usaba isMovablePlanningStatus(
   // jobStatusForOt(ot)), y jobStatusForOt cae al estatus de las OPERACIONES cuando la ficha de
@@ -6179,7 +6179,7 @@ const replannableOts = state.selectedOts.filter((ot) =>
   // que se pueda revisar a mano en vez de perderla en silencio.
   const closedOts = state.selectedOts.filter((ot) => isConfirmedClosedWorkOrder(ot));
   const soloOperacionDiceCerrada = state.selectedOts.filter((ot) => (
-    !closedOts.includes(ot) && !isMovablePlanningStatus(jobStatusForOt(ot))
+    !closedOts.includes(ot) && !isMovablePlanningStatus(jobStatusParaTarjeta(ot))
   ));
   if (closedOts.length) {
     state = window.PlanningWorkflowCore.removeClosedWorkOrdersFromDraft(state, closedOts, new Date().toISOString());
@@ -6448,7 +6448,7 @@ async function dryRunCurrentPlanPerformance(options = {}) {
     metrics.affectedOtsCount = affected.size;
     const jobs = new Map(getPriorityJobs().map((job) => [materialOtKey(job.ot), job]));
     readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
-      isMovablePlanningStatus(jobStatusForOt(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+      isMovablePlanningStatus(jobStatusParaTarjeta(ot)) && !hasClosedWorkOrderSyncWarning(ot)
     );
      const dryRunMode = true;
       const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
@@ -13078,7 +13078,7 @@ function getPriorityJobs() {
         operators: uniq(ops.map((op) => op.operador).filter(Boolean)),
         materials,
         materialBase: materials[0]?.component || "",
-        status: jobStatusForOt(job.ot),
+        status: jobStatusParaTarjeta(job.ot),
         // DECISION DEL USUARIO 2026-10-06: una OT SIN FICHA en `work_orders` no se programa, y
         // la tarjeta lo dice. No es una preferencia de estilo, son tres hechos medidos.
         //
@@ -13100,9 +13100,15 @@ function getPriorityJobs() {
         // "cerrada": una OT cerrada con su fila (`cerrada: true`) sigue teniendo ficha, asi que
         // su causa sale por `status`, que es lo que ya decia el boton.
         sinFicha: !workOrder,
-        movable: Boolean(workOrder) && isMovablePlanningStatus(jobStatusForOt(job.ot)),
+        movable: Boolean(workOrder) && isMovablePlanningStatus(jobStatusParaTarjeta(job.ot)),
+        // `programmed` sigue siendo estado de las operaciones: una OT ya programada en el plan
+        // no se toca aunque la ficha diga "En curso" (los candados de edicion usan ese dato).
         programmed: isProgrammedJobStatus(jobStatusForOt(job.ot)),
-        closed: isClosedJobStatus(jobStatusForOt(job.ot)),
+        // RULE-OT-051: cerrada SOLO si la ficha lo dice o NetSuite lo confirmo. Antes caia al
+        // estatus de la primera operacion y una op "Completado" escondia la OT entera del
+        // backlog (3583). Los jobs HUERFANOS (operaciones sin ficha) conservan el criterio de
+        // antes via el fall-down, para no destapar OTs desaparecidas del espejo.
+        closed: isConfirmedClosedWorkOrder(job.ot) || (!workOrder && isClosedJobStatus(jobStatusParaTarjeta(job.ot))),
         locked: isJobLocked(job.ot),
         firstSequence: ops[0]?.secuencia ?? "",
         lastSequence: ops[ops.length - 1]?.secuencia ?? "",
@@ -13850,8 +13856,11 @@ function isMovablePlanningStatus(status) {
 // OT PERO CAE AL ESTATUS DE SUS OPERACIONES cuando la ficha no dice nada (jobStatusFromOperations
 // arma [workOrderStatus, ...estatus de operaciones] y se queda con el primero que parezca
 // cerrada). Para PROGRAMAR eso esta bien, porque una operacion completada de verdad implica
-// trabajo terminado. Para BORRAR LA OT de la cola no: una sola operacion mal puestaquitaba el
+// trabajo terminado. Para BORRAR LA OT de la cola no: una sola operacion mal puesta quitaba el
 // trabajo entero del plan sin confirmacion.
+// DECISION DEL USUARIO 2026-10-08 (OT 3583): cuando la ficha existe y esta abierta, su estatus
+// manda tambien para PROGRAMAR (ver jobStatusParaTarjeta); el fall-down queda solo para ficha
+// ausente o cerrada.
 function isConfirmedClosedWorkOrder(ot) {
   const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
   if (ficha && isClosedJobStatus(ficha.status)) return true;
@@ -13871,6 +13880,18 @@ function jobStatusFromOperations(ot, operations, workOrders = []) {
 
 function jobStatusForOt(ot) {
   return jobStatusFromOperations(ot, currentPlanOperations(), state.workOrders);
+}
+
+// DECISION DEL USUARIO 2026-10-08 (OT 3583): para mostrar un trabajo y decidir si se puede
+// programar, manda el estatus de la FICHA cuando la ficha existe y esta abierta. El fall-down
+// a las operaciones (jobStatusFromOperations) solo aplica cuando la ficha no esta o dice
+// cerrada: una sola operacion "Completado" sobre una ficha "En curso" no es una OT cerrada
+// (RULE-OT-051; el mismo razonamiento esta en scheduleCurrentPlanImpl, 6172-6179).
+function jobStatusParaTarjeta(ot) {
+  const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+  const fichaStatus = String(ficha?.status || "").trim();
+  if (fichaStatus && !isClosedJobStatus(fichaStatus)) return fichaStatus;
+  return jobStatusForOt(ot);
 }
 
 function matchesStatusFilter(job, filter) {

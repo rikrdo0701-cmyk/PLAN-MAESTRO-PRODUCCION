@@ -222,6 +222,11 @@ test("normalizeState no poda una OT por confirmar solo por falta de datos", () =
   assert.ok(codigo.includes("state.selectedOts = uniq(configuredSelectedOts)"), "y contiene la asignacion");
   const f2 = new Function("selectedOts", "workOrders", "operations", "unconfirmedWorkOrders", "materialOtKey", "isClosedJobStatus", "isMovablePlanningStatus", "jobStatusForOt", "uniq",
     `const state = { selectedOts, workOrders, operations, unconfirmedWorkOrders };
+     const jobStatusParaTarjeta = (ot) => {
+       const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+       const s = String(ficha?.status || "").trim();
+       return s && !isClosedJobStatus(s) ? s : jobStatusForOt(ot);
+     };
      ${codigo}
      return state.selectedOts;`);
 

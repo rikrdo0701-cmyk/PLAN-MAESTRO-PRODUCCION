@@ -63,8 +63,8 @@ test("sin ficha, `movable` es falso aunque el estatus sea programable", () => {
   // (app.js:6057-6077) y avisa "ya no esta en NetSuite".
   assert.match(
     app,
-    /movable: Boolean\(workOrder\) && isMovablePlanningStatus\(jobStatusForOt\(job\.ot\)\)/,
-    "`movable` exige ficha Y estatus programable"
+    /movable: Boolean\(workOrder\) && isMovablePlanningStatus\(jobStatusParaTarjeta\(job\.ot\)\)/,
+    "`movable` exige ficha Y estatus programable (la ficha manda cuando existe y esta abierta)"
   );
   assert.match(app, /sinFicha: !workOrder,/, "y la tarjeta lleva el dato para poder explicar el motivo");
 });
