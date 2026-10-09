@@ -2808,6 +2808,20 @@
         "tests/performance-client-calls.test.mjs"
       ],
       "updated_at": "2026-10-08"
+    },
+    {
+      "rule_id": "RULE-OT-056",
+      "name": "Lo que la persona confirmo en el dialogo de preparacion se guarda POR OT (otConfigurations[ot]: jobType/planningType/manualUnitPrice/commercialCapturedAt) y manda sobre el config del articulo, compartido por todas las OTs del mismo PARTE",
+      "status": "implementada",
+      "category": "OT",
+      "rule": "SINTOMA REPORTADO 2026-10-09: 'agregue 150 OTs a planeado/no planeado y al generar plan me volvio a pedir detalles de la OT que ya habia capturado'. CONFIRMADO EL MECANISMO (respuestas del usuario + codigo): config comercial POR ARTICULO (`articleConfigurations[PARTE]`, app.js:3495-3540) y COMPARTIDO; OTs del mismo PARTE se sobrescriben entre si al capturar; la firma de preparacion (`planningPreparationSignature`, app.js:3450-3465, core :1201-1219) embebe commercialType/planningType y por eso una re-captura de OT del mismo PARTE 'deriva' la firma de OTs capturadas antes -> `needsPlanningPreparation` true -> el gate `preparedPlanningByOt` (app.js:3362-3385) vuelve a abrir el dialogo con datos ya capturados. Agravante estructural 1: `needsManualPrice` exige `manualPrice > 0` (app.js:3516) y el precio NO esta en la firma: un precio 0/vacio (confirmado) nunca satisfacia el need. Agravante 2: `ensureCommercialDataForPlan` (:6891) no tiene call sites (muerto). DEFINE LOS 3 CAMBIOS: (1) `applyCommercialPlanningRequirement` (:3521-3540) ademas escribe la captura POR OT (`otConfigurationFor(job.ot)`: jobType/planningType/manualUnitPrice/commercialCapturedAt) y llama `rememberLocalOtConfigurationEdit` (tombstone RULE-GOV-013 re-aplica en conflicto); (2) `commercialPlanningRequirement` (:3495-3519) lee primero la captura por OT via `otCommercialConfigurationFor` (clave cruda y luego normalizada) y cae al articulo SOLO sin captura; `needsManualPrice` se satisface con `commercialCapturedAt` presente aunque el precio quede 0 (el dialogo ya lo confirmo) - el articulo sigue siendo la fuente del reporte/catalogo; (3) `normalizeOtResourceAssignments` (:13458-13521, corre al inicio de cada preparacion, :3340) conserva jobType/planningType/manualUnitPrice/commercialCapturedAt en el rebuild de `otConfigurations`. DIAGNOSTICO temporal: `planningSignatureDiff` + registro en `prepareJobForPlanning` (:3380) activado con `window.PLANNING_REASK_DIAG === true` -> `console.log('[PLANNING-REASK]', ...)` y `window.__planningReaskDiag` con gapCodes + signatureDiff por OT re-pedida (NO cambia el flujo). F-DIAG pendiente de confirmacion en el grupo 'todo' (perdida total de capturas, hueco RULE-GOV-013 en sync) para decidir si hace falta re-aplicar tombstones en `syncNetSuiteData`.",
+      "source": "sintoma reportado 2026-10-09; mecanismo confirmado con el usuario el mismo dia (config comercial POR ARTICULO y COMPARTIDO; precio dejado vacio)\nsrc/web/planning/app.js: commercialPlanningRequirement :3495-3519 (> leer por OT primero), applyCommercialPlanningRequirement :3521-3540 (captura por OT + commercialCapturedAt + rememberLocalOtConfigurationEdit), otCommercialConfigurationFor (junto a otConfigurationFor :13330), normalizeOtResourceAssignments :13458-13521 (conserva los 4 campos), planningSignatureDiff + bloque DIAG en prepareJobForPlanning :3380-3396, planningPreparationSignature :3450-3465, needsManualPrice :3516, normalizeOtResourceAssignments :3340\ntests/ot-comercial-por-ot.test.mjs (4 casos nuevos: dos OTs del mismo articulo capturadas -> generar no re-pide; precio vacio satisfecho por la captura; normalize conserva la captura por OT; diag registra gaps y diff)",
+      "applies_to": [
+        "src/web/planning/app.js",
+        "tests/ot-comercial-por-ot.test.mjs",
+        "tests/build.test.mjs"
+      ],
+      "updated_at": "2026-10-09"
     }
   ]
 }
