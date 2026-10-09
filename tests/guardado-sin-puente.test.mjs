@@ -648,3 +648,80 @@ test("sin el modulo de aplicacion en el build la compuerta no bloquea (RULE-SUP-
   await ctx.guardarPlanEnSupabase();
   assert.deepEqual(llamadas, [4], "sin modulo de aplicacion el guardado pasa como siempre");
 });
+
+// ---------------------------------------------------------------------------
+// RULE-SUP-072: EL RETIRO DE LA ULTIMA OT NO SE DA POR GUARDADO HASTA QUE SE ESCRIBE
+// ---------------------------------------------------------------------------
+//
+// MEDIDO 2026-10-08 (usuario, en produccion, con la OT 2752): retirar la ultima OT mostraba
+// el toast de exito ("OT 2752 devuelta al backlog") y, al recargar, la OT estaba de vuelta.
+// El aviso de exito no probaba nada: el marcador de retiro (_locallyRemovedDraftOts) se
+// borraba en saveAppSheet por CUALQUIER guardado exitoso —incluido uno que ya estaba en vuelo
+// cuando la persona retiro la OT y cuyo payload todavia la llevaba dentro—; al llegar el turno
+// del guardado del retiro (flushPlanSave), el marcador ya no estaba, no se pedia
+// vaciarSiEstaVacio, el freno del vacio (RULE-SUP-062) saltaba plan_guardar, selected_ots no
+// se borraba... y el informe salia ok:true con el aviso del freno silenciado (RULE-SUP-068).
+// El marcador se borra ahora en guardarPlanEnSupabase, y solo si ESE guardado escribio el
+// vacio de verdad. Estos tests corren el cuerpo REAL de saveAppSheet y de guardarPlanEnSupabase
+// (extraidos de app.js) con los escritores como dobles.
+
+test("RULE-SUP-072: con la cola VACIA un guardado exitoso NO borra el retiro pendiente", async () => {
+  const { ctx } = escenario({ disponible: true, sucias: ["plan"], planOk: true });
+  ctx.state = { selectedOts: [], _locallyRemovedDraftOts: ["2844"], operations: [] };
+  const guardado = await ctx.saveAppSheet(false);
+  assert.equal(guardado, true, "el guardado en si salio bien");
+  assert.deepEqual([...ctx.state._locallyRemovedDraftOts], ["2844"],
+    "con la cola vacia el exito de ESTE guardado no prueba que el retiro se escribio: el marcador se conserva para el guardado del retiro");
+});
+
+test("RULE-SUP-072: con la cola NO vacia el guardado si borra el retiro pendiente", async () => {
+  const { ctx } = escenario({ disponible: true, sucias: ["plan"], planOk: true });
+  ctx.state = { selectedOts: ["2926"], _locallyRemovedDraftOts: ["2844"], operations: [] };
+  await ctx.saveAppSheet(false);
+  assert.equal(ctx.state._locallyRemovedDraftOts, undefined,
+    "con la cola NO vacia el retiro ya viaja en el espejo de selected_ots de ESTE guardado");
+});
+
+test("RULE-SUP-072: el retiro se borra solo cuando el guardado escribio el vacio", async () => {
+  const cuerpo = (() => {
+    const i = app.indexOf("async function guardarPlanEnSupabase(");
+    assert.ok(i > 0, "no se encontro guardarPlanEnSupabase");
+    const f = app.indexOf("async function guardarSyncDeOrdenesTrabajoEnSupabase()", i);
+    assert.ok(f > i, "no se encontro el final de guardarPlanEnSupabase");
+    return app.slice(i, f);
+  })();
+  const montar = (guardado) => {
+    const ctx = {
+      showToast: () => {},
+      PPSupabaseWriter: { guardar: async () => guardado() },
+      state: { selectedOts: [], _locallyRemovedDraftOts: ["2844"], revision: 5 },
+      colaLeidaSinFallo: false,
+      // RULE-SUP-069: la compuerta de la primera lectura ya concluyo en este escenario.
+      esperarPrimeraLecturaDeSupabase: async () => {},
+      String, Object, Array, Number,
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(cuerpo, ctx);
+    return ctx;
+  };
+
+  // 1. Camino rpc con selected_ots escrito: el vacio se persistio, el marcador ya no hace falta.
+  const rpc = montar(() => ({
+    ok: true, camino: "rpc", revision: 7,
+    tablas: { selected_ots: { modo: "espejo", insertadas: 0, error: null } }, avisos: [],
+  }));
+  await rpc.guardarPlanEnSupabase();
+  assert.equal(rpc.state._locallyRemovedDraftOts, undefined,
+    "camino rpc: el vacio se escribio de verdad");
+
+  // 2. Camino viejo con la nota del freno ("sin filas: no se borra la tabla"): NO se escribio,
+  //    el marcador se conserva para que el siguiente guardado reintente con vaciarSiEstaVacio.
+  const freno = montar(() => ({
+    ok: true, camino: "viejo", revision: 7,
+    tablas: { selected_ots: { insertadas: 0, error: null, nota: "sin filas: no se borra la tabla (vaciarSiEstaVacio lo hace explicito)" } }, avisos: [],
+  }));
+  await freno.guardarPlanEnSupabase();
+  assert.deepEqual([...freno.state._locallyRemovedDraftOts], ["2844"],
+    "freno: la tabla quedo intacta, el marcador no se puede dar por guardado");
+});

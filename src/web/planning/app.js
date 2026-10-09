@@ -14447,6 +14447,22 @@ async function guardarPlanEnSupabase(opciones = {}) {
     showToast("No se pudo guardar el plan: " + motivoDelInforme(informe), 9000);
     return false;
   }
+  // RULE-SUP-072: el marcador de retiro de la ultima OT se borra AQUI, y solo cuando ESTE
+  // guardado escribio de verdad el espejo de selected_ots. Antes lo borraba saveAppSheet por
+  // CUALQUIER guardado exitoso, incluido uno que ya estaba en vuelo cuando la persona retiro
+  // la OT y cuyo payload todavia la llevaba dentro: al terminar bien, ese guardado borraba la
+  // senal; el guardado del retiro que lo estaba esperando (flushPlanSave) se quedaba sin el
+  // opt-in vaciarSiEstaVacio, el freno del vacio (RULE-SUP-062) saltaba plan_guardar, la tabla
+  // selected_ots no se borraba y la OT volvia al recargar con el toast "devuelta al backlog".
+  // Con cola vacia, un informe ok + colaVaciadaPorRetiro significa que el vacio SI viajo con
+  // el opt-in (frenoDelRpc devuelve null cuando vaciarSiEstaVacio es true), asi que borrar el
+  // marcador aqui es correcto; si el freno hubiera saltado, no se borra y el siguiente
+  // guardado reintenta. Con cola NO vacia el retiro ya viaja en el espejo del guardado normal
+  // y lo borra saveAppSheet, como siempre.
+  const tablaSeleccion = informe.tablas && informe.tablas.selected_ots;
+  const seleccionEscrita =
+    informe.camino === "rpc" || Boolean(tablaSeleccion && !tablaSeleccion.nota);
+  if (colaVaciadaPorRetiro && seleccionEscrita) delete state._locallyRemovedDraftOts;
   if (Array.isArray(informe.avisos) && informe.avisos.length) {
     // MEDIDO 2026-10-07 (usuario, en produccion): antes esto ponia TODOS los avisos como
     // toasts en cascada — showToast reemplaza el unico #toast, los avisos se pisaban unos a
@@ -14661,7 +14677,15 @@ async function saveAppSheet(showMessage) {
     appSheetAvailable = true;
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
-    delete state._locallyRemovedDraftOts;
+    // RULE-SUP-072: NO se borra el marcador de retiro cuando la cola quedo VACIA. Este
+    // guardado pudo armarse ANTES de que la persona retirara la ultima OT (su payload todavia
+    // la lleva) y su exito no prueba que el retiro se haya escrito: borrar la senal aqui dejaba
+    // al guardado del retiro (flushPlanSave) sin vaciarSiEstaVacio, el freno del vacio saltaba
+    // plan_guardar y la OT volvia al recargar con el toast de exito. Con la cola vacia lo borra
+    // guardarPlanEnSupabase, y SOLO si escribio el vacio de verdad (RULE-SUP-072). Con la cola
+    // NO vacia el retiro ya viaja en el espejo de selected_ots de ESTE guardado, asi que
+    // borrarlo aqui sigue siendo correcto.
+    if ((state.selectedOts || []).length > 0) delete state._locallyRemovedDraftOts;
     delete state._locallyAddedDraftOts;
     delete state._locallyEditedOtConfigurations;
     delete state._locallyEditedCapabilityConfig;
