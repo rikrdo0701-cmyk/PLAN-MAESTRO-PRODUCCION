@@ -63,6 +63,7 @@ function correrPuerta(entrada) {
       "  if (Number.isFinite(Number(importado.revision))) state.revision = Number(importado.revision);",
       "  if (importado.planStart) state.planStart = importado.planStart;",
       "  if (importado.settings) state.settings = importado.settings;",
+      "  if (importado.preparedPlanningByOt) state.preparedPlanningByOt = importado.preparedPlanningByOt;",
       "  if (Array.isArray(importado.excludedCapabilities)) state.excludedCapabilities = importado.excludedCapabilities;",
       "  else if (!opciones.preserveLocalPlanning) state.excludedCapabilities = [];",
       "}",
@@ -217,6 +218,14 @@ test("la puerta pone los cuatro campos que applyImported no mapea", async () => 
   assert.equal(s.syncedAt, "2026-09-29T09:00:00.000Z");
   assert.deepEqual(s.reportFilters, { planta: "MONTERREY" });
   assert.deepEqual(JSON.parse(JSON.stringify(s.otTypes)), [{ id: "tipo-1", name: "PROD" }]);
+});
+
+test("la puerta aplica preparedPlanningByOt de app_state (RULE-OT-057)", async () => {
+  // La firma "ya preparado" viaja en app_state.prepared_planning_by_ot y vuelve por
+  // camposDeAppState; sin esto el gate reabria el dialogo de detalles tras cada carga.
+  const { ctx } = await correrPuerta({ preparedPlanningByOt: { 100: "firma-100", 200: "firma-200" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.__state().preparedPlanningByOt)),
+    { 100: "firma-100", 200: "firma-200" });
 });
 
 test("la puerta NO inventa los campos que no llegaron", async () => {

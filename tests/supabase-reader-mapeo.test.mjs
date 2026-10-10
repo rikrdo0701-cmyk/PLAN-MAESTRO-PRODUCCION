@@ -366,6 +366,28 @@ test("ot_configurations: KIT_HERRAMENTAL, KIT_PENDIENTE y los herramentales extr
   assert.deepEqual(config.additionalHerramentales, ["MOLD-2", "MOLD-3"], "jsonb con repetidos y espacios, como PP_additionalToolList_");
 });
 
+test("ot_configurations: la captura comercial POR OT vuelve de sus columnas (RULE-OT-057)", async () => {
+  // Sin estas columnas commercialCapturedAt llegaba siempre vacio tras una carga y "Generar
+  // plan" volvia a pedir los detalles de OT. Se normaliza igual que article_configurations.
+  const { catalogs } = await catalogsDe({
+    ot_configurations: [
+      { ot: "OT-200", tipo_ot: "plan", tipo_trabajo: "produccion", precio_manual: 2.5,
+        comercial_capturado_en: "2026-10-10T00:00:00+00:00", actualizado: "2026-10-10T00:00:00+00:00" },
+    ],
+  });
+  const config = JSON.parse(JSON.stringify(catalogs.otConfigurations))["OT-200"];
+  assert.equal(config.jobType, "PLAN", "tipo_ot se lee en mayusculas, como el config del articulo");
+  assert.equal(config.planningType, "PRODUCCION");
+  assert.equal(config.manualUnitPrice, 2.5);
+  assert.equal(config.commercialCapturedAt, "2026-10-10T00:00:00+00:00",
+    "la marca de captura es lo que el gate lee para no volver a pedir el precio");
+});
+
+test("app_state: prepared_planning_by_ot vuelve de la columna (RULE-OT-057)", () => {
+  const fila = reader.mapAppState([{ revision: 5, prepared_planning_by_ot: { 100: "firma-100", 200: "firma-200" } }]);
+  assert.deepEqual(copiar(fila.preparedPlanningByOt), { 100: "firma-100", 200: "firma-200" });
+});
+
 test("subcontracts: el id es el de la hoja, no el uuid de la base", async () => {
   // La app borra por id (app.js:5569, data-delete-subcontract). Con el uuid, el borrado no
   // encontraba la fila de la hoja.

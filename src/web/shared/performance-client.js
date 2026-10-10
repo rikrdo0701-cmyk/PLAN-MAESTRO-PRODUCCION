@@ -532,7 +532,7 @@
         current[stored] = target;
         changed = true;
       } else {
-        for (const field of ["machine", "maquina", "herramental", "tool", "kitHerramental", "kit", "additionalHerramentales", "subcontractType", "tipoSubcontrato", "subcontractDays", "diasSubcontrato"]) {
+        for (const field of ["machine", "maquina", "herramental", "tool", "kitHerramental", "kit", "additionalHerramentales", "subcontractType", "tipoSubcontrato", "subcontractDays", "diasSubcontrato", "jobType", "planningType", "manualUnitPrice", "commercialCapturedAt"]) {
           if (setField(target, field, local[field])) changed = true;
         }
         if (local.kitPending === true && target.kitPending !== true) {

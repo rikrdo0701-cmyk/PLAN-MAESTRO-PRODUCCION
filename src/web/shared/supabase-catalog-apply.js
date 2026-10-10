@@ -129,6 +129,11 @@
     if (appState.plant && Object.keys(appState.plant).length) out.plant = appState.plant;
     if (appState.reportFilters && Object.keys(appState.reportFilters).length) out.reportFilters = appState.reportFilters;
     if (appState.operationCatalogWarning) out.operationCatalogWarning = appState.operationCatalogWarning;
+    // RULE-OT-057: la firma "ya preparado" por OT vuelve de app_state. Misma regla de
+    // 'vacio no se aplica': una base sin firmas no borra las que la pagina ya tenia.
+    if (appState.preparedPlanningByOt && Object.keys(appState.preparedPlanningByOt).length) {
+      out.preparedPlanningByOt = appState.preparedPlanningByOt;
+    }
     return out;
   }
 

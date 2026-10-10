@@ -135,6 +135,12 @@ create table public.ot_configurations (
   dias_subcontrato integer not null default 0,
   herramental text not null default '',
   herramentales_extra jsonb not null default '[]'::jsonb,
+  -- RULE-OT-057: la captura comercial POR OT de RULE-OT-056. Sin estas columnas la captura
+  -- se perdia en cada guardado/carga y "Generar plan" volvia a pedir precio/tipo/planificacion.
+  tipo_ot text not null default '',
+  tipo_trabajo text not null default '',
+  precio_manual numeric not null default 0,
+  comercial_capturado_en timestamptz,
   actualizado  timestamptz,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
@@ -267,6 +273,9 @@ create table public.app_state (
   plant       jsonb not null default '{}'::jsonb,
   operation_catalog_warning text not null default '',
   last_schedule jsonb,
+  -- RULE-OT-057: firma de "ya preparado" por OT. Sin esta columna la firma vivia solo
+  -- en cache local y "Generar plan" volvia a pedir los detalles de OT tras cada carga.
+  prepared_planning_by_ot jsonb not null default '{}'::jsonb,
   updated_at  timestamptz not null default now()
 );
 

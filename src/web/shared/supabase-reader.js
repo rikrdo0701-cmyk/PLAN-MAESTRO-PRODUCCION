@@ -1119,6 +1119,13 @@
         kitPending: asBool(row.kit_pendiente, false),
         subcontractType: String(row.tipo_subcontrato == null ? "" : row.tipo_subcontrato).trim(),
         subcontractDays: number(row.dias_subcontrato),
+        // RULE-OT-057: la captura comercial POR OT (RULE-OT-056) tiene columna propia. Antes
+        // vivia solo en memoria/cache local, asi que commercialCapturedAt llegaba siempre vacio
+        // tras una carga y "Generar plan" volvia a pedir los detalles de OT.
+        jobType: String(row.tipo_ot == null ? "" : row.tipo_ot).trim().toUpperCase(),
+        planningType: String(row.tipo_trabajo == null ? "" : row.tipo_trabajo).trim().toUpperCase(),
+        manualUnitPrice: number(row.precio_manual),
+        commercialCapturedAt: String(row.comercial_capturado_en == null ? "" : row.comercial_capturado_en).trim(),
         updatedAt: String(row.actualizado == null ? "" : row.actualizado).trim(),
         additionalHerramentales: listaDeHerramentales(row.herramentales_extra),
       };
@@ -1295,6 +1302,9 @@
       plant: objeto(fila.plant, {}),
       operationCatalogWarning: String(fila.operation_catalog_warning == null ? "" : fila.operation_catalog_warning).trim(),
       lastSchedule: objeto(fila.last_schedule, null),
+      // RULE-OT-057: firma "ya preparado" por OT. Sin leerla, el registro de OTs ya
+      // confirmadas se perdia en cada carga y el dialogo de preparacion volvia a abrirse.
+      preparedPlanningByOt: objeto(fila.prepared_planning_by_ot, {}),
     };
   }
 

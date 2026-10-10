@@ -362,3 +362,32 @@ test("ot_configurations no persiste el residuo derivado pero SI el vaciado a pro
     "suben la vaciada, la de contenido y la del kit pendiente: " + JSON.stringify(subidas));
   assert.equal(informe.ok, true);
 });
+
+test("ot_configurations: la captura comercial POR OT se manda en sus columnas (RULE-OT-057)", () => {
+  const { writer } = escritor();
+  const estado = estadoCatalogos();
+  // Una OT que SOLO tiene captura comercial (sin maquina/kit/herramental y sin updatedAt):
+  // antes no existia columna y se perdia; ahora no es residuo y se escribe.
+  estado.otConfigurations = {
+    "5000": { ot: "5000", machine: "", herramental: "", kitHerramental: "", kitPending: false,
+      subcontractType: "", subcontractDays: 0, additionalHerramentales: [],
+      jobType: "plan", planningType: "produccion", manualUnitPrice: 2.5,
+      commercialCapturedAt: "2026-10-10T00:00:00+00:00" },
+  };
+  const armado = writer.armarCatalogos(estado);
+  const fila = armado.ot_configurations.filas.filter((f) => f.ot === "5000")[0];
+  assert.ok(armado.ot_configurations.filas.length === 1,
+    "la captura comercial sola no es residuo: " + JSON.stringify(armado.ot_configurations.filas));
+  assert.equal(armado.ot_configurations.filas[0].tipo_ot, "PLAN", "jobType -> tipo_ot, en mayusculas");
+  assert.equal(armado.ot_configurations.filas[0].tipo_trabajo, "PRODUCCION");
+  assert.equal(armado.ot_configurations.filas[0].precio_manual, 2.5);
+  assert.equal(armado.ot_configurations.filas[0].comercial_capturado_en, "2026-10-10T00:00:00.000Z",
+    "la marca de captura se normaliza a instante ISO y es lo que evita el re-pedido");
+});
+
+test("app_state: prepared_planning_by_ot se manda en la fila (RULE-OT-057)", () => {
+  const { writer } = escritor();
+  const fila = writer.mapear.appState({ preparedPlanningByOt: { 100: "firma-100" } }, 7);
+  assert.deepEqual(JSON.parse(JSON.stringify(fila.prepared_planning_by_ot)), { 100: "firma-100" });
+  assert.equal(fila.revision, 7);
+});

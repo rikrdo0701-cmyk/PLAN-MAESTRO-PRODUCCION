@@ -682,6 +682,14 @@
             // jsonb: SIEMPRE arreglo, nunca cadena. Una columna jsonb con texto que no
             // es JSON revienta el INSERT de la tabla entera (ver jsonb()).
             herramentales_extra: listaDeHerramentales(item.additionalHerramentales),
+            // RULE-OT-057: la captura comercial POR OT (RULE-OT-056) tiene columna propia.
+            // Antes vivia solo en memoria/cache local y se perdia en cada guardado; por eso
+            // "Generar plan" volvia a pedir los detalles de OT. Se normaliza igual que
+            // article_configurations (jobType->tipo_ot, planningType->tipo_trabajo).
+            tipo_ot: texto(item.jobType).toUpperCase(),
+            tipo_trabajo: texto(item.planningType).toUpperCase(),
+            precio_manual: numero(item.manualUnitPrice, 0),
+            comercial_capturado_en: instante(texto(item.commercialCapturedAt), ""),
             actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
           };
           // RESIDUO DERIVADO, NO SE PERSISTE (medido 2026-10-06: 243 skeleton en la base).
@@ -697,6 +705,8 @@
           const esResiduo = !fila.maquina && !fila.kit && !fila.herramental &&
             fila.herramentales_extra.length === 0 && !fila.kit_pendiente &&
             !fila.tipo_subcontrato && fila.dias_subcontrato <= 0 &&
+            !fila.tipo_ot && !fila.tipo_trabajo && fila.precio_manual <= 0 &&
+            !fila.comercial_capturado_en &&
             !texto(item.updatedAt);
           if (esResiduo) return;
           out.push(fila);
@@ -2137,6 +2147,9 @@
       plant: jsonb(state.plant, {}),
       operation_catalog_warning: texto(state.operationCatalogWarning),
       last_schedule: jsonb(state.lastSchedule, null),
+      // RULE-OT-057: firma "ya preparado" por OT. Sin columna, la firma vivia solo en
+      // cache local y "Generar plan" reabria el dialogo de detalles tras cada carga.
+      prepared_planning_by_ot: jsonb(state.preparedPlanningByOt, {}),
     };
   }
 

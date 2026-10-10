@@ -2822,6 +2822,23 @@
         "tests/build.test.mjs"
       ],
       "updated_at": "2026-10-09"
+    },
+    {
+      "rule_id": "RULE-OT-057",
+      "name": "La captura comercial POR OT (otConfigurations[ot].jobType/planningType/manualUnitPrice/commercialCapturedAt) y la firma 'ya preparado' (preparedPlanningByOt) TIENEN columna en Supabase; sin ella se perdian en cada guardado/carga y 'Generar plan' volvia a pedir los detalles de OT",
+      "status": "implementada",
+      "category": "OT",
+      "rule": "CAUSA RAIZ MEDIDA 2026-10-10 (continuacion de RULE-OT-056): el estado guardaba la captura comercial POR OT y la firma de preparacion, pero el esquema de Supabase NO podia representarlas. MEDIDO con la sesion real: columnas de ot_configurations = id, ot, maquina, kit, kit_pendiente, tipo_subcontrato, dias_subcontrato, herramental, herramentales_extra, actualizado, created_at, updated_at (sin tipo_ot/tipo_trabajo/precio_manual/comercial_capturado_en); columnas de app_state sin prepared_planning_by_ot. El escritor (supabase-writer.js:674-686, filaAppState :2127) no las mandaba y el lector (supabase-reader.js:1108-1127, mapAppState :1283) no las leia, asi que sobrevivian SOLO en la cache local (performance-client.js). MEDIDO contra produccion: 115 OTs en cola, 0 con commercialCapturedAt, 0 con firma; en 'Generar plan' (prepareJobForPlanning con reuseConfirmed) 18 de 115 reabrian el dialogo por hasRequiredGaps=true: 17 needsManualPrice, 11 de esas tambien needsType/needsPlanningType, 1 MISSING_MACHINE. FIX: (1) migracion docs/schema-supabase-captura-comercial-por-ot.sql (APLICAR ANTES de publicar) con cuatro columnas en ot_configurations (tipo_ot, tipo_trabajo, precio_manual, comercial_capturado_en) y prepared_planning_by_ot jsonb en app_state, mas plan_guardar redefinido (create or replace, conserva ACLs) para escribir la columna nueva; (2) mapeo inverso en el escritor y directo en el lector, normalizando igual que article_configurations (jobType->tipo_ot, planningType->tipo_trabajo) y sumando los 4 campos al guard de residuo y a reapplyLocalOtConfigurations; (3) camposDeAppState (supabase-catalog-apply.js) aplica preparedPlanningByOt con la regla 'vacio no se aplica', y applyImported ya lo acepta (app.js:11592). Las 18 OTs se pediran UNA SOLA VEZ mas (sus datos no existian en ninguna parte) y despues no se vuelven a pedir. Misma clase de hueco que RULE-SUP-016 (un esquema desplegado que no puede representar lo que la app guarda).",
+      "source": "sintoma reportado 2026-10-10 ('volvi a dar en generar plan y me volvio a pedir detalles de ot'); diagnosticado con sonda de solo lectura contra produccion y el esquema real (Data API) el mismo dia\nsrc/web/shared/supabase-writer.js: mapear ot_configurations :674-700 (4 columnas nuevas + residuo), filaAppState :2127 (prepared_planning_by_ot)\nsrc/web/shared/supabase-reader.js: mapOtConfigurations :1108-1130 (los 4 campos), mapAppState :1283 (preparedPlanningByOt)\nsrc/web/shared/supabase-catalog-apply.js: camposDeAppState :117-137\nsrc/web/shared/performance-client.js: reapplyLocalOtConfigurations :500-546 (conserva los 4 campos comerciales)\ndocs/schema-supabase.sql: tablas ot_configurations :128-141 y app_state :257-272\ndocs/schema-supabase-captura-comercial-por-ot.sql (migracion, APLICAR antes de publicar)",
+      "applies_to": [
+        "src/web/shared/supabase-writer.js",
+        "src/web/shared/supabase-reader.js",
+        "src/web/shared/supabase-catalog-apply.js",
+        "src/web/shared/performance-client.js",
+        "docs/schema-supabase.sql",
+        "docs/schema-supabase-captura-comercial-por-ot.sql"
+      ],
+      "updated_at": "2026-10-10"
     }
   ]
 }
