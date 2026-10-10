@@ -2838,6 +2838,7 @@
         "docs/schema-supabase.sql",
         "docs/schema-supabase-captura-comercial-por-ot.sql"
       ],
+      "riesgo_vivo": "Espejo de Apps Script (src/server/16-supabase-catalogo.js, PP_supabaseMirrorCatalogo_/RPC ingesta_mirror, borra e inserta desde la hoja CONFIGURACION_OT) tambien escribe ot_configurations. La hoja NO tiene TIPO_OT/TIPO_TRABAJO/PRECIO_MANUAL, asi que una sincronizacion de catalogos por esa via dejaria esas columnas en su default y borraria la captura comercial por OT. Decision del usuario 2026-10-10: documentarlo por ahora, sin tocar el espejo; la captura persiste mientras el guardado sea la web (guardarCatalogos por REST con sesion).",
       "updated_at": "2026-10-10"
     }
   ]
