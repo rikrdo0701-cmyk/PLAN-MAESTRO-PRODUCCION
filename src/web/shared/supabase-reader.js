@@ -1493,6 +1493,38 @@
   // el `offset` de la segunda vuelta se coma operaciones del principio.
   const ORDEN_PAGINADO = { operations: "ot.asc,secuencia.asc" };
 
+  // LA TABLA DE LA QUE SALE CADA REBANADA DE `catalogs`. La clave de la rebanada NO es el
+  // nombre de la tabla (`toolCatalog` es `tools`, `otTypes` es `ot_types`, `machines` es
+  // `machine_catalog`...), y varias rebanadas salen de la MISMA tabla (las cuatro de
+  // operador, todas de `operators`). Lo pide el sondeo de antiguedad de
+  // supabase-catalog-boot.js: MEDIDO 2026-10-11, ese sondeo pasaba las claves de `catalogs`
+  // como nombres de tabla y PostgREST devolvia 404 para ~17 de las 20 (operatorCapacity,
+  // hiddenCapabilities, cts...), de modo que el aviso de "Datos viejos" no veia esos
+  // catalogos. Ver RULE-SUP-074.
+  const FUENTES_DE_CATALOGO = {
+    operators: "operators",
+    operatorCapacity: "operators",
+    operatorPerformance: "operators",
+    operatorProfiles: "operators",
+    configuredCapabilities: "capabilities",
+    hiddenCapabilities: "capabilities",
+    capacityModes: "capabilities",
+    operationRules: "capabilities",
+    customCapabilities: "capabilities",
+    cts: "capabilities",
+    operationCatalog: "operation_catalog",
+    matrix: "matrix",
+    matrixFull: "matrix",
+    machines: "machine_catalog",
+    otTypes: "ot_types",
+    subcontracts: "subcontracts",
+    toolCatalog: "tools",
+    calendarExceptions: "calendar_exceptions",
+    otConfigurations: "ot_configurations",
+    articleConfigurations: "article_configurations",
+    machinePlanningOverrides: "machine_planning_overrides",
+  };
+
   async function readCatalogs(options) {
     const opts = options || {};
     // Las de persona van SIEMPRE, sin opcion para dejarlas fuera: sin ellas la pagina
@@ -1575,6 +1607,9 @@
       source: "supabase",
       schemaVersion: "supabase-reader/1",
       catalogs: catalogs,
+      // La tabla de la que sale cada rebanada de `catalogs`. Lo usa el sondeo de antiguedad
+      // del arranque para consultar la tabla real y no la clave del estado. Ver RULE-SUP-074.
+      fuentes: FUENTES_DE_CATALOGO,
       // LAS CUATRO DE PERSONA, con el mismo criterio que las rebanadas: undefined es
       // 'el lector no trajo esto' (la tabla cayo) y un valor, aunque vacio, es 'no
       // hay'. selectedOts/lockedOts son listas de OT y operationPlanStatuses el objeto
@@ -1632,6 +1667,9 @@
     countTable: countTable,
     status: status,
     readCatalogs: readCatalogs,
+    // El mapa rebanada->tabla. Se publica para que el arranque y los tests puedan exigir
+    // que cada rebanada tenga su tabla sin duplicar la lista. Ver RULE-SUP-074.
+    FUENTES_DE_CATALOGO: FUENTES_DE_CATALOGO,
     normalizeCapabilityKey: normalizeCapabilityKey,
     normalizeKey: normalizeKey,
     // Los mapeos se exportan para que la sonda y los tests los puedan correr sobre filas

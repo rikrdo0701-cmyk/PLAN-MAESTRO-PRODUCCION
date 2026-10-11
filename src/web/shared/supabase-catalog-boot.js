@@ -438,10 +438,22 @@
     // camino critico, y no tiene por que retrasar la pantalla. Va con el MISMO token
     // de la lectura: sin el, `created_at` no se ve (0 filas) y la antiguedad salia
     // siempre como "sin datos" en vez de como "vieja".
-    const tablas = Object.keys(resultado.catalogs || {});
-    await Promise.all(tablas.map(async (t) => {
-      const info = await antiguedadDe(url, clave, t, token);
-      if (info) informe.viejo[t] = info;
+    //
+    // SE SONDEA POR TABLA, NO POR REBANADA DE ESTADO. MEDIDO 2026-10-11: aqui se pasaba
+    // `Object.keys(resultado.catalogs)` (operatorCapacity, hiddenCapabilities, cts...)
+    // como si fueran nombres de tabla, y PostgREST devolvia 404 para ~17 de las 20: ruido
+    // de consola y, peor, el aviso de "Datos viejos" nunca veia esos catalogos. Varias
+    // rebanadas salen de la MISMA tabla (las cuatro de operador, todas de `operators`),
+    // asi que se sondea una vez por tabla y el informe se indexa por tabla. Ver RULE-SUP-074.
+    const fuentes = resultado.fuentes || {};
+    const tablas = [];
+    for (const rebanada of Object.keys(resultado.catalogs || {})) {
+      const tabla = fuentes[rebanada];
+      if (tabla && tablas.indexOf(tabla) < 0) tablas.push(tabla);
+    }
+    await Promise.all(tablas.map(async (tabla) => {
+      const info = await antiguedadDe(url, clave, tabla, token);
+      if (info) informe.viejo[tabla] = info;
     }));
 
     informe.catalogs = resultado.catalogs;
