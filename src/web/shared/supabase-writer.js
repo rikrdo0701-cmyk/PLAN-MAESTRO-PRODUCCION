@@ -222,6 +222,21 @@
   const INTENTOS = 3;
   const ESPERAS_MS = [400, 1200, 3000];
   const TIMEOUT_POR_INTENTO_MS = 30000;
+  // MEDIDO 2026-10-10 (diagnostico del guardado que parecia "fallar" sin llegar a la
+  // base): la SUBIDA del enlace real es de ~21-26 KB/s (256 KB tardaron 10,4 s; 512 KB,
+  // 19,4 s; 1 MB, 48,7 s; 2 MB no terminaron en 90 s), mientras que la bajada es de
+  // ~418 KB/s. El cuerpo del guardado ronda los 2,4 MB (y 4,4 MB al Generar plan), o sea
+  // que con un reloj FIJO de 30 s por intento el cuerpo nunca terminaba de subir: el POST
+  // no llegaba a la base y la pagina mostraba `signal is aborted without reason` (el abort
+  // del reloj) tras los tres intentos. El reloj ahora se calcula con el TAMANO del cuerpo
+  // y un piso de subida conservador: un cuerpo chico sigue con 30 s y uno grande tiene los
+  // minutos que de verdad necesita a esta velocidad.
+  const TIMEOUT_MAXIMO_POR_INTENTO_MS = 240000;
+  const SUBIDA_MINIMA_BYTES_POR_SEGUNDO = 10000;
+  // Arriba de este tamano el reintento se apaga: tres subidas de mas de un minuto solo
+  // triplican la espera cuando lo que falla es el enlace, no la base. Un cuerpo chico
+  // conserva los tres intentos de siempre (un 5xx pasajero si mejora esperando).
+  const UMBRAL_CUERPO_GRANDE_BYTES = 262144;
   // Mismo presupuesto que el espejo de catalogos (PP_CATALOGO_PRESUPUESTO_MS en
   // 16-supabase-catalogo.js) y por la misma razon: si Supabase esta lento o
   // caido, un guardado no puede quedarse colgado. Lo que se queda fuera se dice
@@ -420,6 +435,28 @@
   }
 
   /**
+   * El reloj de UN intento, en milisegundos, a partir del TAMANO del cuerpo. El piso
+   * (`TIMEOUT_POR_INTENTO_MS`) es el de siempre; lo que cambia es que un cuerpo grande ya
+   * no se corta a los 30 s. Se calcula con `cuerpo.length` (unidades UTF-16) y no con el
+   * byte exacto: en un JSON de plan casi todo es ASCII, y el piso de subida (10 KB/s,
+   * contra los ~21-26 KB/s medidos) deja margen de sobra para los acentos.
+   */
+  function timeoutDeCuerpo(cuerpo) {
+    const bytes = cuerpo ? cuerpo.length : 0;
+    const bruto = Math.ceil(bytes / SUBIDA_MINIMA_BYTES_POR_SEGUNDO) * 1000;
+    return Math.max(TIMEOUT_POR_INTENTO_MS, Math.min(TIMEOUT_MAXIMO_POR_INTENTO_MS, bruto));
+  }
+
+  /**
+   * Cuantos intentos merece un cuerpo: un cuerpo chico reintenta lo transitorio tres
+   * veces, uno grande va una sola vez (ver UMBRAL_CUERPO_GRANDE_BYTES).
+   */
+  function intentosDeCuerpo(cuerpo) {
+    const bytes = cuerpo ? cuerpo.length : 0;
+    return bytes > UMBRAL_CUERPO_GRANDE_BYTES ? 1 : INTENTOS;
+  }
+
+  /**
    * Una escritura a la Data API, con reintentos. Devuelve la respuesta si la
    * llamada salio; lanza con un mensaje que dice el status y el detalle de
    * PostgREST (que es donde esta la causa: columna que no existe, RLS, etc.).
@@ -428,17 +465,26 @@
    * barra que construirUrl() escaparia, y meterla en un parametro en vez de
    * parchear el constructor mantiene las dos formas de escribir con el MISMO
    * reintento, el mismo timeout y la misma regla de no reintentar.
+   *
+   * El reloj y los intentos dependen del TAMANO del cuerpo (timeoutDeCuerpo e
+   * intentosDeCuerpo): MEDIDO 2026-10-10, con un reloj fijo de 30 s un cuerpo de
+   * 2-4 MB no terminaba de subir por el enlace del usuario (~21-26 KB/s).
    */
   async function pedir(token, metodo, tabla, opciones) {
     const opts = opciones || {};
     const destino = opts.destino || construirUrl(tabla, opts);
     const cuerpo = opts.cuerpo === undefined ? undefined : JSON.stringify(opts.cuerpo);
     const cabecerasPeticion = cabeceras(token, opts.prefer);
+    const esperaMs = timeoutDeCuerpo(cuerpo);
+    const intentos = intentosDeCuerpo(cuerpo);
     let ultimo = null;
-    for (let intento = 0; intento < INTENTOS; intento += 1) {
+    for (let intento = 0; intento < intentos; intento += 1) {
       if (intento > 0) await dormir(ESPERAS_MS[intento - 1] || ESPERAS_MS[ESPERAS_MS.length - 1]);
       const control = new AbortController();
-      const temporizador = root.setTimeout(() => control.abort(), TIMEOUT_POR_INTENTO_MS);
+      const temporizador = root.setTimeout(() => control.abort(new Error(
+        "se agoto el tiempo de subida (" + Math.round(esperaMs / 1000) + " s) para " +
+        (cuerpo ? cuerpo.length : 0) + " caracteres; el enlace tardo mas que su piso de subida"
+      )), esperaMs);
       try {
         const respuesta = await root.fetch(destino, {
           method: metodo,
@@ -1863,15 +1909,58 @@
   // PP_mapWorkOrder_/PP_mapMaterial_ (02-storage.js).
   // ---------------------------------------------------------------------------
 
+  /**
+   * La clave normalizada de una OT, para comparar `operations[].ot` con `selectedOts`
+   * sin depender de mayusculas ni espacios. Es la misma normalizacion que usa la pagina
+   * (normalizeStatus, app.js:13884) menos el relleno con "PLAN": aqui una OT vacia tiene
+   * que seguir siendo vacia.
+   */
+  function claveOt(valor) {
+    return texto(valor).toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+
+  /**
+   * Las OTs del plan (`selectedOts` + `lockedOts`), normalizadas, o null cuando no hay
+   * plan contra el que recortar.
+   *
+   * MEDIDO 2026-10-10: el cuerpo de `operations` mandaba las 2.236 filas de la pagina
+   * (1.884.421 B) cuando el plan solo tiene 115 OTs (1.256 de esas filas): casi la mitad
+   * del cuerpo era eco de operaciones que la pagina acaba de LEER y que el plan no usa.
+   * Mandar solo las del plan escribe EXACTAMENTE lo mismo, por dos razones que estan en
+   * el DDL: `plan_guardar` escribe `operations` en modo `actualiza` (UPDATE por
+   * operation_id, docs/schema-supabase-plan.sql:735-808), asi que una fila que no se
+   * manda queda con su valor anterior y no se borra ni se vacia; y la senal de que una
+   * operacion salio del plan NO depende de esta lista: la funcion la deduce del diff de
+   * `selected_ots` (lineas 810-829).
+   *
+   * Si `selectedOts` esta vacio (una importacion, un estado recien nacido) no hay lista
+   * contra la que recortar y se manda todo, que es el comportamiento de siempre: recortar
+   * es una optimizacion de tamano, no un cambio de lo que se guarda.
+   */
+  function otsDelPlan(state) {
+    const vistas = new Set();
+    ["selectedOts", "lockedOts"].forEach((campo) => {
+      (Array.isArray(state[campo]) ? state[campo] : []).forEach((valor) => {
+        const clave = claveOt(valor);
+        if (clave) vistas.add(clave);
+      });
+    });
+    return vistas.size ? vistas : null;
+  }
+
   function filasOperations(state, revision) {
     const filas = [];
     const vistas = new Set();
+    const planOts = otsDelPlan(state);
     (Array.isArray(state.operations) ? state.operations : []).forEach((op) => {
       if (!op || typeof op !== "object") return;
       // operation_id es NOT NULL UNIQUE (el id estable de la operacion). Una
       // operacion sin id no se puede escribir y no se le inventa uno: se sale.
       const operationId = texto(op.id);
       if (!operationId) return;
+      // El eco de las operaciones fuera del plan no lo necesita ni el plan ni la
+      // funcion (ver otsDelPlan).
+      if (planOts && !planOts.has(claveOt(op.ot))) return;
       if (vistas.has(operationId)) return;
       vistas.add(operationId);
       const inicio = instante(op.fechaInicio, op.horaInicio);

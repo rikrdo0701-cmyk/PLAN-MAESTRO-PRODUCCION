@@ -120,11 +120,17 @@ function estadoVacio() {
  * por defecto) o "presente". Con "presente" el POST a /rest/v1/rpc/plan_guardar
  * sale y hay que responder con rpcContestando().
  */
-function escritor({ token = JWT_FALSO, configurado = true, responder = null, rpc = "ausente" } = {}) {
+function escritor({ token = JWT_FALSO, configurado = true, responder = null, rpc = "ausente", delays = null } = {}) {
   const llamadas = [];
+  // `delays` captura los milisegundos de cada setTimeout del modulo. Es la unica forma de
+  // observar el reloj de un intento sin esperar minutos: el fetch del simulacro resuelve al
+  // instante y el temporizador se limpia, pero el numero ya quedo anotado.
+  const programar = delays
+    ? (fn, ms) => { delays.push(ms); return setTimeout(fn, ms); }
+    : setTimeout;
   const contexto = {
     console,
-    AbortController, setTimeout, clearTimeout, Math, Date, JSON, Object, Array,
+    AbortController, setTimeout: programar, clearTimeout, Math, Date, JSON, Object, Array,
     Promise, String, Number, Boolean, Error, RegExp, Set, isFinite, parseInt,
     encodeURIComponent,
     // El navegador tiene atob y actorDe() lo usa para leer el `sub` del JWT. En un
@@ -844,6 +850,66 @@ test("el payload trae las nueve claves, con el nombre de tabla de Supabase", asy
   assert.equal(payload.app_state.plan_start, "2026-09-28");
   assert.deepEqual(payload.app_state.settings, { toolChangeOperator: "AJUSTADOR" }, "los jsonb viajan como objeto");
   assert.equal(payload.app_state.saved_at, "2026-09-29T18:00:00.000Z");
+});
+
+test("operations se recorta a las OTs del plan: el eco de las otras no viaja", async () => {
+  // MEDIDO 2026-10-10: el payload mandaba las 2.236 operaciones de la pagina (1.884.421 B)
+  // cuando el plan tiene 115 OTs (1.256 de esas filas). La funcion escribe operations en modo
+  // `actualiza` (UPDATE por operation_id), asi que una fila no mandada queda igual, y la senal
+  // de retirada sale del diff de selected_ots: recortar no pierde nada y baja el cuerpo a la mitad.
+  const conFuera = estado();
+  conFuera.operations.push({ id: "ns-9999-1", ot: "9999", descripcion: "FUERA DEL PLAN", secuencia: 1 });
+  const { writer, llamadas } = escritor({ rpc: "presente", responder: rpcContestando() });
+  await writer.guardar(conFuera);
+  const payload = llamadas[0].cuerpo.p_payload;
+  assert.deepEqual(payload.operations.map((op) => op.ot), ["3177"], "solo la OT del plan (3177)");
+  // Y las otras cuatro tablas no se recortan: el filtro es solo de operations.
+  assert.equal(payload.work_orders.length, 1);
+  assert.equal(payload.materials.length, 1);
+  assert.deepEqual(payload.selected_ots.map((f) => f.ot), ["3177", "3631"]);
+
+  // SIN plan (selectedOts vacio) no hay contra que recortar: se manda todo, como siempre. El
+  // recorte es de tamano, no de lo que se guarda: si fuera un cambio de comportamiento, un
+  // arranque sin cola dejaria de escribir operaciones legitimas.
+  const sinPlan = estado();
+  sinPlan.selectedOts = [];
+  sinPlan.lockedOts = [];
+  sinPlan.operations.push({ id: "ns-9999-1", ot: "9999", descripcion: "OTRA", secuencia: 1 });
+  const otro = escritor({ rpc: "presente", responder: rpcContestando() });
+  await otro.writer.guardar(sinPlan, { vaciarSiEstaVacio: true });
+  assert.deepEqual(otro.llamadas[0].cuerpo.p_payload.operations.map((op) => op.ot), ["3177", "9999"],
+    "sin plan no se recorta nada");
+});
+
+test("el reloj de un intento crece con el tamano del cuerpo, con 30 s de piso y tope", async () => {
+  // MEDIDO 2026-10-10: con un reloj FIJO de 30 s, un cuerpo de 2,4-4,4 MB no terminaba de subir
+  // por el enlace (~21-26 KB/s de subida) y el guardado fallaba con "signal is aborted without
+  // reason". El reloj ahora sale del tamano: chico = 30 s, grande = proporcional (y con tope).
+  const chicos = [];
+  const conChico = escritor({ rpc: "presente", responder: rpcContestando(), delays: chicos });
+  await conChico.writer.guardar(estado());
+  assert.equal(chicos[0], 30000, "un cuerpo chico conserva los 30 s de siempre");
+
+  const grandes = [];
+  const conGrande = escritor({ rpc: "presente", responder: rpcContestando(), delays: grandes });
+  const grande = estado();
+  // 500 KB de descripcion: el cuerpo pasa el umbral y el piso de subida (10 KB/s) manda ~51 s.
+  grande.operations[0].descripcion = "X".repeat(500 * 1024);
+  await conGrande.writer.guardar(grande);
+  assert.ok(grandes[0] > 30000, "un cuerpo grande tiene su reloj proporcional: " + grandes[0]);
+  assert.ok(grandes[0] <= 240000, "y el tope lo corta: " + grandes[0]);
+});
+
+test("un cuerpo grande NO se reintenta: tres subidas de minutos triplican la espera", async () => {
+  const grande = estado();
+  grande.operations[0].descripcion = "X".repeat(300 * 1024);
+  const { writer, llamadas } = escritor({
+    rpc: "presente",
+    responder: rpcContestando(() => contestando(503, "service unavailable")),
+  });
+  const fallo = await writer.guardar(grande);
+  assert.equal(fallo.ok, false);
+  assert.equal(llamadas.length, 1, "un cuerpo grande va una sola vez");
 });
 
 test("manda como p_revision_esperada la revision DEL ESTADO, y no una fabricada", async () => {

@@ -6357,19 +6357,19 @@ onProgress: (event) => {
     const snapshot = await persistPlanSnapshot();
     if (!snapshot?.snapshotId) throw new Error("el plan se calculo, pero no se pudo guardar el borrador");
     state.draftVersionId = snapshot.snapshotId;
-    // EL ESTADO ENTERO YA SUBIO CON EL SNAPSHOT: `persistPlanSnapshot` llama a
-    // `guardarPlanEnSupabase({snapshots})`, que escribe TODAS las tablas con el `state`
-    // actual — el payload del RPC lleva app_state (armarPayload -> appStateRpc) y el DDL
-    // de `plan_guardar` lo actualiza al final de su transaccion, y el camino viejo hace
-    // `parchearAppState`. Hasta 2026-10-07 habia AQUI un segundo guardado
+    // EL ESTADO DEL PLAN YA SUBIO: `persistPlanSnapshot` llama a `guardarPlanEnSupabase()`,
+    // que escribe TODAS las tablas con el `state` actual — el payload del RPC lleva app_state
+    // (armarPayload -> appStateRpc) y el DDL de `plan_guardar` lo actualiza al final de su
+    // transaccion, y el camino viejo hace `parchearAppState` — y despues archiva el borrador
+    // con su propio POST. Hasta 2026-10-07 habia AQUI un segundo guardado
     // (`appSheetMarkDirtyScope("plan")` + `saveAppSheet(false)`) que volvia a escribir todo
     // lo mismo y subia la revision dos veces por generacion. MEDIDO (usuario, en
     // produccion): los fallos transitorios de ese segundo guardado (429, 5xx, red; error
     // agravado por el camino viejo, sin transaccion) sacaban el toast "No se pudo guardar
     // el plan..." con el plan YA guardado — "pero si se guardo" al recargar — y se sumaban
-    // a la cascada de avisos por tabla. Una sola escritura, la del snapshot, deja el estado,
-    // la revision y las tablas en la base; el proximo guardado normal reescribe con la
-    // revision nueva.
+    // a la cascada de avisos por tabla. El estado, la revision y las tablas de espejo siguen
+    // subiendo en UNA transaccion; lo unico aparte es el archivo del borrador, que no sube la
+    // revision; el proximo guardado normal reescribe con la revision nueva.
     saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`, "ui");
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
@@ -7031,10 +7031,35 @@ async function persistPlanSnapshot() {
     operations: currentPlanOperations(),
   }, new Date().toISOString());
   try {
-    let saved;
-    const guardado = await guardarPlanEnSupabase({ snapshots: [payload] });
-    if (!guardado) throw new Error("No se pudo guardar la instantanea en Supabase");
-    saved = payload;
+    // EL ESTADO Y LA INSTANTANEA VAN EN DOS ESCRITURAS, NO EN UNA. MEDIDO 2026-10-10:
+    // con la instantanea embebida en el RPC, el cuerpo ronda los 4,4 MB al Generar plan,
+    // y con el enlace real (subida de ~21-26 KB/s, medido con 256 KB/10,4 s y 1 MB/48,7 s)
+    // no terminaba de subir: el POST no llegaba a la base y la pagina mostraba
+    // `signal is aborted without reason`, que es el abort del reloj de 30 s. La instantanea
+    // (1,95 MB de las operaciones programadas) viaja por su propio POST -el camino que ya
+    // usa el respaldo automatico, `persistPlanAutoBackup` -> `saveDraftSnapshot`- y el
+    // cuerpo del RPC baja a ~1,6 MB, que a esta velocidad tiene margen de sobra.
+    // `plan_guardar` escribe el estado, la revision y las tablas de espejo en una sola
+    // transaccion; lo unico que sale de ahi es el archivo del borrador, que es anexo y que
+    // la funcion nunca borra.
+    const guardado = await guardarPlanEnSupabase();
+    if (!guardado) throw new Error("No se pudo guardar el plan en Supabase");
+    const saved = payload;
+    // La instantanea va DESPUES del plan y, si falla, NO invalida el guardado. Antes el
+    // fallo de la instantanea se llevaba por delante la transaccion entera y el toast decia
+    // que no se habia guardado nada con el plan YA guardado al recargar (la alarma falsa que
+    // RULE-SUP-062 quito del segundo guardado); ahora es un aviso, no una perdida.
+    try {
+      await PPSupabaseBridgeReplacement.saveDraftSnapshot(saved);
+    } catch (errorInstantanea) {
+      // Un entorno sin `saveDraftSnapshot` no es un fallo que haya que gritar: el plan ya
+      // esta guardado y el borrador es un archivo. Se calla y se sigue (mismo criterio que
+      // el `isUnsupportedDraftSnapshotError` de abajo).
+      if (!window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(errorInstantanea)) {
+        console.error("[persistPlanSnapshot] El plan se guardo, pero no la instantanea:", errorInstantanea, errorInstantanea && errorInstantanea.stack);
+        showToast(`Plan guardado; no se pudo archivar la instantanea: ${errorInstantanea.message}`);
+      }
+    }
     upsertPlanSnapshotRecord(saved, "BORRADOR");
     return saved;
   } catch (error) {

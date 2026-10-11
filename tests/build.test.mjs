@@ -1060,7 +1060,11 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // persistPlanSnapshot sube tablas + app_state + revision en una sola escritura. Los fallos
   // transitorios de ese segundo guardado (429, 5xx, red) sacaban el toast falso "No se pudo
   // guardar el plan..." con el plan YA guardado al recargar.
-  assert.doesNotMatch(scheduleImpl, /Guardando plan\.\.\./, "no volvio el segundo guardado de Generar plan: una sola escritura, la del snapshot");
+  // 2026-10-10 (RECORTE DEL CUERPO): el estado sigue subiendo en UNA escritura (el RPC del plan),
+  // y aparte el borrador se archiva con su propio POST. No es el segundo guardado que RULE-SUP-062
+  // quito: ese reescribia el estado entero y subia la revision dos veces; este solo archiva el
+  // borrador (anexo, sin tocar la revision).
+  assert.doesNotMatch(scheduleImpl, /Guardando plan\.\.\./, "no volvio el segundo guardado de Generar plan: el estado sigue siendo una sola escritura");
   assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
   // 1.2 / 3.1 (RULE-PERF-013): despues de guardar NO se relee la lista completa. Antes era
   // `await loadPlanSnapshots(false, { deferPublishedLoad: true })`, que son 31 s medidos de
@@ -1077,12 +1081,22 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // contra el servidor y por eso no se toca.
   const persistSnapshotSource = pagesIndex.slice(
     pagesIndex.indexOf("async function persistPlanSnapshot("),
-    pagesIndex.indexOf("function buildPlanAutoBackupPayload("),
+    pagesIndex.indexOf("async function persistPlanAutoBackup("),
   );
   const persistBackupSource = pagesIndex.slice(
     pagesIndex.indexOf("async function persistPlanAutoBackup("),
     pagesIndex.indexOf("async function publishCurrentPlan("),
   );
+  // 2026-10-10 (RECORTE DEL CUERPO): el estado va por guardarPlanEnSupabase SIN la instantanea
+  // adentro y el borrador por su propio POST. MEDIDO: el cuerpo del RPC con la instantanea
+  // embebida ronda los 4,4 MB al Generar plan, y la subida del enlace del usuario (~21-26 KB/s)
+  // no lo terminaba: el POST no llegaba a la base y el guardado fallaba con "signal is aborted
+  // without reason". Si alguien vuelve a meter `snapshots` en la llamada del estado, el cuerpo
+  // vuelve a crecer y el guardado se vuelve a caer.
+  assert.doesNotMatch(persistSnapshotSource, /guardarPlanEnSupabase\(\s*\{[^}]*snapshots/,
+    "la instantanea no puede volver a viajar dentro del RPC del estado");
+  assert.match(persistSnapshotSource, /PPSupabaseBridgeReplacement\.saveDraftSnapshot\(saved\)/,
+    "el borrador tiene que archivarse por su propio camino");
   assert.doesNotMatch(persistSnapshotSource, /loadPlanSnapshots\(/,
     "guardar el borrador no puede volver a pedir la lista completa");
   assert.doesNotMatch(persistBackupSource, /loadPlanSnapshots\(/,
@@ -1097,11 +1111,12 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /function buildPlanAutoBackupPayload\(\) \{[\s\S]*createAppSheetPayload\(\)/);
   assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*state\.draftVersionId = snapshot\.snapshotId;/);
   // 2026-10-07 (RULE-SUP-062): el segundo guardado de Generar plan se elimino. persistPlanSnapshot
-  // sube tablas + app_state + revision en UNA escritura; el guardado extra de abajo
+  // sube tablas + app_state + revision en UNA escritura (el RPC del plan; desde 2026-10-10 el
+  // borrador se archiva aparte, sin tocar la revision); el guardado extra de abajo
   // (appSheetMarkDirtyScope("plan") + saveAppSheet(false)) duplicaba esa escritura y sus fallos
   // transitorios (429, 5xx, red) sacaban el toast falso "No se pudo guardar el plan..." con el plan
   // YA guardado al recargar, y subian la revision dos veces por generacion.
-  assert.doesNotMatch(scheduleImpl, /appSheetMarkDirtyScope\("plan"\);\s*await saveAppSheet\(false\)/, "no volvio el segundo guardado tras el snapshot: una sola escritura de Generar plan");
+  assert.doesNotMatch(scheduleImpl, /appSheetMarkDirtyScope\("plan"\);\s*await saveAppSheet\(false\)/, "no volvio el segundo guardado tras el snapshot: el estado sigue siendo una sola escritura de Generar plan");
   assert.match(scheduleImpl, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas;[\s\S]*`, "ui"\)/);
   assert.match(pagesIndex, /function isTransientSaveLockError\(error\)[\s\S]*Otro proceso esta actualizando el plan/);
   assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);

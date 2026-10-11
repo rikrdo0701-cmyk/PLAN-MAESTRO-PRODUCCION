@@ -142,6 +142,15 @@ function escenario({ guardar = null, esRuntimeDeAppsScript = false } = {}) {
         if (result?.ok === false) throw new Error(result?.motivo || "No se pudo guardar");
         return { revision: result?.revision || 1, savedAt: "2026-01-01T00:00:00.000Z" };
       },
+      // 2026-10-10: el archivo del BORRADOR va aparte del guardado del estado. persistPlanSnapshot
+      // llama aqui DESPUES de guardarPlanEnSupabase, para que el RPC del estado no cargue los
+      // ~1,95 MB de la instantanea (el cuerpo de 4,4 MB no subia por el enlace). El doble anota
+      // lo archivado para que el test pueda afirmar sobre el.
+      saveDraftSnapshot: async (payload) => {
+        llamadas.push({ metodo: "saveDraftSnapshot", payload });
+        const data = payload || {};
+        return { ...data, snapshotId: data.snapshotId || "draft-test" };
+      },
     },
     appSheetTryAcquireSaveGate: () => ({}),
     appSheetReleaseSaveGate: () => true,
@@ -423,7 +432,7 @@ test("ambitosDeCatalogo reconoce los cuatro ambitos de catalogo y no los del pla
   assert.deepEqual([...f.ambitosDeCatalogo([])], []);
 });
 
-test("persistPlanSnapshot guarda por Supabase con sus snapshots", async () => {
+test("persistPlanSnapshot guarda el estado y archiva el borrador en dos escrituras", async () => {
   const f = escenario();
   let opciones = null;
   f.ctx.PPSupabaseWriter.guardar = async (_state, o) => {
@@ -434,7 +443,13 @@ test("persistPlanSnapshot guarda por Supabase con sus snapshots", async () => {
   const resultado = await f.persistPlanSnapshot();
 
   assert.ok(resultado, "persistPlanSnapshot tiene que devolver el snapshot");
-  assert.ok(Array.isArray(opciones.snapshots) && opciones.snapshots.length, "los snapshots llegan a guardar");
+  // 2026-10-10: la instantanea YA NO viaja dentro del cuerpo del RPC (era el 44% del payload y
+  // no subia por el enlace). El estado va por guardarPlanEnSupabase y el borrador por su POST.
+  assert.ok(!opciones || !Array.isArray(opciones.snapshots) || opciones.snapshots.length === 0,
+    "la instantanea no puede volver a viajar dentro del RPC del estado");
+  const archivados = f.llamadas.filter((l) => l.metodo === "saveDraftSnapshot");
+  assert.equal(archivados.length, 1, "la instantanea se archiva por su propio camino");
+  assert.equal(archivados[0].payload.snapshotId, resultado.snapshotId);
   assert.deepEqual(f.llamadas.filter((l) => l.metodo === "callAppsScript"), []);
 });
 
