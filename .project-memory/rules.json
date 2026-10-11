@@ -2869,6 +2869,20 @@
         "tests/build.test.mjs"
       ],
       "updated_at": "2026-10-10"
+    },
+    {
+      "rule_id": "RULE-SUP-074",
+      "name": "El sondeo de antiguedad de los catalogos se hace por NOMBRE DE TABLA, no por clave de rebanada de estado: con las claves (operatorCapacity, hiddenCapabilities, cts...) PostgREST devolvia 404 en ~17 de 20 y el aviso de 'Datos viejos' no veia esos catalogos",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "SINTOMA REPORTADO 2026-10-11: la consola del navegador se llenaba de 404 de /rest/v1/operatorCapacity?select=updated_at, /rest/v1/hiddenCapabilities, /rest/v1/operatorPerformance, /rest/v1/cts, /rest/v1/configuredCapabilities, /rest/v1/capacityModes... CAUSA RAIZ: supabase-catalog-boot.js (el sondeo de antiguedad del arranque, correr()) iteraba Object.keys(resultado.catalogs) y pasaba cada clave a antiguedadDe(url, clave, t, token) como NOMBRE DE TABLA. Pero las claves de catalogs (supabase-reader.js:1530-1567) son REBANADAS DE ESTADO, no tablas: de ~20 rebanadas solo 3 se llaman igual que su tabla (operators, matrix, subcontracts); las otras ~17 (operatorCapacity, hiddenCapabilities, configuredCapabilities, capacityModes, cts, operationRules, customCapabilities, operatorPerformance, operatorProfiles, operationCatalog, machines, otTypes, toolCatalog, calendarExceptions, otConfigurations, articleConfigurations, machinePlanningOverrides) generaban un GET a una tabla inexistente, 404, y como antiguedadDe prueba TRES columnas por rebanada (updated_at, actualizado, created_at), cada una pagaba 3 peticiones. EFECTO: (1) ruido de 404 en consola y ~50 peticiones inutiles por carga; (2) el aviso 'Datos viejos en Supabase' quedaba CIEGO para esos catalogos: su antiguedad nunca se media. NO rompia el guardado ni el arranque: antiguedadConColumna traga el fallo y devuelve null. FIX: el lector publica FUENTES_DE_CATALOGO (mapa rebanada->tabla, en supabase-reader.js junto a readCatalogs) y lo devuelve como `fuentes` en el informe de readCatalogs; el sondeo deduplica por TABLA (varias rebanadas salen de la MISMA tabla: las cuatro de operador, todas de `operators`) y arma informe.viejo indexado por TABLA. El mapa es la unica fuente del nombre real; se exporta para el test. NOTA: no es una regresion de RULE-SUP-073; el sondeo viene del commit ac4b92f (2026-09-29), cuando se introdujo el aviso, y el mapeo nunca cuadro.",
+      "source": "sintoma reportado 2026-10-11 (consola del navegador con 404 de tablas inexistentes tras desplegar RULE-SUP-073); localizado por lectura de codigo el mismo dia\nsrc/web/shared/supabase-catalog-boot.js: correr() antes usaba Object.keys(resultado.catalogs) como tablas -> ahora fuentes[] + dedupe por tabla\nsrc/web/shared/supabase-reader.js: FUENTES_DE_CATALOGO (junto a readCatalogs), return.fuentes y export FUENTES_DE_CATALOGO\ntests/antiguedad-catalogo.test.mjs (2 casos nuevos: cada rebanada declara su tabla y es una tabla que el lector pide; el sondeo pide cada tabla una sola vez y ninguna rebanada inventada)",
+      "applies_to": [
+        "src/web/shared/supabase-reader.js",
+        "src/web/shared/supabase-catalog-boot.js",
+        "tests/antiguedad-catalogo.test.mjs"
+      ],
+      "updated_at": "2026-10-11"
     }
   ]
 }
