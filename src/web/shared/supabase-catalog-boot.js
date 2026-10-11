@@ -116,24 +116,31 @@
   const COLUMNA_DE_ANTIGUEDAD = ["updated_at", "actualizado", "created_at"];
 
   /**
-   * Tablas por las que NO se alarma aunque salgan viejas, porque NINGUNA PAGINA las escribe.
+   * Tablas por las que el arranque NO alarma de antiguedad. Son DOS casos distintos, y por eso la
+   * lista es de TABLAS, no de "sin escritor":
    *
-   * capabilities, operation_catalog y ot_types no tienen escritor desde la pagina: su unico
-   * escritor es el ESPEJO de las Hojas (16-supabase-catalogo.js), que corre cuando un guardado
-   * llega al despliegue de Apps Script, y ese puente esta apagado (RULE-SUP-030). Estan
-   * congeladas en la siembra de NetSuite, asi que SIEMPRE saldrian viejas y nadie podria
-   * refrescarlas desde la app: un falso positivo que no se puede apagar, de la misma familia
-   * que RULE-SUP-064/065/067 (estados legitimos que no deben alarmar en cada carga).
+   * (1) SIN ESCRITOR DESDE LA PAGINA: capabilities, operation_catalog y ot_types. Su unico
+   *     escritor es el ESPEJO de las Hojas (16-supabase-catalogo.js), que corre cuando un guardado
+   *     llega al despliegue de Apps Script, y ese puente esta apagado (RULE-SUP-030). Estan
+   *     congeladas en la siembra de NetSuite, asi que SIEMPRE saldrian viejas y nadie podria
+   *     refrescarlas desde la app.
    *
-   * MEDIDO 2026-10-11, ya con el sondeo arreglado (RULE-SUP-074): el toast decia
-   * "operation_catalog: 311 h - capabilities: 311 h - ot_types: 270 h" y no habia accion
-   * posible desde la pagina. No se sondean: el hecho (estan congeladas) no cambia y el aviso
-   * no gasta dos peticiones de red por tabla en algo que nunca va a mostrar.
+   * (2) SOLO CAMBIAN AL CAMBIAR UNA DECISION: machine_planning_overrides. La pagina SI la escribe
+   *     (supabase-writer.js, al apartar una maquina con excluded === true), pero su contenido es
+   *     el conjunto de maquinas apartadas: si nadie aparta ni desaparta, la tabla NO cambia, y
+   *     "sin cambios" no es "dato viejo" (ni distingue "no cambio nada" de "se rompio el guardado").
+   *     Es la trampa que updated_at delata en toda tabla de solo-accion.
    *
-   * machine_planning_overrides NO entra aqui: la pagina SI la escribe (al apartar una maquina,
-   * excluded===true), asi que su antiguedad si es una senal que la persona puede mover.
+   * MEDIDO 2026-10-11, ya con el sondeo arreglado (RULE-SUP-074): el toast mostraba
+   * "operation_catalog: 311 h - capabilities: 311 h - machine_planning_overrides: 240 h -
+   * ot_types: 270 h", y ninguna de las cuatro tenia accion real desde la app. Es la familia de
+   * RULE-SUP-064/065/067 (estados legitimos que no deben alarmar en cada carga). No se sondean:
+   * el hecho no cambia y el aviso no gasta peticiones en algo que no va a mostrar. Las tablas que
+   * la pagina guarda CON cambios normales (operators, matrix, tools, subcontracts,
+   * calendar_exceptions, ot_configurations, article_configurations, machine_catalog) SIGUEN
+   * midiendose: ahi un dato viejo si puede significar que el guardado no llego.
    */
-  const TABLAS_SIN_ESCRITOR_EN_LA_PAGINA = ["capabilities", "operation_catalog", "ot_types"];
+  const TABLAS_SIN_AVISO_DE_ANTIGUEDAD = ["capabilities", "operation_catalog", "ot_types", "machine_planning_overrides"];
 
   /**
    * Antiguedad de lo leido: cuando se escribio por ULTIMA VEZ. Sin esto, una tabla con
@@ -465,16 +472,14 @@
     // de consola y, peor, el aviso de "Datos viejos" nunca veia esos catalogos. Varias
     // rebanadas salen de la MISMA tabla (las cuatro de operador, todas de `operators`),
     // asi que se sondea una vez por tabla y el informe se indexa por tabla. Ver RULE-SUP-074.
-    // ...asi que se sondea una vez por tabla y el informe se indexa por tabla. Ver RULE-SUP-074.
-    //
-    // Y NO SE SONDEA LO QUE NINGUNA PAGINA ESCRIBE (RULE-SUP-075): capabilities, operation_catalog
-    // y ot_types solo las escribe el espejo de las Hojas, que esta apagado, asi que saldrian
-    // viejas para siempre y sin accion posible desde la app. Ver TABLAS_SIN_ESCRITOR_EN_LA_PAGINA.
+    // Y NO SE SONDEAN LAS TABLAS SIN AVISO UTIL (RULE-SUP-075): las tres que solo escribe el
+    // espejo de las Hojas (apagado) y machine_planning_overrides, que solo cambia al cambiar un
+    // apartado. Saldrian viejas sin accion real desde la app. Ver TABLAS_SIN_AVISO_DE_ANTIGUEDAD.
     const fuentes = resultado.fuentes || {};
     const tablas = [];
     for (const rebanada of Object.keys(resultado.catalogs || {})) {
       const tabla = fuentes[rebanada];
-      if (tabla && tablas.indexOf(tabla) < 0 && TABLAS_SIN_ESCRITOR_EN_LA_PAGINA.indexOf(tabla) < 0) tablas.push(tabla);
+      if (tabla && tablas.indexOf(tabla) < 0 && TABLAS_SIN_AVISO_DE_ANTIGUEDAD.indexOf(tabla) < 0) tablas.push(tabla);
     }
     await Promise.all(tablas.map(async (tabla) => {
       const info = await antiguedadDe(url, clave, tabla, token);
@@ -529,9 +534,10 @@
     // instantes mirando el calendario de la planta.
     minutosLaborales,
     UMBRAL_MINUTOS_LABORALES,
-    // Las tablas por las que el arranque no alarma (sin escritor desde la pagina). Expuestas para
-    // que el test compruebe que el sondeo las salta, sin reimplementar la lista. Ver RULE-SUP-075.
-    TABLAS_SIN_ESCRITOR_EN_LA_PAGINA,
+    // Las tablas por las que el arranque no alarma de antiguedad (ver el comentario de la
+    // constante, arriba). Expuestas para que el test compruebe que el sondeo las salta, sin
+    // reimplementar la lista. Ver RULE-SUP-075.
+    TABLAS_SIN_AVISO_DE_ANTIGUEDAD,
     // El resolutor del calendario, por la misma razon: el test tiene que poder
     // comprobar la cascada (informe inyectado > cache local > de fabrica) sin
     // reimplementarla.
