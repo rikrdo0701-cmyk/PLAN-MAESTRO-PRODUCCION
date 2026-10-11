@@ -198,6 +198,14 @@
  * con `on_conflict=id` hace que el segundo POST actualice en vez de duplicar.
  * Guardar dos veces con el mismo estado deja la tabla de eventos igual.
  *
+ * QUE EVENTOS YA ESTAN ESCRITOS SE PREGUNTA A LA BASE, no se supone. Antes el
+ * conjunto de "ya mandados" era solo de esta pagina y se vaciaba al recargar: con un
+ * plan de ~6.300 eventos y un tope de 400 por guardado, cada recarga volvia a mandar
+ * los MISMOS primeros 400 y los ~5.900 de arriba solo salian guardando ~16 veces en la
+ * MISMA sesion (MEDIDO 2026-10-11). Ahora, antes de armar el payload,
+ * asegurarEventosSembrados pide al lector los ids que `operation_events` ya tiene para
+ * las OTs del plan, y el guardado manda solo lo que falta. Ver RULE-SUP-076.
+ *
  * LO QUE NO SE REINTENTA, Y POR QUE. Este es el mismo criterio de
  * supabase-catalog-boot.js y esta copiado por el mismo motivo: un 401 o un 403 no
  * mejora esperando (la sesion no esta, el JWT no sirve, o RLS cerro la puerta) y
@@ -258,9 +266,9 @@
   // Con un solo POST el corte deja de ser de tiempo y pasa a ser de tamano. Sin
   // tope, un plan con 1000 operaciones y tres entradas de log cada una mete 3000
   // eventos en un cuerpo, y un cuerpo que no entra es un guardado que no se
-  // escribe. Se mandan primero los que NO han salido de esta pagina, que son los
-  // unicos que hay que escribir de verdad, y lo que no cabe se dice en el informe
-  // en vez de tragar.
+  // escribe. Se mandan primero los que NO estan ya escritos (ni en la base, ver
+  // asegurarEventosSembrados, ni en esta sesion), que son los unicos que hay que
+  // escribir de verdad, y lo que no cabe se dice en el informe en vez de tragar.
   const MAX_EVENTOS_POR_GUARDADO = 400;
 
   /**
@@ -339,10 +347,27 @@
    */
   const ERP_COMPARTIDA = { operations: true, work_orders: true, materials: true };
 
-  // Ids de los eventos que ya salieron en ESTA pagina. Sirve para que un guardado
-  // que se topa con el presupuesto no repita (y no vuelva a pagar) lo que ya
-  // esta escrito: el corte avanza de verdad en vez de estarse reenviando lo mismo.
+  // Ids de los eventos que ya estan escritos. Sirve para que un guardado que se topa
+  // con el presupuesto no repita (y no vuelva a pagar) lo que ya esta escrito: el corte
+  // avanza de verdad en vez de estarse reenviando lo mismo.
+  //
+  // OJO CON EL ALCANCE, que es la leccion de RULE-SUP-076 (2026-10-11). Esto NO es solo
+  // "lo que salio en esta pagina": antes lo era, y con un plan de ~6.300 eventos el tope
+  // de 400 hacia que cada recarga volviera a mandar los MISMOS primeros 400 y que los
+  // ~5.900 de arriba solo salieran guardando 16 veces en la MISMA sesion. Ahora, antes de
+  // armar el payload, el conjunto se SIEMBRA con los ids que ya tiene la base
+  // (asegurarEventosSembrados), asi que "ya enviado" quiere decir "ya esta en la base" y
+  // el guardado manda solo lo que falta. Los que se mandan en este guardado se anaden
+  // despues, como siempre.
   const eventosEnviados = new Set();
+
+  // Si ya se pregunto a la base por los eventos del plan, y la lectura en curso. Son dos
+  // variables y no una para que dos guardados solapados (persistPlanSnapshot hace dos
+  // guardados) no disparen dos lecturas: el primero deja la promesa y el segundo la
+  // espera. configure() las reinicia: otra URL es otro proyecto y el "ya esta en la base"
+  // de antes deja de valer.
+  let eventosSembrados = false;
+  let siembraEnCurso = null;
 
   /**
    * El detalle del 404 del RPC, o null mientras no se sepa. En cuanto se sabe que
@@ -367,6 +392,10 @@
     // Configurar de nuevo es la unica vez en que se vuelve a preguntar por el
     // RPC: si la URL cambio, es otro proyecto y puede tener el DDL aplicado.
     rpcAusente = null;
+    // Y por el mismo motivo se olvida lo sembrado: los ids que ya estaban en la base
+    // eran de OTRO proyecto. Con la URL nueva hay que volver a preguntar (RULE-SUP-076).
+    eventosSembrados = false;
+    siembraEnCurso = null;
     return configActual();
   }
 
@@ -2259,20 +2288,93 @@
   }
 
   /**
-   * Cuantos eventos caben en ESTE guardado, y cuales. Solo los que NO han salido
-   * de esta pagina: son los unicos que hay que escribir de verdad, y meter los
-   * otros en el cuerpo solo lo hace mas grande, porque la funcion los ignora con
-   * on conflict do nothing. El corte se come, por tanto, lo pendiente y no lo que
-   * ya esta, y lo que no cabe sale en el siguiente guardado en vez de perderse.
+   * Cuantos eventos caben en ESTE guardado, y cuales. Solo los que NO estan ya
+   * escritos: son los unicos que hay que escribir de verdad, y meter los otros en el
+   * cuerpo solo lo hace mas grande, porque la funcion los ignora con on conflict do
+   * nothing. El corte se come, por tanto, lo pendiente y no lo que ya esta, y lo que
+   * no cabe sale en el siguiente guardado en vez de perderse.
    *
-   * Recargar la pagina si que los vuelve a mandar todos, porque este conjunto es
-   * de la pagina y no de la base. No es un problema: la funcion los deduplica por
-   * id, y el id es determinista.
+   * "YA ESCRITO" INCLUYE LA BASE, no solo esta pagina. Eso lo garantiza
+   * asegurarEventosSembrados, que se llama antes de armar el payload: siembra
+   * `eventosEnviados` con los ids que ya trae `operation_events` para las OTs del plan.
+   * Sin esa siembra, recargar volvia a mandar los mismos primeros 400 de ~6.300 y los
+   * demas solo salian guardando muchas veces en la misma sesion (RULE-SUP-076).
    */
   function repartoDeEventos(filas) {
     const nuevos = (Array.isArray(filas) ? filas : []).filter((fila) => !eventosEnviados.has(fila.id));
     const elegidas = nuevos.slice(0, MAX_EVENTOS_POR_GUARDADO);
     return { filas: elegidas, omitidos: nuevos.length - elegidas.length };
+  }
+
+  /** Las OTs distintas que tienen operaciones en el plan, en el orden en que aparecen. */
+  function otsConEventos(state) {
+    const ots = [];
+    const vistas = new Set();
+    (Array.isArray(state && state.operations) ? state.operations : []).forEach((op) => {
+      if (!op || typeof op !== "object") return;
+      const ot = texto(op.ot);
+      if (!ot || vistas.has(ot)) return;
+      vistas.add(ot);
+      ots.push(ot);
+    });
+    return ots;
+  }
+
+  /**
+   * Pregunta a la base que eventos del plan YA estan escritos y los marca en
+   * `eventosEnviados`. Ver RULE-SUP-076.
+   *
+   * POR QUE UNA LECTURA Y NO UNA PROMESA DE "YA SE MANDARON". El id del evento es
+   * determinista, pero la pagina no recuerda entre recargas que ids mando: ese recuerdo
+   * solo tiene sentido si se lee de la base, que es la unica que sabe. La lectura la hace
+   * el LECTOR (PPSupabaseReader.readEventIds, filtrada por las OTs del plan), no este
+   * modulo: hay un solo lector (RULE-SUP-015/074) y aqui solo se consume.
+   *
+   * ES BEST-EFFORT, Y SE DICE. Si no hay lector (build sin el, o pruebas) o el estado
+   * todavia no trae OTs, no se siembra y no se marca nada: el siguiente guardado lo
+   * intenta. Si la lectura falla, el guardado SIGUE (no se cae por no poder optimizar) y
+   * el informe lleva el aviso: sin la siembra, este guardado vuelve a mandar sus eventos,
+   * que la funcion deduplica por id, asi que no se pierde nada; lo que puede contar de
+   * mas es el aviso de "eventos omitidos".
+   *
+   * SE SIEMBRA UNA VEZ POR SESION. Reintentar la lectura en cada guardado pagaria una
+   * lectura por guardado para ahorrar unas escrituras; una vez basta, porque los eventos
+   * que salen despues se anaden al mismo conjunto (guardar, camino RPC).
+   */
+  async function asegurarEventosSembrados(ctx, state, informe) {
+    if (eventosSembrados) return;
+    const reader = root.PPSupabaseReader;
+    if (!reader || typeof reader.readEventIds !== "function") return;
+    const ots = otsConEventos(state);
+    // Sin OTs no hay nada que preguntar, y NO se marca la sesion como sembrada: un guardado
+    // de arranque todavia sin plan no puede cerrarle la puerta al que si lo trae.
+    if (!ots.length) return;
+    let arrancada = false;
+    if (!siembraEnCurso) {
+      siembraEnCurso = Promise.resolve().then(() => reader.readEventIds(ots)).then((ids) => {
+        (Array.isArray(ids) ? ids : []).forEach((id) => {
+          const valor = texto(id);
+          if (valor) eventosEnviados.add(valor);
+        });
+      });
+      arrancada = true;
+    }
+    try {
+      await siembraEnCurso;
+    } catch (error) {
+      if (arrancada) {
+        informe.avisos.push(
+          "no se pudo comprobar que eventos del log ya estaban en la base, asi que este guardado vuelve a " +
+          "mandar los suyos: el id es el mismo y la funcion no los duplica, no se pierde nada, pero el aviso " +
+          "de 'eventos omitidos' puede contar de mas. Detalle: " + sano((error && error.message) || error, ctx.secretos)
+        );
+      }
+    } finally {
+      if (arrancada) {
+        eventosSembrados = true;
+        siembraEnCurso = null;
+      }
+    }
   }
 
   function filasSnapshots(lista) {
@@ -2753,6 +2855,12 @@
     const actor = actorDe(token);
     ctx.actor = actor;
 
+    // ANTES de armar el payload: `armarPayload` decide que eventos van segun
+    // `eventosEnviados`, y la siembra es lo que mete ahi lo que ya esta en la base
+    // (RULE-SUP-076). Si el lector no esta o la lectura falla, el guardado sigue igual:
+    // esto evita reenviar de mas, no es un requisito para guardar.
+    await asegurarEventosSembrados(ctx, datos, informe);
+
     const armado = armarPayload(datos, revision, opts);
     if (opts.permitirBorradoErp === true) {
       // El opt-in es del camino viejo. En la funcion no puede existir: el DDL
@@ -2793,9 +2901,10 @@
           // se avisa, el corte se traga un trozo del log sin que nadie lo sepa.
           if (armado.eventosOmitidos > 0) {
             informe.avisos.push(
-              "se omitieron " + armado.eventosOmitidos + " evento(s) del log: un guardado manda como " +
-                "mucho " + MAX_EVENTOS_POR_GUARDADO + " eventos por peticion. Los que no se mande salen " +
-                "en el siguiente guardado, con el mismo id, asi que la base no se queda sin ellos."
+              "se omitieron " + armado.eventosOmitidos + " evento(s) NUEVOS del log (los que ya estaban en la " +
+                "base no se cuentan): un guardado manda como mucho " + MAX_EVENTOS_POR_GUARDADO + " eventos por " +
+                "peticion. Los que no se mande salen en el siguiente guardado, con el mismo id, asi que la base " +
+                "no se queda sin ellos."
             );
           }
           informe.revision = numero(rpc.cuerpo.revision, revision);

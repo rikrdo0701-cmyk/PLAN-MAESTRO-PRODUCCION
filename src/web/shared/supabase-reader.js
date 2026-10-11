@@ -272,6 +272,22 @@
     return avisadoSinSesion;
   }
 
+  /**
+   * Un valor para el `in.(...)` de PostgREST. Va ENTRE COMILLAS y con `"` y `\`
+   * escapados porque el parser de PostgREST corta la lista por comas y parentesis
+   * (docs: `in.("a,b","c")`): sin comillas, una OT con coma partiria la lista en dos
+   * e inventaria una OT que no existe. El valor citado se codifica despues, para que
+   * un espacio o un acento no rompan la URL. Ver readEventIds.
+   */
+  function valorEnLista(valor) {
+    const citado = '"' + String(valor == null ? "" : valor).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    // encodeURIComponent deja `! ' ( ) *` sin codificar, y dentro de un in-list esos
+    // caracteres son parte de la sintaxis: se codifican a mano (patron estricto).
+    return encodeURIComponent(citado).replace(/[!'()*]/g, function (c) {
+      return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+    });
+  }
+
   function restUrl(table, options) {
     const opts = options || {};
     const parts = ["select=" + encodeURIComponent(opts.select || "*")];
@@ -281,6 +297,12 @@
     if (opts.filters && typeof opts.filters === "object") {
       Object.keys(opts.filters).forEach(function (column) {
         parts.push(encodeURIComponent(column) + "=eq." + encodeURIComponent(opts.filters[column]));
+      });
+    }
+    if (opts.in && typeof opts.in === "object") {
+      Object.keys(opts.in).forEach(function (column) {
+        const valores = (opts.in[column] || []).map(valorEnLista);
+        if (valores.length) parts.push(encodeURIComponent(column) + "=in.(" + valores.join(",") + ")");
       });
     }
     return config.url + "/rest/v1/" + encodeURIComponent(table) + "?" + parts.join("&");
@@ -417,6 +439,62 @@
     const range = respuesta.headers.get("content-range") || "";
     const total = range.split("/")[1];
     return total === undefined || total === "*" ? null : Number(total);
+  }
+
+  // Cuantas OTs van en un `in.(...)`. La lista no puede crecer sin tope: la URL tiene
+  // limite y una OT larga no debe tumbarla. 25 deja la URL corta (el plan medido tiene
+  // ~115 OTs: 5 trozos) y no multiplica las peticiones.
+  const TROZO_DE_OTS = 25;
+
+  /**
+   * Los `id` de los eventos de `operation_events` que YA estan en la base para estas
+   * OTs. Ver RULE-SUP-076.
+   *
+   * POR QUE EXISTE. El escritor arma el log de cada operacion como eventos con id
+   * DETERMINISTA (`uuidDe(operationId | kind | indice | mensaje)`, supabase-writer.js).
+   * El guardado manda como mucho MAX_EVENTOS_POR_GUARDADO (400) por peticion, y su
+   * conjunto de "ya enviados" es de la PAGINA y se vacia al recargar. MEDIDO 2026-10-11:
+   * con un plan de ~6.300 eventos, cada recarga volvia a mandar los MISMOS primeros 400
+   * y avisaba de que omitia los otros ~5.900; los eventos por encima del tope solo
+   * salian si se guardaba ~16 veces en la MISMA sesion. Los ids que ya estan en la base
+   * son la unica forma de que el guardado mande SOLO lo que falta.
+   *
+   * SE PIDE POR `ot=in.(...)` Y NO POR `id`. Los ids son ~6.300 y no caben en la URL;
+   * las OTs del plan son unas decenas y el filtro por `ot` usa el indice
+   * `operation_events_ot_at_idx` (docs/schema-supabase-plan.sql:147). La lista de OTs va
+   * por trozos (TROZO_DE_OTS).
+   *
+   * LO QUE DEVUELVE. Solo los `id`, sin repetir. NO trae `payload` (que es lo caro): para
+   * decidir que eventos faltan basta la clave. La paginacion la hace readTableEntero, que
+   * ya resuelve el `db-max-rows` de PostgREST.
+   */
+  async function readEventIds(ots) {
+    const lista = [];
+    const vistas = new Set();
+    (Array.isArray(ots) ? ots : []).forEach(function (ot) {
+      const valor = String(ot == null ? "" : ot).trim();
+      if (!valor || vistas.has(valor)) return;
+      vistas.add(valor);
+      lista.push(valor);
+    });
+    if (!lista.length) return [];
+    const ids = [];
+    const yaVistos = new Set();
+    for (let i = 0; i < lista.length; i += TROZO_DE_OTS) {
+      const trozo = lista.slice(i, i + TROZO_DE_OTS);
+      const filas = await readTableEntero("operation_events", {
+        select: "id",
+        in: { ot: trozo },
+        order: "id.asc",
+      });
+      filas.forEach(function (fila) {
+        const id = String((fila && fila.id) || "").trim();
+        if (!id || yaVistos.has(id)) return;
+        yaVistos.add(id);
+        ids.push(id);
+      });
+    }
+    return ids;
   }
 
   async function status() {
@@ -1665,6 +1743,9 @@
     readTableEntero: readTableEntero,
     ORDEN_PAGINADO: ORDEN_PAGINADO,
     countTable: countTable,
+    // Los ids de operation_events que ya estan en la base para unas OTs. Lo pide el
+    // escritor antes de armar el payload, para mandar solo lo que falta. Ver RULE-SUP-076.
+    readEventIds: readEventIds,
     status: status,
     readCatalogs: readCatalogs,
     // El mapa rebanada->tabla. Se publica para que el arranque y los tests puedan exigir
