@@ -117,7 +117,12 @@ test("el sondeo de antiguedad golpea la tabla real, nunca la rebanada de estado 
   const { contexto, sondeos } = leerYArrancar();
   const leido = await contexto.PPSupabaseReader.readCatalogs();
   const fuentes = contexto.PPSupabaseReader.FUENTES_DE_CATALOGO;
-  const tablasEsperadas = [...new Set(Object.keys(leido.catalogs).map((rebanada) => fuentes[rebanada]))].sort();
+  // RULE-SUP-075: de esa lista se caen las tablas sin escritor desde la pagina (se sondean en su
+  // propio test); el resto es exactamente lo que el sondeo tiene que pedir.
+  const sinEscritor = contexto.PPCatalogBoot.TABLAS_SIN_ESCRITOR_EN_LA_PAGINA;
+  const tablasEsperadas = [...new Set(Object.keys(leido.catalogs).map((rebanada) => fuentes[rebanada]))]
+    .filter((tabla) => sinEscritor.indexOf(tabla) < 0)
+    .sort();
   sondeos.length = 0;
   const informe = await contexto.PPCatalogBoot.correr();
   // Exactamente una peticion por TABLA (no por rebanada: las cuatro de operador son una).
@@ -132,4 +137,32 @@ test("el sondeo de antiguedad golpea la tabla real, nunca la rebanada de estado 
   // El informe se indexa por tabla, que es la pregunta que el aviso contesta.
   assert.ok(informe.viejo.operators, "operators (la tabla) tiene que traer su antiguedad");
   assert.equal(informe.viejo.operatorCapacity, undefined, "la rebanada no puede aparecer como tabla");
+});
+
+test("no se alarma por tablas que ninguna pagina escribe: capabilities, operation_catalog y ot_types (RULE-SUP-075)", async () => {
+  // MEDIDO 2026-10-11, con el sondeo ya arreglado (RULE-SUP-074): el toast mostraba
+  // "operation_catalog: 311 h - capabilities: 311 h - machine_planning_overrides: 240 h -
+  // ot_types: 270 h". Las tres primeras (capabilities, operation_catalog, ot_types) NO las
+  // escribe ninguna pagina: su unico escritor es el espejo de las Hojas (16-supabase-catalogo.js),
+  // apagado (RULE-SUP-030), asi que estan congeladas en la siembra y saldrian viejas en CADA
+  // carga sin que nadie pueda refrescarlas: falso positivo de la familia RULE-SUP-064/067. El
+  // sondeo deja de pedirlas (menos peticiones) y el aviso no las nombra. machine_planning_overrides
+  // NO se veta: la pagina SI la escribe (al apartar una maquina).
+  const { contexto, sondeos } = leerYArrancar();
+  const sinEscritor = contexto.PPCatalogBoot.TABLAS_SIN_ESCRITOR_EN_LA_PAGINA;
+  assert.deepEqual([...sinEscritor].sort(), ["capabilities", "operation_catalog", "ot_types"],
+    "el veto es exactamente las tres que solo escribe el espejo de las Hojas");
+  assert.equal(sinEscritor.includes("machine_planning_overrides"), false,
+    "machine_planning_overrides la pagina SI la escribe: no puede vetarse");
+  assert.equal(sinEscritor.includes("operators"), false,
+    "operators la pagina SI la escribe (pestana Matriz): no puede vetarse");
+  sondeos.length = 0;
+  const informe = await contexto.PPCatalogBoot.correr();
+  for (const tabla of sinEscritor) {
+    assert.equal(sondeos.includes(tabla), false, `${tabla} no puede sondearse: nadie la escribe y saldria vieja siempre`);
+    assert.equal(informe.viejo[tabla], undefined, `${tabla} no puede entrar al aviso de datos viejos`);
+  }
+  // El sondeo sigue vivo para las que la pagina si guarda.
+  assert.ok(sondeos.includes("operators") && sondeos.includes("matrix") && sondeos.includes("machine_planning_overrides"),
+    "las tablas que la pagina escribe tienen que seguir midiendose");
 });
