@@ -340,6 +340,9 @@ HERRAMENTAL_DESTINO, KIT_DESTINO, COMENTARIO, PRECIO, MONTO`.
 `PRECIO` = precio unitario de la OT: `max(unitPrice` de la operación,
 `max(PRECIO_ULTIMA_VENTA, PRECIO_PROMEDIO_VENTA)`, `PRECIO_MANUAL`)`;
 `MONTO` = `PRECIO × piezas pendientes` de la OT (monto de liberación, RULE-MON-001).
+El CSV lo arma `effectiveUnitPriceForOt` (invoice → `PRECIO_MANUAL`, **sin** `PRECIO_REF_VENTA`);
+`weeklyJobSummary` (Plan de la semana) sí usa `PRECIO_REF_VENTA`/`referenceSalePrice` como respaldo
+cuando no hay precio vivo, por lo que ambos lectores pueden diferir (medido 2026-10-11, RULE-MON-003).
 Valores almacenados `< $1 MXN` (cero o polvo residual 0.01/0.1) **no cuentan**: en el CSV
 `PRECIO`/`MONTO` caen al fallback (`effectiveUnitPriceForOt`/`amountForOt`) y en
 `weeklyJobSummary` (Plan de la semana) la fila queda sin precio (`null` → `$0.00`);
