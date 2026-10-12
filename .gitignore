@@ -50,3 +50,11 @@ plan-generated.png
 
 tests/artifacts/
 artifacts/
+
+# Cache/estado local de herramientas y respaldos de la maquina (no son fuente del proyecto)
+.gas-sync/
+.agents/
+.claude/
+.vscode/
+backups/
+restlet-headers.json
