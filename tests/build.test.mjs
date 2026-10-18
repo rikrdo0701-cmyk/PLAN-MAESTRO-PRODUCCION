@@ -799,7 +799,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /planStatusActionCell\(row\.releaseOp\)/);
   assert.match(pagesIndex, /workOrder\?\.builtQuantity/);
   assert.match(pagesIndex, /els\.releaseReport, els\.selectedJobPanel/);
-  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 3);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 4);
   assert.match(pagesIndex, /id="operatorReportFutureDays"/);
   assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
   assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
@@ -941,11 +941,10 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
   assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = \(options\.deferPublishedLoad !== true \|\| !hasDraftReport\)[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
-  assert.match(pagesIndex, /@page\s+inspection\s*\{\s*size:\s*A4 landscape;\s*margin:\s*3mm 8mm 5mm 9mm/);
-  assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\s*\{[^}]*page:\s*inspection/);
+  assert.match(pagesIndex, /inspection-print-page-size/);
   assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
   assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 0\)[\s\S]*sheet\.scrollWidth/);
-  assert.match(pagesIndex, /finally\s*\{[^}]*removeProperty\("--inspection-print-scale"\)[^}]*classList\.remove\("printing-inspection"\)/);
+  assert.match(pagesIndex, /finally\s*\{[^}]*removeProperty\("--inspection-print-scale"\)[^}]*classList\.remove\("printing-inspection"\)[\s\S]*getElementById\("inspection-print-page-size"\)[\s\S]*removeChild/);
   assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection\)/);
   assert.match(pagesIndex, /function inspectionOperationLayout\(count\)/);

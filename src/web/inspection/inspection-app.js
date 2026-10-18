@@ -614,7 +614,7 @@
     // dentro. Sale cuando la ultima fila de materiales tiene un hueco (0 o 1 MP) y tambien
     // con exactamente 2, que es el caso en que el formato deja la linea de libre.
     if (materials.length <= 2) materialRows.push(materialRow({}, {}));
-    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb")}${cell(3, escape(job.wo), "inspection-big inspection-bb")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb")}${cell(2, "REV", "inspection-big inspection-bb")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb")}${cell(2, "Cantidad:", "inspection-label inspection-bb")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb")}${cell(3, "Material", "inspection-head inspection-br inspection-bb")}${cell(3, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb")}${cell(2, "Material", "inspection-head inspection-bb")}${cell(2, "Descripcion", "inspection-head inspection-bb")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
+    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb inspection-strong")}${cell(3, escape(job.wo), "inspection-big inspection-bb inspection-strong")}${cell(7, escape(job.article), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "REV", "inspection-big inspection-bb inspection-strong")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "Cantidad:", "inspection-label inspection-bb inspection-strong")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb inspection-strong")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb inspection-strong")}${cell(3, "Material", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(3, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Material", "inspection-head inspection-bb inspection-strong")}${cell(2, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb inspection-strong")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
     byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${inspectionOperationLayout(3).replace(operationSubheader("OP"), operationSubheader("OPER."))}</div>`;
     const footerCell = (span, html, classes = "", rowSpan = 1) => `<div class="inspection-footer-cell ${classes}" style="grid-column:span ${span}${rowSpan > 1 ? `;grid-row:span ${rowSpan}` : ""}">${html}</div>`;
     let footer = footerCell(1, "Oper", "inspection-footer-head") + footerCell(1, "N°<br>OPER", "inspection-footer-head") + footerCell(2, "Cantidad NC", "inspection-footer-head") + footerCell(1, "Clave", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACION", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES:", "inspection-footer-head inspection-br") + footerCell(2, "ENTREGA", "inspection-footer-head inspection-br") + footerCell(1, "CANT.", "inspection-footer-head inspection-br") + footerCell(1, "RECIBE", "inspection-footer-head");
@@ -688,6 +688,13 @@
     } catch (error) {
       if (!root.confirm(`No se pudo guardar el historial: ${error.message}. ¿Imprimir de todos modos?`)) return;
     }
+    let pageSizeStyle = null;
+    try {
+      pageSizeStyle = document.createElement("style");
+      pageSizeStyle.id = "inspection-print-page-size";
+      pageSizeStyle.textContent = "@media print { @page { size: 297mm 210mm; margin: 3mm 8mm 5mm 9mm; } }";
+      document.head.appendChild(pageSizeStyle);
+    } catch (_) {}
     document.body.classList.add("printing-inspection");
     const sheet = byId("inspectionDocument");
     sheet.style.setProperty("--inspection-print-scale", "1");
@@ -700,11 +707,19 @@
     sheet.style.setProperty("--inspection-print-scale", String(scale));
     sheet.style.setProperty("--inspection-print-minheight", `${Math.ceil(printableHeightMm * 96 / 25.4 / scale)}px`);
     try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
-    finally { sheet.style.removeProperty("--inspection-print-scale"); sheet.style.removeProperty("--inspection-print-minheight"); document.body.classList.remove("printing-inspection"); }
+    finally {
+      sheet.style.removeProperty("--inspection-print-scale");
+      sheet.style.removeProperty("--inspection-print-minheight");
+      document.body.classList.remove("printing-inspection");
+      if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
+    }
   }
   function clearInspectionPrintState() {
     byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale");
+    byId("inspectionDocument")?.style.removeProperty("--inspection-print-minheight");
     document.body.classList.remove("printing-inspection");
+    const pageSizeStyle = document.getElementById("inspection-print-page-size");
+    if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
   }
   function reportError(error) { renderJobStatus("Error", error.message); }
   function initialize() {

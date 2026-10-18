@@ -115,6 +115,13 @@ REQUIERE_HERRAMENTAL, REQUIERE_KIT, CUSTOM, EFICIENCIA_PCT`.
 - Readers: `PP_readState_`. Writers: `PP_writeState_`, `PP_writeSkillState_`.
 - La clave de cambio de herramental es `TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL`
   (`PP_TOOL_CHANGE_CAPABILITY_KEY`).
+- `SOLAPAMIENTO` es el **ratio de liberación de la antecesora** que consume el motor
+  (`overlapForOperation` → `predecessorReleaseMoment`): `1` = fin completo (sin solape),
+  `0.6` = la sucesora puede arrancar cuando la antecesora lleva el 60 % de sus minutos
+  productivos. Se lee como `overlap` en `operationRules` (`supabase-reader.js:705`,
+  `ratio(row.solapamiento, 1)`; `02-storage.js:486-487`) y se edita en la Matriz (input %
+  → `overlap: percent/100`). MEDIDO el 2026-10-12: la tabla trae `1` en las 76 filas, así
+  que el solapamiento está inerte aunque el default del código diga 0.6 (RULE-MAT-014).
 
 ## CATALOGO_OPERACIONES
 
