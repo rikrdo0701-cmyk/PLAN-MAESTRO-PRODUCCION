@@ -1208,7 +1208,9 @@ function bindEvents() {
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
   els.restoreDraftBtn.addEventListener("click", openRestoreDraftDialog);
-  els.pdfBtn.addEventListener("click", generatePlanPdf);
+  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. generatePlanPdf
+  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado).
+  els.pdfBtn.addEventListener("click", () => generatePlanPdf());
   els.undoBtn.addEventListener("click", undoLastChange);
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
@@ -7195,6 +7197,41 @@ async function publishCurrentPlan() {
   }
 }
 
+// RULE-REP-026: fuentes del PDF del plan. Siempre se ofrece el borrador en edicion mas los
+// planes guardados/publicados; el dialogo lo abre generatePlanPdf al pulsar el boton.
+function pdfSourceOptions() {
+  const publishedIds = publishedSnapshotIds();
+  const saved = planSnapshots
+    .filter((snapshot) => snapshot.snapshotId && snapshot.snapshotId !== "draft")
+    .sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+  const options = [{ id: "draft", label: "Borrador (en edicion)" }];
+  for (const snapshot of saved) {
+    const type = publishedIds.has(snapshot.snapshotId) ? "PLAN PUBLICADO" : "PLAN GUARDADO";
+    const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
+    const start = snapshot.planStart || snapshot.weekStart || "sin inicio";
+    options.push({ id: snapshot.snapshotId, label: `${type} - ${generated} - ${start} - ${snapshot.operations || 0} ops` });
+  }
+  return options;
+}
+
+async function choosePdfSource() {
+  const options = pdfSourceOptions();
+  if (options.length <= 1) return "draft";
+  const current = reportSnapshot?.snapshotId || "draft";
+  const dialogOptions = options
+    .map((option) => `<option value="${escapeHtml(option.id)}"${option.id === current ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
+    .join("");
+  const result = await openPlanningDialog({
+    title: "Generar PDF del plan",
+    summary: "Elige la fuente del PDF: el borrador en edicion o un plan guardado.",
+    body: `<label>Fuente del PDF<select name="snapshot_id" required>${dialogOptions}</select></label>`,
+    confirmLabel: "Generar PDF",
+    cancelVisible: true,
+  });
+  if (!result) return null;
+  return String(result.snapshot_id || "");
+}
+
 async function generatePlanPdf(explicitSnapshotId = "") {
   const originalLabel = els.pdfBtn.innerHTML;
   els.pdfBtn.disabled = true;
@@ -7208,63 +7245,34 @@ async function generatePlanPdf(explicitSnapshotId = "") {
     const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
-    const exportSourceId = explicitSnapshotId || (els.exportSnapshotSelect ? els.exportSnapshotSelect.value : "") || "";
-    let usingDraft = exportSourceId === "draft";
-    if (!explicitSnapshotId && !exportSourceId) {
-      usingDraft = reportSnapshot?.snapshotId === "draft" || els.planSnapshotSelect.value === "draft";
+    // La fuente la elige la persona en un dialogo (Borrador en edicion o un plan guardado);
+    // una llamada programatica puede traerla como id explicito.
+    let pdfSourceId = typeof explicitSnapshotId === "string" ? explicitSnapshotId.trim() : "";
+    if (!pdfSourceId) {
+      pdfSourceId = await choosePdfSource();
+      if (!pdfSourceId) return;
     }
-    let snapshotId = explicitSnapshotId || (usingDraft ? "" : (exportSourceId || reportSnapshot?.snapshotId || ""));
-  if (!usingDraft && !snapshotId && planSnapshots.length > 0) {
-    const publishedIds = publishedSnapshotIds();
-    const draftSnapshots = planSnapshots.filter((s) => !publishedIds.has(s.snapshotId));
-    const publishedSnapshots = planSnapshots.filter((s) => publishedIds.has(s.snapshotId));
-    if (draftSnapshots.length === 1 && publishedSnapshots.length === 0) {
-      snapshotId = draftSnapshots[0].snapshotId;
-    } else if (publishedSnapshots.length === 1 && draftSnapshots.length === 0) {
-      snapshotId = publishedSnapshots[0].snapshotId;
-    } else if (draftSnapshots.length > 0 && publishedSnapshots.length > 0) {
-      const options = [...draftSnapshots, ...publishedSnapshots].map((s) => {
-        const type = publishedIds.has(s.snapshotId) ? "PUBLICADO" : "BORRADOR";
-        const gen = s.generatedAt ? formatDateTime(new Date(s.generatedAt)) : "Sin fecha";
-        return { snapshotId: s.snapshotId, label: `${type} - ${gen} - ${s.planStart || "sin inicio"} - ${s.operations || 0} ops` };
-      });
-      const dialogOptions = options.map((o) => `<option value="${escapeHtml(o.snapshotId)}">${escapeHtml(o.label)}</option>`).join("");
-      const result = await openPlanningDialog({
-        title: "Generar PDF del plan",
-        summary: "Hay varios planes guardados. Selecciona cual quieres usar para el PDF:",
-        body: `<label>Plan disponible<select name="snapshot_id" required>${dialogOptions}</select></label>`,
-        confirmLabel: "Generar PDF",
-        cancelVisible: true,
-      });
-      if (!result) return;
-      snapshotId = result.snapshot_id;
-    }
-  }
-  if (!usingDraft && !snapshotId) {
-    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
-    if (!scheduled.length) {
-      showToast("Genera el plan antes de crear el PDF");
-      return;
-    }
-    const snapshot = await persistPlanSnapshot();
-    if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
-  }
+    const usingDraft = pdfSourceId === "draft";
+    const snapshotId = usingDraft ? "" : pdfSourceId;
   if (usingDraft) {
     syncDraftReportWeek();
     reportSnapshot = currentDraftReportSnapshot();
-  } else if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
-  if (!explicitSnapshotId && !reportSnapshot?.operations?.length) {
-    reportSnapshot = { operations: currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
-    if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
+  } else {
+    await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   }
   if (!reportSnapshot?.operations?.length) {
-    showToast("No hay operaciones programadas para el informe de la version anterior");
-    return;
+    if (!usingDraft) {
+      showToast("El plan seleccionado no tiene operaciones programadas");
+      return;
+    }
+    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    reportSnapshot = { operations: scheduled.map((op, index) => ({ ...op, num: index + 1 })) };
+    if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
   showWorkspaceView("reportes", "week", { scrollToTop: true });
-  const reportStart = explicitSnapshotId
-    ? (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart)
-    : (state.planStart || state.reportWeekStart);
+  const reportStart = usingDraft
+    ? (state.planStart || state.reportWeekStart)
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
   renderReports();
   document.body.dataset.printContext = "plan";

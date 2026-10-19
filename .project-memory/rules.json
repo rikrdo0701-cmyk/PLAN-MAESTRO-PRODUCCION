@@ -2936,6 +2936,15 @@
         "src/web/shared/supabase-reader.js"
       ],
       "updated_at": "2026-10-12"
+    },
+    {
+      "rule_id": "RULE-REP-026",
+      "name": "Generar PDF elige la fuente (Borrador o plan guardado) en un dialogo; el clic ya no pasa el evento como id de snapshot",
+      "status": "implementada",
+      "rule": "El boton 'Generar PDF' (#pdfBtn) abre un dialogo (choosePdfSource, app.js) que ofrece 'Borrador (en edicion)' mas cada plan guardado/publicado; las opciones salen de pdfSourceOptions (planSnapshots sin 'draft', ordenados por publishedAt/generatedAt desc, etiquetadas PLAN PUBLICADO / PLAN GUARDADO con fecha, inicio y conteo de operaciones). Si no hay planes guardados no hay dialogo: se imprime el borrador directo. La persona elige la fuente y el PDF se arma de esa fuente: borrador -> currentDraftReportSnapshot(); plan -> loadPlanSnapshotById. DEFECTO CORREGIDO: el binding era els.pdfBtn.addEventListener('click', generatePlanPdf), asi que el PointerEvent del clic llegaba al primer parametro explicitSnapshotId (introducido el 2026-09-03 en 37374e4 para el PDF de la version anterior). El evento es truthy y distinto de 'draft': snapshotId quedaba en el evento; loadPlanSnapshotById(evento) llamaba getPlanSnapshotLight con String(evento) = '[object PointerEvent]', no encontraba fila, devolvia null y snapshot.operations lanzaba TypeError; el catch dejaba reportSnapshot = null, el rescate de la linea siguiente se saltaba porque explicitSnapshotId era truthy, y el guard mostraba 'No hay operaciones programadas para el informe de la version anterior' y hacia return ANTES de window.print(). Resultado: el PDF no se generaba nunca. Ahora el clic se engancha como () => generatePlanPdf() para no pasar el evento; explicitSnapshotId queda reservado a llamadas programaticas.",
+      "source": "Defecto reportado por el usuario 2026-10-18 ('GENERAR PDF NO GENERA EL PDF'; requisito 'me debe poder permitir elegir entre borrador o el plan'); reproducido en produccion (GitHub Pages) pulsando #pdfBtn: aviso 'No hay operaciones programadas para el informe de la version anterior' y sin ventana de impresion. Regresion de 37374e4 (2026-09-03, 'reportes solo borrador + ultimo publicado, default ultimo, PDF previo y pruning'), que introdujo explicitSnapshotId y el guard !explicitSnapshotId. Codigo: src/web/planning/app.js (binding ~1211; pdfSourceOptions/choosePdfSource/generatePlanPdf); tests/build.test.mjs (anclas del binding envuelto y de choosePdfSource, mas el caso RULE-REP-026 con dialogo, sin planes y cancelado). Relacionadas: RULE-REP-004 (fuente de reportes), RULE-PERF-005 (generatePlanPdf no arma PDF: prepara, renderiza y llama window.print).",
+      "domain": "REP",
+      "updated_at": "2026-10-18"
     }
   ]
 }

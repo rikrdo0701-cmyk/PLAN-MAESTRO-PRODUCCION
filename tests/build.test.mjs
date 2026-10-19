@@ -777,6 +777,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType && !commercial\.needsManualPrice\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
+  // RULE-REP-026: el clic no pasa el evento como id de snapshot (rompia Generar PDF).
+  assert.match(pagesIndex, /pdfBtn\.addEventListener\("click", \(\) => generatePlanPdf\(\)\)/);
+  assert.match(pagesIndex, /async function choosePdfSource\(\)/);
   assert.match(pagesIndex, /@page \{ size: 210mm 297mm/);
   assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 210mm; min-height: 0/);
   assert.match(pagesIndex, /html\.printing-landscape body/);
@@ -3383,4 +3386,37 @@ test("el aviso de credenciales dice que hay portapapeles y que el texto de ejemp
   const bloqueDelAviso = check.slice(check.indexOf("AVISO: el build salio SIN credenciales"));
   assert.match(bloqueDelAviso, /PORTAPAPELES|portapapeles/);
   assert.match(bloqueDelAviso, /no (se )?(copie|copie|tome|tomes) tal cual/i);
+});
+
+test("RULE-REP-026: Generar PDF elige entre Borrador y los planes guardados", async () => {
+  // El clic en Generar PDF ya no pasa el evento como id de snapshot: la fuente la resuelve
+  // choosePdfSource con un dialogo que ofrece el borrador en edicion y los planes guardados.
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const source = app.slice(app.indexOf("function pdfSourceOptions("), app.indexOf("async function generatePlanPdf("));
+  const snapshots = [
+    { snapshotId: "snap-1", generatedAt: "2026-10-17T18:00:00Z", planStart: "2026-10-19", operations: 120, publishedAt: "2026-10-17T19:00:00Z" },
+    { snapshotId: "snap-2", generatedAt: "2026-10-16T18:00:00Z", planStart: "2026-10-19", operations: 118 },
+  ];
+  const helpersWith = (list, published, dialog) => Function(
+    "planSnapshots", "publishedSnapshotIds", "formatDateTime", "escapeHtml", "reportSnapshot", "openPlanningDialog",
+    `${source}; return { pdfSourceOptions, choosePdfSource };`,
+  )(list, () => new Set(published), (date) => date.toISOString(), (value) => String(value), { snapshotId: "draft" }, dialog);
+
+  const conPlanes = helpersWith(snapshots, ["snap-1"], async (config) => { conPlanes.dialog = config; return { snapshot_id: "snap-2" }; });
+  const options = conPlanes.pdfSourceOptions();
+  assert.equal(options.length, 3);
+  assert.deepEqual(options.map((option) => option.id), ["draft", "snap-1", "snap-2"]);
+  assert.match(options[0].label, /Borrador/);
+  assert.match(options[1].label, /PLAN PUBLICADO/);
+  assert.match(options[2].label, /PLAN GUARDADO/);
+  assert.equal(await conPlanes.choosePdfSource(), "snap-2");
+  assert.match(conPlanes.dialog.body, /<option value="draft"/);
+  assert.match(conPlanes.dialog.body, /name="snapshot_id"/);
+  assert.match(conPlanes.dialog.confirmLabel, /Generar PDF/);
+
+  const sinPlanes = helpersWith([], [], async () => { throw new Error("no debe abrir dialogo sin planes"); });
+  assert.equal(await sinPlanes.choosePdfSource(), "draft");
+
+  const cancelado = helpersWith(snapshots, ["snap-1"], async () => null);
+  assert.equal(await cancelado.choosePdfSource(), null);
 });
