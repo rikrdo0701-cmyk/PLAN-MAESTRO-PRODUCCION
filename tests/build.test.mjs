@@ -835,6 +835,17 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // real quepa en una pagina A4 horizontal. El motor pagina por el alto de layout, sin
   // transform, asi que escalar encogia lo visual pero el contenido se repartia en 2 paginas.
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-cell\{min-height:2\.6mm/);
+  // MEDIDO 2026-10-23: para una OT con MUCHAS operaciones (mas de las que caben incluso
+  // compactas) la hoja se encoge con `zoom`, que SI reduce el alto de layout que usa el
+  // paginador (`transform:scale` no lo hacia). La clase de impresion aplica las medidas en
+  // pantalla para poder medir antes de `print()`, con hasta 3 pasadas y tope inferior 0.5.
+  // Verificado contra el sitio construido: 40 ops -> 1 pagina sin zoom; 60 -> 1 pagina con
+  // zoom 0.99; 100 -> 1 pagina con zoom 0.65.
+  assert.match(pagesIndex, /zoom:var\(--inspection-print-zoom,1\)/);
+  assert.match(pagesIndex, /const pageWidthPx = \(297 - 9 - 8\) \* mmToPx/);
+  assert.match(pagesIndex, /const next = Math\.max\(0\.5, zoom \* ratio\)/);
+  assert.match(pagesIndex, /setProperty\("--inspection-print-zoom", String\(zoom\)\)/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-print-zoom"\)/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de

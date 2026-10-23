@@ -702,13 +702,44 @@
     // transform), asi que escalar encogia lo visual pero el contenido se repartia en 2
     // paginas y la inferior quedaba cortada (medido 2026-10-22: 40 operaciones, PDF de 2
     // paginas con transform; con celdas compactas cabe en 1).
-    try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
-    finally {
+    const sheet = byId("inspectionDocument");
+    try {
+      await new Promise((resolve) => root.setTimeout(resolve, 50));
+      // La clase `printing-inspection` aplica las medidas de impresion tambien en pantalla, asi
+      // que aqui se puede MEDIR el alto/ancho de layout antes de imprimir. Si la hoja no cabe
+      // (una OT con muchas operaciones), se encoge con `zoom`, que SI reduce el layout que usa
+      // el paginador; `transform:scale` no lo reducia y partia la hoja en 2 paginas. Hasta 3
+      // pasadas y nunca por debajo de 0.5, para no volver ilegible la hoja (medido 2026-10-22:
+      // 60 operaciones -> zoom 0.91 y 1 pagina; 40 ya cabia sin zoom).
+      if (sheet) {
+        const mmToPx = 96 / 25.4;
+        const pageWidthPx = (297 - 9 - 8) * mmToPx;
+        const pageHeightPx = (210 - 3 - 5) * mmToPx;
+        let zoom = 1;
+        for (let pass = 0; pass < 3; pass++) {
+          const width = sheet.scrollWidth;
+          const height = sheet.scrollHeight;
+          if (width * zoom <= pageWidthPx + 1 && height * zoom <= pageHeightPx + 1) break;
+          const ratio = Math.min(
+            width > 0 ? (pageWidthPx * 0.995) / (width * zoom) : 1,
+            height > 0 ? (pageHeightPx * 0.995) / (height * zoom) : 1,
+          );
+          const next = Math.max(0.5, zoom * ratio);
+          if (next >= zoom - 0.001) break;
+          zoom = Math.round(next * 1000) / 1000;
+          sheet.style.setProperty("--inspection-print-zoom", String(zoom));
+          await new Promise((resolve) => root.setTimeout(resolve, 30));
+        }
+      }
+      root.print();
+    } finally {
+      sheet?.style.removeProperty("--inspection-print-zoom");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
     }
   }
   function clearInspectionPrintState() {
+    byId("inspectionDocument")?.style.removeProperty("--inspection-print-zoom");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");
     if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
