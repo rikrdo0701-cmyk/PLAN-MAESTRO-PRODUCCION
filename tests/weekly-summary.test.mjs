@@ -18,6 +18,7 @@ function createWeeklyJobSummary({
   closedPieces = {},
   inspectionPieces = {},
   closedSummaries = {},
+  reportSnapshot = undefined,
 } = {}) {
   const source = sourceBetween("function weeklyJobSummary(", "function renderWeeklyJobDays(");
   // `weeklyJobSummary` reconstruye una operación sintética para las OTs cerradas vía
@@ -32,6 +33,7 @@ function createWeeklyJobSummary({
     "sequenceSort", "isFinalReleaseOperation", "opStart", "opEnd", "workOrderForOt",
     "articleConfigurationValue", "pendingPiecesForWorkOrder", "invoiceUnitPriceForOt",
     "closedPendingPiecesForOt", "inspectionPendingPiecesForOt", "closedWorkOrderOperation",
+    "reportSnapshot",
     `${source}; return weeklyJobSummary;`,
   )(
     { reportWeekStart: "2026-07-20", closedWorkOrderSummaries: closedSummaries },
@@ -65,6 +67,7 @@ function createWeeklyJobSummary({
       return Math.max(0, quantity - (Number.isFinite(built) ? built : 0));
     },
     realClosedWorkOrderOperation,
+    reportSnapshot,
   );
 }
 
@@ -287,6 +290,27 @@ test("weeklyJobSummary conserva una OT cerrada que el borrador ya no trae (RULE-
   assert.equal(finish.part, "PARTE-CERRADA");
   assert.equal(finish.pendingPieces, 5);
   assert.equal(finish.amount, 2500, "debe conservar el costo (5 piezas x $500)");
+});
+
+test("weeklyJobSummary NO mezcla OTs cerradas de hoy en un plan publicado (instantánea inmutable)", () => {
+  // Un plan publicado ya guarda sus propias operaciones: agregarle las OTs cerradas del
+  // estado vivo reescribiría el pasado. Solo el borrador recibe el rescate.
+  const weeklyJobSummary = createWeeklyJobSummary({
+    closedSummaries: {
+      "4701": {
+        ot: "4701",
+        item: "PARTE-CERRADA",
+        quantity: 5,
+        scheduledStart: "2026-07-22T08:00:00Z",
+        scheduledEnd: "2026-07-23T16:00:00Z",
+      },
+    },
+    reportSnapshot: { snapshotId: "snap-1750000000000", operations: [] },
+  });
+  const summary = weeklyJobSummary("2026-07-20", { operations: [] });
+
+  assert.equal(summary.starts.length, 0);
+  assert.equal(summary.finishes.length, 0);
 });
 
 test("weeklyJobSummary usa solo lo pendiente de ensamblar del detalle de inspeccion por encima de la ruta", () => {

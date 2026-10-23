@@ -8755,11 +8755,20 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
   // Decisión 2026-10-22: una OT del plan debe quedarse visible con sus piezas y su costo, no
   // esfumarse. Se reconstruye una operación sintética (mismo camino de precio/cantidad) y solo
   // si la OT no está ya en el reporte.
-  for (const summary of Object.values(state.closedWorkOrderSummaries || {})) {
-    const ot = String(summary?.ot || "").trim();
-    if (!ot || grouped.has(ot)) continue;
-    const synthetic = closedWorkOrderOperation(summary);
-    if (synthetic) grouped.set(ot, [synthetic]);
+  //
+  // SOLO CON EL BORRADOR. Un plan PUBLICADO/guardado ya es una instantánea inmutable con sus
+  // propias operaciones: mezclarle las OTs cerradas de HOY sería reescribir el pasado. Se
+  // excluye cuando la fuente es un snapshot guardado.
+  const reportIsDraft = typeof reportSnapshot === "undefined"
+    || !reportSnapshot
+    || reportSnapshot.snapshotId === "draft";
+  if (reportIsDraft) {
+    for (const summary of Object.values(state.closedWorkOrderSummaries || {})) {
+      const ot = String(summary?.ot || "").trim();
+      if (!ot || grouped.has(ot)) continue;
+      const synthetic = closedWorkOrderOperation(summary);
+      if (synthetic) grouped.set(ot, [synthetic]);
+    }
   }
   const starts = [];
   const finishes = [];
