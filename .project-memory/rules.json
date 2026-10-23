@@ -2945,6 +2945,24 @@
       "source": "Defecto reportado por el usuario 2026-10-18 ('GENERAR PDF NO GENERA EL PDF'; requisito 'me debe poder permitir elegir entre borrador o el plan'); reproducido en produccion (GitHub Pages) pulsando #pdfBtn: aviso 'No hay operaciones programadas para el informe de la version anterior' y sin ventana de impresion. Regresion de 37374e4 (2026-09-03, 'reportes solo borrador + ultimo publicado, default ultimo, PDF previo y pruning'), que introdujo explicitSnapshotId y el guard !explicitSnapshotId. Codigo: src/web/planning/app.js (binding ~1211; pdfSourceOptions/choosePdfSource/generatePlanPdf); tests/build.test.mjs (anclas del binding envuelto y de choosePdfSource, mas el caso RULE-REP-026 con dialogo, sin planes y cancelado). Relacionadas: RULE-REP-004 (fuente de reportes), RULE-PERF-005 (generatePlanPdf no arma PDF: prepara, renderiza y llama window.print).",
       "domain": "REP",
       "updated_at": "2026-10-18"
+    },
+    {
+      "rule_id": "RULE-REP-027",
+      "name": "Una OT que se cierra ya no desaparece del Plan de la semana: queda con sus piezas y su costo",
+      "status": "implementada",
+      "rule": "Cuando una OT se cierra en NetSuite, removeClosedWorkOrdersFromDraft (planning-workflow-core.js) la retira del borrador y guarda un resumen compacto en state.closedWorkOrderSummaries (compactClosedWorkOrder: item, quantity, builtQuantity, pendingQuantity, scheduledStart, scheduledEnd, weekStart, finalStatus). Sin mas, la OT desaparecia del reporte semanal apenas se cerrara (su operaciones salian de state.operations). Ahora weeklyJobSummary (app.js) reconstruye UNA operacion sintetica por cada OT cerrada de esa lista que no este ya en el reporte (closedWorkOrderOperation, con closedSummarySchedule para partir el timestamp ISO de scheduledStart/scheduledEnd en fechaInicio/horaInicio y fechaFin/horaFin), y la procesa por el MISMO camino de precio/cantidad que las demas (weeklyJobSummary ya leia closedPendingPiecesForOt para las piezas): aparece en 'OT que inician' con su inicio programado y en 'OT que terminan' con su fin programado; su cantidad pendiente sale del resumen y su costo de manualUnitPrice/referenceSalePrice del articulo (invoiceUnitPriceForOt da 0 porque la ficha ya no esta en state.workOrders). El resumen se conserva 5 dias (purgeClosedWorkOrderRetention), suficiente para la semana en curso. Decidido 2026-10-22 por el usuario: una OT del plan debe quedarse visible, no esfumarse.",
+      "source": "decision usuario 2026-10-22 ('lo que no quiero es que desaparezcan ot, al menos en el reporte de plan semanal, esta debe quedar como esta con sus piezas y costo marcado al inicio'); src/web/planning/app.js (closedWorkOrderSummaryForOt, closedSummarySchedule, closedWorkOrderOperation, merge de OTs cerradas en weeklyJobSummary ~8690); tests/weekly-summary.test.mjs (caso RULE-REP-027, con closedWorkOrderOperation real inyectado); se apoya en RULE-OT-049/RULE-OT-051 (closedWorkOrderSummaries y la evidencia de cierre).",
+      "domain": "REP",
+      "updated_at": "2026-10-22"
+    },
+    {
+      "rule_id": "RULE-REP-028",
+      "name": "Liberacion final no deja en blanco el articulo ni la cantidad ensamblada de una OT cerrada",
+      "status": "implementada",
+      "rule": "En releaseReportRows (app.js) el articulo se tomaba solo de release.parte || workOrder?.item. La operacion de liberacion final (16OC/39OTD) no lleva parte, y al cerrarse la OT la ficha sale de state.workOrders (workOrderForOt devuelve null): el articulo quedaba vacio y la cantidad ensamblada en 0. Ahora: (1) el articulo sale de la PRIMERA operacion del OT que traiga parte (sequenced.find(...)?.parte), con respaldo a workOrder?.item y al resumen compacto de la OT cerrada (closed.item); (2) la cantidad pendiente consulta primero el resumen (closed.pendingQuantity/closed.quantity) y despues el fallback a la ficha, porque pendingPiecesForWorkOrder(null) devuelve 0 y ese 0 tapaba el resumen (0 ?? x === 0); (3) la ensamblada usa closed.builtQuantity como respaldo de inspectionBuiltPiecesForOt/workOrder.builtQuantity. Resultado: una OT cerrada muestra su articulo, su cantidad y su ensamblado conservados del resumen (RULE-OT-049).",
+      "source": "decision usuario 2026-10-22 ('en liberacion aparece la ot pero el articulo aparece en blanco y la cantidad ensamblada no puebla'); src/web/planning/app.js (releaseReportRows, fallbacks al resumen de OT cerrada y a la primera op con parte); tests/build.test.mjs (caso RULE-REP-028); relacionada con RULE-REP-013 (Liberacion) y RULE-OT-049.",
+      "domain": "REP",
+      "updated_at": "2026-10-22"
     }
   ]
 }

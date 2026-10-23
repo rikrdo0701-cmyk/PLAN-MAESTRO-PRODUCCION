@@ -17,16 +17,24 @@ function createWeeklyJobSummary({
   invoicePrices = {},
   closedPieces = {},
   inspectionPieces = {},
+  closedSummaries = {},
 } = {}) {
   const source = sourceBetween("function weeklyJobSummary(", "function renderWeeklyJobDays(");
+  // `weeklyJobSummary` reconstruye una operación sintética para las OTs cerradas vía
+  // `closedWorkOrderOperation` (y su ayuda `closedSummarySchedule`), que viven FUERA del
+  // recorte de `weeklyJobSummary`. Se inyectan reales, no un stub, para ejercitar el camino
+  // completo.
+  const closedOperationSource = sourceBetween("function closedSummarySchedule(", "function closedWorkOrderOperation(")
+    + sourceBetween("function closedWorkOrderOperation(", "const inspectionWorkOrderCache");
+  const realClosedWorkOrderOperation = Function(`${closedOperationSource}; return closedWorkOrderOperation;`)();
   return Function(
     "state", "selectedWeekRange", "reportOperationsSource", "isToolChangeReportOperation",
     "sequenceSort", "isFinalReleaseOperation", "opStart", "opEnd", "workOrderForOt",
     "articleConfigurationValue", "pendingPiecesForWorkOrder", "invoiceUnitPriceForOt",
-    "closedPendingPiecesForOt", "inspectionPendingPiecesForOt",
+    "closedPendingPiecesForOt", "inspectionPendingPiecesForOt", "closedWorkOrderOperation",
     `${source}; return weeklyJobSummary;`,
   )(
-    { reportWeekStart: "2026-07-20" },
+    { reportWeekStart: "2026-07-20", closedWorkOrderSummaries: closedSummaries },
     (value) => {
       const start = new Date(`${String(value).slice(0, 10)}T00:00:00`);
       const end = new Date(start);
@@ -56,6 +64,7 @@ function createWeeklyJobSummary({
       const built = Number(entry.builtQuantity);
       return Math.max(0, quantity - (Number.isFinite(built) ? built : 0));
     },
+    realClosedWorkOrderOperation,
   );
 }
 
@@ -244,6 +253,40 @@ test("weeklyJobSummary sin piezas vivas ni cerradas deja monto en nulo", () => {
 
   assert.equal(summary.starts[0].pendingPieces, 0);
   assert.equal(summary.starts[0].amount, null);
+});
+
+test("weeklyJobSummary conserva una OT cerrada que el borrador ya no trae (RULE-REP-027)", () => {
+  // La OT 4701 se cerró en NetSuite: `removeClosedWorkOrdersFromDraft` la retiró de
+  // `state.operations` y dejó su resumen compacto en `state.closedWorkOrderSummaries`.
+  // El reporte semanal NO debe esfumarla: debe seguir mostrándola con sus piezas y su costo.
+  const weeklyJobSummary = createWeeklyJobSummary({
+    configurations: { "PARTE-CERRADA": { manualUnitPrice: 500 } },
+    closedSummaries: {
+      "4701": {
+        ot: "4701",
+        item: "PARTE-CERRADA",
+        quantity: 5,
+        builtQuantity: 0,
+        pendingQuantity: 5,
+        scheduledStart: "2026-07-22T08:00:00Z",
+        scheduledEnd: "2026-07-23T16:00:00Z",
+        weekStart: "2026-07-20",
+        finalStatus: "CERRADA",
+      },
+    },
+  });
+  const summary = weeklyJobSummary("2026-07-20", { operations: [] });
+
+  assert.equal(
+    summary.starts.some((row) => row.ot === "4701"),
+    true,
+    "debe aparecer en 'OT que inician' con su inicio programado",
+  );
+  const finish = summary.finishes.find((row) => row.ot === "4701");
+  assert.ok(finish, "debe aparecer en 'OT que terminan' con su fin programado");
+  assert.equal(finish.part, "PARTE-CERRADA");
+  assert.equal(finish.pendingPieces, 5);
+  assert.equal(finish.amount, 2500, "debe conservar el costo (5 piezas x $500)");
 });
 
 test("weeklyJobSummary usa solo lo pendiente de ensamblar del detalle de inspeccion por encima de la ruta", () => {

@@ -8142,6 +8142,67 @@ function closedPendingPiecesForOt(ot) {
   return Number.isFinite(pieces) ? Math.max(0, pieces) : 0;
 }
 
+// RESUMEN COMPACTO DE UNA OT CERRADA (RULE-OT-049). `removeClosedWorkOrdersFromDraft` retira la
+// OT del borrador y guarda este resumen (item, cantidad, ensamblado, pendiente, inicio y fin
+// programados) en `state.closedWorkOrderSummaries`. El reporte lo usa para que una OT que se
+// cerró NO desaparezca del plan semanal (decisión 2026-10-22) y para que en Liberación el
+// artículo y la cantidad ensamblada no queden en blanco cuando la OT ya no está en
+// `state.workOrders`.
+function closedWorkOrderSummaryForOt(ot) {
+  const key = closedSummaryKeyForOt(ot);
+  if (!key) return null;
+  return (state.closedWorkOrderSummaries || {})[key] || null;
+}
+
+// Convierte un timestamp ISO (`2026-10-19T08:00:00Z`) del resumen de una OT cerrada en los
+// campos fecha/hora que el resto del reporte espera (fechaInicio/horaInicio, fechaFin/horaFin).
+function closedSummarySchedule(timestamp) {
+  const text = String(timestamp || "").trim();
+  if (!text) return null;
+  const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const time = `${match[4]}:${match[5]}`;
+  const value = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), 0, 0);
+  return { fecha: date, hora: time, value };
+}
+
+// OPERACION SINTETICA PARA UNA OT CERRADA. Cuando la OT se cierra, el borrador retira sus
+// operaciones (RULE-OT-049) y el reporte semanal las perdería. Se reconstruye UNA operación a
+// partir del resumen compacto (item, pendiente, inicio y fin programados) para que la OT siga
+// apareciendo con sus piezas y su costo, y por el MISMO camino de precio/cantidad que las
+// demás. Devuelve null si no hay resumen o no hay con qué ubicarla en la semana.
+function closedWorkOrderOperation(summary) {
+  if (!summary || typeof summary !== "object") return null;
+  const ot = String(summary.ot || "").trim();
+  if (!ot) return null;
+  const start = closedSummarySchedule(summary.scheduledStart);
+  const end = closedSummarySchedule(summary.scheduledEnd);
+  if (!start && !end) return null;
+  const pending = Number(summary.pendingQuantity);
+  const pieces = Number.isFinite(pending) && pending > 0 ? pending : Number(summary.quantity) || 0;
+  return {
+    ot,
+    parte: String(summary.item || "").trim(),
+    descripcion: "",
+    ct: "",
+    secuencia: 0,
+    fechaInicio: start ? start.fecha : "",
+    horaInicio: start ? start.hora : "",
+    fechaFin: end ? end.fecha : (start ? start.fecha : ""),
+    horaFin: end ? end.hora : (start ? start.hora : ""),
+    cantPendiente: pieces,
+    pendingPieces: pieces,
+    cantTotal: Number(summary.quantity) || 0,
+    tipoInsercion: "",
+    jobType: "",
+    planningType: "",
+    unitPrice: null,
+    amount: null,
+    _closedSummary: true,
+  };
+}
+
 const inspectionWorkOrderCache = new Map();
 const inspectionWorkOrderFillAttempted = new Set();
 // Fallos de lectura de inspeccion. El puente resuelve con { ok: false, error } sin
@@ -8688,6 +8749,18 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     if (!grouped.has(op.ot)) grouped.set(op.ot, []);
     grouped.get(op.ot).push(op);
   }
+  // OTs CERRADAS QUE EL BORRADOR YA NO TRAE (RULE-OT-049). `removeClosedWorkOrdersFromDraft`
+  // retira las operaciones de una OT cerrada de `state.operations` y guarda un resumen
+  // compacto. Sin esto, la OT desaparecería del reporte semanal apenas se cierre en NetSuite.
+  // Decisión 2026-10-22: una OT del plan debe quedarse visible con sus piezas y su costo, no
+  // esfumarse. Se reconstruye una operación sintética (mismo camino de precio/cantidad) y solo
+  // si la OT no está ya en el reporte.
+  for (const summary of Object.values(state.closedWorkOrderSummaries || {})) {
+    const ot = String(summary?.ot || "").trim();
+    if (!ot || grouped.has(ot)) continue;
+    const synthetic = closedWorkOrderOperation(summary);
+    if (synthetic) grouped.set(ot, [synthetic]);
+  }
   const starts = [];
   const finishes = [];
   for (const [ot, operations] of grouped.entries()) {
@@ -9052,16 +9125,37 @@ function releaseReportRows() {
     const releaseMatch = finalReleaseOperationMatch(release);
     const date = opStart(release) || opEnd(release);
     const workOrder = workOrderForOt(ot);
+    // MEDIDO 2026-10-22 (OT cerrada): con la ficha fuera de `state.workOrders`, `workOrder` es
+    // null y el artículo salía en blanco porque la operación de liberación (16OC/39OTD) no
+    // lleva `parte`. El artículo se toma de la PRIMERA operación con `parte` del mismo OT, y
+    // como último recurso del resumen compacto de la OT cerrada.
+    const closed = closedWorkOrderSummaryForOt(ot);
+    const part = sequenced.find((operation) => String(operation.parte || "").trim())?.parte
+      || workOrder?.item || closed?.item || "";
     const inspectionTotal = inspectionQuantityForOt(ot);
     const workOrderTotal = Number(workOrder?.quantity);
     const totalValue = inspectionTotal ?? (Number.isFinite(workOrderTotal) && workOrderTotal > 0 ? workOrderTotal : null);
-    const quantityValue = totalValue ?? release.pendingPieces ?? release.cantPendiente ?? pendingPiecesForWorkOrder(workOrder);
+    // `pendingPiecesForWorkOrder` devuelve 0 cuando no hay ficha (OT cerrada retirada del
+    // borrador). Ese 0 no debe tapar el resumen compacto que sí se conserva, así que la
+    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha.
+    const closedPending = closed
+      ? (Number(closed.pendingQuantity) > 0 ? Number(closed.pendingQuantity)
+          : (Number(closed.quantity) > 0 ? Number(closed.quantity) : null))
+      : null;
+    const livePending = Number(pendingPiecesForWorkOrder(workOrder));
+    const quantityValue = totalValue
+      ?? release.pendingPieces ?? release.cantPendiente
+      ?? closedPending
+      ?? (Number.isFinite(livePending) && livePending > 0 ? livePending : null)
+      ?? 0;
     const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
     const inspectionBuilt = inspectionBuiltPiecesForOt(ot);
-    const built = Math.max(0, Number(inspectionBuilt ?? workOrder?.builtQuantity ?? 0));
+    // La cantidad ensamblada de una OT cerrada ya no está en la ficha (retirada del borrador):
+    // se toma del resumen compacto que sí se conserva.
+    const built = Math.max(0, Number(inspectionBuilt ?? workOrder?.builtQuantity ?? closed?.builtQuantity ?? 0));
     rows.push({
       ot,
-      article: release.parte || workOrder?.item || "",
+      article: part,
       quantity,
       built,
       date,

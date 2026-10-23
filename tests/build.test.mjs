@@ -2929,7 +2929,7 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
   const buildRows = ({ workOrder, built, total = null, pendingPieces = 1 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
     "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
-    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt", "closedWorkOrderSummaryForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
@@ -2942,6 +2942,7 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
     () => built,
     () => total,
+    () => null,
   );
 
   const rowsClosed = buildRows({ workOrder: null, built: 1, total: 1 })();
@@ -2959,6 +2960,42 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
 
   const rowsWithoutTotal = buildRows({ workOrder: null, built: null, pendingPieces: 7 })();
   assert.equal(rowsWithoutTotal[0].quantity, 7);
+});
+
+test("liberacion final puebla articulo y ensamblado de una OT cerrada desde su resumen compacto (RULE-REP-028)", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function releaseReportRows(");
+  const end = app.indexOf("function renderReleaseReport(", start);
+  assert.ok(start >= 0 && end > start, "releaseReportRows debe existir");
+  const source = app.slice(start, end);
+  // OT cerrada: ya no está en `state.workOrders` (workOrderForOt -> null) ni su operación de
+  // liberación lleva `parte`. El reporte debe tomar el artículo y el ensamblado del resumen
+  // compacto que sí se conserva (RULE-OT-049).
+  const closedSummary = { item: "EG40 MUFFLER", quantity: 40, pendingQuantity: 12, builtQuantity: 28 };
+  const buildRows = ({ workOrder = null, built = null, total = null, pendingPieces = 1 }) => Function(
+    "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
+    "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
+    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt", "closedWorkOrderSummaryForOt",
+    `${source}; return releaseReportRows;`,
+  )(
+    () => [{ ot: "4701", parte: "", secuencia: 1, ct: "5537", fechaFin: "2026-07-23", pendingPieces }],
+    () => true,
+    (op) => ({ ct: op.ct, label: "16OC" }),
+    (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
+    (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
+    (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
+    () => workOrder,
+    (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
+    () => built,
+    () => total,
+    () => closedSummary,
+  );
+
+  const rows = buildRows({ workOrder: null, pendingPieces: null })();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].article, "EG40 MUFFLER", "el artículo se toma del resumen de la OT cerrada");
+  assert.equal(rows[0].built, 28, "el ensamblado se toma del resumen de la OT cerrada");
+  assert.equal(rows[0].quantity, 12, "la cantidad pendiente se toma del resumen de la OT cerrada");
 });
 
 test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
