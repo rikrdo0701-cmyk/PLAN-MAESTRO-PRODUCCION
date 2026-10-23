@@ -696,27 +696,19 @@
       document.head.appendChild(pageSizeStyle);
     } catch (_) {}
     document.body.classList.add("printing-inspection");
-    const sheet = byId("inspectionDocument");
-    sheet.style.setProperty("--inspection-print-scale", "1");
-    await new Promise((resolve) => root.setTimeout(resolve, 0));
-    const printableWidthMm = 297 - 9 - 8;
-    const printableHeightMm = 210 - 3 - 5;
-    const widthRatio = (printableWidthMm * 96 / 25.4) / sheet.scrollWidth;
-    const heightRatio = (printableHeightMm * 96 / 25.4) / sheet.scrollHeight;
-    const scale = Math.min(1, widthRatio, heightRatio);
-    sheet.style.setProperty("--inspection-print-scale", String(scale));
-    sheet.style.setProperty("--inspection-print-minheight", `${Math.ceil(printableHeightMm * 96 / 25.4 / scale)}px`);
+    // El tamaño se compacta en el CSS de impresion (celdas, fuentes y huecos en mm) para
+    // que el alto de LAYOUT real del documento quepa en la pagina A4 horizontal. NO se usa
+    // transform:scale() aqui: el motor de impresion pagina por el alto de layout (sin
+    // transform), asi que escalar encogia lo visual pero el contenido se repartia en 2
+    // paginas y la inferior quedaba cortada (medido 2026-10-22: 40 operaciones, PDF de 2
+    // paginas con transform; con celdas compactas cabe en 1).
     try { await new Promise((resolve) => root.setTimeout(resolve, 50)); root.print(); }
     finally {
-      sheet.style.removeProperty("--inspection-print-scale");
-      sheet.style.removeProperty("--inspection-print-minheight");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
     }
   }
   function clearInspectionPrintState() {
-    byId("inspectionDocument")?.style.removeProperty("--inspection-print-scale");
-    byId("inspectionDocument")?.style.removeProperty("--inspection-print-minheight");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");
     if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);

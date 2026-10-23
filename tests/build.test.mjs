@@ -830,7 +830,11 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /inspection-time-head/);
   assert.match(pagesIndex, /SETUP[\s\S]*INACTIVIDAD[\s\S]*PRODUCCI[^<]*/);
   assert.match(pagesIndex, /--inspection-print-scale/);
-  assert.match(pagesIndex, /Math\.min\(1, widthRatio, heightRatio\)/);
+  // MEDIDO 2026-10-22: el print de la hoja de inspeccion dejo de usar transform:scale() y
+  // compacta las celdas en el CSS de impresion (min-height en mm) para que el alto de LAYOUT
+  // real quepa en una pagina A4 horizontal. El motor pagina por el alto de layout, sin
+  // transform, asi que escalar encogia lo visual pero el contenido se repartia en 2 paginas.
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-cell\{min-height:2\.6mm/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
@@ -945,9 +949,14 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = \(options\.deferPublishedLoad !== true \|\| !hasDraftReport\)[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /inspection-print-page-size/);
-  assert.match(pagesIndex, /const printableWidthMm = 297 - 9 - 8;[\s\S]*const printableHeightMm = 210 - 3 - 5/);
-  assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 0\)[\s\S]*sheet\.scrollWidth/);
-  assert.match(pagesIndex, /finally\s*\{[^}]*removeProperty\("--inspection-print-scale"\)[^}]*classList\.remove\("printing-inspection"\)[\s\S]*getElementById\("inspection-print-page-size"\)[\s\S]*removeChild/);
+  // MEDIDO 2026-10-22: la hoja de inspección ya NO mide el ancho/alto con scrollWidth ni
+  // aplica transform:scale() para caber en la página; el motor pagina por el alto de LAYOUT
+  // (sin transform), así que escalar encogía lo visual pero el contenido se repartía en 2
+  // páginas. El tamaño se compacta en el propio CSS de impresión (celdas, fuentes y huecos
+  // en mm) para que el alto real quepa en una A4 horizontal.
+  assert.match(pagesIndex, /El tamaño se compacta en el CSS de impresion \(celdas, fuentes y huecos en mm\)/);
+  assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 50\)[\s\S]*root\.print\(\)/);
+  assert.match(pagesIndex, /finally\s*\{[^}]*classList\.remove\("printing-inspection"\)[\s\S]*getElementById\("inspection-print-page-size"\)[\s\S]*removeChild/);
   assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
   assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection\)/);
   assert.match(pagesIndex, /function inspectionOperationLayout\(count\)/);
