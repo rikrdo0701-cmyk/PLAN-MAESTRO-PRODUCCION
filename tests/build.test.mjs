@@ -873,6 +873,13 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // El zoom solo corrige cuando el CONTENIDO no cabe: si el reparto ya lleno la hoja, el
   // `scrollHeight` (que incluye el min-height de 202mm y el padding) no debe encogerla.
   assert.match(pagesIndex, /pass < 3 && sobra < -1/);
+  // Pedido del usuario 2026-10-24: el numero de trabajo, el articulo y los codigos de
+  // material se leen a mano en el piso, asi que van mas grandes que el resto del encabezado.
+  assert.match(pagesIndex, /inspection-big inspection-job-number/);
+  assert.match(pagesIndex, /inspection-big inspection-article/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-job-number\{font-size:15px\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-article\{font-size:13px\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-mat\{min-height:2\.6mm;padding:\.2mm \.6mm;font-size:9px\}/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
