@@ -846,6 +846,18 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /const next = Math\.max\(0\.5, zoom \* ratio\)/);
   assert.match(pagesIndex, /setProperty\("--inspection-print-zoom", String\(zoom\)\)/);
   assert.match(pagesIndex, /removeProperty\("--inspection-print-zoom"\)/);
+  // MEDIDO 2026-10-24: el PDF salia horizontal pero con la hoja RECORTADA a 210 mm de sus
+  // 280 mm: faltaba el lado derecho (Material, Descripcion, Tramo tubo, Tubo/pzas y las
+  // ultimas columnas de la tabla). La causa no era el tamano de la hoja sino la regla global
+  // de impresion de styles.css (`html, body { width: 210mm }`), que fija el ancho de
+  // maquetacion en vertical y recorta lo que sobra. La hoja marca `printing-landscape` (la
+  // misma marca que ya usa la impresion horizontal del plan) para devolver `width:auto` a
+  // html/body, se limita a `max-width:100%` para no desbordar, y oculta el modal de sesion y
+  // el boton fijo `Salir`, que salian impresos.
+  assert.match(pagesIndex, /document\.documentElement\.classList\.add\("printing-landscape"\)/);
+  assert.match(pagesIndex, /document\.documentElement\.classList\.remove\("printing-landscape"\)/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\{display:block;width:280mm;min-height:202mm/);
+  assert.match(pagesIndex, /body\.printing-inspection #pp-login,body\.printing-inspection #pp-salir/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de

@@ -695,6 +695,14 @@
       pageSizeStyle.textContent = "@media print { @page { size: 297mm 210mm; margin: 3mm 8mm 5mm 9mm; } }";
       document.head.appendChild(pageSizeStyle);
     } catch (_) {}
+    // La hoja se cortaba a 210 mm de ancho (el lado derecho desaparecia: Material, Tramo,
+    // Tubo/pzas y las ultimas columnas de la tabla). La causa NO era el tamano de la hoja
+    // (280 mm) sino la regla global de impresion de styles.css: `html, body { width: 210mm }`
+    // dentro de `@media print`, que fija el ancho de maquetacion en vertical y recorta lo que
+    // sobra. `printing-landscape` es la marca que ya usa la impresion horizontal del plan
+    // para devolver `width:auto` a html/body (medido 2026-10-24: sin la marca el PDF sale
+    // horizontal pero con la hoja recortada a 210 mm de 280 mm).
+    document.documentElement.classList.add("printing-landscape");
     document.body.classList.add("printing-inspection");
     // El tamaño se compacta en el CSS de impresion (celdas, fuentes y huecos en mm) para
     // que el alto de LAYOUT real del documento quepa en la pagina A4 horizontal. NO se usa
@@ -734,12 +742,14 @@
       root.print();
     } finally {
       sheet?.style.removeProperty("--inspection-print-zoom");
+      document.documentElement.classList.remove("printing-landscape");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
     }
   }
   function clearInspectionPrintState() {
     byId("inspectionDocument")?.style.removeProperty("--inspection-print-zoom");
+    document.documentElement.classList.remove("printing-landscape");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");
     if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
