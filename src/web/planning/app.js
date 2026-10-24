@@ -713,6 +713,44 @@ async function refreshMatrixOnVisibility() {
   render({ parts: { capabilityConfig: true, matrix: true }, save: false });
 }
 
+// FIX 2026-10-24 (bug usuario): receptor del aviso entre pestañas de que la matriz cambio en
+// skills.html (emitido por BroadcastChannel o el evento `storage`, misma clave). Al recibirlo,
+// se refresca la matriz de inmediato; si ESTA pestana fue la que guardo, las guardas de
+// refreshMatrixOnVisibility (appSheetDirtyScopes.has("matrix") / _locallyEditedCapabilityConfig)
+// hacen que se salte, asi que nunca se pisa una edicion propia sin guardar. El `typeof` es por
+// los tests que evaluan app.js en un vm sin window/document.
+const MATRIZ_CAMBIO_CANAL = "pp-matriz-refresh";
+const MATRIZ_CAMBIO_KEY = "pp-matriz-refresh-key";
+let ultimoRefrescoMatrizAt = 0;
+function refrescarMatrizCoalescido() {
+  const ahora = Date.now();
+  if (ahora - ultimoRefrescoMatrizAt < 500) return; // coalesce toggles rapidos en skills
+  ultimoRefrescoMatrizAt = ahora;
+  void refreshMatrixOnVisibility();
+}
+function suscribirMatrizCambio() {
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const canal = new BroadcastChannel(MATRIZ_CAMBIO_CANAL);
+      canal.addEventListener("message", (event) => {
+        const dato = event && event.data;
+        if (!dato || dato.kind !== "matrix") return;
+        refrescarMatrizCoalescido();
+      });
+      window.__canalMatriz = canal;
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (typeof window !== "undefined" && window.localStorage && typeof window.addEventListener === "function") {
+      window.addEventListener("storage", (event) => {
+        if (!event || event.key !== MATRIZ_CAMBIO_KEY) return;
+        refrescarMatrizCoalescido();
+      });
+    }
+  } catch (_) {}
+}
+
 function initializePlanningApp() {
   bindElements();
   bindEvents();
@@ -732,6 +770,11 @@ function initializePlanningApp() {
       if (document.visibilityState === "visible") void refreshMatrixOnVisibility();
     });
   }
+  // FIX 2026-10-24 (bug usuario): aviso entre pestañas de que la matriz cambio en skills.html.
+  // skills.html lo emite por BroadcastChannel (o el evento `storage`) tras guardar; aqui se
+  // refresca la matriz de inmediato, sin esperar a que esta pestana vuelva a ser visible. El
+  // `typeof` es porque un test evalua initializePlanningApp en un vm sin la funcion en scope.
+  if (typeof suscribirMatrizCambio === "function") suscribirMatrizCambio();
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializePlanningApp, { once: true });

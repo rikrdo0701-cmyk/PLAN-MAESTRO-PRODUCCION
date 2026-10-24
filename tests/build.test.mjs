@@ -1982,6 +1982,17 @@ test("al volver a la pestana visible se re-lee la matriz de Supabase sin pisar e
     app.indexOf("function operatorPerformanceForOperator(", app.indexOf("function toggleMatrix(key, operator, checked, capability)")));
   assert.match(toggle, /if \(!Array\.isArray\(state\.matrixFull\)\) state\.matrixFull = \[\];/);
   assert.match(toggle, /state\.matrixFull\.push\(\{ capabilityKey: key, operator: operator, habilitado: Boolean\(checked\) \}\)/);
+  // Aviso entre pestañas (bug usuario 2026-10-24): skills.html emite un BroadcastChannel al
+  // guardar la matriz y la principal se suscribe para refrescarla de inmediato, sin esperar a
+  // que la pestana vuelva a ser visible. Se aplica coalescedo (500 ms) para no golpear Supabase
+  // con una lectura entera por cada casilla que se toca en skills.
+  const canal = app.slice(app.indexOf("const MATRIZ_CAMBIO_CANAL"), app.indexOf("function initializePlanningApp"));
+  assert.match(canal, /function suscribirMatrizCambio\(\)/);
+  assert.match(canal, /new BroadcastChannel\(MATRIZ_CAMBIO_CANAL\)/);
+  assert.match(canal, /dato\.kind !== "matrix"\) return;/);
+  assert.match(canal, /refrescarMatrizCoalescido\(\);/);
+  assert.match(canal, /ahora - ultimoRefrescoMatrizAt < 500\) return;/);
+  assert.match(canal, /window\.addEventListener\("storage"/);
 });
 
 test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
@@ -3282,6 +3293,14 @@ test("skills.html mantiene matrixFull sincronizado al marcar/desmarcar (bug usua
 
   // Y el toggle la llama para que el estado y el universo no se separen.
   assert.match(togFn, /syncMatrixFull\(key, operator, checked\);/);
+
+  // FIX 2026-10-24 (bug usuario): al guardar la matriz, skills.html avisa a la principal por
+  // BroadcastChannel (o el evento `storage`) para que refresque la matriz de inmediato, sin
+  // esperar a que la pestana vuelva a ser visible. El emisor vive junto a saveNow.
+  assert.match(skills, /function emitirMatrizCambio\(revision\)/);
+  assert.match(skills, /new BroadcastChannel\(MATRIZ_CAMBIO_CANAL\)/);
+  assert.match(skills, /canalMatriz\.postMessage\(payload\)/);
+  assert.match(skills, /emitirMatrizCambio\(state\.revision\)/);
 });
 
 test("el payload de guardado por puente no deep-clona el estado: el postMessage ya lo copia", async () => {

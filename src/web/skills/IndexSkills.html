@@ -1016,6 +1016,23 @@ function scheduleSave() {
   }, SAVE_DEBOUNCE_MS);
 }
 
+// FIX 2026-10-24 (bug usuario): aviso entre pestañas de que la matriz cambio en skills.html.
+// La principal se suscribe al mismo canal y refresca la matriz sin esperar a un visibilitychange.
+// Usa BroadcastChannel con respaldo al evento `storage` (mismo origen, misma clave) para los
+// navegadores/iframes que no exponen BroadcastChannel.
+const MATRIZ_CAMBIO_CANAL = "pp-matriz-refresh";
+let canalMatriz = null;
+try { canalMatriz = new BroadcastChannel(MATRIZ_CAMBIO_CANAL); } catch (_) { canalMatriz = null; }
+const MATRIZ_CAMBIO_KEY = "pp-matriz-refresh-key";
+function emitirMatrizCambio(revision) {
+  const payload = { kind: "matrix", revision: Number(revision || 0), savedAt: new Date().toISOString() };
+  try {
+    if (canalMatriz) { canalMatriz.postMessage(payload); return; }
+    window.localStorage.setItem(MATRIZ_CAMBIO_KEY, JSON.stringify(payload));
+    window.localStorage.removeItem(MATRIZ_CAMBIO_KEY);
+  } catch (_) {}
+}
+
 async function saveNow() {
   if (!state) return;
   if (saveInFlight) {
@@ -1031,6 +1048,10 @@ async function saveNow() {
     const saved = await window.PPSupabaseBridgeReplacement.saveSkillState(matrixSavePayload());
     state.revision = Number(saved?.revision || state.revision);
     state.savedAt = saved?.savedAt || state.savedAt;
+    // FIX 2026-10-24 (bug usuario): al guardar la matriz en skills, se avisa a las OTRA pestañas
+    // (la principal) por BroadcastChannel para que refresquen la matriz de inmediato, sin esperar
+    // a un visibilitychange (que no dispara si la pestana ya esta visible al enfocarla).
+    emitirMatrizCambio(state.revision);
     if (!dirty) {
       persistSkillsCache();
       setStatus(`Guardado ${new Date().toLocaleTimeString()}`, "ok");
