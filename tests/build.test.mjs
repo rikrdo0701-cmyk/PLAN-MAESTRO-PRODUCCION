@@ -858,6 +858,21 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /document\.documentElement\.classList\.remove\("printing-landscape"\)/);
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\{display:block;width:280mm;min-height:202mm/);
   assert.match(pagesIndex, /body\.printing-inspection #pp-login,body\.printing-inspection #pp-salir/);
+  // REPARTO VERTICAL (pedido del usuario 2026-10-24): con pocas operaciones la hoja quedaba
+  // comprimida arriba y medio folio en blanco abajo. El hueco se reparte entre los renglones
+  // de operacion (se escriben a mano) y las filas de firma, en pasadas que vuelven a medir.
+  // Se cuentan RENGLONES por `.inspection-op` (la primera celda de cada uno), no por
+  // `.inspection-op-line`, que lo llevan las 18 celdas y repartia el hueco entre 400+ celdas.
+  assert.match(pagesIndex, /min-height:var\(--inspection-op-row,1\.7mm\)/);
+  assert.match(pagesIndex, /min-height:var\(--inspection-footer-row,3mm\)/);
+  assert.match(pagesIndex, /const renglones = sheet\.querySelectorAll\("\.inspection-op"\)\.length/);
+  assert.match(pagesIndex, /setProperty\("--inspection-op-row"/);
+  assert.match(pagesIndex, /setProperty\("--inspection-footer-row"/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-op-row"\)/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-footer-row"\)/);
+  // El zoom solo corrige cuando el CONTENIDO no cabe: si el reparto ya lleno la hoja, el
+  // `scrollHeight` (que incluye el min-height de 202mm y el padding) no debe encogerla.
+  assert.match(pagesIndex, /pass < 3 && sobra < -1/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de

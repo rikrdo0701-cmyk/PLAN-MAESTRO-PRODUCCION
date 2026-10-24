@@ -723,8 +723,74 @@
         const mmToPx = 96 / 25.4;
         const pageWidthPx = (297 - 9 - 8) * mmToPx;
         const pageHeightPx = (210 - 3 - 5) * mmToPx;
+        // REPARTO VERTICAL (pedido del usuario 2026-10-24): con pocas operaciones la hoja
+        // quedaba comprimida arriba y medio folio en blanco abajo. El hueco se reparte entre
+        // los renglones EN BLANCO (que se llenan a mano) y las firmas, en vez de dejar celdas
+        // de 1.7mm ilegibles. Primero crecen los renglones de operacion (tope 10mm, que es un
+        // renglon comodo para escribir); si aun sobra, crecen las tres filas de firmas.
+        const altoContenido = () => {
+          const hoja = sheet.getBoundingClientRect();
+          const footer = byId("inspectionReleaseFooter");
+          const fondo = footer ? footer.getBoundingClientRect().bottom : hoja.bottom;
+          // La hoja lleva padding inferior (18px) y borde: si no se cuenta, el reparto
+          // llena hasta el borde del footer pero la hoja termina 5mm mas abajo y el motor
+          // la encoge (medido 2026-10-24: 20 operaciones -> zoom 0.951).
+          const estilo = root.getComputedStyle(sheet);
+          const cola = (parseFloat(estilo.paddingBottom) || 0) + (parseFloat(estilo.borderBottomWidth) || 0);
+          return fondo - hoja.top + cola;
+        };
+        // OJO: `.inspection-op-line` lo llevan las 18 CELDAS de cada renglon, no el renglon.
+        // Contar celdas repartia el hueco entre 400+ celdas y los renglones casi no crecian
+        // (medido 2026-10-24: 20 operaciones -> 1.89mm). El renglon se cuenta por su primera
+        // celda, que es la unica con la clase `inspection-op`.
+        const renglones = sheet.querySelectorAll(".inspection-op").length;
+        // El footer tiene CUATRO filas (encabezado + 3 de firma), no 3: repartir el hueco
+        // entre 3 hacia crecer 4 filas y se pasaba ~20% (medido 2026-10-24: 5 operaciones ->
+        // 9.7mm de sobra negativa y zoom 0.95 despues de haber estirado la hoja).
+        const filasFooter = (() => {
+          const footer = byId("inspectionReleaseFooter");
+          if (!footer) return 3;
+          const filas = root.getComputedStyle(footer).gridTemplateRows.split(" ").filter(Boolean).length;
+          return Math.max(1, filas);
+        })();
+        const varMm = (nombre, porDefecto) => {
+          const valor = parseFloat(sheet.style.getPropertyValue(nombre));
+          return Number.isFinite(valor) ? valor : porDefecto;
+        };
+        // Se reparte en pasadas y se vuelve a medir: crecer los renglones cambia el alto del
+        // footer (las celdas del sello abarcan 3 filas) y una sola cuenta se pasaba 4-5mm,
+        // con lo que el zoom encogia la hoja justo despues de haberla estirado.
+        for (let pass = 0; pass < 4; pass++) {
+          const faltaMm = (pageHeightPx - altoContenido()) / mmToPx;
+          if (faltaMm <= 1) break;
+          let cambio = false;
+          const opActual = varMm("--inspection-op-row", 1.7);
+          if (renglones > 0 && opActual < 10) {
+            const add = Math.min(10 - opActual, (faltaMm * 0.7) / renglones);
+            if (add > 0.05) {
+              sheet.style.setProperty("--inspection-op-row", `${(opActual + add).toFixed(2)}mm`);
+              cambio = true;
+            }
+          }
+          const faltaTrasRenglonesMm = (pageHeightPx - altoContenido()) / mmToPx;
+          const firmaActual = varMm("--inspection-footer-row", 3);
+          if (faltaTrasRenglonesMm > 1 && firmaActual < 22) {
+            const add = Math.min(22 - firmaActual, (faltaTrasRenglonesMm * 0.9) / filasFooter);
+            if (add > 0.05) {
+              sheet.style.setProperty("--inspection-footer-row", `${(firmaActual + add).toFixed(2)}mm`);
+              cambio = true;
+            }
+          }
+          if (!cambio) break;
+          await new Promise((resolve) => root.setTimeout(resolve, 30));
+        }
+        let sobra = pageHeightPx - altoContenido();
         let zoom = 1;
-        for (let pass = 0; pass < 3; pass++) {
+        // El zoom SOLO corrige cuando el CONTENIDO no cabe. `scrollHeight` incluye el
+        // `min-height:202mm` de la hoja y su padding, asi que una hoja que ya cabia se
+        // encogia igual (medido 2026-10-24: 20 operaciones -> zoom 0.951 sin necesidad,
+        // justo lo contrario del reparto pedido).
+        for (let pass = 0; pass < 3 && sobra < -1; pass++) {
           const width = sheet.scrollWidth;
           const height = sheet.scrollHeight;
           if (width * zoom <= pageWidthPx + 1 && height * zoom <= pageHeightPx + 1) break;
@@ -742,13 +808,18 @@
       root.print();
     } finally {
       sheet?.style.removeProperty("--inspection-print-zoom");
+      sheet?.style.removeProperty("--inspection-op-row");
+      sheet?.style.removeProperty("--inspection-footer-row");
       document.documentElement.classList.remove("printing-landscape");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
     }
   }
   function clearInspectionPrintState() {
-    byId("inspectionDocument")?.style.removeProperty("--inspection-print-zoom");
+    const sheet = byId("inspectionDocument");
+    sheet?.style.removeProperty("--inspection-print-zoom");
+    sheet?.style.removeProperty("--inspection-op-row");
+    sheet?.style.removeProperty("--inspection-footer-row");
     document.documentElement.classList.remove("printing-landscape");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");
