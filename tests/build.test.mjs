@@ -1976,6 +1976,12 @@ test("al volver a la pestana visible se re-lee la matriz de Supabase sin pisar e
   assert.match(app, /visibilitychange[\s\S]*visibilityState === "visible"[\s\S]*void refreshMatrixOnVisibility\(\);/);
   // La guarda: no refresca mientras haya un guardado de matriz en vuelo ni una edicion local sin guardar.
   assert.match(refresh, /appSheetSaveInFlight \|\| appSheetDirtyScopes\.has\("matrix"\) \|\| state\._locallyEditedCapabilityConfig/);
+  // Misma causa en la pestana Matriz de la principal: toggleMatrix tambien debe mantener
+  // matrixFull sincronizado al desmarcar, o el escritor no emite el habilitado:false.
+  const toggle = app.slice(app.indexOf("function toggleMatrix(key, operator, checked, capability)"),
+    app.indexOf("function operatorPerformanceForOperator(", app.indexOf("function toggleMatrix(key, operator, checked, capability)")));
+  assert.match(toggle, /if \(!Array\.isArray\(state\.matrixFull\)\) state\.matrixFull = \[\];/);
+  assert.match(toggle, /state\.matrixFull\.push\(\{ capabilityKey: key, operator: operator, habilitado: Boolean\(checked\) \}\)/);
 });
 
 test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
@@ -3211,6 +3217,71 @@ test("skills.html aplana la importacion de Supabase (catalogs bajo raiz) y reint
   // Sin `catalogs` (estado ya plano o cached), no se toca nada.
   const yaPlano = aplanar({ matrix: "plana", operators: [] });
   assert.deepEqual(yaPlano, { matrix: "plana", operators: [] }, "sin catalogs se devuelve igual");
+});
+
+test("skills.html mantiene matrixFull sincronizado al marcar/desmarcar (bug usuario 2026-10-24: desmarcar no persistia)", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+  // El escritor usa state.matrixFull como UNIVERSO (supabase-writer.js, matriz.mapear):
+  // si la pareja desmarcada no esta en matrixFull, no se emite ninguna fila con
+  // habilitado:false y la base conserva el true. El toggle debe actualizar el universo.
+  const syncInicio = skills.indexOf("function syncMatrixFull(");
+  assert.ok(syncInicio >= 0, "syncMatrixFull esta definida");
+  const syncFin = skills.indexOf("\n}\n", syncInicio) + 3;
+  const syncFn = skills.slice(syncInicio, syncFin);
+
+  const togInicio = skills.indexOf("function toggleMatrix(");
+  const togFin = skills.indexOf("\n}\n", togInicio) + 3;
+  const togFn = skills.slice(togInicio, togFin);
+
+  // Ejecutamos syncMatrixFull + toggleMatrix en un scope donde `state` y `dirty` son
+  // variables locales (como en el modulo de skills) y se inyectan por parametro.
+  const api = new Function(
+    "baseAllowedOperatorsForCapability",
+    `let state;\nlet dirty;\n${syncFn}\n${togFn}\nreturn function(_state, key, operator, checked, capability) {
+      state = _state; dirty = false;
+      toggleMatrix(key, operator, checked, capability);
+      return { dirty, matrixFull: state.matrixFull, matrix: state.matrix };
+    };`,
+  )(() => []);
+
+  function correr(matrixFull, matrix, key, operator, checked, capability) {
+    const state = { matrixFull: JSON.parse(JSON.stringify(matrixFull)), matrix: JSON.parse(JSON.stringify(matrix)) };
+    return api(state, key, operator, checked, capability);
+  }
+
+  // Desmarcar una pareja que NO estaba en matrixFull (recien marcada en esta sesion): debe
+  // entrar al universo con habilitado:false para que el mapper mande el false.
+  let r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: true }],
+    { "C::D": ["OP1", "OP2"] },
+    "C::D", "OP2", false,
+  );
+  assert.deepEqual(r.matrixFull, [
+    { capabilityKey: "C::D", operator: "OP1", habilitado: true },
+    { capabilityKey: "C::D", operator: "OP2", habilitado: false },
+  ], "la pareja desmarcada entra al universo con false");
+
+  // Desmarcar una pareja que SI estaba: se actualiza su habilitado a false.
+  r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: true }],
+    { "C::D": ["OP1"] },
+    "C::D", "OP1", false,
+  );
+  assert.deepEqual(r.matrixFull, [{ capabilityKey: "C::D", operator: "OP1", habilitado: false }]);
+
+  // Marcar una pareja nueva: entra al universo con true.
+  r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: false }],
+    { "C::D": ["OP1"] },
+    "C::D", "OP2", true,
+  );
+  assert.deepEqual(r.matrixFull, [
+    { capabilityKey: "C::D", operator: "OP1", habilitado: false },
+    { capabilityKey: "C::D", operator: "OP2", habilitado: true },
+  ]);
+
+  // Y el toggle la llama para que el estado y el universo no se separen.
+  assert.match(togFn, /syncMatrixFull\(key, operator, checked\);/);
 });
 
 test("el payload de guardado por puente no deep-clona el estado: el postMessage ya lo copia", async () => {

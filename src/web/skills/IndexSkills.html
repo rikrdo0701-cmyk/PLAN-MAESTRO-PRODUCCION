@@ -740,12 +740,35 @@ function filterCapabilities(capabilities) {
     || String(capability.key || "").toLowerCase().includes(query));
 }
 
+function syncMatrixFull(key, operator, habilitado) {
+  if (!state.matrixFull) state.matrixFull = [];
+  if (!Array.isArray(state.matrixFull)) state.matrixFull = [];
+  const idx = state.matrixFull.findIndex((c) =>
+    c && c.capabilityKey === key && c.operator === operator);
+  if (idx >= 0) {
+    if (state.matrixFull[idx].habilitado !== Boolean(habilitado)) {
+      state.matrixFull[idx] = { ...state.matrixFull[idx], habilitado: Boolean(habilitado) };
+    }
+  } else {
+    state.matrixFull.push({ capabilityKey: key, operator: operator, habilitado: Boolean(habilitado) });
+  }
+}
+
 function toggleMatrix(key, operator, checked, capability) {
   if (!state.matrix[key]) {
     state.matrix[key] = capability ? [...baseAllowedOperatorsForCapability(capability)] : [];
   }
   if (checked && !state.matrix[key].includes(operator)) state.matrix[key].push(operator);
   if (!checked) state.matrix[key] = state.matrix[key].filter((name) => name !== operator);
+  // FIX 2026-10-24 (bug usuario): el escritor usa state.matrixFull como UNIVERSO para
+  // escribir el valor de cada pareja (supabase-writer.js, matriz.mapear): si la pareja que
+  // se DESMARCA no esta en matrixFull, no se emite NINGUNA fila con habilitado:false y la
+  // base conserva el true (la principal sigue mostrandola marcada). Eso pasaba al desmarcar
+  // una casilla recien marcada en ESTA sesion, porque matrixFull nace en el arranque y
+  // nadie la actualizaba. Aqui se mantiene el universo sincronizado con cada toggle: una
+  // pareja marcada se agrega (habilitado:true) y una desmarcada se escribe como
+  // habilitado:false, para que el mapper siempre tenga la pareja y mande el false.
+  syncMatrixFull(key, operator, checked);
   dirty = true;
 }
 

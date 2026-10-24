@@ -10072,6 +10072,22 @@ function toggleMatrix(key, operator, checked, capability) {
   }
   if (checked && !state.matrix[key].includes(operator)) state.matrix[key].push(operator);
   if (!checked) state.matrix[key] = state.matrix[key].filter((name) => name !== operator);
+  // FIX 2026-10-24 (bug usuario, misma causa que skills.html): el escritor usa
+  // state.matrixFull como UNIVERSO (supabase-writer.js, matriz.mapear); si la pareja que
+  // se DESMARCA no esta en el universo, no se emite ninguna fila con habilitado:false y la
+  // base conserva el true. Se mantiene matrixFull sincronizado con cada toggle: marcar
+  // agrega la pareja (true) y desmarcar la escribe con false, para que el mapper siempre la
+  // tenga. Sin esto, desmarcar una casilla recien marcada en esta sesion no persistia.
+  if (!Array.isArray(state.matrixFull)) state.matrixFull = [];
+  const idx = state.matrixFull.findIndex((c) =>
+    c && c.capabilityKey === key && c.operator === operator);
+  if (idx >= 0) {
+    if (state.matrixFull[idx].habilitado !== Boolean(checked)) {
+      state.matrixFull[idx] = { ...state.matrixFull[idx], habilitado: Boolean(checked) };
+    }
+  } else {
+    state.matrixFull.push({ capabilityKey: key, operator: operator, habilitado: Boolean(checked) });
+  }
   rememberLocalCapabilityConfigEdit();
 }
 
