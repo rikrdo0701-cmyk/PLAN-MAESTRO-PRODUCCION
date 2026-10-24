@@ -9215,6 +9215,27 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
   }).sort((a, b) => a.start - b.start || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }));
 }
 
+// La fuente del estado para un reporte: si se esta viendo un plan publicado (snapshot), los
+// datos del ARTICULO/cantidad/ensamblado de cada OT vienen de ESE snapshot, no del borrador
+// actual. Los otros reportes ya lo hacen (weeklyExecutiveSummary usa sourceState.workOrders,
+// app.js:8805-8809); el reporte de Liberacion leia del borrador y por eso las OTs cerradas
+// retiradas del borrador salian con el articulo en blanco (MEDIDO 2026-10-24, plan 19/10 v2).
+function sourceStateForReports() {
+  return reportSnapshot && reportSnapshot.snapshotId !== "draft" ? reportSnapshot : state;
+}
+
+function workOrderForSource(sourceState, ot) {
+  const key = materialOtKey(ot);
+  const list = Array.isArray(sourceState?.workOrders) ? sourceState.workOrders : [];
+  return list.find((item) => materialOtKey(item?.ot) === key) || null;
+}
+
+function closedSummaryForSource(sourceState, ot) {
+  const key = closedSummaryKeyForOt(ot, sourceState?.closedWorkOrderSummaries);
+  if (!key) return null;
+  return (sourceState?.closedWorkOrderSummaries || {})[key] || null;
+}
+
 function releaseReportRows() {
   const grouped = new Map();
   for (const op of reportOperationsSource()) {
@@ -9222,18 +9243,21 @@ function releaseReportRows() {
     if (!grouped.has(op.ot)) grouped.set(op.ot, []);
     grouped.get(op.ot).push(op);
   }
+  const sourceState = sourceStateForReports();
   const rows = [];
   for (const [ot, operations] of grouped.entries()) {
     const sequenced = operations.slice().sort((a, b) => sequenceSort(a, b));
     const release = sequenced[0];
     const releaseMatch = finalReleaseOperationMatch(release);
     const date = opStart(release) || opEnd(release);
-    const workOrder = workOrderForOt(ot);
-    // MEDIDO 2026-10-22 (OT cerrada): con la ficha fuera de `state.workOrders`, `workOrder` es
-    // null y el artículo salía en blanco porque la operación de liberación (16OC/39OTD) no
-    // lleva `parte`. El artículo se toma de la PRIMERA operación con `parte` del mismo OT, y
-    // como último recurso del resumen compacto de la OT cerrada.
-    const closed = closedWorkOrderSummaryForOt(ot);
+    // FIX 2026-10-24 (bug usuario, plan 19/10 v2): el articulo y la cantidad se resuelven desde
+    // la fuente del reporte (el snapshot seleccionado) y NO del borrador actual. Con la ficha
+    // fuera de `state.workOrders` (OT cerrada retirada del borrador), `workOrder` era null y el
+    // articulo salia en blanco porque la operacion de liberacion (16OC/39OTD) no lleva `parte`.
+    // Se toma de la PRIMERA operacion con `parte` del mismo OT, y como ultimo recurso del
+    // resumen compacto de la OT cerrada, ambos en la fuente del reporte.
+    const workOrder = workOrderForSource(sourceState, ot);
+    const closed = closedSummaryForSource(sourceState, ot);
     const part = sequenced.find((operation) => String(operation.parte || "").trim())?.parte
       || workOrder?.item || closed?.item || "";
     const inspectionTotal = inspectionQuantityForOt(ot);

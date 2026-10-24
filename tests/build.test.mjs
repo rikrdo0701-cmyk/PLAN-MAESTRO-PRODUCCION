@@ -3003,14 +3003,15 @@ test("liberacion final detecta 16OC/39OTD por ct o por descripcion cuando el fee
 
 test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no esta en workOrders", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
-  const start = app.indexOf("function releaseReportRows(");
+  const start = app.indexOf("function workOrderForSource(");
   const end = app.indexOf("function renderReleaseReport(", start);
-  assert.ok(start >= 0 && end > start, "releaseReportRows debe existir");
+  assert.ok(start >= 0 && end > start, "el bloque del reporte de liberacion debe existir");
   const source = app.slice(start, end);
-  const buildRows = ({ workOrder, built, total = null, pendingPieces = 1 }) => Function(
+  const buildRows = ({ reportState, workOrder, built, total = null, pendingPieces = 1 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
-    "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
-    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt", "closedWorkOrderSummaryForOt",
+    "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
+    "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
@@ -3019,44 +3020,47 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
     (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
     (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
-    () => workOrder,
+    () => reportState,
     (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
     () => built,
     () => total,
-    () => null,
+    (s, ot) => (Array.isArray(s?.workOrders) ? s.workOrders : []).find((item) => String(item?.ot) === String(ot)) || null,
+    (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
+    (ot) => String(ot),
+    (ot, summaries) => String(ot),
   );
 
-  const rowsClosed = buildRows({ workOrder: null, built: 1, total: 1 })();
+  const rowsClosed = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: 1, total: 1 })();
   assert.equal(rowsClosed.length, 1);
   assert.equal(rowsClosed[0].built, 1);
   assert.equal(rowsClosed[0].quantity, 1);
 
-  const rowsOpen = buildRows({ workOrder: { builtQuantity: 0, quantity: 15 }, built: 15, total: 15 })();
+  const rowsOpen = buildRows({ reportState: { workOrders: [{ ot: "3483", builtQuantity: 0, quantity: 15 }], closedWorkOrderSummaries: {} }, workOrder: { builtQuantity: 0, quantity: 15 }, built: 15, total: 15 })();
   assert.equal(rowsOpen[0].built, 15);
   assert.equal(rowsOpen[0].quantity, 15);
 
-  const rowsWithoutInspection = buildRows({ workOrder: { builtQuantity: 4, quantity: 15 }, built: null })();
+  const rowsWithoutInspection = buildRows({ reportState: { workOrders: [{ ot: "3483", builtQuantity: 4, quantity: 15 }], closedWorkOrderSummaries: {} }, workOrder: { builtQuantity: 4, quantity: 15 }, built: null })();
   assert.equal(rowsWithoutInspection[0].built, 4);
   assert.equal(rowsWithoutInspection[0].quantity, 15);
 
-  const rowsWithoutTotal = buildRows({ workOrder: null, built: null, pendingPieces: 7 })();
+  const rowsWithoutTotal = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: null, pendingPieces: 7 })();
   assert.equal(rowsWithoutTotal[0].quantity, 7);
 });
 
-test("liberacion final puebla articulo y ensamblado de una OT cerrada desde su resumen compacto (RULE-REP-028)", async () => {
+test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la fuente del reporte (RULE-REP-028)", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
-  const start = app.indexOf("function releaseReportRows(");
+  const start = app.indexOf("function workOrderForSource(");
   const end = app.indexOf("function renderReleaseReport(", start);
-  assert.ok(start >= 0 && end > start, "releaseReportRows debe existir");
+  assert.ok(start >= 0 && end > start, "el bloque del reporte de liberacion debe existir");
+  // Incluye workOrderForSource + closedSummaryForSource + releaseReportRows. sourceStateForReports
+  // se inyecta como parametro para controlar la fuente (borrador vs snapshot publicado).
   const source = app.slice(start, end);
-  // OT cerrada: ya no está en `state.workOrders` (workOrderForOt -> null) ni su operación de
-  // liberación lleva `parte`. El reporte debe tomar el artículo y el ensamblado del resumen
-  // compacto que sí se conserva (RULE-OT-049).
   const closedSummary = { item: "EG40 MUFFLER", quantity: 40, pendingQuantity: 12, builtQuantity: 28 };
-  const buildRows = ({ workOrder = null, built = null, total = null, pendingPieces = 1 }) => Function(
+  const buildRows = ({ reportState, workOrder = null, built = null, total = null, pendingPieces = 1 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
-    "sequenceSort", "opStart", "opEnd", "workOrderForOt", "pendingPiecesForWorkOrder",
-    "inspectionBuiltPiecesForOt", "inspectionQuantityForOt", "closedWorkOrderSummaryForOt",
+    "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
+    "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "4701", parte: "", secuencia: 1, ct: "5537", fechaFin: "2026-07-23", pendingPieces }],
@@ -3065,18 +3069,39 @@ test("liberacion final puebla articulo y ensamblado de una OT cerrada desde su r
     (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
     (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
     (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
-    () => workOrder,
+    () => reportState,
     (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
     () => built,
     () => total,
-    () => closedSummary,
+    (s, ot) => (Array.isArray(s?.workOrders) ? s.workOrders : []).find((item) => String(item?.ot) === String(ot)) || null,
+    (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
+    (ot) => String(ot),
+    (ot, summaries) => String(ot),
   );
 
-  const rows = buildRows({ workOrder: null, pendingPieces: null })();
+  // OT cerrada retirada del borrador: el borrador actual NO la tiene (workOrders vacio), pero el
+  // SNAPSHOT publicado SÍ la trae en su workOrders/closedWorkOrderSummaries. El articulo y el
+  // ensamblado deben salir de la fuente del reporte (el snapshot), no del borrador (bug usuario
+  // 2026-10-24, plan 19/10 v2: articulos en blanco).
+  const rows = buildRows({
+    reportState: { workOrders: [], closedWorkOrderSummaries: { 4701: closedSummary } },
+    pendingPieces: null,
+  })();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].article, "EG40 MUFFLER", "el artículo se toma del resumen de la OT cerrada");
-  assert.equal(rows[0].built, 28, "el ensamblado se toma del resumen de la OT cerrada");
-  assert.equal(rows[0].quantity, 12, "la cantidad pendiente se toma del resumen de la OT cerrada");
+  assert.equal(rows[0].article, "EG40 MUFFLER", "el articulo se toma del resumen compacto de la fuente (snapshot)");
+  assert.equal(rows[0].built, 28, "el ensamblado se toma del resumen de la fuente");
+  assert.equal(rows[0].quantity, 12, "la cantidad pendiente se toma del resumen de la fuente");
+
+  // Una OT con ficha VIVA en el snapshot (abierta): el articulo sale de workOrder.item del snapshot.
+  const rowsOpen = buildRows({
+    reportState: { workOrders: [{ ot: "4701", item: "AM M66-6542-0320", quantity: 40, builtQuantity: 28 }], closedWorkOrderSummaries: {} },
+    pendingPieces: null,
+  })();
+  assert.equal(rowsOpen[0].article, "AM M66-6542-0320", "el articulo se toma de la ficha del snapshot cuando esta abierta");
+
+  // Sin snapshot (borrador), el resumen compacto del borrador sigue funcionando (RULE-OT-049).
+  const rowsDraft = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: { 4701: closedSummary } } })();
+  assert.equal(rowsDraft[0].article, "EG40 MUFFLER", "en el borrador el resumen compacto sigue siendo la fuente");
 });
 
 test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
