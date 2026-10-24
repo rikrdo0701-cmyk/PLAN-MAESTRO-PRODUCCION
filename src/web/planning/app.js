@@ -670,6 +670,49 @@ window.addEventListener("beforeunload", () => {});
 
 window.runPlanningPerformanceDryRun = dryRunCurrentPlanPerformance;
 
+// FIX 2026-10-24 (bug usuario): la matriz de habilidades se ajusta en skills.html (o en la
+// pestana Matriz) y al volver a esta pestana "Generar plan" usaba la matriz VIEJA del arranque.
+// Esta pagina solo leia la matriz UNA vez al arrancar (supabase-catalog-apply -> applyImported,
+// app.js:11740) y no tenia ningun listener de `visibilitychange` (a diferencia de skills.html,
+// IndexSkills.html:1114). La generacion (planner-core.operatorCandidates) lee `state.matrix` en
+// memoria, que quedaba congelado. Al volver la pestana a visible se compara `state.revision`
+// contra la base con getAppStateIfChanged y, si cambio, se re-aplican SOLO los campos de la
+// matriz (y catalagos afines), sin tocar el plan ni la cola que la persona tiene en pantalla:
+// re-aplicar TODO (aplicarEstadoDesdeSupabase entero) arrastraria `operations`/`selectedOts` del
+// servidor y pisaria un borrador no guardado.
+async function refreshMatrixOnVisibility() {
+  const bridge = typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement : null;
+  if (!bridge || typeof bridge.getAppStateIfChanged !== "function") return;
+  if (appSheetSaveInFlight || appSheetDirtyScopes.has("matrix") || state._locallyEditedCapabilityConfig) return;
+  const known = Number(state.revision || 0);
+  if (!(known > 0)) return;
+  let imported;
+  try {
+    imported = await bridge.getAppStateIfChanged(known, { includeMaterials: false });
+  } catch (_) {
+    return;
+  }
+  if (!imported || imported.unchanged) return;
+  const next = typeof imported.catalogs === "object" && imported.catalogs
+    ? Object.assign({}, imported.catalogs, imported)
+    : imported;
+  let cambio = false;
+  for (const key of CAPABILITY_CONFIG_KEYS) {
+    if (next[key] !== undefined && next[key] !== null) {
+      state[key] = key === "matrix" || key === "capacityModes" || key === "operationRules"
+        ? deepClone(next[key])
+        : (Array.isArray(next[key]) ? next[key].slice() : deepClone(next[key]));
+      cambio = true;
+    }
+  }
+  if (next.matrixFull !== undefined) state.matrixFull = next.matrixFull;
+  if (Number.isFinite(Number(next.revision))) state.revision = Number(next.revision);
+  if (next.savedAt) state.savedAt = next.savedAt;
+  if (!cambio) return;
+  if (typeof renderMatrix === "function") renderMatrix();
+  render({ parts: { capabilityConfig: true, matrix: true }, save: false });
+}
+
 function initializePlanningApp() {
   bindElements();
   bindEvents();
@@ -680,6 +723,15 @@ function initializePlanningApp() {
   saveState("ui");
   applyInitialWorkspaceView();
   loadAppStateInBackground();
+  // FIX 2026-10-24 (bug usuario): al volver a esta pestana despues de editar la matriz en
+  // skills.html, se re-lee la matriz de Supabase si la revision cambio. Mismo patron que
+  // skills.html (IndexSkills.html:1114-1118). El `typeof document` es porque hay un test que
+  // evalua initializePlanningApp en un vm sin `document`.
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void refreshMatrixOnVisibility();
+    });
+  }
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializePlanningApp, { once: true });

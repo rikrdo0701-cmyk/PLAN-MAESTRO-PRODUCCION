@@ -1959,6 +1959,25 @@ test("la config de capacidades editada localmente sobrevive a un import remoto",
   assert.equal(state._locallyEditedCapabilityConfig, true);
 });
 
+test("al volver a la pestana visible se re-lee la matriz de Supabase sin pisar el plan (bug usuario 2026-10-24)", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  // El refresh vive en el mismo bloque que CAPABILITY_CONFIG_KEYS (que la funcion reutiliza
+  // para saber QUE campos de la matriz re-aplicar).
+  const refresh = app.slice(app.indexOf("function refreshMatrixOnVisibility"), app.indexOf("function initializePlanningApp"));
+  assert.match(refresh, /(?:async )?function refreshMatrixOnVisibility\(\)/);
+  assert.match(refresh, /getAppStateIfChanged\(known, \{ includeMaterials: false \}\)/);
+  assert.match(refresh, /if \(!imported \|\| imported\.unchanged\) return;/);
+  // Solo re-aplica los campos de la config de capacidades; NO toca operations/selectedOts.
+  assert.match(refresh, /for \(const key of CAPABILITY_CONFIG_KEYS\)/);
+  assert.match(refresh, /next\[key\] !== undefined && next\[key\] !== null/);
+  assert.match(refresh, /state\.matrixFull = next\.matrixFull;/);
+  assert.match(refresh, /render\(\{ parts: \{ capabilityConfig: true, matrix: true \}, save: false \}\)/);
+  // El listener esta enganchado en el arranque, como el de skills.html.
+  assert.match(app, /visibilitychange[\s\S]*visibilityState === "visible"[\s\S]*void refreshMatrixOnVisibility\(\);/);
+  // La guarda: no refresca mientras haya un guardado de matriz en vuelo ni una edicion local sin guardar.
+  assert.match(refresh, /appSheetSaveInFlight \|\| appSheetDirtyScopes\.has\("matrix"\) \|\| state\._locallyEditedCapabilityConfig/);
+});
+
 test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
   const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
   const loadStart = performanceClient.indexOf("async function loadInitialStateConditionally(localCache)");
