@@ -8300,6 +8300,13 @@ function closedWorkOrderOperation(summary) {
 
 const inspectionWorkOrderCache = new Map();
 const inspectionWorkOrderFillAttempted = new Set();
+// Reintentos por OT de la precarga de inspeccion. MEDIDO 2026-10-24 (reporte Liberacion): sin
+// reintento, una OT que fallaba en el primer intento (limite de NetSuite, timeout, hold del sync)
+// quedaba marcada en `inspectionWorkOrderFillAttempted` y el Ensamblado salia en 0 para siempre en
+// esa sesion, aunque la OT SÍ tuviera datos en work_orders (el Detalle OT los mostraba). Se permite
+// un tope de reintentos para no saturar el limite de NetSuite (400 SSS_REQUEST_LIMIT_EXCEEDED).
+const inspectionWorkOrderAttemptCount = new Map();
+const INSPECTION_MAX_ATTEMPTS = 3;
 // Fallos de lectura de inspeccion. El puente resuelve con { ok: false, error } sin
 // rechazar, asi que sin este registro una OT sin dato de NetSuite (por ejemplo un
 // 400 del RESTlet) dejaba el reporte sin PZAS y sin ninguna huella visible.
@@ -8379,12 +8386,28 @@ async function ensureInspectionWorkOrders(ots) {
   const queue = [...candidates];
   let filled = 0;
   let failed = 0;
+  let retryPending = 0;
+  // FIX 2026-10-24 (bug usuario, reporte Liberacion): un fallo de precarga no debe dejar la
+  // OT con Ensamblado 0 para siempre. Se permite reintentarla en el siguiente render (tope
+  // INSPECTION_MAX_ATTEMPTS) y se avisa.
+  const marcarFallo = (item) => {
+    failed += 1;
+    const intentos = Number(inspectionWorkOrderAttemptCount.get(item.key) || 0) + 1;
+    inspectionWorkOrderAttemptCount.set(item.key, intentos);
+    if (intentos < INSPECTION_MAX_ATTEMPTS) {
+      inspectionWorkOrderFillAttempted.delete(item.key);
+      retryPending += 1;
+    }
+  };
   const worker = async () => {
     while (queue.length) {
       if (inspectionFillOnHold()) {
         // Cede el paso a la sincronizacion de OTs: las que queden en cola vuelven a
         // estar disponibles para el siguiente render.
-        queue.forEach((pending) => inspectionWorkOrderFillAttempted.delete(pending.key));
+        queue.forEach((pending) => {
+          inspectionWorkOrderFillAttempted.delete(pending.key);
+          retryPending += 1;
+        });
         queue.length = 0;
         break;
       }
@@ -8393,14 +8416,14 @@ async function ensureInspectionWorkOrders(ots) {
       try {
         const result = await withTimeout(PPSupabaseBridgeReplacement.getInspectionWorkOrder(item.ot), 60000);
         if (!result?.ok) {
-          failed += 1;
           recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", result?.error || "respuesta invalida");
+          marcarFallo(item);
           continue;
         }
         const workOrder = result?.data?.workOrder;
         if (!workOrder) {
-          failed += 1;
           recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", "la OT no devolvio datos de inspeccion");
+          marcarFallo(item);
           continue;
         }
         const quantity = Number(workOrder.quantity);
@@ -8413,14 +8436,16 @@ async function ensureInspectionWorkOrders(ots) {
         });
         filled += 1;
       } catch (error) {
-        // La OT queda marcada para no reintentar en esta carga; el dato sigue ausente.
-        failed += 1;
         recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", error);
+        marcarFallo(item);
       }
     }
   };
   await Promise.all(Array.from({ length: 2 }, worker));
-  if (filled) scheduleInspectionReRender();
+  // Se re-renderiza si se lleno algo O si quedaron reintentos pendientes: sin esto, las OTs que
+  // fallaron en el primer intento (limite NetSuite, timeout, hold del sync) quedaban en
+  // Ensamblado 0 para siempre (bug usuario 2026-10-24).
+  if (filled || retryPending) scheduleInspectionReRender();
   if (failed && typeof showToast === "function") {
     showToast(`Inspeccion: ${failed} OT(s) sin dato de NetSuite (${inspectionWorkOrderFailureLines().slice(0, 160)})`, 7000);
   }
@@ -9279,8 +9304,17 @@ function releaseReportRows() {
     const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
     const inspectionBuilt = inspectionBuiltPiecesForOt(ot);
     // La cantidad ensamblada de una OT cerrada ya no está en la ficha (retirada del borrador):
-    // se toma del resumen compacto que sí se conserva.
-    const built = Math.max(0, Number(inspectionBuilt ?? workOrder?.builtQuantity ?? closed?.builtQuantity ?? 0));
+    // se toma de la inspección viva y, si no llega, del resumen compacto que sí se conserva.
+    // FIX 2026-10-24 (bug usuario, reporte Liberación, plan 19/10 v2): el `workOrder?.builtQuantity`
+    // del snapshot (o del estado podado del borrador) está CONGELADO en 0 para una OT cerrada que se
+    // ensambló después de publicar/retirar; con `??` ese 0 bloqueaba el valor real del resumen.
+    // Se prioriza el resumen compacto (builtQuantity > 0) sobre la ficha congelada.
+    const built = Math.max(0, Number(
+      inspectionBuilt
+      ?? (closed && Number(closed.builtQuantity) > 0 ? Number(closed.builtQuantity) : null)
+      ?? workOrder?.builtQuantity
+      ?? 0
+    ));
     rows.push({
       ot,
       article: part,

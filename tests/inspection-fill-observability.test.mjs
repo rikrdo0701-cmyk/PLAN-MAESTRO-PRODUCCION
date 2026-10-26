@@ -84,7 +84,7 @@ test("un ok:false del puente deja registro con folio, metodo y motivo real", asy
   assert.equal(harness.toasts.length, 1);
   assert.ok(harness.toasts[0].message.startsWith("Inspeccion: 1 OT(s) sin dato de NetSuite"), harness.toasts[0].message);
   assert.ok(harness.toasts[0].message.includes("3483"), harness.toasts[0].message);
-  assert.equal(harness.reRenders.length, 0);
+  assert.equal(harness.reRenders.length, 1);
 });
 
 test("una promesa rechazada tambien queda registrada", async () => {
@@ -133,14 +133,18 @@ test("cantidad total en cero no se registra como fallo ni se cachea", async () =
   assert.equal(harness.toasts.length, 0);
 });
 
-test("la OT fallida se marca comoYa intentada y no se reintenta en la misma carga", async () => {
+test("la OT fallida se REINTENTA en la siguiente carga (con tope) para no dejar el ensamblado en 0", async () => {
   const harness = createInspectionFill({ responses: { 3483: rateLimited } });
 
   await harness.ensureInspectionWorkOrders(["3483"]);
   await harness.ensureInspectionWorkOrders(["3483"]);
 
-  assert.deepEqual(harness.calls, ["getInspectionWorkOrder:3483"]);
-  assert.equal(harness.attempted.has("3483"), true);
+  // FIX 2026-10-24 (bug usuario, reporte Liberacion): antes un fallo de inspeccion marcaba la OT
+  // como intentada y no se volvia a preguntar, dejando el Ensamblado en 0 para siempre aunque la
+  // OT tuviera datos en work_orders. Ahora la OT fallida queda disponible para reintento (tope
+  // INSPECTION_MAX_ATTEMPTS), asi que la segunda carga la vuelve a consultar.
+  assert.deepEqual(harness.calls, ["getInspectionWorkOrder:3483", "getInspectionWorkOrder:3483"]);
+  assert.equal(harness.attempted.has("3483"), false, "queda disponible para un nuevo reintento (tope 3)");
 });
 
 test("el resumen de fallos deduplica el mismo error y ordena por folio", () => {
