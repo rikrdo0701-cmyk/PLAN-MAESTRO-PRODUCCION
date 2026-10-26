@@ -168,14 +168,16 @@ solo lectura:
   declara y lo compensa (`supabase-reader.js:1276-1311`, medido el 2026-09-29: «solo llega
   `fecha_vencimiento`»).
   **CORREGIDO EL 2026-10-25** (RULE-SUP-077): el unificado ya emite las dos. `enriquecerEnsamblada_`
-  suma las transacciones `Build` creadas desde la OT (`SUM(ABS(NVL(bl.quantity,0)))` agrupado por
-  `b.createdfrom`, o `bl.createdfrom` si esa columna no existe en la cuenta) y escribe
-  `cant_ensamblada` y `cant_pendiente = max(0, cantidad − ensamblada)` en todas las filas. Es el
-  mismo dato que `record:built` del 2244, medido en vivo el 2026-10-25 (OT 3764: 10 de 10; 3789:
-  5 de 15; 3786: 0 de 5). Va en su propia consulta y `try/catch` para que un 400 no vacíe
-  `work_orders` (RULE-SUP-048). Ojo con la restricción de la sección 6: la cantidad ensamblada
-  **no** existe como columna de `transaction`; lo que se suma son las líneas `mainline` de las
-  transacciones `Build`.
+  lee `completedquantity` de la **última** operación de la OT (`operationsequence` más alto,
+  desempatando por `mot.id`) en una consulta a `manufacturingoperationtask` por tandas de 100 ids, y
+  escribe `cant_ensamblada` y `cant_pendiente = max(0, cantidad − ensamblada)` en todas las filas.
+  Es el mismo dato que `record:built` del 2244, medido en vivo el 2026-10-25 en **60 OTs al azar
+  entre abiertas y cerradas: coinciden las 60** (3764: 10 de 10; 3789: 5 de 15; 3338: 55 de 50;
+  3560: 0 de 16). Va en su propia consulta y `try/catch` para que un 400 no vacíe `work_orders`
+  (RULE-SUP-048). **No se suma la transacción `Build`:** en esta cuenta `transaction.createdfrom`
+  responde 500 y `transactionline.createdfrom` no devuelve filas (medido contra el 2246 desplegado),
+  y `MAX(mot.completedquantity)` miente por arriba en 6 de 60 OTs. Ver también la restricción de la
+  sección 6: la cantidad ensamblada **no** existe como columna de `transaction`.
 - `descripcion` viene poblada en las 213 (RULE-SUP-012, `item.description`, cambio del 2026-09-28
   que sí está en el archivo desplegado) y `cliente` en las 213 **como cadena vacía**.
 
@@ -493,8 +495,9 @@ No son preferencias; son lo que se midió contra este ERP:
 | Restricción | Evidencia |
 |---|---|
 | Las fechas de SuiteQL son **`dd/MM/aaaa` sin hora ni zona**, en las 6 columnas de fecha de los 7 lectores (`transaction.startdate`, `transaction.enddate`, `transaction.trandate`, `mot.startdatetime`, `mot.enddate`, `item.lastmodifieddate`) | medido el 2026-09-28. Se arman a mano en `isoFechaNetsuite`: `new Date("25/09/2026")` es *Invalid Date* (el texto crudo se iba a un `timestamptz` y PostgREST respondía 400), y `new Date("03/04/2026")` se lee como **mes/día** y guardaba 3 de abril como 4 de marzo, sin ningún error |
-| La cantidad ensamblada **no existe en SuiteQL**: `transaction.built`, `transaction.quantitybuilt` y `transaction.quantityremaining` dan "Unknown identifier" (400), igual que `unbuilt`, `quantity`, `origquantity` y `approveddate` (500) | medido el 2026-09-28. Sale del **record** (`record:built`), que es la misma fuente que usa el 2244 y de la que sale la `cantidadEnsamblada` que la app ya muestra |
-| `MAX(mot.completedquantity)` **puede exceder la cantidad de la OT** | folio 2204: cantidad 3000, `MAX(mot)` 4200, `record:built` 4200; folio 3172: 1500 contra 3169. La operación y la OT no se miden en la misma unidad, así que el respaldo se acota a `cantidad` y se declara en `notas.ensamblada` |
+| La cantidad ensamblada **no existe en SuiteQL**: `transaction.built`, `transaction.quantitybuilt` y `transaction.quantityremaining` dan "Unknown identifier" (400), igual que `unbuilt`, `quantity`, `origquantity` y `approveddate` (500) | medido el 2026-09-28. Sale del **record** (`record:built`), que es la misma fuente que usa el 2244 y de la que sale la `cantidadEnsamblada` que la app ya muestra. **Corregido el 2026-10-25:** la `completedquantity` de la **última** operación de la OT reproduce `record:built` en 60 de 60 OTs medidas, y es lo que escribe el espejo (RULE-SUP-077) |
+| El vínculo **`Build` → OT por `createdfrom` no se puede leer** en esta cuenta: `transaction.createdfrom` responde **500** (el genérico "Error inesperado de SuiteScript") y `transactionline.createdfrom` **no devuelve filas** | medido el 2026-10-25 contra el 2246 desplegado, con la consulta ya escrita y desplegada. Por eso la cantidad ensamblada **no** se calcula sumando las transacciones `Build` |
+| `MAX(mot.completedquantity)` **puede exceder la cantidad de la OT** | folio 2204: cantidad 3000, `MAX(mot)` 4200, `record:built` 4200; folio 3172: 1500 contra 3169. La operación y la OT no se miden en la misma unidad, así que el respaldo se acota a `cantidad` y se declara en `notas.ensamblada`. **El espejo ya no usa `MAX`** (RULE-SUP-077): usa la **última** operación, que coincide con `record:built` en 60 de 60 OTs |
 | `transaction.approveddate` **no existe** (500) y `itemlocation` **no es una tabla** de SuiteQL ("Tipo de búsqueda no válida") | medido el 2026-09-28. El inventario se lee del agregado `aggregateitemlocation` |
 | El endpoint SuiteQL v1 por REST **no acepta parámetros** (`p` da "Invalid content in the request body" con arreglo, con objeto y con marcador `:nombre`) | medido el 2026-09-28. Da igual: dentro de NetSuite se usa `query.runSuiteQL({query, params})`, que **sí** acepta `?` posicional (probado en el 2244 desplegado) |
 | `FETCH NEXT` y `OFFSET`: la cuenta **sí** los acepta, pero **en el orden `ORDER BY ... OFFSET n ROWS FETCH NEXT m ROWS ONLY`**; en el orden inverso dan 400, y `OFFSET` sin `ORDER BY` se ignora | medido el 2026-09-28. El 400 del 2026-09-26 08:00 fue por el **orden**, no por la cláusula (RULE-REP-016-A). Aun así aquí **no se usa ninguna**: la paginación es recorte en memoria con topes por tabla, que es lo que ya se sabe que corre |

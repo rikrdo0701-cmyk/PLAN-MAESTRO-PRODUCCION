@@ -1441,13 +1441,13 @@
       //
       //      CORREGIDO EL 2026-10-25, Y ESTO ES LO QUE CIERRA EL HUECO. El 2246 ya emite las
       //      dos columnas (`netsuite-restlet-unificado-supabase.js`, `enriquecerEnsamblada_`):
-      //      la ensamblada sale de sumar las transacciones `Build` creadas desde la OT, que es
-      //      el mismo dato que `record:built` del 2244 (medido en vivo: OT 3764 = 10, 3789 = 5,
-      //      3786 = 0). Desde esa corrida de la ingesta, `cant_ensamblada` deja de ser 0 en las
-      //      513 filas y el pendiente escrito ya se puede creer. La regla de abajo NO se toca:
-      //      sigue siendo la que distingue "nadie escribio" de "un 0 de verdad", y es la que
-      //      cubre a las filas que quedaron del espejo viejo o a una corrida sin la consulta
-      //      nueva.
+      //      la ensamblada es la `completedquantity` de la ULTIMA operacion de la OT, que es el
+      //      mismo dato que `record:built` del 2244 (medido en vivo en 60 de 60 OTs: 3764 = 10,
+      //      3789 = 5, 3786 = 0, 3338 = 55 de 50). Desde esa corrida de la ingesta,
+      //      `cant_ensamblada` deja de ser 0 en las 491 filas y el pendiente escrito ya se puede
+      //      creer. La regla de abajo NO se toca: sigue siendo la que distingue "nadie escribio"
+      //      de "un 0 de verdad", y es la que cubre a las filas que quedaron del espejo viejo o a
+      //      una corrida sin la consulta nueva.
       //   3. Antes esta linea decia: `rawPending === "" ? cantidad - cant_ensamblada : ...`.
       //      Con `not null default 0` la columna NUNCA llega vacia, asi que esa rama era CODIGO
       //      MUERTO y el `else` ganaba siempre: pendingQuantity era 0 para todas.

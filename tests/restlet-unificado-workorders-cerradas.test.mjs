@@ -208,14 +208,18 @@ test("sin cerrada no hay aviso, y las diez columnas del espejo no se multiplican
   assert.deepEqual(Object.keys(salida.rows[0]).sort(), salida.headers.slice().sort());
 });
 
-test("la cantidad ensamblada sale de sumar las transacciones Build de cada OT", () => {
+test("la cantidad ensamblada es la de la ULTIMA operacion de cada OT", () => {
   // MEDIDO EN VIVO 2026-10-25 contra el 2244: 3764 = 10 de 10, 3789 = 5 de 15, 3786 = 0 de 5.
   const r = restlet(porPosicion(
     [cruda("3764", CERRADA, { cantidad: "10" }), cruda("3789", CERRADA, { cantidad: "15" }), cruda("3786", ABIERTA, { cantidad: "5" })],
     [],
     [
-      { wo_internal_id: 93764, cant_ensamblada: 10 },
-      { wo_internal_id: 93789, cant_ensamblada: 5 },
+      // 3764: dos operaciones; la PRIMERA dice 4 y la ULTIMA 10. Gana la ultima: es la que
+      // NetSuite reporta como `built`.
+      { wo_internal_id: 93764, secuencia: 10, op_id: 1, cant_ensamblada: 4 },
+      { wo_internal_id: 93764, secuencia: 20, op_id: 2, cant_ensamblada: 10 },
+      // 3789: parcial, 5 de 15.
+      { wo_internal_id: 93789, secuencia: 30, op_id: 3, cant_ensamblada: 5 },
     ],
   ));
   const salida = plano(r.post({ accion: "workorders" }));
@@ -224,68 +228,77 @@ test("la cantidad ensamblada sale de sumar las transacciones Build de cada OT", 
   assert.equal(porOt["3764"].cant_pendiente, 0);
   assert.equal(porOt["3789"].cant_ensamblada, 5);
   assert.equal(porOt["3789"].cant_pendiente, 10, " 15 de cantidad menos 5 ensambladas");
-  // La 3786 no tiene ningun Build: 0 ensamblado y el pendiente ENTERO, no 0. Un 0/0 haria que
-  // el lector creyera que nadie escribio las columnas.
+  // La 3786 no tiene ninguna operacion en la respuesta: 0 ensamblado y el pendiente ENTERO, no
+  // 0/0. Un 0/0 haria que el lector creyera que nadie escribio las columnas.
   assert.equal(porOt["3786"].cant_ensamblada, 0);
   assert.equal(porOt["3786"].cant_pendiente, 5);
 });
 
-test("la consulta de Build pide las dos columnas del espejo y agrupa por OT", () => {
+test("la consulta del ensamblado lee la ultima operacion, sin sumar ni agrupar", () => {
   const r = restlet(porPosicion([cruda("2624", ABIERTA)], [], []));
   r.post({ accion: "workorders" });
   const sql = r.consultas.find(esEnsamblada);
-  assert.ok(sql, " tiene que haber una consulta de Build");
-  assert.match(sql, /SUM\(ABS\(NVL\(bl\.quantity, 0\)\)\) AS cant_ensamblada/);
-  assert.match(sql, /b\.createdfrom IN \(/);
-  assert.match(sql, /GROUP BY b\.createdfrom/);
-  assert.match(sql, /b\.type = 'Build'/);
+  assert.ok(sql, " tiene que haber una consulta de ensamblado");
+  assert.match(sql, /mot\.operationsequence AS secuencia/);
+  assert.match(sql, /mot\.id AS op_id/);
+  assert.match(sql, /NVL\(mot\.completedquantity, 0\) AS cant_ensamblada/);
+  assert.match(sql, /WHERE mot\.workorder IN \(/);
+  // El desempate de la ultima operacion se hace en JS con las DOS columnas ordenadas igual
+  // que el 2244 (`operationsequence, id`).
+  assert.match(sql, /ORDER BY mot\.workorder, mot\.operationsequence, mot\.id/);
+  // Lo que se SACO el 2026-10-25, medido contra el 2246 desplegado: `transaction.createdfrom`
+  // responde 500 y `transactionline.createdfrom` no devuelve filas en esta cuenta.
+  assert.doesNotMatch(sql, /transaction/);
+  assert.doesNotMatch(sql, /MAX\(/);
 });
 
-test("si la consulta de Build falla, la accion sigue y lo dice (no se vacia work_orders)", () => {
+test("si dos operaciones empatan en secuencia, gana la de id mas alto (el desempate del 2244)", () => {
+  const r = restlet(porPosicion([cruda("2624", ABIERTA, { cantidad: "10" })], [], [
+    { wo_internal_id: 92624, secuencia: 50, op_id: 9, cant_ensamblada: 3 },
+    { wo_internal_id: 92624, secuencia: 50, op_id: 12, cant_ensamblada: 8 },
+  ]));
+  const salida = plano(r.post({ accion: "workorders" }));
+  assert.equal(salida.rows[0].cant_ensamblada, 8);
+});
+
+test("la sobreproduccion se publica tal cual: NetSuite dice 55 y se escribe 55", () => {
+  // MEDIDO: la OT 3338 tiene cantidad 50 y `record:built` 55. Antes se acotaba a la cantidad y
+  // el espejo decia una cosa distinta de NetSuite. El pendiente ya se acota con Math.max(0).
+  const r = restlet(porPosicion([cruda("3338", CERRADA, { cantidad: "50" })], [], [
+    { wo_internal_id: 93338, secuencia: 10, op_id: 1, cant_ensamblada: 105 },
+    { wo_internal_id: 93338, secuencia: 20, op_id: 2, cant_ensamblada: 55 },
+  ]));
+  const salida = plano(r.post({ accion: "workorders" }));
+  assert.equal(salida.rows[0].cant_ensamblada, 55);
+  assert.equal(salida.rows[0].cant_pendiente, 0, " no queda negativo");
+});
+
+test("si la consulta del ensamblado falla, la accion sigue y lo dice (no se vacia work_orders)", () => {
   const r = restlet((sql) => {
-    if (esEnsamblada(sql)) throw new Error("Unknown identifier createdfrom");
+    if (esEnsamblada(sql)) throw new Error("Unknown identifier operationsequence");
     if (esCerrada(sql)) return [cruda("3302", CERRADA)];
     return [cruda("2624", ABIERTA)];
   });
   const salida = plano(r.post({ accion: "workorders" }));
   assert.equal(salida.ok, true);
   assert.equal(salida.totalRows, 2, " las OTs se siguen escribiendo");
+  // 0/0 a proposito: es la senal de "nadie las escribio" y el lector pone el pendiente entero.
   assert.equal(salida.rows[0].cant_ensamblada, 0);
-  assert.match(salida.aviso, /cantidad ensamblada/);
-  assert.match(salida.aviso, /Unknown identifier createdfrom/, " el aviso dice POR QUE");
-});
-
-test("si la primera estrategia no devuelve filas, se usa la de la linea y se dice", () => {
-  const r = restlet((sql) => {
-    if (esEnsamblada(sql)) {
-      if (/GROUP BY b\.createdfrom/.test(sql)) return [];
-      return [{ wo_internal_id: 92624, cant_ensamblada: 7 }];
-    }
-    if (esCerrada(sql)) return [];
-    return [cruda("2624", ABIERTA, { cantidad: "10" })];
-  });
-  const salida = plano(r.post({ accion: "workorders" }));
-  assert.equal(salida.rows[0].cant_ensamblada, 7);
-  assert.equal(salida.rows[0].cant_pendiente, 3);
-  assert.match(salida.aviso, /transactionline\.createdfrom/);
-});
-
-test("si las dos de Build fallan, la tercera usa la ultima operacion y la acota a la cantidad", () => {
-  const r = restlet((sql) => {
-    if (esEnsamblada(sql)) {
-      if (/manufacturingoperationtask/.test(sql)) return [{ wo_internal_id: 92624, cant_ensamblada: 40 }];
-      throw new Error("Unknown identifier createdfrom");
-    }
-    if (esCerrada(sql)) return [];
-    return [cruda("2624", ABIERTA, { cantidad: "10" })];
-  });
-  const salida = plano(r.post({ accion: "workorders" }));
-  // MEDIDO en la cuenta: MAX(mot.completedquantity) puede exceder la cantidad de la OT
-  // (folio 2204: cantidad 3000, MAX 4200). Se acota a proposito; no se publica un ensamblado
-  // mayor que la orden.
-  assert.equal(salida.rows[0].cant_ensamblada, 10);
   assert.equal(salida.rows[0].cant_pendiente, 0);
-  assert.match(salida.aviso, /manufacturingoperationtask/);
+  assert.match(salida.aviso, /cantidad ensamblada fallo/);
+  assert.match(salida.aviso, /Unknown identifier operationsequence/, " el aviso dice POR QUE");
+});
+
+test("si el ensamblado no devuelve NI UNA fila, se dice y no se inventa el cero", () => {
+  const r = restlet((sql) => {
+    if (esEnsamblada(sql)) return [];
+    if (esCerrada(sql)) return [];
+    return [cruda("2624", ABIERTA, { cantidad: "10" })];
+  });
+  const salida = plano(r.post({ accion: "workorders" }));
+  assert.equal(salida.rows[0].cant_ensamblada, 0);
+  assert.equal(salida.rows[0].cant_pendiente, 0);
+  assert.match(salida.aviso, /no devolvio filas/);
 });
 
 test("accion 'todas': los siete sub-resultados, y el de workorders con la ventana", () => {
