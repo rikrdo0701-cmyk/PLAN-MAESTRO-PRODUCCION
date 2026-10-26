@@ -137,14 +137,23 @@ test("una OT sin cantidad tampoco se queda en pendiente 0", () => {
   assert.equal(wo.pendingQuantity, 0, "sin cantidad y sin avance no hay de donde sacar un pendiente, y 0 es la respuesta honesta");
 });
 
-test("el hueco DECLARADO sigue en MAPPING_GAPS: no se absorbe en silencio", () => {
+test("el hueco DECLARADO sigue en MAPPING_GAPS, ahora con su CIERRE: no se absorbe en silencio", () => {
   // El codigo de arriba resuelve el 0, y esa es la parte peligrosa: si la regla se queda solo en
   // el codigo, el dia que el RESTlet traiga las columnas nadie se acuerda de que hubo un hueco.
   // MAPPING_GAPS es donde este proyecto declara lo que no sabe, asi que el arreglo tiene que
   // aparecer ahi y no solo en el codigo que lo calcula.
+  //
+  // CAMBIO DEL 2026-10-25: el hueco se CERRO (el 2246 ya emite las dos columnas), asi que las
+  // entradas de MAPPING_GAPS se retiraron a proposito. Lo que se vigila ahora es que la
+  // explicacion -que paso, quien las llena y contra que se midio- siga escrita en el MISMO
+  // bloque: un hueco que desaparece sin decir por que es indistinguible de un hueco olvidado.
   const bloque = reader.MAPPING_GAPS.work_orders.join(" | ");
-  assert.ok(bloque.includes("cant_ensamblada") && bloque.includes("cant_pendiente"),
-    "el hueco de cant_ensamblada/cant_pendiente tiene que estar declarado en MAPPING_GAPS.work_orders");
-  assert.ok(bloque.includes("src/server/"),
-    "y tiene que decir DONDE se midio que nadie las escribe, no solo que faltan");
+  assert.ok(!bloque.includes("cant_ensamblada"),
+    "ya no es un hueco: si vuelve a la lista es que la ingesta dejo de traerlas");
+  assert.ok(readerSource.includes("cant_ensamblada") && readerSource.includes("cant_pendiente"));
+  assert.match(readerSource, /CERRADO EL 2026-10-25/);
+  assert.ok(readerSource.includes("enriquecerEnsamblada_"),
+    " tiene que decir QUIEN las llena, no solo que ya no faltan");
+  assert.ok(readerSource.includes("record:built"),
+    " y contra que fuente se midio que el dato existe");
 });

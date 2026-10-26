@@ -76,7 +76,8 @@ define(['N/query'], (query) => {
   const DIAS_OT_CERRADAS = 90;
   const MAX_OT_CERRADAS = 300;
   const COLUMNAS_WORKORDERS = [
-    'wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'estatus', 'cliente', 'fecha_vencimiento'
+    'wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'estatus', 'cliente', 'fecha_vencimiento',
+    'cant_ensamblada', 'cant_pendiente'
   ];
 
   function workorders_() {
@@ -89,18 +90,140 @@ define(['N/query'], (query) => {
       aviso = 'No se pudieron leer las OTs CERRADAS (' + (error && error.message ? error.message : String(error)) +
         '): se trajo solo las abiertas';
     }
-    const rows = abiertas.concat(cerradas);
+    const rows = abiertas.concat(cerradas).map(filaWorkOrder_);
+    const avisosEnsamblada = [];
+    enriquecerEnsamblada_(rows, avisosEnsamblada);
     const salida = {
       ok: true,
       headers: COLUMNAS_WORKORDERS,
-      rows: rows.map(filaWorkOrder_),
+      rows: rows,
       totalRows: rows.length,
       // Lo que la ingesta no lee, pero dice que paso. `cerradas.incluidas` es la cifra que
       // dice si la ventana esta trayendo lo que debe.
       cerradas: { incluidas: cerradas.length, dias: DIAS_OT_CERRADAS, tope: MAX_OT_CERRADAS }
     };
     if (aviso) salida.aviso = aviso;
+    if (avisosEnsamblada.length) {
+      salida.aviso = (salida.aviso ? salida.aviso + ' | ' : '') + avisosEnsamblada.join(' | ');
+    }
     return salida;
+  }
+
+  // ===========================================================================
+  // 1764 — CANTIDAD ENSAMBLADA: LA COLUMNA QUE EL ESPEJO NUNCA LLENO
+  // ===========================================================================
+  //
+  // MEDIDO 2026-10-25, EN VIVO CONTRA EL 2244 DESPLEGADO: la OT 3764 (cerrada, plan del
+  // 19/10) tiene cantidad 10 y `record:built` 10; la 3789, 15 y 5; la 3786, 5 y 0. NetSuite
+  // SI tiene el dato. Y MEDIDO 2026-10-05 en Supabase: `work_orders.cant_ensamblada` esta en
+  // 0 en las 213 filas y `cant_pendiente` es igual a `cantidad`, porque este lector nunca
+  // emitio esas dos columnas: el DDL las crea `not null default 0` y nadie las llena.
+  //
+  // LO QUE EL USUARIO VE POR ESO: el reporte de Liberacion y la hoja de inspeccion leen
+  // `work_orders.cant_ensamblada` (`supabase-bridge-replacement.js:317`,
+  // `inspection-core.js:497`), asi que la columna Ensamblado sale 0 en TODAS las OTs, en
+  // Borrador y en plan guardado, aunque NetSuite diga 10.
+  //
+  // POR QUE SE CALCULA Y NO SE LEE DEL RECORD. `record.load` cuesta 10 unidades de gobierno y
+  // una corrida trae 513 OTs: 5130 unidades contra las 1000 de la ejecucion. El 2244 lo hace
+  // de a UNA OT porque es una hoja, no un espejo. La suma de las transacciones `Build` creadas
+  // desde la OT es exactamente lo que NetSuite llama `built` (`record:built`), y es UNA
+  // consulta.
+  //
+  // POR QUE VA APARTE Y NO COMO UNA COLUMNA MAS DEL SELECT PRINCIPAL. Si esta consulta no
+  // parsea en la cuenta (el nombre de una columna cambia de version a version), el SELECT
+  // principal no se toca: `work_orders` se escribe como hoy y solo falta el ensamblado. Si
+  // fuera una columna mas del SELECT principal, un 400 tumbaria la accion entera y la ingesta
+  // VACIARIA la tabla (RULE-SUP-048).
+  //
+  // DOS ESTRATEGIAS, EN ORDEN. `transaction.createdfrom` es el "Created From" de la
+  // transaccion; `transactionline.createdfrom` es el mismo dato en la linea y es el que usa
+  // la receta publica de NetSuite para la varianza de una OT. Se prueban las dos y se queda la
+  // primera que devuelva filas; cual gano va en el aviso, no se adivina.
+  function enriquecerEnsamblada_(filas, avisos) {
+    const ids = filas
+      .map(function (fila) { return String(fila.wo_internal_id || '').trim(); })
+      .filter(function (id) { return /^\d+$/.test(id); });
+    if (!ids.length) return;
+
+    const estrategias = [
+      { nombre: 'transaction.createdfrom', sql: sqlEnsambladaPorTransaccion_ },
+      { nombre: 'transactionline.createdfrom', sql: sqlEnsambladaPorLinea_ }
+    ];
+    let fuente = '';
+    const porOt = {};
+    for (let i = 0; i < estrategias.length && !fuente; i++) {
+      const estrategia = estrategias[i];
+      try {
+        const leidas = [];
+        // En tandas: 513 ids en un solo `IN` es un texto de ~3 KB, y una tanda de 200 cabe
+        // comoda en cualquier version de SuiteQL.
+        for (let desde = 0; desde < ids.length; desde += 200) {
+          const tanda = ids.slice(desde, desde + 200);
+          const resultado = runSuiteQL_(estrategia.sql(tanda)) || [];
+          for (const fila of resultado) leidas.push(fila);
+        }
+        if (!leidas.length) continue;
+        for (const fila of leidas) {
+          const id = String(fila.wo_internal_id == null ? '' : fila.wo_internal_id).trim();
+          if (!id) continue;
+          const valor = Number(fila.cant_ensamblada);
+          porOt[id] = isFinite(valor) ? Math.max(0, valor) : 0;
+        }
+        fuente = estrategia.nombre;
+        // Solo se dice cuando NO gano la primera: ahi el aviso es informacion (la columna que
+        // esta cuenta tiene es la otra). Cuando gana la primera, callar es lo correcto: el
+        // log de la ingesta se lee para buscar fallos, no para confirmar lo normal.
+        if (i > 0) avisos.push('cantidad ensamblada leida por ' + fuente + ' (la primera estrategia no devolvio filas)');
+      } catch (error) {
+        avisos.push('cantidad ensamblada por ' + estrategia.nombre + ' fallo (' +
+          String((error && error.message) || error).slice(0, 80) + ')');
+      }
+    }
+    if (!fuente) {
+      // Las dos consultas parsearon y no devolvieron nada. Con 513 OTs en el espejo eso no es
+      // normal, asi que se dice: el sintoma (Ensamblado en 0) es el mismo que el de antes, y
+      // sin este aviso no habria como distinguir "la consulta no sirve" de "no hay builds".
+      if (!avisos.length) avisos.push('cantidad ensamblada: ninguna estrategia devolvio filas (se escribe 0)');
+      return;
+    }
+
+    // Con la fuente elegida, TODA fila queda con su ensamblada: una OT que no aparece en el
+    // resultado es una OT sin transacciones `Build`, o sea 0 ensamblado y el pendiente entero.
+    // Dejarla en 0/0 la mandaria a la regla del lector ("nadie las escribio"), que da el mismo
+    // pendiente pero deja el ensamblado sin declarar.
+    for (const fila of filas) {
+      const id = String(fila.wo_internal_id || '').trim();
+      const ensamblada = Object.prototype.hasOwnProperty.call(porOt, id) ? porOt[id] : 0;
+      fila.cant_ensamblada = ensamblada;
+      fila.cant_pendiente = Math.max(0, (Number(fila.cantidad) || 0) - ensamblada);
+    }
+  }
+
+  function sqlEnsambladaPorTransaccion_(ids) {
+    return [
+      'SELECT b.createdfrom AS wo_internal_id,',
+      '  SUM(ABS(NVL(bl.quantity, 0))) AS cant_ensamblada',
+      'FROM transaction b',
+      'JOIN transactionline bl ON bl.transaction = b.id',
+      "WHERE b.type = 'Build'",
+      "  AND NVL(bl.mainline, 'F') = 'T'",
+      '  AND b.createdfrom IN (' + ids.join(',') + ')',
+      'GROUP BY b.createdfrom'
+    ].join('\n');
+  }
+
+  function sqlEnsambladaPorLinea_(ids) {
+    return [
+      'SELECT bl.createdfrom AS wo_internal_id,',
+      '  SUM(ABS(NVL(bl.quantity, 0))) AS cant_ensamblada',
+      'FROM transactionline bl',
+      'JOIN transaction b ON b.id = bl.transaction',
+      "WHERE b.type = 'Build'",
+      "  AND NVL(bl.mainline, 'F') = 'T'",
+      '  AND bl.createdfrom IN (' + ids.join(',') + ')',
+      'GROUP BY bl.createdfrom'
+    ].join('\n');
   }
 
   function filaWorkOrder_(r) {
@@ -112,7 +235,12 @@ define(['N/query'], (query) => {
       cantidad: Number(r.cantidad) || 0,
       estatus: String(r.estatus || ''),
       cliente: String(r.cliente || ''),
-      fecha_vencimiento: isoFecha_(r.fecha_vencimiento)
+      fecha_vencimiento: isoFecha_(r.fecha_vencimiento),
+      // Las llena `enriquecerEnsamblada_`; si esa consulta no corre quedan en 0, que es lo
+      // que Supabase tiene hoy. No se inventa el pendiente: se deja que `mapWorkOrders` del
+      // lector aplique su regla de "las dos en cero = nadie las escribio".
+      cant_ensamblada: Number(r.cant_ensamblada) || 0,
+      cant_pendiente: Number(r.cant_pendiente) || 0
     };
   }
 

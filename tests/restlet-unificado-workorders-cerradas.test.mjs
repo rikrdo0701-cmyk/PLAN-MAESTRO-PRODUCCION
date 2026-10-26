@@ -97,17 +97,31 @@ function esCerrada(sql) {
   return /LIKE '%CERRAD%'/.test(sql) && !/NOT LIKE '%CERRAD%'/.test(sql);
 }
 
-/** Reparte las consultas del par: la primera abiertas, la segunda cerradas. */
-function porPosicion(abiertas, cerradas) {
-  return (sql) => (esCerrada(sql) ? cerradas : abiertas);
+/**
+ * La tercera consulta de la accion: la que suma las transacciones `Build` por OT. Se reconoce
+ * por su columna de salida, que ninguna de las dos principales tiene.
+ */
+function esEnsamblada(sql) {
+  return /AS cant_ensamblada/.test(sql) && /'Build'/.test(sql);
+}
+
+/** Reparte las consultas del par: la primera abiertas, la segunda cerradas, la tercera builds. */
+function porPosicion(abiertas, cerradas, ensamblada) {
+  return (sql) => {
+    if (esEnsamblada(sql)) return typeof ensamblada === "function" ? ensamblada(sql) : (ensamblada || []);
+    return esCerrada(sql) ? cerradas : abiertas;
+  };
 }
 
 test("la accion workorders consulta abiertas Y cerradas, en ese orden", () => {
-  const r = restlet(porPosicion([cruda("2624", ABIERTA)], [cruda("3302", CERRADA)]));
+  const r = restlet(porPosicion([cruda("2624", ABIERTA)], [cruda("3302", CERRADA)], [
+    { wo_internal_id: 92624, cant_ensamblada: 10 },
+  ]));
   const salida = plano(r.post({ accion: "workorders" }));
-  assert.equal(r.consultas.length, 2);
+  assert.equal(r.consultas.length, 3, " abiertas, cerradas y la suma de Build");
   assert.match(r.consultas[0], /NOT LIKE '%CERRAD%'/);
   assert.match(r.consultas[1], /LIKE '%CERRAD%'/);
+  assert.ok(esEnsamblada(r.consultas[2]), " la tercera es la de la cantidad ensamblada");
   assert.equal(salida.ok, true);
   assert.equal(salida.totalRows, 2);
   assert.deepEqual(salida.rows.map((f) => f.ot), ["2624", "3302"]);
@@ -181,14 +195,79 @@ test("si la consulta de ABIERTAS falla, la accion se cae (degradar ahi seria vac
   assert.throws(() => r.post({ accion: "workorders" }), /Failed to parse SQL/);
 });
 
-test("sin cerrada no hay aviso, y las ocho columnas del espejo no se multiplican", () => {
-  const r = restlet(porPosicion([cruda("2624", ABIERTA)], []));
+test("sin cerrada no hay aviso, y las diez columnas del espejo no se multiplican", () => {
+  const r = restlet(porPosicion([cruda("2624", ABIERTA)], [], [
+    { wo_internal_id: 92624, cant_ensamblada: 10 },
+  ]));
   const salida = plano(r.post({ accion: "workorders" }));
   assert.equal("aviso" in salida, false, " el aviso es solo para el fallo, no para el cero");
   assert.deepEqual(salida.headers, [
     "wo_internal_id", "ot", "articulo", "descripcion", "cantidad", "estatus", "cliente", "fecha_vencimiento",
+    "cant_ensamblada", "cant_pendiente",
   ]);
   assert.deepEqual(Object.keys(salida.rows[0]).sort(), salida.headers.slice().sort());
+});
+
+test("la cantidad ensamblada sale de sumar las transacciones Build de cada OT", () => {
+  // MEDIDO EN VIVO 2026-10-25 contra el 2244: 3764 = 10 de 10, 3789 = 5 de 15, 3786 = 0 de 5.
+  const r = restlet(porPosicion(
+    [cruda("3764", CERRADA, { cantidad: "10" }), cruda("3789", CERRADA, { cantidad: "15" }), cruda("3786", ABIERTA, { cantidad: "5" })],
+    [],
+    [
+      { wo_internal_id: 93764, cant_ensamblada: 10 },
+      { wo_internal_id: 93789, cant_ensamblada: 5 },
+    ],
+  ));
+  const salida = plano(r.post({ accion: "workorders" }));
+  const porOt = Object.fromEntries(salida.rows.map((f) => [f.ot, f]));
+  assert.equal(porOt["3764"].cant_ensamblada, 10);
+  assert.equal(porOt["3764"].cant_pendiente, 0);
+  assert.equal(porOt["3789"].cant_ensamblada, 5);
+  assert.equal(porOt["3789"].cant_pendiente, 10, " 15 de cantidad menos 5 ensambladas");
+  // La 3786 no tiene ningun Build: 0 ensamblado y el pendiente ENTERO, no 0. Un 0/0 haria que
+  // el lector creyera que nadie escribio las columnas.
+  assert.equal(porOt["3786"].cant_ensamblada, 0);
+  assert.equal(porOt["3786"].cant_pendiente, 5);
+});
+
+test("la consulta de Build pide las dos columnas del espejo y agrupa por OT", () => {
+  const r = restlet(porPosicion([cruda("2624", ABIERTA)], [], []));
+  r.post({ accion: "workorders" });
+  const sql = r.consultas.find(esEnsamblada);
+  assert.ok(sql, " tiene que haber una consulta de Build");
+  assert.match(sql, /SUM\(ABS\(NVL\(bl\.quantity, 0\)\)\) AS cant_ensamblada/);
+  assert.match(sql, /b\.createdfrom IN \(/);
+  assert.match(sql, /GROUP BY b\.createdfrom/);
+  assert.match(sql, /b\.type = 'Build'/);
+});
+
+test("si la consulta de Build falla, la accion sigue y lo dice (no se vacia work_orders)", () => {
+  const r = restlet((sql) => {
+    if (esEnsamblada(sql)) throw new Error("Unknown identifier createdfrom");
+    if (esCerrada(sql)) return [cruda("3302", CERRADA)];
+    return [cruda("2624", ABIERTA)];
+  });
+  const salida = plano(r.post({ accion: "workorders" }));
+  assert.equal(salida.ok, true);
+  assert.equal(salida.totalRows, 2, " las OTs se siguen escribiendo");
+  assert.equal(salida.rows[0].cant_ensamblada, 0);
+  assert.match(salida.aviso, /cantidad ensamblada/);
+  assert.match(salida.aviso, /Unknown identifier createdfrom/, " el aviso dice POR QUE");
+});
+
+test("si la primera estrategia no devuelve filas, se usa la de la linea y se dice", () => {
+  const r = restlet((sql) => {
+    if (esEnsamblada(sql)) {
+      if (/GROUP BY b\.createdfrom/.test(sql)) return [];
+      return [{ wo_internal_id: 92624, cant_ensamblada: 7 }];
+    }
+    if (esCerrada(sql)) return [];
+    return [cruda("2624", ABIERTA, { cantidad: "10" })];
+  });
+  const salida = plano(r.post({ accion: "workorders" }));
+  assert.equal(salida.rows[0].cant_ensamblada, 7);
+  assert.equal(salida.rows[0].cant_pendiente, 3);
+  assert.match(salida.aviso, /transactionline\.createdfrom/);
 });
 
 test("accion 'todas': los siete sub-resultados, y el de workorders con la ventana", () => {
@@ -215,14 +294,18 @@ test("las dos copias del espejo declaran la MISMA ventana", () => {
   assert.equal(topeUnificado[1], topeSync[1]);
 });
 
-test("el 2246 es el unico que emite work_orders, y es el que trae fecha_vencimiento", () => {
-  // Este es el hallazgo que corrigio el archivo equivocado: el 2246 declara ocho columnas y
-  // `fecha_fin_ns` no esta entre ellas, que es por eso que en Supabase esa columna esta
+test("el 2246 es el unico que emite work_orders, y ahora tambien la cantidad ensamblada", () => {
+  // Este era el hallazgo que corrigio el archivo equivocado: el 2246 declaraba ocho columnas y
+  // `fecha_fin_ns` no estaba entre ellas, que es por eso que en Supabase esa columna esta
   // vacia en las 213 filas mientras `fecha_vencimiento` esta llena. Si alguien "arregla" el
   // 2246 agregandole columnas, este test obliga a decidirlo a conscious.
+  //
+  // DECIDIDO EL 2026-10-25: se agregan `cant_ensamblada` y `cant_pendiente` -las dos que el
+  // espejo nunca llenaba, y por eso la columna Ensamblado salia 0 en TODAS las OTs-, y NO
+  // `fecha_fin_ns`, que sigue siendo del otro archivo.
   assert.doesNotMatch(fuente, /fecha_fin_ns/);
-  assert.doesNotMatch(fuente, /cant_ensamblada/);
   assert.match(fuente, /'fecha_vencimiento'/);
-  // Y el que trae las dos columnas es el otro archivo, el del diseno propuesto.
+  assert.match(fuente, /'cant_ensamblada', 'cant_pendiente'/);
+  // Y el que trae las dos columnas de fecha es el otro archivo, el del diseno propuesto.
   assert.match(fuenteSync, /fecha_fin_ns: isoFecha\(r\.fecha_fin\)/);
 });

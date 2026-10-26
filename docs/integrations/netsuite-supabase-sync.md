@@ -167,6 +167,15 @@ solo lectura:
   `integer not null default 0` en el DDL: el unificado tampoco emite esas dos. El lector ya lo
   declara y lo compensa (`supabase-reader.js:1276-1311`, medido el 2026-09-29: «solo llega
   `fecha_vencimiento`»).
+  **CORREGIDO EL 2026-10-25** (RULE-SUP-077): el unificado ya emite las dos. `enriquecerEnsamblada_`
+  suma las transacciones `Build` creadas desde la OT (`SUM(ABS(NVL(bl.quantity,0)))` agrupado por
+  `b.createdfrom`, o `bl.createdfrom` si esa columna no existe en la cuenta) y escribe
+  `cant_ensamblada` y `cant_pendiente = max(0, cantidad − ensamblada)` en todas las filas. Es el
+  mismo dato que `record:built` del 2244, medido en vivo el 2026-10-25 (OT 3764: 10 de 10; 3789:
+  5 de 15; 3786: 0 de 5). Va en su propia consulta y `try/catch` para que un 400 no vacíe
+  `work_orders` (RULE-SUP-048). Ojo con la restricción de la sección 6: la cantidad ensamblada
+  **no** existe como columna de `transaction`; lo que se suma son las líneas `mainline` de las
+  transacciones `Build`.
 - `descripcion` viene poblada en las 213 (RULE-SUP-012, `item.description`, cambio del 2026-09-28
   que sí está en el archivo desplegado) y `cliente` en las 213 **como cadena vacía**.
 

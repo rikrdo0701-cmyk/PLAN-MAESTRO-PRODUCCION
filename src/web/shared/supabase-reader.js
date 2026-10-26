@@ -191,8 +191,14 @@
       "workOrders[].averageSalePriceFrom | falta la columna precio_desde | la hoja ORDENES_TRABAJO tiene PRECIO_DESDE y el nombre no dice lo que es: no es un precio, es la FECHA desde la que vale el precio promedio de venta. MEDIDO 2026-09-29: app.js:1726 lo pasa por normalizeOtDate y 02-storage.js:2182 lo lee sin Number(), al lado de PRECIO_PROMEDIO_VENTA que si lleva Number(). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
       "workOrders[].averageSalePriceTo | falta la columna precio_hasta | la hoja tiene PRECIO_HASTA, la FECHA hasta la que vale ese precio promedio (misma medicion que en el anterior). La agrega docs/schema-supabase-plan.sql como text, sin aplicar.",
       "workOrders[].startDate, endDate y dueDate | falta la FORMA de la columna fecha_inicio_ns | las tres son timestamptz y el estado espera el texto 'AAAA-MM-DD' de la hoja (PP_mapWorkOrder_, 02-storage.js:2179). Se resuelve con una REGLA, no con una columna: partir el ISO en UTC sin convertir de zona, y la hora (que el estado no tiene campo para estas tres) se descarta en vez de inventarse un lugar donde ponerla. La regla y su motivo estan en partirFechaTexto().",
-      "workOrders[].pendingQuantity | falta la FORMA de la columna cant_ensamblada | MEDIDO 2026-10-01 con sesion en la pagina real: las 175 OT del Backlog decian 'qty:0' y el detalle de la misma OT si mostraba la cantidad. La columna EXISTE y esta bien tipada ('integer not null default 0'); lo que falta es que alguien la escriba: MEDIDO, 'cant_ensamblada' NO aparece en NINGUN archivo de src/server/, o sea que la ingesta, que hace mirror de las filas del RESTlet tal cual, no la trae. El unico escritor (filasWorkOrders, supabase-writer.js:1290) escribe lo que viene del estado. El hueco NO es de esquema: es que la fuente no trae el dato y la tabla, con su default 0, no puede distinguir 'cero' de 'sin escribir'. mapWorkOrders lo resuelve con la regla que ya declaraba (cantidad - cant_ensamblada) y por eso el pendiente sale igual a la cantidad; mientras el RESTlet no la traiga, una OT en curso se vera como si no tuviera nada surtido.",
-      "workOrders[].pendingQuantity | falta la FORMA de la columna cant_pendiente | La misma medicion que la de cant_ensamblada y por el mismo motivo: la columna existe y no la escribe nadie. MEDIDO: 'cant_pendiente' NO aparece en NINGUN archivo de src/server/ y filasWorkOrders (supabase-writer.js:1291) escribe el 0 que le llega del estado. Antes de que existiera el arreglo, mapWorkOrders computaba 'cantidad - cant_ensamblada' solo cuando esta columna llegaba VACIA, y con 'not null default 0' nunca llega vacia: esa rama era codigo muerto y el pendiente salia 0 para todas las OT.",
+      // CERRADO EL 2026-10-25, Y ESO ES EL ARREGLO. Estuvieron listadas como hueco desde el
+      // 2026-10-01: la columna existia, bien tipada (`integer not null default 0`), y nadie la
+      // escribia, asi que una OT en curso se veia como si no tuviera nada surtido y el reporte
+      // de Liberacion mostraba Ensamblado 0 en todas. El 2246 ahora las emite
+      // (`netsuite-restlet-unificado-supabase.js`, `enriquecerEnsamblada_`: suma de las
+      // transacciones `Build` de la OT, el mismo dato que `record:built` del 2244). La regla de
+      // `mapWorkOrders` se queda como estaba: es la que cubre las filas del espejo viejo y una
+      // corrida sin la consulta nueva.
       "workOrders[].revision | falta la FORMA de la columna revision | MEDIDO 2026-10-01: la columna existe y esta bien tipada, pero lo que guarda NO es lo que el estado pide. filasWorkOrders (supabase-writer.js:1645) escribe ahi la REVISION DEL PLAN, que es un contador de guardado, mientras que la hoja de inspeccion usa este campo en la celda REV, que quiere la revision del BOM de NetSuite ('Revision'/'bomRevision' en PP_getInspectionWorkOrder, 16-inspection-service.js:181). Son dos cosas distintas en la misma columna y no hay forma de saber cual esta sin preguntar a quien la escribio. Se deja '' y la hoja imprime 'A', que es lo que se imprimia cuando NetSuite no traia revision. Poner el numero del plan en una celda REV seria affirmar una revision de ingenieria que nadie dio.",
     ],
     operations: [
@@ -1432,6 +1438,16 @@
       //      `src/server/`, o sea que la ingesta (que hace mirror de las filas del RESTlet tal
       //      cual) no las escribe. El unico escritor de la pagina (filasWorkOrders,
       //      supabase-writer.js:1290-1291) escribe lo que viene del estado, o sea un 0.
+      //
+      //      CORREGIDO EL 2026-10-25, Y ESTO ES LO QUE CIERRA EL HUECO. El 2246 ya emite las
+      //      dos columnas (`netsuite-restlet-unificado-supabase.js`, `enriquecerEnsamblada_`):
+      //      la ensamblada sale de sumar las transacciones `Build` creadas desde la OT, que es
+      //      el mismo dato que `record:built` del 2244 (medido en vivo: OT 3764 = 10, 3789 = 5,
+      //      3786 = 0). Desde esa corrida de la ingesta, `cant_ensamblada` deja de ser 0 en las
+      //      513 filas y el pendiente escrito ya se puede creer. La regla de abajo NO se toca:
+      //      sigue siendo la que distingue "nadie escribio" de "un 0 de verdad", y es la que
+      //      cubre a las filas que quedaron del espejo viejo o a una corrida sin la consulta
+      //      nueva.
       //   3. Antes esta linea decia: `rawPending === "" ? cantidad - cant_ensamblada : ...`.
       //      Con `not null default 0` la columna NUNCA llega vacia, asi que esa rama era CODIGO
       //      MUERTO y el `else` ganaba siempre: pendingQuantity era 0 para todas.
