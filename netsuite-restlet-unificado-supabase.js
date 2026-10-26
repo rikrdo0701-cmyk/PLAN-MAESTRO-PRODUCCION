@@ -136,10 +136,12 @@ define(['N/query'], (query) => {
   // fuera una columna mas del SELECT principal, un 400 tumbaria la accion entera y la ingesta
   // VACIARIA la tabla (RULE-SUP-048).
   //
-  // DOS ESTRATEGIAS, EN ORDEN. `transaction.createdfrom` es el "Created From" de la
+  // TRES ESTRATEGIAS, EN ORDEN. `transaction.createdfrom` es el "Created From" de la
   // transaccion; `transactionline.createdfrom` es el mismo dato en la linea y es el que usa
-  // la receta publica de NetSuite para la varianza de una OT. Se prueban las dos y se queda la
-  // primera que devuelva filas; cual gano va en el aviso, no se adivina.
+  // la receta publica de NetSuite para la varianza de una OT; la tercera es la ultima
+  // operacion completada, que es la aproximacion que el propio 2244 usa como respaldo. Se
+  // prueban en ese orden y se queda la primera que devuelva filas; cual gano va en el aviso,
+  // no se adivina.
   function enriquecerEnsamblada_(filas, avisos) {
     const ids = filas
       .map(function (fila) { return String(fila.wo_internal_id || '').trim(); })
@@ -147,10 +149,18 @@ define(['N/query'], (query) => {
     if (!ids.length) return;
 
     const estrategias = [
-      { nombre: 'transaction.createdfrom', sql: sqlEnsambladaPorTransaccion_ },
-      { nombre: 'transactionline.createdfrom', sql: sqlEnsambladaPorLinea_ }
+      { nombre: 'transaction.createdfrom', sql: sqlEnsambladaPorTransaccion_, acotar: false },
+      { nombre: 'transactionline.createdfrom', sql: sqlEnsambladaPorLinea_, acotar: false },
+      // TERCERA Y ULTIMA: la misma que usa el 2244 cuando el record no responde
+      // (`operaciones:ultima`) y la que declara el diseno propuesto
+      // (`netsuite-restlet-supabase-sync.js`, `leerEnsamblada_`). Es una APROXIMACION y se acota
+      // a la cantidad de la OT a proposito: MEDIDO, `MAX(mot.completedquantity)` puede excederla
+      // (folio 2204: cantidad 3000, MAX 4200) porque la operacion y la OT no se miden en la misma
+      // unidad. Se usa solo si las dos de Build no respondieron, y el aviso dice cual gano.
+      { nombre: 'manufacturingoperationtask.completedquantity', sql: sqlEnsambladaPorOperacion_, acotar: true }
     ];
     let fuente = '';
+    let acotar = false;
     const porOt = {};
     for (let i = 0; i < estrategias.length && !fuente; i++) {
       const estrategia = estrategias[i];
@@ -171,6 +181,7 @@ define(['N/query'], (query) => {
           porOt[id] = isFinite(valor) ? Math.max(0, valor) : 0;
         }
         fuente = estrategia.nombre;
+        acotar = estrategia.acotar;
         // Solo se dice cuando NO gano la primera: ahi el aviso es informacion (la columna que
         // esta cuenta tiene es la otra). Cuando gana la primera, callar es lo correcto: el
         // log de la ingesta se lee para buscar fallos, no para confirmar lo normal.
@@ -181,7 +192,7 @@ define(['N/query'], (query) => {
       }
     }
     if (!fuente) {
-      // Las dos consultas parsearon y no devolvieron nada. Con 513 OTs en el espejo eso no es
+      // Ninguna de las tres parseo-y-devolvio filas. Con 491 OTs en el espejo eso no es
       // normal, asi que se dice: el sintoma (Ensamblado en 0) es el mismo que el de antes, y
       // sin este aviso no habria como distinguir "la consulta no sirve" de "no hay builds".
       if (!avisos.length) avisos.push('cantidad ensamblada: ninguna estrategia devolvio filas (se escribe 0)');
@@ -194,9 +205,11 @@ define(['N/query'], (query) => {
     // pendiente pero deja el ensamblado sin declarar.
     for (const fila of filas) {
       const id = String(fila.wo_internal_id || '').trim();
-      const ensamblada = Object.prototype.hasOwnProperty.call(porOt, id) ? porOt[id] : 0;
+      let ensamblada = Object.prototype.hasOwnProperty.call(porOt, id) ? porOt[id] : 0;
+      const cantidad = Number(fila.cantidad) || 0;
+      if (acotar) ensamblada = Math.min(cantidad, ensamblada);
       fila.cant_ensamblada = ensamblada;
-      fila.cant_pendiente = Math.max(0, (Number(fila.cantidad) || 0) - ensamblada);
+      fila.cant_pendiente = Math.max(0, cantidad - ensamblada);
     }
   }
 
@@ -223,6 +236,16 @@ define(['N/query'], (query) => {
       "  AND NVL(bl.mainline, 'F') = 'T'",
       '  AND bl.createdfrom IN (' + ids.join(',') + ')',
       'GROUP BY bl.createdfrom'
+    ].join('\n');
+  }
+
+  function sqlEnsambladaPorOperacion_(ids) {
+    return [
+      'SELECT mot.workorder AS wo_internal_id,',
+      '  MAX(NVL(mot.completedquantity, 0)) AS cant_ensamblada',
+      'FROM manufacturingoperationtask mot',
+      'WHERE mot.workorder IN (' + ids.join(',') + ')',
+      'GROUP BY mot.workorder'
     ].join('\n');
   }
 

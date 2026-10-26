@@ -102,7 +102,7 @@ function esCerrada(sql) {
  * por su columna de salida, que ninguna de las dos principales tiene.
  */
 function esEnsamblada(sql) {
-  return /AS cant_ensamblada/.test(sql) && /'Build'/.test(sql);
+  return /AS cant_ensamblada/.test(sql);
 }
 
 /** Reparte las consultas del par: la primera abiertas, la segunda cerradas, la tercera builds. */
@@ -268,6 +268,24 @@ test("si la primera estrategia no devuelve filas, se usa la de la linea y se dic
   assert.equal(salida.rows[0].cant_ensamblada, 7);
   assert.equal(salida.rows[0].cant_pendiente, 3);
   assert.match(salida.aviso, /transactionline\.createdfrom/);
+});
+
+test("si las dos de Build fallan, la tercera usa la ultima operacion y la acota a la cantidad", () => {
+  const r = restlet((sql) => {
+    if (esEnsamblada(sql)) {
+      if (/manufacturingoperationtask/.test(sql)) return [{ wo_internal_id: 92624, cant_ensamblada: 40 }];
+      throw new Error("Unknown identifier createdfrom");
+    }
+    if (esCerrada(sql)) return [];
+    return [cruda("2624", ABIERTA, { cantidad: "10" })];
+  });
+  const salida = plano(r.post({ accion: "workorders" }));
+  // MEDIDO en la cuenta: MAX(mot.completedquantity) puede exceder la cantidad de la OT
+  // (folio 2204: cantidad 3000, MAX 4200). Se acota a proposito; no se publica un ensamblado
+  // mayor que la orden.
+  assert.equal(salida.rows[0].cant_ensamblada, 10);
+  assert.equal(salida.rows[0].cant_pendiente, 0);
+  assert.match(salida.aviso, /manufacturingoperationtask/);
 });
 
 test("accion 'todas': los siete sub-resultados, y el de workorders con la ventana", () => {
