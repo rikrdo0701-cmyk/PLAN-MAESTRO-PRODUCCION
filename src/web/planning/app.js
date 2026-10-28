@@ -1379,6 +1379,48 @@ function bindEvents() {
     await renderReleaseRealReport();
     prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
   });
+  // RULE-SUP-078: al pulsar "Sincronizar datos" dispara la ingesta SOLO con accion: ensambles
+  document.getElementById("syncReleaseRealBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("syncReleaseRealBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
+    try {
+      const bridge = typeof PPAppsScriptBridge !== "undefined" ? PPAppsScriptBridge : null;
+      if (bridge && typeof bridge.call === "function") {
+        try {
+          await bridge.call("dispararIngestaSupabase", { accion: "ensambles" }, { timeout: 90000 });
+        } catch (e) {
+          console.warn("No se pudo disparar ingesta ensambles via puente:", e);
+        }
+      } else if (typeof google !== "undefined" && google.script && google.script.run) {
+        try {
+          await new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .dispararIngestaSupabase({ accion: "ensambles" });
+          });
+        } catch (e) {
+          console.warn("No se pudo disparar ingesta ensambles via google.script.run:", e);
+        }
+      }
+      await new Promise(r => setTimeout(r, 4000));
+    } catch (e) {
+      console.warn("Error al forzar ingesta de ensambles:", e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Sincronizar datos"; }
+    }
+    await renderReleaseRealReport(true);
+    if (releaseRealCache.error) {
+      alert("No se pudieron cargar los ensambles: " + releaseRealCache.error +
+        "\n\nPosibles causas:\n1. El DDL docs/schema-supabase-ensambles-ot.sql no ha sido aplicado en Supabase.\n2. El RESTlet 2246 no ha sido redeployado con la acción `ensambles`.\n3. La ingesta con `accion: 'ensambles'` no ha escrito en `ensambles_ot`.\n4. No hay ensambles WOCompl en los últimos 60 días para la planta MM del Llano.");
+    } else if (releaseRealCache.rows.length === 0) {
+      alert("La tabla ensambles_ot sigue vacía tras sincronizar.\n" +
+        "Revisa en Supabase: SELECT count(*) FROM ensambles_ot;\n" +
+        "Si sigue en 0, comprueba el log de la ingesta (debe llamar al RESTlet 2246 con accion 'ensambles').");
+    } else {
+      alert("Datos cargados: " + releaseRealCache.rows.length + " ensambles encontrados.");
+    }
+  });
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));

@@ -1,0 +1,11 @@
+{
+  "name": "Plan Maestro de Produccion",
+  "short_name": "Plan Maestro",
+  "description": "Planeacion y control de produccion",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eef1f4",
+  "theme_color": "#087f7a",
+  "lang": "es-MX"
+}
