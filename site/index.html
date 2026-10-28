@@ -33978,7 +33978,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
 
   if (root.location.hostname.endsWith("github.io") && "serviceWorker" in navigator) {
     root.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js").catch((error) => console.warn("Service worker no disponible:", error));
+      navigator.serviceWorker.register("/sw.js").catch((error) => console.warn("Service worker no disponible:", error));
     }, { once: true });
   }
 
