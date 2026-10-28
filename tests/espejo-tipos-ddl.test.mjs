@@ -41,7 +41,7 @@ const ddl = await readFile(new URL("docs/schema-supabase.sql", raiz), "utf8");
 const ingesta = await readFile(new URL("src/server/19-appscript-ingesta-supabase.js", raiz), "utf8");
 
 const TABLAS_DEL_ESPEJO = [
-  "work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders"
+  "work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders", "ensambles_ot"
 ];
 
 /** Las columnas que el DDL declara numéricas enteras en una tabla, tal como las declara. */
@@ -71,7 +71,7 @@ function columnasEnterasDDL(tabla) {
  */
 function columnasNumericasDDL(tabla) {
   const salida = [];
-  for (const archivo of ["docs/schema-supabase.sql", "docs/schema-supabase-sync-netsuite.sql"]) {
+  for (const archivo of ["docs/schema-supabase.sql", "docs/schema-supabase-sync-netsuite.sql", "docs/schema-supabase-ensambles-ot.sql"]) {
     const texto = ddlPorArchivo[archivo];
     const re = new RegExp("create table (?:if not exists )?public\\." + tabla + " \\(([\\s\\S]*?)\\n\\);", "g");
     let m;
@@ -93,7 +93,9 @@ function columnasNumericasDDL(tabla) {
 
 const ddlPorArchivo = {
   "docs/schema-supabase.sql": ddl,
-  "docs/schema-supabase-sync-netsuite.sql": await readFile(new URL("docs/schema-supabase-sync-netsuite.sql", raiz), "utf8")
+  "docs/schema-supabase-sync-netsuite.sql": await readFile(new URL("docs/schema-supabase-sync-netsuite.sql", raiz), "utf8"),
+  // RULE-SUP-078 (2026-10-25): la tabla de eventos de ensamblado vive en su propio DDL.
+  "docs/schema-supabase-ensambles-ot.sql": await readFile(new URL("docs/schema-supabase-ensambles-ot.sql", raiz), "utf8")
 };
 
 /**
@@ -413,6 +415,9 @@ test("NINGUNA columna `numeric` del DDL entra en la de enteras, en las siete tab
     work_orders: ["precio_promedio_venta", "precio_ultima_venta"],
     operations: ["tiempo_ciclo", "tiempo_setup", "tiempo_prod"],
     sales_orders: ["total"],
+    // RULE-SUP-078: `cantidad` es `numeric(18,6)` como materials; una cantidad fraccionaria
+    // de ensamble no se redondea (la cuenta ya maneja 0.01 de una pieza).
+    ensambles_ot: ["cantidad"],
   };
   for (const tabla of Object.keys(fraccionarias)) {
     for (const col of fraccionarias[tabla]) {
@@ -497,6 +502,8 @@ test("una CLAVE NATURAL `not null` sin default NO se rellena en ninguna de las s
     machines: ["nombre"],
     inventory: ["item", "ubicacion"],
     sales_orders: ["folio"],
+    // RULE-SUP-078: `ensambles_ot.build_id` es la clave natural (un evento de ensamble).
+    ensambles_ot: ["build_id"],
   };
   for (const tabla of TABLAS_DEL_ESPEJO) {
     for (const col of naturales[tabla]) {

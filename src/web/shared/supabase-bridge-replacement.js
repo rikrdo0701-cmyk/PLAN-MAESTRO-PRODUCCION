@@ -731,6 +731,44 @@
   }
 
   /**
+   * getEnsambleEvents -> los eventos de ensamblado reales de `ensambles_ot` (RULE-SUP-078).
+   *
+   * ES EL UNICO CONSUMIDOR DEL REPORTE "LIBERACION REAL". La tabla no es estado del plan
+   * (por eso no viaja en readCatalogs) y la pagina no la escribe: la ingesta la reescribe
+   * cada 15 minutos desde NetSuite. Aqui solo se lee, y se devuelve tal cual la mapea el
+   * lector (buildId, date, ot, article, description, quantity, location).
+   *
+   * DEGRADACION. Si el DDL todavia no se aplico, la Data API responde 404 con "Could not
+   * find the table ... in the schema cache"; si no hay sesion, 200 con cero filas. Los dos
+   * casos se distinguen para que el reporte pueda decir QUE falta en vez de mostrar una
+   * tabla vacia sin explicacion.
+   */
+  async function getEnsambleEvents() {
+    const r = getReader();
+    if (typeof r.readEnsambleEvents !== "function") {
+      return {
+        ok: false,
+        data: [],
+        error: "Este build no trae PPSupabaseReader.readEnsambleEvents, asi que los ensambles no se pueden leer de ensambles_ot",
+      };
+    }
+    try {
+      const filas = await r.readEnsambleEvents();
+      return { ok: true, data: filas || [] };
+    } catch (error) {
+      const crudo = String((error && error.message) || error);
+      const faltaDdl = /Could not find the table|schema cache|PGRST205/i.test(crudo);
+      return {
+        ok: false,
+        data: [],
+        error: faltaDdl
+          ? "La tabla ensambles_ot no existe todavia: aplica docs/schema-supabase-ensambles-ot.sql. Sin ella el reporte no puede mostrar lo ensamblado."
+          : `No se pudo leer ensambles_ot (${crudo}).`,
+      };
+    }
+  }
+
+  /**
    * saveInspectionLink -> guarda el TRAMO en `inspection_routes`.
    *
    * QUE CAMBIO Y POR QUE (MEDIDO 2026-10-01). Antes escribia `materials` con
@@ -1220,6 +1258,8 @@
     confirmWorkOrderClosures,
     getInspectionWorkOrder,
     getInspectionDrawingRoutes,
+    // RULE-SUP-078: los eventos de ensamblado reales para el reporte "Liberacion real".
+    getEnsambleEvents,
     // MEDIDO 2026-10-01: las cuatro de la hoja de inspeccion que antes salian por el
     // puente de Apps Script. `getInspectionWorkOrderBundle` cambio de FORMA (a
     // `{detail, history}`, la de 17-inspection-drawing-service.js:10) y no solo de

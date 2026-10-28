@@ -349,7 +349,10 @@ const COLUMNAS_NUMERICAS_ = {
   items: ['clase', 'revision'],
   machines: [],
   inventory: ['disponible', 'fisico', 'comprometido', 'pickeado', 'en_transito', 'revision'],
-  sales_orders: ['cliente_id', 'total', 'moneda', 'revision']
+  sales_orders: ['cliente_id', 'total', 'moneda', 'revision'],
+  // `cantidad` es `numeric(18,6)` (fraccionaria, RULE-SUP-078); `ubicacion` y `revision` son
+  // `integer` y el saneo las redondea.
+  ensambles_ot: ['cantidad', 'ubicacion', 'revision']
 };
 
 /**
@@ -375,7 +378,10 @@ const COLUMNAS_ENTERAS_ = {
   items: ['clase', 'revision'],
   machines: [],
   inventory: ['revision'],
-  sales_orders: ['cliente_id', 'moneda', 'revision']
+  sales_orders: ['cliente_id', 'moneda', 'revision'],
+  // `ensambles_ot.cantidad` es `numeric(18,6)`: fraccionaria a proposito, como materials.
+  // `ubicacion` si es entera. `revision` siempre entera.
+  ensambles_ot: ['ubicacion', 'revision']
 };
 
 // CUANTOS VALORES DISTINTOS POR COLUMNA se nombran en el log antes de decir "y N mas". Un dato
@@ -394,7 +400,9 @@ const COLUMNAS_FECHA_ = {
   items: ['ultima_modificacion'],
   machines: [],
   inventory: [],
-  sales_orders: ['fecha']
+  sales_orders: ['fecha'],
+  // `ensambles_ot.fecha` es `date` (nullable): la fecha real del ensamble.
+  ensambles_ot: ['fecha']
 };
 
 const COLUMNAS_BOOL_ = {
@@ -404,7 +412,9 @@ const COLUMNAS_BOOL_ = {
   items: ['es_ensamblaje', 'inactivo'],
   machines: ['activa'],
   inventory: [],
-  sales_orders: []
+  sales_orders: [],
+  // `ensambles_ot` no tiene columnas booleanas.
+  ensambles_ot: []
 };
 
 /**
@@ -463,6 +473,14 @@ const COLUMNAS_POR_OMISION_ = {
   sales_orders: {
     sales_order_id: '', cliente: '', cliente_id: 0, estatus: '', aprobacion: '', total: 0,
     moneda: 0, memo: '', lineas: [], revision: 0
+  },
+  // `ensambles_ot` (RULE-SUP-078). `build_id` es la clave natural (not null sin
+  // default): no esta, igual que `work_orders.ot` o `items.codigo`. El resto son las
+  // columnas `not null default` del DDL (docs/schema-supabase-ensambles-ot.sql):
+  // `ubicacion` tiene default 1, no 0, porque es la planta MM del Llano.
+  ensambles_ot: {
+    ot: '', wo_internal_id: '', articulo: '', descripcion: '', cantidad: 0,
+    ubicacion: 1, revision: 0
   }
 };
 
@@ -816,7 +834,11 @@ function PP_ingesta_(forzado) {
     // siendo la tabla de NetSuite. Ver docs/schema-machine-catalog.sql.
     centros: { tabla: 'machines', clave: 'nombre' },
     inventario: { tabla: 'inventory', clave: 'item,ubicacion' },
-    ordenes_venta: { tabla: 'sales_orders', clave: 'folio' }
+    ordenes_venta: { tabla: 'sales_orders', clave: 'folio' },
+    // RULE-SUP-078 (2026-10-25): eventos de ensamblado reales de la planta 1.
+    // El RESTlet entrega una fila por Assembly Build (evento), con su fecha real,
+    // OT de origen, articulo y cantidad. clave = build_id: UN evento de ensamble.
+    ensambles: { tabla: 'ensambles_ot', clave: 'build_id' }
   };
 
   // EL UNICO CASO EN EL QUE SE CONSERVAN VALORES PREVIOS, Y POR QUE. RULE-SUP-048 vacia

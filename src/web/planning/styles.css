@@ -1666,6 +1666,16 @@ tr:last-child td { border-bottom: 0; }
 .specialized-report-table { min-width: 1120px; }
 .specialized-report-table th:last-child,
 .specialized-report-table td:last-child { min-width: 280px; white-space: normal; }
+
+/* RULE-SUP-078: el reporte "Liberacion real". Seis columnas y nada de las franjas de color
+   del reporte de produccion (que son para 15 columnas): aqui una sola tinta de encabezado,
+   los numeros alineados a la derecha y un pie de totales. */
+.release-real-table { min-width: 760px; }
+.release-real-table th { background: #8ca9d8; color: #101820; }
+.release-real-table th.report-number,
+.release-real-table td.report-number { text-align: right; font-variant-numeric: tabular-nums; }
+.release-real-table tfoot td { font-weight: 700; background: #edf1f3; }
+.release-real-partial { color: var(--muted); font-size: .85em; font-weight: 650; }
 .report-plan-selector select { min-width: 250px; max-width: 320px; }
 .report-print-header {
   display: flex;

@@ -135,12 +135,15 @@ function respuestaBuena() {
       centros: accionBuena(),
       inventario: accionBuena(),
       ordenes_venta: accionBuena(),
+      // RULE-SUP-078: la octava accion del 2246. Su fila por defecto usa build_id (la clave
+      // natural de ensambles_ot), no ot: accionBuena() rellena ot, pero la accion la ignora.
+      ensambles: accionBuena({ build_id: "1", fecha: "2026-10-01", ot: "1", wo_internal_id: "1", articulo: "A", descripcion: "d", cantidad: 1, ubicacion: 1 }),
     },
   };
 }
 
-/** Las siete tablas que la ingesta escribe, en el orden en que las escribe. */
-const TABLAS = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders"];
+/** Las ocho tablas que la ingesta escribe, en el orden en que las escribe. */
+const TABLAS = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders", "ensambles_ot"];
 
 test("un 200 SIN `acciones` se dice y NO se toca ninguna tabla", async () => {
   // El caso medido. Antes esto reventaba con un TypeError que no decia ni el codigo HTTP ni

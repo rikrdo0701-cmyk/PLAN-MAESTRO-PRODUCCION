@@ -138,11 +138,22 @@ POST { accion, ids: {workorderIds, itemIds, salesOrderIds, workcenterIds}, folio
 | `centros` | `machines` | `nombre` | `entitygroup` (`ismanufacturingworkcenter='T'`) |
 | `inventario` | `inventory` | (item, ubicación) | `aggregateitemlocation` |
 | `ordenes_venta` | `sales_orders` | `folio` | `transaction` type `SalesOrd` |
-| `todas` | las 7 | | |
+| `ensambles` | `ensambles_ot` | `build_id` | `transaction` type `WipBuild` + `transactionline` mainline (RULE-SUP-078) |
+| `todas` | las 8 | | |
 | `diagnostico` | ninguna | | no escribe nada |
 
 Respuesta: `{ ok, accion, tabla, modoUsado, leidas, escritas, omitidas, conflictos[], batches,
 truncado, avisos[], degradaciones[] }`.
+
+**La octava acción, `ensambles` (RULE-SUP-078, 2026-10-27).** Devuelve los **eventos de
+ensamblado** (una fila por transacción `WipBuild`, no una por OT) de la planta MM del Llano
+(`tl.location = 1`), de los últimos 60 días y solo los que vienen de una orden de trabajo, a
+`ensambles_ot` (clave `build_id`). Es la fuente del reporte **"Liberación real"**. Va en su
+**propio `try/catch`** dentro de `accion:'todas'`, así que si su SQL falla se vacía solo esa
+tabla y las otras siete se escriben igual (RULE-SUP-048). **Estado al 2026-10-27:** escrita y
+en el repo, **no desplegada** en el 2246 y **no medida** contra la cuenta, y su DDL
+(`docs/schema-supabase-ensambles-ot.sql`) **no aplicado**. Donde el resto de este documento
+dice "siete tablas" o "las siete acciones" describe el espejo anterior a esta acción.
 
 ### 4.1 `work_orders` también trae las OTs cerradas recientes (RULE-SUP-050)
 

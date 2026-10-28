@@ -2998,6 +2998,30 @@
         "src/web/inspection/inspection-core.js",
         "tests/restlet-unificado-workorders-cerradas.test.mjs"
       ]
+    },
+{
+      "rule_id": "RULE-SUP-078",
+      "name": "El reporte \"Liberacion real\" lee UNA fila por EVENTO de ensamble de ensambles_ot (accion `ensambles` del 2246), y el monto se calcula al renderizar con el precio del plan: el precio no se guarda",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "QUE ES. Segundo reporte de liberacion, separado de \"Liberacion final\": lo que NetSuite YA ensamblo, una fila por EVENTO de Assembly Build (no por OT), de la planta MM del Llano (ubicacion 1), de los ultimos 2 meses, y solo lo que viene de una orden de trabajo. Columnas: Fecha real del ensamble, OT, Articulo, Cantidad, P. unitario, Monto. Orden: de lo mas nuevo a lo mas viejo. POR QUE UNA FILA POR EVENTO Y NO POR OT: el usuario confirmo el 2026-10-25 que \"hay ensambles parciales en varios eventos\"; agregar por OT perderia la fecha real de cada ensamble parcial, que es el dato que el reporte existe para mostrar. La tabla muestra \"1.º\", \"2.º\" junto a la OT cuando hay mas de un evento, numerados CRONOLOGICAMENTE (el mas viejo es 1.º), aunque la lista vaya al reves. FUENTE: tabla nueva `public.ensambles_ot` (docs/schema-supabase-ensambles-ot.sql), clave natural `build_id`, escrita por el UNICO writer (RULE-SUP-001) desde la accion `ensambles` del RESTlet 2246: transaction.type = 'WipBuild', linea mainline de transactionline (que es la que lleva el articulo construido y la cantidad), LEFT JOIN a la orden de trabajo (para descartar lo que no viene de una OT), tl.location = 1 y tr.trandate >= SYSDATE - 60. La accion va en su PROPIO try/catch dentro de `accion:'todas'` para que una consulta mala no vacie las otras siete tablas (RULE-SUP-048). EL MONTO NO SE GUARDA, SE CALCULA: `releaseRealUnitPrice` usa `effectiveUnitPriceForOt` -la MISMA funcion con la que el borrador valora la OT- y solo si la OT ya no esta en el estado (una cerrada de hace dos meses) cae al articulo del propio evento y al precio de referencia del catalogo; sin ningun precio la fila va en 0, no se inventa. Guardar el precio en la ingesta lo congelaria y el reporte se separaria del plan en cuanto cambie un precio. CONSECUENCIA DECLARADA: el Monto usa el precio de HOY, asi que un plan publicado antes de un cambio de precio puede no coincidir al centavo. SE LEE SUELTA, NO DEL ESTADO: `ensambles_ot` no es estado del plan, no viaja en readCatalogs; el reporte la pide al abrir la pestana (`PPSupabaseReader.readEnsambleEvents` -> `PPSupabaseBridgeReplacement.getEnsambleEvents`) y cachea el resultado en la sesion de la pagina. LA FECHA VIAJA COMO TEXTO: el lector no tiene maquinaria de zona horaria (prueba que lo exige) y la pagina la arma en hora LOCAL, porque leer \"2026-10-24\" como instante la correria un dia en Mexico (UTC-6). DEGRADACION: sin DDL el 404 de la Data API se traduce en un aviso que dice que falta aplicar el esquema, y sin sesion se ve el error real, en vez de una tabla vacia sin explicacion.",
+      "source": "Pedido del usuario 2026-10-25 (reporte nuevo \"Liberacion real\", una fila por evento de ensamble, ultimos 2 meses, planta MM del Llano, monto = cantidad x precio del plan) + RULE-SUP-001 (un solo writer) + RULE-SUP-048 (una accion caida vacia su tabla) + RULE-SUP-077 (la cantidad ensamblada de la OT, que es OTRO dato) + RULE-REP-021 (de donde sale el precio que usa el plan) + netsuite-restlet-unificado-supabase.js (ensambles_, ejecutar_) + src/server/19-appscript-ingesta-supabase.js (TABLAS.ensambles) + docs/schema-supabase-ensambles-ot.sql + src/web/shared/supabase-reader.js (readEnsambleEvents, mapEnsambleEvents) + src/web/shared/supabase-bridge-replacement.js (getEnsambleEvents) + src/web/planning/app.js (releaseRealRows, releaseRealUnitPrice, renderReleaseRealReport, exportReleaseRealXlsx)",
+      "domain": "supabase",
+      "updated_at": "2026-10-27",
+      "applies_to": [
+        "netsuite-restlet-unificado-supabase.js",
+        "src/server/19-appscript-ingesta-supabase.js",
+        "docs/schema-supabase-ensambles-ot.sql",
+        "src/web/shared/supabase-reader.js",
+        "src/web/shared/supabase-bridge-replacement.js",
+        "src/web/planning/app.js",
+        "src/web/planning/index.template.html",
+        "src/web/planning/styles.css",
+        "tests/supabase-reader-mapeo.test.mjs",
+        "tests/espejo-tipos-ddl.test.mjs",
+        "tests/ingesta-shape-restlet.test.mjs",
+        "tests/disparar-ingesta.test.mjs"
+      ]
     }
   ]
 }

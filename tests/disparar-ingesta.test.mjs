@@ -396,7 +396,7 @@ test("la lectura esta en la lista blanca del puente y no inventa la proxima ejec
 // llamaba filas, el mismo nombre que las filas que se escriben, y lo tapaba dentro del bucle:
 // el return devolvia el ARREGLO de filas de la ultima tabla en vez del conteo. Se fijo con una
 // prueba que falla con el nombre viejo.
-const TABLAS_DE_LA_INGESTA = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders"];
+const TABLAS_DE_LA_INGESTA = ["work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders", "ensambles_ot"];
 
 /**
  * Corre PP_ingesta_ de verdad. Devuelve { r, base, escrituras }.
@@ -484,6 +484,8 @@ function accionesCompletas() {
     centros: { ok: true, rows: [{ nombre: "CORTADOR" }, { nombre: "TORNEADO" }] },
     inventario: { ok: true, rows: [{ item: "IT1", ubicacion: "U1" }, { item: "IT2", ubicacion: "U1" }] },
     ordenes_venta: { ok: true, rows: [{ folio: "F1" }, { folio: "F2" }] },
+    // RULE-SUP-078: la octava accion del 2246.
+    ensambles: { ok: true, rows: [{ build_id: "B1", ot: "2121", cantidad: 3, ubicacion: 1 }, { build_id: "B2", ot: "2122", cantidad: 5, ubicacion: 1 }] },
   };
 }
 
@@ -639,18 +641,18 @@ test("si el SANEO falla, la tabla NO se vacia: un arreglo de la escritura que tu
     "con el motivo, no solo con que fallo: " + JSON.stringify(r.errores));
 });
 
-test("una corrida completa reescribe las SIETE tablas y no deja ninguna con lo anterior", () => {
+test("una corrida completa reescribe las OCHO tablas y no deja ninguna con lo anterior", () => {
   const previas = Object.fromEntries(TABLAS_DE_LA_INGESTA.map((t) => [t, 9]));
   const { r, base, escrituras } = correrIngesta({ acciones: accionesCompletas(), previas });
-  assert.equal(r.ok, true, "siete tablas escritas y ningun fallo, la corrida es ok");
+  assert.equal(r.ok, true, "ocho tablas escritas y ningun fallo, la corrida es ok");
   assert.equal(r.ejecutada, true);
   assert.deepEqual(structuredClone(r.vaciadas), [], "no se vacio ninguna: todas se reescribieron");
   assert.deepEqual(structuredClone(r.noSePudoVaciar), []);
   for (const t of TABLAS_DE_LA_INGESTA) {
     assert.equal(base[t], 2, t + " quedo con lo que devolvio NetSuite, no con las 9 filas anteriores");
   }
-  // El espejo BORRA antes de escribir: en las siete escrituras el borrado es el conteo previo.
-  assert.equal(escrituras.length, 7, "y se escribieron las siete, una llamada cada una");
+  // El espejo BORRA antes de escribir: en las ocho escrituras el borrado es el conteo previo.
+  assert.equal(escrituras.length, 8, "y se escribieron las ocho, una llamada cada una");
   for (const e of escrituras) assert.equal(e.borradas, 9, e.tabla + ": el espejo borro lo que habia");
 });
 
@@ -666,7 +668,7 @@ test("una tabla que NetSuite NO devuelve se VACIA: no conserva lo anterior", () 
   assert.equal(base.materials, 0, "materials quedo VACIA: no se quedo con las 328 filas de la corrida anterior");
   assert.equal(base.inventory, 0, "y lo mismo con la que vino pero fallo");
   assert.deepEqual(structuredClone(r.vaciadas), ["materials", "inventory"]);
-  assert.equal(r.ok, false, "y la corrida NO es ok: se escribieron cinco de siete");
+  assert.equal(r.ok, false, "y la corrida NO es ok: se escribieron seis de ocho");
   // El aviso tiene que NOMBRAR LA TABLA, no el nombre de la accion de NetSuite: materiales y
   // materials no son lo mismo para quien va a buscarla en la base.
   assert.ok(r.errores.some((e) => /materials/.test(e) && /VACIO/.test(e)),
@@ -766,8 +768,8 @@ test("el conteo por tabla es un conteo por tabla, no el arreglo de filas de la u
   const { r } = correrIngesta({ acciones: accionesCompletas() });
   assert.ok(!Array.isArray(r.filas), "filas NO puede ser un arreglo: la pagina cuenta Object.keys()");
   assert.deepEqual(structuredClone(r.filas), {
-    work_orders: 2, operations: 2, materials: 2, items: 2, machines: 2, inventory: 2, sales_orders: 2,
-  }, "y son las SIETE tablas con su conteo, con el nombre de la TABLA");
+    work_orders: 2, operations: 2, materials: 2, items: 2, machines: 2, inventory: 2, sales_orders: 2, ensambles_ot: 2,
+  }, "y son las OCHO tablas con su conteo, con el nombre de la TABLA");
 });
 
 test("el dedupe por clave natural cuenta lo que se ESCRIBE, no lo que vino", () => {

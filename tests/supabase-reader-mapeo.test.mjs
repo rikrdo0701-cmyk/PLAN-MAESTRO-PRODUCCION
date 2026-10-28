@@ -811,3 +811,72 @@ test("el lector NO tiene maquinaria de zona horaria: ninguna fecha se puede conv
     assert.equal(codigo.includes(llamada), false, `el lector tiene ${llamada}: aplicaria una zona y moveria las fechas un dia`);
   }
 });
+
+// =============================================================================
+// RULE-SUP-078: LOS EVENTOS DE ENSAMBLADO REALES (`ensambles_ot`)
+// =============================================================================
+
+test("mapEnsambleEvents: una fila de ensambles_ot sale con los nombres de la pagina", () => {
+  // El reporte "Liberacion real" lee estas filas tal cual: si un nombre cambia aqui, la
+  // columna del reporte se ve vacia y nadie se entera (es el sintoma que este archivo existe
+  // para evitar). Se comprueban los ocho campos, uno por uno.
+  const reader = lector({});
+  const filas = reader.mapEnsambleEvents([{
+    build_id: "22983", fecha: "2026-10-24", ot: "4057", wo_internal_id: "9911",
+    articulo: "CM 400", descripcion: "CONO 400", cantidad: "5.000000", ubicacion: 1,
+  }]);
+  assert.equal(filas.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(filas[0])), {
+    buildId: "22983",
+    date: "2026-10-24",
+    ot: "4057",
+    woInternalId: "9911",
+    article: "CM 400",
+    description: "CONO 400",
+    quantity: 5,
+    location: 1,
+  });
+});
+
+test("mapEnsambleEvents: la fecha viaja como TEXTO, no como instante (no se mueve un dia)", () => {
+  // Es el defecto que el test de zona horaria de arriba previene, visto desde el otro lado:
+  // si `date` saliera como Date, este test lo veria. Y el valor tiene que ser EXACTAMENTE el
+  // que manda la base, sin recortar ni reinterpretar.
+  const reader = lector({});
+  const filas = reader.mapEnsambleEvents([{ build_id: "1", fecha: "2026-01-01" }]);
+  assert.equal(typeof filas[0].date, "string");
+  assert.equal(filas[0].date, "2026-01-01");
+});
+
+test("mapEnsambleEvents: una fecha vacia o ausente no se inventa", () => {
+  const reader = lector({});
+  const filas = reader.mapEnsambleEvents([
+    { build_id: "1" },
+    { build_id: "2", fecha: null },
+    { build_id: "3", fecha: "" },
+  ]);
+  assert.deepEqual(filas.map((f) => f.date), ["", "", ""]);
+});
+
+test("readEnsambleEvents: lee ensambles_ot ordenado de lo mas nuevo a lo mas viejo", async () => {
+  // El orden no es cosmetico: el reporte se lee de arriba abajo y la paginacion EXIGE un
+  // orden estable. Se comprueba la tabla, el orden y que el mapeo se aplique.
+  let pedida = "";
+  const reader = lector({
+    ensambles_ot: [
+      { build_id: "B2", fecha: "2026-10-23", ot: "3988", articulo: "TURBO T3", cantidad: 3, ubicacion: 1 },
+      { build_id: "B1", fecha: "2026-10-19", ot: "3988", articulo: "TURBO T3", cantidad: 2, ubicacion: 1 },
+    ],
+  });
+  const original = reader.readEnsambleEvents;
+  assert.equal(typeof original, "function");
+  const filas = await reader.readEnsambleEvents();
+  assert.equal(filas.length, 2);
+  // Los arreglos que salen del `vm` tienen otro Array.prototype: se pasan por JSON para
+  // que deepEqual en modo estricto compare los VALORES y no el prototipo.
+  const simple = JSON.parse(JSON.stringify(filas));
+  assert.deepEqual(simple.map((f) => f.buildId), ["B2", "B1"]);
+  assert.deepEqual(simple.map((f) => f.quantity), [3, 2]);
+  pedida = simple.map((f) => f.ot).join(",");
+  assert.equal(pedida, "3988,3988", "dos eventos de la misma OT son dos filas, no una");
+});

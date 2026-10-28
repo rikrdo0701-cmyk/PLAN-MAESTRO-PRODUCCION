@@ -1127,6 +1127,12 @@ function bindElements() {
     "releaseReport",
     "releaseReportCount",
     "exportReleaseXlsxBtn",
+    // RULE-SUP-078: el reporte "Liberacion real".
+    "releaseRealReport",
+    "releaseRealReportCount",
+    "exportReleaseRealXlsxBtn",
+    "printReleaseRealBtn",
+    "releaseRealPrintContext",
     "planSnapshotSelect",
     "reportWeekStartInput",
     "reportWeekPrevBtn",
@@ -1366,6 +1372,13 @@ function bindEvents() {
   els.exportBacklogXlsxBtn.addEventListener("click", exportBacklogXlsx);
   els.exportQueueXlsxBtn.addEventListener("click", exportQueueXlsx);
   els.exportReleaseXlsxBtn?.addEventListener("click", exportReleaseXlsx);
+  // RULE-SUP-078: el reporte "Liberacion real". Exportar e imprimir; el render se dispara al
+  // abrir la pestana (showTab) y con el boton de exportar si aun no hay datos.
+  els.exportReleaseRealXlsxBtn?.addEventListener("click", () => exportReleaseRealXlsx());
+  els.printReleaseRealBtn?.addEventListener("click", async () => {
+    await renderReleaseRealReport();
+    prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
+  });
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
@@ -9374,6 +9387,234 @@ function exportReleaseXlsx() {
   downloadBlob(bytes, "liberacion-final-16oc-39otd.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
+// =============================================================================
+// LIBERACION REAL (RULE-SUP-078)
+// -----------------------------------------------------------------------------
+// QUE ES. Lo que NetSuite YA ensamblo, una fila por EVENTO de ensamble (no por OT), de la
+// planta MM del Llano (ubicacion 1), de los ultimos 2 meses, y solo lo que viene de una
+// orden de trabajo. La fuente es la tabla `ensambles_ot`, que la ingesta reescribe desde
+// la accion `ensambles` del RESTlet 2246.
+//
+// EL MONTO NO SE GUARDA: SE CALCULA AQUI, CON EL PRECIO DEL PLAN. `effectiveUnitPriceForOt`
+// es la MISMA funcion que valora la OT en el borrador (precio manual de la OT -> ultima
+// venta de NetSuite -> precio de referencia del catalogo, el mas alto de los que existan, 0
+// si ninguno). Por eso el monto del reporte no puede separarse del que muestra el plan, y
+// por eso el precio no viaja en `ensambles_ot`: guardarlo lo congelaria en la ingesta.
+//
+// SE LEE SUELTA, NO DEL ESTADO. `ensambles_ot` no es estado del plan y no viaja en
+// readCatalogs; el reporte la pide al abrirse. La cache es de la sesion de la pagina: si
+// NetSuite ensambla algo nuevo, se ve al recargar, no en el siguiente render.
+// =============================================================================
+let releaseRealCache = { rows: [], error: "", loading: false, loaded: false, pending: null };
+
+/**
+ * Las filas del reporte, a partir de los eventos crudos de `ensambles_ot`.
+ *
+ * UNA FILA POR EVENTO, y por eso una OT puede aparecer varias veces (ensambles parciales
+ * en fechas distintas, confirmado por el usuario el 2026-10-25). El `eventIndex`/`eventCount`
+ * solo sirven para marcar en pantalla "2.º de 3" y que se vea que no es un duplicado.
+ *
+ * ORDEN: de lo mas nuevo a lo mas viejo. Un evento sin fecha va al final (no se inventa una
+ * fecha para ordenarlo). El desempate es por OT y luego por build_id, los dos descendentes,
+ * para que dos eventos del mismo dia tengan un orden estable.
+ */
+/**
+ * El precio unitario de UNA fila del reporte "Liberacion real".
+ *
+ * ORDEN (el que pidio el usuario el 2026-10-25, y el que ya usa el plan):
+ *   1. `effectiveUnitPriceForOt(ot)`: precio de venta vivo de NetSuite (ultima venta/promedio)
+ *      y, si no hay, el precio manual capturado para el articulo de la OT. Es la MISMA funcion
+ *      que valora la OT en el borrador (`amountForOt`), asi que mientras la OT este en el plan
+ *      el monto del reporte no puede separarse del que muestra el plan.
+ *   2. Si la OT ya no esta en el estado (una OT cerrada de hace dos meses), `articleForOt`
+ *      devuelve vacio y el paso 1 da 0. Entonces se usa el ARTICULO DEL PROPIO EVENTO (viene
+ *      de NetSuite) para buscar el precio manual del catalogo.
+ *   3. Si tampoco hay, el precio de referencia del catalogo (`referenceSalePrice`), que es el
+ *      ultimo precio de venta que dejo el sync.
+ *   4. Si no hay ninguno, 0. La fila se muestra en 0; no se inventa un precio.
+ */
+function releaseRealUnitPrice(ot, article) {
+  const planPrice = Math.max(0, Number(effectiveUnitPriceForOt(ot)) || 0);
+  if (planPrice >= 1) return planPrice;
+  const part = articleKeyForPart(articleForOt(ot) || article || "");
+  if (!part) return 0;
+  const configuration = articleConfigurationValue(part) || {};
+  const manualPrice = Math.max(0, Number(configuration.manualUnitPrice) || 0);
+  if (manualPrice >= 1) return manualPrice;
+  return Math.max(0, Number(configuration.referenceSalePrice) || 0);
+}
+
+/**
+ * La fecha de un evento de ensamble ("2026-10-24") como Date LOCAL.
+ *
+ * POR QUE NO `new Date(texto)`. Ese constructor lee "2026-10-24" como medianoche UTC, y en
+ * Mexico (UTC-6) cae el dia anterior: el reporte mostraria el ensamble un dia antes. Se parte
+ * y se arma con el constructor de tres numeros, que es hora local. Es la misma regla que ya
+ * usa el resto de la pagina para las fechas que llegan como texto.
+ */
+function parseEnsambleDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value == null ? "" : value));
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function releaseRealRows(events) {
+  const list = Array.isArray(events) ? events : [];
+  const rows = list.map((ev) => {
+    const ot = String((ev && ev.ot) || "");
+    const article = String((ev && ev.article) || "");
+    const quantity = Math.max(0, Number(ev && ev.quantity) || 0);
+    const unitPrice = releaseRealUnitPrice(ot, article);
+    return {
+      buildId: String((ev && ev.buildId) || ""),
+      date: parseEnsambleDate(ev && ev.date),
+      ot: ot,
+      article: article,
+      description: String((ev && ev.description) || ""),
+      quantity: quantity,
+      unitPrice: unitPrice,
+      amount: unitPrice * quantity,
+      eventIndex: 0,
+      eventCount: 1,
+    };
+  });
+  // LA NUMERACION ES CRONOLOGICA, no la del orden en que llegan. Si la OT 4057 se ensamblo
+  // el 23 y el 24, el 23 es "1.º de 2" y el 24 es "2.º de 2": numerar al reves (por el orden
+  // de la lectura, que viene de lo mas nuevo a lo mas viejo) haria que el reporte llamara
+  // "primero" al ultimo ensamble, que es justo lo contrario de lo que paso en el piso.
+  const porOt = new Map();
+  for (const row of rows) {
+    const key = materialOtKey(row.ot);
+    if (!porOt.has(key)) porOt.set(key, []);
+    porOt.get(key).push(row);
+  }
+  for (const grupo of porOt.values()) {
+    grupo.sort((a, b) => {
+      const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+      const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+      if (at !== bt) return at - bt;
+      return String(a.buildId).localeCompare(String(b.buildId), "es", { numeric: true });
+    });
+    grupo.forEach((row, index) => {
+      row.eventIndex = index + 1;
+      row.eventCount = grupo.length;
+    });
+  }
+  return rows.sort((a, b) => {
+    const at = a.date ? a.date.getTime() : Number.NEGATIVE_INFINITY;
+    const bt = b.date ? b.date.getTime() : Number.NEGATIVE_INFINITY;
+    if (at !== bt) return bt - at;
+    return String(b.ot).localeCompare(String(a.ot), "es", { numeric: true })
+      || String(b.buildId).localeCompare(String(a.buildId), "es", { numeric: true });
+  });
+}
+
+/**
+ * Lee `ensambles_ot` una vez por sesion (o de nuevo si `force`). Nunca deja la cache a medias.
+ * `pending` guarda la promesa en vuelo: dos llamadas seguidas (abrir la pestana y pulsar
+ * Exportar antes de que termine) esperan LA MISMA lectura en vez de disparar dos.
+ */
+function loadReleaseRealEvents(force) {
+  if (releaseRealCache.pending) return releaseRealCache.pending;
+  if (releaseRealCache.loaded && !force) return Promise.resolve();
+  releaseRealCache.loading = true;
+  releaseRealCache.pending = (async () => {
+    const bridge = typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement : null;
+    if (!bridge || typeof bridge.getEnsambleEvents !== "function") {
+      releaseRealCache = {
+        rows: [],
+        error: "Este build no trae el lector de ensambles (PPSupabaseBridgeReplacement.getEnsambleEvents).",
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+      return;
+    }
+    try {
+      const result = await bridge.getEnsambleEvents();
+      releaseRealCache = {
+        rows: releaseRealRows(result && result.data),
+        error: result && result.ok ? "" : String((result && result.error) || "No se pudo leer ensambles_ot"),
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+    } catch (error) {
+      releaseRealCache = {
+        rows: [],
+        error: `No se pudo leer ensambles_ot (${String((error && error.message) || error)})`,
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+    }
+  })();
+  return releaseRealCache.pending;
+}
+
+const RELEASE_REAL_HEADERS = ["Fecha", "OT", "Articulo", "Cantidad", "P. unitario", "Monto"];
+
+function releaseRealIsNumericColumn(header) {
+  return header === "Cantidad" || header === "P. unitario" || header === "Monto";
+}
+
+function releaseRealTotals(rows) {
+  return rows.reduce((acc, row) => {
+    acc.quantity += row.quantity;
+    acc.amount += row.amount;
+    return acc;
+  }, { quantity: 0, amount: 0 });
+}
+
+async function renderReleaseRealReport(force) {
+  if (!els.releaseRealReport) return;
+  if (!releaseRealCache.loaded || force) {
+    els.releaseRealReport.innerHTML = `<tbody>${emptyTableRow(RELEASE_REAL_HEADERS.length, "Leyendo ensambles...")}</tbody>`;
+    await loadReleaseRealEvents(force);
+  }
+  const rows = releaseRealCache.rows;
+  const totals = releaseRealTotals(rows);
+  if (els.releaseRealReportCount) {
+    els.releaseRealReportCount.textContent = `${rows.length} ensamble${rows.length === 1 ? "" : "s"} · ${formatMaterialQuantity(totals.quantity)} pzs`;
+  }
+  const head = `<thead><tr>${RELEASE_REAL_HEADERS.map((header) => `<th class="${releaseRealIsNumericColumn(header) ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead>`;
+  const body = rows.map((row) => {
+    const parcial = row.eventCount > 1
+      ? ` <span class="release-real-partial" title="Evento ${row.eventIndex} de ${row.eventCount} de esta OT">${row.eventIndex}.º</span>`
+      : "";
+    return `<tr>
+    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
+    <td>${escapeHtml(row.ot)}${parcial}</td>
+    <td>${escapeHtml(row.article)}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td class="report-number">${escapeHtml(formatCurrency(row.unitPrice))}</td>
+    <td class="report-number">${escapeHtml(formatCurrency(row.amount))}</td>
+  </tr>`;
+  }).join("");
+  const foot = rows.length
+    ? `<tfoot><tr><td colspan="3">Total</td><td class="report-number">${escapeHtml(formatMaterialQuantity(totals.quantity))}</td><td></td><td class="report-number">${escapeHtml(formatCurrency(totals.amount))}</td></tr></tfoot>`
+    : "";
+  const vacio = releaseRealCache.error || "No hay ensambles en los ultimos 2 meses para la planta MM del Llano";
+  els.releaseRealReport.innerHTML = `${head}<tbody>${body || emptyTableRow(RELEASE_REAL_HEADERS.length, vacio)}</tbody>${foot}`;
+}
+
+function exportReleaseRealXlsx() {
+  if (!releaseRealCache.loaded) {
+    loadReleaseRealEvents(false).then(() => exportReleaseRealXlsx());
+    return;
+  }
+  const rows = releaseRealCache.rows.map((row) => [
+    row.date ? formatReportDate(row.date) : "SIN FECHA",
+    row.ot,
+    row.article,
+    Number(row.quantity.toFixed(2)),
+    Number(row.unitPrice.toFixed(2)),
+    Number(row.amount.toFixed(2)),
+  ]);
+  const bytes = buildXlsxBytes(RELEASE_REAL_HEADERS, rows, "Liberacion real");
+  downloadBlob(bytes, "liberacion-real.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
 function toolChangeReportData(op) {
   const stored = {
     fromHerramental: reportToolValue(op.toolChangeFromHerramental),
@@ -9982,6 +10223,9 @@ function showTab(tab) {
   });
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
   document.getElementById(`${tab}Tab`).classList.add("active");
+  // RULE-SUP-078: "Liberacion real" lee `ensambles_ot` al abrirse (no viaja en el estado del
+  // plan). El render es idempotente y usa la cache de la sesion.
+  if (tab === "releaseReal") renderReleaseRealReport();
 }
 
 function addOperator() {

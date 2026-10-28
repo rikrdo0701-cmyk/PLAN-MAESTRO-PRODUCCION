@@ -26,8 +26,19 @@ define(['N/query'], (query) => {
 
     if (accion === 'todas') {
       const out = {};
+      // `ensambles` va en un try/catch PROPIO y no en esta lista: es la accion nueva
+      // (RULE-SUP-078) y su consulta todavia no esta medida en la cuenta. Si su SQL no
+      // parsea, 'todas' tiene que seguir entregando las siete de siempre.
       for (const a of ['workorders', 'operaciones', 'materiales', 'items', 'centros', 'inventario', 'ordenes_venta']) {
         out[a] = ejecutar_(a);
+      }
+      try {
+        out.ensambles = ensambles_();
+      } catch (error) {
+        out.ensambles = {
+          ok: false,
+          error: 'ensambles fallo: ' + String((error && error.message) || error).slice(0, 160)
+        };
       }
       return { ok: true, acciones: out };
     }
@@ -43,6 +54,7 @@ define(['N/query'], (query) => {
       case 'centros': return centros_();
       case 'inventario': return inventario_();
       case 'ordenes_venta': return ordenesVenta_();
+      case 'ensambles': return ensambles_();
       default: return { ok: false, error: 'accion no soportada: ' + accion };
     }
   }
@@ -312,34 +324,23 @@ define(['N/query'], (query) => {
     // tiempo_prod / cant_pendiente; `estatus` traduce mot.status al vocabulario del app.
     const sql = [
       'SELECT',
-      '  mot.id AS workorder_id,',
-      '  wo.tranid AS workorder_tranid,',
-      '  mot.operationsequence AS sequence,',
-      '  mot.manufacturingworkcenter AS ct_id,',
-      '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
-      "  NVL(mot.title, '') AS titulo,",
-      '  mot.inputquantity AS cant_total,',
-      '  NVL(mot.completedquantity, 0) AS cant_realizada,',
-      '  mot.setuptime AS setup_min,',
-      '  NVL(mot.runrate, 0) AS runrate,',
-      '  NVL(mot.remainingwork, 0) AS restante,',
-      '  NVL(mot.estimatedwork, 0) AS estimado,',
-      '  mot.status AS status_op,',
-      "  NVL(mot.laborresources, '') AS operador,",
-      "  NVL(mot.machineresources, '') AS maquina,",
-      '  mot.startdatetime AS start_planned,',
-      '  mot.enddate AS end_planned',
-      'FROM manufacturingoperationtask mot',
-      'JOIN transaction wo ON wo.id = mot.workorder',
-      "WHERE wo.type = 'WorkOrd'",
-      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
-      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
-      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
-      // Mismo filtro de planta que workorders_: la OT es de la planta 1 si la linea
-      // mainline tiene location=1 (medido 2026-09-29: 72 OTs con operaciones son de la
-      // planta 2). EXISTS evita duplicar si hubiera mas de una mainline.
-      "  AND EXISTS (SELECT 1 FROM transactionline tl WHERE tl.transaction = wo.id AND tl.mainline = 'T' AND tl.location = 1)",
-      'ORDER BY wo.id, mot.operationsequence, mot.id'
+      '  tr.id AS build_id,',
+      '  tr.tranid AS build_tranid,',
+      '  tr.trandate AS fecha,',
+      '  tl.createdfrom AS wo_internal_id,',
+      '  wo.tranid AS ot,',
+      '  i.itemid AS articulo,',
+      '  i.description AS descripcion,',
+      '  tl.quantity AS cantidad,',
+      '  tl.location AS ubicacion',
+      'FROM transaction tr',
+      'JOIN transactionline tl ON tl.transaction = tr.id AND tl.mainline = \'T\'',
+      'LEFT JOIN workorder wo ON wo.id = tl.createdfrom',
+      'LEFT JOIN item i ON i.id = tl.item',
+      "WHERE tr.type = 'WOCompl'",
+      '  AND tr.trandate >= (SYSDATE - 60)',
+      '  AND tl.location = 1',
+      'ORDER BY tr.trandate DESC, tr.id DESC'
     ].join('\n');
     const rows = runSuiteQL_(sql);
     return {
@@ -448,6 +449,53 @@ define(['N/query'], (query) => {
     };
   }
 
+  // ===========================================================================
+  // ENSAMBLES_OT — eventos de ensamblado reales (WOCompl, RULE-SUP-078)
+  // ---------------------------------------------------------------------------
+  // MEDIDO 2026-10-27: la transaccion de completacion es WOCompl (no WipBuild);
+  // la fila de ensamble lleva createdfrom en transactionline, NO en cabecera
+  // (cabecera responde 500 con createdfrom; linea responde 200).
+  // El item, cantidad, ubicacion y creado de OT vienen de la linea mainline.
+  // ---------------------------------------------------------------------------
+  function ensambles_() {
+    const sql = [
+      'SELECT',
+      '  tr.id AS build_id,',
+      '  tr.tranid AS build_tranid,',
+      '  tr.trandate AS fecha,',
+      '  tl.createdfrom AS wo_internal_id,',
+      '  wo.tranid AS ot,',
+      '  i.itemid AS articulo,',
+      '  i.description AS descripcion,',
+      '  tl.quantity AS cantidad,',
+      '  tl.location AS ubicacion',
+      'FROM transaction tr',
+      'JOIN transactionline tl ON tl.transaction = tr.id AND tl.mainline = \'T\'',
+      'LEFT JOIN workorder wo ON wo.id = tl.createdfrom',
+      'LEFT JOIN item i ON i.id = tl.item',
+      "WHERE tr.type = 'WOCompl'",
+      '  AND tr.trandate >= (SYSDATE - 60)',
+      '  AND tl.location = 1',
+      'ORDER BY tr.trandate DESC, tr.id DESC'
+    ].join('\n');
+    const rows = runSuiteQL_(sql);
+    return {
+      ok: true,
+      headers: ['build_id', 'build_tranid', 'fecha', 'wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'ubicacion'],
+      rows: rows.map(r => ({
+        build_id: String(r.build_id || ''),
+        build_tranid: String(r.build_tranid || ''),
+        fecha: isoFecha_(r.fecha),
+        wo_internal_id: String(r.wo_internal_id || ''),
+        ot: String(r.ot || ''),
+        articulo: String(r.articulo || ''),
+        descripcion: String(r.descripcion || ''),
+        cantidad: Number(r.cantidad) || 0,
+        ubicacion: Number(r.ubicacion) || 0
+      })),
+      totalRows: rows.length
+    };
+  }
   // ===========================================================================
   // 1765 — INV_PLANTAS: items con cantidades por ubicacion
   // ===========================================================================

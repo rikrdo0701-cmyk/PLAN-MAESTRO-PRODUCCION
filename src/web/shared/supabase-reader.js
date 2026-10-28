@@ -921,6 +921,65 @@
   }
 
   /**
+   * LOS EVENTOS DE ENSAMBLADO REALES, de `ensambles_ot` (RULE-SUP-078).
+   *
+   * POR QUE SE LEE SUELTA, Y NO POR readCatalogs(). Esta tabla NO es estado del plan: es el
+   * registro de lo que NetSuite ya ensamblo, y la unica pantalla que la usa es el reporte
+   * "Liberacion real". Meterla en readCatalogs la haria viajar en cada arranque y la
+   * reconciliaria applyImported, que no sabe nada de eventos de ensamble. El mismo criterio
+   * que `inspection_routes`: se lee cuando el reporte se abre, no cuando arranca la pagina.
+   *
+   * ORDEN. `fecha` descendente y `build_id` descendente: el reporte se lee de lo mas nuevo a
+   * lo mas viejo, y la paginacion EXIGE un orden estable (sin el, `offset` salta filas).
+   *
+   * PAGINACION. El tope de 60 dias de la consulta de NetSuite acota el volumen; el bucle con
+   * tope es la misma red de seguridad que readInspectionRoutes: una pagina que devolviera
+   * PAGE filas para siempre seria un ciclo sin fin.
+   */
+  async function readEnsambleEvents() {
+    const PAGE = 1000;
+    let offset = 0;
+    const todas = [];
+    for (let vuelta = 0; vuelta < 50; vuelta++) {
+      const chunk = await readTable("ensambles_ot", {
+        select: "build_id,fecha,ot,wo_internal_id,articulo,descripcion,cantidad,ubicacion",
+        order: "fecha.desc,build_id.desc",
+        limit: PAGE,
+        offset,
+      });
+      todas.push(...(Array.isArray(chunk) ? chunk : []));
+      if (chunk.length < PAGE) break;
+      offset += PAGE;
+    }
+    return mapEnsambleEvents(todas);
+  }
+
+  /**
+   * Una fila de `ensambles_ot` con los nombres que usa la pagina.
+   *
+   * LA FECHA VIAJA COMO TEXTO, NO COMO Date. `fecha` es una columna `date` y PostgREST la
+   * entrega como "2026-10-24". Convertirla aqui leyendola como instante la tomaria como
+   * medianoche UTC, y en Mexico (UTC-6) eso cae el dia anterior: el reporte mostraria el
+   * ensamble un dia antes. Este lector NO tiene maquinaria de zona horaria a proposito (hay
+   * una prueba que lo exige), asi que el texto se entrega tal cual y la pagina lo parte y lo
+   * arma en hora LOCAL, que es la misma regla que ya usa `partirFechaTexto`.
+   */
+  function mapEnsambleEvents(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        buildId: String(row.build_id == null ? "" : row.build_id),
+        date: String(row.fecha == null ? "" : row.fecha).trim(),
+        ot: String(row.ot == null ? "" : row.ot),
+        woInternalId: String(row.wo_internal_id == null ? "" : row.wo_internal_id),
+        article: String(row.articulo == null ? "" : row.articulo),
+        description: String(row.descripcion == null ? "" : row.descripcion),
+        quantity: Number(row.cantidad) || 0,
+        location: Number(row.ubicacion) || 0,
+      };
+    });
+  }
+
+  /**
    * CUANTAS IMPRESIONES MUESTRA LA PAGINA, Y POR QUE SON CINCO Y NO MAS.
    * La hoja no limitaba: `getInspectionHistory` hacia `rows.slice(-5).reverse()`, o
    * sea que las ultimas cinco y en orden inverso (la mas reciente primero). El 5 es
@@ -1803,6 +1862,10 @@
     // `state`, asi que no sale de readCatalogs() sino de readInspectionRoutes().
     mapInspectionRoutes: mapInspectionRoutes,
     readInspectionRoutes: readInspectionRoutes,
+    // RULE-SUP-078: los eventos de ensamblado reales de `ensambles_ot`, para el reporte
+    // "Liberacion real". Se exporta el mapeador para poder probarlo SIN red.
+    mapEnsambleEvents: mapEnsambleEvents,
+    readEnsambleEvents: readEnsambleEvents,
     // MEDIDO 2026-10-01: el historial de impresiones de la hoja de inspeccion. La
     // tabla se creo en docs/schema-inspection-history.sql y sale de la misma razon que
     // `inspection_routes`: el puente de Apps Script esta deshabilitado y la hoja
