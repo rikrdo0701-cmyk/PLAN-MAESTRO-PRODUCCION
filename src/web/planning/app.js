@@ -1379,27 +1379,20 @@ function bindEvents() {
     await renderReleaseRealReport();
     prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
   });
-  // RULE-SUP-078: al pulsar "Sincronizar datos" dispara la ingesta SOLO con accion: ensambles
+  // RULE-SUP-078: al pulsar "Sincronizar datos" se ORDENA la ingesta completa por la puerta de
+  // Apps Script (la misma que usa "Sincronizar OTs") y luego se relee `ensambles_ot` de Supabase.
+  // No se manda `accion: 'ensambles'` porque doPost solo acepta `accion: 'ingesta'`
+  // (19-appscript-ingesta-supabase.js:1143-1148 rechaza cualquier otra DICHO, sin correr nada), y
+  // el navegador tampoco puede escribir la tabla: su RLS solo deja SELECT y `ingesta_mirror`
+  // esta revocado para anon/authenticated. La escribe la ingesta con la service key.
   document.getElementById("syncReleaseRealBtn")?.addEventListener("click", async () => {
     const btn = document.getElementById("syncReleaseRealBtn");
     if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
     try {
-      // Ingesta directa por Supabase: el puente Apps Script está deshabilitado (RULE-SUP-030)
-      // y `google.script.run` no funciona en GitHub Pages. La ingesta debe ser directa.
-      const supabaseUrl = window.__SUPABASE_URL || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getUrl?.() : null);
-      const supabaseKey = window.__SUPABASE_ANON_KEY || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getKey?.() : null);
-      if (supabaseUrl && supabaseKey) {
-        const resp = await fetch(supabaseUrl + "/rest/v1/rpc/plan_guardar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "apikey": supabaseKey },
-          body: JSON.stringify({ accion: "ensambles", sync_release_real: true })
-        });
-        if (resp.ok) console.log("Ingesta ensambles iniciada vía Supabase");
-        else console.warn("Ingesta ensambles falló:", resp.status);
-      } else {
-        console.warn("No se pudo disparar ingesta ensambles: faltan credenciales de Supabase");
+      const ingesta = await correrIngestaPorBoton();
+      if (ingesta && ingesta.seguir) {
+        await new Promise(r => setTimeout(r, 1500));
       }
-      await new Promise(r => setTimeout(r, 4000));
     } catch (e) {
       console.warn("Error al forzar ingesta de ensambles:", e);
     } finally {
