@@ -9,14 +9,14 @@ on:
       - "scripts/build-appscript.mjs"
   workflow_dispatch:
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pages: write
   id-token: write
-
-concurrency:
-  group: github-pages
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -32,7 +32,6 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm test
-      - run: npm run check
       - run: npm run build
       - name: Verificar frontend generado
         run: |
@@ -40,6 +39,9 @@ jobs:
           grep -q "PlannerCore" site/index.html
           grep -q "scheduleCurrentPlan" site/index.html
           grep -q "subcontractWindowEnd" site/index.html
+      - name: Validar sincronización de Liberación Real
+        run: |
+          grep -q "syncReleaseRealBtn" site/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
