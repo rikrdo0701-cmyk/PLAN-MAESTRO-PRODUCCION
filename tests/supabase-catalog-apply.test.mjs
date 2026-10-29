@@ -1,0 +1,269 @@
+// Tests de la PUERTA de arranque de Supabase: las dos piezas que hacen que el
+// estado de la pagina venga de Supabase y no del puente de Apps Script.
+//
+// QUE SE PRUEBA, Y POR QUE SON DOS PIEZAS:
+//
+//  A) supabase-catalog-apply.js arma UN objeto con todo lo leido y se lo pasa a
+//     `aplicarEstadoDesdeSupabase`. No escribe `root.state`.
+//
+//  B) La puerta de app.js (el bloque marcado con PP-APPLY-DESDE-SUPABASE) mete ese
+//     objeto por `applyImported` con preserveLocalPlanning en false, y pone los
+//     cuatro campos que applyImported no mapea.
+//
+// POR QUE B SE PRUEBA LEYENDO EL CODIGO FUENTE Y NO UNA COPIA. La puerta vive
+// dentro de app.js, que necesita el DOM entero para cargarse. El bloque marcado es
+// el contrato entre las dos piezas: si alguien lo mueve o le cambia el nombre, este
+// test falla en vez de que el arranque se quede escribiendo en un objeto fantasma.
+//
+// EL FALLO QUE ESTA DETRAS DE TODO, MEDIDO 2026-09-29. El apply hacia
+// `root.state = {...}` sobre un `let state` de primer nivel, que NO es propiedad de
+// window. La pagina no cambiaba y no habia ningun error. El primer test de A es el
+// que cierra esa puerta.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const APLICACION = readFileSync(new URL("../src/web/shared/supabase-catalog-apply.js", import.meta.url), "utf8");
+const APP = readFileSync(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+
+/** El bloque real de la puerta, sacado de app.js entre los dos centinelas. */
+function bloquePuerta() {
+  const desde = APP.indexOf("/* PP-APPLY-DESDE-SUPABASE:INICIO */");
+  const hasta = APP.indexOf("/* PP-APPLY-DESDE-SUPABASE:FIN */");
+  assert.ok(desde >= 0 && hasta > desde, "app.js tiene que conservar el bloque PP-APPLY-DESDE-SUPABASE: la puerta no se movio");
+  return APP.slice(desde, hasta);
+}
+
+/**
+ * Corre la puerta de verdad. `state` y el `applyImported` de mentira se declaran en
+ * el PRIMER NIVEL del script del vm, igual que en app.js: eso es lo que hace que
+ * `state` sea invisible para `ctx.state` y lo que obliga a la puerta a tocarlo por el
+ * identificador. El applyImported de aqui imita las lineas del de app.js que importan,
+ * incluido el `else if (!preserveLocalPlanning) state.excludedCapabilities = []`.
+ */
+function correrPuerta(entrada) {
+  const ctx = {
+    console: { log() {}, warn() {}, error() {} },
+    Promise, JSON, Date, Math, String, Number, Object, Array, Error, Boolean, Set, Map,
+    render: (o) => { ctx.renderCon = o; },
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(
+    [
+      "let state = { operations: ['viejo'], excludedCapabilities: ['CT-1'], savedAt: 'ayer', otTypes: [{ id: 'viejo' }] };",
+      "globalThis.__state = () => state;",
+      "async function applyImported(importado, opciones) {",
+      "  globalThis.__opciones = opciones;",
+      "  globalThis.__entradaRecibida = importado;",
+      "  if (Array.isArray(importado.operations)) state.operations = importado.operations;",
+      "  if (Array.isArray(importado.materials)) state.materials = importado.materials;",
+      "  if (importado.operators) state.operators = importado.operators;",
+      "  if (Number.isFinite(Number(importado.revision))) state.revision = Number(importado.revision);",
+      "  if (importado.planStart) state.planStart = importado.planStart;",
+      "  if (importado.settings) state.settings = importado.settings;",
+      "  if (importado.preparedPlanningByOt) state.preparedPlanningByOt = importado.preparedPlanningByOt;",
+      "  if (Array.isArray(importado.excludedCapabilities)) state.excludedCapabilities = importado.excludedCapabilities;",
+      "  else if (!opciones.preserveLocalPlanning) state.excludedCapabilities = [];",
+      "}",
+      bloquePuerta(),
+      "globalThis.__puerta = aplicarEstadoDesdeSupabase;",
+      "globalThis.__colaLeidaSinFallo = () => colaLeidaSinFallo;",
+      "globalThis.__primeraLecturaConcluida = () => primeraLecturaConcluida;",
+    ].join("\n"),
+    ctx,
+  );
+  return ctx.__puerta(entrada).then((r) => ({ r, ctx }));
+}
+
+// ---------------------------------------------------------------------------
+// A) El modulo de aplicacion
+// ---------------------------------------------------------------------------
+
+function crearCtx({ boot = {}, puerta = true } = {}) {
+  const ctx = {
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout, clearTimeout, Promise, JSON, Date, Math, String, Number, Object, Array, Error, RegExp, Boolean,
+    addEventListener() {},
+    document: { readyState: "complete", getElementById: () => null, createElement: () => ({ style: {}, appendChild() {}, addEventListener() {} }), head: { appendChild() {} }, body: { appendChild() {} } },
+    PPCatalogBoot: {
+      correr: async () => Object.assign({ activo: true, fallo: null, catalogs: boot.catalogs || {}, ms: 1, viejo: {}, vacias: [] }, boot),
+      aviso: () => false,
+    },
+    PPSupabaseWriter: {
+      armarCatalogos: (estado) => ({
+        tools: { claves: Object.fromEntries((estado.toolCatalog || []).map((i) => [i.id, true])) },
+        calendar_exceptions: { claves: Object.fromEntries((estado.calendarExceptions || []).map((i) => [[i.startDate, i.concept, i.machine].join("|"), true])) },
+      }),
+    },
+    async aplicarEstadoDesdeSupabase(entrada) {
+      ctx.entrada = entrada;
+      return { aplicado: true, claves: Object.keys(entrada) };
+    },
+    // RULE-SUP-069: el abridor de la compuerta de guardados de app.js. El modulo lo
+    // llama en el `finally` de su primer intento de lectura; aqui se cuenta para poder
+    // fijar que la compuerta se abre en TODOS los desenlaces de la lectura.
+    concluirPrimeraLecturaDeSupabase: () => { ctx.concluida = (ctx.concluida || 0) + 1; },
+  };
+  // El modulo se instala solo al cargarse (document.readyState "complete"), y esa
+  // primera corrida es la que esta en vuelo cuando el test llama a aplicarUnaVez.
+  // Por eso el fallo se declara aqui y no despues: si se cambia despues, el test
+  // estaria mirando el resultado de la corrida buena.
+  if (!puerta) delete ctx.aplicarEstadoDesdeSupabase;
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(APLICACION, ctx);
+  return ctx;
+}
+
+test("el apply NO escribe root.state: pasa todo por la puerta de app.js", async () => {
+  // El fallo medido el 2026-09-29. `state` es un `let` de primer nivel de app.js, o
+  // sea que NO existe como propiedad de window: escribir ahi era escribir en un
+  // objeto que nadie lee, y la pagina se quedaba con los valores de muestra.
+  const ctx = crearCtx({ boot: { catalogs: { operators: ["A"] }, operations: [{ id: "s" }] } });
+  const r = await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.equal(r.aplicado, true);
+  assert.equal(ctx.state, undefined, "no se puede crear un 'state' global desde el apply");
+  assert.ok(ctx.entrada, "se llamo a aplicarEstadoDesdeSupabase");
+  assert.deepEqual([...ctx.entrada.operators], ["A"], "los catalogos van en el objeto de entrada");
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.entrada.operations)), [{ id: "s" }], "el plan va en el MISMO objeto");
+});
+
+test("el apply sale SIN APLICAR si app.js no expone la puerta", async () => {
+  const ctx = crearCtx({ boot: { catalogs: { operators: ["A"] } }, puerta: false });
+  const r = await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.equal(r.aplicado, false, "no se finge que se aplico");
+  assert.match(String(r.motivo), /aplicarEstadoDesdeSupabase/);
+});
+
+test("undefined NO se pasa: lo que el lector no trajo no se toca", async () => {
+  const ctx = crearCtx({ boot: { catalogs: { operators: ["A"] }, selectedOts: undefined, lockedOts: undefined, operationPlanStatuses: undefined } });
+  await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.equal("selectedOts" in ctx.entrada, false, "sin fallback: la clave ni se pone");
+  assert.equal("lockedOts" in ctx.entrada, false);
+  assert.equal("operationPlanStatuses" in ctx.entrada, false);
+});
+
+test("una cola VACIA si se pasa: 'no hay' es informacion real", async () => {
+  const ctx = crearCtx({ boot: { catalogs: {}, selectedOts: [], lockedOts: [], operationPlanStatuses: {} } });
+  await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.deepEqual([...ctx.entrada.selectedOts], [], "array vacio se pasa");
+  assert.deepEqual(ctx.entrada.operationPlanStatuses, {}, "objeto vacio se pasa");
+});
+
+test("si la lectura falla, no se aplica nada", async () => {
+  const ctx = crearCtx({ boot: { fallo: "red caida", catalogs: null } });
+  const r = await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.equal(r.aplicado, false);
+  assert.equal(ctx.entrada, undefined, "no se llamo a la puerta");
+});
+
+test("las claves leidas las calcula el ESCRITOR, no una copia de la regla", async () => {
+  // Si el apply tuviera su propia version de la clave natural, el primer cambio de
+  // nombre de columna las separaria y el borrado de "lo que quito la persona" dejaria
+  // de funcionar en silencio.
+  const ctx = crearCtx({ boot: { catalogs: { toolCatalog: [{ id: "T1" }, { id: "T2" }] } } });
+  await ctx.PPCatalogApply.aplicarUnaVez();
+  assert.deepEqual(ctx.PPCatalogApply.claves.tools, ["T1", "T2"]);
+});
+
+test("el primer intento de lectura abre la compuerta de los guardados de arranque (RULE-SUP-069)", async () => {
+  // La compuerta (app.js) detiene los guardados de arranque hasta que la primera
+  // lectura concluya. La conclusion la avisa ESTE modulo en el `finally` de su intento,
+  // porque la via fuerte (aplicarEstadoDesdeSupabase) no corre cuando la lectura falla,
+  // cuando no hay sesion o cuando no hay boot: sin este aviso, los guardados se
+  // quedarian esperando para siempre (nadie guarda estado que no leyo, pero tampoco
+  // puede quedarse sin guardar nunca).
+  const trasLecturaBuena = crearCtx({ boot: { catalogs: { operators: ["A"] } } });
+  await trasLecturaBuena.PPCatalogApply.aplicarUnaVez();
+  assert.equal(trasLecturaBuena.concluida, 1, "lectura que aplica: la compuerta se abre");
+
+  const trasLecturaFallida = crearCtx({ boot: { fallo: "red caida", catalogs: null } });
+  await trasLecturaFallida.PPCatalogApply.aplicarUnaVez();
+  assert.equal(trasLecturaFallida.concluida, 1, "lectura fallida: tambien se abre, o los guardados no correrian nunca");
+
+  const sinSesion = crearCtx({ boot: { activo: false, motivo: "sin sesion", catalogs: null } });
+  await sinSesion.PPCatalogApply.aplicarUnaVez();
+  assert.equal(sinSesion.concluida, 1, "sin sesion: se abre igual; entrar despues reintenta la lectura");
+});
+
+// ---------------------------------------------------------------------------
+// B) La puerta de app.js
+// ---------------------------------------------------------------------------
+
+test("la puerta aplica con preserveLocalPlanning en FALSE (Supabase gana al localStorage)", async () => {
+  const { r, ctx } = await correrPuerta({ operations: [{ id: "s" }] });
+  assert.equal(ctx.__opciones.preserveLocalPlanning, false, "con true, el borrador local le gana a la base");
+  assert.equal(r.aplicado, true);
+});
+
+test("la puerta NO borra excludedCapabilities, que el lector no trae", async () => {
+  // applyImported, con preserveLocalPlanning en false, hace
+  // `else if (!preserveLocalPlanning) state.excludedCapabilities = []`. Sin esto, cada
+  // arranque borraria una decision de la persona.
+  const { ctx } = await correrPuerta({ operations: [] });
+  assert.deepEqual([...ctx.__state().excludedCapabilities], ["CT-1"]);
+});
+
+test("la puerta pone los cuatro campos que applyImported no mapea", async () => {
+  const { ctx } = await correrPuerta({
+    savedAt: "2026-09-29T10:00:00.000Z",
+    syncedAt: "2026-09-29T09:00:00.000Z",
+    reportFilters: { planta: "MONTERREY" },
+    otTypes: [{ id: "tipo-1", name: "PROD" }],
+  });
+  const s = ctx.__state();
+  assert.equal(s.savedAt, "2026-09-29T10:00:00.000Z");
+  assert.equal(s.syncedAt, "2026-09-29T09:00:00.000Z");
+  assert.deepEqual(s.reportFilters, { planta: "MONTERREY" });
+  assert.deepEqual(JSON.parse(JSON.stringify(s.otTypes)), [{ id: "tipo-1", name: "PROD" }]);
+});
+
+test("la puerta aplica preparedPlanningByOt de app_state (RULE-OT-057)", async () => {
+  // La firma "ya preparado" viaja en app_state.prepared_planning_by_ot y vuelve por
+  // camposDeAppState; sin esto el gate reabria el dialogo de detalles tras cada carga.
+  const { ctx } = await correrPuerta({ preparedPlanningByOt: { 100: "firma-100", 200: "firma-200" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.__state().preparedPlanningByOt)),
+    { 100: "firma-100", 200: "firma-200" });
+});
+
+test("la puerta NO inventa los campos que no llegaron", async () => {
+  const { ctx } = await correrPuerta({ operations: [] });
+  const s = ctx.__state();
+  assert.equal(s.otTypes[0].id, "viejo", "sin datos de Supabase, el estado se queda como estaba");
+  assert.equal(s.savedAt, "ayer");
+});
+
+test("la puerta pinta una vez, sin guardar", async () => {
+  const { ctx } = await correrPuerta({ operations: [] });
+  // El objeto es del realm del vm, asi que se compara por su forma y no por prototipo.
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.renderCon)), { save: false });
+});
+
+test("la puerta enciende la senal de cola leida SOLO cuando selectedOts viene de una lectura buena (RULE-SUP-068)", async () => {
+  // La senal es lo que permite a guardarPlanEnSupabase distinguir "la cola esta
+  // vacia porque se leyo vacia" de "la cola esta vacia porque la lectura fallo" —
+  // el lector produce las dos cosas y solo la primera deja el aviso del freno sin
+  // verdad. MEDIDO 2026-10-08: sin esta distincion, cada recarga con el plan en
+  // cero mostraba "Aviso: No se llamo a plan_guardar porque llego vacia...".
+  const { ctx: leidaVacia } = await correrPuerta({ selectedOts: [] });
+  assert.equal(leidaVacia.__colaLeidaSinFallo(), true,
+    "lectura OK con 0 filas: la bandera se enciende; 'no hay' es informacion real");
+
+  const { ctx: leidaConOts } = await correrPuerta({ selectedOts: ["2844"] });
+  assert.equal(leidaConOts.__colaLeidaSinFallo(), true,
+    "la bandera certifica 'leyo la cola sin fallo', no 'la cola estaba vacia': el vacio lo comprueba quien guarda");
+
+  const { ctx: leidaFallida } = await correrPuerta({ operations: [] });
+  assert.equal(leidaFallida.__colaLeidaSinFallo(), false,
+    "sin la clave — lectura fallida, undefined que el apply descarta — la bandera queda apagada");
+});
+
+test("la puerta abre la compuerta de guardados al terminar de aplicar (RULE-SUP-069)", async () => {
+  // La via fuerte del arranque: cuando la lectura aplica, la propia puerta suelta a los
+  // guardados que esperaban por ella. El `finally` del modulo (probado arriba) cubre el
+  // caso en que la puerta no corre.
+  const { ctx } = await correrPuerta({ operations: [] });
+  assert.equal(ctx.__primeraLecturaConcluida(), true, "aplicar abre la compuerta: guardar deja de esperar");
+});

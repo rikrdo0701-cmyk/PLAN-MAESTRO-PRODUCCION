@@ -1,12 +1,54 @@
-const PP_APP_VERSION = '2.39.0';
-const PP_SCHEMA_VERSION = 29;
+const PP_APP_VERSION = '2.51.0';
+const PP_SCHEMA_VERSION = 31;
+const PP_RETENCION_PLANES_DIAS = 90;
 const PP_DEFAULT_SPREADSHEET_ID = ''; // Configure PLANNING_SPREADSHEET_ID in Script Properties.
 
+function PP_dateToIso_(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    const day = String(Number(match[1])).padStart(2, '0');
+    const month = String(Number(match[2])).padStart(2, '0');
+    const year = match[3];
+    return `${year}-${month}-${day}`;
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return value;
+  return text;
+}
+
 function doGet(e) {
+  if (PP_isBridgeRequest_(e)) return PP_createBridgeOutput_();
   const appName = PP_appNameFromRequest_(e);
   return HtmlService.createHtmlOutputFromFile(PP_appHtmlFile_(appName))
     .setTitle(PP_appTitle_(appName))
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function PP_ensurePruneTrigger_() {
+  const existing = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < existing.length; i += 1) {
+    if (existing[i].getHandlerFunction() === 'pruneOldPlanSnapshotsDaily') {
+      ScriptApp.deleteTrigger(existing[i]);
+    }
+  }
+  ScriptApp.newTrigger('pruneOldPlanSnapshotsDaily')
+    .timeBased()
+    .everyDays(1)
+    .atHour(3)
+    .create();
+  return { ok: true, message: 'Trigger de poda diaria (3:00) instalado para pruneOldPlanSnapshots(' + PP_RETENCION_PLANES_DIAS + ' dias)' };
+}
+
+// Los triggers de Apps Script no pueden pasar parametros: este wrapper es el que se
+// registra en el trigger y llama a pruneOldPlanSnapshots con la politica vigente.
+function pruneOldPlanSnapshotsDaily() {
+  return pruneOldPlanSnapshots(PP_RETENCION_PLANES_DIAS);
+}
+
+function setupPruneTrigger() {
+  return PP_ensurePruneTrigger_();
 }
 
 function setupProductionPlanningApp() {
@@ -21,6 +63,7 @@ function setupProductionPlanningApp() {
   properties.setProperty('PLANNING_SPREADSHEET_ID', spreadsheetId);
 
   PP_ensureWorkbook_(spreadsheet);
+  PP_ensurePruneTrigger_();
   return {
     ok: true,
     spreadsheetId: spreadsheetId,
@@ -51,7 +94,7 @@ function initializeProductionPlanningDatabase(spreadsheetId) {
 function verifyProductionPlanningDatabase() {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);
-  const required = ['CONFIGURACION_OT', 'CONFIGURACION_ARTICULO', 'HERRAMENTALES', 'SUBCONTRATOS', 'TIPOS_OT', 'ESTADOS_OPERACION_PLAN', 'PLANES_HISTORICOS'];
+  const required = ['CONFIGURACION_OT', 'CONFIGURACION_ARTICULO', 'HERRAMENTALES', 'SUBCONTRATOS', 'TIPOS_OT', 'ESTADOS_OPERACION_PLAN', 'PLANES_HISTORICOS', 'BORRADOR_PLAN'];
   return {
     ok: true,
     spreadsheetId: spreadsheet.getId(),
@@ -67,10 +110,148 @@ function verifyProductionPlanningDatabase() {
   };
 }
 
+function getPlanningPureProbe_() {
+  return { ok: true, appVersion: PP_APP_VERSION, schemaVersion: PP_SCHEMA_VERSION, source: 'pure-probe' };
+}
+
+function diagnoseOtOperatingStatuses(ot) {
+  const target = String(ot || '').trim().toUpperCase();
+  if (!target) throw new Error('Indica el numero de OT: diagnoseOtOperatingStatuses(ot)');
+  const spreadsheet = PP_getWorkbook_();
+  const statusRows = PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
+  const data = {
+    ot: target,
+    spreadsheetId: spreadsheet.getId(),
+    statusRows: statusRows
+      .filter(function(row) {
+        return String(row.OT || '').toUpperCase() === target || String(row.KEY || '').toUpperCase().indexOf(target) >= 0;
+      })
+      .map(function(row) { return { KEY: row.KEY, ESTATUS_PLAN: row.ESTATUS_PLAN, OPERATION_ID: row.OPERATION_ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, FECHA_INICIO: row.FECHA_INICIO, FECHA_REAPERTURA: row.FECHA_REAPERTURA, ORIGEN: row.ORIGEN || 'draft' }; }),
+    operationRows: operationRows
+      .filter(function(row) { return String(row.OT || '').toUpperCase() === target; })
+      .map(function(row) { return { ID: row.ID, OT: row.OT, SECUENCIA: row.SECUENCIA, CT: row.CT, DESC: row.DESCRIPCION, ESTATUS: row.ESTATUS, INICIO: row.FECHA_INICIO, FIN: row.FECHA_FIN, LOCKED: row.LOCKED }; })
+  };
+  Logger.log(JSON.stringify(data, null, 2));
+  return data;
+}
+
+function diagnoseOt3124() {
+  diagnoseOtOperatingStatuses('3124');
+}
+
+function reabrirTodoPlanificacion() {
+  Logger.log(JSON.stringify(PP_clearAllOperationPlanStatuses_()));
+}
+
+function getPlanningProductionVersion() {
+  const spreadsheet = PP_getWorkbook_();
+  return {
+    ok: true,
+    spreadsheetId: spreadsheet.getId(),
+    appVersion: PP_APP_VERSION,
+    schemaVersion: PP_SCHEMA_VERSION
+  };
+}
+
+function resetPlanningEphemeralState() {
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+
+  const clearBelowHeader = function(sheet) {
+    if (!sheet) return 0;
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+    return Math.max(0, lastRow - 1);
+  };
+
+  const cleared = {
+    operations: clearBelowHeader(spreadsheet.getSheetByName('OPERACIONES')),
+    operationStatuses: clearBelowHeader(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN')),
+    draftPlan: clearBelowHeader(spreadsheet.getSheetByName('BORRADOR_PLAN')),
+    publishedPlans: clearBelowHeader(spreadsheet.getSheetByName('PLANES_HISTORICOS')),
+    snapshotPayloads: clearBelowHeader(spreadsheet.getSheetByName('SNAPSHOT_PAYLOADS'))
+  };
+
+  const cacheSheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+  if (cacheSheet) cacheSheet.clearContents();
+
+  const transientConfig = {
+    schemaVersion: PP_SCHEMA_VERSION,
+    appVersion: PP_APP_VERSION,
+    revision: 0,
+    savedAt: '',
+    source: 'reset-planning-ephemeral',
+    selectedOts: [],
+    lockedOts: [],
+    expandedOts: [],
+    selectedOperationId: '',
+    planStart: '',
+    loadWeekStart: '',
+    reportWeekStart: '',
+    preparedPlanningByOt: {},
+    closedWorkOrderSummaries: {},
+    // Las marcas de por-confirmar de RULE-OT-051. En un arranque en frio la hoja no las tiene y
+    // por lo tanto no hay ninguna OT sin evidencia de cierre: {} es el valor honesto, no falta.
+    UNCONFIRMED_WORK_ORDERS: {},
+    lastSchedule: null,
+    PP_STATE_CACHE_REVISION: 0
+  };
+  PP_writeConfigPatch_(spreadsheet, transientConfig);
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    message: 'Estado transitorio reiniciado: operaciones vacias, OTs de vuelta al backlog, sin completados, borradores ni planes.',
+    revision: 0,
+    cleared: cleared
+  };
+}
+
 function getAppState() {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);
   return PP_readState_(spreadsheet);
+}
+
+// LEE UNA HOJA CUALQUIERA Y DEVUELVE SUS FILAS COMO OBJETOS.
+//
+// POR QUE EXISTE. La migracion a Supabase necesita sacar los datos de las Hojas sin perder ni un
+// registro, y getAppState() no sirve para eso: devuelve el estado ya PROCESADO (con claves
+// normalizadas, campos derived y, en el caso de operators, reducido a un array de strings que se
+// lleva por delante ACTIVO, MINUTOS_CAPACIDAD y RENDIMIENTO_PCT). Para migrar con fidelidad hace
+// falta el contenido BRUTO de cada hoja, y eso es lo que devuelve esta funcion: un array de
+// objetos, uno por fila, con los encabezados de la fila 1 como claves y los valores como texto.
+//
+// LO QUE NO HACE, A PROPOSITO. No normaliza, no interpreta, no convierte tipos ni infiere claves.
+// Cada celda sale como texto tal como esta en la hoja (con trim). Si una fila esta vacia, se omite.
+// La logica de negocio sigue viviendo en PP_mapOperation_, PP_buildOtConfigurations_ y demas; esto
+// es solo el lector de la hoja, y quien migra decide que hace con cada campo.
+function readSheetRows(sheetName) {
+  const sheet = PP_getWorkbook_().getSheetByName(String(sheetName || ''));
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return [];
+  const rows = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  if (!rows.length) return [];
+  const headers = rows[0].map(function(h, i) {
+    const t = String(h == null ? '' : h).trim();
+    return t || ('COL_' + (i + 1));
+  });
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = {};
+    let empty = true;
+    for (let c = 0; c < headers.length; c++) {
+      const v = rows[r][c];
+      const s = v == null ? '' : String(v).trim();
+      if (s) empty = false;
+      row[headers[c]] = s;
+    }
+    if (!empty) out.push(row);
+  }
+  return out;
 }
 
 function PP_acquireScriptLock_(action, timeoutMs) {
@@ -88,6 +269,18 @@ function saveAppState(payload) {
     const spreadsheet = PP_getWorkbook_();
     PP_ensureWorkbook_(spreadsheet);
     return PP_writeState_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveWorkOrderSyncState(payload) {
+  if (!payload || !Array.isArray(payload.operations) || !Array.isArray(payload.workOrders)) throw new Error('La sincronizacion no contiene OTs u operaciones');
+  const lock = PP_acquireScriptLock_('guardar sincronizacion de OTs', 30000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_writeWorkOrderSyncState_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
   } finally {
     lock.releaseLock();
   }
@@ -129,10 +322,77 @@ function savePlanSnapshot(payload) {
   }
 }
 
+function saveDraftSnapshot(payload) {
+  if (!payload || !Array.isArray(payload.operations)) throw new Error('El borrador no contiene operations');
+  const lock = PP_acquireScriptLock_('guardar borrador', 30000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_replaceDraftSnapshot_(spreadsheet, payload, Session.getActiveUser().getEmail() || 'usuario');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function listPlanSnapshots() {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);
   return PP_listPlanSnapshots_(spreadsheet);
+}
+
+// RETENCION POR ANTIGUEDAD DE LOS PLANES PUBLICADOS. Decision de la persona (2026-09-27).
+// Se llama a mano para limpiar el atraso acumulado, y ademas se corre en cada publicacion.
+//
+// QUE PROTEGE, Y NO ES NEGOCIABLE:
+//   - El borrador NUNCA se borra, ni por antiguedad ni por nada.
+//   - El snapshot mas reciente por generatedAt NUNCA se borra, aunque sea viejo.
+//   - Un snapshot SIN generatedAt NO se borra: se devuelve en sinFecha para que la persona decida.
+//     La ausencia de fecha no es evidencia de antiguedad.
+//
+// QUE DEVUELVE: cuantos evaluo, cuantos borro, cuantas filas libera, cuales protegio y cuales
+// dejo sin fecha. Si algo falla, el error sube: no hay catch silencioso.
+//
+// maxAgeDays es obligatorio. Sin el no se ejecuta, porque "borrar todo porque no me dijeron
+// cuantos dias" es la peor respuesta posible a una pregunta mal hecha. Para la politica acordada
+// (un mes) se llama pruneOldPlanSnapshots(30).
+function pruneOldPlanSnapshots(maxAgeDays) {
+  const dias = Number(maxAgeDays);
+  if (!isFinite(dias) || dias <= 0) {
+    throw new Error('pruneOldPlanSnapshots necesita maxAgeDays numerico y mayor que 0. Received: ' + maxAgeDays);
+  }
+  const lock = PP_acquireScriptLock_('podar planes antiguos', 120000);
+  try {
+    const spreadsheet = PP_getWorkbook_();
+    PP_ensureWorkbook_(spreadsheet);
+    return PP_pruneOldPlanSnapshots_(spreadsheet, dias, {});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// DIAGNOSTICO DE LA ANTIGUEDAD, SIN BORRAR NADA. Para fijar el corte con números y no con
+// suposiciones: cuántos snapshots hay por rango de días, cuántos NO tienen fecha, y cuántos
+// liberarían con el corte indicado. Usa la MISMA función que borra, con dryRun, para que la
+// simulación no pueda divergir de lo que de verdad pasa.
+function edadPlanSnapshots(maxAgeDays) {
+  const dias = Number(maxAgeDays) > 0 ? Number(maxAgeDays) : 30;
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return PP_pruneOldPlanSnapshots_(spreadsheet, dias, { dryRun: true });
+}
+
+// PUNTOS DE ENTRADA SIN ARGUMENTOS, para correr desde el editor de Apps Script. Las dos funciones
+// de arriba piden maxAgeDays, y desde el editor no se le pasan argumentos: habria que escribir un
+// wrapper a mano cada vez, que es justo lo que se quiere evitar. Estos dos fijan el corte de
+// 90 dias, que es la politica acordada, y devuelven el resultado para pegarlo.
+//
+// OJO CON LA SEGUNDA: BORRA. La primera no toca nada.
+function DIAG_EDAD_SNAPSHOTS() {
+  return edadPlanSnapshots(PP_RETENCION_PLANES_DIAS);
+}
+
+function DIAG_PODA_SNAPSHOTS() {
+  return pruneOldPlanSnapshots(PP_RETENCION_PLANES_DIAS);
 }
 
 function getPlanSnapshot(snapshotId) {
@@ -140,6 +400,17 @@ function getPlanSnapshot(snapshotId) {
   const spreadsheet = PP_getWorkbook_();
   PP_ensureWorkbook_(spreadsheet);
   return PP_getPlanSnapshot_(spreadsheet, snapshotId);
+}
+
+function getPlanSnapshotLight(snapshotId) {
+  if (!snapshotId) throw new Error('Falta snapshotId');
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return PP_getPlanSnapshotLight_(spreadsheet, snapshotId);
+}
+
+function restorePublishedPlanAsDraft(snapshotId, currentPayload) {
+  return PP_restorePublishedPlanAsDraft_(snapshotId, currentPayload);
 }
 
 function syncNetSuitePlant() {

@@ -6,66 +6,357 @@
   "use strict";
 
   const SNAP_MINUTES = 1;
-  const ALLOCATION_CHUNK_MINUTES = 30;
+  const ALLOCATION_CHUNK_MINUTES = 120;
   const SEARCH_STEP_MINUTES = 60;
+  const TOOL_AFFINITY_WINDOW_MINUTES = 20;
   const DEFAULT_START_MINUTE = 7 * 60;
   const DEFAULT_END_MINUTE = 17 * 60;
   const DEFAULT_HORIZON_DAYS = 15;
+  const MAX_SCHEDULING_DAYS = 366;
+  const MAX_FIXED_CHAIN_PROBES = 32;
+  const FAST_QUALITY_BUDGET_MS = 300000;
+  const FIXED_CHAIN_INFEASIBLE = 0;
+  const FIXED_CHAIN_FEASIBLE = 1;
+  const FIXED_CHAIN_INCONCLUSIVE = 2;
+  const PLANNING_BUDGET_EXCEEDED = "PLANNING_BUDGET_EXCEEDED";
   const GENERATED_BY = "PLANNER_CORE_V2";
   const TOOL_CHANGE_CAPABILITY = {
     key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL",
     ct: "TOOL_CHANGE",
     label: "CAMBIO DE HERRAMENTAL",
   };
+  const DEFAULT_GAP_FILL = Object.freeze({
+    enabled: false,
+    minGapMinutes: 60,
+    maxCandidates: 50,
+    budgetMs: 3000,
+    maxIterations: 1,
+  });
 
-  function schedulePlan(inputState, options) {
-    const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
-    const operationCount = Array.isArray(inputState?.operations) ? inputState.operations.length : 0;
-    const volumePassLimit = operationCount <= 80 ? 4 : 1;
-    const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
-    const strategyPool = ["balanced", "finish", "load", "tools", "makespan", "idle"];
-    const strategies = strategyPool.slice(0, Math.min(passCount + 2, strategyPool.length));
-    const evaluated = strategies.map((strategy) => {
-      const result = schedulePlanOnce(inputState, { ...(options || {}), strategy });
-      return { strategy, result, metrics: evaluatePlan(result) };
-    });
-    evaluated.sort((a, b) => a.metrics.objective - b.metrics.objective || strategies.indexOf(a.strategy) - strategies.indexOf(b.strategy));
-    const selected = evaluated[0];
-    selected.result.lastSchedule.optimization = {
-      method: "MULTI_STRATEGY_HEURISTIC",
-      globalOptimalityGuaranteed: false,
-      strategiesEvaluated: evaluated.map((item) => ({ strategy: item.strategy, objective: item.metrics.objective })),
-      volumePassLimit,
-      selectedStrategy: selected.strategy,
-      metrics: selected.metrics,
+  function createPlanningPerformanceState(options) {
+    if (!options || (!options.collectStats && !Number.isFinite(Number(options.timeBudgetMs)) && !Number.isFinite(Number(options.progressEveryMs)))) return null;
+    const nowMs = typeof options.nowMs === "function" ? options.nowMs : defaultNowMs;
+    const startedAtMs = nowMs();
+    const startedAtWallMs = Date.now();
+    return {
+      nowMs,
+      startedAtMs,
+      startedAtWallMs,
+      startedAt: new Date().toISOString(),
+      // completeAll se registra aqui y no solo en schedulePlanOnce: el guard de presupuesto
+      // de schedulePlan corre sobre este estado compartido ANTES de la primera estrategia
+      // (planner-core.js:232), cuando completeAll aun no estaba puesto, asi que una corrida
+      // completeAll podia abortar por tiempo real. Eso es justo lo que completeAll promete
+      // no hacer, y es el camino de "Generar plan" (app.js:5602).
+      completeAll: options?.completeAll === true,
+      timeBudgetMs: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Number(options.timeBudgetMs) : 0,
+      budgetCheckLimit: Number.isFinite(Number(options.timeBudgetMs)) && Number(options.timeBudgetMs) > 0 ? Math.round(Number(options.timeBudgetMs) * 500) : 0,
+      budgetCheckCount: 0,
+      progressEveryMs: Number.isFinite(Number(options.progressEveryMs)) && Number(options.progressEveryMs) > 0 ? Number(options.progressEveryMs) : 0,
+      lastProgressElapsedMs: 0,
+      lastPhase: "scheduler:init",
+      scheduledOpsTotal: 0,
+      scheduledOpsDone: 0,
+      strategy: "",
+      progress: typeof options.onProgress === "function" ? options.onProgress : null,
+      stats: {
+        strategiesStarted: 0,
+        strategyTimings: [],
+        mainLoopIterations: 0,
+        windowedTieWindowHits: 0,
+        windowedTieAffinityHits: 0,
+        windowedTieIdleHits: 0,
+        toolAffinityTopKPromotions: 0,
+        cachedAssignmentReuses: 0,
+        assignmentCandidateEvaluations: 0,
+        slotProbes: 0,
+        slotProbeSkips: 0,
+        busyOverlapScans: 0,
+        busyConflictScans: 0,
+        busyConflictSorts: 0,
+        busySegmentSorts: 0,
+        toolCatalogLookups: 0,
+        toolCatalogScans: 0,
+        otConfigurationLookups: 0,
+        gapFillPasses: 0,
+        gapFillGapsScanned: 0,
+        gapFillCandidatesTried: 0,
+        gapFillCommitted: 0,
+        gapFillMoved: 0,
+        gapFillBudgetAborts: 0,
+      },
     };
-    return selected.result;
   }
 
-  function schedulePlanOnce(inputState, options) {
+  function defaultNowMs() {
+    return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+  }
+
+  function planningNowMs(performanceState) {
+    return performanceState?.nowMs ? performanceState.nowMs() : defaultNowMs();
+  }
+
+  function countPlanningStat(performanceState, name, amount = 1) {
+    if (!performanceState?.stats || !Object.prototype.hasOwnProperty.call(performanceState.stats, name)) return;
+    performanceState.stats[name] += amount;
+  }
+
+  const BUDGET_CLOCK_SAMPLE = 4096;
+  function checkPlanningBudget(performanceState, phase, context) {
+    if (!performanceState) return false;
+    performanceState.lastPhase = phase;
+    performanceState.budgetCheckCount = (performanceState.budgetCheckCount || 0) + 1;
+    const checkCount = performanceState.budgetCheckCount;
+    if (performanceState.completeAll !== true) {
+      const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
+      const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
+      const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
+      if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+        performanceState.lastProgressElapsedMs = effectiveElapsedMs;
+        emitPlanningProgress(performanceState, phase);
+      }
+      const timerExceeded = performanceState.timeBudgetMs && effectiveElapsedMs > performanceState.timeBudgetMs;
+      const counterExceeded = performanceState.budgetCheckLimit > 0 && checkCount >= performanceState.budgetCheckLimit;
+      if (performanceState.budgetCheckLimit > 0 && checkCount % 100000 === 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget] checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
+      }
+      if (timerExceeded || counterExceeded) {
+        if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(`[planner-budget] ABORT checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} timer=${timerExceeded} counter=${counterExceeded}`);
+        if (context) context.abortReason = "TIME_BUDGET_EXCEEDED";
+        performanceState.aborted = true;
+        performanceState.reason = "TIME_BUDGET_EXCEEDED";
+        emitPlanningProgress(performanceState, phase);
+        return true;
+      }
+      return false;
+    }
+    if (checkCount % BUDGET_CLOCK_SAMPLE === 0 || checkCount % 100000 === 0) {
+      const elapsedMs = planningNowMs(performanceState) - performanceState.startedAtMs;
+      const wallElapsedMs = Date.now() - (performanceState.startedAtWallMs || Date.now());
+      const effectiveElapsedMs = Math.max(elapsedMs, wallElapsedMs);
+      if (performanceState.progressEveryMs && effectiveElapsedMs - performanceState.lastProgressElapsedMs >= performanceState.progressEveryMs) {
+        performanceState.lastProgressElapsedMs = effectiveElapsedMs;
+        emitPlanningProgress(performanceState, phase);
+      }
+      if (checkCount % 100000 === 0 && performanceState.budgetCheckLimit > 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget] checks=${checkCount} limit=${performanceState.budgetCheckLimit} wallMs=${wallElapsedMs} perfMs=${elapsedMs} phase=${phase}`);
+      }
+    }
+    return false;
+  }
+
+  function assertPlanningBudget(performanceState, phase, context) {
+    if (!checkPlanningBudget(performanceState, phase, context)) return;
+    const error = new Error("TIME_BUDGET_EXCEEDED");
+    error.code = PLANNING_BUDGET_EXCEEDED;
+    throw error;
+  }
+
+  function isPlanningBudgetExceeded(error) {
+    return error?.code === PLANNING_BUDGET_EXCEEDED;
+  }
+
+  function emitPlanningProgress(performanceState, phase) {
+    if (!performanceState?.progress) return;
+    try {
+      const elapsedMs = Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now())));
+      performanceState.progress({
+        phase,
+        elapsedMs,
+        scheduled: performanceState.scheduledOpsDone || 0,
+        total: performanceState.scheduledOpsTotal || 0,
+        strategy: performanceState.strategy || "",
+        stats: { ...performanceState.stats },
+      });
+    } catch (_) {
+      // Progress hooks are diagnostic-only and must not affect scheduling.
+    }
+  }
+
+  function emitFinalizeProgress(performanceState) {
+    if (!performanceState?.progress) return;
+    try {
+      performanceState.lastPhase = "finalize:select-best";
+      performanceState.progress({
+        phase: "finalize:select-best",
+        elapsedMs: Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now()))),
+        scheduled: performanceState.scheduledOpsDone || 0,
+        total: performanceState.scheduledOpsTotal || 0,
+        strategy: "",
+        stats: { ...performanceState.stats },
+      });
+    } catch (_) {
+      // Progress hooks are diagnostic-only and must not affect scheduling.
+    }
+  }
+
+  function attachPlanningPerformance(state, performanceState, abortReason = "") {
+    if (!performanceState || !state?.lastSchedule) return;
+    const elapsedMs = Math.round(Math.max(planningNowMs(performanceState) - performanceState.startedAtMs, Date.now() - (performanceState.startedAtWallMs || Date.now())));
+    state.lastSchedule.performance = {
+      startedAt: performanceState.startedAt,
+      elapsedMs,
+      lastPhase: performanceState.lastPhase,
+      aborted: Boolean(abortReason || performanceState.aborted),
+      reason: abortReason || performanceState.reason || "",
+      budgetCheckCount: performanceState.budgetCheckCount || 0,
+      budgetCheckLimit: performanceState.budgetCheckLimit || 0,
+      startedAtWallMs: performanceState.startedAtWallMs || 0,
+      stats: { ...performanceState.stats },
+    };
+  }
+
+  const YIELD_INTERVAL_MS = 200;
+
+  async function schedulePlan(inputState, options) {
+    const onYield = typeof options?.onYield === "function" ? options.onYield : null;
+    const earlyStop = options?.earlyStop !== false;
+    const performanceState = createPlanningPerformanceState(options);
+    const configuredPasses = options?.optimizationPasses ?? inputState?.settings?.optimizationPasses ?? 4;
+    const completeAll = options?.completeAll === true;
+    const flowBalancedEnabled = options?.flowBalancedEnabled ?? inputState?.settings?.flowBalancedEnabled ?? true;
+    const operationCount = filterExcludedOperations(inputState, inputState?.operations).length;
+    const fastQualityMode = options?.fastQualityMode === true || inputState?.settings?.fastQualityMode === true ||
+      (performanceState?.timeBudgetMs > 0 && performanceState.timeBudgetMs <= FAST_QUALITY_BUDGET_MS);
+    const volumePassLimit = operationCount <= 80 ? 4 : 1;
+    const passCount = Math.min(clampInteger(configuredPasses, 1, 4), volumePassLimit);
+    const configuredStrategyPool = Array.isArray(options?.strategyPool) ? options.strategyPool
+      : Array.isArray(inputState?.settings?.strategyPool) ? inputState.settings.strategyPool
+        : null;
+    const strategyPool = configuredStrategyPool && configuredStrategyPool.length
+      ? configuredStrategyPool
+      : ["balanced", "finish", "load", "tools", "makespan", "idle", "balance"];
+    const strategyLimit = fastQualityMode ? Math.min(3, passCount + 2) : passCount + 2;
+    const strategies = strategyPool.slice(0, Math.min(strategyLimit, strategyPool.length));
+const evaluated = [];
+    const strategyFailures = [];
+    const strategySkips = [];
+    let flowEvaluation;
+    let completePlanFound = false;
+    for (const [index, strategy] of strategies.entries()) {
+      if (checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
+        if (!evaluated.length) break;
+        break;
+      }
+      if (onYield) await onYield();
+const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
+      evaluated.push({ strategy, index, result, metrics: evaluatePlan(result) });
+      if (result.lastSchedule?.performance?.aborted) {
+        const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
+        if (complete.length) {
+          emitFinalizeProgress(performanceState);
+          return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+        }
+        return result;
+      }
+      const hasCompletePlan = evaluated.some((item) => Number(item.metrics?.unscheduled || 0) === 0 && Number(item.metrics?.operatorConflicts || 0) === 0);
+      if (earlyStop && hasCompletePlan && (evaluated.length >= 2 || completeAll)) {
+        for (const pending of strategies.slice(evaluated.length)) {
+          strategySkips.push({ strategy: pending, reason: "COMPLETE_PLAN_FOUND" });
+        }
+        completePlanFound = true;
+        break;
+      }
+      if (fastQualityMode && evaluated.length >= 2) {
+        const first = evaluated[0].metrics;
+        const converged = evaluated.every((item) =>
+          item.metrics.operatorConflicts === first.operatorConflicts &&
+          item.metrics.unscheduled === first.unscheduled &&
+          item.metrics.objective === first.objective
+        );
+        if (converged) {
+          for (const pending of strategies.slice(evaluated.length)) {
+            strategySkips.push({ strategy: pending, reason: "STRATEGY_CONVERGED" });
+          }
+          break;
+        }
+      }
+    }
+    if (flowBalancedEnabled && !completePlanFound && strategyPool.length > 1) {
+      const skipFastFlow = fastQualityMode && operationCount > 80;
+      if (skipFastFlow) {
+        strategySkips.push({ strategy: "flow_balanced", reason: "FAST_QUALITY_BUDGET" });
+      } else {
+        try {
+          const strategy = "flow_balanced";
+          if (!checkPlanningBudget(performanceState, `strategy:${strategy}:start`)) {
+            if (onYield) await onYield();
+            const result = await schedulePlanOnce(inputState, { ...(options || {}), strategy, fastQualityMode, __performanceState: performanceState, onYield });
+            flowEvaluation = { strategy, index: evaluated.length, result, metrics: evaluatePlan(result) };
+            evaluated.push(flowEvaluation);
+            if (result.lastSchedule?.performance?.aborted) {
+              const complete = evaluated.filter((item) => !item.result?.lastSchedule?.performance?.aborted);
+              if (complete.length) {
+                emitFinalizeProgress(performanceState);
+                return finalizeMultiStrategyPlan({ evaluated, selectable: complete, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason: "TIME_BUDGET_EXCEEDED" });
+              }
+              return result;
+            }
+          }
+        } catch (error) {
+          strategyFailures.push({ strategy: "flow_balanced", message: String(error?.message || error || "ERROR_DESCONOCIDO") });
+        }
+      }
+    }
+    if (!evaluated.length) {
+      return await schedulePlanOnce(inputState, { ...(options || {}), strategy: "balanced", fastQualityMode, __performanceState: performanceState, onYield });
+    }
+    emitFinalizeProgress(performanceState);
+    return finalizeMultiStrategyPlan({ evaluated, selectable: evaluated, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState });
+  }
+
+  async function schedulePlanOnce(inputState, options) {
+    const performanceState = options?.__performanceState || createPlanningPerformanceState(options);
+    const strategy = options?.strategy || "balanced";
+    if (performanceState) {
+      performanceState.strategy = strategy;
+      if (options?.completeAll === true) performanceState.completeAll = true;
+    }
+    const isDryRun = options?.isDryRun === true || options?.__dryRun === true;
+    const strategyStarted = planningNowMs(performanceState);
+    if (performanceState) {
+      performanceState.stats.strategiesStarted += 1;
+      if (typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn(`[planner-budget-init] strategy=${strategy} budgetCheckLimit=${performanceState.budgetCheckLimit} timeBudgetMs=${performanceState.timeBudgetMs} startedAtWallMs=${performanceState.startedAtWallMs} now=${Date.now()}`);
+      }
+      emitPlanningProgress(performanceState, `strategy:${strategy}:start`);
+    }
     const operations = (Array.isArray(inputState.operations) ? inputState.operations : []).map((op, idx) => ({ ...op, num: idx + 1 }));
     const workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
     const state = { ...inputState, operations, lastSchedule: undefined };
+    state.__performanceState = performanceState;
+    state.__otConfigurationIndex = buildOtConfigurationIndex(state, performanceState);
+    state.__toolCatalogByPart = buildToolCatalogIndex(state, performanceState);
     const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
+    const gapFillConfig = resolveGapFillConfig(options, settings);
     const horizonDays = clampInteger(options?.horizonDays || state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45);
-    const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(state.operations));
+    const planStart = startOfDay(parseDateOnly(options?.planStart || state.planStart) || inferPlanStart(filterExcludedOperations(state, state.operations)));
     const requestedStart = atMinute(planStart, DEFAULT_START_MINUTE);
     const executionTime = parseExecutionTime(options?.executionTime);
-    const windowStart = executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart;
-    const windowEnd = atMinute(addDays(startOfDay(windowStart), horizonDays), DEFAULT_START_MINUTE);
+    const windowStart = options?.startFromExecutionTime === true
+      ? (executionTime ? ceilToSnap(executionTime) : requestedStart)
+      : (options?.respectPlanStart === true
+        ? requestedStart
+        : (executionTime && executionTime > requestedStart ? ceilToSnap(executionTime) : requestedStart));
+    const newnessBase = options?.baseSnapshot?.fullState || options?.baseSnapshot || null;
+    const newnessIndex = newnessBase ? buildNewnessIndex(newnessBase) : null;
+    const nowAnchor = executionTime;
+    const windowEnd = atMinute(addDays(startOfDay(planStart), MAX_SCHEDULING_DAYS), DEFAULT_START_MINUTE);
     const diagnostics = [];
     state.__windowCache = new Map();
     state.__workOrdersByOt = new Map((inputState.workOrders || []).map((wo) => [normalizeKey(wo.ot), wo]));
     const allOperations = state.operations;
     const preservedCompletedChanges = allOperations
       .filter((op) => op.generatedBy === GENERATED_BY && isPlanCompletedOperation(state, op))
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
-    const sourceOperations = allOperations
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state), isDryRun));
+    const sourceOperations = expandAdditionalToolOperations(state, allOperations
       .filter((op) => op.generatedBy !== GENERATED_BY)
-      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
-    const completed = sourceOperations.filter((op) => isPlanCompletedOperation(state, op));
-    const inactive = sourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && !isSchedulableOperation(op));
-    const activeSourceOperations = sourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op));
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index, state), isDryRun)));
+    const excludedCapabilityOperations = sourceOperations.filter((op) => isOperationCapabilityExcluded(state, op));
+    const includedSourceOperations = filterExcludedOperations(state, sourceOperations);
+    const completed = includedSourceOperations.filter((op) => isPlanCompletedOperation(state, op));
+    const inactive = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && (!isSchedulableOperation(op) || isHistoricalOperation(op)));
+    const activeSourceOperations = includedSourceOperations.filter((op) => !isPlanCompletedOperation(state, op) && isSchedulableOperation(op) && !isHistoricalOperation(op));
     const selectionDefined = Array.isArray(state.selectedOts);
     const selectedOtsSet = new Set((state.selectedOts || []).map(normalizeKey));
     const isSelected = (op) => !selectionDefined || selectedOtsSet.has(normalizeKey(op.ot));
@@ -81,81 +372,218 @@
       operatorBusy: new Map(),
       machineBusy: new Map(),
       operatorLoad: new Map(),
+      operatorIdleCache: options?.noOperatorIdleCache === true ? null : new Map(),
       machineTools: new Map(),
       scheduledByKey: new Map(),
-      scheduledById: new Map(),
       generatedChanges: [],
       changeCounter: 0,
       gapFilled: 0,
-      strategy: options?.strategy || "balanced",
+      gapFillPost: 0,
+      gapFillResult: null,
+      strategy,
+      newnessIndex,
+      nowAnchor,
+      performanceState,
+      abortReason: "",
+      lastAllocationConflictEnd: null,
+      flowWipTarget: options?.strategy === "flow_balanced"
+        ? clampInteger(options?.flowWipTarget ?? settings.flowWipTarget ?? 10, 1, 50)
+        : 10,
+      fastQualityMode: options?.fastQualityMode === true,
+      antiIdleTieBreakEnabled: options?.antiIdleTieBreak !== false,
+      toolAffinityTopKEnabled: options?.toolAffinityTopK !== false,
+      windowedTieEnabled: options?.windowedTie !== false,
+      isDryRun: options?.isDryRun === true || options?.__dryRun === true,
     };
 
-    seedCompletedToolStates(context, state.operationPlanStatuses);
-    seedMachineToolHistory(context, state.machineToolHistory, sourceOperations);
-
-    const fixed = activeSourceOperations.filter(isFixedOperation);
-    const movable = activeSourceOperations.filter((op) =>
-      !isFixedOperation(op) &&
-      op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      isSelected(op) &&
-      isAssignableOperation(state, op)
+    const authorizedStatuses = selectionDefined
+      ? (Array.isArray(state.operationPlanStatuses) ? state.operationPlanStatuses : Object.values(state.operationPlanStatuses || {}))
+        .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
+      : state.operationPlanStatuses;
+    const authorizedToolHistory = selectionDefined
+      ? (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : [])
+        .filter((item) => selectedOtsSet.has(normalizeKey(item?.ot)))
+        .filter(isCompletedToolHistory)
+      : (Array.isArray(state.machineToolHistory) ? state.machineToolHistory : []).filter(isCompletedToolHistory);
+    const authorizedSourceOperations = includedSourceOperations.filter(isSelected);
+    const authorizedHistoricalOperations = authorizedSourceOperations.filter((op) =>
+      isPlanCompletedOperation(state, op) || isFixedOperation(state, op)
     );
-    const excluded = activeSourceOperations.filter((op) =>
-      !isFixedOperation(op) &&
-      op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
-      (!isSelected(op) || !isAssignableOperation(state, op))
-    );
-    for (const op of fixed) commitFixedOperation(context, op);
+    let fixed = [];
+    let movable = [];
+    let excluded = activeSourceOperations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && isSelected(op));
+    let jobs = [];
+    try {
+      assertPlanningBudget(performanceState, "scheduler:seed", context);
+      seedCompletedToolStates(context, authorizedStatuses);
+      seedMachineToolHistory(context, authorizedToolHistory, authorizedHistoricalOperations);
 
-    enrichToolsFromCatalog(state, movable);
-    const jobs = buildJobs(movable);
-    let pending = movable.length;
-    let safety = Math.max(100, pending * 4);
-
-    while (pending > 0 && safety-- > 0) {
-      const ready = [];
-      for (const job of jobs) {
-        const op = job.operations[job.index];
-        if (!op) continue;
-        const assignment = findBestAssignment(context, op, job.last);
-        if (assignment) ready.push({ job, op, assignment });
+      fixed = completed
+        .filter((op) => isSelected(op) && hasCompleteProgram(op))
+        .slice()
+        .sort((a, b) => (operationEnd(a)?.getTime() || 0) - (operationEnd(b)?.getTime() || 0));
+      movable = activeSourceOperations.filter((op) =>
+        !isFixedOperation(state, op) &&
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        isSelected(op) &&
+        isAssignableOperation(state, op)
+      );
+      excluded = activeSourceOperations.filter((op) =>
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
+      );
+      for (const op of fixed) {
+        assertPlanningBudget(performanceState, "fixed-operations", context);
+        commitFixedOperation(context, op);
       }
 
-      if (!ready.length) break;
-      const firstOperations = ready.filter((candidate) => candidate.job.index === 0);
-      const candidates = firstOperations.length ? firstOperations : ready;
-      candidates.sort((a, b) => compareReadyCandidates(a, b, firstOperations.length > 0, context.strategy));
-      const chosen = candidates[0];
-      chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
-      const committed = commitAssignment(context, chosen.op, chosen.assignment);
-      chosen.job.last = committed;
-      chosen.job.index += 1;
-      pending -= 1;
+      enrichToolsFromCatalog(state, movable);
+      jobs = buildJobs(movable, fixed, state);
+      excluded = activeSourceOperations.filter((op) =>
+        op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+        (!isSelected(op) || (!isFixedOperation(state, op) && !isAssignableOperation(state, op)))
+      );
+    } catch (error) {
+      if (!isPlanningBudgetExceeded(error)) throw error;
+      context.abortReason = "TIME_BUDGET_EXCEEDED";
+      if (!jobs.length && movable.length) excluded = [...excluded, ...movable];
+    }
+    let pending = movable.length;
+    if (performanceState) {
+      performanceState.scheduledOpsTotal = movable.length;
+      performanceState.scheduledOpsDone = 0;
+    }
+    // Mark first operations in jobs for sequence protection
+    // These operations must be scheduled before subsequent operations of the same OT
+    // and must maintain PENDIENTE/planeado status
+    jobs.forEach(job => {
+      if (job.operations[0]) {
+        job.operations[0]._protectedSequence = true;
+      }
+    });
+    let safety = Math.max(100, pending * 4);
+    const onYield = typeof options?.onYield === "function" ? options.onYield : null;
+    let lastYieldAt = Date.now();
+
+    try {
+      while (!context.abortReason && pending > 0 && safety-- > 0) {
+        countPlanningStat(performanceState, "mainLoopIterations");
+        assertPlanningBudget(performanceState, "main-loop", context);
+        if (onYield && Date.now() - lastYieldAt >= YIELD_INTERVAL_MS) {
+          await onYield();
+          lastYieldAt = Date.now();
+        }
+        const ready = [];
+        for (const job of jobs) {
+          assertPlanningBudget(performanceState, "job-scan", context);
+          const op = job.operations[job.index];
+          if (!op) continue;
+          const previous = latestPredecessor(job.last, fixedPredecessor(job, op));
+          const cached = job.__planAssignment;
+          let assignment = null;
+          if (cached && cached.op === op && cached.unique && isCachedAssignmentValid(context, cached.assignment)) {
+            assignment = cached.assignment;
+            assignment.operatorLoad = context.operatorLoad.get(assignment.operator) || 0;
+            assignment.projectedOperatorLoad = (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes;
+            countPlanningStat(performanceState, "cachedAssignmentReuses");
+          } else {
+            const candidates = findAssignments(context, op, previous)
+              .filter((candidate) => respectsFixedSuccessor(context, job, op, candidate));
+            candidates.sort((a, b) => compareAssignments(a, b, context.strategy, context));
+            assignment = selectOperationAssignment(context, op, candidates);
+            if (assignment) {
+              job.__planAssignment = { op, assignment, unique: candidates.length === 1 };
+            }
+          }
+          if (assignment) ready.push({ job, op, assignment });
+        }
+
+        if (!ready.length) break;
+        const candidates = context.strategy === "flow_balanced" || context.fastQualityMode
+          ? flowReadyCandidates(ready, jobs, context.flowWipTarget)
+          : ready;
+        candidates.sort((a, b) => compareReadyCandidates(a, b, false, context.strategy, context));
+        const chosen = candidates[0];
+        chosen.assignment.gapFill = isLaterOperationGapFill(context, chosen.job, chosen.assignment);
+        const committed = commitAssignment(context, chosen.op, chosen.assignment);
+        chosen.job.last = committed;
+        chosen.job.index += 1;
+        pending -= 1;
+        if (performanceState) performanceState.scheduledOpsDone += 1;
+      }
+    } catch (error) {
+      if (!isPlanningBudgetExceeded(error)) throw error;
+      context.abortReason = "TIME_BUDGET_EXCEEDED";
+    }
+
+    if (gapFillConfig.enabled && !context.abortReason) {
+      let gapFillResult = null;
+      try {
+        gapFillResult = runGapFill(context, jobs, gapFillConfig, { performanceState, fixed });
+      } catch (error) {
+        if (!isPlanningBudgetExceeded(error)) throw error;
+        gapFillResult = { ...(context.gapFillResult || {}), enabled: true, aborted: true, elapsedMs: gapFillResult?.elapsedMs || 0 };
+      }
+      context.gapFillResult = gapFillResult;
+      if (gapFillResult) {
+        pending = 0;
+        for (const job of jobs) pending += Math.max(0, job.operations.length - job.index);
+        if (performanceState) performanceState.scheduledOpsDone = Math.max(0, movable.length - pending);
+        if (gapFillResult.aborted) {
+          diagnostics.push({
+            level: "WARN", code: "GAP_FILL_BUDGET_EXCEEDED",
+            message: `Gap-fill post-schedule abortado por presupuesto tras ${gapFillResult.elapsedMs || 0}ms`,
+          });
+        } else if (gapFillResult.fills > 0) {
+          diagnostics.push({
+            level: "INFO", code: "GAP_FILL_POST_SCHEDULE",
+            fills: gapFillResult.fills, moved: gapFillResult.moved, headsPlaced: gapFillResult.headsPlaced, gaps: gapFillResult.gaps,
+          });
+        }
+      }
     }
 
     const unscheduled = [];
+    const lockedOtKeys = new Set((state.lockedOts || []).map(normalizeKey));
     for (const job of jobs) {
       for (let index = job.index; index < job.operations.length; index++) {
         const op = job.operations[index];
-        op.operador = op.operador || "SIN_OPERADOR";
-        if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
+        op.operador = "SIN_OPERADOR";
+        op.fechaInicio = ""; op.horaInicio = ""; op.fechaFin = ""; op.horaFin = "";
+        if (!isBendingOperationResolved(state, op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") op.maquina = "";
         op.log = appendLog(op.log, "WARN_SIN_HUECO_EN_HORIZONTE");
         unscheduled.push(op);
-        diagnostics.push({ level: "WARN", code: "UNSCHEDULED", operationId: op.id, ot: op.ot, sequence: op.secuencia });
+        diagnostics.push({
+          level: "WARN", code: "UNSCHEDULED", operationId: op.id, ot: op.ot, sequence: op.secuencia,
+          cause: unscheduledCause(state, op),
+        });
+        if (lockedOtKeys.has(normalizeKey(op.ot))) {
+          diagnostics.push({
+            level: "WARN", code: "OPERATOR_CONFLICT_FIXED_WINDOW", operationId: op.id, ot: op.ot, sequence: op.secuencia,
+            message: "Sin operador libre en ventana para OT bloqueada",
+          });
+        }
       }
+    }
+    if (context.abortReason) {
+      diagnostics.push({ level: "ERROR", code: context.abortReason, phase: performanceState?.lastPhase || "scheduler", message: "Se excedio el presupuesto de tiempo de planeacion" });
     }
 
     const fixedIds = new Set(fixed.map((item) => item.id));
     const scheduled = [...context.scheduledByKey.values()]
       .filter((op) => !fixedIds.has(op.id));
-    state.operations = [...completed, ...inactive, ...preservedCompletedChanges, ...fixed, ...context.generatedChanges, ...scheduled, ...unscheduled, ...excluded]
+    state.operations = [
+      ...completed.filter((op) => !fixedIds.has(op.id)),
+      ...inactive, ...preservedCompletedChanges, ...fixed, ...context.generatedChanges, ...scheduled, ...unscheduled, ...excluded, ...excludedCapabilityOperations,
+    ]
       .sort(compareScheduledOperations)
       .map((op, index) => ({ ...op, num: index + 1 }));
     state.planStart = formatDate(planStart);
     state.horizonDays = horizonDays;
     const activeOperations = [...fixed.filter(isSelected), ...context.generatedChanges, ...scheduled]
       .filter((op) => operationStart(op) && operationEnd(op));
-    const operatorConflicts = operatorOverlapConflicts(activeOperations);
+    const capacityCheckOperations = activeOperations.filter((op) => !isPlanCompletedOperation(state, op));
+    const operatorConflicts = operatorOverlapConflicts(capacityCheckOperations, state);
     for (const conflict of operatorConflicts) {
       diagnostics.push({
         level: "ERROR",
@@ -174,16 +602,28 @@
       engine: GENERATED_BY,
       scheduled: scheduled.length,
       selectedJobs: selectedOtsSet.size,
-      scheduledOts: [...new Set([...fixed.filter(isSelected), ...scheduled]
+      scheduledOts: [...new Set([...fixed.filter(isSelected), ...context.generatedChanges, ...scheduled]
         .filter((op) => operationStart(op) && operationEnd(op))
         .map((op) => String(op.ot || "").trim())
         .filter(Boolean))],
       changes: context.generatedChanges.length,
       gapFilled: context.gapFilled,
+      gapFillPost: context.gapFillPost,
+      gapFill: context.gapFillResult || {
+        enabled: gapFillConfig.enabled,
+        minGapMinutes: gapFillConfig.minGapMinutes,
+        maxCandidates: gapFillConfig.maxCandidates,
+        budgetMs: gapFillConfig.budgetMs,
+        gaps: 0, fills: 0, moved: 0, headsPlaced: 0, tried: 0, elapsedMs: 0, aborted: false,
+      },
       unscheduled: unscheduled.length,
       operatorConflicts: operatorConflicts.length,
       diagnostics,
     };
+    if (performanceState) {
+      performanceState.stats.strategyTimings.push({ strategy, elapsedMs: Math.round(planningNowMs(performanceState) - strategyStarted), aborted: Boolean(context.abortReason) });
+      attachPlanningPerformance(state, performanceState, context.abortReason);
+    }
     return state;
   }
 
@@ -207,6 +647,10 @@
     }
   }
 
+  function isCompletedToolHistory(item) {
+    return item?.completed === true || normalizeKey(item?.status || item?.planStatus) === "COMPLETADA_PLAN";
+  }
+
   function seedMachineToolHistory(context, history, operations) {
     const historical = Array.isArray(history) ? history : [];
     const candidates = [
@@ -220,7 +664,7 @@
       })),
       ...(operations || []).map((op) => ({
         machine: op.maquina,
-        toolKey: operationToolKey(op),
+        toolKey: operationToolKey(op, context.state),
         operationId: op.id,
         start: operationStart(op),
         end: operationEnd(op),
@@ -250,38 +694,67 @@
     return `${herramental || "SIN_HERR"}/${kit || "SIN_KIT"}`;
   }
 
-  function findBestAssignment(context, op, previous) {
+  function findAssignments(context, op, previous) {
     const earliest = computeEarliestStart(context, op, previous);
-    if (earliest >= context.windowEnd) return null;
-    if (isSubcontractOperation(context.state, op)) return findSubcontractAssignment(context, op, earliest);
+    if (earliest >= context.windowEnd) return [];
+    if (isSubcontractOperation(context.state, op)) {
+      const assignment = findSubcontractAssignment(context, op, earliest);
+      return assignment ? [{ ...assignment, earliest: new Date(earliest) }] : [];
+    }
     const finite = isFiniteOperation(context.state, op);
     const operators = operatorCandidates(context.state, op, finite);
-    if (!operators.length) return null;
+    if (!operators.length) return [];
 
     const machines = machineCandidates(context.state, op);
-    if (!machines.length) return null;
+    if (!machines.length) return [];
+
     const assignments = [];
+    const selectedMachine = String(op.maquina || "").trim();
+    const machineOrder = selectedMachine ? [selectedMachine, ...machines.filter(m => m && normalizeKey(m) !== "SIN_MAQUINA" && m !== selectedMachine && !(String(resolvedBendingCt(op, context.state)) === "5459" && String(m) === "1")).slice(0, 2)] : machines;
+
+    // Cache de nextBusyConflictEnd por (operator, machine): dentro de una sola llamada
+    // a findAssignments el contexto NO cambia (no se confirma ninguna operación), así que
+    // el mismo (operator, machine, start, end) siempre produce el mismo resultado.
+    // Esto elimina escaneos redundantes de segmentos ocupados.
+    const conflictCache = new Map();
+    const cachedNextBusyConflictEnd = function(start, end, operatorList, machineId, isFinite) {
+      const key = operatorList.join('|') + '::' + machineId + '::' + start.getTime() + '::' + end.getTime() + '::' + isFinite;
+      if (conflictCache.has(key)) return conflictCache.get(key);
+      const result = nextBusyConflictEnd(context, start, end, operatorList, machineId, isFinite);
+      conflictCache.set(key, result);
+      return result;
+    };
 
     for (const operator of operators) {
-      for (const machine of machines) {
-        const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite);
-        if (assignment) assignments.push(assignment);
+      for (const machine of machineOrder) {
+        if (context.abortReason) return assignments;
+        countPlanningStat(context.performanceState, "assignmentCandidateEvaluations");
+        assertPlanningBudget(context.performanceState, "assignment-candidates", context);
+        const assignment = findEarliestSlot(context, op, earliest, operator, machine, finite, cachedNextBusyConflictEnd);
+        if (assignment) assignments.push({ ...assignment, earliest: new Date(earliest) });
       }
     }
-
-    assignments.sort((a, b) => compareAssignments(a, b, context.strategy));
-    return assignments[0] || null;
+    return assignments;
   }
 
-  function findEarliestSlot(context, op, earliest, operator, machine, finite) {
+  function findEarliestSlot(context, op, earliest, operator, machine, finite, conflictFn) {
+    if (context.abortReason) return null;
     let cursor = ceilToSnap(earliest);
-    while (cursor < context.windowEnd) {
-      let postToolChangeFailed = false;
+    while (!context.abortReason && cursor < context.windowEnd) {
+      countPlanningStat(context.performanceState, "slotProbes");
+      if (checkPlanningBudget(context.performanceState, "slot-probes", context)) {
+        countPlanningStat(context.performanceState, "slotProbeSkips");
+        return null;
+      }
+      context.lastAllocationConflictEnd = null;
       const toolChange = toolChangeFor(context, op, machine, cursor);
       const setupMinutes = toolChange.minutes;
       const performance = operatorPerformanceForOperation(context.state, op, operator);
       const efficiency = operationEfficiencyForOperation(context.state, op);
       const productionMinutes = operationDuration(op, performance, efficiency);
+      const preserveFractionalDuration = op?.tiempoFallback === true;
+      // Si la operación ya no cabe en el horizonte restante, no seguir probando.
+      if (cursor + productionMinutes + setupMinutes > context.windowEnd) return null;
       let allocation;
       let setupOperator = "";
       if (toolChange.required && setupMinutes > 0) {
@@ -298,6 +771,7 @@
           machine,
           finite,
           setupMinutes: 0,
+          preserveFractionalDuration,
         });
         if (setupAllocation && productionAllocation && setupAllocation.end.getTime() === productionAllocation.start.getTime()) {
           allocation = {
@@ -316,6 +790,7 @@
           machine,
           finite,
           setupMinutes: 0,
+          preserveFractionalDuration,
         });
         if (productionAllocation) {
           allocation = {
@@ -327,32 +802,25 @@
         }
       }
       if (allocation) {
-        const postToolChange = findPostToolChange(context, op, machine, allocation);
-        if (postToolChange === null) {
-          postToolChangeFailed = true;
-          allocation = null;
-        } else {
-          return {
-            ...allocation,
-            operator,
-            machine,
-            finite,
-            setupMinutes,
-            productionMinutes,
-            setupOperator,
-            toolChange,
-            postToolChange,
-            toolPenalty: toolChange.required ? 1 : 0,
-            operatorLoad: context.operatorLoad.get(operator) || 0,
-          };
-        }
+        return {
+          ...allocation,
+          operator,
+          machine,
+          finite,
+          setupMinutes,
+          productionMinutes,
+          setupOperator,
+          toolChange,
+          toolPenalty: toolChange.required ? 1 : 0,
+          operatorLoad: context.operatorLoad.get(operator) || 0,
+          projectedOperatorLoad: (context.operatorLoad.get(operator) || 0) + productionMinutes,
+        };
       }
-      const postChangeMinutes = postToolChangeFailed ? Math.max(1, numberOr(context.settings.toolChangeMinutes, 120)) : 0;
-      const conflictEnd = nextBusyConflictEnd(
-        context,
+      const allocationConflictEnd = context.lastAllocationConflictEnd;
+      const conflictEnd = allocationConflictEnd && allocationConflictEnd > cursor ? allocationConflictEnd : conflictFn(
         cursor,
-        addMinutes(cursor, setupMinutes + productionMinutes + postChangeMinutes),
-        [operator, setupOperator, postToolChangeFailed ? toolChangeOperator(context.state, context.settings) : ""].filter(Boolean),
+        addMinutes(cursor, setupMinutes + productionMinutes),
+        [operator, setupOperator].filter(Boolean),
         machine,
         finite
       );
@@ -364,7 +832,7 @@
   }
 
   function allocateWork(context, requestedStart, totalMinutes, resources) {
-    const duration = Math.max(1, Math.ceil(totalMinutes));
+    const duration = resources.preserveFractionalDuration ? totalMinutes : Math.max(1, Math.ceil(totalMinutes));
     let remaining = duration;
     let cursor = ceilToSnap(requestedStart);
     let first = null;
@@ -372,7 +840,8 @@
     let consumed = 0;
     const segments = [];
 
-    while (cursor < context.windowEnd && remaining > 0) {
+    while (!context.abortReason && cursor < context.windowEnd && remaining > 0) {
+      assertPlanningBudget(context.performanceState, "allocate-work", context);
       const availableUntil = currentAvailabilityEnd(context.state, cursor, resources.operator, resources.machine);
       if (!availableUntil) {
         if (!first) return null;
@@ -381,19 +850,25 @@
       }
       const segmentMinutes = Math.min(ALLOCATION_CHUNK_MINUTES, remaining, diffMinutes(cursor, availableUntil));
       const segmentEnd = addMinutes(cursor, segmentMinutes);
-      const operatorBusy = resources.finite && overlapsBusy(context.operatorBusy.get(resources.operator), cursor, segmentEnd);
-      const machineBusy = resources.finite && hasMachineResource(resources.machine) && overlapsBusy(context.machineBusy.get(resources.machine), cursor, segmentEnd);
-      const busy = operatorBusy || machineBusy;
-      if (busy) return null;
+      const operatorConflictEnd = resources.finite ? firstBusyOverlapEnd(context.operatorBusy.get(resources.operator), cursor, segmentEnd, context.performanceState) : null;
+      const machineConflictEnd = resources.finite && hasMachineResource(resources.machine)
+        ? firstBusyOverlapEnd(context.machineBusy.get(resources.machine), cursor, segmentEnd, context.performanceState)
+        : null;
+      const conflictEnd = maxDate(operatorConflictEnd, machineConflictEnd);
+      if (conflictEnd) {
+        context.lastAllocationConflictEnd = maxDate(context.lastAllocationConflictEnd, conflictEnd);
+        return null;
+      }
 
       if (!first) first = new Date(cursor);
       segments.push({ start: new Date(cursor), end: new Date(segmentEnd) });
-      consumed += diffMinutes(cursor, segmentEnd);
-      remaining -= diffMinutes(cursor, segmentEnd);
+      consumed += segmentMinutes;
+      remaining -= segmentMinutes;
       if (!operationStart && consumed >= resources.setupMinutes) operationStart = new Date(segmentEnd);
       cursor = segmentEnd;
 
       if (remaining > 0) {
+        assertPlanningBudget(context.performanceState, "allocate-work:calendar", context);
         const nextEnd = addMinutes(cursor, Math.min(ALLOCATION_CHUNK_MINUTES, remaining));
         if (!isCalendarAvailable(context.state, cursor, nextEnd, resources.operator, resources.machine)) {
           cursor = ceilToSnap(nextAvailableMoment(context.state, cursor, resources.operator, resources.machine, context.windowEnd));
@@ -415,7 +890,8 @@
     const configuredDays = op.subcontractDays;
     if (!Number.isFinite(Number(configuredDays)) || Number(configuredDays) <= 0) return null;
     const days = clampInteger(configuredDays, 1, 90);
-    const end = addWorkingDays(context.state, earliest, days, context.windowEnd);
+    const subcontractWindowEnd = addDays(startOfDay(earliest), 366);
+    const end = addWorkingDays(context.state, earliest, days, subcontractWindowEnd);
     if (!end) return null;
     return {
       start: earliest,
@@ -430,6 +906,7 @@
       toolChange: { required: false, minutes: 0 },
       toolPenalty: 0,
       operatorLoad: 0,
+      projectedOperatorLoad: 0,
       subcontractRule: {
         name: op.subcontractType || rule?.name || "SUBCONTRATO",
         days,
@@ -446,22 +923,31 @@
     next.fechaFin = formatDate(assignment.end);
     next.horaFin = formatTime(assignment.end);
     next.needsReschedule = false;
+    next.autoFrozen = false;
     next.planStatus = "PENDIENTE";
+    if (assignment.setupMinutes > 0 && !(Number(next.tiempoSetup) > 0)) next.tiempoSetup = assignment.setupMinutes;
+    Object.assign(next, waitDiagnostic(context, assignment));
     next.log = appendLog(next.log, assignment.subcontractRule
       ? `SUBCONTRATO ${assignment.subcontractRule.name || "DEFAULT"}`
       : `PROGRAMADO_${GENERATED_BY}`);
-    if (assignment.gapFill) {
-      next.log = appendLog(next.log, "GAP_FILL_SEQ2_PLUS");
+    if (assignment.gapFill || assignment.gapFillPost) {
+      next.log = appendLog(next.log, assignment.gapFillPost ? "GAP_FILL_POST_SCHEDULE" : "GAP_FILL_SEQ2_PLUS");
       context.gapFilled += 1;
     }
+    if (assignment.gapFillPost) context.gapFillPost += 1;
 
-    const tracksOperator = isLoadBearingOperator(assignment.operator);
-    if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments);
+    const tracksOperator = assignment.finite && isLoadBearingOperator(assignment.operator);
+    const busyMetadata = { operationId: next.id, ot: next.ot, secuencia: next.secuencia, performanceState: context.performanceState };
+    if (tracksOperator) addBusySegments(context.operatorBusy, assignment.operator, assignment.productionSegments || assignment.segments, { ...busyMetadata, resourceType: "OPERADOR" });
     if (isLoadBearingOperator(assignment.setupOperator) && assignment.setupSegments?.length) {
-      addBusySegments(context.operatorBusy, assignment.setupOperator, assignment.setupSegments);
+      addBusySegments(context.operatorBusy, assignment.setupOperator, assignment.setupSegments, { ...busyMetadata, resourceType: "OPERADOR" });
       context.operatorLoad.set(assignment.setupOperator, (context.operatorLoad.get(assignment.setupOperator) || 0) + assignment.setupMinutes);
     }
-    if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.segments);
+    if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.segments, { ...busyMetadata, resourceType: "MAQUINA" });
+    if (context.operatorIdleCache) {
+      context.operatorIdleCache.delete(assignment.operator);
+      if (assignment.setupOperator) context.operatorIdleCache.delete(assignment.setupOperator);
+    }
     if (tracksOperator) {
       context.operatorLoad.set(assignment.operator, (context.operatorLoad.get(assignment.operator) || 0) + assignment.productionMinutes);
     }
@@ -471,18 +957,8 @@
       context.generatedChanges.push(change);
       next.log = appendLog(next.log, `CAMBIO_HERR_KIT ${assignment.toolChange.fromLabel} -> ${assignment.toolChange.toLabel}`);
     }
-    if (assignment.postToolChange?.required) {
-      addBusySegments(context.operatorBusy, assignment.postToolChange.operator, assignment.postToolChange.segments);
-      if (assignment.finite && hasMachineResource(assignment.machine)) addBusySegments(context.machineBusy, assignment.machine, assignment.postToolChange.segments);
-      context.operatorLoad.set(
-        assignment.postToolChange.operator,
-        (context.operatorLoad.get(assignment.postToolChange.operator) || 0) + assignment.postToolChange.minutes
-      );
-      const returnChange = createPostToolChangeOperation(context, next, assignment.postToolChange);
-      context.generatedChanges.push(returnChange);
-    }
 
-    const toolKey = operationToolKey(next);
+    const toolKey = operationToolKey(next, context.state);
     if (hasMachineResource(assignment.machine) && toolKey) {
       const events = context.machineTools.get(assignment.machine) || [];
       const newEvent = {
@@ -500,28 +976,16 @@
         else hi = mid;
       }
       events.splice(lo, 0, newEvent);
-      if (assignment.postToolChange?.required) {
-        const postEvent = {
-          start: assignment.postToolChange.start.getTime(),
-          end: assignment.postToolChange.end.getTime(),
-          toolKey: assignment.postToolChange.toLabel,
-          operationId: returnChangeId(next.id, context.changeCounter),
-          isChange: true,
-        };
-        const postEnd = postEvent.end;
-        while (lo < events.length && events[lo].end <= postEnd) lo++;
-        events.splice(lo, 0, postEvent);
-      }
       context.machineTools.set(assignment.machine, events);
     }
 
     context.scheduledByKey.set(operationKey(next), next);
-    context.scheduledById.set(next.id, next);
     return {
       operation: next,
       start: assignment.operationStart,
       end: assignment.end,
       duration: assignment.productionMinutes,
+      segments: assignment.productionSegments || assignment.segments,
     };
   }
 
@@ -538,6 +1002,8 @@
       contenido: "",
       ct: TOOL_CHANGE_CAPABILITY.ct,
       operador: assignment.setupOperator || toolChangeOperator(context.state, context.settings) || "SIN_OPERADOR",
+      herramental: reportableToolValue(toHerramental),
+      kitHerramental: reportableToolValue(toKit),
       fechaInicio: formatDate(assignment.start),
       horaInicio: formatTime(assignment.start),
       fechaFin: formatDate(assignment.setupEnd || assignment.operationStart),
@@ -548,6 +1014,7 @@
       tipoInsercion: "CAMBIO_HERRAMENTAL",
       estatus: "PLAN",
       generatedBy: GENERATED_BY,
+      generatedAdditionalTool: false,
       completionKey,
       toolChangeFromHerramental: reportableToolValue(fromHerramental),
       toolChangeFromKit: reportableToolValue(fromKit),
@@ -557,63 +1024,31 @@
     };
   }
 
-  function createPostToolChangeOperation(context, operation, postToolChange) {
-    context.changeCounter += 1;
-    const target = context.scheduledById.get(postToolChange.targetOperationId) || operation;
-    const [herramental, kit] = splitToolKey(postToolChange.toLabel);
-    const [fromHerramental, fromKit] = splitToolKey(postToolChange.fromLabel);
-    const completionKey = toolChangeCompletionKey(target, operation.maquina, postToolChange.toLabel);
-    return {
-      ...target,
-      id: returnChangeId(operation.id, context.changeCounter),
-      num: 0,
-      descripcion: "CAMBIO DE HERRAMENTAL / KIT",
-      contenido: "",
-      ct: TOOL_CHANGE_CAPABILITY.ct,
-      operador: postToolChange.operator,
-      maquina: operation.maquina,
-      herramental: herramental === "SIN_HERR" ? "" : herramental,
-      kitHerramental: kit === "SIN_KIT" ? "" : kit,
-      fechaInicio: formatDate(postToolChange.start),
-      horaInicio: formatTime(postToolChange.start),
-      fechaFin: formatDate(postToolChange.end),
-      horaFin: formatTime(postToolChange.end),
-      tiempoCiclo: 0,
-      tiempoSetup: postToolChange.minutes,
-      tiempoProd: 0,
-      tipoInsercion: "CAMBIO_HERRAMENTAL",
-      estatus: "PLAN",
-      generatedBy: GENERATED_BY,
-      completionKey,
-      toolChangeFromHerramental: reportableToolValue(fromHerramental),
-      toolChangeFromKit: reportableToolValue(fromKit),
-      toolChangeToHerramental: reportableToolValue(herramental),
-      toolChangeToKit: reportableToolValue(kit),
-      log: `${GENERATED_BY} ${postToolChange.fromLabel} -> ${postToolChange.toLabel}`,
-    };
-  }
-
-  function returnChangeId(operationId, counter) {
-    return `chg-return-${operationId}-${counter}`;
-  }
-
   function toolChangeCompletionKey(operation, machine, toToolKey) {
     return `TOOL_CHANGE|${normalizeKey(operation?.id || `${operation?.ot || "OT"}-${operation?.secuencia || 0}`)}|${normalizeKey(machine)}|${normalizeKey(toToolKey)}`;
   }
 
   function commitFixedOperation(context, op) {
+    op.esperaMinutos = 0;
+    op.causaEspera = "";
+    op.recursoEspera = "";
+    op.otBloqueadora = "";
+    op.secuenciaBloqueadora = "";
     const start = operationStart(op);
     const end = operationEnd(op);
-    if (start && end) {
+    const reservesCapacity = !isPlanCompletedOperation(context.state, op);
+    if (start && end && reservesCapacity) {
       const segments = [{ start, end }];
-      const tracksOperator = isLoadBearingOperator(op.operador);
-      if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments);
-      if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments);
+      const tracksOperator = isFiniteOperation(context.state, op) && isLoadBearingOperator(op.operador);
+      const busyMetadata = { operationId: op.id, ot: op.ot, secuencia: op.secuencia, performanceState: context.performanceState };
+      if (tracksOperator) addBusySegments(context.operatorBusy, op.operador, segments, { ...busyMetadata, resourceType: "OPERADOR" });
+      if (isFiniteOperation(context.state, op) && hasMachineResource(op.maquina)) addBusySegments(context.machineBusy, op.maquina, segments, { ...busyMetadata, resourceType: "MAQUINA" });
+      if (context.operatorIdleCache) context.operatorIdleCache.delete(op.operador);
       if (tracksOperator) context.operatorLoad.set(op.operador, (context.operatorLoad.get(op.operador) || 0) + diffMinutes(start, end));
     }
-    if (end && hasMachineResource(op.maquina) && operationToolKey(op)) {
+    if (end && hasMachineResource(op.maquina) && operationToolKey(op, context.state)) {
       const events = context.machineTools.get(op.maquina) || [];
-      events.push({ start: start?.getTime() || end.getTime(), end: end.getTime(), toolKey: operationToolKey(op), operationId: op.id, isChange: op.tipoInsercion === "CAMBIO_HERRAMENTAL" });
+      events.push({ start: start?.getTime() || end.getTime(), end: end.getTime(), toolKey: operationToolKey(op, context.state), operationId: op.id, isChange: op.tipoInsercion === "CAMBIO_HERRAMENTAL" });
       context.machineTools.set(op.maquina, events);
     }
     context.scheduledByKey.set(operationKey(op), op);
@@ -622,12 +1057,130 @@
   function computeEarliestStart(context, op, previous) {
     let earliest = new Date(context.windowStart);
     if (previous?.operation) {
-      const ratio = overlapForOperation(context.state, previous.operation);
-      const milestone = addGeneralWorkMinutes(context.state, previous.start, Math.round(previous.duration * ratio), context.windowEnd);
-      if (milestone && milestone > earliest) earliest = milestone;
+      const predecessorLimit = predecessorReleaseMoment(context, previous);
+      if (predecessorLimit && predecessorLimit > earliest) earliest = predecessorLimit;
+    }
+    if (context?.nowAnchor && isNewOperation(context, op)) {
+      const anchor = ceilToSnap(context.nowAnchor);
+      // El ancla de "hora actual" solo aplica a operaciones del MISMO dia calendario
+      // de ejecucion: evita programar hoy hacia el pasado sin desplazar el arranque
+      // de turno de los dias siguientes (que respetan el inicio del calendario).
+      const onExecutionDay = startOfDay(anchor).getTime() === startOfDay(earliest).getTime();
+      if (onExecutionDay && anchor > earliest) earliest = anchor;
     }
 
     return nextAvailableMoment(context.state, earliest, "", "", context.windowEnd);
+  }
+
+  function predecessorReleaseMoment(context, previous) {
+    const ratio = overlapForOperation(context.state, previous.operation);
+    const durationKnown = Number.isFinite(previous.duration) && previous.duration > 0;
+    let limit = previous.end;
+    if (!isSubcontractOperation(context.state, previous.operation) && ratio < 1 && durationKnown) {
+      const milestoneMinutes = Math.round(previous.duration * ratio);
+      const partialMilestone = previous.segments?.length
+        ? productiveMilestone(previous.segments, milestoneMinutes)
+        : addGeneralWorkMinutes(context.state, previous.start, milestoneMinutes, context.windowEnd);
+      if (partialMilestone && partialMilestone < previous.end) limit = partialMilestone;
+    }
+    return limit;
+  }
+
+  function productiveMilestone(segments, minutes) {
+    let remaining = Math.max(0, roundUp(minutes, SNAP_MINUTES));
+    for (const segment of segments || []) {
+      const duration = Math.max(0, diffMinutes(segment.start, segment.end));
+      if (remaining <= duration) return addMinutes(segment.start, remaining);
+      remaining -= duration;
+    }
+    return null;
+  }
+
+  function respectsFixedSuccessor(context, job, op, assignment) {
+    const isConstraint = (operation) => !isPlanCompletedOperation(context.state, operation);
+    const fixed = new Set(job.fixedOperations.filter(isConstraint));
+    const future = [
+      ...job.operations.slice(job.index + 1),
+      ...job.fixedOperations.filter((operation) => isConstraint(operation) && compareOperationSequence(operation, op) > 0),
+    ].sort(compareOperationSequence);
+    const fixedIndex = future.findIndex((operation) => fixed.has(operation));
+    if (fixedIndex < 0) return true;
+    const successor = future[fixedIndex];
+    const fixedStart = operationStart(successor);
+    if (!fixedStart) return true;
+    const probeContext = cloneFeasibilityContext(context);
+    const probeJob = { ...job };
+    const previous = commitAssignment(probeContext, op, { ...assignment, gapFill: false });
+    const feasibility = fixedChainFeasibility(
+      probeContext,
+      probeJob,
+      future.slice(0, fixedIndex),
+      fixedStart,
+      previous,
+      { remaining: MAX_FIXED_CHAIN_PROBES },
+    );
+     return feasibility !== FIXED_CHAIN_INFEASIBLE;
+  }
+
+  function fixedChainFeasibility(context, job, intermediates, fixedStart, previous, budget) {
+    if (!intermediates.length) {
+      const release = predecessorReleaseMoment(context, previous);
+      return release && release <= fixedStart ? FIXED_CHAIN_FEASIBLE : FIXED_CHAIN_INFEASIBLE;
+    }
+    const [intermediate, ...rest] = intermediates;
+    const probeJob = { ...job, index: job.operations.indexOf(intermediate) };
+    const assignments = findAssignments(context, intermediate, previous)
+      .sort((a, b) => compareFixedChainAssignments(context, intermediate, a, b));
+    for (const assignment of assignments) {
+      if (budget.remaining-- <= 0) return FIXED_CHAIN_INCONCLUSIVE;
+      const branchContext = cloneFeasibilityContext(context);
+      const next = commitAssignment(branchContext, intermediate, { ...assignment, gapFill: false });
+      const result = fixedChainFeasibility(branchContext, probeJob, rest, fixedStart, next, budget);
+      if (result === FIXED_CHAIN_FEASIBLE) return result;
+      if (result === FIXED_CHAIN_INCONCLUSIVE) return result;
+    }
+    return FIXED_CHAIN_INFEASIBLE;
+  }
+
+  function compareFixedChainAssignments(context, operation, a, b) {
+    const releaseA = assignmentReleaseMoment(context, operation, a)?.getTime() || Number.MAX_SAFE_INTEGER;
+    const releaseB = assignmentReleaseMoment(context, operation, b)?.getTime() || Number.MAX_SAFE_INTEGER;
+    return releaseA - releaseB || compareAssignments(a, b, context.strategy, context);
+  }
+
+  function assignmentReleaseMoment(context, operation, assignment) {
+    return predecessorReleaseMoment(context, {
+      operation,
+      start: assignment.operationStart,
+      end: assignment.end,
+      duration: assignment.productionMinutes,
+      segments: assignment.productionSegments || assignment.segments,
+    });
+  }
+
+  // machineTools y scheduledByKey NO se clonan: commitAssignment nunca los modifica.
+  // Clonarlos copiaba dos Maps enteros en cada probe, lo que multiplicaba la presión de GC.
+  function cloneFeasibilityContext(context) {
+    const cloneBusy = (map) => new Map([...map.entries()].map(([key, intervals]) => [
+      key,
+      intervals.map((interval) => ({ ...interval, start: new Date(interval.start), end: new Date(interval.end) })),
+    ]));
+    return {
+      ...context,
+      diagnostics: [],
+      operatorBusy: cloneBusy(context.operatorBusy),
+      machineBusy: cloneBusy(context.machineBusy),
+      operatorLoad: new Map(context.operatorLoad),
+      operatorIdleCache: new Map(),
+      // machineTools y scheduledByKey TAMBIEN se clonaban por referencia, pero
+      // commitAssignment ESCRIBE en ellos (machineTools.set y scheduledByKey.set).
+      // O sea que cada probe contaminaba el estado real: scheduledByKey acumulaba
+      // entradas de candidatos rechazados y machineTools se sobrescribia con valores
+      // de prueba. Un probe que se supone que es un dry-run no puede mutar el estado.
+      machineTools: new Map(context.machineTools),
+      scheduledByKey: new Map(context.scheduledByKey),
+      generatedChanges: [],
+    };
   }
 
   function isLaterOperationGapFill(context, job, assignment) {
@@ -643,7 +1196,7 @@
   }
 
   function toolChangeFor(context, op, machine, candidateStart) {
-    const toKey = operationToolKey(op);
+    const toKey = operationToolKey(op, context.state);
     if (!machine || machine === "SIN_MAQUINA" || !toKey) return { required: false, minutes: 0, fromLabel: "", toLabel: toKey };
     const events = context.machineTools.get(machine);
     let fromKey = "SIN_ANTECEDENTE";
@@ -658,7 +1211,7 @@
       const prior = lo > 0 ? events[lo - 1] : null;
       if (prior) {
         fromKey = prior.toolKey || "SIN_ANTECEDENTE";
-        if (prior.toolKey === toKey) return { required: false, minutes: 0, fromLabel: fromKey, toLabel: toKey };
+        if (normalizeKey(prior.toolKey) === normalizeKey(toKey)) return { required: false, minutes: 0, fromLabel: fromKey, toLabel: toKey };
       }
     }
     const minutes = toolChangeMinutesForTransition(context.state, op, fromKey, toKey, context.settings);
@@ -667,7 +1220,9 @@
 
   function toolChangeMinutesForTransition(state, op, fromKey, toKey, settings) {
     const catalog = toolCatalogForOperation(state, op);
-    if (!catalog) return Math.max(SNAP_MINUTES, numberOr(settings?.toolChangeMinutes, 120));
+    const generalMinutes = Number(settings?.toolChangeMinutes);
+    const fallbackMinutes = Number.isFinite(generalMinutes) && generalMinutes > 0 ? generalMinutes : 120;
+    if (!catalog) return fallbackMinutes;
     const [fromHerramental, fromKit] = splitToolKey(fromKey);
     const [toHerramental, toKit] = splitToolKey(toKey);
     const noAntecedent = normalizeKey(fromKey) === "SIN_ANTECEDENTE";
@@ -675,61 +1230,21 @@
     const kitChanged = noAntecedent
       ? normalizeKey(toKit) !== "SIN_KIT"
       : normalizeKey(fromKit) !== normalizeKey(toKit);
-    return Math.max(0,
+    const configuredMinutes = Math.max(0,
       (toolChanged ? numberOr(catalog.toolSetupMinutes, 0) : 0) +
       (kitChanged ? numberOr(catalog.kitSetupMinutes, 0) : 0)
     );
-  }
-
-  function firstEventAfter(events, time) {
-    if (!events || events.length === 0) return null;
-    let lo = 0, hi = events.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (events[mid].end < time) lo = mid + 1;
-      else hi = mid;
+    if (configuredMinutes > 0) return configuredMinutes;
+    if (noAntecedent) return fallbackMinutes;
+    if (!noAntecedent && (toolChanged || kitChanged)) {
+      return fallbackMinutes;
     }
-    for (let i = lo; i < events.length; i++) {
-      if (Number.isFinite(events[i].start) && events[i].start >= time) return events[i];
-    }
-    return null;
-  }
-
-  function findPostToolChange(context, op, machine, allocation) {
-    const fromLabel = operationToolKey(op);
-    if (!fromLabel || !machine || machine === "SIN_MAQUINA") return { required: false };
-    const future = firstEventAfter(context.machineTools.get(machine), allocation.end.getTime());
-    if (!future || future.toolKey === fromLabel || future.isChange || Number.isFinite(future.preChangeStart)) {
-      return { required: false };
-    }
-    const operator = toolChangeOperator(context.state, context.settings);
-    if (!operator) return null;
-    const target = context.scheduledById.get(future.operationId) || op;
-    const minutes = toolChangeMinutesForTransition(context.state, target, fromLabel, future.toolKey, context.settings);
-    if (minutes <= 0) return { required: false };
-    const postAllocation = allocateWork(context, allocation.end, minutes, {
-      operator,
-      machine,
-      finite: true,
-      setupMinutes: 0,
-    });
-    if (!postAllocation || postAllocation.end.getTime() > future.start) return null;
-    return {
-      required: true,
-      operator,
-      minutes,
-      start: postAllocation.start,
-      end: postAllocation.end,
-      segments: postAllocation.segments,
-      fromLabel,
-      toLabel: future.toolKey,
-      targetOperationId: future.operationId,
-    };
+    return 0;
   }
 
   function enrichToolsFromCatalog(state, operations) {
     for (const op of operations) {
-      if (!isBendingOperation(op)) continue;
+      if (!isBendingOperationResolved(state, op)) continue;
       const item = toolCatalogForOperation(state, op);
       if (!item) continue;
       if (!cleanTool(op.herramental)) op.herramental = cleanTool(item.herramental);
@@ -738,9 +1253,19 @@
   }
 
   function toolCatalogForOperation(state, op) {
-    if (!isBendingOperation(op)) return null;
-    const candidates = (state.toolCatalog || []).filter((item) => {
-      return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(op.parte);
+    if (!isBendingOperationResolved(state, op)) return null;
+    const part = String(op.parte || indexedWorkOrder(state, op.ot)?.item || "").trim();
+    const performanceState = state.__performanceState;
+    countPlanningStat(performanceState, "toolCatalogLookups");
+    if (performanceState) assertPlanningBudget(performanceState, "tool-catalog-lookup");
+    const cachedCatalogIndex = state.__toolCatalogByPart;
+    const catalogIndex = (cachedCatalogIndex && typeof cachedCatalogIndex.get === "function")
+      ? cachedCatalogIndex
+      : buildToolCatalogIndex(state, performanceState);
+    const indexedCandidates = catalogIndex.get(normalizeKey(part));
+    const candidates = indexedCandidates || (state.toolCatalog || []).filter((item) => {
+      countPlanningStat(performanceState, "toolCatalogScans");
+      return item.active !== false && normalizeKey(item.part || item.parte) === normalizeKey(part);
     });
     const herramental = cleanTool(op.herramental);
     const kit = cleanTool(op.kitHerramental);
@@ -752,7 +1277,7 @@
   }
 
   function operatorCandidates(state, op, finite) {
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     if (Array.isArray(state.configuredCapabilities) && !state.configuredCapabilities.includes(capability.key)) return [];
     const matrix = state.matrix || {};
     const allowed = matrix[capability.key] || matrix[capability.ct] || [];
@@ -761,6 +1286,13 @@
       (!active.size || active.has(normalizeKey(name)))
     );
     return unique(candidates).filter((name) => name && normalizeKey(name) !== "SIN_OPERADOR");
+  }
+
+  function unscheduledCause(state, op) {
+    if (!operatorCandidates(state, op, isFiniteOperation(state, op)).length) return "SIN_OPERADOR_CONFIGURADO";
+    if (isBendingOperationResolved(state, op) && !machineCandidates(state, op).length) return "SIN_MAQUINA_O_HERRAMENTAL_VALIDO";
+    if (isBendingOperationResolved(state, op) && operationToolKey(op, state) && !toolChangeOperator(state, state.settings || {})) return "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL";
+    return "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO";
   }
 
   function toolChangeOperator(state, settings) {
@@ -794,17 +1326,17 @@
   }
 
   function machineCandidates(state, op) {
-    if (!isBendingOperation(op)) return [""];
+    if (!isBendingOperationResolved(state, op)) return [""];
     const assignedMachine = String(op.maquina || "").trim();
     if (assignedMachine && normalizeKey(assignedMachine) !== "SIN_MAQUINA") {
-      return validBendingMachine(assignedMachine, op.ct) ? [assignedMachine] : [];
+      return validBendingMachine(assignedMachine, resolvedBendingCt(op, state)) ? [assignedMachine] : [];
     }
     const catalog = (state.machines || [])
       .filter((machine) => machine.active !== false)
       .map((machine) => machine.id || machine.machine || machine.maquina)
       .filter(Boolean);
     const candidates = unique([op.maquina, ...catalog].filter(Boolean))
-      .filter((machine) => normalizeKey(machine) !== "SIN_MAQUINA" && !(String(op.ct) === "5459" && String(machine) === "1"));
+      .filter((machine) => normalizeKey(machine) !== "SIN_MAQUINA" && !(String(resolvedBendingCt(op, state)) === "5459" && String(machine) === "1"));
     return candidates;
   }
 
@@ -813,9 +1345,11 @@
     const toolsByMachine = new Map();
     const configured = Array.isArray(state.configuredCapabilities) ? new Set(state.configuredCapabilities) : null;
     const matrix = state.matrix || {};
-    for (const op of operations || []) {
+    const effectiveOperations = filterExcludedOperations(state, operations)
+      .map((op, index) => applyOtConfiguration(state, normalizeOperation(op, index)));
+    for (const op of effectiveOperations) {
       if (String(op.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL") continue;
-      const capability = capabilityForOperation(op);
+      const capability = capabilityForOperation(op, state);
       const isSubcontract = isSubcontractOperation(state, op);
       const isConfigured = configured
         ? configured.has(capability.key)
@@ -828,19 +1362,19 @@
         const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
         if (!operators.length) issues.push({ code: "MISSING_OPERATOR", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
-      if (isBendingOperation(op) && !validBendingMachine(op.maquina, op.ct)) {
+      if (isBendingOperationResolved(state, op) && !validBendingMachine(op.maquina, resolvedBendingCt(op, state))) {
         issues.push({ code: "MISSING_MACHINE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
       const catalog = toolCatalogForOperation(state, op);
-      if (isBendingOperation(op) && !cleanTool(op.herramental) && !cleanTool(catalog?.herramental)) {
+      if (isBendingOperationResolved(state, op) && !cleanTool(op.herramental) && !cleanTool(catalog?.herramental)) {
         issues.push({ code: "MISSING_TOOL", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
       }
-      if (isBendingOperation(op) && validBendingMachine(op.maquina, op.ct)) {
+      if (isBendingOperationResolved(state, op) && validBendingMachine(op.maquina, resolvedBendingCt(op, state))) {
         const toolKey = operationToolKey({
           ...op,
           herramental: cleanTool(op.herramental) || cleanTool(catalog?.herramental),
           kitHerramental: op.kitPending === true ? "" : (cleanTool(op.kitHerramental) || cleanTool(catalog?.kitHerramental)),
-        });
+        }, state);
         if (toolKey) {
           const machine = String(op.maquina).trim();
           const group = toolsByMachine.get(machine) || { tools: new Set(), operation: op, capability };
@@ -875,9 +1409,123 @@
     return issues;
   }
 
-  function isBendingOperation(op) {
+   function isBendingOperation(op) {
     const ct = String(op.ct || "").trim();
     return ct === "5459" || ct === "5527";
+  }
+
+  function resolvedBendingCt(op, state) {
+    const raw = String(op?.ct || "").trim();
+    if (raw && raw !== "SIN_CT") return raw;
+    try {
+      if (!state) return "SIN_CT";
+      return String(capabilityForOperation(op, state).ct || "").trim();
+    } catch (_error) {
+      return "SIN_CT";
+    }
+  }
+
+  function isBendingOperationResolved(state, op) {
+    if (isBendingOperation(op)) return true;
+    const ct = resolvedBendingCt(op, state);
+    return ct === "5459" || ct === "5527";
+  }
+
+  function isClosedOt(ot) {
+    if (!ot) return false;
+    if (String(ot.status || "").toUpperCase() === "CERRADO") return true;
+    if (String(ot.planStatus || "").toUpperCase() === "COMPLETADA") return true;
+    return false;
+  }
+
+  function analyzeUnscheduledOperations(state, scheduleResult) {
+    const diagnostics = Array.isArray(scheduleResult?.diagnostics) ? scheduleResult.diagnostics : [];
+    const unscheduledDiags = diagnostics.filter((d) => d?.code === "UNSCHEDULED");
+    if (!unscheduledDiags.length) return { total: 0, byCause: {}, capacityOps: [], configOps: [], engineSuspicion: [] };
+
+    const byCause = {};
+    for (const d of unscheduledDiags) {
+      const cause = d.cause || "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO";
+      if (!byCause[cause]) byCause[cause] = [];
+      byCause[cause].push(d);
+    }
+
+    const configCauses = new Set(["SIN_OPERADOR_CONFIGURADO", "SIN_MAQUINA_O_HERRAMENTAL_VALIDO", "SIN_AJUSTADOR_PARA_CAMBIO_HERRAMENTAL"]);
+    const configOps = unscheduledDiags.filter((d) => configCauses.has(d.cause));
+    const capacityOps = unscheduledDiags.filter((d) => !configCauses.has(d.cause));
+
+    const horizonStart = parseDateOnly(state.planStart) || new Date();
+    const horizonEndMs = horizonStart.getTime() + clampInteger(state.horizonDays || 15, 1, 45) * 86400000;
+    const horizonMinutes = Math.max(0, (horizonEndMs - horizonStart.getTime()) / 60000);
+
+    const engineSuspicion = [];
+    const operations = (state.operations || []).filter((op) => !filterExcludedOperations(state, [op]).length);
+    const opsById = new Map(operations.map((op) => [String(op.id), op]));
+
+    for (const d of capacityOps) {
+      const op = opsById.get(String(d.operationId));
+      if (!op) continue;
+      const capability = capabilityForOperation(op, state);
+      const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
+      const prodMinutes = productionMinutes(op);
+      const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
+      const avgPerf = opPerf.length ? opPerf.reduce((a, b) => a + b, 0) / opPerf.length : 100;
+      const effectiveMinutes = prodMinutes / (avgPerf / 100);
+      const totalAvailable = operators.reduce((sum, name) => sum + availableMinutes(state, name, state.planStart, state.horizonDays || 15), 0);
+      const capRatio = totalAvailable > 0 ? effectiveMinutes / totalAvailable : Infinity;
+      const isHeavy = effectiveMinutes > horizonMinutes * 0.15;
+      const onlyOneOperator = operators.length === 1;
+
+      if (capRatio > 0.05 && !isHeavy && onlyOneOperator && operators.length === 1) {
+        engineSuspicion.push({
+          operationId: d.operationId,
+          ot: d.ot,
+          sequence: d.sequence,
+          capability: capability.key,
+          operators,
+          effectiveMinutes: Math.round(effectiveMinutes),
+          totalAvailableMinutes: Math.round(totalAvailable),
+          reason: "UNIQUE_OPERATOR_SATURATED",
+        });
+      }
+    }
+
+    const details = unscheduledDiags.map((d) => {
+      const op = opsById.get(String(d.operationId));
+      if (!op) return { ...d, capability: "", operators: [], prodMinutes: 0, effectiveMinutes: 0, totalAvailableMinutes: 0, machine: "" };
+      const capability = capabilityForOperation(op, state);
+      const operators = operatorCandidates(state, op, isFiniteOperation(state, op));
+      const prodMinutes = productionMinutes(op);
+      const opPerf = operators.map((name) => operatorPerformanceForOperation(state, op, name));
+      const avgPerf = opPerf.length ? opPerf.reduce((a, b) => a + b, 0) / opPerf.length : 100;
+
+      const effectiveMinutes = prodMinutes / (avgPerf / 100);
+      const totalAvailable = operators.reduce((sum, name) => sum + availableMinutes(state, name, state.planStart, state.horizonDays || 15), 0);
+      return {
+        operationId: d.operationId,
+        ot: d.ot,
+        sequence: d.sequence,
+        cause: d.cause,
+        capability: capability.key,
+        ct: capability.ct,
+        operators,
+        machine: op.maquina || "",
+        prodMinutes: Math.round(prodMinutes),
+        effectiveMinutes: Math.round(effectiveMinutes),
+        totalAvailableMinutes: Math.round(totalAvailable),
+        descripcion: op.descripcion || "",
+        parte: op.parte || "",
+      };
+    });
+
+    return {
+      total: unscheduledDiags.length,
+      byCause: Object.fromEntries(Object.entries(byCause).map(([cause, items]) => [cause, items.length])),
+      capacityOps: capacityOps.length,
+      configOps: configOps.length,
+      engineSuspicion,
+      details,
+    };
   }
 
   function validBendingMachine(machine, ct) {
@@ -888,7 +1536,7 @@
   function isFiniteOperation(state, op) {
     if (op.tipoInsercion === "SUBCONTRATO" || isSubcontractOperation(state, op)) return false;
     if (op.tipoInsercion === "CAMBIO_HERRAMENTAL") return true;
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     const matchedRule = operationRuleForOperation(state, op);
     const mode = [capability.key, matchedRule?.key, capability.ct]
       .filter((k, i, arr) => k && arr.indexOf(k) === i)
@@ -898,15 +1546,15 @@
   }
 
   function isSubcontractOperation(state, op) {
-    if (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") return true;
-    if (String(op.ct || "") === "6462") return true;
-    const description = normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`);
-    if (["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"].some((name) => description.includes(name))) return true;
-    if (String(op.ct || "") === "5495") {
-      const eCoat = /E\s*[- ]?\s*COAT/.test(description);
-      if ((description.includes("67OTD") && description.includes("ENVIO") && description.includes("PINTURA")) || (eCoat && description.includes("PINTURA"))) return true;
+    if (op && typeof op === "object") {
+      const cached = __subcontractCache.get(op);
+      if (cached !== undefined) return cached;
     }
-    return false;
+    const result = (String(op.tipoInsercion || "").toUpperCase() === "SUBCONTRATO") ||
+      (op.subcontractType && String(op.subcontractType).trim()) ||
+      isSpecialSubcontractCapability({ ct: op.ct, label: normalizeKey(`${op.descripcion || ""} ${op.contenido || ""}`) });
+    if (op && typeof op === "object") __subcontractCache.set(op, result);
+    return result;
   }
 
   function subcontractRule(state, op) {
@@ -931,7 +1579,7 @@
   }
 
   function operationRuleForOperation(state, op) {
-    const capability = capabilityForOperation(op);
+    const capability = capabilityForOperation(op, state);
     const rules = state.operationRules || {};
     const directKey = rules[capability.key] ? capability.key : (rules[capability.ct] ? capability.ct : "");
     if (directKey) return { ...rules[directKey], key: directKey };
@@ -945,11 +1593,134 @@
     return null;
   }
 
-  function capabilityForOperation(op) {
-    const ct = String(op.ct || "SIN_CT").trim();
-    const label = String(op.descripcion || op.tipoInsercion || "OPERACION").trim();
-    return { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
+  function resolveOperationCt(state, label) {
+    if (!state) return "SIN_CT";
+    const labelKey = normalizeKey(label).replace(/\s+/g, "_");
+    let resolution = state.__ctResolution;
+    if (!resolution ||
+        resolution.configuredCapabilities !== state.configuredCapabilities ||
+        resolution.operationCatalog !== state.operationCatalog ||
+        resolution.matrix !== state.matrix) {
+      const candidates = [];
+      for (const key of state.configuredCapabilities || []) {
+        const separator = String(key).indexOf("::");
+        if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+      }
+      for (const item of state.operationCatalog || []) {
+        const ct = String(item?.ct || "").trim();
+        const itemLabel = String(item?.label || item?.operation || "").trim();
+        if (ct && itemLabel) candidates.push({ ct, label: itemLabel });
+      }
+      for (const key of Object.keys(state.matrix || {})) {
+        const separator = key.indexOf("::");
+        if (separator > 0) candidates.push({ ct: key.slice(0, separator).trim(), label: key.slice(separator + 2) });
+      }
+      const byKey = new Map();
+      for (const item of candidates) {
+        if (!item.ct || item.ct === "SIN_CT") continue;
+        const itemKey = normalizeKey(item.label).replace(/\s+/g, "_");
+        if (!byKey.has(itemKey)) byKey.set(itemKey, item.ct);
+      }
+      resolution = {
+        configuredCapabilities: state.configuredCapabilities,
+        operationCatalog: state.operationCatalog,
+        matrix: state.matrix,
+        byKey,
+      };
+      state.__ctResolution = resolution;
+    }
+    const matched = resolution.byKey.get(labelKey);
+    return matched || "SIN_CT";
   }
+
+  function capabilityForOperation(op, state) {
+    const source = op || {};
+    const resolutionRef = state && state.__ctResolution ? state.__ctResolution : null;
+    if (state) {
+      const cached = __capabilityCache.get(source);
+      if (cached && cached.resolution === resolutionRef) return cached.result;
+    }
+    const label = String(op?.descripcion || op?.tipoInsercion || "OPERACION").trim();
+    const rawCt = String(op?.ct || "").trim();
+    const ct = rawCt && rawCt !== "SIN_CT" ? rawCt : resolveOperationCt(state, label);
+    const result = { ct, label, key: `${ct}::${normalizeKey(label).replace(/\s+/g, "_")}` };
+    if (state) __capabilityCache.set(source, { resolution: resolutionRef, result });
+    return result;
+  }
+
+  function filterCapabilities(capabilities, query) {
+    const items = Array.isArray(capabilities) ? capabilities : [];
+    const terms = normalizeSearchText(query).split(" ").filter(Boolean);
+    if (!terms.length) return items.slice();
+    return items.filter((capability) => {
+      const haystack = normalizeSearchText([
+        capability?.ct,
+        capability?.label,
+        capability?.name,
+        capability?.operation,
+        capability?.key,
+      ].filter(Boolean).join(" "));
+      return terms.every((term) => haystack.includes(term));
+    });
+  }
+
+  function isSpecialSubcontractCapability(capability) {
+    const ct = String(capability?.ct || "").trim();
+    const value = normalizeSearchText([
+      capability?.ct,
+      capability?.label,
+      capability?.name,
+      capability?.operation,
+      capability?.key,
+    ].filter(Boolean).join(" "));
+    if (["SUBCONTRATO", "CROMADO", "METOKOTE", "MAKA", "GALVANIZADO"].some((name) => value.includes(name))) return true;
+    if (ct === "6462") return true;
+    if (ct !== "5495") return false;
+    const eCoat = /E\s*[- ]?\s*COAT/.test(value);
+    return (value.includes("67OTD") && value.includes("ENVIO") && value.includes("PINTURA")) ||
+      (eCoat && value.includes("PINTURA"));
+  }
+
+  function normalizedCapabilityKey(capability) {
+    if (typeof capability === "string") {
+      const separator = capability.indexOf("::");
+      if (separator < 0) return normalizeKey(capability).replace(/\s+/g, "_");
+      return capabilityKeyFromParts(capability.slice(0, separator), capability.slice(separator + 2));
+    }
+    if (capability?.key) return normalizedCapabilityKey(capability.key);
+    return capabilityKeyFromParts(
+      capability?.ct,
+      capability?.label || capability?.name || capability?.operation || capability?.descripcion || capability?.tipoInsercion,
+    );
+  }
+
+  function capabilityKeyFromParts(ct, label) {
+    const normalizedCt = normalizeKey(ct || "SIN_CT").replace(/\s+/g, "_");
+    const normalizedLabel = normalizeKey(label || "OPERACION").replace(/\s+/g, "_");
+    return `${normalizedCt}::${normalizedLabel}`;
+  }
+
+  function isOperationCapabilityExcluded(state, operation) {
+    if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return false;
+    const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
+    if (!excluded.length) return false;
+    const operationKey = normalizedCapabilityKey(capabilityForOperation(operation || {}, state));
+    return excluded.some((capability) => normalizedCapabilityKey(capability) === operationKey);
+  }
+
+  function excludedCapabilityKeySet(state) {
+    const excluded = Array.isArray(state?.excludedCapabilities) ? state.excludedCapabilities : [];
+    return new Set(excluded.map(normalizedCapabilityKey).filter(Boolean));
+  }
+
+  function filterExcludedOperations(state, operations, excludedSet = excludedCapabilityKeySet(state)) {
+    return (Array.isArray(operations) ? operations : []).filter((operation) => {
+      if (normalizeKey(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL") return true;
+      return !excludedSet.has(normalizedCapabilityKey(capabilityForOperation(operation || {}, state)));
+    });
+  }
+  // TODO: Consider memoizing filterExcludedOperations for performance improvement (RULE-BAL-009 / RULE-MAT-008)
+  // Current overhead: normalizes capabilities and creates Set per call; could cache by (stateHash, excludedSetHash)
 
   function isCalendarAvailable(state, start, end, operator, machine) {
     const windows = effectiveWindows(state, start, operator, machine);
@@ -965,6 +1736,7 @@
       cache = new Map();
       state.__windowCache = cache;
     }
+    if (state.__performanceState) assertPlanningBudget(state.__performanceState, "effective-windows", { state, date, operator, machine });
     let cacheKey = "";
     if (cache) {
       cacheKey = `${formatDate(date)}|${operator}|${machine}`;
@@ -1000,8 +1772,14 @@
     for (const entry of entries) {
       const startDate = String(entry.startDate || entry.fechaInicio || entry.date || entry.fecha || dateKey);
       const endDate = String(entry.endDate || entry.fechaFin || entry.date || entry.fecha || startDate);
-      const start = dateKey === startDate ? parseClock(entry.start || entry.horaInicio, 0) : 0;
-      const end = dateKey === endDate ? parseClock(entry.end || entry.horaFin, 24 * 60) : 24 * 60;
+      const concept = normalizeKey(entry.concept || entry.concepto || entry.resourceType || entry.tipoRecurso || "GENERAL");
+      const fullDayConcept = concept === "ASUETO" || concept === "VACACIONES";
+      let start = dateKey === startDate ? parseClock(entry.start || entry.horaInicio, 0) : 0;
+      let end = dateKey === endDate ? parseClock(entry.end || entry.horaFin, 24 * 60) : 24 * 60;
+      // ASUETO/VACACIONES guardados o leidos con horas 00:00-00:00 (p. ej. Sheets normaliza 24:00 a 0:00
+      // en celdas de hora, o el formulario quedo sin horas) representan el dia completo: sin lapso util
+      // se bloquean las 24 horas. Un GENERAL con horas explicitas nunca cae aqui.
+      if (fullDayConcept && end <= start) { start = 0; end = 24 * 60; }
       if (end > start) windows = subtractWindow(windows, { start, end });
     }
     const result = windows.filter((window) => window.end > window.start);
@@ -1012,6 +1790,7 @@
   function nextAvailableMoment(state, date, operator, machine, windowEnd) {
     let cursor = ceilToSnap(date);
     while (cursor < windowEnd) {
+      assertPlanningBudget(state.__performanceState, "calendar-next-available");
       const windows = effectiveWindows(state, cursor, operator, machine);
       const currentMinute = minuteOfDay(cursor);
       const window = windows.find((item) => item.end > currentMinute);
@@ -1034,7 +1813,14 @@
   function addWorkingDays(state, date, days, windowEnd) {
     let cursor = startOfDay(date);
     let remaining = days;
+    let iterationCount = 0;
     while (cursor < windowEnd && remaining > 0) {
+      assertPlanningBudget(state.__performanceState, "calendar-working-days");
+      iterationCount++;
+      if (iterationCount % 50 === 0) {
+        // Yield al navegador cada 50 iteraciones para evitar "script unresponsive"
+        setTimeout(() => {}, 0);
+      }
       cursor = addDays(cursor, 1);
       if (effectiveWindows(state, atMinute(cursor, DEFAULT_START_MINUTE), "", "").length) remaining -= 1;
     }
@@ -1045,8 +1831,15 @@
   function addGeneralWorkMinutes(state, date, minutes, windowEnd) {
     let cursor = ceilToSnap(date);
     let remaining = Math.max(0, roundUp(minutes, SNAP_MINUTES));
+    let iterationCount = 0;
     if (!remaining) return cursor;
     while (cursor < windowEnd && remaining > 0) {
+      assertPlanningBudget(state.__performanceState, "calendar-work-minutes");
+      iterationCount++;
+      if (iterationCount % 50 === 0) {
+        // Yield al navegador cada 50 iteraciones para evitar "script unresponsive"
+        setTimeout(() => {}, 0);
+      }
       const end = addMinutes(cursor, Math.min(ALLOCATION_CHUNK_MINUTES, remaining));
       if (isCalendarAvailable(state, cursor, end, "", "")) {
         remaining -= diffMinutes(cursor, end);
@@ -1070,11 +1863,12 @@
   }
 
   function nextResourceAvailability(state, operator, machine, startValue) {
-    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(state.operations);
+    const operations = filterExcludedOperations(state, state.operations);
+    const startDate = parseDateOnly(startValue || state.planStart) || inferPlanStart(operations);
     const cursorStart = atMinute(startDate, DEFAULT_START_MINUTE);
     const windowEnd = atMinute(addDays(startOfDay(startDate), clampInteger(state.horizonDays || DEFAULT_HORIZON_DAYS, 1, 45)), DEFAULT_START_MINUTE);
     const selected = Array.isArray(state.selectedOts) ? new Set(state.selectedOts.map(normalizeKey)) : null;
-    const intervals = (state.operations || []).filter((op) => {
+    const intervals = operations.filter((op) => {
       if (isPlanCompletedOperation(state, op)) return false;
       if (selected && !selected.has(normalizeKey(op.ot))) return false;
       if (operator && String(op.operador || "") !== String(operator)) return false;
@@ -1098,37 +1892,102 @@
   }
 
   function overlapsBusy(intervals, start, end) {
-    if (!intervals) return false;
-    return intervals.some((interval) => start < interval.end && end > interval.start);
+    return Boolean(firstBusyOverlapEnd(intervals, start, end));
+  }
+
+  function firstBusyOverlapEnd(intervals, start, end, performanceState = null) {
+    if (!intervals || !intervals.length) return null;
+    let index = firstIntervalEndingAfter(intervals, start);
+    while (index > 0 && intervals[index - 1].end > start) index -= 1;
+    let conflictEnd = null;
+    for (; index < intervals.length; index += 1) {
+      if (index % 64 === 0) assertPlanningBudget(performanceState, "busy-overlap-scan");
+      const interval = intervals[index];
+      countPlanningStat(performanceState, "busyOverlapScans");
+      if (interval.start >= end) break;
+      if (start < interval.end && end > interval.start) {
+        conflictEnd = maxDate(conflictEnd, interval.end);
+        break;
+      }
+    }
+    return conflictEnd ? new Date(conflictEnd) : null;
+  }
+
+  function firstIntervalEndingAfter(intervals, start) {
+    let low = 0;
+    let high = intervals.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (intervals[mid].end <= start) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  }
+
+  function maxDate(left, right) {
+    if (!left) return right ? new Date(right) : null;
+    if (!right) return new Date(left);
+    return left > right ? new Date(left) : new Date(right);
+  }
+
+  function isCachedAssignmentValid(context, assignment) {
+    if (!assignment || !assignment.end) return false;
+    const start = assignment.operationStart || assignment.start;
+    const end = assignment.end;
+    const spanStart = assignment.start;
+    const operators = unique([assignment.operator, assignment.setupOperator].filter(Boolean));
+    for (const operator of operators) {
+      if (firstBusyOverlapEnd(context.operatorBusy.get(operator), spanStart, end, context.performanceState)) return false;
+    }
+    if (assignment.machine && hasMachineResource(assignment.machine) &&
+        firstBusyOverlapEnd(context.machineBusy.get(assignment.machine), spanStart, end, context.performanceState)) {
+      return false;
+    }
+    return start < end;
   }
 
   function nextBusyConflictEnd(context, start, end, operators, machine, finite) {
+    assertPlanningBudget(context.performanceState, "busy-conflict-scan", context);
     const intervals = [];
-    for (const operator of unique(operators)) intervals.push(...(context.operatorBusy.get(operator) || []));
-    if (finite && hasMachineResource(machine)) intervals.push(...(context.machineBusy.get(machine) || []));
-    const conflicts = intervals
-      .filter((interval) => start < interval.end && end > interval.start)
-      .sort((left, right) => left.start - right.start || left.end - right.end);
+    for (const operator of unique(operators)) collectBusyConflicts(intervals, context.operatorBusy.get(operator), start, end, context.performanceState);
+    if (finite && hasMachineResource(machine)) collectBusyConflicts(intervals, context.machineBusy.get(machine), start, end, context.performanceState);
+    const conflicts = intervals.sort((left, right) => left.start - right.start || left.end - right.end);
+    if (conflicts.length > 1) countPlanningStat(context.performanceState, "busyConflictSorts");
     if (!conflicts.length) return null;
     let conflictEnd = new Date(conflicts[0].end);
     for (let index = 1; index < conflicts.length && conflicts[index].start <= conflictEnd; index += 1) {
+      assertPlanningBudget(context.performanceState, "busy-conflict-merge", context);
       if (conflicts[index].end > conflictEnd) conflictEnd = new Date(conflicts[index].end);
     }
     return conflictEnd;
   }
 
-  function operatorOverlapConflicts(stateOrOperations) {
+  function collectBusyConflicts(out, intervals, start, end, performanceState) {
+    if (!intervals || !intervals.length) return;
+    let index = firstIntervalEndingAfter(intervals, start);
+    while (index > 0 && intervals[index - 1].end > start) index -= 1;
+    for (; index < intervals.length; index += 1) {
+      if (index % 64 === 0) assertPlanningBudget(performanceState, "busy-conflict-scan");
+      const interval = intervals[index];
+      countPlanningStat(performanceState, "busyConflictScans");
+      if (interval.start >= end) break;
+      if (start < interval.end && end > interval.start) out.push(interval);
+    }
+  }
+
+  function operatorOverlapConflicts(stateOrOperations, stateContext = null) {
     const operations = Array.isArray(stateOrOperations)
       ? stateOrOperations
       : (Array.isArray(stateOrOperations?.operations)
         ? stateOrOperations.operations.filter((op) => !isPlanCompletedOperation(stateOrOperations, op))
         : []);
+    const capacityState = stateContext || (Array.isArray(stateOrOperations) ? null : stateOrOperations);
     const byOperator = new Map();
     for (const op of operations) {
       const operator = String(op.operador || "").trim();
       const start = operationStart(op);
       const end = operationEnd(op);
-      if (!isLoadBearingOperator(operator) || !start || !end || start >= end) continue;
+      if ((capacityState && !isFiniteOperation(capacityState, op)) || !isLoadBearingOperator(operator) || !start || !end || start >= end) continue;
       if (!byOperator.has(operator)) byOperator.set(operator, []);
       byOperator.get(operator).push({ op, start, end });
     }
@@ -1158,10 +2017,53 @@
     return conflicts;
   }
 
-  function addBusySegments(map, resource, segments) {
+  function waitDiagnostic(context, assignment) {
+    const earliest = assignment.earliest || assignment.operationStart;
+    const waitMinutes = Math.max(0, Math.round(diffMinutes(earliest, assignment.operationStart)));
+    if (!waitMinutes) return { esperaMinutos: 0, causaEspera: "", recursoEspera: "", otBloqueadora: "", secuenciaBloqueadora: "" };
+
+    if (assignment.toolChange?.required && assignment.setupMinutes > 0 && assignment.start < assignment.operationStart) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CAMBIO_HERRAMENTAL", recursoEspera: assignment.machine || assignment.setupOperator || "CAMBIO DE HERRAMENTAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
+
+    const candidates = [];
+    const collect = (intervals, cause, resource) => {
+      for (const interval of intervals || []) {
+        if (interval.end > earliest && interval.start < assignment.operationStart) candidates.push({ interval, cause, resource });
+      }
+    };
+    collect(context.operatorBusy.get(assignment.operator), "OPERADOR", assignment.operator);
+    if (assignment.finite && hasMachineResource(assignment.machine)) collect(context.machineBusy.get(assignment.machine), "MAQUINA", assignment.machine);
+    candidates.sort((left, right) => right.interval.end - left.interval.end || (left.cause === "OPERADOR" ? -1 : 1));
+    const blocker = candidates[0];
+    const calendarProbe = blocker?.interval.end || earliest;
+    const resourceCalendarStart = nextAvailableMoment(context.state, calendarProbe, assignment.operator, assignment.machine, context.windowEnd);
+    if (resourceCalendarStart > calendarProbe && resourceCalendarStart >= assignment.operationStart) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CALENDARIO", recursoEspera: [assignment.operator, assignment.machine].filter(Boolean).join(" / ") || "CALENDARIO GENERAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
+    if (blocker) return {
+      esperaMinutos: waitMinutes,
+      causaEspera: blocker.cause,
+      recursoEspera: blocker.resource,
+      otBloqueadora: blocker.interval.ot == null ? "" : String(blocker.interval.ot),
+      secuenciaBloqueadora: blocker.interval.secuencia ?? "",
+    };
+
+    if (resourceCalendarStart > earliest) {
+      return { esperaMinutos: waitMinutes, causaEspera: "CALENDARIO", recursoEspera: [assignment.operator, assignment.machine].filter(Boolean).join(" / ") || "CALENDARIO GENERAL", otBloqueadora: "", secuenciaBloqueadora: "" };
+    }
+    return { esperaMinutos: waitMinutes, causaEspera: "SIN_CAUSA", recursoEspera: "", otBloqueadora: "", secuenciaBloqueadora: "" };
+  }
+
+  function addBusySegments(map, resource, segments, metadata) {
     if (!resource || normalizeKey(resource) === "SIN_OPERADOR" || normalizeKey(resource) === "SIN_MAQUINA" || normalizeKey(resource) === "SUBCONTRATO") return;
     const current = map.get(resource) || [];
-    current.push(...segments.map((segment) => ({ start: new Date(segment.start), end: new Date(segment.end) })));
+    const { performanceState, ...intervalMetadata } = metadata || {};
+    current.push(...segments.map((segment) => ({
+      start: new Date(segment.start), end: new Date(segment.end),
+      ...intervalMetadata, resource,
+    })));
+    countPlanningStat(performanceState, "busySegmentSorts");
     current.sort((a, b) => a.start - b.start);
     map.set(resource, current);
   }
@@ -1176,36 +2078,311 @@
     return Boolean(key) && key !== "SIN_MAQUINA";
   }
 
-  function buildJobs(operations) {
+  function buildJobs(operations, fixedOperations, state = {}) {
     const byOt = new Map();
     for (const op of operations) {
       const key = normalizeKey(op.ot);
       if (!byOt.has(key)) byOt.set(key, []);
       byOt.get(key).push(op);
     }
+    const selectedOrder = new Map((state.selectedOts || [])
+      .map((ot, index) => [normalizeKey(ot), index])
+      .filter(([key]) => key));
     return [...byOt.values()].map((items) => ({
-      operations: items.sort((a, b) => Number(a.secuencia) - Number(b.secuencia) || Number(a.num) - Number(b.num)),
+      operations: items.sort(compareOperationSequence),
+      fixedOperations: (fixedOperations || [])
+        .filter((op) => normalizeKey(op.ot) === normalizeKey(items[0]?.ot))
+        .sort(compareOperationSequence),
       index: 0,
       last: null,
+      hasAnchor: items.some((op) => hasOperationAnchor(op)),
+      orderIndex: selectedOrder.has(normalizeKey(items[0]?.ot)) ? selectedOrder.get(normalizeKey(items[0]?.ot)) : Number.MAX_SAFE_INTEGER,
     })).sort((a, b) => normalizePriority(a.operations[0]?.prioridad) - normalizePriority(b.operations[0]?.prioridad));
   }
 
-  function compareFirstOperationCandidates(a, b) {
+  function expandAdditionalToolOperations(state, operations) {
+    const byOt = new Map();
+    operations.forEach((op) => {
+      if (!isBendingOperationResolved(state, op)) return;
+      const extras = additionalToolList(op.additionalHerramentales || op.herramentalesExtra);
+      if (!extras.length) return;
+      const key = normalizeKey(op.ot);
+      if (!byOt.has(key)) byOt.set(key, []);
+      byOt.get(key).push(op);
+    });
+    if (!byOt.size) return operations;
+    const expanded = [...operations];
+    const completedGenerated = new Set((state.operations || [])
+      .filter((op) => op.generatedAdditionalTool === true && isPlanCompletedOperation(state, op))
+      .map((op) => `${normalizeKey(op.ot)}|${normalizeKey(op.herramental)}`));
+    for (const items of byOt.values()) {
+      const base = items.sort(compareOperationSequence)[0];
+      additionalToolList(base.additionalHerramentales).forEach((tool, index) => {
+        const entry = additionalToolEntry(tool);
+        if (completedGenerated.has(`${normalizeKey(base.ot)}|${normalizeKey(entry.herramental)}`)) return;
+        expanded.push(additionalToolOperation(base, entry, index));
+      });
+    }
+    return expanded;
+  }
+
+  function additionalToolOperation(base, tool, index) {
+    const entry = additionalToolEntry(tool);
+    return {
+      ...base,
+      id: `${base.id || `${base.ot}-${base.secuencia}`}-herr-extra-${index + 1}`,
+      num: Number(base.num || 0) + ((index + 1) / 1000),
+      secuencia: Number(base.secuencia || 1) + ((index + 1) / 1000),
+      descripcion: base.descripcion || "DOBLEZ",
+      maquina: entry.machine || base.maquina,
+      herramental: entry.herramental,
+      additionalHerramentales: [],
+      fechaInicio: "",
+      horaInicio: "",
+      fechaFin: "",
+      horaFin: "",
+      operador: "SIN_OPERADOR",
+      locked: false,
+      autoFrozen: false,
+      generatedBy: GENERATED_BY,
+      generatedAdditionalTool: true,
+      tipoInsercion: "OPERACION",
+      planStatus: "PENDIENTE",
+      log: appendLog(base.log, "HERRAMENTAL_ADICIONAL_GENERADO"),
+    };
+  }
+
+  function fixedPredecessor(job, operation) {
+    const candidates = (job.fixedOperations || [])
+      .filter((candidate) => compareOperationSequence(candidate, operation) < 0)
+      .filter((candidate) => operationStart(candidate) && operationEnd(candidate));
+    const predecessor = candidates.reduce((latest, candidate) => latestPredecessor(latest, {
+      operation: candidate,
+      start: operationStart(candidate),
+      end: operationEnd(candidate),
+      duration: declaredOperationDuration(candidate),
+    }), null)?.operation;
+    if (!predecessor) return null;
+    const start = operationStart(predecessor);
+    const end = operationEnd(predecessor);
+    return { operation: predecessor, start, end, duration: declaredOperationDuration(predecessor) };
+  }
+
+  function declaredOperationDuration(operation) {
+    const setup = numberOr(operation?.tiempoSetup, 0);
+    const production = productionMinutes(operation);
+    return setup + production > 0 ? operationDuration(operation, 100, 100) : null;
+  }
+
+  function latestPredecessor(left, right) {
+    if (!left) return right;
+    if (!right) return left;
+    const leftEnd = left.end instanceof Date ? left.end.getTime() : Number.NEGATIVE_INFINITY;
+    const rightEnd = right.end instanceof Date ? right.end.getTime() : Number.NEGATIVE_INFINITY;
+    if (leftEnd !== rightEnd) return leftEnd > rightEnd ? left : right;
+    return compareOperationSequence(left.operation, right.operation) >= 0 ? left : right;
+  }
+
+  function compareOperationSequence(a, b) {
+    return Number(a?.secuencia) - Number(b?.secuencia) || Number(a?.num) - Number(b?.num);
+  }
+
+  function toolAffinityScore(assignment) {
+    const change = assignment?.toolChange;
+    if (!change || change.required !== true) return 2;
+    const [fromHerramental, fromKit] = splitToolKey(change.fromLabel || "");
+    const [toHerramental, toKit] = splitToolKey(change.toLabel || "");
+    if (normalizeKey(fromHerramental) !== normalizeKey(toHerramental)) return 0;
+    return normalizeKey(fromKit) === normalizeKey(toKit) ? 2 : 1;
+  }
+
+  function toolAffinityTie(a, b) {
+    const aEnd = a?.assignment?.end instanceof Date ? a.assignment.end.getTime() : a?.assignment?.end;
+    const bEnd = b?.assignment?.end instanceof Date ? b.assignment.end.getTime() : b?.assignment?.end;
+    if (aEnd !== bEnd || !Number.isFinite(aEnd)) return 0;
+    return toolAffinityScore(b.assignment) - toolAffinityScore(a.assignment);
+  }
+
+  function tieBreakAssignment(candidate) {
+    return candidate?.assignment || candidate || null;
+  }
+
+  function assignmentEndMs(assignment) {
+    const end = assignment?.end;
+    if (end instanceof Date) return end.getTime();
+    const numeric = Number(end);
+    return Number.isFinite(numeric) ? numeric : Number.NaN;
+  }
+
+  function windowedTieBreak(a, b, context, windowMinutes = TOOL_AFFINITY_WINDOW_MINUTES) {
+    if (context?.windowedTieEnabled === false) return 0;
+    const assignmentA = tieBreakAssignment(a);
+    const assignmentB = tieBreakAssignment(b);
+    const endA = assignmentEndMs(assignmentA);
+    const endB = assignmentEndMs(assignmentB);
+    if (!Number.isFinite(endA) || !Number.isFinite(endB)) return 0;
+    if (Math.abs(endA - endB) > windowMinutes * 60000) return 0;
+    countPlanningStat(context?.performanceState, "windowedTieWindowHits");
+    const affinity = toolAffinityScore(assignmentB) - toolAffinityScore(assignmentA);
+    if (affinity) {
+      countPlanningStat(context?.performanceState, "windowedTieAffinityHits");
+      return affinity;
+    }
+    if (context?.antiIdleTieBreakEnabled === false) return 0;
+    const idleDelta = operatorIdleCostDelta(context, assignmentA, assignmentB);
+    if (idleDelta) countPlanningStat(context?.performanceState, "windowedTieIdleHits");
+    return idleDelta;
+  }
+
+  function operatorCommittedIdle(context, operator) {
+    if (!context?.operatorBusy || !isLoadBearingOperator(operator)) return 0;
+    const cache = context.operatorIdleCache;
+    if (cache && cache.has(operator)) return cache.get(operator) || 0;
+    const intervals = context.operatorBusy.get(operator) || [];
+    let idle = 0;
+    for (let index = 1; index < intervals.length; index++) {
+      const previous = intervals[index - 1];
+      const next = intervals[index];
+      if (formatDate(previous.end) === formatDate(next.start)) {
+        idle += Math.max(0, diffMinutes(previous.end, next.start));
+      }
+    }
+    if (cache) cache.set(operator, idle);
+    return idle;
+  }
+
+  function operatorTrailingGapMinutes(context, operator, start) {
+    if (!context?.operatorBusy || !isLoadBearingOperator(operator) || !(start instanceof Date)) return 0;
+    const intervals = context.operatorBusy.get(operator);
+    if (!intervals || !intervals.length) return 0;
+    let lo = 0;
+    let hi = intervals.length - 1;
+    let prior = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (intervals[mid].end <= start) {
+        prior = intervals[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (!prior || formatDate(prior.end) !== formatDate(start)) return 0;
+    return Math.max(0, diffMinutes(prior.end, start));
+  }
+
+  function operatorIdleCost(context, assignment) {
+    const operator = assignment?.operator;
+    if (!isLoadBearingOperator(operator)) return 0;
+    return operatorCommittedIdle(context, operator) + operatorTrailingGapMinutes(context, operator, assignment?.start);
+  }
+
+  function operatorIdleCostDelta(context, assignmentA, assignmentB) {
+    return operatorIdleCost(context, assignmentA) - operatorIdleCost(context, assignmentB);
+  }
+
+  function selectTopKAssignment(context, assignments, topK = 3) {
+    if (!assignments || !assignments.length) return null;
+    if (assignments.length === 1 || context?.toolAffinityTopKEnabled === false) return assignments[0];
+    const top = assignments.slice(0, topK);
+    let best = top[0];
+    let bestScore = toolAffinityScore(top[0]);
+    for (let index = 1; index < top.length; index++) {
+      const score = toolAffinityScore(top[index]);
+      if (score > bestScore) {
+        best = top[index];
+        bestScore = score;
+      }
+    }
+    if (best !== assignments[0]) countPlanningStat(context.performanceState, "toolAffinityTopKPromotions");
+    return best;
+  }
+
+  function compareFirstOperationCandidates(a, b, strategy, context) {
+    if (usesOrderedStartFlow(strategy, context)) {
+      const order = jobOrderIndex(a.job) - jobOrderIndex(b.job);
+      if (order) return order;
+    }
     const ap = normalizePriority(a.op.prioridad);
     const bp = normalizePriority(b.op.prioridad);
     const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
     const bd = parseDateOnly(b.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
-    return ap - bp || a.assignment.end - b.assignment.end || ad - bd || String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
+    return ap - bp || a.assignment.end - b.assignment.end || ad - bd || windowedTieBreak(a, b, context) || String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
   }
 
-  function compareReadyCandidates(a, b, firstOperation, strategy) {
+  function jobOrderIndex(job) {
+    return Number.isFinite(Number(job?.orderIndex)) ? Number(job.orderIndex) : Number.MAX_SAFE_INTEGER;
+  }
+
+  function hasOperationAnchor(operation) {
+    return Boolean(String(operation?.fechaInicio || "").trim()) && Boolean(String(operation?.horaInicio || "").trim());
+  }
+
+  function anchorPreferredOperator(operation) {
+    if (!hasOperationAnchor(operation)) return "";
+    const operator = String(operation?.operador || "").trim();
+    if (!operator || normalizeKey(operator) === "SIN_OPERADOR") return "";
+    return operator;
+  }
+
+  function selectOperationAssignment(context, op, candidates) {
+    if (!candidates || !candidates.length) return null;
+    const preferred = anchorPreferredOperator(op);
+    if (preferred) {
+      const minStart = candidates.reduce((min, candidate) => Math.min(min, candidate.start.getTime()), Number.POSITIVE_INFINITY);
+      const atMin = candidates.filter((candidate) => candidate.start.getTime() === minStart);
+      const preferredAtMin = atMin.find((candidate) => String(candidate.operator) === preferred);
+      if (preferredAtMin) {
+        countPlanningStat(context.performanceState, "anchoredOperatorPreferenceHits");
+        return preferredAtMin;
+      }
+      return selectTopKAssignment(context, atMin);
+    }
+    return selectTopKAssignment(context, candidates);
+  }
+
+  function compareFirstAndSuccessorCandidates(firstCandidate, successorCandidate) {
+    const firstOrder = jobOrderIndex(firstCandidate.job);
+    const successorOrder = jobOrderIndex(successorCandidate.job);
+    if (firstOrder < successorOrder) {
+      return successorCandidate.assignment.end <= firstCandidate.assignment.start ? 1 : -1;
+    }
+    if (successorOrder < firstOrder) {
+      return firstCandidate.assignment.end <= successorCandidate.assignment.start ? -1 : 1;
+    }
+    return -1;
+  }
+
+  function usesOrderedStartFlow(strategy, context) {
+    return context?.fastQualityMode === true || strategy === "flow_balanced";
+  }
+
+  function compareReadyCandidates(a, b, firstOperation, strategy, context) {
+    const anchorTierA = a.job?.hasAnchor ? 0 : 1;
+    const anchorTierB = b.job?.hasAnchor ? 0 : 1;
+    if (anchorTierA !== anchorTierB) return anchorTierA - anchorTierB;
+    const isFirstA = Boolean(a.job.operations[0]) && a.op === a.job.operations[0];
+    const isFirstB = Boolean(b.job.operations[0]) && b.op === b.job.operations[0];
+    if (isFirstA && !isFirstB) return usesOrderedStartFlow(strategy, context) ? compareFirstAndSuccessorCandidates(a, b) : -1;
+    if (!isFirstA && isFirstB) return usesOrderedStartFlow(strategy, context) ? -compareFirstAndSuccessorCandidates(b, a) : 1;
+    if (isFirstA && isFirstB) return compareFirstOperationCandidates(a, b, strategy, context);
+    if (strategy === "flow_balanced" || context?.fastQualityMode === true) return compareFlowReadyCandidates(a, b, context);
+    const stateA = a.job?.state || a.context?.state || {};
+    const stateB = b.job?.state || b.context?.state || {};
+    const aIsSubcontract = isSubcontractOperation(stateA, a.op);
+    const bIsSubcontract = isSubcontractOperation(stateB, b.op);
+    if (aIsSubcontract && bIsSubcontract) {
+      const daysA = Number(a.op.subcontractDays || 0);
+      const daysB = Number(b.op.subcontractDays || 0);
+      if (daysA !== daysB) return daysA - daysB;
+    }
     if (firstOperation) {
       const priorityDifference = normalizePriority(a.op.prioridad) - normalizePriority(b.op.prioridad);
       if (priorityDifference) return priorityDifference;
     }
     const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
     const bd = parseDateOnly(b.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
-    const tie = String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
+    const tie = toolAffinityTie(a, b) || String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
     if (strategy === "finish") {
       return a.assignment.end - b.assignment.end || a.assignment.start - b.assignment.start || ad - bd || a.assignment.toolPenalty - b.assignment.toolPenalty || tie;
     }
@@ -1214,6 +2391,9 @@
     }
     if (strategy === "tools") {
       return a.assignment.start - b.assignment.start || a.assignment.toolPenalty - b.assignment.toolPenalty || a.assignment.end - b.assignment.end || a.assignment.operatorLoad - b.assignment.operatorLoad || tie;
+    }
+    if (strategy === "balanced_goal") {
+      return a.assignment.start - b.assignment.start || a.assignment.toolPenalty - b.assignment.toolPenalty || a.assignment.operatorLoad - b.assignment.operatorLoad || a.assignment.end - b.assignment.end || ad - bd || tie;
     }
     if (strategy === "makespan") {
       const aDur = operationDuration(a.op, 100, 100);
@@ -1225,24 +2405,157 @@
       const bGap = b.job.last ? (b.assignment.start - (operationEnd(b.job.last)?.getTime() || b.assignment.start)) : 0;
       return aGap - bGap || a.assignment.start - b.assignment.start || a.assignment.end - b.assignment.end || tie;
     }
-    return firstOperation ? compareFirstOperationCandidates(a, b) : compareInterleavedCandidates(a, b);
+    if (strategy === "balance") {
+      const aLoad = a.assignment.operatorLoad || 0;
+      const bLoad = b.assignment.operatorLoad || 0;
+      if (aLoad !== bLoad) return aLoad - bLoad;
+    }
+    const state = a.job?.state || a.context?.state || {};
+    if (!isFirstA && !isFirstB) {
+      const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
+      if (toolChange) return toolChange;
+      const matrix = state.matrix || {};
+      const capabilityA = capabilityForOperation(a.op, state);
+      const capabilityB = capabilityForOperation(b.op, state);
+      const keyA = capabilityA.key;
+      const keyB = capabilityB.key;
+      const operatorsA = matrix[keyA] || matrix[capabilityA.ct] || [];
+      const operatorsB = matrix[keyB] || matrix[capabilityB.ct] || [];
+      const loadA = (a.assignment.operatorLoad || 0);
+      const loadB = (b.assignment.operatorLoad || 0);
+      if (operatorsA.length > 0 && operatorsB.length > 0) {
+        const aInMatrix = operatorsA.indexOf(String(a.assignment.operator || "")) >= 0;
+        const bInMatrix = operatorsB.indexOf(String(b.assignment.operator || "")) >= 0;
+        if (aInMatrix && !bInMatrix) return -1;
+        if (!aInMatrix && bInMatrix) return 1;
+      }
+      const matrixWeightA = computeMatrixLoadWeight(state, capabilityA, loadA, String(a.assignment.operator || "SIN_OPERADOR"));
+      const matrixWeightB = computeMatrixLoadWeight(state, capabilityB, loadB, String(b.assignment.operator || "SIN_OPERADOR"));
+      if (matrixWeightA !== matrixWeightB) return matrixWeightA - matrixWeightB;
+    }
+    return firstOperation ? compareFirstOperationCandidates(a, b, strategy, context) : compareInterleavedCandidates(a, b, context);
   }
 
-  function compareAssignments(a, b, strategy) {
+  function compareAssignments(a, b, strategy, context) {
+    const nearTie = windowedTieBreak(a, b, context);
+    if (nearTie) return nearTie;
     const tie = String(a.operator).localeCompare(String(b.operator), "es", { numeric: true });
-    if (strategy === "finish") return a.end - b.end || a.start - b.start || a.toolPenalty - b.toolPenalty || a.operatorLoad - b.operatorLoad || tie;
-    if (strategy === "load") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || tie;
-    if (strategy === "tools") return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || tie;
-    return a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || a.toolPenalty - b.toolPenalty || tie;
+    const sameMachine = normalizeKey(String(a.machine || "")) === normalizeKey(String(b.machine || ""));
+    if (sameMachine) {
+      return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || nearTie || tie;
+    }
+    if (strategy === "flow_balanced") {
+      return a.toolPenalty - b.toolPenalty ||
+        a.projectedOperatorLoad - b.projectedOperatorLoad ||
+        a.end - b.end ||
+        a.start - b.start ||
+        String(a.machine).localeCompare(String(b.machine), "es", { numeric: true }) ||
+        nearTie || tie;
+    }
+    if (strategy === "finish") return a.end - b.end || a.start - b.start || a.toolPenalty - b.toolPenalty || a.operatorLoad - b.operatorLoad || nearTie || tie;
+    if (strategy === "load") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.end - b.end || a.toolPenalty - b.toolPenalty || nearTie || tie;
+    if (strategy === "tools") return a.toolPenalty - b.toolPenalty || a.start - b.start || a.end - b.end || a.operatorLoad - b.operatorLoad || nearTie || tie;
+    if (strategy === "balanced_goal") return a.start - b.start || a.operatorLoad - b.operatorLoad || a.toolPenalty - b.toolPenalty || a.end - b.end || nearTie || tie;
+    return a.start - b.start || a.toolPenalty - b.toolPenalty || a.end - b.end || a.operatorLoad - b.operatorLoad || nearTie || tie;
   }
 
-  function compareInterleavedCandidates(a, b) {
-    const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
-    const bd = parseDateOnly(b.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
-    return a.assignment.start - b.assignment.start ||
+  function flowReadyCandidates(ready, jobs, wipTarget) {
+    const activeReady = ready.filter((candidate) => isFlowActiveJob(candidate.job));
+    const activeWip = jobs.filter((job) => job.operations[job.index] && isFlowActiveJob(job)).length;
+    return activeWip >= wipTarget && activeReady.length ? activeReady : ready;
+  }
+
+  function isFlowActiveJob(job) {
+    return job.index > 0 || job.fixedOperations.length > 0;
+  }
+
+  function compareFlowReadyCandidates(a, b, context) {
+    const toolChange = a.assignment.toolPenalty - b.assignment.toolPenalty;
+    if (toolChange) return toolChange;
+    const slack = flowSlackMinutes(a) - flowSlackMinutes(b);
+    if (slack) return slack;
+    const remaining = flowActiveProjectedFinish(a) - flowActiveProjectedFinish(b);
+    if (remaining) return remaining;
+    const unlocked = flowUnlockedSuccessorWork(b) - flowUnlockedSuccessorWork(a);
+    if (unlocked) return unlocked;
+    const gapFit = compareFlowGapFit(a, b);
+    if (gapFit) return gapFit;
+    const nearTie = windowedTieBreak(a, b, context);
+    if (nearTie) return nearTie;
+    return a.assignment.toolPenalty - b.assignment.toolPenalty ||
       a.assignment.end - b.assignment.end ||
       a.assignment.operatorLoad - b.assignment.operatorLoad ||
+      a.assignment.start - b.assignment.start ||
+      String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
+  }
+
+  function flowSlackMinutes(candidate) {
+    const due = parseDateOnly(candidate.op.fechaReq);
+    if (!due) return Number.MAX_SAFE_INTEGER;
+    return diffMinutes(new Date(flowProjectedFinish(candidate)), atMinute(due, DEFAULT_END_MINUTE));
+  }
+
+  function flowActiveProjectedFinish(candidate) {
+    if (!isFlowActiveJob(candidate.job)) return Number.MAX_SAFE_INTEGER;
+    return flowProjectedFinish(candidate);
+  }
+
+  function flowProjectedFinish(candidate) {
+    let finish = new Date(candidate.assignment.end);
+    const fixed = new Set(candidate.job.fixedOperations);
+    const future = [
+      ...candidate.job.operations.slice(candidate.job.index + 1),
+      ...candidate.job.fixedOperations.filter((operation) => compareOperationSequence(operation, candidate.op) > 0),
+    ].sort(compareOperationSequence);
+    for (const operation of future) {
+      if (fixed.has(operation)) {
+        const fixedEnd = operationEnd(operation);
+        if (fixedEnd && fixedEnd > finish) finish = fixedEnd;
+      } else {
+        finish = addMinutes(finish, operationDuration(operation, 100, 100));
+      }
+    }
+    return finish.getTime();
+  }
+
+  function flowUnlockedSuccessorWork(candidate) {
+    const successor = [
+      ...candidate.job.operations.slice(candidate.job.index + 1),
+      ...candidate.job.fixedOperations.filter((operation) => compareOperationSequence(operation, candidate.op) > 0),
+    ].sort(compareOperationSequence)[0];
+    return successor ? operationDuration(successor, 100, 100) : 0;
+  }
+
+  function compareFlowGapFit(a, b) {
+    const aFitsBeforeB = a.assignment.start < b.assignment.start && a.assignment.end <= b.assignment.start;
+    const bFitsBeforeA = b.assignment.start < a.assignment.start && b.assignment.end <= a.assignment.start;
+    return aFitsBeforeB === bFitsBeforeA ? 0 : (aFitsBeforeB ? -1 : 1);
+  }
+
+  function computeMatrixLoadWeight(state, capability, operatorLoad, operatorName) {
+    const matrix = state.matrix || {};
+    const key = capability.key;
+    const ct = capability.ct;
+    const allowedOperators = matrix[key] || matrix[ct] || [];
+    if (!allowedOperators.length) return operatorLoad;
+    const opName = operatorName || (operatorLoad !== undefined ? "SIN_OPERADOR" : "SIN_OPERADOR");
+    const operatorInMatrix = allowedOperators.some((op) => normalizeKey(op) === normalizeKey(opName));
+    if (!operatorInMatrix) return operatorLoad * 2;
+    const configuredCapabilities = Array.isArray(state.configuredCapabilities) ? state.configuredCapabilities : [];
+    const capabilityInConfig = configuredCapabilities.includes(key);
+    if (!capabilityInConfig) return operatorLoad * 1.5;
+    const weight = allowedOperators.filter((op) => normalizeKey(op) === normalizeKey(opName)).length;
+    return operatorLoad / Math.max(1, weight);
+  }
+
+  function compareInterleavedCandidates(a, b, context) {
+    const ad = parseDateOnly(a.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
+    const bd = parseDateOnly(b.op.fechaReq)?.getTime() || Number.MAX_SAFE_INTEGER;
+    return windowedTieBreak(a, b, context) ||
+      a.assignment.start - b.assignment.start ||
       a.assignment.toolPenalty - b.assignment.toolPenalty ||
+      a.assignment.end - b.assignment.end ||
+      a.assignment.operatorLoad - b.assignment.operatorLoad ||
       ad - bd ||
       String(a.op.ot).localeCompare(String(b.op.ot), "es", { numeric: true });
   }
@@ -1254,13 +2567,17 @@
   }
 
   function evaluatePlan(state) {
-    const operations = (state.operations || []).filter((op) => !isPlanCompletedOperation(state, op) && operationStart(op) && operationEnd(op));
+    const operations = filterExcludedOperations(state, state.operations)
+      .filter((op) => !isPlanCompletedOperation(state, op) && operationStart(op) && operationEnd(op));
     const starts = operations.map((op) => operationStart(op).getTime());
     const ends = operations.map((op) => operationEnd(op).getTime());
     const makespanMinutes = starts.length ? Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 60000) : 0;
     let tardinessMinutes = 0;
+    let weightedTardinessMinutes = 0;
     const loadByOperator = new Map();
     const intervalsByOperator = new Map();
+    const loadByResource = new Map();
+    const flowByOt = new Map();
     for (const op of operations) {
       const start = operationStart(op);
       const end = operationEnd(op);
@@ -1268,23 +2585,47 @@
       const operator = String(op.operador || "SIN_OPERADOR");
       if (isLoadBearingOperator(operator)) {
         loadByOperator.set(operator, (loadByOperator.get(operator) || 0) + duration);
+        loadByResource.set(`OPERADOR:${operator}`, (loadByResource.get(`OPERADOR:${operator}`) || 0) + duration);
         if (!intervalsByOperator.has(operator)) intervalsByOperator.set(operator, []);
-        intervalsByOperator.get(operator).push({ start, end });
+        intervalsByOperator.get(operator).push({ op, start, end });
       }
+      if (hasMachineResource(op.maquina)) {
+        const machine = String(op.maquina);
+        loadByResource.set(`MAQUINA:${machine}`, (loadByResource.get(`MAQUINA:${machine}`) || 0) + duration);
+      }
+      const ot = normalizeKey(op.ot);
+      const flow = flowByOt.get(ot) || { start, end };
+      flow.start = flow.start < start ? flow.start : start;
+      flow.end = flow.end > end ? flow.end : end;
+      flowByOt.set(ot, flow);
       const due = op.tipoInsercion === "CAMBIO_HERRAMENTAL" ? null : parseDateOnly(op.fechaReq);
       if (due) {
         const dueEnd = atMinute(due, DEFAULT_END_MINUTE);
-        if (end > dueEnd) tardinessMinutes += diffMinutes(dueEnd, end);
+        if (end > dueEnd) {
+          const lateness = diffMinutes(dueEnd, end);
+          tardinessMinutes += lateness;
+          weightedTardinessMinutes += lateness * priorityWeight(op.prioridad);
+        }
       }
     }
     let idleMinutes = 0;
-    for (const intervals of intervalsByOperator.values()) {
+    let avoidableIdleMinutes = 0;
+    const gaps = [];
+    for (const [operator, intervals] of intervalsByOperator.entries()) {
       intervals.sort((a, b) => a.start - b.start);
       for (let index = 1; index < intervals.length; index++) {
         if (formatDate(intervals[index - 1].end) === formatDate(intervals[index].start)) {
-          idleMinutes += Math.max(0, diffMinutes(intervals[index - 1].end, intervals[index].start));
+          const previous = intervals[index - 1];
+          const next = intervals[index];
+          idleMinutes += Math.max(0, diffMinutes(previous.end, next.start));
+          gaps.push({ operator, previous, next });
         }
       }
+    }
+    const remainingCandidateMinutes = new Map();
+    gaps.sort((a, b) => a.previous.end - b.previous.end || String(a.operator).localeCompare(String(b.operator), "es", { numeric: true }) || a.next.start - b.next.start);
+    for (const gap of gaps) {
+      avoidableIdleMinutes += avoidableGapMinutes(state, operations, gap.operator, gap.previous, gap.next, remainingCandidateMinutes);
     }
     const loads = [...loadByOperator.entries()]
       .filter(([operator]) => isLoadBearingOperator(operator))
@@ -1294,6 +2635,13 @@
     const unscheduled = Number(state.lastSchedule?.unscheduled || 0);
     const changes = Number(state.lastSchedule?.changes || 0);
     const operatorConflicts = Number(state.lastSchedule?.operatorConflicts ?? operatorOverlapConflicts(operations).length);
+    const averageFlowMinutes = flowByOt.size
+      ? [...flowByOt.values()].reduce((sum, flow) => sum + diffMinutes(flow.start, flow.end), 0) / flowByOt.size
+      : 0;
+    const resourceUtilization = {};
+    for (const [resource, minutes] of loadByResource) {
+      resourceUtilization[resource] = makespanMinutes > 0 ? Math.round(minutes / makespanMinutes * 10000) / 10000 : 0;
+    }
     const objective = Math.round(
       operatorConflicts * 1e13 +
       unscheduled * 1e12 +
@@ -1308,6 +2656,13 @@
       operatorConflicts,
       unscheduled,
       tardinessMinutes: Math.round(tardinessMinutes),
+      weightedTardinessMinutes: Math.round(weightedTardinessMinutes),
+      averageFlowMinutes: Math.round(averageFlowMinutes),
+      avoidableIdleMinutes: Math.round(avoidableIdleMinutes),
+      toolChanges: changes,
+      maxWip: maxConcurrentWip(flowByOt),
+      resourceUtilization,
+      score: 0,
       makespanMinutes: Math.round(makespanMinutes),
       idleMinutes: Math.round(idleMinutes),
       loadStdDevMinutes: Math.round(Math.sqrt(loadVariance)),
@@ -1315,14 +2670,463 @@
     };
   }
 
+  function avoidableGapMinutes(state, operations, operator, previous, next, remainingCandidateMinutes) {
+    const gapMinutes = availableGapMinutes(state, previous.end, next.start, operator, "");
+    if (!gapMinutes) return 0;
+    const candidates = operations
+      .filter((op) => isGapFillCandidate(state, operations, op, operator, previous.end, next.start))
+      .sort((a, b) => operationStart(a) - operationStart(b) || compareOperationSequence(a, b) || String(a.id).localeCompare(String(b.id)));
+    let remaining = gapMinutes;
+    for (const candidate of candidates) {
+      const available = availableGapMinutes(state, previous.end, next.start, operator, candidate.maquina);
+      const duration = remainingCandidateMinutes.has(candidate)
+        ? remainingCandidateMinutes.get(candidate)
+        : Math.max(0, operationDuration(
+          candidate,
+          operatorPerformanceForOperation(state, candidate, operator),
+          operationEfficiencyForOperation(state, candidate),
+        ));
+      if (!available || !duration || duration > available || duration > remaining) continue;
+      const consumed = duration;
+      remainingCandidateMinutes.set(candidate, duration - consumed);
+      remaining -= consumed;
+      if (!remaining) break;
+    }
+    return gapMinutes - remaining;
+  }
+
+  function isGapFillCandidate(state, operations, op, operator, gapStart, gapEnd) {
+    const start = operationStart(op);
+    if (!start || start < gapEnd || isFixedOperation(state, op) || !isAssignableOperation(state, op)) return false;
+    if (operationToolKey(op, state) || isHardWaitCause(op.causaEspera)) return false;
+    if (!operatorCandidates(state, op, isFiniteOperation(state, op)).includes(operator)) return false;
+    const predecessors = operations.filter((candidate) => normalizeKey(candidate.ot) === normalizeKey(op.ot) &&
+      compareOperationSequence(candidate, op) < 0);
+    if (predecessors.some((candidate) => !operationEnd(candidate) || operationEnd(candidate) > gapStart)) return false;
+    return !hasMachineResource(op.maquina) || !operations.some((candidate) => candidate !== op &&
+      String(candidate.maquina || "") === String(op.maquina) && operationStart(candidate) < gapEnd && operationEnd(candidate) > gapStart);
+  }
+
+  function availableGapMinutes(state, start, end, operator, machine) {
+    if (start >= end || formatDate(start) !== formatDate(end)) return 0;
+    const startMinute = minuteOfDay(start);
+    const endMinute = minuteOfDay(end);
+    return effectiveWindows(state, start, operator, machine)
+      .reduce((sum, window) => sum + Math.max(0, Math.min(endMinute, window.end) - Math.max(startMinute, window.start)), 0);
+  }
+
+  function isHardWaitCause(cause) {
+    return ["CALENDARIO", "MAQUINA", "CAMBIO_HERRAMENTAL"].includes(normalizeKey(cause));
+  }
+
+  function resolveGapFillConfig(options, settings) {
+    const raw = options?.gapFill ?? settings?.gapFill ?? null;
+    const base = { ...DEFAULT_GAP_FILL };
+    if (raw === true) return { ...base, enabled: true };
+    if (raw === false || raw === null || raw === undefined || typeof raw !== "object") return base;
+    const enabled = raw.enabled === undefined ? base.enabled : Boolean(raw.enabled);
+    return {
+      enabled,
+      minGapMinutes: clampInteger(Number(raw.minGapMinutes) > 0 ? Number(raw.minGapMinutes) : base.minGapMinutes, 1, 720),
+      maxCandidates: clampInteger(Number.isFinite(Number(raw.maxCandidates)) && Number(raw.maxCandidates) >= 0 ? Number(raw.maxCandidates) : base.maxCandidates, 0, 5000),
+      budgetMs: Number(raw.budgetMs) > 0 ? Number(raw.budgetMs) : base.budgetMs,
+      maxIterations: clampInteger(Number(raw.maxIterations) > 0 ? Number(raw.maxIterations) : base.maxIterations, 1, 2),
+    };
+  }
+
+  function collectGapFillGaps(context, minGapMinutes) {
+    const gaps = [];
+    for (const [operator, intervals] of context.operatorBusy.entries()) {
+      if (!isLoadBearingOperator(operator) || !intervals || intervals.length < 2) continue;
+      for (let index = 1; index < intervals.length; index++) {
+        const previous = intervals[index - 1];
+        const next = intervals[index];
+        if (previous.operationId != null && String(previous.operationId) === String(next.operationId)) continue;
+        if (formatDate(previous.end) !== formatDate(next.start)) continue;
+        const minutes = diffMinutes(previous.end, next.start);
+        if (minutes >= minGapMinutes) gaps.push({ operator, start: new Date(previous.end), end: new Date(next.start), minutes });
+      }
+    }
+    return gaps;
+  }
+
+  function freeHolesWithin(context, operator, boundsStart, boundsEnd) {
+    const from = boundsStart.getTime();
+    const until = boundsEnd.getTime();
+    const intervals = (context.operatorBusy.get(operator) || [])
+      .filter((interval) => interval.end.getTime() > from && interval.start.getTime() < until)
+      .slice()
+      .sort((a, b) => a.start - b.start);
+    const holes = [];
+    let cursor = from;
+    for (const interval of intervals) {
+      const start = interval.start.getTime();
+      const end = interval.end.getTime();
+      if (start > cursor) holes.push({ start: new Date(cursor), end: new Date(Math.min(start, until)) });
+      if (end > cursor) cursor = end;
+      if (cursor >= until) break;
+    }
+    if (cursor < until) holes.push({ start: new Date(cursor), end: new Date(until) });
+    return holes.filter((hole) => hole.end.getTime() > hole.start.getTime());
+  }
+
+  function gapFillPrevious(context, op) {
+    const otKey = normalizeKey(op.ot);
+    let previous = null;
+    for (const candidate of context.scheduledByKey.values()) {
+      if (candidate.id === op.id || normalizeKey(candidate.ot) !== otKey) continue;
+      if (compareOperationSequence(candidate, op) >= 0) continue;
+      const start = operationStart(candidate);
+      const end = operationEnd(candidate);
+      if (!start || !end) continue;
+      previous = latestPredecessor(previous, {
+        operation: candidate,
+        start,
+        end,
+        duration: declaredOperationDuration(candidate),
+        segments: null,
+      });
+    }
+    return previous;
+  }
+
+  function gapFillSuccessorsAllow(context, op, assignment) {
+    const release = predecessorReleaseMoment(context, {
+      operation: op,
+      start: assignment.operationStart,
+      end: assignment.end,
+      duration: assignment.productionMinutes,
+      segments: assignment.productionSegments || assignment.segments,
+    });
+    if (!release) return true;
+    const otKey = normalizeKey(op.ot);
+    for (const candidate of context.scheduledByKey.values()) {
+      if (candidate.id === op.id || normalizeKey(candidate.ot) !== otKey) continue;
+      if (compareOperationSequence(candidate, op) <= 0) continue;
+      if (isPlanCompletedOperation(context.state, candidate)) continue;
+      const start = operationStart(candidate);
+      if (start && start < release) return false;
+    }
+    return true;
+  }
+
+  function gapFillPlacementAllowed(op, operator, assignment) {
+    const currentStart = operationStart(op);
+    if (!currentStart || !assignment?.start) return true;
+    const currentOperator = String(op.operador || "").trim();
+    if (normalizeKey(operator) === normalizeKey(currentOperator)) {
+      return assignment.start.getTime() < currentStart.getTime();
+    }
+    return assignment.start.getTime() <= currentStart.getTime();
+  }
+
+  function tryGapFillPlacement(context, op, hole, operator, previous) {
+    if (context.abortReason) return null;
+    if (!isFiniteOperation(context.state, op)) return null;
+    if (isSubcontractOperation(context.state, op)) return null;
+    if (!operatorCandidates(context.state, op, true).includes(operator)) return null;
+    const earliest = computeEarliestStart(context, op, previous);
+    if (!(earliest instanceof Date)) return null;
+    const from = earliest.getTime() > hole.start.getTime() ? earliest : hole.start;
+    if (from.getTime() >= hole.end.getTime()) return null;
+    const machines = machineCandidates(context.state, op);
+    if (!machines.length) return null;
+    const selectedMachine = String(op.maquina || "").trim();
+    const machineOrder = selectedMachine
+      ? [selectedMachine, ...machines.filter((machine) => machine && normalizeKey(machine) !== "SIN_MAQUINA" && machine !== selectedMachine).slice(0, 2)]
+      : machines;
+    for (const machine of machineOrder) {
+      countPlanningStat(context.performanceState, "gapFillCandidatesTried");
+      const probe = { ...context, windowEnd: new Date(hole.end.getTime()) };
+      const assignment = findEarliestSlot(probe, op, from, operator, machine, true);
+      if (context.abortReason || probe.abortReason) return null;
+      if (!assignment?.end) continue;
+      if (assignment.end.getTime() > hole.end.getTime()) continue;
+      if (assignment.start.getTime() < from.getTime()) continue;
+      if (assignment.toolChange?.required && assignment.setupMinutes > 0) continue;
+      return { ...assignment, earliest: new Date(earliest.getTime()) };
+    }
+    return null;
+  }
+
+  function releaseGapFillOperation(context, op) {
+    const id = String(op.id ?? "");
+    const dropFrom = (map) => {
+      for (const [resource, intervals] of [...map.entries()]) {
+        const kept = intervals.filter((interval) => String(interval.operationId ?? "") !== id);
+        if (kept.length === intervals.length) continue;
+        if (kept.length) map.set(resource, kept);
+        else map.delete(resource);
+      }
+    };
+    dropFrom(context.operatorBusy);
+    dropFrom(context.machineBusy);
+    const start = operationStart(op);
+    const end = operationEnd(op);
+    if (start && end && isLoadBearingOperator(op.operador)) {
+      const currentLoad = context.operatorLoad.get(op.operador) || 0;
+      context.operatorLoad.set(op.operador, Math.max(0, currentLoad - diffMinutes(start, end)));
+    }
+    const machine = String(op.maquina || "").trim();
+    if (machine && hasMachineResource(machine)) {
+      const events = context.machineTools.get(machine);
+      if (events) {
+        const kept = events.filter((event) => String(event.operationId ?? "") !== id);
+        if (kept.length) context.machineTools.set(machine, kept);
+        else context.machineTools.delete(machine);
+      }
+    }
+    if (context.operatorIdleCache) context.operatorIdleCache.clear();
+    context.scheduledByKey.delete(operationKey(op));
+  }
+
+  function attemptGapFillHole(context, jobs, gap, hole, env) {
+    if (diffMinutes(hole.start, hole.end) < SNAP_MINUTES) return false;
+    if (Date.now() - env.startedWall > env.budgetMs) {
+      env.result.aborted = true;
+      countPlanningStat(env.performanceState, "gapFillBudgetAborts");
+      return false;
+    }
+    for (const job of jobs) {
+      const op = job.operations[job.index];
+      if (!op || env.movedIds.has(op.id) || env.fixedIds.has(op.id)) continue;
+      if (isFixedOperation(context.state, op) || !isAssignableOperation(context.state, op)) continue;
+      if (isSubcontractOperation(context.state, op) || !isFiniteOperation(context.state, op)) continue;
+      env.result.tried += 1;
+      countPlanningStat(env.performanceState, "gapFillCandidatesTried");
+      const previous = gapFillPrevious(context, op);
+      const assignment = tryGapFillPlacement(context, op, hole, gap.operator, previous);
+      if (!assignment) continue;
+      if (!gapFillSuccessorsAllow(context, op, assignment)) continue;
+      const committed = commitAssignment(context, op, { ...assignment, gapFillPost: true });
+      job.last = committed;
+      job.index += 1;
+      env.result.fills += 1;
+      env.result.headsPlaced += 1;
+      countPlanningStat(env.performanceState, "gapFillCommitted");
+      if (env.performanceState) performanceStateIncrementScheduled(env.performanceState);
+      return true;
+    }
+    const candidates = [...context.scheduledByKey.values()].filter((op) =>
+      !env.fixedIds.has(op.id) && !env.movedIds.has(op.id) &&
+      op.tipoInsercion !== "CAMBIO_HERRAMENTAL" &&
+      !isFixedOperation(context.state, op) && isAssignableOperation(context.state, op) &&
+      isFiniteOperation(context.state, op) && !isSubcontractOperation(context.state, op) &&
+      !operationToolKey(op, context.state) &&
+      isLoadBearingOperator(op.operador) &&
+      Boolean(operationStart(op)) && Boolean(operationEnd(op)) &&
+      operationStart(op).getTime() >= hole.start.getTime() &&
+      operatorCandidates(context.state, op, true).includes(gap.operator)
+    ).sort((a, b) =>
+      operationStart(a) - operationStart(b) ||
+      normalizePriority(a.prioridad) - normalizePriority(b.prioridad) ||
+      String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }) ||
+      compareOperationSequence(a, b));
+    for (const op of candidates) {
+      if (Date.now() - env.startedWall > env.budgetMs) {
+        env.result.aborted = true;
+        countPlanningStat(env.performanceState, "gapFillBudgetAborts");
+        return false;
+      }
+      env.result.tried += 1;
+      countPlanningStat(env.performanceState, "gapFillCandidatesTried");
+      const previous = gapFillPrevious(context, op);
+      const assignment = tryGapFillPlacement(context, op, hole, gap.operator, previous);
+      if (!assignment) continue;
+      if (!gapFillPlacementAllowed(op, gap.operator, assignment)) continue;
+      if (!gapFillSuccessorsAllow(context, op, assignment)) continue;
+      env.movedIds.add(op.id);
+      const job = jobs.find((candidate) => normalizeKey(candidate.operations[0]?.ot) === normalizeKey(op.ot));
+      releaseGapFillOperation(context, op);
+      const committed = commitAssignment(context, op, { ...assignment, gapFillPost: true });
+      if (job && job.last?.operation?.id === op.id) job.last = committed;
+      env.result.fills += 1;
+      env.result.moved += 1;
+      countPlanningStat(env.performanceState, "gapFillCommitted");
+      countPlanningStat(env.performanceState, "gapFillMoved");
+      return true;
+    }
+    return false;
+  }
+
+  function performanceStateIncrementScheduled(performanceState) {
+    performanceState.scheduledOpsDone = (performanceState.scheduledOpsDone || 0) + 1;
+  }
+
+  function runGapFill(context, jobs, config, extras) {
+    const performanceState = extras?.performanceState || context.performanceState || null;
+    const result = {
+      enabled: Boolean(config.enabled),
+      minGapMinutes: config.minGapMinutes,
+      maxCandidates: config.maxCandidates,
+      budgetMs: config.budgetMs,
+      gaps: 0,
+      fills: 0,
+      moved: 0,
+      headsPlaced: 0,
+      tried: 0,
+      aborted: false,
+      elapsedMs: 0,
+    };
+    const startedWall = Date.now();
+    const finish = () => {
+      result.elapsedMs = Date.now() - startedWall;
+      return result;
+    };
+    if (!config.enabled || config.maxCandidates <= 0 || context.abortReason) return finish();
+    countPlanningStat(performanceState, "gapFillPasses");
+    const fixedIds = new Set((extras?.fixed || []).map((op) => op.id));
+    const movedIds = new Set();
+    const env = { fixedIds, movedIds, result, performanceState, startedWall, budgetMs: config.budgetMs };
+    try {
+      const iterations = Math.max(1, Math.min(2, config.maxIterations));
+      for (let pass = 0; pass < iterations; pass++) {
+        const gaps = collectGapFillGaps(context, config.minGapMinutes);
+        if (pass === 0) {
+          result.gaps = gaps.length;
+          countPlanningStat(performanceState, "gapFillGapsScanned", gaps.length);
+        }
+        if (!gaps.length) break;
+        gaps.sort((a, b) => b.minutes - a.minutes || a.start - b.start || String(a.operator).localeCompare(String(b.operator), "es", { numeric: true }));
+        for (const gap of gaps) {
+          if (result.fills >= config.maxCandidates || result.aborted || context.abortReason) break;
+          if (Date.now() - startedWall > config.budgetMs) {
+            result.aborted = true;
+            countPlanningStat(performanceState, "gapFillBudgetAborts");
+            break;
+          }
+          let progress = true;
+          while (progress && result.fills < config.maxCandidates && !result.aborted && !context.abortReason) {
+            progress = false;
+            if (Date.now() - startedWall > config.budgetMs) {
+              result.aborted = true;
+              countPlanningStat(performanceState, "gapFillBudgetAborts");
+              break;
+            }
+            const holes = freeHolesWithin(context, gap.operator, gap.start, gap.end)
+              .sort((a, b) => diffMinutes(b.start, b.end) - diffMinutes(a.start, a.end));
+            for (const hole of holes) {
+              if (result.fills >= config.maxCandidates || result.aborted || context.abortReason) break;
+              if (attemptGapFillHole(context, jobs, gap, hole, env)) {
+                progress = true;
+                break;
+              }
+              if (result.aborted) break;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (!isPlanningBudgetExceeded(error)) throw error;
+      result.aborted = true;
+      countPlanningStat(performanceState, "gapFillBudgetAborts");
+    }
+    return finish();
+  }
+
+  function applyComparableScores(evaluated) {
+    const components = [
+      ["weightedTardinessMinutes", 0.45],
+      ["averageFlowMinutes", 0.30],
+      ["avoidableIdleMinutes", 0.15],
+      ["toolChanges", 0.10],
+    ];
+    const denominators = Object.fromEntries(components.map(([key]) => [key, Math.max(1, ...evaluated.map((item) => finiteNumber(item.metrics[key])))]));
+    for (const item of evaluated) {
+      item.metrics.score = Math.round(components.reduce((sum, [key, weight]) =>
+        sum + weight * finiteNumber(item.metrics[key]) / denominators[key], 0) * 1e8) / 1e8;
+    }
+  }
+
+  function finalizeMultiStrategyPlan({ evaluated, selectable, flowEvaluation, strategyFailures, strategySkips, volumePassLimit, performanceState, abortReason = "" }) {
+    applyComparableScores(evaluated);
+    const selectedPool = selectable?.length ? selectable : evaluated;
+    const legacyCandidates = selectedPool.filter((item) => item.strategy !== "flow_balanced");
+    const legacySelected = legacyCandidates.length
+      ? legacyCandidates.reduce((best, item) => compareEvaluatedPlans(item, best, false) < 0 ? item : best)
+      : selectedPool[0];
+    const flowCandidate = selectedPool.find((item) => item === flowEvaluation);
+    const flowImprovesSafely = flowCandidate && legacySelected &&
+      flowCandidate.metrics.operatorConflicts <= legacySelected.metrics.operatorConflicts &&
+      flowCandidate.metrics.unscheduled <= legacySelected.metrics.unscheduled &&
+      flowCandidate.metrics.score < legacySelected.metrics.score;
+    const selected = flowImprovesSafely ? flowCandidate : legacySelected;
+    selected.result.lastSchedule.optimization = {
+      method: "MULTI_STRATEGY_HEURISTIC",
+      globalOptimalityGuaranteed: false,
+      strategiesEvaluated: evaluated.map((item) => ({
+        strategy: item.strategy,
+        objective: item.metrics.objective,
+        score: item.metrics.score,
+        metrics: item.metrics,
+        aborted: Boolean(item.result?.lastSchedule?.performance?.aborted),
+      })),
+      strategyFailures,
+      strategySkips,
+      volumePassLimit,
+      selectedStrategy: selected.strategy,
+      metrics: selected.metrics,
+    };
+    attachPlanningPerformance(selected.result, performanceState, abortReason);
+    return selected.result;
+  }
+
+  function compareEvaluatedPlans(a, b, useComparableScore) {
+    return a.metrics.operatorConflicts - b.metrics.operatorConflicts ||
+      a.metrics.unscheduled - b.metrics.unscheduled ||
+      (useComparableScore ? a.metrics.score - b.metrics.score : a.metrics.objective - b.metrics.objective) ||
+      a.index - b.index;
+  }
+
+  function maxConcurrentWip(flowByOt) {
+    const events = [];
+    for (const flow of flowByOt.values()) {
+      events.push({ time: flow.start.getTime(), change: 1 });
+      events.push({ time: flow.end.getTime(), change: -1 });
+    }
+    events.sort((a, b) => a.time - b.time || a.change - b.change);
+    let active = 0;
+    let maximum = 0;
+    for (const event of events) {
+      active += event.change;
+      maximum = Math.max(maximum, active);
+    }
+    return maximum;
+  }
+
   function operationKey(op) {
     const ct = op.ct ? `|${normalizeKey(op.ct)}` : "";
     return `${normalizeKey(op.ot)}|${Number(op.secuencia || 0)}${ct}`;
   }
 
-  function operationToolKey(op) {
+  function buildNewnessIndex(base) {
+    const baseOts = new Set();
+    const baseOpKeys = new Set();
+    for (const ot of (base?.selectedOts || [])) {
+      const key = normalizeKey(ot);
+      if (key) baseOts.add(key);
+    }
+    for (const op of (base?.operations || [])) {
+      const ot = normalizeKey(op?.ot);
+      if (ot) baseOts.add(ot);
+      baseOpKeys.add(operationKey(op));
+    }
+    return { baseOts, baseOpKeys };
+  }
+
+  function isNewOperation(context, op) {
+    const index = context?.newnessIndex;
+    const ot = normalizeKey(op?.ot);
+    if (index) {
+      if (!index.baseOts.has(ot)) return true;
+      return !index.baseOpKeys.has(operationKey(op));
+    }
+    return !operationStart(op) && !operationEnd(op);
+  }
+
+function operationToolKey(op, state) {
     const type = String(op.tipoInsercion || "").toUpperCase();
-    if (type !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(op)) return "";
+    if (type !== "CAMBIO_HERRAMENTAL" && !isBendingOperationResolved(state, op)) return "";
     const herr = cleanTool(op.herramental);
     const kit = cleanTool(op.kitHerramental);
     if (!herr && !kit) return "";
@@ -1342,15 +3146,24 @@
 
   function operationDuration(op, performancePercent, efficiencyPercent) {
     const setup = numberOr(op.tiempoSetup, 0);
-    const production = numberOr(op.tiempoProd, 0);
+    const production = productionMinutes(op);
     const performance = Math.max(1, numberOr(performancePercent, 100));
     const efficiency = Math.max(1, Math.min(100, numberOr(efficiencyPercent, 100)));
-    const adjustedProduction = Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
+    const adjustedProduction = op?.tiempoFallback === true
+      ? production
+      : Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
     const explicit = setup + adjustedProduction;
     if (explicit > 0) return explicit;
     const start = operationStart(op);
     const end = operationEnd(op);
     return start && end ? Math.max(SNAP_MINUTES, diffMinutes(start, end)) : SNAP_MINUTES;
+  }
+
+  function productionMinutes(op) {
+    const cycle = numberOr(op?.tiempoCiclo, 0);
+    const pieces = numberOr(op?.cantidadPendiente ?? op?.cantPendiente ?? op?.cantTotal, 0);
+    if (cycle > 0 && pieces > 0) return Math.round(cycle * pieces * 100) / 100;
+    return numberOr(op?.tiempoProd, 0);
   }
 
   function operationStart(op) {
@@ -1361,9 +3174,15 @@
     return parseDateTime(op.fechaFin, op.horaFin);
   }
 
-  function isFixedOperation(op) {
-    const status = normalizeKey(op.estatus);
-    return op.locked === true || op.autoFrozen === true || status.includes("PROGRAMAD") || status.includes("SCHEDULED");
+  function isFixedOperation(state, op) {
+    return isHistoricalOperation(op) || isPlanCompletedOperation(state, op);
+  }
+
+  function hasCompleteProgram(item) {
+    return Boolean(
+      String(item?.fechaInicio || "").trim() && String(item?.horaInicio || "").trim() &&
+      String(item?.fechaFin || "").trim() && String(item?.horaFin || "").trim()
+    );
   }
 
   function operationCompletionKey(op) {
@@ -1371,9 +3190,13 @@
     if (normalizeKey(op?.tipoInsercion) === "CAMBIO_HERRAMENTAL") {
       return toolChangeCompletionKey(op, op?.maquina, operationToolKey(op));
     }
-    const id = String(op?.id || "").trim();
-    if (id) return `OP|${normalizeKey(id)}`;
-    return `OP|${normalizeKey(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeKey(op?.ct)}`;
+    return `OP|${normalizeKey(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeKey(op?.ct || "SIN_CT")}`;
+  }
+
+  function isHistoricalOperation(op) {
+    const status = normalizeKey(op?.planStatus || op?.estatus);
+    return op?.historical === true || op?.isHistorical === true ||
+      ["PUBLICADO", "PUBLICADA", "GUARDADO", "GUARDADA", "HISTORICO", "HISTORICA"].includes(status);
   }
 
   function isPlanCompletedOperation(state, op) {
@@ -1394,28 +3217,52 @@
 
   function isAssignableOperation(state, op) {
     const key = normalizeKey(op.ot);
-    const workOrder = state.__workOrdersByOt?.get(key);
+    const workOrder = indexedWorkOrder(state, key);
     return isMovablePlanningStatus(op.estatus) && (!workOrder || isMovablePlanningStatus(workOrder.status));
+  }
+
+  function indexedWorkOrder(state, ot) {
+    const key = normalizeKey(ot);
+    const index = state?.__workOrdersByOt;
+    if (index && typeof index.get === "function") return index.get(key);
+    if (index && typeof index === "object" && index[key]) return index[key];
+    return (Array.isArray(state?.workOrders) ? state.workOrders : [])
+      .find((workOrder) => normalizeKey(workOrder?.ot) === key);
   }
 
   function isMovablePlanningStatus(status) {
     const normalized = normalizeKey(status);
-    return !["CERRAD", "CLOSED", "COMPLETE", "COMPLETADO", "PROGRAMAD", "SCHEDULED", "PLANIFICAD", "PLANNED"]
+    return ![
+      "CERRAD", "CLOSED", "COMPLETE", "COMPLETAD",
+      "CANCELAD", "CANCELED", "CANCELLED"
+    ]
       .some((blocked) => normalized.includes(blocked));
   }
 
+  let _otScheduledSelected = null;
+  let _otScheduledScheduled = null;
+  let _otScheduledSet = null;
+
   function isOtScheduled(state, ot) {
     const key = normalizeKey(ot);
-    const selected = Array.isArray(state?.selectedOts)
-      ? state.selectedOts.some((item) => normalizeKey(item) === key)
-      : false;
-    if (!selected) return false;
-    return Array.isArray(state?.lastSchedule?.scheduledOts)
-      ? state.lastSchedule.scheduledOts.some((item) => normalizeKey(item) === key)
-      : false;
+    const selected = state?.selectedOts;
+    const scheduled = state?.lastSchedule?.scheduledOts;
+    if (!Array.isArray(selected) || !Array.isArray(scheduled)) return false;
+    if (_otScheduledSelected !== selected || _otScheduledScheduled !== scheduled) {
+      const scheduledSet = new Set(scheduled.map(normalizeKey));
+      const intersection = new Set();
+      for (const item of selected) {
+        const normalized = normalizeKey(item);
+        if (scheduledSet.has(normalized)) intersection.add(normalized);
+      }
+      _otScheduledSet = intersection;
+      _otScheduledSelected = selected;
+      _otScheduledScheduled = scheduled;
+    }
+    return _otScheduledSet.has(key);
   }
 
-  function normalizeOperation(op, index) {
+  function normalizeOperation(op, index, state) {
     const next = {
       ...op,
       id: op.id || `op-${index + 1}`,
@@ -1427,37 +3274,91 @@
       operador: String(op.operador || "SIN_OPERADOR").trim(),
       maquina: String(op.maquina || "").trim(),
       herramental: cleanTool(op.herramental),
+      additionalHerramentales: additionalToolList(op.additionalHerramentales || op.herramentalesExtra),
       kitHerramental: cleanTool(op.kitHerramental),
       tipoInsercion: String(op.tipoInsercion || "OPERACION").trim().toUpperCase(),
       estatus: String(op.estatus || "PLAN").trim(),
     };
-    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperation(next)) {
+    if (next.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isBendingOperationResolved(state, next) && !isFixedOperation(state, next)) {
       next.maquina = "";
       next.herramental = "";
+      next.additionalHerramentales = [];
       next.kitHerramental = "";
       next.kitPending = false;
     }
     return next;
   }
 
-  function applyOtConfiguration(state, op) {
-    const entries = Object.entries(state.otConfigurations || {});
-    const match = entries.find(([ot, item]) => normalizeKey(item?.ot || ot) === normalizeKey(op.ot));
-    const configuration = match?.[1] || {};
-    if (match && isBendingOperation(op)) {
-      op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
-      op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
-      op.kitPending = configuration.kitPending === true;
-    } else if (!isBendingOperation(op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL") {
-      op.maquina = "";
+   function applyOtConfiguration(state, op, isDryRun) {
+     const performanceState = state.__performanceState;
+     countPlanningStat(performanceState, "otConfigurationLookups");
+     const cachedConfigurationIndex = state.__otConfigurationIndex;
+     const configurationIndex = (cachedConfigurationIndex && typeof cachedConfigurationIndex.get === "function")
+       ? cachedConfigurationIndex
+       : buildOtConfigurationIndex(state);
+     const indexedConfiguration = configurationIndex.get(normalizeKey(op.ot));
+     const match = indexedConfiguration !== undefined;
+     const configuration = indexedConfiguration || {};
+
+     if (isClosedOt(op)) return op;
+
+     if (match && isBendingOperationResolved(state, op)) {
+       op.maquina = String(configuration.machine || configuration.maquina || op.maquina || "SIN_MAQUINA").trim();
+       op.herramental = cleanTool(configuration.herramental || configuration.tool || op.herramental);
+       op.additionalHerramentales = additionalToolList(configuration.additionalHerramentales || configuration.herramentalesExtra || op.additionalHerramentales);
+       op.kitHerramental = configuration.kitPending === true ? "" : cleanTool(configuration.kitHerramental || configuration.kit);
+       op.kitPending = configuration.kitPending === true;
+      } else if (!isBendingOperationResolved(state, op) && op.tipoInsercion !== "CAMBIO_HERRAMENTAL" && !isFixedOperation(state, op)) {
+        op.maquina = "";
+      }
+      if (isBendingOperationResolved(state, op) && !isSubcontractOperation(state, op)) {
+        const catalogTool = toolCatalogForOperation(state, op);
+        if (!op.maquina || normalizeKey(op.maquina) === "SIN_MAQUINA") {
+          if (catalogTool && catalogTool.machine) op.maquina = String(catalogTool.machine).trim();
+        }
+        if (!op.herramental && !op.tool) {
+          if (catalogTool && cleanTool(catalogTool.herramental)) {
+            op.herramental = cleanTool(catalogTool.herramental);
+            op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+          }
+        } else if (normalizeKey(op.herramental) === "SIN_HERRAMENTAL" || normalizeKey(op.tool) === "SIN_HERRAMENTAL") {
+          if (catalogTool && cleanTool(catalogTool.herramental)) {
+            op.herramental = cleanTool(catalogTool.herramental);
+            op.kitHerramental = cleanTool(catalogTool.kitHerramental);
+          }
+          op.tool = "";
+        }
+      }
+      if (isSubcontractOperation(state, op)) {
+       op.subcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+       op.subcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
+       op.operador = "SUBCONTRATO";
+       op.maquina = "";
+      }
+
+      return op;
+   }
+
+  function buildOtConfigurationIndex(state) {
+    const index = new Map();
+    for (const [ot, item] of Object.entries(state.otConfigurations || {})) {
+      const key = normalizeKey(item?.ot || ot);
+      if (key && !index.has(key)) index.set(key, item || {});
     }
-    if (isSubcontractOperation(state, op)) {
-      op.subcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
-      op.subcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
-      op.operador = "SUBCONTRATO";
-      op.maquina = "";
+    return index;
+  }
+
+  function buildToolCatalogIndex(state, performanceState) {
+    const index = new Map();
+    for (const item of state.toolCatalog || []) {
+      countPlanningStat(performanceState, "toolCatalogScans");
+      if (item?.active === false) continue;
+      const key = normalizeKey(item.part || item.parte);
+      if (!key) continue;
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(item);
     }
-    return op;
+    return index;
   }
 
   function normalizePriority(value) {
@@ -1498,8 +3399,8 @@
   }
 
   function parseClock(value, fallback) {
-    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
-    return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
+    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    return match ? Number(match[1]) * 60 + Number(match[2]) + Number(match[3] || 0) / 60 : fallback;
   }
 
   function formatDate(date) {
@@ -1507,7 +3408,8 @@
   }
 
   function formatTime(date) {
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    return date.getSeconds() || date.getMilliseconds() ? `${time}:${String(date.getSeconds()).padStart(2, "0")}` : time;
   }
 
   function startOfDay(date) {
@@ -1517,9 +3419,7 @@
   }
 
   function atMinute(date, minute) {
-    const next = startOfDay(date);
-    next.setMinutes(minute);
-    return next;
+    return addMinutes(startOfDay(date), minute);
   }
 
   function minuteOfDay(date) {
@@ -1593,13 +3493,25 @@
     return Math.max(0, Math.min(1, numeric));
   }
 
+  const __normalizeKeyCache = new Map();
+  const __NORMALIZE_KEY_CACHE_MAX = 200000;
+  const __capabilityCache = new WeakMap();
+  const __subcontractCache = new WeakMap();
   function normalizeKey(value) {
-    return String(value || "")
+    const cached = __normalizeKeyCache.get(value);
+    if (cached !== undefined) return cached;
+    const result = String(value || "")
       .trim()
       .toUpperCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/\s+/g, " ");
+    if (__normalizeKeyCache.size < __NORMALIZE_KEY_CACHE_MAX) __normalizeKeyCache.set(value, result);
+    return result;
+  }
+
+  function normalizeSearchText(value) {
+    return normalizeKey(value).replace(/_/g, " ").replace(/\s+/g, " ");
   }
 
   function cleanTool(value) {
@@ -1607,8 +3519,55 @@
     return ["", "NO", "N/A", "NA", "-"].includes(normalizeKey(text)) ? "" : text;
   }
 
+  function toolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    return unique(values.map(cleanTool).filter(Boolean));
+  }
+
+  function additionalToolEntry(value) {
+    if (value && typeof value === "object") {
+      return {
+        herramental: cleanTool(value.herramental || value.tool),
+        machine: String(value.machine || value.maquina || "").trim(),
+      };
+    }
+    return { herramental: cleanTool(value), machine: "" };
+  }
+
+  function additionalToolList(value) {
+    let values = value;
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) return [];
+      try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+    }
+    if (!Array.isArray(values)) values = [];
+    const out = [];
+    const seen = new Set();
+    values.forEach((item) => {
+      const entry = additionalToolEntry(item);
+      if (!entry.herramental) return;
+      const key = `${normalizeKey(entry.herramental)}|${normalizeKey(entry.machine)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(entry.machine ? entry : entry.herramental);
+    });
+    return out;
+  }
+
   function appendLog(current, message) {
-    return [current, message].filter(Boolean).join(" | ");
+    const text = String(current == null ? "" : current);
+    const entry = String(message == null ? "" : message);
+    if (!entry) return text;
+    if (!text) return entry;
+    if (text.endsWith(" | " + entry)) return text;
+    return text + " | " + entry;
   }
 
   function roundUp(value, increment) {
@@ -1618,6 +3577,14 @@
   function numberOr(value, fallback) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function finiteNumber(value) {
+    return numberOr(value, 0);
+  }
+
+  function priorityWeight(value) {
+    return Math.max(1, 101 - normalizePriority(value));
   }
 
   function clampInteger(value, min, max) {
@@ -1635,7 +3602,15 @@
   return {
     GENERATED_BY,
     SNAP_MINUTES,
+    normalizeKey,
     schedulePlan,
+    gapFillDefaults: { ...DEFAULT_GAP_FILL },
+    resolveGapFillConfig,
+    filterCapabilities,
+    isSpecialSubcontractCapability,
+    isOperationCapabilityExcluded,
+    excludedCapabilityKeySet,
+    filterExcludedOperations,
     operatorOverlapConflicts,
     availableMinutes,
     nextResourceAvailability,
@@ -1643,14 +3618,25 @@
     isFiniteOperation,
     isSubcontractOperation,
     operationDuration,
+    productionMinutes,
+    evaluatePlan,
     operationToolKey,
     operationCompletionKey,
     isPlanCompletedOperation,
+    isFixedOperation,
+    toolAffinityTie,
+    windowedTieBreak,
+    operatorIdleCost,
+    selectTopKAssignment,
     isMovablePlanningStatus,
     isOtScheduled,
     planningConfigurationIssues,
+    analyzeUnscheduledOperations,
     isBendingOperation,
+    isBendingOperationResolved,
     isSubcontractOperation,
     toolChangeCapability: () => ({ ...TOOL_CHANGE_CAPABILITY }),
+    capabilityForOperation,
+    resolveOperationCt,
   };
 });

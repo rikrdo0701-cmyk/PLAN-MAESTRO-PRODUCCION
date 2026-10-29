@@ -1,6 +1,12 @@
 const PP_PLANT_LOCATION_ID = 1;
 const PP_PLANT_NAME = 'Planta MM del Llano';
 
+const PP_OPERATIONS_RESTLET_ = { script: '2240', deploy: '1' };
+
+function PP_operationsRestlet_() {
+  return PP_OPERATIONS_RESTLET_;
+}
+
 function PP_hasNetSuiteCredentials_() {
   const properties = PropertiesService.getScriptProperties();
   return ['NS_ACCOUNT_ID', 'NS_CONSUMER_KEY', 'NS_CONSUMER_SECRET', 'NS_TOKEN', 'NS_TOKEN_SECRET']
@@ -44,22 +50,22 @@ function PP_syncNetSuitePlant_(current) {
 
 function PP_fetchNetSuitePlantData_() {
   const config = PP_netSuiteConfig_();
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const plantFilter = PP_buildPlantFilter_(workOrders.rows);
-  const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
+  const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let invoiceAverages = { byItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
-  try {
-    invoiceAverages = PP_fetchInvoiceSalesAverages_(config, invoiceWindow);
-  } catch (error) {
-    invoiceAverages.warning = String(error.message || error);
-  }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applyInvoiceAverages_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations), invoiceAverages
-  ));
+  // Ver PP_fetchNetSuiteWorkOrdersData_: el precio va cacheado y la lista de OTs no.
+  const cachedPrices = PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const salesPrices = cachedPrices.prices;
+  const salesPricesOk = cachedPrices.ok;
+  const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, plantOperations);
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(
+    salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
+  );
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
-  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: '1762/17', workOrders: workOrderCatalog.length });
+  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: workOrderCatalog.length });
   const materialsResponse = PP_fetchRestletPages_({ script: '1763', deploy: '14' }, { locationId: config.locationId, onlyOpen: true, maxWOs: 50000 }, config, 20);
   const materials = materialsResponse.rows
     .filter(function(row) { return PP_belongsToPlant_(row, plantFilter); })
@@ -69,8 +75,9 @@ function PP_fetchNetSuitePlantData_() {
     workOrders: workOrderCatalog,
     plantOperations: plantOperations,
     materials: materials,
-    operationCatalog: PP_buildOperationCatalog_(plantOperations),
-    invoicePriceWindow: { from: invoiceAverages.from, to: invoiceAverages.to, warning: invoiceAverages.warning || '' },
+    operationCatalog: operationCatalogResult.items,
+    operationCatalogWarning: operationCatalogResult.warning,
+    invoicePriceWindow: { from: salesPrices.from, to: salesPrices.to, warning: salesPrices.warning || '' },
     fetchedAt: new Date().toISOString()
   };
 }
@@ -79,19 +86,22 @@ function PP_fetchNetSuiteWorkOrdersData_() {
   const config = PP_netSuiteConfig_();
   const workOrders = PP_fetchRestletPages_({ script: '1764', deploy: '1' }, { table: 'WO_LISTA', locationId: config.locationId, onlyOpen: true }, config, 10);
   const invoiceWindow = PP_invoiceAverageWindow_(new Date());
-  let invoiceAverages = { byItem: {}, from: invoiceWindow.from, to: invoiceWindow.to, warning: '' };
-  try {
-    invoiceAverages = PP_fetchInvoiceSalesAverages_(config, invoiceWindow);
-  } catch (error) {
-    invoiceAverages.warning = String(error.message || error);
-  }
-  const workOrderCatalog = PP_enrichWorkOrderPhotos_(PP_applyInvoiceAverages_(
-    PP_buildWorkOrderCatalog_(workOrders.rows, []), invoiceAverages
-  ));
+  // Los precios SIENTEN cache: son el unico fetch caro (el 1766 pagina REQ_FIFO, hasta 100
+  // paginas) y no participan en la frescura del plan, que depende de la lista de OTs (1764),
+  // que se sigue leyendo viva en cada sincronizacion. Cachear el snapshot entero habria
+  // falseado syncedAt y con el la deteccion de OTs cerradas (RULE-OT-046), asi que el cache va
+  // solo sobre el precio.
+  const cachedPrices = PP_fetchSalesPricesRestletCached_(config, invoiceWindow);
+  const salesPrices = cachedPrices.prices;
+  const salesPricesOk = cachedPrices.ok;
+  const baseCatalog = PP_buildWorkOrderCatalog_(workOrders.rows, []);
+  const workOrderCatalog = PP_enrichWorkOrderPhotos_(
+    salesPricesOk ? PP_applySalesPrices_(baseCatalog, salesPrices) : baseCatalog
+  );
   PP_assertNetSuiteRows_(workOrderCatalog, 'OTs', { restlet: '1764/1', rawRows: workOrders.rows.length });
   return {
     workOrders: workOrderCatalog,
-    invoicePriceWindow: { from: invoiceAverages.from, to: invoiceAverages.to, warning: invoiceAverages.warning || '' },
+    invoicePriceWindow: { from: salesPrices.from, to: salesPrices.to, warning: salesPrices.warning || '' },
     fetchedAt: new Date().toISOString()
   };
 }
@@ -101,10 +111,11 @@ function PP_fetchNetSuitePlanningData_(current) {
     return PP_fetchNetSuitePlantData_();
   }
   const config = PP_netSuiteConfig_();
+  const operationCatalogResult = PP_fetchNetSuiteOperationCatalogCached_(config);
   const plantFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
-  const operationsResponse = PP_fetchRestletPages_({ script: '1762', deploy: '17' }, { locationId: config.locationId, onlyOpen: true }, config, 20);
+  const operationsResponse = PP_fetchRestletPages_(PP_operationsRestlet_(), { locationId: config.locationId, onlyOpen: true }, config, 20);
   const plantOperations = operationsResponse.rows.filter(function(row) { return PP_belongsToPlant_(row, plantFilter); });
-  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: '1762/17', workOrders: current.workOrders.length });
+  PP_assertNetSuiteRows_(plantOperations, 'operaciones', { restlet: PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy, workOrders: current.workOrders.length });
   const materialsResponse = PP_fetchRestletPages_({ script: '1763', deploy: '14' }, { locationId: config.locationId, onlyOpen: true, maxWOs: 50000 }, config, 20);
   const materials = materialsResponse.rows
     .filter(function(row) { return PP_belongsToPlant_(row, plantFilter); })
@@ -112,7 +123,8 @@ function PP_fetchNetSuitePlanningData_(current) {
   return {
     plantOperations: plantOperations,
     materials: materials,
-    operationCatalog: PP_buildOperationCatalog_(plantOperations),
+    operationCatalog: operationCatalogResult.items,
+    operationCatalogWarning: operationCatalogResult.warning,
     fetchedAt: new Date().toISOString()
   };
 }
@@ -120,7 +132,38 @@ function PP_fetchNetSuitePlanningData_(current) {
 function PP_assertNetSuiteRows_(rows, label, context) {
   if (Array.isArray(rows) && rows.length > 0) return;
   const detail = context ? ' Detalle: ' + JSON.stringify(context) : '';
-  throw new Error('NetSuite devolvio 0 ' + label + ' para Planta MM del Llano. Revisa propiedades NS_*, permisos del deployment, permisos del token y RESTlets 1764/1, 1762/17 y 1763/14.' + detail);
+  throw new Error('NetSuite devolvio 0 ' + label + ' para Planta MM del Llano. Revisa propiedades NS_*, permisos del deployment, permisos del token y RESTlets 1764/1, operaciones ' + PP_operationsRestlet_().script + '/' + PP_operationsRestlet_().deploy + ' y 1763/14.' + detail);
+}
+
+function PP_preservedToolChanges_(current, operations) {
+  const presentOts = {};
+  (operations || []).forEach(function(row) {
+    const key = PP_normalizeKey_(row && row.ot);
+    if (key) presentOts[key] = true;
+  });
+  return (current && current.operations || []).filter(function(op) {
+    return op && PP_normalizeKey_(op.tipoInsercion) === 'CAMBIO_HERRAMENTAL' && presentOts[PP_normalizeKey_(op.ot)];
+  });
+}
+
+function PP_preserveWorkOrderLocalFields_(item, previous) {
+  item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+  if (!(Number(item.lastSalePrice) > 0) && Number(previous.lastSalePrice) > 0) {
+    item.lastSalePrice = Number(previous.lastSalePrice);
+  }
+  if (!(Number(item.averageSalePrice) > 0) && Number(previous.averageSalePrice) > 0) {
+    item.averageSalePrice = Number(previous.averageSalePrice);
+  }
+  if (!String(item.averageSalePriceFrom || '').trim() && previous.averageSalePriceFrom) {
+    item.averageSalePriceFrom = previous.averageSalePriceFrom;
+  }
+  if (!String(item.averageSalePriceTo || '').trim() && previous.averageSalePriceTo) {
+    item.averageSalePriceTo = previous.averageSalePriceTo;
+  }
+  if (!String(item.photoUrl || '').trim() && previous.photoUrl) {
+    item.photoUrl = previous.photoUrl;
+  }
+  return item;
 }
 
 function PP_applyNetSuitePlantData_(current, snapshot) {
@@ -130,20 +173,33 @@ function PP_applyNetSuitePlantData_(current, snapshot) {
     previousWorkOrders[PP_normalizeKey_(item.ot)] = item;
   });
   workOrderCatalog.forEach(function(item) {
-    const previous = previousWorkOrders[PP_normalizeKey_(item.ot)] || {};
-    item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+    PP_preserveWorkOrderLocalFields_(item, previousWorkOrders[PP_normalizeKey_(item.ot)] || {});
   });
   const plantOperations = snapshot.plantOperations || [];
+  const catalogFilter = PP_buildPlantFilterFromWorkOrders_(workOrderCatalog);
+  const contextForOperations = Object.assign({}, current, { workOrders: workOrderCatalog });
+  const droppedPlaceholderOperations = [];
   const operations = plantOperations
     .filter(PP_isSchedulable_)
-    .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
+    .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
+    .filter(function(row) {
+      const reason = PP_placeholderOperationReason_(row);
+      if (reason) {
+        droppedPlaceholderOperations.push('EXCLUIDA_NOMBRE_PLACEHOLDER ' + reason + ' (OT ' + String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid']) || '') + ')');
+        return false;
+      }
+      return true;
+    })
+    .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, contextForOperations); });
   const materials = snapshot.materials || [];
 
   const merged = JSON.parse(JSON.stringify(current || {}));
-  merged.operations = operations;
+  merged.operations = PP_preservedToolChanges_(current, operations).concat(operations);
   merged.workOrders = workOrderCatalog;
   merged.materials = materials;
-  merged.operationCatalog = snapshot.operationCatalog || PP_buildOperationCatalog_(plantOperations);
+  merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
+  merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
+  merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   const openOts = {};
   workOrderCatalog.forEach(function(item) { openOts[PP_normalizeKey_(item.ot)] = true; });
   merged.operationPlanStatuses = Object.keys(merged.operationPlanStatuses || {}).reduce(function(out, key) {
@@ -173,19 +229,128 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
     previousWorkOrders[PP_normalizeKey_(item.ot)] = item;
   });
   workOrderCatalog.forEach(function(item) {
-    const previous = previousWorkOrders[PP_normalizeKey_(item.ot)] || {};
-    item.dueDateOverride = String(previous.dueDateOverride || '').trim();
+    PP_preserveWorkOrderLocalFields_(item, previousWorkOrders[PP_normalizeKey_(item.ot)] || {});
   });
 
   const merged = JSON.parse(JSON.stringify(current || {}));
   merged.workOrders = workOrderCatalog;
   const openOts = {};
   workOrderCatalog.forEach(function(item) { openOts[PP_normalizeKey_(item.ot)] = true; });
+  // Una OT que NetSuite ya no lista como abierta no puede seguir en la cola del plan.
+  // Sin esto CONFIG.selectedOts la conservaba para siempre: el cliente la podaba solo en
+  // memoria (pruneDraftToOpenWorkOrders) y la vuelta a cargar la resucitaba.
+  //
+  // PERO "no listada" no es lo mismo que "cerrada" (RULE-OT-049). El catalogo viene de un
+  // RESTlet con onlyOpen:true y con filtros que descartan filas, asi que una OT abierta puede
+  // no aparecer sin estar cerrada. Y aqui es donde la perdida se vuelve irreversible, porque
+  // lo que se poda en esta funcion SE PERSISTE en CONFIG: un segundo sync ya no la
+  // resucita. Por eso hay tres capas, igual que en el cliente
+  // (reconcileActiveWorkOrders en planning-workflow-core.js):
+  //  1. Evidencia positiva: el catalogo trae la OT con exists === false, o su estatus dice
+  //     cerrada o cancelada. Eso si poda, en una pasada.
+  //  2. Ausencia sin evidencia: no se poda. La OT sigue en CONFIG y se anota en
+  //     unconfirmedWorkOrders. Hace falta que falte otra vez para darla por cerrada, y si
+  //     vuelve a aparecer la marca se borra sola.
+  //  3. Caida masiva: si falta mas de MASA_OT_RATIO de las OTs conocidas de una sola vez, el
+  //     catalogo se toma por lectura incompleta y NO se poda nada. Perder 200 OTs por un
+  //     catalogo a medias es peor que tener OTs de mas en la cola.
+  const CERRADOS_EXPLICITOS = ['CERRADA', 'CERRADO', 'CLOSED', 'COMPLETE', 'COMPLETAD', 'CANCELADA', 'CANCELADO', 'CANCELED', 'CANCELLED'];
+  const MASA_OT_RATIO = 0.2;
+  const MASA_OT_MINIMO = 20;
+  // La hora de ESTA pasada. No se usa merged.syncedAt porque mas abajo, en el return, se
+  // asigna; si se usara aqui marcaria con la hora del guardado anterior y las marcas de
+  // "cuantas veces ha fallado" quedarían descolocadas.
+  const ahora = snapshot.fetchedAt || new Date().toISOString();
+  function estatusCerrado(item) {
+    var estatus = PP_normalizeKey_(item && (item.status || item.estatus) || '');
+    if (!estatus) return false;
+    return CERRADOS_EXPLICITOS.some(function(palabra) { return estatus.indexOf(PP_normalizeKey_(palabra)) >= 0; });
+  }
+  var confirmadas = {};
+  workOrderCatalog.forEach(function(item) {
+    if (item && (item.exists === false || item.existe === false)) confirmadas[PP_normalizeKey_(item.ot)] = true;
+  });
+  var previasPorOt = {};
+  ((current && current.workOrders) || []).forEach(function(item) {
+    var clave = PP_normalizeKey_(item && item.ot);
+    if (!clave) return;
+    previasPorOt[clave] = item;
+    if (estatusCerrado(item)) confirmadas[clave] = true;
+  });
+  var conocidas = Object.keys(previousWorkOrders).concat(Object.keys(previasPorOt));
+  var unicasConocidas = [];
+  var vistas = {};
+  conocidas.forEach(function(clave) { if (clave && !vistas[clave]) { vistas[clave] = true; unicasConocidas.push(clave); } });
+  var faltantes = unicasConocidas.filter(function(clave) { return !openOts[clave] && !confirmadas[clave]; });
+  var caidaMasiva = faltantes.length > 0
+    && unicasConocidas.length >= MASA_OT_MINIMO
+    && (faltantes.length / unicasConocidas.length) > MASA_OT_RATIO;
+
+  var previasPorConfirmar = merged.unconfirmedWorkOrders || {};
+  var porConfirmar = {};
+  Object.keys(previasPorConfirmar).forEach(function(clave) {
+    var previa = previasPorConfirmar[clave] || {};
+    if (confirmadas[clave]) return;
+    porConfirmar[clave] = {
+      ot: previa.ot || clave,
+      firstSeenAt: previa.firstSeenAt || ahora || '',
+      lastSeenAt: previa.lastSeenAt || ahora || '',
+      misses: Number(previa.misses) > 0 ? Number(previa.misses) : 1
+    };
+  });
+  if (!caidaMasiva) {
+    faltantes.forEach(function(clave) {
+      var previa = porConfirmar[clave];
+      porConfirmar[clave] = {
+        ot: (previa && previa.ot) || (previasPorOt[clave] && previasPorOt[clave].ot) || clave,
+        firstSeenAt: (previa && previa.firstSeenAt) || ahora || '',
+        lastSeenAt: ahora || '',
+        misses: ((previa && previa.misses) || 0) + 1
+      };
+    });
+  }
+  Object.keys(openOts).forEach(function(clave) { delete porConfirmar[clave]; });
+  // Segunda ausencia NO es cierre confirmado. La poda por segunda ausencia se elimino
+  // (ver reconcileActiveWorkOrders en planning-workflow-core.js): ahora solo se poda con
+  // evidencia positiva de NetSuite (confirmWorkOrderClosures). El backend no debe cerrar
+  // OTs que el frontend no cerraria.
+  Object.keys(confirmadas).forEach(function(clave) { delete porConfirmar[clave]; });
+  merged.unconfirmedWorkOrders = porConfirmar;
+  merged.lastWorkOrderReconcile = {
+    at: ahora || '',
+    incoming: workOrderCatalog.length,
+    live: unicasConocidas.length,
+    missing: faltantes.length,
+    confirmedClosed: Object.keys(confirmadas).length,
+    massDrop: Boolean(caidaMasiva),
+    unconfirmedOts: Object.keys(porConfirmar)
+  };
+
+  var sigueViva = function(ot) { return !confirmadas[PP_normalizeKey_(ot)]; };
+  // IMPORTANTE: workOrders no se reemplaza en crudo. Si se hiciera, las OTs que solo faltan
+  // se quedarian en selectedOts SIN ficha, que es justo el estado roto que se midio el
+  // 2026-09-26 (14 de las 17 OTs rotadas seguian con operaciones vivas pero sin work order).
+  // Se conserva lo anterior de toda OT que no vino y no esta confirmada como cerrada.
+  merged.workOrders = workOrderCatalog
+    .filter(function(item) { return !confirmadas[PP_normalizeKey_(item && item.ot)]; })
+    .concat(Object.keys(previasPorOt)
+      .filter(function(clave) { return !openOts[clave] && !confirmadas[clave]; }
+      )
+      .map(function(clave) { return previasPorOt[clave]; })
+    );
   merged.operationPlanStatuses = Object.keys(merged.operationPlanStatuses || {}).reduce(function(out, key) {
     const item = merged.operationPlanStatuses[key] || {};
-    if (openOts[PP_normalizeKey_(item.ot)]) out[key] = item;
+    if (sigueViva(item.ot)) out[key] = item;
     return out;
   }, {});
+  merged.selectedOts = (merged.selectedOts || []).filter(sigueViva);
+  merged.lockedOts = (merged.lockedOts || []).filter(sigueViva);
+  merged.expandedOts = (merged.expandedOts || []).filter(sigueViva);
+  if (merged.lastSchedule && Array.isArray(merged.lastSchedule.scheduledOts)) {
+    merged.lastSchedule = Object.assign({}, merged.lastSchedule, {
+      scheduledOts: merged.lastSchedule.scheduledOts.filter(sigueViva)
+    });
+  }
   merged.plant = Object.assign({}, merged.plant || {}, {
     name: PP_PLANT_NAME,
     locationId: PP_PLANT_LOCATION_ID,
@@ -202,14 +367,27 @@ function PP_applyNetSuiteWorkOrdersData_(current, snapshot) {
 function PP_applyNetSuitePlanningData_(current, snapshot) {
   if (snapshot.workOrders) return PP_applyNetSuitePlantData_(current, snapshot);
   const plantOperations = snapshot.plantOperations || [];
+  const catalogFilter = PP_buildPlantFilterFromWorkOrders_(current.workOrders);
+  const droppedPlaceholderOperations = [];
   const operations = plantOperations
     .filter(PP_isSchedulable_)
+    .filter(function(row) { return PP_belongsToPlant_(row, catalogFilter); })
+    .filter(function(row) {
+      const reason = PP_placeholderOperationReason_(row);
+      if (reason) {
+        droppedPlaceholderOperations.push('EXCLUIDA_NOMBRE_PLACEHOLDER ' + reason + ' (OT ' + String(PP_pick_(row, ['Orden de trabajo', 'workorder_tranid']) || '') + ')');
+        return false;
+      }
+      return true;
+    })
     .map(function(row, index) { return PP_mapNetSuiteOperation_(row, index, current); });
   const materials = snapshot.materials || [];
   const merged = JSON.parse(JSON.stringify(current || {}));
-  merged.operations = operations;
+  merged.operations = PP_preservedToolChanges_(current, operations).concat(operations);
   merged.materials = materials;
-  merged.operationCatalog = snapshot.operationCatalog || PP_buildOperationCatalog_(plantOperations);
+  merged.syncWarnings = (Array.isArray(merged.syncWarnings) ? merged.syncWarnings : []).concat(droppedPlaceholderOperations);
+  merged.operationCatalog = PP_resolveOperationCatalog_(current, snapshot, plantOperations);
+  merged.operationCatalogWarning = String(snapshot.operationCatalogWarning || '');
   merged.plant = Object.assign({}, merged.plant || {}, {
     name: PP_PLANT_NAME,
     locationId: PP_PLANT_LOCATION_ID,
@@ -234,64 +412,435 @@ function PP_invoiceAverageWindow_(endDate) {
   };
 }
 
-function PP_fetchInvoiceSalesAverages_(config, window) {
-  const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-  const query = { limit: 1000, offset: 0 };
-  const sql = [
-    "SELECT tl.item AS item_id, BUILTIN.DF(tl.item) AS item_name,",
-    "ABS(SUM(NVL(tl.quantity, 0))) AS billed_quantity,",
-    "ABS(SUM(NVL(tl.netamount, 0))) AS net_amount",
-    "FROM transaction t",
-    "INNER JOIN transactionline tl ON tl.transaction = t.id",
-    "WHERE t.type = 'CustInvc'",
-    "AND NVL(t.voided, 'F') = 'F'",
-    "AND tl.mainline = 'F' AND tl.taxline = 'F' AND tl.iscogs = 'F'",
-    "AND tl.item IS NOT NULL",
-    "AND t.trandate >= TO_DATE('" + window.from + "', 'YYYY-MM-DD')",
-    "AND t.trandate <= TO_DATE('" + window.to + "', 'YYYY-MM-DD')",
-    "GROUP BY tl.item, BUILTIN.DF(tl.item)"
-  ].join(' ');
-  const finalUrl = endpoint + '?limit=1000&offset=0';
-  const response = UrlFetchApp.fetch(finalUrl, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: PP_oauthHeader_('POST', endpoint, query, config),
-      Prefer: 'transient'
-    },
-    payload: JSON.stringify({ q: sql }),
-    muteHttpExceptions: true
-  });
-  const status = response.getResponseCode();
-  const raw = response.getContentText();
-  if (status < 200 || status >= 300) throw new Error('SuiteQL facturacion: ' + status + ' ' + raw.slice(0, 500));
-  const json = JSON.parse(raw || '{}');
-  const byItem = {};
-  (json.items || []).forEach(function(row) {
-    const itemName = String(row.item_name || row.itemName || '').trim();
-    const quantity = Math.abs(Number(row.billed_quantity || row.billedQuantity || 0));
-    const amount = Math.abs(Number(row.net_amount || row.netAmount || 0));
-    if (!itemName || !(quantity > 0) || !(amount > 0)) return;
-    byItem[PP_normalizeKey_(itemName)] = amount / quantity;
-  });
-  return { byItem: byItem, from: window.from, to: window.to, warning: '' };
+function PP_fetchNetSuiteOperationCatalogCached_(config) {
+  const scope = PP_normalizeKey_(config.accountId + '_' + config.locationId);
+  const cacheKey = 'NS_OPERATION_CATALOG_V1_' + scope;
+  const attemptKey = 'NS_OPERATION_CATALOG_ATTEMPT_V1_' + scope;
+  let cache = PP_getNetSuiteOperationCatalogCache_();
+  let items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+  if (items.length) return { items: items, warning: '' };
+
+  let lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return PP_netSuiteOperationCatalogDeferred_('actualizacion en curso');
+  } catch (_) {
+    return PP_netSuiteOperationCatalogDeferred_('bloqueo temporal no disponible');
+  }
+
+  try {
+    if (!cache) cache = PP_getNetSuiteOperationCatalogCache_();
+    items = PP_readNetSuiteOperationCatalogCache_(cache, cacheKey);
+    if (items.length) return { items: items, warning: '' };
+
+    const now = Date.now();
+    let properties;
+    let lastAttemptRaw = '';
+    try {
+      properties = PropertiesService.getScriptProperties();
+      lastAttemptRaw = properties.getProperty(attemptKey) || '';
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('lectura de cooldown no disponible');
+    }
+    const lastAttempt = Number(lastAttemptRaw || 0);
+    if (lastAttemptRaw && (!Number.isFinite(lastAttempt) || lastAttempt <= 0)) {
+      return PP_netSuiteOperationCatalogDeferred_('marcador de cooldown invalido');
+    }
+    if (lastAttempt > 0 && now - lastAttempt < 3600000) {
+      return PP_netSuiteOperationCatalogDeferred_('consulta omitida durante cooldown');
+    }
+    const attemptMarker = String(now);
+    try {
+      properties.setProperty(attemptKey, attemptMarker);
+      if (properties.getProperty(attemptKey) !== attemptMarker) throw new Error('cooldown no persistido');
+    } catch (_) {
+      return PP_netSuiteOperationCatalogDeferred_('escritura de cooldown no disponible');
+    }
+
+    const result = PP_fetchNetSuiteOperationCatalog_(config);
+    if (result.items.length && cache) {
+      try { cache.put(cacheKey, JSON.stringify(result.items), 3600); } catch (_) {}
+    }
+    return result;
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
 }
 
-function PP_applyInvoiceAverages_(workOrders, averages) {
+function PP_getNetSuiteOperationCatalogCache_() {
+  try { return CacheService.getScriptCache(); } catch (_) { return null; }
+}
+
+function PP_readNetSuiteOperationCatalogCache_(cache, key) {
+  if (!cache) return [];
+  let cached = '';
+  try { cached = cache.get(key); } catch (_) { return []; }
+  if (!cached) return [];
+  try { return PP_validateNetSuiteOperationCatalogCache_(JSON.parse(cached)); } catch (_) { return []; }
+}
+
+function PP_validateNetSuiteOperationCatalogCache_(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const catalog = {};
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+        || typeof item.key !== 'string' || typeof item.ct !== 'string'
+        || typeof item.label !== 'string' || item.source !== 'NETSUITE_MASTER'
+        || item.active !== true) return [];
+    const ct = item.ct.trim();
+    const label = item.label.trim();
+    const key = ct + '::' + PP_normalizeKey_(label);
+    if (!ct || !label || item.key !== key) return [];
+    if (PP_isSpecialNetSuiteOperation_(ct, label)) continue;
+    if (!catalog[key]) {
+      catalog[key] = { key: key, ct: ct, label: label, source: 'NETSUITE_MASTER', active: true };
+    }
+  }
+  return Object.keys(catalog).sort().map(function(key) { return catalog[key]; });
+}
+
+function PP_netSuiteOperationCatalogDeferred_(reason) {
+  return { items: [], warning: 'Catálogo de operaciones NetSuite no disponible: ' + reason };
+}
+
+function PP_fetchNetSuiteOperationCatalog_(config) {
+  const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+  const limit = 1000;
+  const sql = [
+    'SELECT routing.id AS routing_id,',
+    'step.operationsequence AS operation_sequence,',
+    'step.id AS step_id,',
+    'BUILTIN.DF(step.manufacturingworkcenter) AS work_center,',
+    'step.operationname AS operation_name',
+    'FROM manufacturingroutingstep step',
+    'JOIN manufacturingrouting routing ON routing.id = step.manufacturingrouting',
+    'JOIN entitygroup center ON center.id = step.manufacturingworkcenter',
+    "WHERE NVL(routing.isinactive, 'F') = 'F'",
+    "AND NVL(center.isinactive, 'F') = 'F'",
+    'ORDER BY routing_id, operation_sequence, step_id'
+  ].join(' ');
+  const catalog = {};
+  try {
+    for (let offset = 0, page = 0; page < 100; page++, offset += limit) {
+      const query = { limit: limit, offset: offset };
+      const finalUrl = endpoint + '?limit=' + limit + '&offset=' + offset;
+      const response = UrlFetchApp.fetch(finalUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: {
+          Authorization: PP_oauthHeader_('POST', endpoint, query, config),
+          Prefer: 'transient'
+        },
+        payload: JSON.stringify({ q: sql }),
+        muteHttpExceptions: true
+      });
+      const status = response.getResponseCode();
+      const raw = response.getContentText();
+      if (status < 200 || status >= 300) throw new Error('HTTP ' + status);
+      let json;
+      try { json = JSON.parse(raw || '{}'); } catch (error) { throw new Error('JSON invalido'); }
+      if (!Array.isArray(json.items)) throw new Error('respuesta sin items');
+      if (typeof json.hasMore !== 'boolean') throw new Error('respuesta sin hasMore booleano');
+      const malformedRow = json.items.some(function(row) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return true;
+        const workCenter = row.work_center != null ? row.work_center : row.workCenter;
+        const operationName = row.operation_name != null ? row.operation_name : row.operationName;
+        return !String(workCenter || '').trim() || !String(operationName || '').trim();
+      });
+      if (malformedRow) throw new Error('fila de operacion incompleta');
+      json.items.forEach(function(row) {
+        const workCenter = String(row.work_center || row.workCenter || '').trim();
+        const label = String(row.operation_name || row.operationName || '').trim();
+        const ct = PP_extractOperationCatalogCt_(workCenter);
+        if (!ct || !label || PP_isSpecialNetSuiteOperation_(ct, label)) return;
+        const key = ct + '::' + PP_normalizeKey_(label);
+        if (!catalog[key]) {
+          catalog[key] = { key: key, ct: ct, label: label, source: 'NETSUITE_MASTER', active: true };
+        }
+      });
+      if (json.hasMore !== true) break;
+      if (page === 99) throw new Error('paginacion incompleta');
+    }
+    const items = Object.keys(catalog).sort().map(function(key) { return catalog[key]; });
+    if (!items.length) throw new Error('respuesta sin operaciones validas');
+    return { items: items, warning: '' };
+  } catch (error) {
+    return { items: [], warning: 'Catálogo de operaciones NetSuite no disponible: ' + String(error.message || error).slice(0, 100) };
+  }
+}
+
+function PP_extractOperationCatalogCt_(workCenter) {
+  const text = String(workCenter || '').trim();
+  const match = text.match(/(?:^|\b)CT[\s:_-]*(\d{3,})\b/i) || text.match(/\b(\d{3,})\b/);
+  return match ? match[1] : text;
+}
+
+function PP_isSpecialNetSuiteOperation_(ct, label) {
+  const normalized = PP_normalizeKey_(String(ct || '') + ' ' + String(label || '')).replace(/[^A-Z0-9]+/g, '');
+  return ['SUBCONTRATO', 'CROMADO', 'METOKOTE', 'MAKA', 'GALVANIZADO'].some(function(term) {
+    return normalized.indexOf(term) >= 0;
+  });
+}
+
+function PP_resolveOperationCatalog_(current, snapshot, plantOperations) {
+  if (Array.isArray(snapshot.operationCatalog) && snapshot.operationCatalog.length) return snapshot.operationCatalog;
+  if (current && Array.isArray(current.operationCatalog) && current.operationCatalog.length) return current.operationCatalog;
+  return PP_buildOperationCatalog_(plantOperations);
+}
+
+const PP_SALES_PRICES_CACHE_TTL_S_ = 3600;
+const PP_SALES_PRICES_COOLDOWN_MS_ = 3600000;
+
+/**
+ * Cache de los precios de venta del 1766 (REQ_FIFO).
+ *
+ * Por que existe: el 1766 pagina REQ_FIFO (hasta 100 paginas) y es, con diferencia, el fetch
+ * mas caro del arranque: la app sincroniza en cada carga, y la cuota diaria de UrlFetch de
+ * Apps Script es por consumidor (20 000/dia en cuentas de consumidor). Agotada, TODA llamada
+ * falla con "Service invoked too many times for one day: urlfetch" y la app deja de poder
+ * sincronizar nada.
+ *
+ * Por que NO se cachea el snapshot entero: la frescura del plan depende de la lista de OTs
+ * (1764), que es lo que detecta las OTs cerradas (RULE-OT-046). Cachear el snapshot
+ * falsearia syncedAt y las OTs cerradas volverian a colarse. El precio no participa en esa
+ * decision, asi que es justo lo que se puede cachear.
+ *
+ * El costo es hasta una hora de retraso en el precio de venta; la foto, la cantidad y el
+ * estatus de la OT siempre se leen vivos.
+ */
+function PP_fetchSalesPricesRestletCached_(config, window) {
+  const scope = PP_normalizeKey_(
+    config.accountId + '_' + config.locationId + '_' + window.from + '_' + window.to
+  );
+  const cacheKey = 'NS_SALES_PRICES_V1_' + scope;
+  const attemptKey = 'NS_SALES_PRICES_ATTEMPT_V1_' + scope;
+  const empty = { lastByItem: {}, avgByItem: {}, from: window.from, to: window.to, warning: '' };
+  let cache = PP_getSalesPricesCache_();
+  const cached = PP_readSalesPricesCache_(cache, cacheKey, window);
+  if (cached) return { prices: cached, ok: true };
+
+  let lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: actualizacion en curso' }), ok: false };
+    }
+  } catch (_) {
+    return { prices: Object.assign({}, empty, { warning: 'precios: bloqueo no disponible' }), ok: false };
+  }
+
+  try {
+    // Doble lectura dentro del lock: otra ejecucion pudo llenarlo mientrasEsperabamos.
+    if (!cache) cache = PP_getSalesPricesCache_();
+    const afterLock = PP_readSalesPricesCache_(cache, cacheKey, window);
+    if (afterLock) return { prices: afterLock, ok: true };
+
+    let properties = null;
+    let lastAttemptRaw = '';
+    try {
+      properties = PropertiesService.getScriptProperties();
+      lastAttemptRaw = properties.getProperty(attemptKey) || '';
+    } catch (_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: cooldown ilegible' }), ok: false };
+    }
+    const lastAttempt = Number(lastAttemptRaw || 0);
+    if (lastAttemptRaw && (!Number.isFinite(lastAttempt) || lastAttempt <= 0)) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: marcador de cooldown invalido' }), ok: false };
+    }
+    if (lastAttempt > 0 && Date.now() - lastAttempt < PP_SALES_PRICES_COOLDOWN_MS_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: omitido durante cooldown' }), ok: false };
+    }
+    const marker = String(Date.now());
+    try {
+      properties.setProperty(attemptKey, marker);
+      if (properties.getProperty(attemptKey) !== marker) throw new Error('cooldown no persistido');
+    } catch (_) {
+      return { prices: Object.assign({}, empty, { warning: 'precios: cooldown no escribible' }), ok: false };
+    }
+
+    const prices = PP_fetchSalesPricesRestlet_(config, window);
+    if (cache && prices.lastByItem && Object.keys(prices.lastByItem).length) {
+      const payload = { source: 'NETSUITE_1766', from: window.from, to: window.to, lastByItem: prices.lastByItem, avgByItem: prices.avgByItem };
+      try { cache.put(cacheKey, JSON.stringify(payload), PP_SALES_PRICES_CACHE_TTL_S_); } catch (_) {}
+    }
+    return { prices: prices, ok: true };
+  } catch (error) {
+    // Un fallo NO se cachea: el cooldown de arriba evita la tormenta de reintentos y el
+    // siguiente intento real vuelve a intentarlo.
+    return { prices: Object.assign({}, empty, { warning: String(error && error.message || error) }), ok: false };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+function PP_getSalesPricesCache_() {
+  try { return CacheService.getScriptCache(); } catch (_) { return null; }
+}
+
+function PP_readSalesPricesCache_(cache, key, window) {
+  if (!cache) return null;
+  let raw = '';
+  try { raw = cache.get(key); } catch (_) { return null; }
+  if (!raw) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_) { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.source !== 'NETSUITE_1766') return null;
+  // La ventana va en la clave, pero se revalida: un cambio de periodo debe invalidar el
+  // promedio de 6 meses, no servirlo mezclado con otro.
+  if (String(parsed.from) !== String(window.from) || String(parsed.to) !== String(window.to)) return null;
+  if (!parsed.lastByItem || typeof parsed.lastByItem !== 'object' || Array.isArray(parsed.lastByItem)) return null;
+  if (!parsed.avgByItem || typeof parsed.avgByItem !== 'object' || Array.isArray(parsed.avgByItem)) return null;
+  return { lastByItem: parsed.lastByItem, avgByItem: parsed.avgByItem, from: parsed.from, to: parsed.to, warning: '' };
+}
+
+function PP_fetchSalesPricesRestlet_(config, window) {
+  const page = PP_fetchRestletPages_({ script: '1766', deploy: '1' }, { table: 'REQ_FIFO' }, config, 100);
+  const lastByItem = {};
+  const lastDateByItem = {};
+  const sumAmt = {};
+  const sumQty = {};
+  const cutoff = new Date(window.from + 'T00:00:00');
+  (page.rows || []).forEach(function(row) {
+    const itemId = String(row._ITEM_ID || '').trim();
+    const itemName = String(PP_pick_(row, ['_ITEM_NAME', 'item_name', 'Articulo', 'Item', 'ITEM', 'PARTE']) || '').trim();
+    // 'PRECIO BASE MNX' SI esta en pesos, aunque la venta sea en dolares. No hay que
+    // multiplicar por TIPO CAMBIO. La columna se llama asi porque es el precio base en la
+    // moneda de la compania, y MONEDA dice en que moneda se transactio, que es otra cosa.
+    //
+    // MEDIDO contra facturas reales (2026-09-26, DIAG_PRECIOS_MONEDA, dos articulos):
+    //   M66-8602  MONEDA 'US Dollar' | TIPO CAMBIO 16.9237 | PRECIO BASE MNX 1375.90
+    //             factura INV2244: 13 pzas por $17 923.23 = $1 378.71 por pieza.
+    //             El CRUDO (1375.90) es el precio real (error 0%); el CRUDO x TIPO CAMBIO
+    //             (23 285.26) es 17x el precio real (error 1589%).
+    //   TR 350    MONEDA 'Peso Mexicano' | TIPO CAMBIO 1 | promedio 280.65
+    //             facturas a $273 y $304: error 3%. Sin cambio, porque el factor ya es 1.
+    //
+    // QUE SE HABIA MEDIDO MAL, y por que: la evidencia anterior (2026-09-26) era una linea
+    // con TIPO CAMBIO 18.31 cuyo TAX AMOUNT cerraba exacto contra el CRUDO, y de ahi se
+    // concluyo que el crudo venia en dolares. Ese cierre solo demuestra que las tres
+    // columnas vienen en la MISMA moneda entre si; no dice cual. Ahora se tiene la factura
+    // real, que si dice cual, y es la unica referencia externa valida.
+    //
+    // OJO: por que las dos columnas cierran entre si y aun asi el crudo es pesos. MONEDA
+    // dice 'US Dollar', pero PRECIO BASE MNX, TAX AMOUNT y GROSS AMT estan los tres en
+    // pesos: en M66-8602, 1375.90 x 3 = 4127.69, x 1.16 = 4788.12 = GROSS AMT. Si el crudo
+    // fuera dolares, el GROSS AMT habria salido en dolares y la factura en pesos habria
+    // dado 23 285 por pieza, no 1378.71.
+    const price = Number(PP_pick_(row, ['PRECIO BASE MNX', 'precio_base_mnx']) || 0);
+    const qty = Number(PP_pick_(row, ['CANTIDAD ORDEN', 'cantidad_orden']) || 0);
+    const orderedAt = PP_parseRestletDate_(PP_pick_(row, ['FECHA DE ORDEN', 'fecha_orden']));
+    const keys = [];
+    if (itemId) keys.push(PP_normalizeKey_(itemId));
+    if (itemName) keys.push(PP_normalizeKey_(itemName));
+    if (!keys.length) return;
+    if (orderedAt && isFinite(price)) {
+      keys.forEach(function(key) {
+        if (!lastDateByItem[key] || orderedAt.getTime() > lastDateByItem[key].getTime()) {
+          lastDateByItem[key] = orderedAt;
+          lastByItem[key] = price;
+        }
+      });
+    }
+    if (orderedAt && !isNaN(orderedAt.getTime()) && orderedAt.getTime() >= cutoff.getTime() && qty > 0 && price > 0) {
+      keys.forEach(function(key) {
+        sumAmt[key] = (sumAmt[key] || 0) + (price * qty);
+        sumQty[key] = (sumQty[key] || 0) + qty;
+      });
+    }
+  });
+  const avgByItem = {};
+  Object.keys(sumAmt).forEach(function(key) {
+    if (sumQty[key] > 0) avgByItem[key] = sumAmt[key] / sumQty[key];
+  });
+  return { lastByItem: lastByItem, avgByItem: avgByItem, from: window.from, to: window.to, warning: '' };
+}
+
+function PP_parseRestletDate_(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  let match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (match) {
+    let day = Number(match[1]);
+    let month = Number(match[2]);
+    const year = Number(match[3]);
+    let hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const meridiem = String(match[6]).toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    return new Date(year, month - 1, day, hour, minute, 0, 0);
+  }
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), 0, 0, 0, 0);
+  match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+  // DD/MM/AAAA hh:mm:ss y DD/MM/AAAA hh:mm: el de arriba solo acepta el formato con AM/PM, asi
+  // que sin este patron la fecha cae en `new Date(texto)`, que en es-MX devuelve invalido y la
+  // fila se descarta silenciosamente del precio (no entra ni a la ultima venta ni al promedio).
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (match) {
+    return new Date(
+      Number(match[3]), Number(match[2]) - 1, Number(match[1]),
+      Number(match[4]), Number(match[5]), Number(match[6] || 0), 0
+    );
+  }
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function PP_applySalesPrices_(workOrders, prices) {
   return (workOrders || []).map(function(item) {
-    const price = Number((averages.byItem || {})[PP_normalizeKey_(item.item)] || 0);
-    item.averageSalePrice = price > 0 ? price : 0;
-    item.averageSalePriceFrom = averages.from || '';
-    item.averageSalePriceTo = averages.to || '';
+    const keys = [];
+    if (item.itemId) keys.push(PP_normalizeKey_(item.itemId));
+    if (item.item) keys.push(PP_normalizeKey_(item.item));
+    let last = 0;
+    let avg = 0;
+    keys.forEach(function(key) {
+      if (!last) last = Number((prices.lastByItem || {})[key] || 0);
+      if (!avg) avg = Number((prices.avgByItem || {})[key] || 0);
+    });
+    item.lastSalePrice = last > 0 ? last : 0;
+    item.averageSalePrice = avg > 0 ? avg : 0;
+    item.averageSalePriceFrom = prices.from || '';
+    item.averageSalePriceTo = prices.to || '';
     return item;
   });
+}
+
+// pageSize por RESTlet. El valor no es "cuantas filas caben" sino "cuantas llamadas se
+// ahorran", y el costo de una llamada es fijo: medido en el 1766 (sonda DIAG_precios1766 del
+// 2026-09-26) el tiempo es 2023 ms fijos + 0.543 ms por fila, o sea que pedir 5x mas filas
+// cuesta 0.34 s mas, mientras que repetir la llamada cuesta 2 s. Por eso el tamano se sube
+// mientras el restlet lo aguante.
+//
+// 1766 REQ_FIFO = 1000: su tope real es 1000 (pedir 2000 devuelve 1000) y ya se usa asi en
+// produccion en el script de inventario INV_PLANTAS_WIP. Son 6671 filas, o sea 7 llamadas.
+//
+// 2240 operaciones = 2500: el clamp del restlet es 50..5000 (netsuite-restlet-operaciones.js:26)
+// y trae 2400 filas abiertas (sonda DIAG_operaciones2240 del 2026-09-26), o sea que entra en
+// UNA llamada en vez de 12. Aqui el ahorro es mayor porque el 2240 pagina en memoria
+// (all = runSuiteQL_(sql) y despues slice), de modo que cada llamada RE-EJECUTA el JOIN
+// completo de todas las plantas: 12 llamadas son 12 escaneos completos, 1 llamada es 1.
+//
+// Los demas (1764 WO_LISTA, 1763 materiales) se quedan en 200 porque su maximo NO esta
+// verificado: medirlos exige otra sonda y cambiarlos a ciegas seria repetir el error del
+// precio en TIPO CAMBIO.
+const PP_RESTLET_PAGE_SIZE_ = { '1766': 1000, '2240': 2500 };
+
+function PP_restletPageSize_(query) {
+  var scriptId = String((query || {}).script || '');
+  var configured = PP_RESTLET_PAGE_SIZE_[scriptId];
+  return configured > 0 ? configured : 200;
 }
 
 function PP_fetchRestletPages_(query, baseBody, config, maxPages) {
   const rows = [];
   let headers = [];
+  const pageSize = PP_restletPageSize_(query);
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
-    const body = Object.assign({}, baseBody, { pageIndex: pageIndex, pageSize: 200 });
+    const body = Object.assign({}, baseBody, { pageIndex: pageIndex, pageSize: pageSize });
     const response = PP_netSuiteRestletRequest_(query, body, config);
     if (!response.ok) throw new Error('NetSuite RESTlet: ' + response.status + ' ' + response.raw.slice(0, 500));
     headers = response.json.headers || headers;
@@ -301,21 +850,39 @@ function PP_fetchRestletPages_(query, baseBody, config, maxPages) {
   return { rows: rows, headers: headers };
 }
 
+const PP_NS_RATE_LIMIT_WAITS_MS_ = [2000, 5000, 10000];
+
+function PP_isNetSuiteRateLimit_(result) {
+  return result && result.status === 400 && String(result.raw || '').indexOf('SSS_REQUEST_LIMIT_EXCEEDED') >= 0;
+}
+
 function PP_netSuiteRestletRequest_(query, body, config) {
   const endpoint = 'https://' + String(config.accountId).toLowerCase() + '.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
   const finalUrl = endpoint + '?' + Object.keys(query).map(function(key) { return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]); }).join('&');
-  const response = UrlFetchApp.fetch(finalUrl, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { Authorization: PP_oauthHeader_('POST', endpoint, query, config) },
-    payload: JSON.stringify(body || {}),
-    muteHttpExceptions: true
-  });
-  const status = response.getResponseCode();
-  const raw = response.getContentText();
-  let json;
-  try { json = JSON.parse(raw); } catch (error) { json = null; }
-  return { ok: status >= 200 && status < 300 && json && json.ok === true, status: status, json: json || {}, raw: raw };
+  const payload = JSON.stringify(body || {});
+  const fetchOnce = function() {
+    // OAuth 1.0a: cada reintento firma con nonce/timestamp nuevos.
+    const response = UrlFetchApp.fetch(finalUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: PP_oauthHeader_('POST', endpoint, query, config) },
+      payload: payload,
+      muteHttpExceptions: true
+    });
+    const status = response.getResponseCode();
+    const raw = response.getContentText();
+    let json;
+    try { json = JSON.parse(raw); } catch (error) { json = null; }
+    return { ok: status >= 200 && status < 300 && json && json.ok === true, status: status, json: json || {}, raw: raw };
+  };
+  let result = fetchOnce();
+  // NetSuite devuelve 400 SSS_REQUEST_LIMIT_EXCEEDED cuando se satura el limite de
+  // solicitudes: es transitorio, se reintenta con espera antes de rendirse.
+  for (let attempt = 0; PP_isNetSuiteRateLimit_(result) && attempt < PP_NS_RATE_LIMIT_WAITS_MS_.length; attempt++) {
+    Utilities.sleep(PP_NS_RATE_LIMIT_WAITS_MS_[attempt]);
+    result = fetchOnce();
+  }
+  return result;
 }
 
 function PP_oauthHeader_(method, endpoint, query, config) {
@@ -416,6 +983,7 @@ function PP_buildWorkOrderCatalog_(rows, operationRows) {
       id: 'wo-' + (workOrderId || ot || (index + 1)),
       workOrderId: workOrderId,
       ot: ot,
+      itemId: String(PP_pick_(row, ['Item Internal ID', 'item_internal_id', 'itemid', 'Item ID', 'item_id', '_ITEM_ID']) || '').trim(),
       item: String(PP_pick_(row, ['Articulo', 'Item', 'item_name']) || '').trim(),
       description: String(PP_pick_(row, ['Descripcion', 'Description']) || '').trim(),
       photoUrl: String(PP_pick_(row, ['Foto URL', 'Imagen URL', 'URL de imagen', 'Image URL', 'image_url', 'item_image']) || '').trim(),
@@ -445,8 +1013,26 @@ function PP_netSuiteDate_(value) {
 
 function PP_isSchedulable_(row) {
   const status = PP_normalizeKey_(PP_pick_(row, ['Estado', 'Status', 'status_op'])).replace(/[ _-]/g, '');
-  if (status.indexOf('COMPLETE') >= 0 || status.indexOf('COMPLETADO') >= 0 || status.indexOf('CERRADO') >= 0 || status.indexOf('CLOSED') >= 0) return false;
-  return status === '' || status.indexOf('NOINICIADO') >= 0 || status.indexOf('NOTSTARTED') >= 0 || status.indexOf('PROGRESS') >= 0 || status.indexOf('PROCESO') >= 0 || status.indexOf('ENCURSO') >= 0 || status.indexOf('LIBERADO') >= 0 || status.indexOf('RELEASED') >= 0 || status.indexOf('PLANIFICAD') >= 0 || status.indexOf('PLANNED') >= 0 || status.indexOf('PROGRAMADO') >= 0 || status.indexOf('SCHEDULED') >= 0;
+  return ![
+    'COMPLETE', 'COMPLET', 'CERRAD', 'CLOSED',
+    'CANCELAD', 'CANCELED', 'CANCELLED'
+  ].some(function(terminal) { return status.indexOf(terminal) >= 0; });
+}
+
+function PP_placeholderOperationReason_(row) {
+  const descripcion = String(PP_pick_(row, ['Operacion', 'operation']) || '').trim();
+  if (!descripcion) return null;
+  const single = descripcion.toLowerCase().replace(/[\s_]+/g, '');
+  return /^(delete\d*|prueba\d*|test\d*|x{2,}|\d+)$/.test(single) ? descripcion : null;
+}
+
+function PP_workOrderPendingQuantity_(current, ot) {
+  if (!current || !Array.isArray(current.workOrders)) return 0;
+  const found = current.workOrders.find(function(workOrder) {
+    return PP_normalizeKey_(workOrder.ot) === PP_normalizeKey_(ot);
+  });
+  if (!found) return 0;
+  return Math.max(0, Number(found.pendingQuantity || 0));
 }
 
 function PP_mapNetSuiteOperation_(row, index, current) {
@@ -456,19 +1042,22 @@ function PP_mapNetSuiteOperation_(row, index, current) {
   const existing = (current.operations || []).find(function(op) {
     return PP_normalizeKey_(op.ot) === PP_normalizeKey_(ot) && Number(op.secuencia) === sequence && PP_normalizeKey_(op.ct) === PP_normalizeKey_(ct);
   }) || {};
-  const qty = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad', 'qty_to_process']) || 0);
-  const done = Number(PP_pick_(row, ['Cantidad realizada', 'qty_completed']) || 0);
-  const pending = Math.max(0, qty - done) || qty || 1;
-  const rateRaw = Number(PP_pick_(row, ['Tasa produccion', 'production_rate']));
-  const setupRaw = Number(PP_pick_(row, ['Tiempo preparacion (min)', 'setup_min']));
-  const rate = Number.isFinite(rateRaw) ? (rateRaw > 10 ? 0.67 : Math.max(0, rateRaw)) : 0;
-  const setup = Number.isFinite(setupRaw) ? (setupRaw > 20 ? 15 : Math.max(0, setupRaw)) : 0;
+  const qtyRaw = Number(PP_pick_(row, ['Cantidad a procesar', 'Cantidad de entrada', 'Cantidad', 'qty_to_process']) || 0);
+  const qty = qtyRaw > 0 ? qtyRaw : PP_workOrderPendingQuantity_(current, ot);
+  const done = Number(PP_pick_(row, ['Cantidad realizada', 'Cantidad completada', 'qty_completed']) || 0);
+  const pending = Math.max(0, qty - done);
+  const rateRaw = Number(PP_pick_(row, ['Tasa produccion', 'production_rate', 'Velocidad de ejecucion (minutos/unidad)', 'run_rate']));
+  const setupRaw = Number(PP_pick_(row, ['Tiempo preparacion (min)', 'setup_min', 'Tiempo de configuracion (minutos)', 'setup_time']));
+  const rate = Number.isFinite(rateRaw) ? Math.max(0, rateRaw) : 0;
+  const setup = Number.isFinite(setupRaw) ? Math.max(0, setupRaw) : 0;
   const remaining = Number(PP_pick_(row, ['Trabajo restante (min)', 'remaining_min']) || 0);
   const estimated = Number(PP_pick_(row, ['Tiempo estimado (min)', 'est_min']) || 0);
+  const production = pending > 0 && rate > 0 ? Math.round(rate * pending * 100) / 100 : (remaining || estimated || 0);
+  const cycle = pending > 0 && production > 0 ? Math.round((production / pending) * 100) / 100 : 0;
   const priority = PP_priorityForOt_(current, ot);
   const netSuiteOperator = String(PP_pick_(row, ['Recurso humano', 'Operador', 'human_resource']) || '').trim();
   const netSuiteMachine = String(PP_pick_(row, ['Recurso maquina', 'Maquina', 'machine_resource']) || '').trim();
-  const operator = existing.operador && existing.operador !== 'SIN_OPERADOR' ? existing.operador : (netSuiteOperator || 'SIN_OPERADOR');
+  const operator = PP_resolveNetSuiteOperator_(existing.operador, netSuiteOperator, current);
   const bending = ['5459', '5527'].indexOf(String(ct || '').trim()) >= 0;
   const machine = bending
     ? (existing.maquina && existing.maquina !== 'SIN_MAQUINA' ? existing.maquina : netSuiteMachine)
@@ -494,14 +1083,35 @@ function PP_mapNetSuiteOperation_(row, index, current) {
     kitPending: existing.kitPending === true,
     autoFrozen: existing.autoFrozen === true,
     cantPendiente: pending,
-    tiempoCiclo: rate,
+    tiempoCiclo: cycle,
     tiempoSetup: setup,
-    tiempoProd: remaining || estimated || Math.max(30, Math.round(rate * pending)),
+    tiempoProd: production,
     fechaInicio: existing.fechaInicio || '', horaInicio: existing.horaInicio || '', fechaFin: existing.fechaFin || '', horaFin: existing.horaFin || '',
     tipoInsercion: 'OPERACION',
     estatus: String(PP_pick_(row, ['Estado', 'Status', 'status_op']) || 'No iniciado').trim(),
     log: 'NETSUITE_APPS_SCRIPT'
   };
+}
+
+function PP_normalizeNetSuiteOperatorFallback_(candidate, active) {
+  if (!candidate) return 'SIN_OPERADOR';
+  const key = PP_normalizeKey_(candidate);
+  if (key === 'SIN_OPERADOR' || key === 'SUBCONTRATO') return String(candidate).trim();
+  if (!Array.isArray(active)) return String(candidate).trim();
+  const activeKeys = {};
+  active.forEach(function(name) {
+    const normalized = PP_normalizeKey_(name);
+    if (normalized) activeKeys[normalized] = true;
+  });
+  return activeKeys[key] ? String(candidate).trim() : 'SIN_OPERADOR';
+}
+
+function PP_resolveNetSuiteOperator_(existing, netSuiteOperator, current) {
+  const active = current && current.operators;
+  const existingOperator = String(existing || '').trim();
+  const preserve = existingOperator && existingOperator !== 'SIN_OPERADOR';
+  const preferred = preserve ? existingOperator : (String(netSuiteOperator || '').trim() || 'SIN_OPERADOR');
+  return PP_normalizeNetSuiteOperatorFallback_(preferred, active);
 }
 
 function PP_mapNetSuiteMaterial_(row, index) {

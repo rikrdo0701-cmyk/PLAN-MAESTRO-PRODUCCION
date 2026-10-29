@@ -1,0 +1,354 @@
+# Plan de migración a Supabase — Plan Maestro de Producción
+
+**Fecha:** 2026-09-27
+**Estado:** PLAN. No se mueve nada hasta que se apruebe.
+**Alcance:** catálogos + operaciones/OTs/estados + la ingesta de NetSuite, para que la web lea
+directo de Supabase y no haya que sincronizar en cada carga.
+
+---
+
+## 0. Qué NO cambia
+
+- **RULE-OT-051** (las tres capas del cierre): la lógica vive en `reconcileActiveWorkOrders` y
+  `PP_applyNetSuiteWorkOrdersData_`. La migración la **traslada**, no la reescribe.
+- **RULE-PLAN-013** (el plan no vive en localStorage; el snapshot `draft` es su autoridad): el
+  snapshot `draft` sigue siendo la fuente del plan, ahora como fila en Supabase.
+- **RULE-OT-053** (la cola no se pierde por ausencia) y **RULE-OT-047** (`selectedOts` es la
+  autoridad de la cola y persiste).
+- La concurrencia optimista: se **recrea** en Supabase, no se elimina.
+
+## 1. Estado actual (fuente: `.project-memory/data-sources.json`)
+
+Todo está en **un solo workbook** (`PLANNING_SPREADSHEET_ID`), 19 hojas, más 5 RESTlets de
+NetSuite y Drive. Las lecturas calientes pasan por `PP_buildState_`, que las lee **todas** en cada
+`getAppState`.
+
+| Hoja | Papel | ¿Lectura caliente? |
+|---|---|---|
+| CONFIG | revisión, savedAt, syncedAt, selectedOts, lockedOts, expandedOts, planStart, horizonDays, reportWeekStart, reportFilters, preparedPlanningByOt, closedWorkOrderSummaries, unconfirmedWorkOrders, settings, lastSchedule, plant, operationCatalogWarning | **Sí** (cada getAppState) |
+| OPERACIONES | 37 columnas por operación | **Sí** |
+| ESTADOS_OPERACION_PLAN | 22 columnas, la clave de completado | **Sí** |
+| ORDENES_TRABAJO | 19 columnas, las fichas | **Sí** |
+| MATERIALES | 13 columnas | **Sí** |
+| OPERADORES | 6 columnas | Sí |
+| CAPACIDADES | 10 columnas | Sí |
+| CATALOGO_OPERACIONES | 5 columnas | Sí |
+| MAQUINAS, HERRAMENTALES, SUBCONTRATOS, TIPOS_OT, CALENDARIO | catálogos | Sí |
+| CONFIGURACION_OT, CONFIGURACION_ARTICULO, MATRIZ | configuración | Sí |
+| AUDITORIA, PLANES_HISTORICOS, BORRADOR_PLAN | historial | No (cola diferida) |
+
+El cuello de botella: `getAppState` las lee **todas**, y el reconstruido frío pasa de 120 s
+(RULE-PERF-014). Por eso migrar a Supabase sí ataca el dolor.
+
+## 2. Objetivo
+
+1. **ID único por registro** en cada catálogo (petición explícita de la persona).
+2. **NetSuite como fuente** ingesta a Supabase, para que la web **no sincronice en cada carga**.
+3. Lecturas rápidas: la web lee Supabase directo (PostgREST), sin puente ni reconstruido frío.
+4. Una sola fuente de verdad para los datos que hoy viven en Hojas.
+
+## 3. Estructura objetivo en Supabase
+
+### 3.1 Catálogos (ID único, lectura caliente)
+
+| Tabla | Hoja origen | ID único | Clave natural |
+|---|---|---|---|
+| `operators` | OPERADORES | `id` uuid | OPERADOR |
+| `capabilities` | CAPACIDADES | `id` uuid | KEY |
+| `operation_catalog` | CATALOGO_OPERACIONES | `id` uuid | KEY |
+| `machines` | MAQUINAS | `id` uuid | nombre |
+| `tools` | HERRAMENTALES | `id` uuid | (parte, herramental) |
+| `subcontracts` | SUBCONTRATOS | `id` uuid | (parte, tipo) |
+| `ot_types` | TIPOS_OT | `id` uuid | nombre |
+| `calendar_exceptions` | CALENDARIO | `id` uuid | (fecha, concepto, máquina) |
+| `ot_configurations` | CONFIGURACION_OT | `id` uuid | OT |
+| `article_configurations` | CONFIGURACION_ARTICULO | `id` uuid | ARTICULO |
+| `matrix` | MATRIZ | `id` uuid | (CAPACIDAD_KEY, OPERADOR) |
+
+### 3.2 Datos operativos
+
+| Tabla | Hoja origen | ID único |
+|---|---|---|
+| `work_orders` | ORDENES_TRABAJO | uuid (o el folio) |
+| `operations` | OPERACIONES | uuid (ya trae `ns-<id>`) |
+| `operation_plan_statuses` | ESTADOS_OPERACION_PLAN | uuid |
+| `materials` | MATERIALES | uuid |
+
+### 3.3 Estado y cola
+
+| Tabla | Origen | Notas |
+|---|---|---|
+| `app_state` (una fila) | CONFIG | revisión, savedAt, syncedAt, planStart, horizonDays, reportWeekStart, reportFilters, settings, plant, operationCatalogWarning, lastSchedule |
+| `selected_ots` | CONFIG.selectedOts | **la cola**, con posición (order) para el orden manual |
+| `locked_ots` | CONFIG.lockedOts | |
+| `closed_work_order_summaries` | CONFIG.closedWorkOrderSummaries | |
+| `unconfirmed_work_orders` | CONFIG.unconfirmedWorkOrders | |
+| `prepared_planning_by_ot` | CONFIG.preparedPlanningByOt | |
+| `plan_snapshots` | PLANES_HISTORICOS + BORRADOR_PLAN | snapshotId + operations (jsonb) |
+
+#### 3.3.1 Tablas del plan que `schema-supabase.sql` todavía NO crea — pendiente de aprobar
+
+Contraste hecho el **2026-09-28** con `scripts/supabase-read-test.mjs` (paso `plan.documento`, que
+lee las dos fuentes y las compara). Esta sección del plan declara **22 tablas**;
+`docs/schema-supabase.sql` crea **21**:
+
+| Falta en el SQL | Origen | Qué guarda |
+|---|---|---|
+| `prepared_planning_by_ot` | `CONFIG.preparedPlanningByOt` | la preparación validada de cada OT (máquina, herramental, kit, tipo/días de subcontrato) antes de generar plan — ver RULE-OT-010 |
+
+**No se agregó el `create table`.** Este plan dice arriba *"No se mueve nada hasta que se apruebe"*
+y `schema-supabase.sql` es el artefacto de la **fase 1**; agregar la tabla es una decisión de la
+persona, no de la sonda. Se deja anotado aquí para que la diferencia se vea antes de la migración y
+no el día de ejecutarla, que es cuando ya cuesta caro.
+
+**Y un segundo drift, del lado de la ingesta (2026-09-28), que tampoco se aplicó.** La sección 3.4
+reescribió la ingesta a un RESTlet de NetSuite con 7 tablas, y `schema-supabase.sql` solo tiene 4 de
+esas 7. El delta va en `docs/schema-supabase-sync-netsuite.sql` (propuesto): crea `items`,
+`inventory` y `sales_orders`, y altera `materials` y `machines`:
+
+| Drift | Por qué la ingesta lo necesita |
+|---|---|
+| falta la tabla `items` | la acciones `items` no tiene dónde escribir |
+| falta la tabla `inventory` | ídem para `inventario` |
+| falta la tabla `sales_orders` | ídem para `ordenes_venta` |
+| `materials` no tiene `line_id` | es la **clave natural** de la fila: sin ella no hay `on_conflict` y el upsert degrada a borrar-y-reinsertar |
+| `machines` no tiene `tipo` | **ya no se agrega** (RULE-SUP-010): `workcentertype` no existe en ninguna fuente (SuiteQL ni REST Record API, medido) y el usuario decidió que el dato no se necesita porque la máquina se captura en el plan; `centros` guarda solo `nombre` y `activa` |
+
+Mientras ese SQL no se aplique, `accion: 'diagnostico'` del RESTlet responde `tablasFaltantes` con
+`items`, `inventory` y `sales_orders`, y dice qué hacer. Ese es el mecanismo: el hueco se declara en
+la respuesta en vez de asumirse.
+
+Además, medido el mismo día y sin credenciales:
+
+- **El proyecto existe y responde**, pero **no se pudo contar ninguna tabla real**: `/auth/v1/health`
+  devolvió `401` sin `apikey` (respuesta normal de un Supabase sano) y los pasos de Data API
+  quedaron *sin datos*, no *fallidos*. Ver `.project-memory/integrations.json` `INT-SUPABASE` y
+  `.project-memory/data-sources.json` `SUPABASE-PLAN` (status `planned`: **sin tablas y sin datos**).
+- **Los dos hosts no son intercambiables**: la Data API, el panel y `/auth` son
+  `https://xtgtfjcwxcoxvixholpj.supabase.co` (**sin** prefijo `db.`), y el Postgres del 5432 es
+  `db.xtgtfjcwxcoxvixholpj.supabase.co` (**con** prefijo), que además salió **IPv6-only** (DoH
+  devuelve `NODATA` para el tipo A), o sea que no es alcanzable por IPv4 desde esta red.
+- **No hay ninguna credencial en el repo**: ni contraseña de la base, ni clave `anon`, ni
+  `service_role`. Para cerrar la comprobación de lectura de filas hace falta la clave `anon` y, para
+  el paso directo a Postgres, además `SUPABASE_DB_PASSWORD` y el paquete `pg`.
+
+### 3.4 La ingesta NetSuite → Supabase — **CAMBIO 2026-09-28: push desde NetSuite, no Apps Script**
+
+La versión anterior de esta sección decía que la ingesta sería *un RESTlet de Apps Script corriendo en
+horario*. **Eso cambió**: el push se hace **desde dentro de NetSuite**. La razón es que el trigger ya
+existe y es el correcto — el propio guardado del registro — y ningun User Event de NetSuite puede
+invocar a Apps Script de forma nativa sin una indirección (RESTlet → App Script → Supabase) que
+devuelve el problema: una llamada extra en la transacción del usuario, y un punto más donde la ingesta
+se puede caer sin que nadie se entere.
+
+```
+User Event (afterSubmit)  ──encola──►  Suitelet  ──URL interna──►  RESTlet  ──PostgREST──►  Supabase
+   (6, uno por registro)              (encolado,               (lee NetSuite         (upsert por
+                                       corre aparte)            por SuiteQL)          clave natural)
+                                       
+Script programado  ──encola──►  Suitelet  (barrido: inventario + reconciliación)
+```
+
+Piezas, todas en la raíz del repo:
+
+| Archivo | Tipo | Qué hace |
+|---|---|---|
+| `netsuite-user-event-workorder.js` | UserEvent `workorder` | encola `workorders` + `operaciones` + `materiales` (son tres registros distintos) |
+| `netsuite-user-event-operacion.js` | UserEvent `manufacturingoperationtask` | encola `operaciones` |
+| `netsuite-user-event-item.js` | UserEvent `item` | encola `items` |
+| `netsuite-user-event-workcenter.js` | UserEvent `workcenter` (los centros son registros de tipo `workcenter`, respaldados por `entitygroup`) | encola `centros` |
+| `netsuite-user-event-salesorder.js` | UserEvent `salesorder` | encola `ordenes_venta` |
+| `netsuite-suitelet-sync-tarea.js` | Suitelet | despacha al RESTlet por URL interna; no reintenta solo |
+| `netsuite-restlet-supabase-sync.js` | Restlet | **el único escritor** de las 7 tablas; lee por SuiteQL, hace upsert |
+| `netsuite-scheduled-sincronizacion.js` | ScheduledScript | barrido: `inventario` (sin User Event posible) + reconciliación |
+
+El User Event de `workorder` **no** dispara la ingesta de operaciones ni de materiales: esos son otros
+registros (`manufacturingoperationtask`, `transactionline`). Por eso hay seis User Events y no uno.
+
+**Lo que NO cambió:** Apps Script sigue siendo la única capa con el OAuth de NetSuite, y por eso sigue
+siendo quien responde a la web cuando la escritura necesita ir a NetSuite. El cambio es de dirección:
+antes los datos salían de NetSuite por askew hacia Apps Script; ahora NetSuite empuja. El **estado
+vive en Supabase** en los dos casos. Contrato completo en
+`docs/integrations/netsuite-supabase-sync.md`.
+
+**Delta de esquema APLICADO el 2026-09-28** en el proyecto `xtgtfjcwxcoxvixholpj`:
+`docs/schema-supabase-sync-netsuite.sql` (crea `items`, `inventory`, `sales_orders`; agrega
+`materials.line_id` con su UNIQUE; **no agrega `machines.tipo`**, revocado por RULE-SUP-010).
+Verificado después de aplicar: las 3 tablas existen, `materials.line_id` existe y
+`materials_line_id_key` (UNIQUE) existe.
+
+### 3.5 Concurrencia
+
+Una columna `revision` por fila (o por tabla). Cada escritura hace `update ... where revision = ?`
+y espera `revision + 1`. Si no, rechaza. Es el equivalente de `CONFLICT_REVISION` en Postgres.
+
+## 4. Fases
+
+1. **Esquema** en Supabase (tablas, ids, índices, RLS si hace falta). Sin tocar la app.
+2. **Migración de datos** (una vez, de Hojas a Supabase). Verificación fila por fila.
+3. **Lectura**: la web lee los catálogos/operaciones de Supabase. Escritores siguen en Hojas.
+   *(Iniciada el 2026-09-29: existe `src/web/shared/supabase-reader.js` + sonda; ver §4.1.)*
+4. **Escritura**: los escritores pasan a Supabase. Hojas pasa a historial.
+5. **Ingesta NetSuite** → Supabase en horario. Se retira el puente de lectura.
+6. **Fuera** el puBridge de lectura (queda solo para escrituras que necesitan NetSuite).
+
+Cada fase se verifica con las sondas que ya existen (`web-probe.mjs`, `web-probe-generar-plan.mjs`).
+
+Las fases que tocan Supabase agregan **`scripts/supabase-read-test.mjs`** (`npm run
+probe:lectura:supabase`), que es de **solo lectura** y no escribe nada: `--list` imprime qué tablas
+expone la Data API y cuáles del esquema faltan, y `--table=<tabla>` lee filas reales con conteo
+exacto, columnas y muestra. La comparación de esquema (`plan.esquema`) no depende de la credencial:
+siempre contrasta lo expuesto contra `docs/schema-supabase.sql`, de modo que sirve para las fases 1
+a 3; la lectura de filas necesita la clave `anon`. Es la sonda del `RULE-TST-002`.
+
+### 4.1 Fase 3 — estado al 2026-09-29 (iniciada)
+
+El **primer cambio de fuente** de la fase 3 ya está en el repo: `src/web/shared/supabase-reader.js`,
+un lector de **solo lectura** que trae filas de Supabase por PostgREST con la clave **publicable**
+(cliente) y las mapea al MISMO shape que arma `PP_buildState_` (`src/server/02-storage.js`).
+
+- **Va apagado por defecto.** La URL y la clave se inyectan en el build desde `SUPABASE_URL` /
+  `SUPABASE_ANON_KEY` (nunca del repo). Sin ellas, `isConfigured()` es `false` y **nada** del lector
+  toca el arranque: la página sigue por el puente de Apps Script. Estar fuera de la ruta de arranque
+  es deliberado: primero se prueba, después se engancha.
+- **No infiere.** Los campos del state que la tabla de hoy NO puede llenar están declarados en
+  `MAPPING_GAPS` (`capabilities.operationRules.overlap` por ser booleano en Supabase y numérico en la
+  hoja, `capabilities` sin `PALABRAS_CLAVE`/`CUSTOM`, `tools.id` textual vs uuid, `KIT_HERRAMENTAL` vs
+  `kit`, `calendar_exceptions` sin hora inicio/fin, `article_configurations.PRECIO_REF_VENTA`,
+  `work_orders.FECHA_ENTREGA_AJUSTADA`/`PRECIO_DESDE`/`PRECIO_HASTA` y los campos faltantes de
+  `operations`).
+- **Sonda:** `npm run probe:lectura:frontend` (`scripts/supabase-reader-verify.mjs`) ejecuta el MISMO
+  código que se sirve en Pages contra el Supabase real. Medido el 2026-09-29: 25 tablas (desde el
+  2026-09-29 con `machine_planning_overrides`, que crea el DDL de cierre), 208
+  `work_orders`, 2119 `operations`, 327 `materials`, 202 `machines`, 86 `operation_catalog`, 78 CTs.
+- **Decisión tomada (2026-09-29): "la información de restlet desde Apps Script y lectura y escritura
+  desde Supabase".** Se **midió** antes de escribir código, porque la decisión define si hace falta
+  login: el rol `anon` **no puede escribir** en ninguna de las 25 tablas (`POST /rest/v1/tools` →
+  `401 {"code":"42501","message":"new row violates row-level security policy for table \"tools\""}`,
+  `.openchamber/diag-supabase-escritura.mjs`; y tampoco actualizar —
+  `Content-Range */0` sobre una fila real — ni ejecutar `ingesta_mirror`, según
+  `.openchamber/diag-ddl-cierre.mjs`). Las 25 tienen RLS con **solo** la política `lectura_web`
+  de SELECT, y es a propósito (`docs/schema-supabase-sync-netsuite.sql:198-200`: *"NADIE escribe desde
+  la web… si la web pudiera escribir, podría pisar el plan"*), porque la clave publicable viaja
+  dentro del bundle público de Pages. Por tanto **no hace falta Supabase Auth**: la página **lee** con
+  la publicable y **Apps Script escribe** con la service role key (`sb_secret_…`, nunca en el repo).
+  Dos escritores, con **uno solo por tabla** (RULE-SUP-015).
+- **Espejo de catálogos implementado** (`src/server/16-supabase-catalogo.js`). Apps Script
+  convierte las 11 tablas de catálogo de las Hojas a Supabase por el mismo RPC atómico
+  `public.ingesta_mirror`, enganchado a los **tres** caminos de guardado (`PP_finishPartialWrite_`
+  para catálogos y matriz, `PP_writeNetSuiteSyncState_` y `PP_writeState_`). Cada guardado paga solo
+  las tablas que tocó, el espejo entero tiene un presupuesto de 20 s, y va **después** de
+  `SpreadsheetApp.flush()` y dentro de `try/catch`: **un Supabase caído no puede impedir guardar el
+  plan**, solo se pierde la frescura, que el siguiente guardado reintenta. Sin credencial el espejo no
+  hace nada.
+  - **Excluye `machines` a propósito**: la escribe el RESTlet 2246 (entitygroup que es centro de
+    trabajo, RULE-SUP-010) y la hoja `MAQUINAS` guarda lo mismo; espejarla serían dos escritores
+    peleándose la tabla cada 15 minutos — y como el espejo del RESTlet **borra la tabla entera**,
+    cualquier columna que escribiera la app en `machines` se perdería en la siguiente corrida. Por
+    eso la decisión de apartar una máquina va a `machine_planning_overrides` (abajo, RULE-SUP-017).
+  - **Lo que esa exclusión produce, medido el 2026-09-29 (corregido: aquí se había escrito que
+    "desactivar una máquina no llega a Supabase", y era impreciso).** `machines.activa` **sí viene de
+    NetSuite** (`netsuite-restlet-unificado-supabase.js:287`, `entitygroup.isinactive`) y hay **202
+    máquinas, 0 inactivas**. La app **no puede** desactivar una máquina: el único control es
+    *"Eliminar máquina"* (`app.js:5443-5454`), que quita la fila; no hay toggle como sí lo hay para
+    `ot_types` (`app.js:5555`). Los dos conceptos están separados: *"NetSuite dice que está inactivo"*
+    es del ERP y lo trae el RESTlet; *"aquí no quiero agendar"* es decisión de la app y hoy se
+    expresa **borrando la fila**, no bajando un flag. **El conflicto real es el borrado**: si
+    `machines` se espejara desde Apps Script, cada borrado del catálogo lo desharía el mirror del
+    RESTlet en menos de 15 minutos. Ésa es la razón de excluirla, no una regla inventada.
+  - **Consecuencia en el cutover, DECIDIDA el 2026-09-29 (RULE-SUP-017).** El usuario autorizó que
+    la planificación **aparte** una máquina que NetSuite da por activa, y solo en esa dirección: no
+    hay forma de forzar el uso de una máquina que NetSuite da por inactiva, porque nadie concedió
+    ese permiso. La implementación es una **tabla aparte**, `machine_planning_overrides`
+    (`machine_nombre` + `excluida`), **no** una columna en `machines`:
+    - *Por qué aparte:* el RESTlet 2246 borra y reescribe `machines` entera cada 15 minutos, así que
+      cualquier columna de la app en esa tabla se perdería en la siguiente corrida. Y el espejo de
+      catálogos no puede escribir `machines` sin ser un segundo escritor.
+    - *Un solo escritor:* `machine_planning_overrides` la escribe Apps Script (desde la hoja
+      `MAQUINAS`, columna `EXCLUIDA`, que se añadió); el RESTlet nunca la toca.
+    - *Bandera efectiva:* `machines.activa AND NOT excluida`, calculada en **un solo lugar por
+      capa** (`PP_mapMachine_`, `mapMachines()` del lector, y la normalización de `state.machines`)
+      para no tocar los ~6 filtros `.filter(m => m.active !== false)` que ya consumen el estado.
+    - *Ausencia de fila = no apartada.* El espejo escribe la fila de **todas** las máquinas, no solo
+      de las excluidas, para que no haya dos formas de decir "se puede agendar".
+    - *Unión por texto normalizado* (trim + upper) entre `machines.nombre` y `machine_nombre`: con
+      la unión exacta, una máquina apartada se volvería a agendar sola y el fallo sería silencioso.
+    - *UI:* el toggle **Apartar / Reincluir** sustituye a "Eliminar máquina" como forma de apartar
+      (eliminar ya no serviría: el RESTlet reviviría la fila). El botón de eliminar se conserva.
+    - *Estado:* la tabla la crea `docs/schema-supabase-cierre-catalogos.sql`, **aplicada el
+      2026-09-29** y verificada. Sigue **vacía** hasta que Apps Script la siembre, y la UI se comporta
+      como antes mientras tanto (una máquina sin fila de override no está apartada, que es el
+      comportamiento correcto).
+- **`docs/schema-supabase-cierre-catalogos.sql`: APLICADO el 2026-09-29.** Medido contra el
+  esquema **desplegado**, el de los catálogos **no puede representar lo que las Hojas guardan**
+  (RULE-SUP-016): faltaba `operators.nombre_real`, `capabilities.palabras_clave`, `capabilities.custom`,
+  el **factor** de `capabilities.solapamiento` (la hoja lo guarda como ratio 0..1 y en la tabla
+  quedó `boolean`), `tools.codigo`, `subcontracts.codigo`, la ventana de `calendar_exceptions`,
+  `article_configurations.precio_ref_venta` y la tabla `machine_planning_overrides` (RULE-SUP-017).
+  El archivo corrige eso y mete las 11 tablas de catálogo en la
+  whitelist de `ingesta_mirror` **sin abrir escritura a `anon`** (el RPC sigue siendo
+  `SECURITY INVOKER` y revocado a `PUBLIC`).
+  - **Cómo se aplicó:** `scripts/aplicar-ddl-cierre.ps1 -Si -Teclado`, que pide la contraseña de
+    postgres por prompt enmascarado y la pasa solo por la memoria del proceso; ni el archivo, ni el
+    historial de PowerShell, ni el repo la ven. Son **32 sentencias** y el archivo es idempotente.
+  - **Costó tres intentos, y dos de los fallos eran míos, no de la base.** `scripts/apply-sql-supabase.mjs`
+    divide el SQL él mismo, y su primera versión no entendía comentarios: un `;` dentro de un
+    comentario `--` partía la sentencia y una comilla dentro de un comentario abría modo literal. Eso
+    produjo **7 errores falsos** ("syntax error at or near el", "column codigo does not exist") que
+    perseguí como si fueran del DDL. El segundo bug: al cerrar un cuerpo `$$…$$` se perdía **uno de
+    los dos `$`** y la función llegaba a Postgres sin cerrar. Con el divisor arreglado, el diagnóstico
+    dio `OK: las 32 sentencias se aplicarían sin error` y la aplicación fue limpia.
+  - **El `-Diagnosticar` existe por esto:** Postgres se detiene en el primer error de un lote, así que
+    sin él, un DDL con varios `ALTER` obliga a una corrida por cada error. Ejecuta cada sentencia en
+    su propio `SAVEPOINT`, lista todos los fallos y hace `ROLLBACK` total. Además **audita el archivo
+    antes de tocar la base**: si un fragmento no empieza por palabra clave SQL, no ejecuta nada y lo
+    avisa, porque un diagnóstico que inventa errores es peor que no diagnosticar.
+  - **Verificado después de aplicarlo** con `.openchamber/diag-ddl-cierre.mjs` (solo clave publicable,
+    no necesita la contraseña): **25 tablas visibles**, `machine_planning_overrides` creada con RLS y
+    solo `lectura_web`, las **15 columnas nuevas se leen** por `anon`, `capabilities.solapamiento` ya es
+    `numeric` (las 76 filas quedaron en `1` por el DEFAULT documentado), `anon` **no inserta**
+    (`401 42501`), **no actualiza** (`Content-Range */0`, medido reescribiendo una fila real de
+    `capabilities` su propio valor) y **no ejecuta `ingesta_mirror`** (`401 42501`). El **borrado** por
+    `anon` no quedó medido y la sonda lo declara: con la tabla vacía un `DELETE` devuelve `200` con
+    `0` filas tanto si puede como si no, y medirlo exigiría borrar datos de producción.
+- **Verificación sin escribir nada.** `.openchamber/diag-catalogo-payload.mjs` compara las columnas
+  que emite el mapeador contra el esquema real (leído por la Data API) más las del DDL de cierre:
+  **11/11 tablas OK**. Esa sonda **encontró un bug real** —el mapeador leía `TIPO_TRABJO` en vez de
+  `TIPO_TRABAJO` y el campo salía vacío **sin dar error**—, y `tests/supabase-catalogo-mapping.test.mjs`
+  lo vuelve a cazar (se comprobó mutando el typo a propósito: el test falla nombrando la columna).
+- **Lo que falta para enganchar el lector al arranque**, en orden (el paso 1 ya está hecho):
+  1. ~~aplicar `docs/schema-supabase-cierre-catalogos.sql`~~ — **hecho el 2026-09-29**,
+  2. **desplegar el archivo nuevo de servidor en Apps Script** (25 archivos; el build lo agrega solo),
+  3. **guardar una vez la pestaña de catálogos** en la página, que es lo que dispara el espejo,
+  4. confirmar que los catálogos de Supabase se refrescan (dejan de estar en `2026-09-28T05:11`),
+  5. recién entonces cambiar la fuente de los catálogos en la página.
+- **Tablas vacías** (cola/estado/plan: `app_state`, `selected_ots`, `locked_ots`,
+  `operation_plan_statuses`, `plan_snapshots`, `closed_work_order_summaries`,
+  `unconfirmed_work_orders`, `tools`, `subcontracts`, `calendar_exceptions`): siguen viniendo del
+  puente; su migración es la fase 2/4, no la 3. `machine_planning_overrides` está en la lista
+  también, pero por otra razón: la crea el espejo de catálogos, no la ingesta.
+- **Pendiente de despliegue (solo el usuario).**
+  1. **RESTlet 2246 en NetSuite** con el filtro `ail.location = 1` de `RULE-SUP-013`: `inventory`
+     sigue en **2401** filas cuando el SQL filtrado da ~1933. Hay que pegar
+     `netsuite-restlet-unificado-supabase.js` en NetSuite.
+  2. **Apps Script**: el `.gs` desplegado aún no coincide con el local (falta el guard de horario), y
+     falta subir el `16-supabase-catalogo.js` nuevo.
+  3. **Rota la contraseña de postgres** en el panel de Supabase: quedó escrita en el chat.
+
+## 5. Riesgos
+
+- **La concurrencia**: hay que recrear `CONFLICT_REVISION` en Supabase o dos sesiones se pisarán.
+- **La cola con orden**: `selected_ots` necesita una columna de posición o el orden manual se pierde.
+- **La migración**: 138 715 filas de PLANES_HISTORICOS + el estado completo. Se hace una vez y se verifica.
+- **La ingesta**: si el sync falla, la web lee datos viejos de Supabase. Hay que avisar, no esconder.
+- **El OAuth de NetSuite sigue en Apps Script**: Supabase no puede llamar a NetSuite directamente. La
+  lectura de NetSuite que necesita la web sigue pasando por Apps Script; la escritura desde NetSuite a
+  Supabase es el sentido inverso y no usa OAuth (§3.4).
+- **El modo `comparar` es una llamada por fila.** Con el gobierno de 10,000 llamadas externas/día por
+  cliente, un barrido grande no puede ir en `comparar`. Por eso `MAX_FILAS_COMPARAR = 60` y pasado ese
+  tope el RESTlet degrada a `upsert` (una llamada por lote) **y lo declara** en `degradaciones`. Un
+  `POST` con `Prefer: resolution=merge-duplicates` es last-write-wins: sin guarda de `revision`. Es una
+  degradación consciente, no un default.
+- **La service role key sale de un script parameter de NetSuite**, nunca del repo. Si ese deployment
+  queda *Available Externally*, la clave queda expuesta por una URL. Por eso el RESTlet se invoca por
+  URL interna desde el Suitelet (RULE-SUP-005).

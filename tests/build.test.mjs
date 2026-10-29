@@ -2,12 +2,3646 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildProject } from "../scripts/build-appscript.mjs";
+import { runInNewContext } from "node:vm";
+import { buildProject, resolverCredencialesSupabase } from "../scripts/build-appscript.mjs";
 
-test("el build genera las tres aplicaciones de Apps Script", async () => {
-  const result = await buildProject();
-  assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html"]);
+// MEDIDO 2026-10-02: TODAS las llamadas a `buildProject()` de este archivo pasan
+// `{ portapapeles: [] }`. No es cosmetico. El build resuelve las credenciales de Supabase del
+// entorno y, si no las hay, del PORTAPAPELES (build-appscript.mjs, "LA CREDENCIAL DEL
+// PORTAPAPELES"). Sin ese argumento estas pruebas montaban el bundle con lo que hubiera copiado
+// quien las estuviera corriendo: el mismo `npm test` salia con credenciales unas veces y sin ellas
+// otras, y las de credenciales no se podian ni escribir, porque el resultado dependia de un estado
+// externo. Con `[]` el bundle sale sin credenciales, que es exactamente el caso que hay que probar.
+const SIN_PORTAPAPELES = { portapapeles: [] };
+
+test("la identidad del detalle es UI local y no se envia al estado compartido", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(planningApp, /selectedDetailOt:\s*""/);
+  assert.match(planningApp, /queueMoveOt:\s*""/);
+  const persistableSource = planningApp.slice(
+    planningApp.indexOf("function persistableState("),
+    planningApp.indexOf("function createAppSheetPayload("),
+  );
+assert.match(persistableSource, /\{\s*matrixSearch,\s*selectedDetailOt,\s*queueMoveOt,\s*\.\.\.persisted\s*\}/);
+});
+
+test("publicar el plan no duplica el clonado del estado ni usa createAppSheetPayload", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const publishSource = planningApp.slice(
+    planningApp.indexOf("async function publishCurrentPlan("),
+    planningApp.indexOf("async function generatePlanPdf("),
+  );
+  assert.match(publishSource, /const persisted = persistableState\(\);/);
+  assert.match(publishSource, /delete persisted\._locallyRemovedDraftOts;/);
+  assert.match(publishSource, /delete persisted\.machineToolHistory;/);
+  assert.match(publishSource, /operations: currentPlanOperations\(\),/);
+  assert.doesNotMatch(publishSource, /createAppSheetPayload\(\)/);
+  assert.doesNotMatch(publishSource, /deepClone/);
+});
+
+test("cola de planeacion expone mover sin flechas y modal de preparacion sin textos removidos", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const planningStyles = await readFile(new URL("../src/web/planning/styles.css", import.meta.url), "utf8");
+  assert.doesNotMatch(planningApp, /data-move-direction="up"/);
+  assert.doesNotMatch(planningApp, /data-move-direction="down"/);
+  assert.doesNotMatch(planningApp, /data-move-queue-ot=/);
+  assert.match(planningApp, /data-start-queue-move/);
+  assert.match(planningApp, /data-place-queue-ot/);
+  assert.match(planningApp, /queue-move-actions/);
+  assert.match(planningApp, /`qty:\$\{formatMaterialQuantity\(Number\.isFinite\(quantity\) \? quantity : 0\)\}`/);
+  assert.match(planningApp, /Moviendo OT/);
+  assert.match(planningApp, /Cancelar/);
+  assert.match(planningApp, /Poner aqui/);
+  assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*startQueueMove/);
+  assert.match(planningApp, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);\s*\n\s*reorderSelectedJobs\(state\.queueMoveOt, button\.dataset\.placeQueueOt\)/);
+  assert.match(planningStyles, /\.queue-move-actions \{ position: absolute; right: 10px; bottom: 10px;/);
+  assert.match(planningApp, /function canReorderSelectedJobs\(sourceOt, targetOt, options = \{\}\)/);
+  assert.doesNotMatch(planningApp, /No puedes mover una OT a traves de un trabajo fijo/);
+  assert.match(planningApp, /planStatusBackgroundRefreshPending/);
+  assert.match(planningApp, /operatorLoadsSourceMemoized/);
+  assert.match(planningApp, /planStateMutationVersion/);
+  assert.match(planningApp, /renderGanttStructureMemo/);
+  assert.match(planningApp, /Materia prima base/);
+  assert.match(planningApp, /materialsForOt\(job\.ot\)\[0\]/);
+  assert.doesNotMatch(planningApp, /<span>Cantidad<\/span><strong>\$\{escapeHtml\(quantityLabel\)\}<\/strong>/);
+  assert.doesNotMatch(planningApp, /Los datos comerciales se guardan por articulo/);
+assert.doesNotMatch(planningApp, /Una asignacion para toda la orden/);
+  assert.doesNotMatch(planningApp, /<span>CT \$\{escapeHtml\(op\.ct\)\}<\/span>/);
+});
+
+test("saturation y reportes usan las memos de cargas; el Gantt cachea DOM por firma estructural", async () => {
+  const app = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  assert.match(app, /ganttStructureDomCache/);
+  assert.match(app, /structureCacheKey/);
+  assert.match(app, /reportOperatorLoadsRenderMemo/);
+  assert.match(app, /reportLoadsSignature/);
+  assert.match(app, /reportOperatorLoadsWeekCache/);
+  assert.match(app, /memo\.reportOps === reportOperations/);
+
+  const saturationStart = app.indexOf("function renderSaturation()");
+  const saturationEnd = app.indexOf("function focusCapabilityPlanState(", saturationStart);
+  const saturation = app.slice(saturationStart, saturationEnd);
+  assert.match(saturation, /operatorLoadsSourceMemoized\(source, state\.loadWeekStart, 7\)/);
+  assert.doesNotMatch(saturation, /const loads = operatorLoadsForOperations\(/);
+
+  const loadsStart = app.indexOf("function renderReportOperatorLoads(");
+  const execStart = app.indexOf("function weeklyExecutiveSummary(", loadsStart);
+  const loadsSlice = app.slice(loadsStart, execStart);
+  assert.match(loadsSlice, /reportOperatorLoadsSourceMemoized\(reportOps, weekDate\)/);
+
+  const execSliceStart = app.indexOf("function weeklyExecutiveSummary(summary = weeklyJobSummary()");
+  const execSliceEnd = app.indexOf("function renderWeeklyExecutiveSummary(", execSliceStart);
+  const execSlice = app.slice(execSliceStart, execSliceEnd);
+  assert.match(execSlice, /reportOperatorLoadsSourceMemoized\(sourceOperations, weekDate\)/);
+  assert.match(execSlice, /inPlanOperators = reportOperatorLoadsSourceMemoized/);
+});
+
+test("el boton devuelve a backlog solo trabajos no bloqueados con confirmacion", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
+  const start = planningApp.indexOf("function returnUnlockedJobsToBacklog()");
+  const end = planningApp.indexOf("function reorderSelectedJobs(", start);
+  const source = planningApp.slice(start, end);
+  const createHandler = (state, options = {}) => {
+    const calls = { confirm: 0, checkpoint: 0, tombstones: [], invalidate: 0, priorities: 0, list: 0, queue: 0, gantt: 0, save: 0, toasts: [] };
+    const handler = Function(
+      "state", "window", "isProgrammedJobStatus", "jobStatusForOt", "showToast", "checkpointState",
+      "rememberDraftRemovedOts", "invalidatePriorityJobsCache", "applyQueuePriorities", "renderPriorityList", "renderPriorityQueue", "renderGantt", "saveState",
+      `${source}; return returnUnlockedJobsToBacklog;`,
+    )(
+      state,
+      {
+        confirm(message) { calls.confirm += 1; calls.confirmMessage = message; return options.confirm !== false; },
+        PlanningWorkflowCore: {
+          canRemoveSelectedOt(current, ot) {
+            return (current.lockedOts || []).includes(ot)
+              ? { allowed: false, reason: "Desbloquea la OT antes de retirarla del plan" }
+              : { allowed: true, reason: "" };
+          },
+          removeOtFromDraft(current, ot) {
+            const keep = (items) => (items || []).filter((item) => item !== ot);
+            const preparedPlanningByOt = { ...(current.preparedPlanningByOt || {}) };
+            delete preparedPlanningByOt[ot];
+            return { ...current, selectedOts: keep(current.selectedOts), lockedOts: keep(current.lockedOts), preparedPlanningByOt };
+          },
+        },
+      },
+      (status) => String(status || "").toUpperCase() === "PROGRAMADO",
+      (ot) => options.programmedOts?.includes(ot) ? "PROGRAMADO" : "PENDIENTE",
+      (message) => calls.toasts.push(message),
+      () => { calls.checkpoint += 1; },
+      (ots) => { calls.tombstones.push(...ots); },
+      () => { calls.invalidate += 1; },
+      () => { calls.priorities += 1; },
+      () => { calls.list += 1; },
+      () => { calls.queue += 1; },
+      () => { calls.gantt += 1; },
+      () => { calls.save += 1; },
+    );
+    return { handler, calls };
+  };
+
+  assert.match(planningTemplate, /id="returnUnlockedToBacklogBtn"/);
+  assert.match(planningApp, /returnUnlockedToBacklogBtn\.addEventListener\("click", returnUnlockedJobsToBacklog\)/);
+
+  const state = { selectedOts: ["100", "200", "300"], lockedOts: ["200"], preparedPlanningByOt: { 100: "a", 200: "b", 300: "c" } };
+  const { handler, calls } = createHandler(state);
+  handler();
+  assert.equal(calls.confirmMessage, "esta seguro de enviar todos los trabajos no bloqueados a backlog?");
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, ["200"]);
+  assert.deepEqual(state.preparedPlanningByOt, { 200: "b" });
+  assert.deepEqual(calls.tombstones, ["100", "300"]);
+  assert.equal(calls.save, 1);
+  assert.equal(calls.toasts.at(-1), "2 trabajos devueltos al backlog");
+
+  const cancelled = { selectedOts: ["100", "200"], lockedOts: ["200"] };
+  const cancelledFlow = createHandler(cancelled, { confirm: false });
+  cancelledFlow.handler();
+  assert.deepEqual(cancelled.selectedOts, ["100", "200"]);
+  assert.equal(cancelledFlow.calls.confirm, 1);
+  assert.equal(cancelledFlow.calls.save, 0);
+
+  const none = { selectedOts: ["200", "300"], lockedOts: ["200"] };
+  const noneFlow = createHandler(none, { programmedOts: ["300"] });
+  noneFlow.handler();
+  assert.equal(noneFlow.calls.confirm, 0);
+  assert.equal(noneFlow.calls.save, 0);
+  assert.equal(noneFlow.calls.toasts.at(-1), "No hay trabajos no bloqueados para enviar a backlog");
+});
+
+test("el retiro manual de una OT programada o completada pide confirmacion adaptativa (RULE-UI-014)", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+
+  // El drag de la tarjeta ahora inicia en programadas (solo el candado lo frena);
+  // el teclado y el reordenamiento interno siguen bloqueando programadas.
+  const pointerStart = planningApp.indexOf("item.addEventListener(\"pointerdown\", (event) => {");
+  const pointerEnd = planningApp.indexOf("item.setPointerCapture", pointerStart);
+  const pointerSlice = planningApp.slice(pointerStart, pointerEnd);
+  assert.match(pointerSlice, /if \(job\?\.locked\) return;/);
+  assert.doesNotMatch(pointerSlice, /if \(job\?\.programmed \|\| job\?\.locked\) return;/);
+
+  // La rama de remocion de performSelectJob usa la senal de completadas y el aviso.
+  const selectStart = planningApp.indexOf("async function performSelectJob(");
+  const selectEnd = planningApp.indexOf("function confirmarRetiroManualDeOT(", selectStart);
+  const selectSlice = planningApp.slice(selectStart, selectEnd);
+  assert.match(selectSlice, /hasCompletedPlanOperations\(state, ot\)/);
+  assert.match(selectSlice, /if \(!removal\.allowed && !completadas\)/);
+  assert.match(selectSlice, /confirmarRetiroManualDeOT\(ot, job, completadas\)/);
+
+  // El aviso adaptativo solo aparece cuando la OT tiene programadas/completadas.
+  const helperStart = planningApp.indexOf("function confirmarRetiroManualDeOT(");
+  const helperEnd = planningApp.indexOf("function showPlanningPreparationLoading(", helperStart);
+  const helper = planningApp.slice(helperStart, helperEnd);
+  const createHelper = (options = {}) => {
+    const calls = { confirm: 0, confirmMessages: [], toasts: [] };
+    const fn = Function("window", "showToast", `${helper}; return confirmarRetiroManualDeOT;`)(
+      {
+        confirm(message) {
+          calls.confirm += 1;
+          calls.confirmMessages.push(message);
+          return options.confirm !== false;
+        },
+      },
+      (message) => calls.toasts.push(message),
+    );
+    return { fn, calls };
+  };
+
+  const programada = createHelper();
+  assert.equal(programada.fn("100", { programmed: true }, false), true);
+  assert.equal(programada.calls.confirm, 1);
+  assert.match(programada.calls.confirmMessages[0], /La OT 100 tiene operaciones programadas cuya programacion se perdera/);
+  assert.match(programada.calls.confirmMessages[0], /Aun asi, desea moverla a backlog\?/);
+
+  const completadas = createHelper();
+  assert.equal(completadas.fn("200", {}, true), true);
+  assert.match(completadas.calls.confirmMessages[0], /operaciones completadas que quedaran fuera del plan/);
+
+  const ambas = createHelper();
+  assert.equal(ambas.fn("300", { programmed: true }, true), true);
+  assert.match(
+    ambas.calls.confirmMessages[0],
+    /operaciones programadas cuya programacion se perdera y operaciones completadas que quedaran fuera del plan/,
+  );
+
+  const libre = createHelper();
+  assert.equal(libre.fn("400", {}, false), true);
+  assert.equal(libre.calls.confirm, 0);
+
+  const cancelado = createHelper({ confirm: false });
+  assert.equal(cancelado.fn("100", { programmed: true }, false), false);
+  assert.equal(cancelado.calls.toasts.at(-1), "La OT 100 no se movio a backlog");
+});
+
+test("la configuracion de flujo expone controles y diagnostico sin render global", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const planningTemplate = await readFile(new URL("../src/web/planning/index.template.html", import.meta.url), "utf8");
+  const flowEventSource = planningApp.slice(
+    planningApp.indexOf('els.flowBalancedEnabledInput.addEventListener("change"'),
+    planningApp.indexOf("els.closeDetailPanelBtn.addEventListener", planningApp.indexOf('els.flowBalancedEnabledInput.addEventListener("change"')),
+  );
+
+  assert.match(planningTemplate, /id="flowBalancedEnabledInput"/);
+  assert.match(planningTemplate, /id="flowWipTargetInput"[^>]*min="1"[^>]*max="50"/);
+  assert.match(planningTemplate, /id="flowOptimizationDiagnostics"/);
+  assert.match(planningApp, /flowBalancedEnabled:\s*true/);
+  assert.match(planningApp, /flowWipTarget:\s*10/);
+  assert.match(planningApp, /state\.settings\.flowBalancedEnabled\s*=\s*state\.settings\.flowBalancedEnabled\s*!==\s*false/);
+  assert.match(planningApp, /state\.settings\.flowWipTarget\s*=\s*Number\.isFinite\(flowWipTarget\)/);
+  assert.match(flowEventSource, /renderFlowBalanceConfiguration\(\)/);
+  assert.doesNotMatch(flowEventSource, /saveAndRender\(/);
+  assert.match(planningApp, /Flujo promedio/);
+  assert.match(planningApp, /WIP maximo/);
+  assert.match(planningApp, /Huecos evitables/);
+  assert.match(planningApp, /Cambios de herramental/);
+  assert.match(planningApp, /Utilizacion/);
+  assert.match(planningApp, /Estrategia:/);
+});
+
+test("dry-run de rendimiento de planeacion esta expuesto y no persiste resultados", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const dryRunStart = planningApp.indexOf("async function dryRunCurrentPlanPerformance(options = {})");
+  const dryRunEnd = planningApp.indexOf("function dryRunNowMs()", dryRunStart);
+  const dryRunSource = planningApp.slice(dryRunStart, dryRunEnd);
+  const scheduleStart = planningApp.indexOf("async function scheduleCurrentPlanImpl()");
+  const scheduleEnd = planningApp.indexOf("async function dryRunCurrentPlanPerformance()", scheduleStart);
+  const scheduleSource = planningApp.slice(scheduleStart, scheduleEnd);
+
+  assert.match(planningApp, /window\.runPlanningPerformanceDryRun\s*=\s*dryRunCurrentPlanPerformance/);
+  assert.match(dryRunSource, /console\.table\(metrics\)/);
+  assert.match(dryRunSource, /console\.info\("\[planning dry-run\]", result\)/);
+  assert.match(dryRunSource, /dryRunOptions/);
+  assert.match(planningApp, /PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS\s*=\s*60000/);
+  assert.match(dryRunSource, /configuredTimeoutMs/);
+  assert.match(dryRunSource, /plannerOptions\.timeBudgetMs\s*=\s*configuredTimeoutMs/);
+  assert.match(dryRunSource, /skipScheduler/);
+  assert.match(dryRunSource, /profileOnly/);
+  assert.match(dryRunSource, /SCHEDULER_SKIPPED/);
+  assert.match(dryRunSource, /yieldToBrowser/);
+  assert.match(dryRunSource, /await yieldToBrowser\(\)/);
+  assert.match(dryRunSource, /timeBudgetMs/);
+  assert.match(dryRunSource, /collectStats/);
+  assert.match(dryRunSource, /progressEveryMs/);
+  assert.match(dryRunSource, /lastPhase/);
+  assert.match(dryRunSource, /startedAt/);
+  assert.match(dryRunSource, /elapsedMs/);
+  assert.match(dryRunSource, /aborted/);
+  assert.match(dryRunSource, /TIME_BUDGET_EXCEEDED/);
+assert.match(dryRunSource, /markPhase\("readiness"/);
+  assert.match(dryRunSource, /markPhase\("prepare-draft"/);
+  assert.match(dryRunSource, /markPhase\("scheduler-start"/);
+  assert.match(dryRunSource, /markPhase\("scheduler-end"/);
+  assert.match(dryRunSource, /selectedOtsCount/);
+  assert.match(dryRunSource, /engineSelectedOtsCount/);
+  assert.match(dryRunSource, /affectedOtsCount/);
+  assert.match(dryRunSource, /readyOtsCount/);
+  assert.match(dryRunSource, /lockedOtsCount/);
+  assert.match(dryRunSource, /closedKeptCount/);
+  assert.match(dryRunSource, /inputOperationsCount/);
+  assert.match(dryRunSource, /includedOperationsCount/);
+  assert.match(dryRunSource, /scheduledOperationsCount/);
+  assert.match(dryRunSource, /unscheduledOperationsCount/);
+  assert.match(dryRunSource, /scheduledOtsCount/);
+  assert.match(dryRunSource, /unscheduledOtsCount/);
+  assert.match(dryRunSource, /diagnosticsCount/);
+  assert.match(dryRunSource, /diagnosticsByCode/);
+  assert.match(dryRunSource, /diagnosticLoads/);
+  assert.match(planningApp, /function buildDryRunDiagnosticLoads/);
+  assert.match(planningApp, /weekLoads/);
+  assert.match(planningApp, /horizonLoads/);
+  assert.match(planningApp, /weekDemandByCt/);
+  assert.match(planningApp, /matrixCapabilities/);
+  assert.match(dryRunSource, /selectedStrategy/);
+  assert.match(dryRunSource, /planStart/);
+  assert.match(dryRunSource, /horizonDays/);
+  assert.doesNotMatch(dryRunSource, /incrementalBase/);
+assert.match(dryRunSource, /totalMs/);
+  assert.match(dryRunSource, /readinessMs/);
+  assert.match(dryRunSource, /prepareDraftMs/);
+  assert.match(dryRunSource, /schedulePlanMs/);
+  assert.match(dryRunSource, /resultBuildMs/);
+  assert.match(dryRunSource, /plannerStrategiesStarted/);
+  assert.match(dryRunSource, /plannerMainLoopIterations/);
+  assert.match(dryRunSource, /plannerAssignmentCandidateEvaluations/);
+  assert.match(dryRunSource, /plannerSlotProbes/);
+  assert.match(dryRunSource, /plannerBusyConflictScans/);
+  assert.match(dryRunSource, /plannerBusySegmentSorts/);
+  assert.match(dryRunSource, /plannerToolCatalogLookups/);
+  assert.match(dryRunSource, /plannerOtConfigurationLookups/);
+  assert.doesNotMatch(dryRunSource, /\bsaveState\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bqueueAppSheetSave\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bpersistPlanSnapshot\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bsaveDraftSnapshot\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bsaveAndRender\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\brender\s*\(/);
+  assert.doesNotMatch(dryRunSource, /\bensurePlanningDataLoaded\s*\(/);
+  assert.match(scheduleSource, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas/);
+  assert.match(scheduleSource, /persistPlanSnapshot\(\)/);
+  assert.match(scheduleSource, /const preservedQueueOrder = \[\.\.\.state\.selectedOts\];[\s\S]{0,200}state = \{ \.\.\.result, selectedOts: preservedQueueOrder \}/);
+  assert.doesNotMatch(scheduleSource, /Plan parcial:/);
+  assert.match(scheduleSource, /missingAptOts/);
+  assert.match(scheduleSource, /ensurePlanningDataLoaded\(true, \{ force: true, ots: replannableOts \}\)/);
+  assert.match(scheduleSource, /No se genero el plan: falta sincronizar operaciones de OT/);
+  assert.match(planningApp, /const NETSUITE_WORKORDER_FRESH_MS = 15 \* 60 \* 1000/);
+  assert.match(scheduleSource, /Verificando OTs en NetSuite\.\.\./);
+  assert.match(scheduleSource, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "schedule" \}\)[\s\S]*if \(!scheduleFreshness\.ok\) return;[\s\S]*removeClosedWorkOrdersFromDraft[\s\S]*PlannerCore\.schedulePlan/);
+  const publishImpl = planningApp.slice(
+    planningApp.indexOf("async function publishCurrentPlan("),
+    planningApp.indexOf("async function generatePlanPdf("),
+  );
+  assert.match(publishImpl, /Verificando OTs en NetSuite\.\.\./);
+  assert.match(publishImpl, /ensureNetSuiteWorkOrdersFresh\(\{ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" \}\)[\s\S]*if \(!publishFreshness\.ok\) return;[\s\S]*persistPlanSnapshot\(\)/);
+});
+
+test("todos los workflows usan acciones compatibles con Node.js 24", async () => {
+  const workflowNames = ["ci.yml", "deploy-appscript.yml", "deploy-pages.yml", "npm-publish-github-packages.yml"];
+  const workflows = await Promise.all(workflowNames.map((name) =>
+    readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8")
+  ));
+  const expectedActionCounts = [1, 1, 1, 2];
+  for (const [index, workflow] of workflows.entries()) {
+    assert.equal((workflow.match(/actions\/checkout@v6\b/g) || []).length, expectedActionCounts[index], `${workflowNames[index]} debe usar actions/checkout@v6`);
+    assert.equal((workflow.match(/actions\/setup-node@v6\b/g) || []).length, expectedActionCounts[index], `${workflowNames[index]} debe usar actions/setup-node@v6`);
+  }
+  assert.match(workflows[2], /actions\/configure-pages@v6\b/);
+  assert.match(workflows[2], /actions\/upload-pages-artifact@v5\b/);
+  assert.match(workflows[2], /actions\/deploy-pages@v5\b/);
+});
+
+// MEDIDO 2026-09-30: al deshabilitar el puente se cambio el codigo de app.js y el de
+// performance-client.js, pero NO el shim `planningFetchSnapshotById` que el propio build
+// inyecta en el bundle. Ese shim se llevo 24 llamadas, y la que se le salvo de la lista
+// (`getPlanSnapshotLight`) se llevo la rama de `fetchJson(PLAN_SNAPSHOTS_API + ...)`,
+// que es la URL del web app de Apps Script: en GitHub Pages da 404. Los tests de
+// app.js NO lo pueden ver, porque el shim no vive en src/: se genera en el build. Por eso
+// el candado va aqui, sobre el bundle ya montado.
+test("el bundle montado NO hace ninguna llamada al puente de Apps Script", async () => {
+  const result = await buildProject(SIN_PORTAPAPELES);
+  const destinos = [
+    ...result.htmlFiles.map((f) => path.join(result.distDir, f)),
+    path.join(result.siteDir, "index.html"),
+    path.join(result.siteDir, "skills.html"),
+    path.join(result.siteDir, "operator.html"),
+  ];
+
+  for (const archivo of destinos) {
+    const txt = await readFile(archivo, "utf8");
+    // Se borran los comentarios antes de afirmar: el codigo explains el bug citando la
+    // llamada vieja, y un test que no distingue prosa de codigo obliga a borrar la
+    // explicacion. Lo que no se perdona es una llamada DE VERDAD.
+    const codigo = txt.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+    const llamadas = codigo.match(/callAppsScript\s*\(\s*["'`]/g) || [];
+    assert.deepEqual(llamadas, [], `${path.basename(archivo)}Todavia llama al puente: ${llamadas.length} llamada(s)`);
+  }
+});
+
+test("el puente queda deshabilitado, no solo esquivado", async () => {
+  // Que no haya llamadas no basta: si `call` volviera a hablar con el iframe, el proximo
+  // method que se agregue reventaria en produccion sin que nada se entere. Se afirma que
+  // la puerta RECHAZA, con un motivo que dice que mas.
+  const result = await buildProject(SIN_PORTAPAPELES);
+  for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+    const txt = await readFile(archivo, "utf8");
+    assert.match(txt, /El puente de Apps Script esta deshabilitado/,
+      `${path.basename(archivo)} deberia rechazar el puente con un motivo explicito`);
+    assert.match(txt, /PPSupabaseBridgeReplacement/,
+      `${path.basename(archivo)} deberia traer el reemplazo de Supabase`);
+  }
+});
+
+test("el bundle monta el reemplazo con el lector y el escritor ya puestos", async () => {
+  // POR QUE ESTE ORDEN Y NO OTRO. `supabase-bridge-replacement.js` agarra PPSupabaseReader
+  // y PPSupabaseWriter del global AL EVALUARSE (sus dos primeras lineas), no al llamar. Si
+  // el build lo montara antes que a ellos, en el navegador los tendria como undefined para
+  // siempre y TODAS las llamadas darian "PPSupabaseReader no esta disponible". El orden
+  // de los bloques <script> no es lo que se afirma aqui: lo que importa es que, DENTRO
+  // del bloque que los monta, el lector y el escritor esten antes que el reemplazo.
+  const result = await buildProject(SIN_PORTAPAPELES);
+  const index = await readFile(path.join(result.siteDir, "index.html"), "utf8");
+  const codigo = index.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+
+  const lector = codigo.indexOf("root.PPSupabaseReader =");
+  const escritor = codigo.indexOf("root.PPSupabaseWriter =");
+  const reemplazo = codigo.indexOf("root.PPSupabaseBridgeReplacement = api");
+  assert.ok(lector > 0, "el bundle no monta PPSupabaseReader");
+  assert.ok(escritor > 0, "el bundle no monta PPSupabaseWriter");
+  assert.ok(reemplazo > 0, "el bundle no monta PPSupabaseBridgeReplacement");
+  assert.ok(lector < reemplazo, "el reemplazo se evaluaria sin lector");
+  assert.ok(escritor < reemplazo, "el reemplazo se evaluaria sin escritor");
+});
+
+test("el puente no monta NINGUN iframe: no se descarga el script de Google", async () => {
+  // MEDIDO 2026-09-30 en la pagina real: la consola mostraba
+  //   script.google.com/macros/s/AKfy.../exec?app=bridge&v=2.51.0
+  // con `call` ya rechazando todo. La razon es que `ensureReady` seguia siendo `ensureBridge`
+  // y `loadAppStateInBackground` lo llamaba en cada arranque. O sea: el sitio ya no habia
+  // un camino de DATOS hacia Apps Script, pero todavia tenia una dependencia VIVA de Apps
+  // Script, que se descarga entera en cada carga de pagina. Sin este test, "deshabilitado"
+  // significaba solo "no contesta", y eso es distinto de "no existe".
+  const result = await buildProject(SIN_PORTAPAPELES);
+  for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+    const codigo = (await readFile(archivo, "utf8"))
+      .replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+    const nombre = path.basename(archivo);
+
+    // 1. La puerta no monta nada: tiene que RECHAZAR. Se aceptan las dos formas de
+    //    declararla en el objeto (`ensureReady:` y la abreviada `ensureReady,`), porque
+    //    este test no debe obligar a un estilo de escritura, solo a un comportamiento.
+    assert.match(codigo, /ensureReady\s*[:,][\s\S]{0,400}?MOTIVO|ensureReady\s*[:,][\s\S]{0,400}?deshabilitado/,
+      `${nombre}: ensureReady tiene que rechazar con el motivo del puente, no montar un iframe`);
+
+    // 2. Y el iframe no se crea en ningun lado por una llamada que si llegue a ejecutarse.
+    //    Se afirma sobre la CREACION del elemento, no sobre la mencion del objeto: el nombre
+    //    PPAppsScriptBridge sigue apareciendo legitimamente en `enRuntimeAppsScript` de app.js,
+    //    que lo consulta unicamente para preguntar por `google.script.run` (dentro de
+    //    HtmlService), no para leer ni escribir datos. Un test que prohibiera la mencion
+    //    obligaria a romper esa pregunta, que es buena.
+    assert.doesNotMatch(codigo, /createElement\(\s*["']iframe["']|\.id\s*=\s*["']ppAppsScriptBridge["']/,
+      `${nombre}: algo sigue creando el iframe del puente`);
+
+    // 3. La URL del web app no se navega. Con el iframe gone, cualquier postMessage ahi
+    //    seria un bug, no una llamada.
+    assert.doesNotMatch(codigo, /exec\?app=bridge/,
+      `${nombre}: el bundle sigueuanceando el web app de Apps Script`);
+  }
+});
+
+test("el build genera Apps Script y GitHub Pages", async () => {
+  const result = await buildProject(SIN_PORTAPAPELES);
+  assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"]);
+  assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
+  const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
+  const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
+  const inspectionDrawingService = await readFile(path.join(result.distDir, "17-inspection-drawing-service.js"), "utf8");
+  const planningWorkOrderService = await readFile(path.join(result.distDir, "18-planning-work-order-service.js"), "utf8");
+  const storageService = await readFile(path.join(result.distDir, "02-storage.js"), "utf8");
+  const codeService = await readFile(path.join(result.distDir, "01-code.js"), "utf8");
+  const bridge = await readFile(path.join(result.distDir, "Bridge.html"), "utf8");
+  const appScriptWorkflow = await readFile(path.join(process.cwd(), ".github/workflows/deploy-appscript.yml"), "utf8");
+  const claspConfig = JSON.parse(await readFile(path.join(process.cwd(), ".clasp.json"), "utf8"));
+  assert.equal(claspConfig.rootDir, "dist");
+  assert.equal(claspConfig.scriptId, "1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_");
+  const serverBundle = (await Promise.all(result.serverFiles.map((file) => readFile(path.join(result.distDir, file), "utf8")))).join("\n");
+  const bridgeMethods = [...bridge.matchAll(/^\s{4}([A-Za-z_$][\w$]*): true,$/gm)].map((match) => match[1]);
+  assert.ok(bridgeMethods.length >= 30, `el bridge debe declarar los metodos permitidos (se leyeron ${bridgeMethods.length})`);
+  const missingEntryPoints = bridgeMethods.filter((method) => !String(method).startsWith("PP_") && !serverBundle.includes("function " + method + "("));
+  assert.deepEqual(missingEntryPoints, [], `cada metodo del bridge sin prefijo PP_ necesita un entry point global en src/server: ${missingEntryPoints.join(", ")}`);
   assert.match(index, /<title>Planeacion de Produccion<\/title>/);
-  assert.match(index, /function doGet|google\.script\.run/);
+  assert.match(index, /google\.script\.run/);
+  assert.match(index, /PPAppsScriptBridge/);
+  assert.match(index, /getAppState/);
+  assert.match(index, /savePlanningStateOptimized/);
+  assert.doesNotMatch(codeService, /addMetaTag\(['"]cache-control['"]/, "Apps Script lanza error en addMetaTag('cache-control'); no agregar metatags no soportados en doGet");
+  assert.match(codeService, /function saveWorkOrderSyncState\(payload\)/);
+  assert.match(performanceService, /function getAppStateIfChanged\(clientRevision, options\)/);
+  assert.match(performanceService, /knownRevision > 0 && knownRevision === metadata\.revision[\s\S]*unchanged: true/);
+  assert.match(bridge, /getAppStateIfChanged: true/);
+  assert.match(bridge, /saveOperationPlanStatus: true/);
+  assert.match(bridge, /saveWorkOrderSyncState: true/);
+  assert.match(bridge, /getPlanningWorkOrderData: true/);
+  assert.match(planningWorkOrderService, /function getPlanningWorkOrderData\(ot\)/);
+  assert.match(appScriptWorkflow, /clasp deploy --deploymentId/);
+  assert.match(appScriptWorkflow, /CLASPRC_JSON no esta configurado/);
+  assert.match(appScriptWorkflow, /CLASP_JSON no esta configurado/);
+  assert.match(appScriptWorkflow, /config\.rootDir = 'dist'/);
+  assert.match(appScriptWorkflow, /EXPECTED_SCRIPT_ID/);
+  assert.match(appScriptWorkflow, /1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_/);
+  assert.match(appScriptWorkflow, /1ew3Nqi0e8SHid_zWv1z5cl6ATCZzqVLqc2lkbfox5CMNsh8FH5tL8zKx/);
+  assert.match(appScriptWorkflow, /\^AKfy/);
+  assert.match(appScriptWorkflow, /error title=clasp push/);
+  assert.match(appScriptWorkflow, /JSON\.parse\(fs\.readFileSync/);
+  const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
+  const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
+  assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);
+  assert.doesNotMatch(serviceWorker, /plan-maestro-v2\.41\.4/);
+  assert.match(pagesIndex, /script\.google\.com\/macros\/s\/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q\/exec/);
+  assert.doesNotMatch(pagesIndex, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
+// MEDIDO 2026-10-02: antes el workflow tenia el identificador escrito a mano y esta linea lo
+  // fijaba. Eso era lo que permitia que el push a main y `npm run deploy` acabaran en deployments
+  // distintos sin que nada lo dijera: cada uno abria el suyo y la pagina, que habla con la URL
+  // horneada en el bundle, se quedaba en el viejo. Ahora el workflow lo LEE de .clasp.json, asi que
+  // lo que se comprueba es que lo lea, no que lo repita. Que el bundle de dos lineas mas arriba
+  // traiga la URL correcta es lo que demuestra que la lectura sirvio.
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/,
+    "el workflow NO puede repetir el identificador: si cambia en un lado, el push a main y npm run deploy despliegan a lugares distintos");
+  assert.match(appScriptWorkflow, /require\('\.\/\.clasp\.json'\)\.deploymentId/,
+    "lo lee de .clasp.json, igual que el build y que el deploy local");
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
+  assert.doesNotMatch(appScriptWorkflow, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
+  assert.match(pagesIndex, /manifest\.webmanifest/);
+  assert.match(pagesIndex, /serviceWorker\.register/);
+  assert.match(pagesIndex, /PlannerCore/);
+  assert.match(pagesIndex, /PlanningWorkflowCore/);
+assert.match(pagesIndex, /state\.planStart = state\.planStart \|\| formatDate\(weekStart\(new Date\(\)\)\)/);
+  assert.doesNotMatch(pagesIndex, /loadIncrementalPlanningBase/);
+  assert.match(pagesIndex, /startFromExecutionTime: true/);
+const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWindow()"), pagesIndex.indexOf("function scheduledPlanWindowStart()"));
+  assert.match(planWindowSource, /PlanningWorkflowCore\.ganttPlanWindow\(\{/);
+  assert.match(planWindowSource, /currentPlanOperations\(\)\.filter\(\(op\) => isJobScheduled\(op\.ot\) && !isPlanCompletedOperation\(op\) && opStart\(op\)\)/);
+  assert.doesNotMatch(planWindowSource, /scheduledPlanWindowStart\(\)/);
+  assert.match(pagesIndex, /const affected = new Set\(state\.selectedOts\.map\(normalizeStatus\)\);/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.weeklyFinishingCost\(finishingRows\)/);
+  assert.match(pagesIndex, /function formatReportDuration\(minutes\)[\s\S]*min[\s\S]*s/);
+  assert.match(pagesIndex, /function formatReportDate\(date\)[\s\S]*\$\{d\}\/\$\{m\}\/\$\{y\}/);
+  assert.match(pagesIndex, /function resetDailyReportFiltersToToday\(\)[\s\S]*const today = formatDate\(new Date\(\)\)[\s\S]*operator[\s\S]*adjuster[\s\S]*subcontract/);
+  assert.match(pagesIndex, /function initializePlanningApp\(\)[\s\S]*resetDailyReportFiltersToToday\(\)[\s\S]*render\(\)/);
+  const dailyReportFilterSource = pagesIndex.slice(pagesIndex.indexOf("function filteredReportRows("), pagesIndex.indexOf("function renderReportFilterStatus("));
+  assert.match(dailyReportFilterSource, /value && value <= range\.end/);
+  assert.doesNotMatch(dailyReportFilterSource, /value >= range\.start/);
+  assert.match(pagesIndex, /operatorPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /adjusterPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /subcontractPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /<td>\$\{formatReportDuration\(operationCycleMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(operationSetupMinutesForReport\(op\)\)\}<\/td>[\s\S]*<td>\$\{formatReportDuration\(scheduledProductionMinutesForExport\(op\)\)\}<\/td>/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.report-comment-input::placeholder\s*\{[^}]*opacity:\s*0/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(1\)[\s\S]*width:\s*4%/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.production-report-table th:nth-child\(15\)[\s\S]*white-space:\s*normal/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.report-page-table:not\(\.report-show-all-table\) th \{ white-space:\s*normal/);
+  assert.match(pagesIndex, /formatCurrency\(window\.PlanningWorkflowCore\.effectiveFinishingAmount\(row\)\)/);
+  assert.match(pagesIndex, /return window\.PlanningWorkflowCore\.weeklyFinishingRowsByType\(rows\);/);
+  assert.match(pagesIndex, /const finishingRows = summary\.finishes \|\| \[\];/);
+  assert.doesNotMatch(pagesIndex, /const startingRows = summary\.starts \|\| \[\];/);
+  assert.doesNotMatch(pagesIndex, /Number\(row\.amount \|\| 0\)/);
+  assert.match(pagesIndex, /Number\.isFinite\(number\) && number >= 1/);
+  // El max del reporte semanal se mantiene (decisión de negocio) pero el precio de venta del
+  // sync entra por su propio campo y SOLO como respaldo cuando no hay un precio vivo
+  // (RULE-REP-021). Antes ese precio se metía en manualUnitPrice con un max que solo subía.
+  assert.match(pagesIndex, /const livePrice = invoiceUnitPriceForOt\(ot\) \|\| null/);
+  assert.match(pagesIndex, /livePrice \? null : configuration\.referenceSalePrice/);
+  assert.doesNotMatch(pagesIndex, /configuration\.manualUnitPrice = price;/,
+    "el sync no debe escribir el precio de venta en manualUnitPrice");
+  assert.match(pagesIndex, /const amount = amounts\.length \? Math\.max\(\.\.\.amounts\) : null/);
+  assert.match(pagesIndex, /Number\.isFinite\(pendingPiecesValue\)/);
+  assert.match(pagesIndex, /window\.PlanningWorkflowCore = api/);
+  assert.doesNotMatch(pagesIndex, /const window = getPlanWindow\(\);[\s\S]{0,1800}window\.PlanningWorkflowCore\.isActiveGanttView/);
+  assert.doesNotMatch(pagesIndex, /createPlanningWorkflowCore[\s\S]*?<\/script>\s*<script>\s*"use strict";\s*const STORAGE_KEY/);
+  assert.match(pagesIndex, /scheduleCurrentPlan/);
+  assert.match(pagesIndex, /NETSUITE_PLANNING_TIMEOUT_MS = 15000/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.withTimeout/);
+  assert.match(pagesIndex, /const removal = window\.PlanningWorkflowCore\.canRemoveSelectedOt\(state, ot\);[\s\S]{0,180}if \(!removal\.allowed && !completadas\)[\s\S]{0,180}showToast\(removal\.reason\)/);
+  // RULE-UI-014: el retiro manual de una OT programada/completada solo procede
+  // tras el aviso adaptativo; el candado manual sigue frenando en performSelectJob.
+  assert.match(pagesIndex, /if \(window\.PlanningWorkflowCore\.isOtLockedInState\(state, ot\)\)[\s\S]{0,40}showToast\(removal\.reason\)/);
+  assert.match(pagesIndex, /if \(!confirmarRetiroManualDeOT\(ot, job, completadas\)\) return false;/);
+  assert.match(pagesIndex, /La OT \$\{ot\} tiene \$\{advertencias\.join\(" y "\)\}\. Aun asi, desea moverla a backlog\?/);
+  assert.match(pagesIndex, /if \(!selected && alreadySelected\) \{\s*Object\.assign\(state, window\.PlanningWorkflowCore\.removeOtFromDraft\(state, ot\)\);\s*if \(typeof rememberDraftRemovedOts === "function"\) rememberDraftRemovedOts\(\[ot\]\);\s*\}/);
+  assert.match(pagesIndex, /prepareDraftForReschedule/);
+  assert.match(pagesIndex, /const engineSelectedOts = window\.PlanningWorkflowCore\.schedulingSelectedOts\(state, closedOts\);[\s\S]{0,1200}PlannerCore\.schedulePlan\(\{ \.\.\.state, selectedOts: engineSelectedOts \}, \{/);
+  assert.match(pagesIndex, /const preservedQueueOrder = \[\.\.\.state\.selectedOts\];[\s\S]{0,200}state = \{ \.\.\.result, selectedOts: preservedQueueOrder \};/);
+  assert.match(pagesIndex, /NetSuite no respondio; se programara con los datos ya cargados/);
+  assert.match(pagesIndex, /originalEnsurePlanningDataLoaded\(showMessage, options\)/);
+  assert.match(pagesIndex, /return \{ ready: true, source: "fresh", readyOts: selectedOts, missingOts: \[\], warning: "" \}/);
+  assert.match(pagesIndex, /netSuiteSyncOutcome/);
+  assert.match(pagesIndex, /subcontractWindowEnd/);
+  assert.match(pagesIndex, /name="ot_manual_price" type="number" min="0" step="0\.01"/);
+  assert.match(pagesIndex, /function planningPreparationTitle\(job\)/);
+  assert.match(pagesIndex, /const description = String\(job\?\.descripcion \|\| workOrderForOt\(ot\)\?\.description \|\| ""\)\.trim\(\);/);
+  assert.match(pagesIndex, /const detail = \[article, description, quantity \? `\$\{formatMaterialQuantity\(quantity\)\} pzas` : ""\]\.filter\(Boolean\)\.join\(" - "\);/);
+  assert.match(pagesIndex, /name="tool_\$\{escapeHtml\(index\)\}_extra_machine_\$\{escapeHtml\(extraIndex\)\}"/);
+  assert.match(pagesIndex, /data-job-tool-extra-machine/);
+  assert.doesNotMatch(pagesIndex, /Piezas pendientes/);
+  assert.doesNotMatch(pagesIndex, /Monto estimado/);
+  assert.match(pagesIndex, /configuration\.subcontractType \|\| registeredSubcontract/);
+  assert.match(pagesIndex, /configuration\.machine/);
+  assert.match(storageService, /CONFIGURACION_OT:\s*\['OT', 'MAQUINA', 'KIT_HERRAMENTAL'[\s\S]*'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'\]/);
+  assert.match(storageService, /PP_additionalToolList_\(item\.additionalHerramentales \|\| item\.herramentalesExtra \|\| \[\]\)/);
+  assert.match(storageService, /herramental:\s*String\(row\.HERRAMENTAL \|\| ''\)\.trim\(\)/);
+  assert.match(storageService, /preparedPlanningByOt:\s*config\.preparedPlanningByOt \|\| \{\}/);
+  assert.match(storageService, /\['preparedPlanningByOt', JSON\.stringify\(payload\.preparedPlanningByOt \|\| \{\}\)\]/);
+  assert.match(performanceService, /preparedPlanningByOt:\s*payload\.preparedPlanningByOt \|\| \{\}/);
+  assert.match(performanceService, /CONFIGURACION_ARTICULO[\s\S]{0,180}PP_articleConfigurationRows_\(payload\)/);
+  assert.match(pagesIndex, /preparedPlanningByOt:\s*clone\(state\.preparedPlanningByOt \|\| \{\}\)/);
+  assert.match(pagesIndex, /articleConfigurations:\s*state\.articleConfigurations \|\| \{\}/);
+  assert.match(pagesIndex, /if \(imported\.preparedPlanningByOt\) state\.preparedPlanningByOt = imported\.preparedPlanningByOt;/);
+  assert.match(pagesIndex, /function setPlanningActionsBusy/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("schedule", true\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("sync", true\)/);
+  assert.match(pagesIndex, /id="syncBacklogOtsBtn"[^>]*>Sincronizar OTs<\/button>/);
+  assert.match(pagesIndex, /async function syncBacklogWorkOrders\(options = \{\}\)/);
+  assert.match(pagesIndex, /const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;/);
+  // MEDIDO 2026-09-30: este bloque afirmaba que el presupuesto del PUENTE quedara por encima
+  // del del cliente (2 intentos + 5 s), porque si el puente cortara primero el usuario veria
+  // el error del puente en vez de "NetSuite no respondio en N segundos". MEDIDO entonces:
+  // getAppState tardaba 11,3 s y getAppStateIfChanged 197 s, y eran 74 llamadas al puente en
+  // una sola carga de pagina, cada una con arranque en frio. Ese era el problema de fondo.
+  //
+  // Con el puente deshabilitado (RULE-SUP-030) la RELACION ya no existe: no hay llamada que
+  // cortar, asi que no hay segundo reloj. El presupuesto del cliente es el unico, y la
+  // sincronizacion va a Supabase. Por eso lo que se afirma ahora es la AUSENCIA: si el
+  // cliente vuelve a traer presupuestos por metodo del "puente", es porque el iframe volvio.
+  const backlogBudget = Number((pagesIndex.match(/NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = (\d+);/) || [])[1]);
+  const bridgeClient = await readFile(new URL("../src/web/shared/apps-script-bridge-client.js", import.meta.url), "utf8");
+  // Se quitan los comentarios antes de afirmar: el comentario que explica por que se borro la
+  // maqueria del iframe la nombra, y un test que no distingue prosa de codigo obliga a borrar
+  // la explicacion para poder pasar.
+  const puenteCodigo = bridgeClient.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+  assert.doesNotMatch(puenteCodigo, /METHOD_TIMEOUT_MS|CALL_TIMEOUT_MS|READY_TIMEOUT_MS/,
+    "el puente no tiene presupuestos: no hay llamada que cronometrar");
+  assert.doesNotMatch(puenteCodigo, /postMessage|addEventListener\(\s*["']message["']/,
+    "el puente no habla por postMessage: no hay iframe al que hablarle");
+  assert.doesNotMatch(puenteCodigo, /createElement\(\s*["']iframe["']/,
+    "el puente no crea iframes");
+  assert.ok(backlogBudget > 0, "el cliente sigue teniendo su propio presupuesto de sincronizacion");
+  // El limite de solicitudes de NetSuite es transitorio: la sync ligera reintenta una vez.
+  assert.match(pagesIndex, /SSS_REQUEST_LIMIT_EXCEEDED[\s\S]{0,600}window\.setTimeout\(resolve, 5000\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.reconcileActiveWorkOrders\(state, payload\.workOrders, nowIso\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.purgeClosedWorkOrderRetention\(/);
+  assert.match(pagesIndex, /setBacklogSyncInFlight\(true\)/);
+  assert.match(pagesIndex, /setBacklogSyncInFlight\(false\)/);
+  assert.match(pagesIndex, /id="restoreDraftBtn"[^>]*>Restaurar borrador<\/button>/);
+  assert.equal((pagesIndex.match(/id="restoreDraftBtn"/g) || []).length, 1);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)/);
+  assert.match(pagesIndex, /async function previewDraftRestore\(snapshotId, syncBeforeRestore\)/);
+  assert.match(pagesIndex, /async function confirmDraftRestore\(snapshotId, previewState\)/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.reconcilePublishedPlan\(snapshot, previewState\)/);
+  assert.match(pagesIndex, /restoredOts[\s\S]*closedOts[\s\S]*completedOperations[\s\S]*removedOperations[\s\S]*newOperations[\s\S]*preservedConfigurations/);
+  assert.match(pagesIndex, /Sincronizar antes de restaurar/);
+  assert.match(pagesIndex, /Continuar con datos cargados/);
+  assert.match(pagesIndex, /reemplaza el borrador[\s\S]*conserva un respaldo[\s\S]*publicado permanece intacto/i);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("restore", true\)/);
+  assert.match(pagesIndex, /setPlanningActionsBusy\("restore", false\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.restorePublishedPlanAsDraft\(snapshotId, previewState\)/);
+  assert.match(pagesIndex, /reportSnapshot = null;[\s\S]*Borrador restaurado; revisa y genera nuevamente el plan/);
+  const restoreOpenSource = pagesIndex.slice(pagesIndex.indexOf("async function openRestoreDraftDialog()"), pagesIndex.indexOf("async function previewDraftRestore("));
+  const restorePreviewSource = pagesIndex.slice(pagesIndex.indexOf("async function previewDraftRestore("), pagesIndex.indexOf("async function confirmDraftRestore("));
+  const restoreReadOnlySyncSource = pagesIndex.slice(pagesIndex.indexOf("async function refreshRestorePreviewData("), pagesIndex.indexOf("async function previewDraftRestore("));
+  const restoreConfirmSource = pagesIndex.slice(pagesIndex.indexOf("async function confirmDraftRestore("), pagesIndex.indexOf("async function loadPlanSnapshots("));
+  [restoreOpenSource, restorePreviewSource, restoreConfirmSource].forEach((source) => {
+    assert.match(source, /netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight/);
+  });
+  assert.match(restorePreviewSource, /if \(outcome\?\.status !== "complete"\)[\s\S]*Continuar con datos cargados[\s\S]*if \(!continueWithLoaded\) return/);
+  assert.doesNotMatch(restorePreviewSource, /outcome\?\.ready/);
+  assert.match(restoreReadOnlySyncSource, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
+  assert.doesNotMatch(restoreReadOnlySyncSource, /syncNetSuitePlanningData|saveState|savePlanningStateOptimized|persistPlanSnapshot|render\(/);
+  assert.doesNotMatch(restorePreviewSource, /syncNetSuiteTwoPhase|syncNetSuitePlanningData|saveState/);
+  assert.match(restorePreviewSource, /let previewState = createAppSheetPayload\(\);/);
+  assert.doesNotMatch(restorePreviewSource, /\bstate\s*=/);
+  assert.match(restorePreviewSource, /confirmDraftRestore\(snapshotId, previewState\)/);
+  assert.match(pagesIndex, /function refreshPlanningActionControls\(\)[\s\S]*planningActionsBusy \|\| netSuiteSyncInFlight \|\| netSuitePlanningSyncInFlight[\s\S]*setPlanningControlBusy\(els\.restoreDraftBtn, busy\)/);
+  assert.match(pagesIndex, /function setNetSuiteSyncState\(inProgress\)[\s\S]*refreshPlanningActionControls\(\)/);
+  assert.ok(restoreConfirmSource.indexOf("await loadPlanSnapshots(false)") < restoreConfirmSource.indexOf("reportSnapshot = null"));
+  assert.match(restoreConfirmSource, /showWorkspaceView\("plan-semanal", "", \{ scrollToTop: true \}\)/);
+  assert.match(pagesIndex, /Cantidad diferente en NetSuite/);
+  assert.match(pagesIndex, /Cerrada o no encontrada en NetSuite/);
+  const backlogSyncSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function syncBacklogWorkOrders(options = {})"),
+    pagesIndex.indexOf("async function syncNetSuiteTwoPhase(options = {})"),
+  );
+  assert.match(backlogSyncSource, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
+  assert.match(backlogSyncSource, /NETSUITE_BACKLOG_SYNC_TIMEOUT_MS/);
+  assert.match(backlogSyncSource, /guardarSyncDeOrdenesTrabajoEnSupabase\(\)/);
+  assert.doesNotMatch(backlogSyncSource, /saveAppState|createAppSheetPayload\(nextState\)/);
+  assert.doesNotMatch(backlogSyncSource, /openPlanningDialog|compareWorkOrderLite|applyConfirmedWorkOrderChanges|persistPlanSnapshot/);
+  assert.doesNotMatch(backlogSyncSource, /syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
+  assert.doesNotMatch(pagesIndex, /function fetchNetSuiteWorkOrdersLiteCompat/);
+  assert.doesNotMatch(pagesIndex, /id="balanceBtn"/);
+  assert.doesNotMatch(pagesIndex, /els\.balanceBtn\.addEventListener/);
+  assert.match(pagesIndex, /if \(isSubcontractAppOperation\(op\)\) requirement\.codes\.add\("OT_SUBCONTRACT"\)/);
+  assert.match(pagesIndex, /if \(window\.PlannerCore\?\.isBendingOperation\?\.\(op\)\)[\s\S]*requirement\.codes\.add\("OT_TOOL"\)[\s\S]*requirement\.codes\.add\("OPTIONAL_KIT"\)/);
+  assert.match(pagesIndex, /async function showPlanningBlockers\(job, blockers\)[\s\S]*planningOperatorSelectionMarkup\(requirements, \{ toolChange \}\)/);
+  assert.match(pagesIndex, /confirmLabel: "Guardar y continuar"/);
+  assert.match(pagesIndex, /const resolved = await showPlanningBlockers\(job, blockers\);[\s\S]*if \(!resolved\)/);
+  assert.match(pagesIndex, /async function ensurePlanConfigurationCollected\(ots\)[\s\S]*confirmLabel: "Guardar y programar"/);
+  assert.match(pagesIndex, /function enableOperatorsForCapability\(capability, operators\)[\s\S]*state\.configuredCapabilities\.push\(capability\.key\)[\s\S]*state\.matrix\[capability\.key\]\.push\(name\)/);
+  assert.match(pagesIndex, /applyPlanningOperatorSelectionsFromForm\(els\.planningDialogForm, requirements, \{ toolChange \}\)/);
+  const builtStartupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function loadAppStateInBackground()"),
+    pagesIndex.indexOf("async function restoreDraftPlanFromSharedState()"),
+  );
+  assert.ok(
+    builtStartupSource.indexOf("await restoreDraftPlanFromSharedState()") < builtStartupSource.indexOf("purgeClosedWorkOrderRetention()"),
+    "la purga debe ejecutarse despues de restaurar el borrador compartido",
+  );
+  // MEDIDO 2026-09-30: este estado de prueba no tenia `workOrders`, y el arranque lo lee para
+  // decidir si el sync muestra mensaje (`state.workOrders.length === 0`). Antes no se notaba
+  // porque la llamada estaba dentro de un ternario con `isAppsScriptRuntime()`, que el arnes
+  // fijaba en false y hacia que la rama se cortara antes de evaluar el argumento. Al quitar la
+  // compuerta (RULE-SUP-030) el argumento se evalua siempre. El estado real de la app SI trae
+  // workOrders porque normalizeState() lo garantiza, asi que lo que faltaba era el fixture.
+  const startupState = { operations: [], workOrders: [] };
+  let operationsSeenByPurge = [];
+  const workspaceOptions = [];
+  let bootSyncCalls = 0;
+  const generatedStartup = Function(
+    "state", "loadAppSheetIfAvailable", "requestAnimationFrame", "loadPlanSnapshots", "restoreDraftPlanFromSharedState",
+    "purgeClosedWorkOrderRetention", "syncReportFiltersToPlanWeekOrToday", "saveState", "render", "applyInitialWorkspaceView",
+    "showToast", "isAppsScriptRuntime", "syncNetSuiteInBackground",
+    `${builtStartupSource}; return loadAppStateInBackground;`,
+  )(
+    startupState, async () => true, (callback) => callback(), async () => {},
+    async () => { startupState.operations = [{ ot: "OT-CERRADA" }]; return true; },
+    () => { operationsSeenByPurge = [...startupState.operations]; startupState.operations = []; },
+    () => {}, () => {}, () => {}, (options) => workspaceOptions.push(options), () => {}, () => false,
+    () => { bootSyncCalls += 1; return Promise.resolve(true); },
+  );
+  await generatedStartup();
+  // Y el sync de arranque tiene que occurir: antes estaba compuerteado por isAppsScriptRuntime(),
+  // que el arnes fijaba en false, o sea que en el sitio estatico nunca se lanzaba.
+  assert.equal(bootSyncCalls, 1, "el arranque tiene que lanzar el sync de OTs: ya no hay puente que lo compuertree");
+  assert.deepEqual(operationsSeenByPurge, [{ ot: "OT-CERRADA" }]);
+  assert.deepEqual(workspaceOptions, [{ scrollToTop: false }]);
+  assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
+  assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
+  assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
+  assert.match(pagesIndex, /function isPlanCompletedOperation\(op, statusesOverride\)[\s\S]*const stored = \(statusesOverride \|\| draftViewStatuses\(\)\)\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
+  assert.match(pagesIndex, /function reportSourceAllowsOperationTracking\(\)/);
+  assert.match(pagesIndex, /statusActions: reportSourceAllowsOperationTracking\(\)/);
+  assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
+  assert.match(pagesIndex, /const mustConfirmPlanning =[^;]+\|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
+  assert.match(pagesIndex, /const hasRequiredGaps = requirements\.some\(\(item\) => \["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"\]\s*\.some\(\(code\) => item\.codes\.has\(code\)\)\) \|\| commercial\.needsType \|\| commercial\.needsPlanningType \|\| commercial\.needsManualPrice;/);
+  assert.doesNotMatch(pagesIndex, /machine === currentMachine \? " selected"/);
+  assert.match(pagesIndex, /function confirmZeroManualPrice\(form\)[\s\S]*ot_manual_price[\s\S]*Number\(input\.value \|\| 0\)[\s\S]*no puede ser negativo/);
+  assert.match(pagesIndex, /if \(!confirmZeroManualPrice\(els\.planningDialogForm\)\) return;[\s\S]*closePlanningDialog/);
+  assert.match(pagesIndex, /commercialPlanningRequirement\(job, \{ alwaysPlanningType: options\.forceConfirm === true \}\)/);
+  assert.match(pagesIndex, /needsPlanningType: options\.alwaysPlanningType === true \|\| !planningType/);
+  assert.match(pagesIndex, /function maxOperationPriceSignalForOt\(ot\)/);
+  assert.match(pagesIndex, /needsManualPrice: !isComponentCommercialType\(commercialType\)\s*&& !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
+  assert.match(pagesIndex, /class="article-temporary-price-input"/);
+  assert.match(pagesIndex, /function updateTemporaryArticlePrice\(article, value\)/);
+  assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--prototype td/);
+  assert.match(pagesIndex, /\.weekly-day-table \.weekly-row--expedited td/);
+  assert.match(pagesIndex, /function printPlanHeader\(title\)/);
+  assert.match(pagesIndex, /class="individual-print-header"/);
+  assert.match(pagesIndex, /class="individual-print-logo">MALDONADO/);
+  assert.match(pagesIndex, /class="individual-print-code">MP CD 28-02 V02/);
+  assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N DIARIO INDIVIDUAL/);
+  assert.match(pagesIndex, /PLAN DE PRODUCCI(?:O|Ó)N SEMANAL/);
+  assert.match(pagesIndex, /function prepareIndividualPrint\(target, orientation/);
+  assert.match(pagesIndex, /querySelector\("\.individual-print-date"\)/);
+  assert.match(pagesIndex, /document\.body\.classList\.add\("printing-individual-plan"\)/);
+  assert.match(pagesIndex, /document\.body\.classList\.remove\("printing-individual-plan"\)/);
+  assert.match(pagesIndex, /grid-template-columns:\s*1fr 2fr 1fr/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table th,[\s\S]*text-align:\s*center/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.executive-summary[\s\S]*display:\s*none !important/);
+  assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType && !commercial\.needsManualPrice\) continue/);
+  assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
+  assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
+  // RULE-REP-026: el clic no pasa el evento como id de snapshot (rompia Generar PDF).
+  assert.match(pagesIndex, /pdfBtn\.addEventListener\("click", \(\) => generatePlanPdf\(\)\)/);
+  assert.match(pagesIndex, /async function choosePdfSource\(\)/);
+  assert.match(pagesIndex, /@page \{ size: 210mm 297mm/);
+  assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 210mm; min-height: 0/);
+  assert.match(pagesIndex, /html\.printing-landscape body/);
+  assert.match(pagesIndex, /@page \{ size: 297mm 210mm; margin: 12mm; \}/);
+  assert.match(pagesIndex, /@page \{ size: 210mm 297mm; margin: 12mm; \}/);
+  assert.match(pagesIndex, /@media print[\s\S]*\.plan-alerts,[\s\S]*\.draft-executive,[\s\S]*\.toast,[\s\S]*\.planner-grid/);
+  assert.match(pagesIndex, /\.weekly-job-panel\.loads \{ display: none; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-reports \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); gap: 5mm; align-items: stretch; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel\.loads \{ display: block; grid-column: 1 \/ -1; \}/);
+  assert.match(pagesIndex, /body\[data-print-context="plan"\] \.weekly-job-panel:not\(\.loads\) \{ display: flex; flex-direction: column; \}/);
+  assert.match(pagesIndex, /function formatReportTime\(date\)/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-status-action-column[\s\S]*display:\s*none/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.report-page-table[\s\S]*width:\s*100%/);
+  assert.match(pagesIndex, /body\.printing-individual-plan \.tab-panel\.print-target[\s\S]*zoom:\s*0\.9/);
+  assert.match(pagesIndex, /id="releaseTab"/);
+  assert.match(pagesIndex, /id="exportReleaseXlsxBtn"/);
+  assert.match(pagesIndex, /els\.exportReleaseXlsxBtn\?\.addEventListener/);
+  assert.match(pagesIndex, /headers = \["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"\]/);
+  assert.match(pagesIndex, /if \(statusActions\) headers\.push\("Completar"\)/);
+  assert.match(pagesIndex, /planStatusActionCell\(row\.releaseOp\)/);
+  assert.match(pagesIndex, /workOrder\?\.builtQuantity/);
+  assert.match(pagesIndex, /els\.releaseReport, els\.selectedJobPanel/);
+  assert.equal((pagesIndex.match(/@page \{/g) || []).length, 4);
+  assert.match(pagesIndex, /id="operatorReportFutureDays"/);
+  assert.match(pagesIndex, /id="adjusterReportFutureDays"/);
+  assert.match(pagesIndex, /id="subcontractReportFutureDays"/);
+  assert.match(pagesIndex, /id="subcontractReportStatus"/);
+  assert.match(pagesIndex, /reportCoverageDiagnostics\(reportOperationsSource\(\)\)/);
+  assert.match(pagesIndex, /weekPrintContext\.textContent = formatReportDateTime\(new Date\(\)\)/);
+  assert.match(pagesIndex, /await new Promise\(\(resolve\) => window\.setTimeout\(resolve, 50\)\);\s*window\.print\(\)/);
+  assert.match(pagesIndex, /delete document\.body\.dataset\.printContext/);
+  assert.doesNotMatch(pagesIndex, /ReportShowAll/);
+  assert.match(pagesIndex, /function setGanttView\(view\)/);
+  assert.match(pagesIndex, /id="hoja-inspeccion"/);
+  assert.match(pagesIndex, /id="inspectionPrintCheck"/);
+  assert.match(pagesIndex, /id="inspectionSecondCapture"/);
+  assert.match(pagesIndex, /id="inspectionReleaseFooter"/);
+  assert.match(pagesIndex, /MP FO 08 V23/);
+  assert.match(pagesIndex, /Fechas de entrega:/);
+  assert.match(pagesIndex, /job\.dueDate/);
+  assert.match(pagesIndex, /Tubo\/pzas/);
+  assert.match(pagesIndex, /materialRow\(materials\[index\], materials\[index \+ 1\]/);
+  assert.match(pagesIndex, /second\?\.route[\s\S]*second\?\.required/);
+  assert.match(pagesIndex, />Hoja de inspección</);
+  assert.match(pagesIndex, /Seleccionar operaciones/);
+  assert.match(pagesIndex, /InspectionCore\.printableOperations/);
+  assert.match(pagesIndex, /\.inspection-grid[^}]*grid-template-columns:\s*repeat\(24,\s*1fr\)/);
+  assert.match(pagesIndex, /inspection-time-head/);
+  assert.match(pagesIndex, /SETUP[\s\S]*INACTIVIDAD[\s\S]*PRODUCCI[^<]*/);
+  assert.match(pagesIndex, /--inspection-print-scale/);
+  // MEDIDO 2026-10-22: el print de la hoja de inspeccion dejo de usar transform:scale() y
+  // compacta las celdas en el CSS de impresion (min-height en mm) para que el alto de LAYOUT
+  // real quepa en una pagina A4 horizontal. El motor pagina por el alto de layout, sin
+  // transform, asi que escalar encogia lo visual pero el contenido se repartia en 2 paginas.
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-cell\{min-height:2\.6mm/);
+  // MEDIDO 2026-10-23: para una OT con MUCHAS operaciones (mas de las que caben incluso
+  // compactas) la hoja se encoge con `zoom`, que SI reduce el alto de layout que usa el
+  // paginador (`transform:scale` no lo hacia). La clase de impresion aplica las medidas en
+  // pantalla para poder medir antes de `print()`, con hasta 3 pasadas y tope inferior 0.5.
+  // Verificado contra el sitio construido: 40 ops -> 1 pagina sin zoom; 60 -> 1 pagina con
+  // zoom 0.99; 100 -> 1 pagina con zoom 0.65.
+  assert.match(pagesIndex, /zoom:var\(--inspection-print-zoom,1\)/);
+  assert.match(pagesIndex, /const pageWidthPx = \(297 - 9 - 8\) \* mmToPx/);
+  assert.match(pagesIndex, /const next = Math\.max\(0\.5, zoom \* ratio\)/);
+  assert.match(pagesIndex, /setProperty\("--inspection-print-zoom", String\(zoom\)\)/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-print-zoom"\)/);
+  // MEDIDO 2026-10-24: el PDF salia horizontal pero con la hoja RECORTADA a 210 mm de sus
+  // 280 mm: faltaba el lado derecho (Material, Descripcion, Tramo tubo, Tubo/pzas y las
+  // ultimas columnas de la tabla). La causa no era el tamano de la hoja sino la regla global
+  // de impresion de styles.css (`html, body { width: 210mm }`), que fija el ancho de
+  // maquetacion en vertical y recorta lo que sobra. La hoja marca `printing-landscape` (la
+  // misma marca que ya usa la impresion horizontal del plan) para devolver `width:auto` a
+  // html/body, se limita a `max-width:100%` para no desbordar, y oculta el modal de sesion y
+  // el boton fijo `Salir`, que salian impresos.
+  assert.match(pagesIndex, /document\.documentElement\.classList\.add\("printing-landscape"\)/);
+  assert.match(pagesIndex, /document\.documentElement\.classList\.remove\("printing-landscape"\)/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-sheet\{display:block;width:280mm;min-height:202mm/);
+  assert.match(pagesIndex, /body\.printing-inspection #pp-login,body\.printing-inspection #pp-salir/);
+  // REPARTO VERTICAL (pedido del usuario 2026-10-24): con pocas operaciones la hoja quedaba
+  // comprimida arriba y medio folio en blanco abajo. El hueco se reparte entre los renglones
+  // de operacion (se escriben a mano) y las filas de firma, en pasadas que vuelven a medir.
+  // Se cuentan RENGLONES por `.inspection-op` (la primera celda de cada uno), no por
+  // `.inspection-op-line`, que lo llevan las 18 celdas y repartia el hueco entre 400+ celdas.
+  assert.match(pagesIndex, /min-height:var\(--inspection-op-row,1\.7mm\)/);
+  assert.match(pagesIndex, /min-height:var\(--inspection-footer-row,3mm\)/);
+  assert.match(pagesIndex, /const renglones = sheet\.querySelectorAll\("\.inspection-op"\)\.length/);
+  assert.match(pagesIndex, /setProperty\("--inspection-op-row"/);
+  assert.match(pagesIndex, /setProperty\("--inspection-footer-row"/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-op-row"\)/);
+  assert.match(pagesIndex, /removeProperty\("--inspection-footer-row"\)/);
+  // El zoom solo corrige cuando el CONTENIDO no cabe: si el reparto ya lleno la hoja, el
+  // `scrollHeight` (que incluye el min-height de 202mm y el padding) no debe encogerla.
+  assert.match(pagesIndex, /pass < 3 && sobra < -1/);
+  // Pedido del usuario 2026-10-24: el numero de trabajo, el articulo y los codigos de
+  // material se leen a mano en el piso, asi que van mas grandes que el resto del encabezado.
+  assert.match(pagesIndex, /inspection-big inspection-job-number/);
+  assert.match(pagesIndex, /inspection-big inspection-article/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-job-number\{font-size:15px\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-article\{font-size:13px\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-mat\{min-height:2\.6mm;padding:\.2mm \.6mm;font-size:9px\}/);
+  assert.match(pagesIndex, /addEventListener\("afterprint"/);
+  // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
+  // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
+  // Apps Script. El puente esta deshabilitado (RULE-SUP-030) y las tres llamadas no
+  // tenían a quien responder: la pestana de inspeccion abria sin lista de OTs. Ahora
+  // salen por `llamar`, que es el reemplazo del puente, y el `call` ni existe en el
+  // archivo. El `doesNotMatch` de `PPAppsScriptBridge` es lo que protege esto: si alguien
+  // reintroduce el puente, no vuelve a entrar en silencio.
+  //
+  // LAS ASERCIONES DE `call(` VAN SOBRE EL TROZO DE `inspection-app.js`, NO SOBRE LA
+  // PAGINA ENTERA. El texto `call("getInspectionWorkOrders")` aparece legitimamente en un
+  // comentario de `supabase-bridge-replacement.js` (el que explica por que existia esa
+  // funcion), y `pagesIndex` lo contiene entero. Buscar en la pagina entera hacia fallar
+  // un test por un comentario, que es la forma mas rapida de que alguien borre la
+  // proteccion.
+  const inspectionAppSource = pagesIndex.slice(
+    pagesIndex.indexOf("(function inspectionAppFactory"),
+    pagesIndex.indexOf("root.InspectionApp = {"),
+  );
+  assert.ok(inspectionAppSource.length > 0, "no se encontro el modulo de la app de inspeccion en la pagina generada");
+  assert.match(inspectionAppSource, /llamar\("getInspectionWorkOrderBundle", task\.wo/);
+  assert.match(inspectionAppSource, /llamar\("getInspectionWorkOrders"\)/);
+  assert.match(inspectionAppSource, /llamar\("recordInspectionPrint", \{/);
+  assert.match(inspectionAppSource, /llamar\("getInspectionHistory", folio\)/);
+  for (const metodoViego of ["getInspectionWorkOrder", "getInspectionDrawingRoutes", "getInspectionHistory", "getInspectionWorkOrderBundle", "getInspectionWorkOrders", "recordInspectionPrint"]) {
+    assert.doesNotMatch(inspectionAppSource, new RegExp(`\\bcall\\("${metodoViego}"`), `la app de inspeccion vuelve a pedir ${metodoViego} por el puente de Apps Script`);
+  }
+  assert.doesNotMatch(inspectionAppSource, /PPAppsScriptBridge/);
+  // MEDIDO 2026-10-01: el historial distingue "no pude leer" de "no hay ninguna
+  // impresion". Con la tabla sin aplicar, sin esto la tarjeta decia "Total: 0" como si
+  // nadie hubiera impreso nunca.
+  assert.match(inspectionAppSource, /No se pudo leer el historial de impresiones/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogSearch"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogTable"/);
+  assert.match(pagesIndex, /id="inspectionRouteCatalogError"[^>]*role="alert"[^>]*hidden/);
+  assert.match(pagesIndex, /id="retryInspectionRouteCatalogBtn"[^>]*>Reintentar</);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.getInspectionDrawingRoutes\(""\)/);
+  assert.match(pagesIndex, /function editInspectionRouteCatalogRow\(index/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionRouteSavePayload\(row,/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.saveInspectionLink\(payload\)/);
+  const inspectionRouteEditorSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function editInspectionRouteCatalogRow("),
+    pagesIndex.indexOf("function renderWeeklyReleaseTarget("),
+  );
+  assert.match(inspectionRouteEditorSource, /submit:\s*async \(values\) =>/);
+  assert.match(inspectionRouteEditorSource, /id="inspectionRouteDialogError" class="planning-error" role="alert" hidden/);
+  assert.match(inspectionRouteEditorSource, /InspectionCore\.applyInspectionRouteSave\(/);
+  assert.match(inspectionRouteEditorSource, /errorElement\.hidden = false;[\s\S]*return false;/);
+  assert.doesNotMatch(inspectionRouteEditorSource, /while \(true\)/);
+  // MEDIDO 2026-10-01 (RULE-INS-001). La fila con material VACIO de inspection_routes
+  // es el DIBUJO A NIVEL DE ORDEN DE TRABAJO, no un tramo a medio llenar. Tres cosas
+  // tienen que ser ciertas en el build, y las tres se-afirman sobre el TEXTO porque
+  // el dialogo depende de un <dialog> nativo que no se puede abrir en node:
+  //   1. la tabla lo DICE, para que una celda vacia no se lea como dato faltante;
+  //   2. el dialogo no ofrece un campo de Tramo para esa fila, porque el tramo de esa
+  //      fila no se consulta nunca (se busca por la clave `articulo + '|'`);
+  //   3. el submit de esa fila NO escribe. Un tramo vacio ahi seria un ok:true que
+  //      cambia una fila sin que nadie lo pidiera, que es el fallo silencioso mas
+  //      pequeno que hay: el unico rastro es una fila distinta a como estaba.
+  assert.match(pagesIndex, /\(dibujo de la OT\)/);
+  assert.match(inspectionRouteEditorSource, /confirmLabel: row\.material \? "Guardar tramo" : "Cerrar"/);
+  assert.match(inspectionRouteEditorSource, /submit: async \(values\) => \{\s*if \(!row\.material\) return true;/);
+  // Y la rama SIN material tiene que existir, no solo faltar el campo: sin el, el
+  // dialogo se abriria vacio y el boton diria "Cerrar" sobre nada.
+  assert.match(inspectionRouteEditorSource, /body: row\.material\s*\?[\s\S]*:\s*`[\s\S]*Dibujo de la OT|body: row\.material\s*\?[\s\S]*:\s*`[\s\S]*dibujo de la OT, sin material/);
+  assert.match(pagesIndex, /\.planning-muted \{ color: var\(--muted\); font-style: italic; \}/);
+  assert.match(pagesIndex, /planningDialogConfirm\.disabled = true;[\s\S]*await submit\(values\)/);
+  assert.match(pagesIndex, /state\.detail = bundle\.detail;[\s\S]*renderDetail\(\);[\s\S]*renderHistory\(bundle\.history/);
+  assert.match(pagesIndex, /\["Tramos"[\s\S]*\["Dibujo"[\s\S]*\["Material"[\s\S]*\["Pendientes"/);
+  assert.match(pagesIndex, /Total:[\s\S]*ltima impresi[^:]*:[\s\S]*Folio\/fecha:/);
+  assert.match(pagesIndex, /inspection-check-pill/);
+  assert.match(pagesIndex, /El dibujo se guarda por art[^<]*fabricado/);
+  assert.match(pagesIndex, /inspection-action-icon/);
+  assert.match(pagesIndex, /missingRoutes[\s\S]*root\.alert[\s\S]*editMaterialLink/);
+  assert.match(pagesIndex, /diagnostic\.alerts[\s\S]*root\.confirm/);
+  assert.match(pagesIndex, /No se pudo guardar el historial[\s\S]*root\.confirm/);
+  assert.match(pagesIndex, /materials\.length <= 2[\s\S]*materialRow\(\{\}, \{\}/);
+  for (const footerHeading of ["Oper", "Cantidad NC", "Clave", "FTY", "SELLO LIBERACI", "OBSERVACIONES", "ENTREGA", "CANT.", "RECIBE"]) {
+    assert.match(pagesIndex, new RegExp(footerHeading));
+  }
+  assert.match(pagesIndex, /N[^<]*<br>OPER/);
+  assert.match(pagesIndex, /footerCell\(6, "", "inspection-seal-box inspection-br", 3\)/);
+  assert.match(pagesIndex, /for \(let row = 0; row < 3; row \+= 1\)/);
+  assert.match(pagesIndex, /\.inspection-actions \.primary\s*\{[^}]*grid-column:\s*auto/);
+  assert.match(pagesIndex, /\.inspection-actions \.secondary\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
+  assert.match(pagesIndex, /id="inspectionReload"[\s\S]*id="inspectionDrawing"[\s\S]*id="inspectionEditLink"[\s\S]*id="inspectionPrint"[\s\S]*id="inspectionSelectOps"/);
+  assert.match(pagesIndex, /function initializePlanningApp\(\)\s*\{[\s\S]*applyInitialWorkspaceView\(\);[\s\S]*loadAppStateInBackground\(\);/);
+  const optimizedStartupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)"),
+    pagesIndex.indexOf("const originalLoadPlanSnapshots =", pagesIndex.indexOf("async function loadInitialStateConditionally(localCache)")),
+  );
+  assert.match(optimizedStartupSource, /PPSupabaseBridgeReplacement\.getAppStateIfChanged\(revision, \{ includeMaterials: false \}\)/);
+  assert.match(optimizedStartupSource, /loadPlanSnapshots\(false, \{ deferPublishedLoad: true \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /loadPlanSnapshotById|restoreDraftPlanFromSharedState/);
+  // La lectura de caché no se difiere con requestIdleCallback: diferirla corre contra el import
+  // del servidor y pierde el atajo de getAppStateIfChanged. Se resuelve una sola vez, en el
+  // primer uso (justo antes de loadInitialStateConditionally) y se memoriza.
+  assert.match(pagesIndex, /let initialLocalCache = \{ usable: false, revision: 0, deferredMaterials: false \}/,
+    "la caché inicial se inicializa con valores por defecto");
+  assert.match(pagesIndex, /function resolveInitialLocalCache\(\)\s*\{[\s\S]*if \(initialLocalCacheResolved\) return initialLocalCache;[\s\S]*initialLocalCacheResolved = true;[\s\S]*initialLocalCache = readUsableLocalStateCache\(initialPerformanceMeta\);/,
+    "la caché se lee una sola vez y se memoriza");
+  assert.doesNotMatch(pagesIndex, /requestIdleCallback\(read, \{ timeout: 2000 \}\)/,
+    "la lectura de caché no se aplaza al idle");
+  assert.match(optimizedStartupSource, /loadInitialStateConditionally\(resolveInitialLocalCache\(\)\)/);
+  assert.match(optimizedStartupSource, /applyInitialWorkspaceView\(\{ scrollToTop: false \}\)/);
+  assert.doesNotMatch(optimizedStartupSource, /state\.selectedDetailOt = ""|state\.selectedOperationId = ""/);
+  assert.match(pagesIndex, /function showWorkspaceView\(section, tab = "", \{ scrollToTop = false \} = \{\}\)[\s\S]*if \(scrollToTop\) window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/);
+  assert.match(pagesIndex, /showWorkspaceView = function optimizedShowWorkspaceView[\s\S]*section === "reportes"[\s\S]*loadSnapshotsOnce\(false\)/);
+  assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
+  assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce\(showMessage, options = \{\}\)[\s\S]*requestPlanSnapshots\(showMessage, options\)/);
+  assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
+  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = \(options\.deferPublishedLoad !== true \|\| !hasDraftReport\)[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
+  assert.match(pagesIndex, /inspection-print-page-size/);
+  // MEDIDO 2026-10-22: la hoja de inspección ya NO mide el ancho/alto con scrollWidth ni
+  // aplica transform:scale() para caber en la página; el motor pagina por el alto de LAYOUT
+  // (sin transform), así que escalar encogía lo visual pero el contenido se repartía en 2
+  // páginas. El tamaño se compacta en el propio CSS de impresión (celdas, fuentes y huecos
+  // en mm) para que el alto real quepa en una A4 horizontal.
+  assert.match(pagesIndex, /El tamaño se compacta en el CSS de impresion \(celdas, fuentes y huecos en mm\)/);
+  assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 50\)[\s\S]*root\.print\(\)/);
+  assert.match(pagesIndex, /finally\s*\{[^}]*classList\.remove\("printing-inspection"\)[\s\S]*getElementById\("inspection-print-page-size"\)[\s\S]*removeChild/);
+  assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);
+  assert.match(pagesIndex, /InspectionCore\.inspectionRows\(detail\.operations \|\| \[\], state\.selection\)/);
+  assert.match(pagesIndex, /function inspectionOperationLayout\(count\)/);
+  const inspectionPublicFunctions = `${inspectionService}\n${inspectionDrawingService}`;
+  for (const inspectionFunction of ["getInspectionWorkOrders", "getInspectionWorkOrder", "getInspectionWorkOrderBundle", "saveInspectionLink", "getInspectionHistory", "recordInspectionPrint", "getInspectionDrawingRoutes"]) {
+    assert.match(inspectionPublicFunctions, new RegExp(`function ${inspectionFunction}\\(`));
+  }
+  assert.match(inspectionService, /requeridoOriginal/);
+  assert.match(inspectionService, /deficitNeto/);
+  assert.match(inspectionService, /deficit/);
+  // MEDIDO 2026-10-04: la banda de MP se pinta con los materiales YA deduplicados, porque la
+  // base tiene una COPIA por cada renglon del BOM (348 de 348) y la hoja las sacaba una al
+  // lado de la otra. Que se pinten los que salen de `inspectionMaterialsUnicos` es lo que
+  // hace que una MP salga UNA vez; por eso el aserto pide la llamada anidada completa y no
+  // solo el nombre de la funcion.
+  assert.match(pagesIndex, /root\.InspectionCore\.inspectionMaterials\(root\.InspectionCore\.inspectionMaterialsUnicos\(detail\.materials \|\| \[\]\)\)/);
+  assert.match(pagesIndex, /function firstInspectionMaterialIndex\(\)[\s\S]*inspectionMaterials\(materials\)[\s\S]*materials\.indexOf\(first\)/);
+  assert.match(pagesIndex, /inspectionEditLink"\)\.addEventListener\("click", \(\) => editMaterialLink\(firstInspectionMaterialIndex\(\)\)/);
+  assert.doesNotMatch(inspectionService, /credenciales\.txt|netsuiteauth\.txt/i);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.ganttOperationTiming/);
+  assert.match(pagesIndex, /PlanningWorkflowCore\.isMachineGanttOperation\(op\)/);
+  assert.match(pagesIndex, /gantt-bar--tool-change/);
+  const toolChangeStyleIndex = pagesIndex.lastIndexOf(".gantt-bar.gantt-bar--tool-change {");
+  assert.ok(toolChangeStyleIndex > pagesIndex.lastIndexOf(".gantt-bar.job-type-tag--urgent,"), "el fondo de cambio debe prevalecer sobre los tipos de OT");
+  assert.ok(toolChangeStyleIndex > pagesIndex.lastIndexOf(".gantt-bar.risk-dot--ok,"), "el borde de cambio debe prevalecer sobre los niveles de riesgo");
+  const toolChangeStyle = pagesIndex.slice(toolChangeStyleIndex, pagesIndex.indexOf("}", toolChangeStyleIndex));
+  assert.match(toolChangeStyle, /repeating-linear-gradient/);
+  assert.match(toolChangeStyle, /border-left-color:/);
+  assert.match(pagesIndex, /Cambio de herramental/);
+  assert.match(pagesIndex, /Origen:/);
+  assert.match(pagesIndex, /Destino:/);
+  assert.match(pagesIndex, /Maquina:/);
+  assert.match(pagesIndex, /Ajustador:/);
+  assert.match(pagesIndex, /Duracion:/);
+  assert.match(pagesIndex, /Minutos productivos/);
+  assert.match(pagesIndex, /Minutos no operativos/);
+  assert.match(pagesIndex, /Causa de espera/);
+  assert.match(pagesIndex, /window\.PlannerCore\?\.productionMinutes\?\.\(op\)/);
+  const operationDurationSource = pagesIndex.slice(pagesIndex.indexOf("function operationDuration(op)"), pagesIndex.indexOf("const OPERATION_DURATION_CACHE"));
+  assert.match(
+    operationDurationSource,
+    /const explicit[\s\S]*if \(explicit > 0\) return explicit;[\s\S]*if \(start && end\)/,
+    "operationDuration debe preferir la duracion productiva al intervalo calendario salvo subcontratos",
+  );
+  assert.equal((pagesIndex.match(/aria-selected="(?:true|false)" data-view="(?:job|operator|machine|ct)"/g) || []).length, 4);
+  assert.equal((pagesIndex.match(/onclick="setGanttView\('(?:job|operator|machine|ct)'\)"/g) || []).length, 4);
+  assert.match(pagesIndex, /async function syncNetSuiteTwoPhase\(options = \{\}\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.fetchNetSuiteWorkOrdersLite\(\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.syncNetSuitePlanningData\(\)/);
+  assert.match(pagesIndex, /PPSupabaseBridgeReplacement\.savePlanSnapshot\(/);
+  assert.match(pagesIndex, /snapshotId: "draft"/);
+  assert.match(pagesIndex, /if \(snapshotId === "draft"\) \{[\s\S]*const liveDraft = currentDraftReportSnapshot\(\);[\s\S]*if \(liveDraft.operations\.length\) \{[\s\S]*reportSnapshot = liveDraft;[\s\S]*\} else \{[\s\S]*reportSnapshot = await loadPlanSnapshotById\(saved\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*\}[\s\S]*\}/);
+  assert.match(pagesIndex, /class="job-detail-operations-scroll"/);
+  assert.match(pagesIndex, /id="jobToolInput"/);
+  assert.match(pagesIndex, /data-add-job-tool/);
+  assert.match(pagesIndex, /applyToolToJob\(job\.ot, toolInput\.value, currentJobAdditionalTools\(\)\)/);
+  assert.match(pagesIndex, /class="queue-tool-mini"/);
+  assert.match(pagesIndex, /"Maq\/Area", "Herramental", "TC \(min\)"/);
+  assert.match(pagesIndex, /effectiveJobTool\(state, \{ ot: op\.ot, parte: op\.parte \|\| workOrder\?\.item \|\| "", ops: \[op\] \}, \["5459", "5527"\]\)/);
+  assert.match(pagesIndex, /toolCatalogForAppOperation\(op\)\?\.herramental/);
+  const detailBinding = pagesIndex.slice(pagesIndex.indexOf('const toolInput = els.selectedJobPanel.querySelector("#jobToolInput")'), pagesIndex.indexOf("function renderGantt()"));
+  assert.match(detailBinding, /applyToolToJob\(job\.ot, toolInput\.value, currentJobAdditionalTools\(\)\)/, "el editor de herramental debe enlazarse dentro del detalle de OT");
+  assert.match(pagesIndex, /<details class="job-resource-section/);
+  assert.doesNotMatch(pagesIndex, /class="job-photo/);
+  assert.doesNotMatch(pagesIndex, />Inicio NetSuite</);
+  assert.doesNotMatch(pagesIndex, />Fin NetSuite</);
+  assert.match(bridge, /saveDraftSnapshot: true/);
+  assert.match(bridge, /restorePublishedPlanAsDraft: true/);
+  assert.match(bridge, /fetchNetSuiteWorkOrdersLite: true/);
+  assert.match(bridge, /getInspectionWorkOrderBundle: true/);
+  assert.match(bridge, /getPlanSnapshotLight: true/);
+  assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::/);
+  assert.match(storageService, /fullState/);
+  assert.match(storageService, /PLAN_SNAPSHOT_PAYLOAD::[\s\S]*getProperties\(\)/);
+  assert.match(storageService, /snapshotId\.indexOf\('technical-'\) === 0/);
+  assert.match(storageService, /const fullState = opts\.skipFullState \? null : PP_readPlanSnapshotPayload_\(key\);[\s\S]*if \(!rows\.length && !fullState\)/);
+  assert.match(storageService, /function PP_getPlanSnapshotLight_[\s\S]*skipFullState: true/);
+  assert.match(storageService, /offset < serialized\.length; offset \+= 32000[\s\S]*staged\[key\] = JSON\.stringify\(manifest\);[\s\S]*properties\.setMany\(staged, appendOnly\)/);
+  assert.match(storageService, /appendOnly: !\(options && options\.snapshotId\) \|\| Boolean\(options && options\.keepPreviousPayload\)/);
+  assert.match(storageService, /catch \(error\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_/);
+  assert.match(storageService, /keepPreviousPayload[\s\S]*SpreadsheetApp\.flush\(\);[\s\S]*PP_finalizePlanSnapshotPayload_/);
+  assert.match(storageService, /function PP_rollbackPlanSnapshotPayload_[\s\S]*setProperty\(transaction\.key, transaction\.previousValue\)[\s\S]*PP_deletePlanSnapshotPayloadGeneration_\([^;]+transaction\.newManifest/);
+  const payloadStorage = storageService.slice(storageService.indexOf("function PP_planSnapshotPayloadKey_"), storageService.indexOf("function PP_appendPlanSnapshot_"));
+  assert.match(payloadStorage, /function PP_getPayloadSheet_[\s\S]*getSheetByName\('SNAPSHOT_PAYLOADS'\)/);
+  assert.doesNotMatch(payloadStorage, /PropertiesService/);
+  const storageSheets = storageService.slice(storageService.indexOf("const PP_SHEETS"), storageService.indexOf("const PP_OPERATION_FIELDS"));
+  assert.match(storageSheets, /SNAPSHOT_PAYLOADS: \['KEY', 'VALUE'\]/);
+  const replaceDraftSource = storageService.slice(storageService.indexOf("function PP_replaceDraftSnapshot_"), storageService.indexOf("function PP_listPlanSnapshots_"));
+  assert.match(replaceDraftSource, /PP_rollbackPlanSnapshotPayload_\(payloadTransaction\.value\)/);
+  assert.doesNotMatch(replaceDraftSource, /PP_storePlanSnapshotPayload_\('draft', previousPayload\)/);
+  assert.match(replaceDraftSource, /requireRows: true/);
+  assert.match(storageService, /if \(options && options\.requireRows && !rows\.length\) throw new Error\('La instantanea no contiene operaciones programadas para guardar'\)/);
+  assert.match(codeService, /function restorePublishedPlanAsDraft\(snapshotId, currentPayload\)/);
+  const publishingService = await readFile(path.join(result.distDir, "05-publishing-service.js"), "utf8");
+  assert.match(publishingService, /PP_acquireScriptLock_\('restaurar publicado'/);
+  assert.match(publishingService, /payloadRevision[\s\S]*currentRevision[\s\S]*stalePayload[\s\S]*const reconciliationState = stalePayload \? currentState : currentPayload/);
+  assert.match(publishingService, /PP_reconcilePublishedPlan_\(snapshot, reconciliationState\)/);
+  assert.doesNotMatch(publishingService, /PP_reconcilePublishedPlan_\(snapshot, currentPayload\)/);
+  assert.match(publishingService, /catch \(error\)[\s\S]*PP_writeState_\([\s\S]*PP_replaceDraftSnapshot_\([\s\S]*throw error/);
+  assert.match(publishingService, /snapshotId: 'draft'[\s\S]*backupId: backupId[\s\S]*summary:/);
+  assert.match(performanceService.replace(/\s+/g, " "), /selectedOts/);
+  assert.ok((pagesIndex.match(/data-report-source-select/g) || []).length >= 3);
+  assert.match(pagesIndex, /syncDraftReportWeek\(\);[\s\S]*const liveDraft = currentDraftReportSnapshot\(\);/);
+  assert.match(pagesIndex, /loadSnapshot = null;[\s\S]*syncDraftLoadWeek\(\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);[\s\S]*renderSaturation\(\);/);
+  assert.match(pagesIndex, /loadSnapshot = reportSnapshot;[\s\S]*syncLoadWeekFromPlanSource\(reportSnapshot\);[\s\S]*renderReports\(\);[\s\S]*renderLoads\(\);/);
+  assert.match(pagesIndex, /async function loadSelectedLoadPlan\(snapshotId\) \{\s*await loadSelectedPlanSnapshot\(snapshotId\);\s*\}/);
+  assert.match(pagesIndex, /function renderLoadSourceSelect\(\) \{[\s\S]*syncPlanSourceSelect\(els\.loadPlanSelect\);[\s\S]*els\.loadModeSelect\.value = loadMode;/);
+  const scheduleImpl = pagesIndex.slice(pagesIndex.indexOf("async function scheduleCurrentPlanImpl"), pagesIndex.indexOf("async function dryRunCurrentPlanPerformance"));
+  assert.match(scheduleImpl, /Revisando plan\.\.\.[\s\S]*Actualizando OTs\.\.\.[\s\S]*Validando OTs\.\.\.[\s\S]*Completando configuracion\.\.\.[\s\S]*Preparando OTs\.\.\.[\s\S]*Programando OTs\.\.\.[\s\S]*Guardando borrador\.\.\./);
+  // 2026-10-07 (RULE-SUP-062): despues de "Guardando borrador..." YA NO hay "Guardando plan...".
+  // El segundo guardado (appSheetMarkDirtyScope("plan") + saveAppSheet(false)) se elimino:
+  // persistPlanSnapshot sube tablas + app_state + revision en una sola escritura. Los fallos
+  // transitorios de ese segundo guardado (429, 5xx, red) sacaban el toast falso "No se pudo
+  // guardar el plan..." con el plan YA guardado al recargar.
+  // 2026-10-10 (RECORTE DEL CUERPO): el estado sigue subiendo en UNA escritura (el RPC del plan),
+  // y aparte el borrador se archiva con su propio POST. No es el segundo guardado que RULE-SUP-062
+  // quito: ese reescribia el estado entero y subia la revision dos veces; este solo archiva el
+  // borrador (anexo, sin tocar la revision).
+  assert.doesNotMatch(scheduleImpl, /Guardando plan\.\.\./, "no volvio el segundo guardado de Generar plan: el estado sigue siendo una sola escritura");
+  assert.match(scheduleImpl, /Programando \$\{scheduled\} de \$\{total\}/);
+  // 1.2 / 3.1 (RULE-PERF-013): despues de guardar NO se relee la lista completa. Antes era
+  // `await loadPlanSnapshots(false, { deferPublishedLoad: true })`, que son 31 s medidos de
+  // PP_listPlanSnapshots_ en cada guardado. Ahora el servidor ya devuelve el registro que guardo y
+  // se incorpora a la lista local. Este test fija AMBAS mitades: que se hace el upsert, y que la
+  // lectura completa NO volvio a estos dos caminos (si alguien la devuelve, el guardado se vuelve a
+  // congelar sin que nadie se entere de por que).
+  assert.match(pagesIndex, /async function persistPlanSnapshot\(\)[\s\S]*upsertPlanSnapshotRecord\(saved, "BORRADOR"\);[\s\S]*return saved/);
+  assert.match(pagesIndex, /async function persistPlanAutoBackup\(payload = null\)[\s\S]*upsertPlanSnapshotRecord\(saved, "RESPALDO"\);[\s\S]*kind: "RESPALDO"/);
+  // El "no vuelve" se mira DENTRO de las dos funciones de guardado, no en todo el archivo: la
+  // llamada igual existe, y tiene que existir, en el camino de ARRANQUE (app.js:626, el rescate
+  // rapido del borrador, fijada por la camara de optimizedStartupSource de la linea 674). Ahi la
+  // lectura ya no cuesta 31 s gracias al conteo incremental, pero sigue siendo una lectura real
+  // contra el servidor y por eso no se toca.
+  const persistSnapshotSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function persistPlanSnapshot("),
+    pagesIndex.indexOf("async function persistPlanAutoBackup("),
+  );
+  const persistBackupSource = pagesIndex.slice(
+    pagesIndex.indexOf("async function persistPlanAutoBackup("),
+    pagesIndex.indexOf("async function publishCurrentPlan("),
+  );
+  // 2026-10-10 (RECORTE DEL CUERPO): el estado va por guardarPlanEnSupabase SIN la instantanea
+  // adentro y el borrador por su propio POST. MEDIDO: el cuerpo del RPC con la instantanea
+  // embebida ronda los 4,4 MB al Generar plan, y la subida del enlace del usuario (~21-26 KB/s)
+  // no lo terminaba: el POST no llegaba a la base y el guardado fallaba con "signal is aborted
+  // without reason". Si alguien vuelve a meter `snapshots` en la llamada del estado, el cuerpo
+  // vuelve a crecer y el guardado se vuelve a caer.
+  assert.doesNotMatch(persistSnapshotSource, /guardarPlanEnSupabase\(\s*\{[^}]*snapshots/,
+    "la instantanea no puede volver a viajar dentro del RPC del estado");
+  assert.match(persistSnapshotSource, /PPSupabaseBridgeReplacement\.saveDraftSnapshot\(saved\)/,
+    "el borrador tiene que archivarse por su propio camino");
+  assert.doesNotMatch(persistSnapshotSource, /loadPlanSnapshots\(/,
+    "guardar el borrador no puede volver a pedir la lista completa");
+  assert.doesNotMatch(persistBackupSource, /loadPlanSnapshots\(/,
+    "guardar el respaldo tampoco");
+  // El upsert reordena, guarda la cache local y redibuja el selector: son los mismos efectos que
+  // dejaba loadPlanSnapshotsImpl. Si se olvidara alguno, la lista y el selector se desincronizan.
+  assert.match(pagesIndex, /function upsertPlanSnapshotRecord\(saved, kind\)[\s\S]*savePlanSnapshotsCache\(planSnapshots\);[\s\S]*renderPlanSnapshotSelect\(\);[\s\S]*renderReports\(\);/);
+  // 3.1: el respaldo automatico se ARMA antes del dialogo de semana y se GUARDA despues. Antes se
+  // guardaba antes de preguntar, y esa ida y vuelta a Apps Script congelaba el boton sin dialogo
+  // visible. El contenido del payload no cambia: se arma en el mismo punto de la carrera.
+  assert.match(scheduleImpl, /const backupPayload = buildPlanAutoBackupPayload\(\);[\s\S]*const chosenWeek = await askGeneratingPlanWeek\(\);\s*if \(!chosenWeek\) return;\s*const backup = await persistPlanAutoBackup\(backupPayload\);/);
+  assert.match(pagesIndex, /function buildPlanAutoBackupPayload\(\) \{[\s\S]*createAppSheetPayload\(\)/);
+  assert.match(scheduleImpl, /const snapshot = await persistPlanSnapshot\(\);[\s\S]*if \(!snapshot\?\.snapshotId\) throw new Error\("el plan se calculo, pero no se pudo guardar el borrador"\);[\s\S]*state\.draftVersionId = snapshot\.snapshotId;/);
+  // 2026-10-07 (RULE-SUP-062): el segundo guardado de Generar plan se elimino. persistPlanSnapshot
+  // sube tablas + app_state + revision en UNA escritura (el RPC del plan; desde 2026-10-10 el
+  // borrador se archiva aparte, sin tocar la revision); el guardado extra de abajo
+  // (appSheetMarkDirtyScope("plan") + saveAppSheet(false)) duplicaba esa escritura y sus fallos
+  // transitorios (429, 5xx, red) sacaban el toast falso "No se pudo guardar el plan..." con el plan
+  // YA guardado al recargar, y subian la revision dos veces por generacion.
+  assert.doesNotMatch(scheduleImpl, /appSheetMarkDirtyScope\("plan"\);\s*await saveAppSheet\(false\)/, "no volvio el segundo guardado tras el snapshot: el estado sigue siendo una sola escritura de Generar plan");
+  assert.match(scheduleImpl, /saveAndRender\(`\$\{summary\.scheduled \|\| 0\} programadas;[\s\S]*`, "ui"\)/);
+  assert.match(pagesIndex, /function isTransientSaveLockError\(error\)[\s\S]*Otro proceso esta actualizando el plan/);
+  assert.match(pagesIndex, /weeklyPlanIdentifier\(week, version\)/);
+  assert.match(pagesIndex, /const label = window\.PlanningWorkflowCore\.weeklyPlanIdentifier\(week, version\);/);
+  assert.match(pagesIndex, /reportSourceLabel\(\) \{[\s\S]*weeklyPlanIdentifier\(week, reportSnapshot\.version\)/);
+  assert.match(pagesIndex, /function isPublishedSnapshotOption\(snapshot, publishedIds = publishedSnapshotIds\(\)\)/);
+  assert.match(pagesIndex, /window\.PlanningWorkflowCore\.isPublishedPlanSnapshot\(snapshot\)/);
+  assert.match(pagesIndex, /function publishedPlanSnapshots\(\)[\s\S]*isPublishedSnapshotOption\(snapshot, publishedIds\)[\s\S]*publishedAt \|\| right\.generatedAt/);
+  assert.match(pagesIndex, /status: isPublishedSnapshotOption\(snapshot, publishedIds\) \? "PUBLICADO"/);
+  const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
+  assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
+  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;/);
+assert.match(snapshotsLoad, /renderReports\(\);/);
+  assert.match(pagesIndex, /let planSourceLoadVersion = 0;/);
+  assert.match(pagesIndex, /async function loadSelectedPlanSnapshot\(selectedSnapshotId\)[\s\S]*planSourceLoadVersion \+= 1/);
+  assert.match(pagesIndex, /async function loadPlanSnapshotById\(snapshotId, options = \{\}\)[\s\S]*const requestVersion = \+\+planSourceLoadVersion;[\s\S]*requestVersion !== planSourceLoadVersion/);
+  assert.match(pagesIndex, /const bootSourceVersion = planSourceLoadVersion;[\s\S]*planSourceLoadVersion !== bootSourceVersion\) break/);
+  assert.match(pagesIndex, /return reportSnapshot;[\s\S]*catch \(error\)[\s\S]*return null;/);
+  assert.doesNotMatch(pagesIndex, /if \(Array\.isArray\(payload\?\.selectedOts\)\) state\.selectedOts = payload\.selectedOts;/);
+  assert.match(pagesIndex, /Sincronizando OTs/);
+  assert.match(pagesIndex, /Sincronizando operaciones/);
+  assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);
+  assert.match(storageService, /BORRADOR_PLAN/);
+});
+
+test("un import o cache stale no pisa un borrador mas reciente; el restore de boot respeta frescura", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const bootRestoreStart = app.indexOf("async function maybeRestoreSavedDraftOnBoot()");
+  const bootRestoreEnd = app.indexOf("function scheduleDraftBootRestoreRetry()", bootRestoreStart);
+  const bootRestore = app.slice(bootRestoreStart, bootRestoreEnd);
+  assert.match(bootRestore, /const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;/);
+  // 2026-10-04 (RULE-PLAN-015): la puerta ya no es "en pantalla no hay nada programado" (el espejo
+  // hoy SI trae horas, MEDIDO 2026-10-04: 1168/2232 filas con hora_inicio no nula; el lector
+  // documentaba 0/1000 el 2026-09-29). La puerta de hoy: si el plan de pantalla es MAS NUEVO que
+  // el borrador Y ya tiene plan, no se toca. En cualquier otro caso entra cuando el plan en pantalla
+  // difiere del borrador (la comparacion de arriba, hecha solo sobre lo que este rescate restaura).
+  assert.match(bootRestore, /if \(pantallaEsMasNueva && hayPlanEnPantalla\) return;/);
+  assert.match(bootRestore, /if \(state\.lastSchedule && savedIsNewer\)[\s\S]*savedGeneratedAtMs > embeddedAtMs/);
+
+  const importStart = app.indexOf("async function applyImported(imported, options = {})");
+  const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  // 2026-10-05 (RULE-PLAN-015): el reloj de la IMPORTACION ya NO tiene que ser > 0. MEDIDO en
+  // produccion: en el arranque el payload se pide con `app_state.last_schedule` NULL, o sea reloj 0,
+  // y la clausula de antes hacia que la comparacion saliera FALSA por falta de dato y no por
+  // antiguedad: la importacion de fondo se llevaba `operations`, `planStart`, `selectedOts` y
+  // `lockedOts` del espejo y el plan recien restaurado se perdia (medido: el rescate escribia
+  // app_state revision 2 y 3 y la pantalla seguia con las 8 operaciones truncadas de la 2624).
+  // Un reloj en cero no es "mas viejo": es "el servidor no trae plan" (RULE-PLAN-012).
+  assert.match(importFlow, /const importedIsStaleSchedule = currentScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;/);
+  assert.doesNotMatch(importFlow, /importedScheduleAtMs > 0 &&/);
+  assert.match(importFlow, /Array\.isArray\(imported\.operations\) && !importedIsStaleSchedule/);
+  assert.match(importFlow, /imported\.lastSchedule && !importedIsStaleSchedule/);
+  assert.match(importFlow, /Array\.isArray\(imported\.selectedOts\) && !importedIsStaleSchedule/);
+  assert.match(importFlow, /imported\.planStart && !importedIsStaleSchedule/);
+
+  const perfClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  // El cache local conserva selectedOts/lockedOts: son la autoridad del borrador y
+  // son lo unico que sobrevive si el guardado remoto no llega antes de recargar.
+  assert.match(perfClient, /const \{ matrixSearch, operations, lastSchedule, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
+  assert.match(perfClient, /plan-produccion-cache-v5/);
+});
+
+test("el detalle de OT muestra carga de operaciones mientras espera una ruta valida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSelectedJobPanel()");
+  const renderEnd = app.indexOf("function renderGantt()", renderStart);
+  const renderSelected = app.slice(renderStart, renderEnd);
+  assert.match(renderSelected, /Cargando operaciones\.\.\./);
+  assert.match(renderSelected, /selectedJobDetailOperationLoads\.has\(materialOtKey\(job\.ot\)\)/);
+});
+
+test("el detalle de OT incluye el boton Actualizar OT bloqueado cuando la OT esta fija", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSelectedJobPanel()");
+  const renderEnd = app.indexOf("function renderGantt()", renderStart);
+  const renderSelected = app.slice(renderStart, renderEnd);
+  assert.match(renderSelected, /data-detail-ot-refresh/);
+  assert.match(renderSelected, /OT bloqueada: no se actualizan tiempos porque esta fija/);
+  assert.match(renderSelected, /updateSelectedOtFromNetSuite\(job\.ot\)/);
+  assert.match(app, /async function updateSelectedOtFromNetSuite\(ot\)/);
+});
+
+test("la sincronizacion ligera clasifica cambios, refresca tiempos y resume sin helpers prohibidos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("async function syncBacklogWorkOrders(options = {})");
+  const end = app.indexOf("async function syncNetSuiteTwoPhase(options = {})");
+  const source = app.slice(start, end);
+  assert.match(source, /classifySmartSyncChange\(state, payload\.workOrders\)/);
+  assert.match(source, /refreshSmartSyncOtTimes\(smartSync\.updateCandidates\)/);
+  assert.match(source, /finalizeSmartSyncSummary\(smartSync, refreshResults\)/);
+  assert.match(source, /smartSyncSummaryMessage\(smartSyncCounts\)/);
+  assert.doesNotMatch(source, /saveAppState|createAppSheetPayload\(nextState\)|compareWorkOrderLite|applyConfirmedWorkOrderChanges|syncNetSuitePlanningData|syncNetSuitePlant|syncNetSuiteWorkOrders|fetchNetSuiteWorkOrdersLiteCompat/);
+});
+
+test("las filas de inspeccion no imprimen descripcion ni centro en No. Maquina", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const start = inspectionApp.indexOf("function operationRow(operation)");
+  const end = inspectionApp.indexOf("function printDiagnostic", start);
+  const operationRow = inspectionApp.slice(start, end);
+  assert.match(operationRow, /operation\?\.code/);
+  assert.doesNotMatch(operationRow, /operation\?\.workCenter/);
+  assert.doesNotMatch(operationRow, /operation\?\.operation/);
+});
+
+test("el editor de tramo usa un panel compacto sin prompts", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const start = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const end = inspectionApp.indexOf("async function saveEditModal", start);
+  const editor = inspectionApp.slice(start, end);
+
+  assert.match(editor, /class="inspection-link-context"/);
+  assert.match(editor, /class="inspection-link-body"/);
+  assert.match(editor, /class="inspection-link-material-head"/);
+  assert.match(editor, /class="inspection-link-material-row/);
+  assert.match(editor, /inspection-link-material-status/);
+  assert.match(editor, /El tramo se guarda por articulo \+ material\./);
+  assert.match(inspectionApp, /dialog\.setAttribute\("aria-labelledby", "inspectionLinkDialogTitle"\)/);
+  assert.match(editor, /<h2 id="inspectionLinkDialogTitle">Editar tramo\/dibujo<\/h2>/);
+  assert.doesNotMatch(editor, /(?:root\.|window\.)?prompt\s*\(/);
+  assert.match(inspectionCss, /\.inspection-link-form\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/);
+  assert.match(inspectionCss, /\.inspection-link-body\{[^}]*overflow:auto/);
+  assert.match(inspectionCss, /\.inspection-link-material-row\{[^}]*grid-template-columns:/);
+  assert.match(inspectionCss, /\.inspection-link-dialog[^}]*:focus-visible/);
+  assert.match(inspectionCss, /@media \(max-width:\d+px\)/);
+});
+
+test("el editor apila materiales en el borde responsive", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const responsiveRule = inspectionCss.match(/@media \(max-width:(\d+)px\)\{\.inspection-link-dialog/);
+
+  assert.ok(responsiveRule, "debe existir el breakpoint del editor");
+  assert.ok(Number(responsiveRule[1]) >= 801, "el breakpoint debe cubrir de 760 a 801 px");
+  assert.match(responsiveRule[0], /inspection-link-dialog/);
+});
+
+test("el foco del editor contrasta sobre sus fondos", async () => {
+  const inspectionCss = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection.css"), "utf8");
+  const focusRule = inspectionCss.match(/\.inspection-link-dialog input:focus-visible,[^{]+\{[^}]*outline:3px solid (#[\da-f]{6})/i);
+  const closeRule = inspectionCss.match(/\.inspection-link-close\{[^}]*background:(#[\da-f]{6})/i);
+  const relativeLuminance = (hex) => {
+    const channels = hex.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16) / 255);
+    const [red, green, blue] = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const contrast = (first, second) => {
+    const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+    const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  assert.ok(focusRule, "debe declarar un outline de foco explícito");
+  assert.ok(closeRule, "debe declarar el fondo del botón cerrar");
+  assert.ok(contrast(focusRule[1], "#ffffff") >= 3, "el foco debe contrastar al menos 3:1 sobre blanco");
+  assert.ok(contrast(focusRule[1], closeRule[1]) >= 3, "el foco debe contrastar al menos 3:1 sobre el botón cerrar");
+});
+
+test("el estado de tramo se sincroniza mientras se edita", async () => {
+  const inspectionApp = await readFile(path.join(process.cwd(), "src", "web", "inspection", "inspection-app.js"), "utf8");
+  const helperStart = inspectionApp.indexOf("function updateInspectionRouteStatus(input)");
+  const helperEnd = inspectionApp.indexOf("function openEditModal", helperStart);
+  const helper = inspectionApp.slice(helperStart, helperEnd);
+  const editorStart = inspectionApp.indexOf("function openEditModal(focusIndex)");
+  const editorEnd = inspectionApp.indexOf("async function saveEditModal", editorStart);
+  const editor = inspectionApp.slice(editorStart, editorEnd);
+
+  assert.ok(helperStart >= 0, "debe existir el sincronizador del estado");
+  assert.match(helper, /status\.textContent = hasRoute \? "Tramo capturado" : "Falta tramo"/);
+  assert.match(helper, /status\.classList\.toggle\("is-ready", hasRoute\)/);
+  assert.match(helper, /status\.classList\.toggle\("is-pending", !hasRoute\)/);
+  assert.match(editor, /addEventListener\("input", \(\) => updateInspectionRouteStatus\(input\)\)/);
+});
+
+test("la matriz ofrece busqueda compacta y controles de exclusion accesibles", async () => {
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
+
+  assert.match(template, /id="matrixSearchInput"[^>]*placeholder="Buscar operación o CT…"/);
+  assert.match(template, /id="matrixSearchCount"[^>]*aria-live="polite"/);
+  assert.match(template, /id="clearMatrixSearchBtn"[^>]*>Limpiar<\/button>/);
+  assert.match(styles, /\.matrix-search\s*\{[^}]*display:\s*(?:flex|grid)/);
+  assert.match(styles, /\.matrix-search-input:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.capability-plan-state:focus-visible[\s\S]*outline:/);
+  assert.match(styles, /\.matrix-row-excluded[\s\S]*opacity:/);
+  assert.match(styles, /\.matrix-excluded-badge\s*\{/);
+  assert.match(styles, /\.matrix-empty\s*\{/);
+});
+
+test("la matriz filtra, conserva la consulta al rerenderizar y cambia exclusiones", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function showWorkspaceView(", bindStart);
+  const bindings = app.slice(bindStart, bindEnd);
+  const persistStart = app.indexOf("function persistableState(");
+  const persistEnd = app.indexOf("function isAppsScriptRuntime()", persistStart);
+  const persistence = app.slice(persistStart, persistEnd);
+
+  assert.match(app, /let state = loadState\(\);\s*state\.matrixSearch = "";/);
+  assert.match(app, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\);/);
+  assert.match(renderMatrix, /window\.PlannerCore\.filterCapabilities\(capabilities, state\.matrixSearch\)/);
+  assert.match(renderMatrix, /matrixSearchInput\.value = state\.matrixSearch/);
+  assert.match(renderMatrix, /matrixSearchCount\.textContent = `\$\{filteredCapabilities\.length\} de \$\{capabilities\.length\} operaciones`/);
+  assert.match(renderMatrix, /Sin operaciones que coincidan/);
+  assert.match(renderMatrix, /data-capability-plan-state=/);
+  assert.match(renderMatrix, />Usar en el plan<\/option>/);
+  assert.match(renderMatrix, />Excluir del plan<\/option>/);
+  assert.match(renderMatrix, /matrix-row-excluded/);
+  assert.match(renderMatrix, /matrix-excluded-badge[^>]*>Excluida</);
+  assert.match(renderMatrix, /state\.excludedCapabilities = excluded[\s\S]*filter\(\(item\) => item !== key\)/);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\)/);
+  assert.match(bindings, /matrixSearchInput\.addEventListener\("input"[\s\S]*state\.matrixSearch = els\.matrixSearchInput\.value[\s\S]*renderMatrix\(\)/);
+  assert.match(bindings, /clearMatrixSearchBtn\.addEventListener\("click"[\s\S]*state\.matrixSearch = ""[\s\S]*renderMatrix\(\)[\s\S]*matrixSearchInput\.focus\(\)/);
+  assert.match(persistence, /const \{ matrixSearch, selectedDetailOt, queueMoveOt, \.\.\.persisted \} = source;/);
+  assert.match(persistence, /delete persisted\.machineToolHistory;/);
+  assert.match(persistence, /key\.indexOf\("__"\) === 0/);
+  assert.match(performanceClient, /function compactLocalState\(\)[\s\S]*const \{ matrixSearch, operations, lastSchedule, expandedOts, draftVersionId, activePublishedVersionId, planStart, reportWeekStart, loadWeekStart, \.\.\.persisted \} = state;/);
+  assert.match(performanceClient, /const LOCAL_CACHE_QUOTA_GUARD_BYTES = 4 \* 1024 \* 1024;/);
+  assert.match(performanceClient, /const serialized = trimLocalCachePayload\(compacted\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\)/);
+  assert.match(persistence, /const payload = persistableState\(source\);/);
+  assert.doesNotMatch(persistence, /\.\.\.deepClone\(persistableState\(source\)\)/);
+});
+
+test("el guardado local optimizado mantiene matrixSearch efimero", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const compactStart = performanceClient.indexOf("function compactLocalState()");
+  const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
+  const compactSource = performanceClient.slice(compactStart, compactEnd);
+  const compactLocalState = Function("state", "LOCAL_CACHE_IDENTITY", `${compactSource}; return compactLocalState;`)({
+    revision: 7,
+    matrixSearch: "soldadura",
+    excludedCapabilities: ["5527::SOLDADURA_SOPORTE"],
+    materials: [{ ot: "WO-1" }],
+  }, "plan-produccion-cache-v2");
+
+  const persisted = compactLocalState();
+
+  assert.equal(persisted.matrixSearch, undefined);
+  assert.deepEqual(persisted.excludedCapabilities, ["5527::SOLDADURA_SOPORTE"]);
+  assert.deepEqual(persisted.materials, []);
+  assert.match(compactSource, /performanceCache:\s*\{[\s\S]*identity: LOCAL_CACHE_IDENTITY[\s\S]*revision[,:\s]/);
+  assert.match(performanceClient, /const compacted = compactLocalState\(\);[\s\S]*const serialized = trimLocalCachePayload\(compacted\);[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\);[\s\S]*writeMeta\(\{[\s\S]*deferredMaterials: true/);
+});
+
+test("el cache local descarta tombstones de UI cuando supera 4MB y nunca pierde workOrders/materials/otConfigurations", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const trimStart = performanceClient.indexOf("const LOCAL_CACHE_QUOTA_GUARD_BYTES =");
+  const trimEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", trimStart);
+  const trimSource = performanceClient.slice(trimStart, trimEnd);
+  const { trimLocalCachePayload } = Function(`${trimSource}; return { trimLocalCachePayload };`)();
+
+  const small = trimLocalCachePayload({
+    _locallyRemovedDraftOts: ["100"],
+    workOrders: [{ ot: "WO-1" }],
+    materials: [],
+    otConfigurations: { k: { ot: "WO-1" } },
+  });
+  assert.ok(small.includes('"_locallyRemovedDraftOts"'));
+
+  const filler = "x".repeat(3 * 1024 * 1024);
+  const trimmed = JSON.parse(trimLocalCachePayload({
+    _locallyRemovedDraftOts: ["100"],
+    _pendingAddOt: { ot: "WO-9" },
+    _pendingAddOtSnapshot: { ot: "WO-9" },
+    _locallyAddedDraftOts: ["200"],
+    _locallyEditedOtConfigurations: ["WO-3"],
+    expandedOts: ["300"],
+    workOrders: [{ ot: "WO-1" }],
+    materials: [{ ot: "WO-1" }],
+    otConfigurations: { k: { ot: "WO-1" } },
+    filler,
+  }));
+  assert.equal(trimmed._locallyRemovedDraftOts, undefined);
+  assert.equal(trimmed._pendingAddOt, undefined);
+  assert.equal(trimmed._pendingAddOtSnapshot, undefined);
+  assert.equal(trimmed._locallyAddedDraftOts, undefined);
+  assert.equal(trimmed._locallyEditedOtConfigurations, undefined);
+  assert.equal(trimmed.expandedOts, undefined);
+  assert.deepEqual(trimmed.workOrders, [{ ot: "WO-1" }]);
+  assert.deepEqual(trimmed.materials, [{ ot: "WO-1" }]);
+  assert.deepEqual(trimmed.otConfigurations, { k: { ot: "WO-1" } });
+  assert.ok(trimmed.filler);
+});
+
+test("el cache local excluye machineToolHistory igual que el payload persistido", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const compactStart = performanceClient.indexOf("function compactLocalState()");
+  const compactEnd = performanceClient.indexOf("scheduleLocalStorageFlush =", compactStart);
+  const compactSource = performanceClient.slice(compactStart, compactEnd);
+  assert.match(compactSource, /delete persisted\.machineToolHistory;/);
+
+  const compactLocalState = Function("state", "LOCAL_CACHE_IDENTITY", `${compactSource}; return compactLocalState;`)({
+    revision: 11,
+    operations: [{ id: "op-1", log: "NETSUITE_APPS_SCRIPT" }],
+    materials: [{ ot: "WO-1" }],
+    machineToolHistory: [{ id: "m1", machine: "MAQUINA", herramental: "HERR-1" }],
+    workOrders: [{ ot: "WO-1" }],
+    otConfigurations: { "WO-1": { ot: "WO-1" } },
+    selectedOts: ["WO-1"],
+    lockedOts: ["WO-1"],
+  }, "plan-produccion-cache-v5");
+
+  const persisted = compactLocalState();
+  assert.equal("machineToolHistory" in persisted, false);
+  assert.deepEqual(persisted.workOrders, [{ ot: "WO-1" }]);
+  assert.deepEqual(persisted.otConfigurations, { "WO-1": { ot: "WO-1" } });
+  assert.deepEqual(persisted.operations, []);
+  // La cola Planeado/Por planear si sobrevive al cache local: es la autoridad del
+  // borrador mientras el guardado remoto no responde.
+  assert.deepEqual(persisted.selectedOts, ["WO-1"]);
+  assert.deepEqual(persisted.lockedOts, ["WO-1"]);
+  assert.deepEqual(persisted.materials, []);
+});
+
+test("el log de operacion no repite la misma entrada consecutiva y se compacta al importar", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const plannerCore = await readFile(path.join(process.cwd(), "src", "web", "planning", "planner-core.js"), "utf8");
+  const logStart = app.indexOf("const OP_LOG_SEPARATOR =");
+  const logEnd = app.indexOf("function normalizeHeader(", logStart);
+  const logSource = app.slice(logStart, logEnd);
+  const { appendLog, compactOperationLog, compactOperationLogs } = Function(
+    `${logSource}; return { appendLog, compactOperationLog, compactOperationLogs };`,
+  )();
+
+  assert.equal(appendLog("", "PRIORIDAD_COLA_APP"), "PRIORIDAD_COLA_APP");
+  assert.equal(appendLog("NETSUITE_APPS_SCRIPT", "PRIORIDAD_COLA_APP"), "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP");
+  assert.equal(
+    appendLog("NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP", "PRIORIDAD_COLA_APP"),
+    "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP",
+  );
+  assert.equal(
+    appendLog("NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP", "COMPLETADA_PLAN_APP"),
+    "NETSUITE_APPS_SCRIPT | PRIORIDAD_COLA_APP | COMPLETADA_PLAN_APP",
+  );
+  assert.equal(appendLog("A", ""), "A");
+  assert.equal(appendLog(null, null), "");
+
+  assert.equal(
+    compactOperationLog("A | PRIORIDAD_COLA_APP | PRIORIDAD_COLA_APP | PRIORIDAD_COLA_APP | B"),
+    "A | PRIORIDAD_COLA_APP | B",
+  );
+  assert.equal(compactOperationLog("A | A | A"), "A");
+  assert.equal(compactOperationLog("A | B | A"), "A | B | A");
+  assert.equal(compactOperationLog(""), "");
+  assert.equal(compactOperationLog(undefined), "");
+
+  const operations = [
+    { log: "X | Y | Y" },
+    { log: "Z" },
+    { log: "" },
+    { log: "P | P | P" },
+  ];
+  compactOperationLogs(operations);
+  assert.deepEqual(operations.map((op) => op.log), ["X | Y", "Z", "", "P"]);
+
+  const importStart = app.indexOf("function applyImported(");
+  const importFlow = app.slice(importStart, app.indexOf("function importCsv(", importStart));
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\([^;]+\);[\s\S]*compactOperationLogs\(state\.operations\);/);
+  const normalizeStart = app.indexOf("function normalizeOperation(");
+  const normalizeOperation = app.slice(normalizeStart, app.indexOf("function normalizeMaterials(", normalizeStart));
+  assert.match(normalizeOperation, /next\.log = compactOperationLog\(next\.log\);/);
+
+  const coreAppendStart = plannerCore.indexOf("function appendLog(current, message)");
+  const coreAppend = plannerCore.slice(coreAppendStart, plannerCore.indexOf("function roundUp(", coreAppendStart));
+  assert.match(coreAppend, /if \(text\.endsWith\(" \| " \+ entry\)\) return text;/);
+  assert.match(coreAppend, /return text \+ " \| " \+ entry;/);
+  assert.doesNotMatch(coreAppend, /\[current, message\]\.filter\(Boolean\)\.join/);
+});
+
+test("las exclusiones sobreviven importacion, restauracion y guardado diferido", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const normalizeStart = app.indexOf("function normalizeState()");
+  const normalizeEnd = app.indexOf("function bindEvents()", normalizeStart);
+  const normalizeState = app.slice(normalizeStart, normalizeEnd);
+  const importStart = app.indexOf("function applyImported(");
+  const importEnd = app.indexOf("function importCsv(", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  const removalStart = app.indexOf("function removeCapability(");
+  const removalEnd = app.indexOf("function removeOperator(", removalStart);
+  const removal = app.slice(removalStart, removalEnd);
+  const deferredStart = performanceClient.indexOf("function baseSavePayload()");
+  const deferredEnd = performanceClient.indexOf("function saveJobsForScopes(", deferredStart);
+  const deferredPayloads = performanceClient.slice(deferredStart, deferredEnd);
+  const basePayload = deferredPayloads.slice(0, deferredPayloads.indexOf("function planningSavePayload()"));
+  const matrixPayload = deferredPayloads.slice(deferredPayloads.indexOf("function matrixSavePayload()"));
+
+  assert.match(normalizeState, /state\.excludedCapabilities = normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.match(importFlow, /if \(Array\.isArray\(imported\.excludedCapabilities\)\) state\.excludedCapabilities = normalizeCapabilityKeys\(imported\.excludedCapabilities\)/);
+  assert.match(importFlow, /"excludedCapabilities"/);
+  assert.match(importFlow, /excludedCapabilities:\s*Array\.isArray\(parsed\.excludedCapabilities\)/);
+  assert.match(removal, /state\.excludedCapabilities = state\.excludedCapabilities\.filter\(\(excludedKey\) => excludedKey !== key\)/);
+  assert.doesNotMatch(basePayload, /excludedCapabilities/);
+  assert.match(matrixPayload, /excludedCapabilities:\s*normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.doesNotMatch(deferredPayloads, /matrixSearch/);
+});
+
+test("cambiar la exclusion restaura el foco al control de la misma capacidad", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const focusStart = app.indexOf("function focusCapabilityPlanState(key)");
+  const focusEnd = app.indexOf("function renderMatrix()", focusStart);
+  const renderStart = app.indexOf("function renderMatrix()");
+  const renderEnd = app.indexOf("function renderOperationCatalogSelect()", renderStart);
+  const renderMatrix = app.slice(renderStart, renderEnd);
+
+  assert.ok(focusStart >= 0, "debe existir el restaurador de foco por capacidad");
+  const focusSource = app.slice(focusStart, focusEnd);
+  const focused = [];
+  const controls = ["5459::DOBLADO", "5527::SOLDADURA_SOPORTE"].map((key) => ({
+    dataset: { capabilityPlanState: key },
+    focus: () => focused.push(key),
+  }));
+  const focusCapabilityPlanState = Function("els", `${focusSource}; return focusCapabilityPlanState;`)({
+    matrixWrap: { querySelectorAll: () => controls },
+  });
+
+  focusCapabilityPlanState("5527::SOLDADURA_SOPORTE");
+
+  assert.deepEqual(focused, ["5527::SOLDADURA_SOPORTE"]);
+  assert.match(renderMatrix, /saveAndRender\([^;]+,\s*"matrix"\);\s*focusCapabilityPlanState\(key\);/);
+});
+
+test("el cliente conserva y muestra operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const applyStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const applyEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", applyStart);
+  const applySource = app.slice(applyStart, applyEnd);
+  const alertsStart = app.indexOf("function planAlertItems()");
+  const alertsEnd = app.indexOf("function renderPriorityList()", alertsStart);
+  const alertsSource = app.slice(alertsStart, alertsEnd);
+  const state = {
+    operations: [],
+    materials: [],
+    operationCatalog: [],
+    operationCatalogWarning: "",
+    selectedOts: [],
+    netSuiteSyncAlert: null,
+    netSuiteChangeAlerts: [],
+    planStart: "2026-07-26",
+  };
+  let backlogResetCount = 0;
+  const applyPayload = Function("state", "normalizeKey", "selectedJobOt", "resetBacklogWindow", `${applySource}; return applyNetSuitePlanningPayload;`)(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+    () => "",
+    () => { backlogResetCount += 1; },
+  );
+  const planAlertItems = Function(
+    "state",
+    "normalizeStatus",
+    "getPriorityJobs",
+    "isJobSelected",
+    "jobRiskLevel",
+    "weeklyExecutiveSummary",
+    "weeklyJobSummary",
+    "currentDraftScheduledOperations",
+    `${alertsSource}; return planAlertItems;`,
+  )(
+    state,
+    (value) => String(value || "").trim().toUpperCase(),
+    () => [],
+    () => false,
+    () => ({ level: "VERDE", label: "" }),
+    () => ({ targetMet: true }),
+    () => [],
+    () => [],
+  );
+
+  applyPayload({ operationCatalogWarning: "Catalogo NetSuite no disponible" });
+
+  assert.equal(state.operationCatalogWarning, "Catalogo NetSuite no disponible");
+  assert.equal(backlogResetCount, 0);
+  applyPayload({ operations: [] });
+  assert.equal(backlogResetCount, 1);
+  assert.deepEqual(planAlertItems().find((alert) => alert.title === "Catalogo de operaciones NetSuite"), {
+    level: "warning",
+    title: "Catalogo de operaciones NetSuite",
+    message: "Catalogo NetSuite no disponible",
+  });
+});
+
+test("el backlog renderiza una ventana inicial de 30 trabajos con controles progresivos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+
+  assert.match(app, /const BACKLOG_PAGE_SIZE = 30/);
+  assert.match(renderPriorityList, /jobs\.slice\(0,\s*backlogVisibleLimit\)/);
+  assert.match(renderPriorityList, /\$\{visibleJobs\.length\} de \$\{jobs\.length\}/);
+  assert.match(template, /id="priorityLoadMore"/);
+  assert.match(template, /id="priorityLoadMoreSentinel"/);
+});
+
+test("la ventana del backlog avanza exactamente 30 y puede reiniciarse sin render adicional", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      resetBacklogWindow,
+      showMoreBacklogJobs,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {},
+    {},
+  );
+
+  assert.equal(backlog.limit, 30);
+  backlog.showMoreBacklogJobs();
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  backlog.resetBacklogWindow();
+  assert.equal(backlog.limit, 30);
+  assert.equal(renderCount, 1);
+});
+
+test("buscar y filtrar reinician el backlog; el boton carga mas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const bindStart = app.indexOf("function bindEvents()");
+  const bindEnd = app.indexOf("function setActiveTab(", bindStart);
+  const bindEvents = app.slice(bindStart, bindEnd);
+
+  assert.match(bindEvents, /searchInput\.addEventListener\("input",\s*debounce\(\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\},\s*120\)\)/);
+  assert.match(bindEvents, /statusFilter\.addEventListener\("change",\s*\(\) => \{\s*resetBacklogWindow\(\);\s*renderPriorityList\(\);\s*\}\)/);
+  assert.match(bindEvents, /priorityLoadMore\.addEventListener\("click",\s*showMoreBacklogJobs\)/);
+});
+
+test("el observer del backlog es unico, no carga en cascada y conserva el fallback", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
+  const progressiveEnd = app.indexOf("let state = loadState()", progressiveStart);
+  assert.ok(progressiveStart >= 0 && progressiveEnd > progressiveStart, "debe existir el controlador de ventana progresiva");
+  const progressiveSource = app.slice(progressiveStart, progressiveEnd);
+  let observed = 0;
+  let observerCallback;
+  let renderCount = 0;
+  const backlog = Function(
+    "renderPriorityList",
+    "els",
+    "window",
+    `${progressiveSource}; return {
+      bindBacklogLoadMoreObserver,
+      get limit() { return backlogVisibleLimit; },
+    };`,
+  )(
+    () => { renderCount += 1; },
+    {
+      priorityLoadMore: { hidden: false },
+      priorityLoadMoreSentinel: {},
+    },
+    {
+      IntersectionObserver: class {
+        constructor(callback) { observerCallback = callback; }
+        observe() { observed += 1; }
+      },
+    },
+  );
+
+  backlog.bindBacklogLoadMoreObserver();
+  backlog.bindBacklogLoadMoreObserver();
+  assert.equal(observed, 1);
+  observerCallback([{ isIntersecting: true }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 60);
+  assert.equal(renderCount, 1);
+  observerCallback([{ isIntersecting: false }]);
+  observerCallback([{ isIntersecting: true }]);
+  assert.equal(backlog.limit, 90);
+  assert.equal(renderCount, 2);
+});
+
+test("el backlog conserva el foco de fecha visible y reinicia al cambiar el dataset", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderPriorityList()");
+  const renderEnd = app.indexOf("function renderPriorityQueue()", renderStart);
+  const renderPriorityList = app.slice(renderStart, renderEnd);
+  const payloadStart = app.indexOf("function applyNetSuitePlanningPayload(payload)");
+  const payloadEnd = app.indexOf("function setNetSuiteSyncPhaseLabel(", payloadStart);
+  const applyPayload = app.slice(payloadStart, payloadEnd);
+  const importedStart = app.indexOf("function applyImported(imported, options = {})");
+  const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
+  const applyImported = app.slice(importedStart, importedEnd);
+  const backlogSyncStart = app.indexOf("async function syncBacklogWorkOrders(options = {})");
+  const backlogSyncEnd = app.indexOf("async function syncNetSuiteTwoPhase(", backlogSyncStart);
+  const syncBacklog = app.slice(backlogSyncStart, backlogSyncEnd);
+  const twoPhaseStart = backlogSyncEnd;
+  const twoPhaseEnd = app.indexOf("function applyNetSuitePlanningPayload(payload)", twoPhaseStart);
+  const syncTwoPhase = app.slice(twoPhaseStart, twoPhaseEnd);
+
+assert.match(renderPriorityList, /document\.activeElement\?\.dataset\?\.dueOt/);
+  assert.match(renderPriorityList, /dataset\.dueOt === focusedDueOt[\s\S]*\.focus\(\)/);
+  assert.match(applyPayload, /Array\.isArray\(payload\?\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(applyImported, /Array\.isArray\(imported\.operations\)[\s\S]*if \(backlogDatasetChanged\) resetBacklogWindow\(\)/);
+  assert.match(syncBacklog, /resetBacklogWindow\(\)[\s\S]*render\(\{ save: false \}\)/);
+  assert.match(syncTwoPhase, /syncWorkOrdersOnce\(\{ showMessage: false, manual: true \}\)/);
+});
+
+test("la importacion de buckets de estados es no destructiva y respeta los guardados en vuelo", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importedStart = app.indexOf("function applyImported(imported, options = {})");
+  const importedEnd = app.indexOf("function captureLocalPlanningState()", importedStart);
+  const applyImported = app.slice(importedStart, importedEnd);
+  const helpers = app.slice(app.indexOf("const pendingPlanStatusSaveKeys = new Set();"),
+    app.indexOf("function deletePlanStatusByOrigin(key)"));
+
+  assert.match(applyImported, /state\.operationPlanStatuses = mergeImportedPlanStatuses\(/);
+  assert.match(applyImported, /state\.publishedPlanStatuses = mergeImportedPublishedPlanStatuses\(/);
+  assert.match(helpers, /function writePlanStatusByOrigin\(key, status\)/);
+  assert.match(helpers, /const pendingPlanStatusSaveKeys = new Set\(\);/);
+  assert.match(helpers, /function clearPendingPlanStatusSaveKeys\(key\)/);
+  assert.match(helpers, /function mergeImportedPlanStatuses\(local, remote\)/);
+  assert.match(helpers, /function mergeImportedPublishedPlanStatuses\(local, remote\)/);
+});
+
+test("tombstones locales evitan que import remoto o snapshot stale reviva OTs retiradas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+const importStart = app.indexOf("async function applyImported(imported, options = {})");
+  const importEnd = app.indexOf("function captureLocalPlanningState()", importStart);
+  const importFlow = app.slice(importStart, importEnd);
+  const payloadStart = app.indexOf("function createAppSheetPayload(source = state)");
+  const payloadEnd = app.indexOf("function isAppsScriptRuntime()", payloadStart);
+  const createPayloadSource = app.slice(payloadStart, payloadEnd);
+
+  assert.match(importFlow, /const locallyRemovedDraftOts = \[\.\.\.\(state\._locallyRemovedDraftOts \|\| \[\]\)\];/);
+  assert.match(importFlow, /normalizeState\(\);\s*applyLocalDraftRemovalTombstones\(locallyRemovedDraftOts\);/);
+  assert.match(importFlow, /function rememberDraftRemovedOts\(ots\)/);
+  assert.match(importFlow, /function forgetDraftRemovedOt\(ot\)/);
+assert.match(createPayloadSource, /delete payload\._locallyRemovedDraftOts;/);
+  assert.match(createPayloadSource, /delete payload\._pendingAddOt;/);
+  assert.match(createPayloadSource, /delete payload\._pendingAddOtSnapshot;/);
+  assert.match(createPayloadSource, /delete payload\.machineToolHistory;/);
+
+  const state = {
+    selectedOts: ["100", "200"],
+    lockedOts: ["100"],
+    expandedOts: ["100", "200"],
+    lastSchedule: { scheduledOts: ["100", "200"] },
+    preparedPlanningByOt: { 100: "a", 200: "b" },
+    operations: [
+      { id: "100-op", ot: "100", fechaInicio: "2026-07-13", horaInicio: "07:00", fechaFin: "2026-07-13", horaFin: "08:00", locked: true },
+      { id: "200-op", ot: "200", fechaInicio: "2026-07-13", horaInicio: "08:00", fechaFin: "2026-07-13", horaFin: "09:00" },
+    ],
+  };
+  let invalidations = 0;
+  const api = Function(
+    "state",
+    "window",
+    "materialOtKey",
+    "invalidateCurrentPlanOperationsCache",
+    `${importFlow}; return { applyLocalDraftRemovalTombstones, rememberDraftRemovedOts, forgetDraftRemovedOt };`,
+  )(
+    state,
+    { PlanningWorkflowCore: { removeOtFromDraft(current, ot) {
+      const key = String(ot || "").trim().toUpperCase();
+      const keep = (items) => (items || []).filter((item) => String(item || "").trim().toUpperCase() !== key);
+      const preparedPlanningByOt = { ...(current.preparedPlanningByOt || {}) };
+      Object.keys(preparedPlanningByOt).forEach((item) => { if (String(item).trim().toUpperCase() === key) delete preparedPlanningByOt[item]; });
+      return {
+        ...current,
+        selectedOts: keep(current.selectedOts),
+        lockedOts: keep(current.lockedOts),
+        expandedOts: keep(current.expandedOts),
+        preparedPlanningByOt,
+        operations: (current.operations || []).map((operation) => String(operation.ot || "").trim().toUpperCase() === key
+          ? { ...operation, locked: false, fechaInicio: "", horaInicio: "", fechaFin: "", horaFin: "" }
+          : operation),
+        lastSchedule: { ...current.lastSchedule, scheduledOts: keep(current.lastSchedule.scheduledOts) },
+      };
+    } } },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => { invalidations += 1; },
+  );
+
+  api.rememberDraftRemovedOts(["100"]);
+  assert.deepEqual(state._locallyRemovedDraftOts, ["100"]);
+  const removed = api.applyLocalDraftRemovalTombstones(["100"]);
+
+  assert.equal(removed, 1);
+  assert.deepEqual(state.selectedOts, ["200"]);
+  assert.deepEqual(state.lockedOts, []);
+  assert.deepEqual(state.expandedOts, ["200"]);
+  assert.deepEqual(state.lastSchedule.scheduledOts, ["200"]);
+  assert.equal(state.preparedPlanningByOt[100], undefined);
+  assert.equal(state.operations.find((op) => op.id === "100-op").fechaInicio, "");
+  assert.equal(invalidations, 1);
+api.forgetDraftRemovedOt("100");
+  assert.equal(state._locallyRemovedDraftOts, undefined);
+});
+
+test("la config de capacidades editada localmente sobrevive a un import remoto", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importFlow = app.slice(
+    app.indexOf("function applyImported(imported, options = {})"),
+    app.indexOf("function captureLocalPlanningState()", app.indexOf("function applyImported(imported, options = {})")),
+  );
+  const payload = app.slice(
+    app.indexOf("function createAppSheetPayload(source = state)"),
+    app.indexOf("function isAppsScriptRuntime()", app.indexOf("function createAppSheetPayload(source = state)")),
+  );
+  const helpers = app.slice(
+    app.indexOf("const CAPABILITY_CONFIG_KEYS ="),
+    app.indexOf("function uniq(items)", app.indexOf("const CAPABILITY_CONFIG_KEYS =")),
+  );
+
+  assert.match(importFlow, /const localCapabilityConfigEdited = state\._locallyEditedCapabilityConfig === true;/);
+  assert.match(importFlow, /const preservedLocalCapabilityConfig = localCapabilityConfigEdited \? captureLocalCapabilityConfig\(\) : null;/);
+  assert.match(importFlow, /if \(preservedLocalCapabilityConfig\) restoreLocalCapabilityConfig\(preservedLocalCapabilityConfig\);/);
+  assert.match(payload, /delete payload\._locallyEditedCapabilityConfig;/);
+  assert.match(importFlow, /if \(Array\.isArray\(imported\.workOrders\)\)/);
+  // La linea que faltaba: desde RULE-OT-051 (2.49.0) la lista importada NO se asigna tal cual.
+  // Se le anexan las fichas de las OTs marcadas que no vinieron, porque si la ausencia de una OT
+  // no tiene evidencia de cierre, tampoco hay motivo para tirarle su ficha. La asignacion es
+  // ahora `importadas.concat(fichasDeMarcadas)`, y este assert existed para fijar la forma
+  // anterior, que es exactamente la que producia el zombie: la OT en la cola sin ficha.
+  assert.match(importFlow, /const importadas = normalizeWorkOrders\(imported\.workOrders\)\.map/);
+  assert.match(importFlow, /state\.workOrders = importadas\.concat\(fichasDeMarcadas\)/);
+  assert.match(importFlow, /mergeWorkOrderLocalOverrides\(localWorkOrdersByOt\.get\(materialOtKey\(item\.ot\)\), item\)/);
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(localOperationsBeforeImport, imported\.operations\)/);
+  assert.match(importFlow, /state\.operations = preserveImportedOperationPrices\(preservedLocalPlanning\.operations, state\.operations\)/);
+  const priceMerge = app.slice(
+    app.indexOf("function mergeWorkOrderLocalOverrides("),
+    app.indexOf("function applyNetSuiteWorkOrdersPayload(", app.indexOf("function mergeWorkOrderLocalOverrides(")),
+  );
+  assert.match(priceMerge, /if \(!merged\.dueDateOverride && local\.dueDateOverride\) merged\.dueDateOverride = local\.dueDateOverride;/);
+  assert.match(priceMerge, /if \(!\(merged\.lastSalePrice > 0\) && Number\(local\.lastSalePrice\) > 0\)/);
+  assert.match(priceMerge, /function preserveImportedOperationPrices\(localOperations, importedOperations\)/);
+  assert.match(priceMerge, /if \(!\(Number\(merged\.unitPrice\) > 0\) && source\.unitPrice > 0\) merged\.unitPrice = source\.unitPrice;/);
+
+  const state = {
+    _locallyEditedCapabilityConfig: true,
+    configuredCapabilities: ["5467::CORTE"],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    excludedCapabilities: [],
+    capacityModes: { "5467::CORTE": "FINITA" },
+    matrix: { "5467::CORTE": ["OP1", "OP2"] },
+    operators: ["OP1", "OP2"],
+    operatorProfiles: { OP1: { name: "OP1", category: "FUERA_DE_PLAN" } },
+    operatorPerformance: { OP1: 100 },
+    cts: ["5467"],
+  };
+  const remote = {
+    configuredCapabilities: ["9999::OTRO"],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    excludedCapabilities: ["9999::OTRO"],
+    capacityModes: {},
+    matrix: {},
+    operators: [],
+    operatorProfiles: {},
+    operatorPerformance: {},
+    cts: [],
+  };
+  const api = Function(
+    "state",
+    "deepClone",
+    `${helpers}; return { rememberLocalCapabilityConfigEdit, captureLocalCapabilityConfig, restoreLocalCapabilityConfig };`,
+  )(state, (value) => JSON.parse(JSON.stringify(value)));
+
+  api.rememberLocalCapabilityConfigEdit();
+  const snapshot = api.captureLocalCapabilityConfig();
+  for (const [key, value] of Object.entries(remote)) state[key] = value;
+  api.restoreLocalCapabilityConfig(snapshot);
+
+  assert.deepEqual(state.configuredCapabilities, ["5467::CORTE"]);
+  assert.deepEqual(state.matrix, { "5467::CORTE": ["OP1", "OP2"] });
+  assert.deepEqual(state.operators, ["OP1", "OP2"]);
+  assert.deepEqual(state.excludedCapabilities, []);
+  assert.deepEqual(state.cts, ["5467"]);
+  assert.equal(state._locallyEditedCapabilityConfig, true);
+});
+
+test("al volver a la pestana visible se re-lee la matriz de Supabase sin pisar el plan (bug usuario 2026-10-24)", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  // El refresh vive en el mismo bloque que CAPABILITY_CONFIG_KEYS (que la funcion reutiliza
+  // para saber QUE campos de la matriz re-aplicar).
+  const refresh = app.slice(app.indexOf("function refreshMatrixOnVisibility"), app.indexOf("function initializePlanningApp"));
+  assert.match(refresh, /(?:async )?function refreshMatrixOnVisibility\(\)/);
+  assert.match(refresh, /getAppStateIfChanged\(known, \{ includeMaterials: false \}\)/);
+  assert.match(refresh, /if \(!imported \|\| imported\.unchanged\) return;/);
+  // Solo re-aplica los campos de la config de capacidades; NO toca operations/selectedOts.
+  assert.match(refresh, /for \(const key of CAPABILITY_CONFIG_KEYS\)/);
+  assert.match(refresh, /next\[key\] !== undefined && next\[key\] !== null/);
+  assert.match(refresh, /state\.matrixFull = next\.matrixFull;/);
+  assert.match(refresh, /render\(\{ parts: \{ capabilityConfig: true, matrix: true \}, save: false \}\)/);
+  // El listener esta enganchado en el arranque, como el de skills.html.
+  assert.match(app, /visibilitychange[\s\S]*visibilityState === "visible"[\s\S]*void refreshMatrixOnVisibility\(\);/);
+  // La guarda: no refresca mientras haya un guardado de matriz en vuelo ni una edicion local sin guardar.
+  assert.match(refresh, /appSheetSaveInFlight \|\| appSheetDirtyScopes\.has\("matrix"\) \|\| state\._locallyEditedCapabilityConfig/);
+  // Misma causa en la pestana Matriz de la principal: toggleMatrix tambien debe mantener
+  // matrixFull sincronizado al desmarcar, o el escritor no emite el habilitado:false.
+  const toggle = app.slice(app.indexOf("function toggleMatrix(key, operator, checked, capability)"),
+    app.indexOf("function operatorPerformanceForOperator(", app.indexOf("function toggleMatrix(key, operator, checked, capability)")));
+  assert.match(toggle, /if \(!Array\.isArray\(state\.matrixFull\)\) state\.matrixFull = \[\];/);
+  assert.match(toggle, /state\.matrixFull\.push\(\{ capabilityKey: key, operator: operator, habilitado: Boolean\(checked\) \}\)/);
+  // Aviso entre pestañas (bug usuario 2026-10-24): skills.html emite un BroadcastChannel al
+  // guardar la matriz y la principal se suscribe para refrescarla de inmediato, sin esperar a
+  // que la pestana vuelva a ser visible. Se aplica coalescedo (500 ms) para no golpear Supabase
+  // con una lectura entera por cada casilla que se toca en skills.
+  const canal = app.slice(app.indexOf("const MATRIZ_CAMBIO_CANAL"), app.indexOf("function initializePlanningApp"));
+  assert.match(canal, /function suscribirMatrizCambio\(\)/);
+  assert.match(canal, /new BroadcastChannel\(MATRIZ_CAMBIO_CANAL\)/);
+  assert.match(canal, /dato\.kind !== "matrix"\) return;/);
+  assert.match(canal, /refrescarMatrizCoalescido\(\);/);
+  assert.match(canal, /ahora - ultimoRefrescoMatrizAt < 500\) return;/);
+  assert.match(canal, /window\.addEventListener\("storage"/);
+});
+
+test("el arranque optimizado aplica tombstones aun cuando getAppStateIfChanged responde unchanged", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const loadStart = performanceClient.indexOf("async function loadInitialStateConditionally(localCache)");
+  const loadEnd = performanceClient.indexOf("loadAppStateInBackground = function optimizedLoadAppStateInBackground", loadStart);
+  const loadFlow = performanceClient.slice(loadStart, loadEnd);
+
+  assert.match(loadFlow, /if \(imported\?\.unchanged\) \{[\s\S]*applyLocalDraftRemovalTombstones\(state\._locallyRemovedDraftOts \|\| \[\]\);[\s\S]*return \{ loaded: false, unchanged: true \};/);
+});
+
+test("el selector de matriz excluye subcontratos con la clasificacion compartida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderOperationCatalogSelect()");
+  const renderEnd = app.indexOf("function renderConfiguration()", renderStart);
+  const renderSource = app.slice(renderStart, renderEnd);
+  const newCtInput = { innerHTML: "", disabled: false };
+  const addCtBtn = { disabled: false };
+  const state = {
+    operationCatalog: [
+      { key: "5467::CORTE", ct: "5467", label: "CORTE", active: true },
+      { key: "6462::CROMADO_ESPECIAL", ct: "6462", label: "CROMADO ESPECIAL", active: true },
+    ],
+  };
+  const renderOperationCatalogSelect = Function(
+    "state",
+    "getCapabilityRows",
+    "capabilityKey",
+    "els",
+    "escapeHtml",
+    "window",
+    `${renderSource}; return renderOperationCatalogSelect;`,
+  )(
+    state,
+    () => [],
+    (ct, label) => `${ct}::${String(label).replace(/ /g, "_")}`,
+    { newCtInput, addCtBtn },
+    (value) => String(value),
+    {
+      PlannerCore: {
+        isSpecialSubcontractCapability: (item) => /CROMADO/.test(item.label),
+      },
+    },
+  );
+
+  renderOperationCatalogSelect();
+
+  assert.match(newCtInput.innerHTML, /5467::CORTE/);
+  assert.doesNotMatch(newCtInput.innerHTML, /CROMADO/);
+});
+
+test("Gantt, cargas, metricas y borradores omiten capacidades excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const sliceFunction = (name, nextName) => {
+    const start = app.indexOf(`function ${name}`);
+    const end = app.indexOf(`function ${nextName}`, start);
+    assert.ok(start >= 0 && end > start, `debe existir ${name}`);
+    return app.slice(start, end);
+  };
+  const helper = sliceFunction("currentPlanOperations(", "currentDraftScheduledOperations(");
+  const currentPlanOperations = Function(
+    "state",
+    "window",
+    `${helper}; return currentPlanOperations;`,
+  )(
+    { excludedCapabilities: ["5527::SOLDADURA"], operations: [{ id: "keep" }, { id: "drop" }] },
+    { PlannerCore: { filterExcludedOperations: (_state, operations) => operations.filter((op) => op.id !== "drop") } },
+  );
+
+  assert.deepEqual(currentPlanOperations().map((op) => op.id), ["keep"]);
+  assert.match(sliceFunction("currentDraftScheduledOperations(", "renderDraftExecutiveSummary("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderDraftExecutiveSummary(", "renderTop("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderTop(", "renderPlanAlerts("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("renderLoads(", "renderOperationCatalogSelect("), /currentDraftScheduledOperations\(\)/);
+  assert.match(sliceFunction("persistPlanSnapshot(", "publishCurrentPlan("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("publishCurrentPlan(", "generatePlanPdf("), /operations:\s*currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getGanttGroups(", "ganttOperationHasMachine("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getOperatorLoads(", "operatorLoadsForOperations("), /currentPlanOperations\(\)/);
+  assert.match(sliceFunction("getCtLoads(", "operationDuration("), /currentPlanOperations\(\)/);
+});
+
+test("preparacion y validacion ignoran operaciones excluidas", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const preparation = app.slice(
+    app.indexOf("async function prepareJobForPlanning("),
+    app.indexOf("function setGanttView(", app.indexOf("async function prepareJobForPlanning(")),
+  );
+  const validation = app.slice(
+    app.indexOf("function validateScheduleConfiguration("),
+    app.indexOf("function freezeElapsedOperations(", app.indexOf("function validateScheduleConfiguration(")),
+  );
+  const excluded = { id: "excluded", ot: "100", ct: "5459", tipoInsercion: "OPERACION" };
+  const state = { excludedCapabilities: ["5459::DOBLADO"], preparedPlanningByOt: {} };
+  const currentPlanOperations = () => [];
+  let preparedOperations = null;
+  let validatedOperations = null;
+  let dialogs = 0;
+  const window = {
+    PlannerCore: {
+      planningConfigurationIssues: (_state, operations) => {
+        validatedOperations = operations;
+        return [];
+      },
+    },
+    PlanningWorkflowCore: {
+      canReusePlanningPreparation: () => false,
+      needsPlanningPreparation: () => true,
+      markPlanningPrepared: () => ({}),
+    },
+  };
+  const prepareJobForPlanning = Function(
+    "state", "window", "currentPlanOperations", "jobPlanningOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
+    "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
+    "applyCommercialPlanningRequirement", "assignPlanningOperators",
+    `${preparation}; return prepareJobForPlanning;`,
+  )(
+    state, window, currentPlanOperations, () => [], async () => { dialogs += 1; },
+    (_issues, operations) => { preparedOperations = operations; return []; },
+    () => ({ needsType: false, needsPlanningType: false, needsManualPrice: false }),
+    () => "signature", () => true, () => true,
+    async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
+  );
+  const validateScheduleConfiguration = Function(
+    "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
+    "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
+    "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    "normalizeStatus",
+    `${validation}; return validateScheduleConfiguration;`,
+  )(
+    { ...state, operations: [excluded] }, window, currentPlanOperations,
+    () => true, () => false, () => false, () => false,
+    () => ({ label: "DOBLADO", ct: "5459" }), () => excluded,
+    () => null, () => ({ days: 0 }), () => true,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+assert.equal(await prepareJobForPlanning({ ot: "100", ops: [excluded], parte: "P" }), true);
+  assert.deepEqual(preparedOperations, []);
+  assert.equal(dialogs, 0);
+  assert.equal(validateScheduleConfiguration(new Date()), null);
+  assert.deepEqual(validatedOperations, []);
+});
+
+test("RUL-PRE-?: pedir operadores agrega la habilidad a la matriz y la persiste para no repetir la pregunta", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const helpers = app.slice(
+    app.indexOf("function capabilityOperatorRequirements("),
+    app.indexOf("function planningCatalogSelectMarkup(", app.indexOf("function capabilityOperatorRequirements(")),
+  );
+  const state = {
+    operators: ["DOBLADOR 2", "SUBCONTRATO"],
+    configuredCapabilities: [],
+    hiddenCapabilities: ["5459::DOBLADO_BASE_SUPERIOR"],
+    cts: [],
+    matrix: { 5459: [] },
+    operations: [
+      { ot: "100", ct: "5459", descripcion: "Doblado base superior", operador: "SIN_OPERADOR" },
+    ],
+    operatorPerformance: {},
+  };
+  const assigned = [];
+  const normalizeStatus = (value) => String(value || "").trim().toUpperCase();
+  const uniq = (values) => [...new Set(values || [])];
+  const TOOL_CHANGE_CAPABILITY = { key: "TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL", ct: "TOOL_CHANGE", label: "CAMBIO DE HERRAMENTAL" };
+  const capabilityFromOperation = (op) => {
+    const label = String(op?.descripcion || op?.tipoInsercion || "OPERACION").trim();
+    return { key: `${op.ct}::${label.toUpperCase().replace(/\s+/g, "_")}`, ct: op.ct, label };
+  };
+  const findOperation = (id) => ({ id, ot: id === "s" ? "200" : "100" });
+  const assignPlanningOperators = (operations) => {
+    for (const op of operations) {
+      const allowed = state.matrix[`${op.ct}::${op.descripcion.toUpperCase().replace(/\s+/g, "_")}`] || [];
+      if (!allowed.includes(op.operador)) op.operador = allowed[0] || "SIN_OPERADOR";
+    }
+    assigned.push(...operations);
+  };
+  const invalidateCurrentPlanOperationsCache = () => {};
+  const build = Function(
+    "state", "normalizeStatus", "uniq", "TOOL_CHANGE_CAPABILITY", "capabilityFromOperation", "findOperation",
+    "assignPlanningOperators", "invalidateCurrentPlanOperationsCache", "rememberLocalCapabilityConfigEdit",
+    "enableOperatorsForCapability", "capabilityOperatorRequirements", "groupPlanConfigurationGaps",
+    `; ${helpers};
+     return { enableOperatorsForCapability, capabilityOperatorRequirements, groupPlanConfigurationGaps };`,
+  )(
+    state, normalizeStatus, uniq, TOOL_CHANGE_CAPABILITY, capabilityFromOperation, findOperation,
+    assignPlanningOperators, invalidateCurrentPlanOperationsCache,
+    () => { state._locallyEditedCapabilityConfig = true; },
+  );
+  const issues = [
+    { code: "MISSING_OPERATOR", operationId: "x", capability: { key: "5459::DOBLADO_BASE_SUPERIOR", ct: "5459", label: "DOBLADO BASE SUPERIOR" } },
+    { code: "MISSING_CAPABILITY", operationId: "y", capability: { key: "5459::DOBLADO_BASE_SUPERIOR", ct: "5459", label: "DOBLADO BASE SUPERIOR" } },
+    { code: "MISSING_OPERATOR", operationId: "z", capability: TOOL_CHANGE_CAPABILITY },
+  ];
+  const requirements = build.capabilityOperatorRequirements(issues);
+  assert.equal(requirements.length, 1);
+  assert.deepEqual(requirements[0].codes, ["MISSING_OPERATOR", "MISSING_CAPABILITY"]);
+
+  build.enableOperatorsForCapability(requirements[0], ["DOBLADOR 2"]);
+  assert.ok(state.configuredCapabilities.includes("5459::DOBLADO_BASE_SUPERIOR"));
+  assert.ok(!state.hiddenCapabilities.includes("5459::DOBLADO_BASE_SUPERIOR"));
+  assert.deepEqual(state.matrix["5459::DOBLADO_BASE_SUPERIOR"], ["DOBLADOR 2"]);
+  assert.equal(state.operations[0].operador, "DOBLADOR 2");
+
+  const gaps = build.groupPlanConfigurationGaps(
+    [
+      { code: "MISSING_MACHINE", operationId: "m", ot: "100" },
+      { code: "MISSING_TOOL", operationId: "t", ot: "100" },
+      { code: "MISSING_SUBCONTRACT_TYPE", operationId: "s", ot: "200" },
+      { code: "MISSING_TOOL_CHANGE_OPERATOR", operationId: "z" },
+    ],
+    state.operations,
+  );
+  assert.equal(gaps.machines.length, 1);
+  assert.equal(gaps.machines[0].ot, "100");
+  assert.equal(gaps.tools.length, 1);
+  assert.equal(gaps.subcontracts.length, 1);
+  assert.equal(gaps.operators.length, 0);
+  assert.equal(gaps.toolChange, true);
+});
+
+test("generar plan no pide datos de OTs fuera del alcance y reutiliza configuracion OT persistida", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const preparation = app.slice(
+    app.indexOf("async function prepareJobForPlanning("),
+    app.indexOf("function setGanttView(", app.indexOf("async function prepareJobForPlanning(")),
+  );
+  const validation = app.slice(
+    app.indexOf("function validateScheduleConfiguration("),
+    app.indexOf("function freezeElapsedOperations(", app.indexOf("function validateScheduleConfiguration(")),
+  );
+  const scoped = { id: "scoped", ot: "200", ct: "3000", tipoInsercion: "OPERACION", subcontractType: "", subcontractDays: 0 };
+  const unaffected = { id: "unaffected", ot: "100", ct: "3000", tipoInsercion: "OPERACION", subcontractType: "", subcontractDays: 0 };
+  const state = {
+    selectedOts: ["100", "200"],
+    preparedPlanningByOt: {},
+    otConfigurations: { 200: { ot: "200", subcontractType: "MAKA", subcontractDays: 3 } },
+  };
+  let dialogs = 0;
+  let validatedOperations = null;
+  const window = {
+    PlannerCore: {
+      planningConfigurationIssues: (_state, operations) => {
+        validatedOperations = operations;
+        return [];
+      },
+    },
+    PlanningWorkflowCore: {
+      canReusePlanningPreparation: () => false,
+      needsPlanningPreparation: () => true,
+      markPlanningPrepared: (source, ot, signature) => ({ preparedPlanningByOt: { ...(source.preparedPlanningByOt || {}), [ot]: signature } }),
+    },
+  };
+  const prepareJobForPlanning = Function(
+    "state", "window", "currentPlanOperations", "jobPlanningOperations", "showPlanningBlockers", "buildPlanningRequirements",
+    "commercialPlanningRequirement", "planningPreparationSignature", "isSubcontractAppOperation",
+    "isBendingAppOperation", "showPlanningRequirements", "applyPlanningRequirements",
+    "applyCommercialPlanningRequirement", "assignPlanningOperators",
+    `${preparation}; return prepareJobForPlanning;`,
+  )(
+    state, window, (operations) => operations, (job) => job.ops,
+    async () => { dialogs += 1; }, () => [],
+    () => ({ needsType: false, needsPlanningType: false, needsManualPrice: false }),
+    () => "signature", () => true, () => false,
+    async () => { dialogs += 1; return null; }, () => {}, () => {}, () => {},
+  );
+  const validateScheduleConfiguration = Function(
+    "state", "window", "currentPlanOperations", "isJobSelected", "isPlanCompletedOperation",
+    "isJobLocked", "shouldAutoFreezeOperation", "capabilityFromOperation", "findOperation",
+    "toolCatalogForAppOperation", "subcontractDaysForAppOperation", "isSubcontractAppOperation",
+    "normalizeStatus",
+    `${validation}; return validateScheduleConfiguration;`,
+  )(
+    state, window, () => [unaffected, scoped],
+    () => true, () => false, () => false, () => false,
+    () => ({ label: "SUBCONTRATO", ct: "3000" }), (id) => [unaffected, scoped].find((op) => op.id === id),
+    () => null, () => ({ days: 0 }), () => true,
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+  assert.equal(await prepareJobForPlanning({ ot: "200", ops: [scoped], parte: "P" }, { reuseConfirmed: true }), true);
+  assert.equal(dialogs, 0);
+  assert.equal(state.preparedPlanningByOt[200], "signature");
+  assert.equal(validateScheduleConfiguration(new Date(), ["200"]), null);
+  assert.deepEqual(validatedOperations, [scoped]);
+});
+
+test("agregar o arrastrar una OT consulta su ruta directa una vez por sesion antes de planearla", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const selection = app.slice(
+    app.indexOf("function selectJob("),
+    app.indexOf("async function prepareJobForPlanning(", app.indexOf("function selectJob(")),
+  );
+  const backlog = app.slice(
+    app.indexOf("function renderPriorityList()"),
+    app.indexOf("function renderPriorityQueue()", app.indexOf("function renderPriorityList()")),
+  );
+  const drag = app.slice(
+    app.indexOf("function finishBacklogDrag("),
+    app.indexOf("function jobPlanningOperations()", app.indexOf("function finishBacklogDrag(")),
+  );
+
+  assert.match(selection, /if \(selected && !alreadySelected\) \{/);
+  assert.match(selection, /await ensureWorkOrderPlanningData\(ot\)/);
+  assert.doesNotMatch(selection, /ensurePlanningDataLoaded\(true, \{ force: true \}\)/);
+  assert.match(selection, /setIndividualPlanningBusy\(ot, true\)/);
+  assert.match(selection, /finally[\s\S]*setIndividualPlanningBusy\(ot, false\)/);
+  assert.match(selection, /job = getPriorityJobs\(\)\.find\(\(item\) => materialOtKey\(item\.ot\) === otKey\)/);
+  assert.match(selection, /if \(!hasIndividualPlanningOperations\(ot\) \|\| !jobPlanningOperations\(job\)\.length\)[\s\S]*return;/);
+  assert.match(backlog, /selectJob\(job\.ot, true\)/);
+  assert.match(drag, /selectJob\(sourceOt, true\)/);
+});
+
+test("completar una operacion usa guardado atomico y render parcial", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const persistence = app.slice(
+    app.indexOf("async function performToggleOperationPlanStatus("),
+    app.indexOf("function renderProductionReportTable(", app.indexOf("async function persistOptimisticPlanStatus(")),
+  );
+
+  assert.match(persistence, /PPSupabaseBridgeReplacement\.saveOperationPlanStatus/);
+  assert.match(persistence, /const stateOperation = state\.operations\.find/);
+  assert.match(persistence, /const reportOperation = reportOperationsSource\(\)\.find/);
+  assert.match(persistence, /if \(stateOperation\) \{[\s\S]*operation\.needsReschedule = true/);
+  assert.match(persistence, /renderPlanStatusChange\(\)/);
+  assert.doesNotMatch(persistence, /\brender\(\)/);
+});
+
+test("reportes de borrador usan operaciones actuales y publicado permanece inmutable", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const reportSource = app.slice(
+    app.indexOf("function currentDraftReportSnapshot()"),
+    app.indexOf("function reportSourceLabel()", app.indexOf("function reportOperationsSource()")),
+  );
+  const staleSource = app.slice(
+    app.indexOf("function stalePublishedPieces("),
+    app.indexOf("function weeklyJobSummary(", app.indexOf("function stalePublishedPieces(")),
+  );
+  const included = { id: "included", ot: "100", secuencia: 2, pendingPieces: 5 };
+  const excluded = { id: "excluded", ot: "100", secuencia: 1, pendingPieces: 5 };
+  const state = { planStart: "2026-07-20", operations: [excluded, included] };
+  const currentDraftScheduledOperations = () => [included];
+  const makeReportOperationsSource = (reportSnapshot) => Function(
+    "state", "reportSnapshot", "window", "currentDraftScheduledOperations",
+    `${reportSource}; return reportOperationsSource;`,
+  )(state, reportSnapshot, { PlanningWorkflowCore: { mondayIso: () => "2026-07-20" } }, currentDraftScheduledOperations);
+
+  const draftSource = makeReportOperationsSource({
+    snapshotId: "draft",
+    excludedCapabilities: [],
+    operations: [excluded, included],
+  });
+  const defaultSource = makeReportOperationsSource(null);
+  const publishedSource = makeReportOperationsSource({
+    snapshotId: "published-1",
+    operations: [excluded, included],
+  });
+
+  assert.deepEqual(draftSource().map((op) => op.id), ["included"]);
+  assert.deepEqual(defaultSource().map((op) => op.id), ["included"]);
+  assert.deepEqual(publishedSource().map((op) => op.id), ["excluded", "included"]);
+
+  const stalePublishedPieces = Function(
+    "state", "reportOperationsSource", "isJobScheduled", "isPlanCompletedOperation",
+    "isClosedJobStatus", "jobStatusForOt", "opStart", "opEnd", "sequenceSort",
+    "pendingPiecesForWorkOrder", "workOrderForOt", "window", "jobStatusFromOperations",
+    "materialOtKey",
+    `${staleSource}; return stalePublishedPieces;`,
+  )(
+    state, draftSource, () => true, () => false, () => false, () => "",
+    () => new Date("2026-07-01T07:00:00"), () => new Date("2026-07-01T08:00:00"),
+    (a, b) => a.secuencia - b.secuencia, () => 0, () => null,
+    { PlannerCore: { isPlanCompletedOperation: () => false } },
+    () => "PLAN",
+    (value) => String(value || "").trim().toUpperCase(),
+  );
+
+  assert.deepEqual(stalePublishedPieces(new Date("2026-07-20T00:00:00"), draftSource(), state), {
+    initialCut: 5,
+    finishing: 5,
+  });
+});
+
+test("exportCsv omite capacidades excluidas del borrador", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
+  );
+  const state = { operations: [{ id: "keep" }, { id: "drop" }] };
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
+    `${exportSource}; return exportCsv;`,
+  )(
+    state,
+    { PlanningWorkflowCore: { draftExportOperations: (value) => value.operations } },
+    () => [state.operations[0]],
+    ["ID"],
+    (op) => [op.id],
+    (value) => String(value),
+    (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "draft" } },
+    () => [state.operations[0]],
+  );
+
+  await exportCsv();
+
+  assert.match(exported, /keep/);
+  assert.doesNotMatch(exported, /drop/);
+});
+
+test("exportCsv exporta las operaciones del plan publicado seleccionado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
+  );
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
+    `${exportSource}; return exportCsv;`,
+  )(
+    {},
+    { PlanningWorkflowCore: {} },
+    () => [],
+    ["OT"],
+    (op) => [op.ot],
+    (value) => String(value),
+    (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "snap-1" } },
+    () => [{ ot: "200" }, { ot: "300" }],
+  );
+
+  await exportCsv();
+
+  assert.match(exported, /200/);
+  assert.match(exported, /300/);
+});
+
+test("exportCsv antepone el BOM UTF-8 para que Excel abra los acentos bien", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const exportSource = app.slice(
+    app.indexOf("async function exportCsv()"),
+    app.indexOf("async function exportSourceOperations("),
+  );
+  let exported = "";
+  const exportCsv = Function(
+    "state", "window", "currentPlanOperations", "PLAN_HEADERS", "operationToRow",
+    "csvCell", "downloadBlob", "els", "exportSourceOperations",
+    `${exportSource}; return exportCsv;`,
+  )(
+    {},
+    { PlanningWorkflowCore: {} },
+    () => [],
+    ["DESCRIPCION"],
+    (op) => [op.descripcion],
+    (value) => String(value),
+    (value) => { exported = value; },
+    { exportSnapshotSelect: { value: "draft" } },
+    () => [{ descripcion: "INSPECCIÓN DE PIEZAS" }],
+  );
+
+  await exportCsv();
+
+  assert.ok(exported.startsWith("\uFEFF"), "el CSV debe arrancar con BOM UTF-8");
+  assert.match(exported, /INSPECCIÓN/);
+});
+
+test("PLAN_HEADERS documenta las columnas del CSV exportado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const headersSource = app.slice(app.indexOf("const PLAN_HEADERS = ["), app.indexOf("const FIELD_MAP =", app.indexOf("const PLAN_HEADERS = [")));
+  const PLAN_HEADERS = Function(`${headersSource}; return PLAN_HEADERS;`)();
+
+assert.deepEqual(PLAN_HEADERS, [
+    "NUM", "OT", "PARTE", "DESCRIPCION", "CONTENIDO", "PRIORIDAD", "FECHA_REQ",
+    "CANT_TOTAL", "SECUENCIA", "CT", "OPERADOR", "MAQUINA", "HERRAMENTAL",
+    "KIT_HERRAMENTAL", "CANT_PENDIENTE", "TIEMPO_CICLO", "TIEMPO_SETUP", "TIEMPO_PROD",
+    "FECHA_INICIO", "HORA_INICIO", "FECHA_FIN", "HORA_FIN", "TIPO_INSERCION", "ESTATUS",
+    "LOG", "DIAS_SUBCONTRATO", "KIT_PENDIENTE", "AUTO_FROZEN", "HERRAMENTAL_ORIGEN",
+    "KIT_ORIGEN", "HERRAMENTAL_DESTINO", "KIT_DESTINO", "COMENTARIO", "PRECIO", "MONTO",
+    "GENERADO_EL",
+  ]);
+});
+
+test("operationToRow calcula PRECIO y MONTO desde la OT cuando la operacion no los trae", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PRECIO", "MONTO"],
+    { PRECIO: "unitPrice", MONTO: "amount" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+  );
+
+  const row = operationToRow({ ot: "100", unitPrice: 10, amount: 200 });
+  assert.deepEqual(row, [10, 200]);
+
+  const computed = operationToRow({ ot: "200" });
+  assert.deepEqual(computed, [12.5, 250]);
+});
+
+test("operationToRow ignora PRECIO/MONTO residuales (< $1 MXN) o en cero y cae al precio de la OT", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PRECIO", "MONTO"],
+    { PRECIO: "unitPrice", MONTO: "amount" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+  );
+
+  const residual = operationToRow({ ot: "300", unitPrice: 0.01, amount: 0.02 });
+  assert.deepEqual(residual, [12.5, 250]);
+
+  const zeroed = operationToRow({ ot: "400", unitPrice: 0, amount: 0 });
+  assert.deepEqual(zeroed, [12.5, 250]);
+});
+
+test("operationToRow resuelve CT por descripcion y cantidad desde la OT cuando la operacion trae SIN_CT o 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt", "window", "state",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["CT", "CANT_PENDIENTE", "CANT_TOTAL"],
+    { CT: "ct", CANT_PENDIENTE: "cantPendiente", CANT_TOTAL: "cantTotal" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+    { PlannerCore: { capabilityForOperation: (op) => ({ ct: op.ct === "SIN_CT" ? "5458" : op.ct, label: op.descripcion }) } },
+    { configuredCapabilities: ["5458::3OTD_:_CORTE_DE_TUBO"] },
+    () => 50,
+    () => ({ pendingQuantity: 50 }),
+  );
+
+  const resolved = operationToRow({ ot: "3298", ct: "SIN_CT", descripcion: "3OTD : CORTE DE TUBO", cantPendiente: 0, cantTotal: 0 });
+  assert.deepEqual(resolved, ["5458", 50, 50]);
+
+  const preserved = operationToRow({ ot: "3298", ct: "5458", descripcion: "3OTD : CORTE DE TUBO", cantPendiente: 12, cantTotal: 15 });
+  assert.deepEqual(preserved, ["5458", 12, 15]);
+});
+
+test("operationToRow rellena PARTE desde la ficha de la OT cuando la operacion no trae articulo", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const rowSource = app.slice(
+    app.indexOf("function operationToRow("),
+    app.indexOf("function scheduledProductionMinutesForExport(", app.indexOf("function operationToRow(")),
+  );
+  const operationToRow = Function(
+    "PLAN_HEADERS", "FIELD_MAP", "scheduledProductionMinutesForExport",
+    "effectiveUnitPriceForOt", "amountForOt", "window", "state",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    `${rowSource}; return operationToRow;`,
+  )(
+    ["PARTE"],
+    { PARTE: "parte" },
+    () => 0,
+    () => 12.5,
+    () => 250,
+    {},
+    {},
+    () => 0,
+    (ot) => (ot === "2624" ? { item: "F66-2767-200" } : null),
+  );
+
+  const fromOp = operationToRow({ ot: "2624", parte: "TRL 200" });
+  assert.deepEqual(fromOp, ["TRL 200"]);
+
+  const fromWorkOrder = operationToRow({ ot: "2624" });
+  assert.deepEqual(fromWorkOrder, ["F66-2767-200"]);
+
+  const blank = operationToRow({ ot: "9999" });
+  assert.deepEqual(blank, [""]);
+});
+
+test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPriceForOt cae a precio manual si ambos son 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const priceSource = app.slice(
+    app.indexOf("function invoiceUnitPriceForOt("),
+    app.indexOf("function effectiveWorkOrderDueDate(", app.indexOf("function invoiceUnitPriceForOt(")),
+  );
+  const workOrders = {
+    "100": { lastSalePrice: 500, averageSalePrice: 784.5 },
+    "200": { lastSalePrice: 40, averageSalePrice: 700 },
+    "300": { lastSalePrice: 0, averageSalePrice: 0 },
+  };
+  const invoiceUnitPriceForOt = Function(
+    "workOrderForOt", "effectiveUnitPriceForOt", "amountForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOtRef",
+    `${priceSource}; return invoiceUnitPriceForOt;`,
+  )((ot) => workOrders[ot]);
+  const effectiveUnitPriceForOt = Function(
+    "workOrderForOt", "invoiceUnitPriceForOt", "effectiveUnitPriceForOt", "amountForOt",
+    "pendingPiecesForWorkOrder", "articleConfigurationValue", "articleForOt",
+    `${priceSource}; return effectiveUnitPriceForOt;`,
+  )(
+    (ot) => workOrders[ot],
+    (ot) => workOrders[ot] && Math.max(workOrders[ot].lastSalePrice || 0, workOrders[ot].averageSalePrice || 0),
+    () => 0,
+    () => 0,
+    () => 0,
+    () => ({ manualUnitPrice: 99 }),
+    () => "ART",
+  );
+
+  assert.equal(invoiceUnitPriceForOt("100"), 784.5);
+  assert.equal(invoiceUnitPriceForOt("200"), 700);
+  assert.equal(invoiceUnitPriceForOt("300"), 0);
+  assert.equal(effectiveUnitPriceForOt("100"), 784.5);
+  assert.equal(effectiveUnitPriceForOt("300"), 99);
+});
+
+test("commercialPlanningRequirement no pide precio si la operacion ya tiene unitPrice/amount >= 1", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function maxOperationPriceSignalForOt(");
+  const end = app.indexOf("function applyCommercialPlanningRequirement(", start);
+  assert.ok(start >= 0 && end > start, "bloque commercialPlanningRequirement debe existir");
+  const source = app.slice(start, end);
+  assert.match(source, /needsManualPrice: !isComponentCommercialType\(commercialType\)\s*&& !\(invoicePrice > 0\) && !\(manualPrice > 0\) && !\(operationPrice >= 1\)/);
+
+  const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: manual, jobType, planningType: "NORMAL" }),
+    () => invoice,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" });
+
+  assert.equal(make([{ ot: "3537", unitPrice: 12.5, amount: 25 }]).needsManualPrice, false);
+  assert.equal(make([{ ot: "3537", unitPrice: 0, amount: 500 }]).needsManualPrice, false);
+  assert.equal(make([{ ot: "3537", unitPrice: 0.01, amount: 0.02 }]).needsManualPrice, true);
+  assert.equal(make([]).needsManualPrice, true);
+  assert.equal(make([], 80).needsManualPrice, false);
+  assert.equal(make([], 0, 45).needsManualPrice, false);
+});
+
+test("RULE-REP-022: un COMPONENTE no pide precio en \"preparar trabajo\" y se queda en 0", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function maxOperationPriceSignalForOt(");
+  const end = app.indexOf("function applyCommercialPlanningRequirement(", start);
+  assert.ok(start >= 0 && end > start, "el bloque de COMPONENTE debe existir");
+  assert.ok(app.indexOf('const COMPONENT_COMMERCIAL_TYPE = "COMPONENTE"') > start, "COMPONENT_COMMERCIAL_TYPE va antes de commercialPlanningRequirement");
+  const source = app.slice(start, end);
+
+  // El helper no puede apoyarse en normalizeStatus: con un valor falso devuelve "PLAN", y
+  // comparar contra "PLAN" para decidir si algo es COMPONENTE es una trampa silenciosa.
+  const helper = Function(`${source}; return isComponentCommercialType;`)();
+  assert.equal(helper("COMPONENTE"), true);
+  assert.equal(helper("  componente "), true);
+  assert.equal(helper("Componente"), true);
+  assert.equal(helper("LINEA"), false);
+  assert.equal(helper("ESPECIAL"), false);
+  assert.equal(helper(""), false);
+  assert.equal(helper(undefined), false);
+  assert.equal(helper(null), false);
+  assert.equal(helper(0), false);
+
+  // needsManualPrice tiene que quedar en false para COMPONENTE aunque no haya ninguna de las
+  // tres fuentes de precio: ese es exactamente el caso que antes obligaba a escribir $1.00.
+  const make = (operations, invoice = 0, manual = 0, jobType = "") => Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: manual, jobType, planningType: "NORMAL" }),
+    () => invoice,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" });
+
+  assert.equal(make([]).needsManualPrice, true, "sin tipo sigue pidiendo precio");
+  assert.equal(make([], 0, 0, "COMPONENTE").needsManualPrice, false, "COMPONENTE sin ningun precio");
+  assert.equal(make([], 0, 0, "COMPONENTE").isComponent, true);
+  assert.equal(make([{ ot: "3537", unitPrice: 0.01, amount: 0.02 }], 0, 0, "COMPONENTE").needsManualPrice, false);
+  assert.equal(make([], 0, 0, "LINEA").needsManualPrice, true, "LINEA si sigue pidiendo precio");
+  assert.equal(make([], 0, 0, "linea").needsManualPrice, true, "el tipo se compara sin distinguir mayusculas");
+
+  // El tipo elegido en el dialogo manda sobre el guardado, para que elegir COMPONENTE esconda
+  // el campo de entrada y no despues de confirmar.
+  const override = Function(
+    "state", "materialOtKey", "articleConfigurationValue", "invoiceUnitPriceForOt",
+    "pendingPiecesForWorkOrder", "workOrderForOt",
+    // RULE-OT-056: sin otConfigurations no hay captura por OT; cae al config del articulo.
+    `const otCommercialConfigurationFor = () => null; ${source}; return commercialPlanningRequirement;`,
+  )(
+    { operations: [] },
+    (value) => String(value || "").trim().toUpperCase(),
+    () => ({ manualUnitPrice: 0, jobType: "LINEA", planningType: "NORMAL" }),
+    () => 0,
+    () => 10,
+    () => null,
+  )({ ot: "3537", parte: "COMP-1000" }, { commercialType: "COMPONENTE" });
+  assert.equal(override.needsManualPrice, false, "elegir COMPONENTE en el dialogo quita el precio");
+  assert.equal(override.currentType, "COMPONENTE");
+});
+
+test("RULE-REP-022: applyCommercialPlanningRequirement no escribe precio en un COMPONENTE", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function applyCommercialPlanningRequirement(");
+  const end = app.indexOf("function buildPlanningRequirements(", start);
+  assert.ok(start >= 0 && end > start, "applyCommercialPlanningRequirement debe existir");
+  const source = app.slice(start, end);
+  assert.match(source, /if \(!\(commercial\.invoicePrice > 0\) && !isComponentCommercialType\(selectedType\)\)/);
+
+  const apply = Function(
+    "articleConfigurationFor", "isComponentCommercialType", "suggestedPlanningTypeForJob",
+    // RULE-OT-056: la captura por OT va a un objeto desechable; el assert mira el config del
+    // articulo como hasta ahora.
+    `const otConfigurationFor = () => ({}); const rememberLocalOtConfigurationEdit = () => {}; ${source}; return applyCommercialPlanningRequirement;`,
+  );
+
+  const base = { invoicePrice: 0, manualPrice: 0, currentType: "", currentPlanningType: "" };
+  const job = { ot: "3537", parte: "COMP-1000" };
+
+  // COMPONENTE: ni escribe el precio capturado ni el que ya estaba. Se queda como estaba.
+  const configA = { manualUnitPrice: 0, jobType: "", planningType: "" };
+  apply(() => configA, () => true, () => "NORMAL")(
+    job, { ot_job_type: "COMPONENTE", ot_manual_price: "1250" }, base);
+  assert.equal(configA.jobType, "COMPONENTE");
+  assert.equal(configA.manualUnitPrice, 0, "un COMPONENTE no se valora con el precio capturado");
+
+  const configB = { manualUnitPrice: 1, jobType: "", planningType: "" };
+  apply(() => configB, () => true, () => "NORMAL")(
+    job, { ot_job_type: "COMPONENTE", ot_manual_price: "1" }, base);
+  assert.equal(configB.manualUnitPrice, 1, "no borra el valor previo: ese dato lo puso una persona");
+
+  // Los demas tipos siguen escribiendo como antes.
+  const configC = { manualUnitPrice: 0, jobType: "", planningType: "" };
+  apply(() => configC, () => false, () => "NORMAL")(
+    job, { ot_job_type: "LINEA", ot_manual_price: "840.5" }, base);
+  assert.equal(configC.manualUnitPrice, 840.5, "una linea si se valora");
+});
+
+test("RULE-REP-025: el precio unitario temporal puede quedar en 0 o vacio; solo un negativo bloquea", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function confirmZeroManualPrice(");
+  const end = app.indexOf("function closePlanningDialog(", start) > start
+    ? app.indexOf("function closePlanningDialog(", start)
+    : start + 1200;
+  const source = app.slice(start, end);
+  assert.match(source, /Number\(input\.value \|\| 0\) >= 0/);
+  assert.match(source, /no puede ser negativo/);
+
+  const confirm = Function("showToast", "isComponentCommercialType", `${source}; return confirmZeroManualPrice;`)(
+    () => {}, (value) => String(value || "").trim().toUpperCase() === "COMPONENTE",
+  );
+  const form = (price, type) => ({
+    elements: {
+      namedItem: (name) => (name === "ot_manual_price"
+        ? { value: price, focus() {} }
+        : { value: type }),
+    },
+  });
+
+  assert.equal(confirm(form("0", "LINEA")), true, "una linea en 0 avanza (RULE-REP-025)");
+  assert.equal(confirm(form("", "LINEA")), true, "una linea con el campo vacio avanza");
+  assert.equal(confirm(form("0", "COMPONENTE")), true);
+  assert.equal(confirm(form("1", "LINEA")), true);
+  assert.equal(confirm({}), true, "sin campo de precio no hay nada que confirmar");
+});
+
+test("RULE-REP-022: el dialogo esconde el precio en el acto al elegir COMPONENTE", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  // El campo de precio lleva una clase propia para poder esconderlo, y el setup escucha el
+  // select de tipo comercial. Sin esto el required del input dejaria el formulario sin enviar.
+  assert.match(app, /<label class="planning-price-field">Precio unitario temporal/);
+  assert.match(app, /const typeSelect = els\.planningDialogBody\.querySelector\('select\[name="ot_job_type"\]'\);/);
+  assert.match(app, /const priceLabel = els\.planningDialogBody\.querySelector\("\.planning-price-field"\);/);
+  assert.match(app, /typeSelect\.addEventListener\("change", syncPriceField\);/);
+  assert.match(app, /input\.required = false;/);
+  assert.match(app, /input\.min = componente \? "" : "0";/);
+  // El marcador de abajo ya no lista solo tres tipos: COMPONENTE tambien es opcion valida.
+  assert.match(app, /<option value="">Selecciona el tipo comercial<\/option>/);
+});
+
+test("mergeIndividualWorkOrder no bloquea precio remoto positivo por local en 0 y conserva dueDateOverride/foto locales", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const mergeSource = app.slice(
+    app.indexOf("function mergeIndividualWorkOrder("),
+    app.indexOf("function mergeIndividualPlanningOperationCatalog(", app.indexOf("function mergeIndividualWorkOrder(")),
+  );
+  const mergeIndividualWorkOrder = Function(`${mergeSource}; return mergeIndividualWorkOrder;`)();
+
+  const localZero = mergeIndividualWorkOrder(
+    { ot: "100", lastSalePrice: 320, averageSalePrice: 410, averageSalePriceFrom: "2026-03-05" },
+    { ot: "100", lastSalePrice: 0, averageSalePrice: 0, dueDateOverride: "2026-08-01", photoUrl: "local.jpg" },
+    "100",
+  );
+  assert.equal(localZero.lastSalePrice, 320);
+  assert.equal(localZero.averageSalePrice, 410);
+  assert.equal(localZero.averageSalePriceFrom, "2026-03-05");
+  assert.equal(localZero.dueDateOverride, "2026-08-01");
+  assert.equal(localZero.photoUrl, "local.jpg");
+
+  const localPositive = mergeIndividualWorkOrder(
+    { ot: "200", lastSalePrice: 0, averageSalePrice: 0 },
+    { ot: "200", lastSalePrice: 500, averageSalePrice: 784.5 },
+    "200",
+  );
+  assert.equal(localPositive.lastSalePrice, 500);
+  assert.equal(localPositive.averageSalePrice, 784.5);
+});
+
+test("mergeIndividualPlanningOperation y mergeIndividualPlanningData conservan unitPrice/amount locales positivos", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const mergeOpSource = app.slice(
+    app.indexOf("function mergeIndividualPlanningOperation("),
+    app.indexOf("function mergeIndividualPlanningOperationsPreserving(", app.indexOf("function mergeIndividualPlanningOperation(")),
+  );
+  const mergeIndividualPlanningOperation = Function(`${mergeOpSource}; return mergeIndividualPlanningOperation;`)();
+
+  const matched = mergeIndividualPlanningOperation(
+    { id: "remote", ot: "3424", secuencia: 1, ct: "5458", tiempoProd: 20 },
+    { id: "local", ot: "3424", secuencia: 1, ct: "5458", tiempoProd: 8, unitPrice: 320, amount: 11200 },
+  );
+  assert.equal(matched.unitPrice, 320);
+  assert.equal(matched.amount, 11200);
+  assert.equal(matched.tiempoProd, 20);
+
+  const preserveSource = app.slice(
+    app.indexOf("function preserveImportedOperationPrices("),
+    app.indexOf("function applyNetSuiteWorkOrdersPayload(", app.indexOf("function preserveImportedOperationPrices(")),
+  );
+  const preserveImportedOperationPrices = Function(
+    "materialOtKey",
+    `${preserveSource}; return preserveImportedOperationPrices;`,
+  )((value) => String(value || "").trim().toUpperCase());
+
+  const dataMerge = app.slice(
+    app.indexOf("function mergeIndividualPlanningData("),
+    app.indexOf("function ensureWorkOrderPlanningData(", app.indexOf("function mergeIndividualPlanningData(")),
+  );
+  assert.match(dataMerge, /preserveImportedOperationPrices\(existingOperations, mergedOperations\)/);
+  assert.match(app.slice(
+    app.indexOf("function applyForcedOtPlanningData("),
+    app.indexOf("async function updateSelectedOtFromNetSuite(", app.indexOf("function applyForcedOtPlanningData(")),
+  ), /preserveImportedOperationPrices\(existingOperations, mergedOperations\)/);
+
+  const fallback = preserveImportedOperationPrices(
+    [{ id: "local", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 1935, amount: 967500 }],
+    [{ id: "remote", ot: "3607", secuencia: 1, ct: "5458", unitPrice: 0, amount: 0 }],
+  );
+  assert.equal(fallback[0].unitPrice, 1935);
+  assert.equal(fallback[0].amount, 967500);
+});
+
+test("importJson adopta y limpia operationCatalogWarning", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const importSource = app.slice(
+    app.indexOf("function importJson("),
+    app.indexOf("function importCsv(", app.indexOf("function importJson(")),
+  );
+  const importJson = Function(
+    "normalizeOperation", "normalizeCapabilityKeys",
+    `${importSource}; return importJson;`,
+  )((op) => op, (values) => values);
+
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "Catalogo no disponible",
+  })).operationCatalogWarning, "Catalogo no disponible");
+  assert.equal(importJson(JSON.stringify({
+    operations: [],
+    operationCatalogWarning: "",
+  })).operationCatalogWarning, "");
+});
+
+test("renderWeekReport incluye cargas de operadores solo para el PDF del plan", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const reportSource = app.slice(
+    app.indexOf("function renderWeekReport()"),
+    app.indexOf("function weeklyExecutiveSummary("),
+  );
+
+  assert.match(reportSource, /Cargas de operadores/);
+  assert.match(reportSource, /renderReportOperatorLoads/);
+  assert.match(reportSource, /loads-table/);
+  assert.match(reportSource, /OT que inician/);
+  assert.match(reportSource, /Acabado \/ OT que terminan/);
+});
+
+test("identificador semanal distingue versiones y nextWeeklyVersion cuenta publicaciones de la misma semana", async () => {
+  const coreSource = await readFile(path.join(process.cwd(), "src", "web", "planning", "planning-workflow-core.js"), "utf8");
+  const sandbox = { module: { exports: {} }, exports: {}, console, globalThis: {} };
+  sandbox.window = sandbox;
+  runInNewContext(coreSource, sandbox);
+  const core = sandbox.module.exports;
+
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 1), "24/08/2026");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 2), "24/08/2026 version 1");
+  assert.equal(core.weeklyPlanIdentifier("2026-08-24", 3), "24/08/2026 version 2");
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-24", version: 1 }], "2026-08-24"), 2);
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-24", version: 1 }, { weekStart: "2026-08-24", version: 2 }], "2026-08-24"), 3);
+  assert.equal(core.nextWeeklyVersion([{ weekStart: "2026-08-17", version: 9 }], "2026-08-24"), 1);
+});
+
+test("publicar plan guarda la nueva version directo, sin dialogo de motivo ni comparacion con version anterior y no usa window.prompt", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const publish = app.slice(
+    app.indexOf("async function publishCurrentPlan("),
+    app.indexOf("async function generatePlanPdf("),
+  );
+
+  assert.doesNotMatch(publish, /window\.prompt/);
+  assert.doesNotMatch(publish, /Guardar PDF de la version anterior/);
+  assert.doesNotMatch(publish, /name="publication_reason"[\s\S]*required/);
+  assert.doesNotMatch(publish, /Captura el motivo de la nueva version/);
+  assert.doesNotMatch(publish, /compactVersionDiff\(/);
+  assert.doesNotMatch(publish, /callAppsScript\("publishDraftPlan", payload\)/);
+  // 2026-10-04: esto era la foto del defecto. Publicar guardaba con persistPlanSnapshot(), que
+  // vuelve a escribir la fila 'draft' con status BORRADOR y deja el payload PUBLICADO sin usar, asi
+  // que plan_snapshots no tenia ninguna fila publicada y el desplegable de planes
+  // (planSourceOptionsMarkup -> operationalPlanOptions, que solo deja pasar las PUBLICADO) ofrecia
+  // solo el borrador. MEDIDO en produccion ese dia: 1 plan guardado.
+  //
+  // SIN COMENTARIOS para la negativa: el comentario de app.js que explica el cambio NOMBRA la
+  // llamada vieja, y un doesNotMatch sobre el texto entero se enciende con el comentario.
+  const publishEjecutable = publish
+    .split(/\r?\n/)
+    .filter((linea) => !/^\s*\/\//.test(linea))
+    .join("\n");
+  assert.doesNotMatch(publishEjecutable, /persistPlanSnapshot\(\)/);
+  assert.match(
+    publishEjecutable,
+    /PPSupabaseBridgeReplacement\.publishDraftPlan\(payload\)/,
+    "publicar tiene que escribir la fila PUBLICADO con su propio snapshot_id, no volver a guardar el borrador",
+  );
+});
+
+test("bloquear/desbloquear OT no vuelve al render global y usa el indice operationsByOt", async () => {
+  const planningApp = await readFile(new URL("../src/web/planning/app.js", import.meta.url), "utf8");
+  const lockSource = planningApp.slice(
+    planningApp.indexOf("function toggleJobLock("),
+    planningApp.indexOf("function toggleAllJobs("),
+  );
+  assert.match(lockSource, /planningStateIndexes\(\)\.operationsByOt\.get\(materialOtKey\(ot\)\)/);
+  assert.match(lockSource, /renderPriorityQueue\(\)/);
+  assert.match(lockSource, /updateJobLockDetail\(ot\)/);
+  assert.match(lockSource, /scheduleJobLockBackgroundWork\(\)/);
+  assert.match(lockSource, /saveState\("plan"\)/);
+  assert.doesNotMatch(lockSource, /saveAndRender\(/);
+  assert.doesNotMatch(lockSource, /state\.operations\.filter\(\(op\) => op\.ot === ot\)/);
+  assert.match(planningApp, /function scheduleJobLockBackgroundWork\(\)/);
+  assert.match(planningApp, /jobLockBackgroundRefreshPending/);
+});
+
+test("liberacion final detecta 16OC/39OTD por ct o por descripcion cuando el feed trae SIN_CT", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("const FINAL_RELEASE_OPERATION_CTS");
+  const end = app.indexOf("function reportOperationCommentCell(", start);
+  assert.ok(start >= 0 && end > start, "bloque finalRelease debe existir");
+  const source = app.slice(start, end);
+  const match = Function("window", "state", `${source}; return finalReleaseOperationMatch;`)({ PlannerCore: {} }, {});
+
+  assert.deepEqual(match({ ct: "5504", descripcion: "x" }), { ct: "5504", label: "39OTD" });
+  assert.deepEqual(match({ ct: "5537", descripcion: "x" }), { ct: "5537", label: "16OC" });
+  assert.deepEqual(match({ ct: "SIN_CT", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }), { ct: "5537", label: "16OC" });
+  assert.deepEqual(match({ ct: "SIN_CT", descripcion: "39OTD : INSPECCION Y LIBERACIÓN DE PIEZAS TERMINADA" }), { ct: "5504", label: "39OTD" });
+  assert.deepEqual(match({ ct: "", descripcion: "16OC : LIBERACION DE PIEZAS" }), { ct: "5537", label: "16OC" });
+  assert.equal(match({ ct: "SIN_CT", descripcion: "23OTD : INSPECCION DE ARMADO Y PUNTEADO DE PIEZAS" }), null);
+  assert.equal(match({ ct: "SIN_CT", descripcion: "26OTD : UBICACION PARA PERFORADO" }), null);
+  assert.equal(match({ ct: "5459", descripcion: "16OC : LIBERACIÓN DE PIEZAS" }), null);
+  assert.equal(match(null), null);
+
+  const withCatalog = Function(
+    "window", "state",
+    `${source}; return finalReleaseOperationMatch;`,
+  )(
+    { PlannerCore: { capabilityForOperation: () => ({ ct: "5537" }) } },
+    {},
+  );
+  assert.deepEqual(withCatalog({ ct: "SIN_CT", descripcion: "OTRA OPS" }), { ct: "5537", label: "16OC" });
+});
+
+test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no esta en workOrders", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function workOrderForSource(");
+  const end = app.indexOf("function renderReleaseReport(", start);
+  assert.ok(start >= 0 && end > start, "el bloque del reporte de liberacion debe existir");
+  const source = app.slice(start, end);
+  const buildRows = ({ reportState, workOrder, built, total = null, pendingPieces = 1 }) => Function(
+    "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
+    "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
+    "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
+    `${source}; return releaseReportRows;`,
+  )(
+    () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
+    () => true,
+    (op) => ({ ct: op.ct, label: "16OC" }),
+    (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
+    (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
+    (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
+    () => reportState,
+    (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
+    () => built,
+    () => total,
+    (s, ot) => (Array.isArray(s?.workOrders) ? s.workOrders : []).find((item) => String(item?.ot) === String(ot)) || null,
+    (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
+    (ot) => String(ot),
+    (ot, summaries) => String(ot),
+  );
+
+  const rowsClosed = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: 1, total: 1 })();
+  assert.equal(rowsClosed.length, 1);
+  assert.equal(rowsClosed[0].built, 1);
+  assert.equal(rowsClosed[0].quantity, 1);
+
+  const rowsOpen = buildRows({ reportState: { workOrders: [{ ot: "3483", builtQuantity: 0, quantity: 15 }], closedWorkOrderSummaries: {} }, workOrder: { builtQuantity: 0, quantity: 15 }, built: 15, total: 15 })();
+  assert.equal(rowsOpen[0].built, 15);
+  assert.equal(rowsOpen[0].quantity, 15);
+
+  const rowsWithoutInspection = buildRows({ reportState: { workOrders: [{ ot: "3483", builtQuantity: 4, quantity: 15 }], closedWorkOrderSummaries: {} }, workOrder: { builtQuantity: 4, quantity: 15 }, built: null })();
+  assert.equal(rowsWithoutInspection[0].built, 4);
+  assert.equal(rowsWithoutInspection[0].quantity, 15);
+
+  const rowsWithoutTotal = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: null, pendingPieces: 7 })();
+  assert.equal(rowsWithoutTotal[0].quantity, 7);
+});
+
+test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la fuente del reporte (RULE-REP-028)", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function workOrderForSource(");
+  const end = app.indexOf("function renderReleaseReport(", start);
+  assert.ok(start >= 0 && end > start, "el bloque del reporte de liberacion debe existir");
+  // Incluye workOrderForSource + closedSummaryForSource + releaseReportRows. sourceStateForReports
+  // se inyecta como parametro para controlar la fuente (borrador vs snapshot publicado).
+  const source = app.slice(start, end);
+  const closedSummary = { item: "EG40 MUFFLER", quantity: 40, pendingQuantity: 12, builtQuantity: 28 };
+  const buildRows = ({ reportState, workOrder = null, built = null, total = null, pendingPieces = 1 }) => Function(
+    "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
+    "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
+    "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
+    `${source}; return releaseReportRows;`,
+  )(
+    () => [{ ot: "4701", parte: "", secuencia: 1, ct: "5537", fechaFin: "2026-07-23", pendingPieces }],
+    () => true,
+    (op) => ({ ct: op.ct, label: "16OC" }),
+    (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
+    (op) => (op.fechaInicio ? new Date(`${op.fechaInicio}T08:00:00`) : null),
+    (op) => (op.fechaFin ? new Date(`${op.fechaFin}T16:00:00`) : null),
+    () => reportState,
+    (order) => (order ? Math.max(0, Number(order.quantity || 0) - Number(order.builtQuantity || 0)) : 0),
+    () => built,
+    () => total,
+    (s, ot) => (Array.isArray(s?.workOrders) ? s.workOrders : []).find((item) => String(item?.ot) === String(ot)) || null,
+    (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
+    (ot) => String(ot),
+    (ot, summaries) => String(ot),
+  );
+
+  // OT cerrada retirada del borrador: el borrador actual NO la tiene (workOrders vacio), pero el
+  // SNAPSHOT publicado SÍ la trae en su workOrders/closedWorkOrderSummaries. El articulo y el
+  // ensamblado deben salir de la fuente del reporte (el snapshot), no del borrador (bug usuario
+  // 2026-10-24, plan 19/10 v2: articulos en blanco).
+  const rows = buildRows({
+    reportState: { workOrders: [], closedWorkOrderSummaries: { 4701: closedSummary } },
+    pendingPieces: null,
+  })();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].article, "EG40 MUFFLER", "el articulo se toma del resumen compacto de la fuente (snapshot)");
+  assert.equal(rows[0].built, 28, "el ensamblado se toma del resumen de la fuente");
+  assert.equal(rows[0].quantity, 12, "la cantidad pendiente se toma del resumen de la fuente");
+
+  // Una OT con ficha VIVA en el snapshot (abierta): el articulo sale de workOrder.item del snapshot.
+  const rowsOpen = buildRows({
+    reportState: { workOrders: [{ ot: "4701", item: "AM M66-6542-0320", quantity: 40, builtQuantity: 28 }], closedWorkOrderSummaries: {} },
+    pendingPieces: null,
+  })();
+  assert.equal(rowsOpen[0].article, "AM M66-6542-0320", "el articulo se toma de la ficha del snapshot cuando esta abierta");
+
+  // Sin snapshot (borrador), el resumen compacto del borrador sigue funcionando (RULE-OT-049).
+  const rowsDraft = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: { 4701: closedSummary } } })();
+  assert.equal(rowsDraft[0].article, "EG40 MUFFLER", "en el borrador el resumen compacto sigue siendo la fuente");
+});
+
+test("toolChangeReportComment no duplica el wrap cuando log/comentario ya trae el comentario formateado", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function toolChangeReportData(");
+  const end = app.indexOf("function reportSelectionLabel(", start);
+  assert.ok(start >= 0 && end > start, "bloque toolChangeReport debe existir");
+  const source = app.slice(start, end);
+  const helpers = `
+    function cleanToolValue(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const upper = text.toUpperCase();
+      if (["NO", "N/A", "NA", "-", "VACIO", "VACÍO"].includes(upper)) return "";
+      return text;
+    }
+    function normalizeStatus(value) { return String(value || "").trim().toUpperCase(); }
+  `;
+  const comment = Function(
+    `${helpers}; ${source}; return toolChangeReportComment;`,
+  )();
+
+  const fromLog = comment({ log: "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)", herramental: "5 x 6" });
+  assert.equal(fromLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+  assert.ok(!fromLog.endsWith("))"), "no debe cerrar con doble parentesis");
+
+  const fromComentario = comment({ comentario: "Cambio de herramental de (4 x 5 --> 5 X 8)", log: "" });
+  assert.equal(fromComentario, "Cambio de herramental de (4 x 5 --> 5 X 8)");
+
+  const stored = comment({ toolChangeFromHerramental: "4 x 5", toolChangeToHerramental: "5 x 6", log: "Cambio de herramental de (X --> Y)" });
+  assert.equal(stored, "Cambio de herramental de (4 x 5 --> 5 x 6)");
+
+  const rawLog = comment({ log: "PLANNER_CORE_V2 SIN_ANTECEDENTE -> 5 x 6", herramental: "5 x 6" });
+  assert.equal(rawLog, "Cambio de herramental de (SIN HERRAMENTAL --> 5 x 6)");
+});
+
+test("skills.html se publica conectado a Supabase (reemplazo del puente) con resaltado de operaciones sin operador", async () => {
+  const result = await buildProject(SIN_PORTAPAPELES);
+  const skills = await readFile(path.join(result.siteDir, "skills.html"), "utf8");
+  const distSkills = await readFile(path.join(result.distDir, "IndexSkills.html"), "utf8");
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const styles = await readFile(path.join(process.cwd(), "src", "web", "planning", "styles.css"), "utf8");
+
+  // Desde RULE-SUP-030 el puente esta deshabilitado y skills ya NO lo monta: la pagina
+  // lee y escribe por Supabase, igual que la principal (RULE-MAT-012, migrada 2026-10-07).
+  assert.match(skills, /PPSupabaseBridgeReplacement/);
+  assert.match(skills, /PPSupabaseReader/);
+  assert.match(skills, /PPSupabaseWriter/);
+  assert.match(skills, /getAppStateIfChanged/);
+  assert.match(skills, /getAppState\(\)/);
+  assert.match(skills, /saveSkillState/);
+  assert.doesNotMatch(skills, /PPAppsScriptBridge/);
+  assert.doesNotMatch(skills, /AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q/);
+  assert.match(skills, /matrix-row-no-operator/);
+  assert.doesNotMatch(skills, /\{\{[A-Z0-9_]+\}\}/);
+  assert.doesNotMatch(skills, /__PP_APPS_SCRIPT_WEB_APP_URL__/);
+  assert.doesNotMatch(skills, /__PP_SUPABASE_(URL|ANON_KEY)__/);
+  assert.match(distSkills, /PPSupabaseBridgeReplacement/);
+  assert.doesNotMatch(distSkills, /PPAppsScriptBridge/);
+  assert.match(distSkills, /matrix-row-no-operator/);
+  assert.doesNotMatch(distSkills, /\{\{[A-Z0-9_]+\}\}/);
+  assert.match(app, /hasAssignedOperator/);
+  assert.match(app, /matrix-row-no-operator/);
+  assert.match(styles, /\.matrix-row-no-operator td \{ background: #fdecea;/);
+  assert.match(styles, /\.matrix-table tbody tr\.matrix-row-no-operator td:first-child \{ background: #fdecea; box-shadow: inset 3px 0 0 #d9534f;/);
+});
+
+test("skills.html espeja matrixSavePayload y recarga en CONFLICT_REVISION", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const payloadStart = skills.indexOf("function matrixSavePayload()");
+  const payloadEnd = skills.indexOf("function setStatus(", payloadStart);
+  const payload = skills.slice(payloadStart, payloadEnd);
+
+  assert.match(payload, /settings: clone\(state\.settings \|\| \{\}\)/);
+  assert.match(payload, /capacityMinutes: state\.capacityMinutes/);
+  assert.match(payload, /operationCatalog: clone\(state\.operationCatalog \|\| \[\]\)/);
+  assert.match(payload, /matrix: clone\(state\.matrix \|\| \{\}\)/);
+  // La rejilla completa viaja en el payload: sin ella el mapear de la tabla `matrix`
+  // no escribe habilitado=false y DESMARCAR no persiste (RULE-MAT-012, medido 2026-10-07).
+  assert.match(payload, /matrixFull: clone\(state\.matrixFull \|\| \[\]\)/);
+  assert.match(payload, /operators: \[\.\.\.\(state\.operators \|\| \[\]\)\]/);
+  assert.match(payload, /excludedCapabilities: normalizeCapabilityKeys\(state\.excludedCapabilities\)/);
+  assert.match(payload, /revision: Number\(state\.revision \|\| 0\)/);
+  assert.match(performanceClient, /function baseSavePayload\(\)[\s\S]*settings: clone\(state\.settings \|\| \{\}\)/);
+  assert.match(performanceClient, /function matrixSavePayload\(\)\s*\{[^}]*\.\.\.baseSavePayload\(\)/);
+  assert.match(skills, /CONFLICT_REVISION/);
+  assert.match(skills, /getAppStateIfChanged/);
+  assert.doesNotMatch(skills, /PPAppsScriptBridge/);
+  assert.match(skills, /PPSupabaseBridgeReplacement/);
+  assert.match(skills, /hydrateSkillsCache|pp-skills-matrix-v1/);
+  assert.doesNotMatch(skills, /legacy-note/);
+  assert.doesNotMatch(skills, /Vista independiente/);
+  assert.match(skills, /await loadState\(\{ silent: false, force: true \}\)/);
+  assert.match(skills, /matrix-row-no-operator/);
+  assert.match(skills, /Sin operador/);
+  assert.doesNotMatch(skills, /data-remove-operator=/);
+  assert.doesNotMatch(skills, /data-remove-capability=/);
+  assert.doesNotMatch(skills, /data-add-operator/);
+  assert.doesNotMatch(skills, /operator-name-input/);
+});
+
+test("skills.html aplana la importacion de Supabase (catalogs bajo raiz) y reintenta al entrar", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+
+  // El aplanado existe y la vista de la matriz lo consume antes de normalizar.
+  assert.match(skills, /function aplanarImportacion\(/);
+  assert.match(skills, /Object\.assign\(\{\}, catalogs, imported\)/);
+  assert.match(skills, /state = normalizeImportedState\(aplanarImportacion\(imported\)\)/);
+
+  // La lectura anonima (sin JWT) con RLS `to authenticated` responde 200 con cero
+  // filas: la vista avisa y espera a que entren para releer, como la web principal.
+  assert.match(skills, /sessionRequired/);
+  assert.match(skills, /"pp:sesion"/);
+  assert.match(skills, /void loadState\(\{ silent: false, force: true \}\)/);
+
+  // Comportamiento: se extrae la funcion del fuente y se ejecuta con la forma del
+  // lector (catalogs anidados + raiz) para probar el mismo contrato.
+  const inicio = skills.indexOf("function aplanarImportacion(");
+  assert.ok(inicio >= 0, "aplanarImportacion esta definida");
+  const fin = skills.indexOf("\n}\n", inicio) + 3;
+  const aplanar = new Function(`return (${skills.slice(inicio, fin)});`)();
+
+  const plano = aplanar({
+    catalogs: {
+      matrix: { "CT CORTE::CORTE": ["FORMADO 1"] },
+      operators: ["FORMADO 1"],
+      operationCatalog: [{ key: "CT CORTE::CORTE", ct: "CORTE", label: "CORTE" }],
+      capacityModes: { "CT CORTE::CORTE": "FINITA" },
+      operationRules: {},
+      operatorPerformance: {},
+      configuredCapabilities: ["CT CORTE::CORTE"],
+    },
+    operations: [{ id: "op-1" }],
+    revision: 7,
+    savedAt: "2026-10-07T00:00:00Z",
+    source: "supabase",
+  });
+  assert.deepEqual(plano.matrix, { "CT CORTE::CORTE": ["FORMADO 1"] }, "matrix pasa a la raiz");
+  assert.deepEqual(plano.operators, ["FORMADO 1"], "operators pasa a la raiz");
+  assert.deepEqual(plano.operationCatalog, [{ key: "CT CORTE::CORTE", ct: "CORTE", label: "CORTE" }], "operationCatalog pasa a la raiz");
+  assert.equal(plano.revision, 7, "revision de la raiz se conserva");
+  assert.equal(plano.operations[0].id, "op-1", "operations de la raiz se conserva");
+
+  // La raiz gana sobre catalogs si las dos traen la misma clave (revision, savedAt...).
+  const gananRaiz = aplanar({ catalogs: { matrix: "de-catalogos" }, matrix: "de-raiz" });
+  assert.equal(gananRaiz.matrix, "de-raiz", "la raiz gana sobre catalogs");
+
+  // Sin `catalogs` (estado ya plano o cached), no se toca nada.
+  const yaPlano = aplanar({ matrix: "plana", operators: [] });
+  assert.deepEqual(yaPlano, { matrix: "plana", operators: [] }, "sin catalogs se devuelve igual");
+});
+
+test("skills.html mantiene matrixFull sincronizado al marcar/desmarcar (bug usuario 2026-10-24: desmarcar no persistia)", async () => {
+  const skills = await readFile(path.join(process.cwd(), "src", "web", "skills", "IndexSkills.html"), "utf8");
+  // El escritor usa state.matrixFull como UNIVERSO (supabase-writer.js, matriz.mapear):
+  // si la pareja desmarcada no esta en matrixFull, no se emite ninguna fila con
+  // habilitado:false y la base conserva el true. El toggle debe actualizar el universo.
+  const syncInicio = skills.indexOf("function syncMatrixFull(");
+  assert.ok(syncInicio >= 0, "syncMatrixFull esta definida");
+  const syncFin = skills.indexOf("\n}\n", syncInicio) + 3;
+  const syncFn = skills.slice(syncInicio, syncFin);
+
+  const togInicio = skills.indexOf("function toggleMatrix(");
+  const togFin = skills.indexOf("\n}\n", togInicio) + 3;
+  const togFn = skills.slice(togInicio, togFin);
+
+  // Ejecutamos syncMatrixFull + toggleMatrix en un scope donde `state` y `dirty` son
+  // variables locales (como en el modulo de skills) y se inyectan por parametro.
+  const api = new Function(
+    "baseAllowedOperatorsForCapability",
+    `let state;\nlet dirty;\n${syncFn}\n${togFn}\nreturn function(_state, key, operator, checked, capability) {
+      state = _state; dirty = false;
+      toggleMatrix(key, operator, checked, capability);
+      return { dirty, matrixFull: state.matrixFull, matrix: state.matrix };
+    };`,
+  )(() => []);
+
+  function correr(matrixFull, matrix, key, operator, checked, capability) {
+    const state = { matrixFull: JSON.parse(JSON.stringify(matrixFull)), matrix: JSON.parse(JSON.stringify(matrix)) };
+    return api(state, key, operator, checked, capability);
+  }
+
+  // Desmarcar una pareja que NO estaba en matrixFull (recien marcada en esta sesion): debe
+  // entrar al universo con habilitado:false para que el mapper mande el false.
+  let r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: true }],
+    { "C::D": ["OP1", "OP2"] },
+    "C::D", "OP2", false,
+  );
+  assert.deepEqual(r.matrixFull, [
+    { capabilityKey: "C::D", operator: "OP1", habilitado: true },
+    { capabilityKey: "C::D", operator: "OP2", habilitado: false },
+  ], "la pareja desmarcada entra al universo con false");
+
+  // Desmarcar una pareja que SI estaba: se actualiza su habilitado a false.
+  r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: true }],
+    { "C::D": ["OP1"] },
+    "C::D", "OP1", false,
+  );
+  assert.deepEqual(r.matrixFull, [{ capabilityKey: "C::D", operator: "OP1", habilitado: false }]);
+
+  // Marcar una pareja nueva: entra al universo con true.
+  r = correr(
+    [{ capabilityKey: "C::D", operator: "OP1", habilitado: false }],
+    { "C::D": ["OP1"] },
+    "C::D", "OP2", true,
+  );
+  assert.deepEqual(r.matrixFull, [
+    { capabilityKey: "C::D", operator: "OP1", habilitado: false },
+    { capabilityKey: "C::D", operator: "OP2", habilitado: true },
+  ]);
+
+  // Y el toggle la llama para que el estado y el universo no se separen.
+  assert.match(togFn, /syncMatrixFull\(key, operator, checked\);/);
+
+  // FIX 2026-10-24 (bug usuario): al guardar la matriz, skills.html avisa a la principal por
+  // BroadcastChannel (o el evento `storage`) para que refresque la matriz de inmediato, sin
+  // esperar a que la pestana vuelva a ser visible. El emisor vive junto a saveNow.
+  assert.match(skills, /function emitirMatrizCambio\(revision\)/);
+  assert.match(skills, /new BroadcastChannel\(MATRIZ_CAMBIO_CANAL\)/);
+  assert.match(skills, /canalMatriz\.postMessage\(payload\)/);
+  assert.match(skills, /emitirMatrizCambio\(state\.revision\)/);
+});
+
+test("el payload de guardado por puente no deep-clona el estado: el postMessage ya lo copia", async () => {
+  const performanceClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "performance-client.js"), "utf8");
+  const bridgeClient = await readFile(path.join(process.cwd(), "src", "web", "shared", "apps-script-bridge-client.js"), "utf8");
+  const payloadStart = performanceClient.indexOf("function baseSavePayload()");
+  const payloadEnd = performanceClient.indexOf("function saveJobsForScopes(", payloadStart);
+  const payloads = performanceClient.slice(payloadStart, payloadEnd);
+
+  assert.doesNotMatch(payloads, /operations: clone\(/);
+  assert.doesNotMatch(payloads, /workOrders: clone\(/);
+  assert.doesNotMatch(payloads, /otConfigurations: clone\(/);
+  assert.doesNotMatch(payloads, /articleConfigurations: clone\(/);
+  assert.doesNotMatch(payloads, /operationPlanStatuses: clone\(/);
+  assert.match(payloads, /operations: state\.operations \|\| \[\]/);
+  assert.match(payloads, /operationPlanStatuses: state\.operationPlanStatuses \|\| \{\}/);
+  assert.match(bridgeClient, /El puente de Apps Script esta deshabilitado/);
+
+  const state = {
+    operations: [{ id: "op-1", ot: "100", log: "PLAN" }],
+    workOrders: [{ ot: "100", quantity: 5 }],
+    otConfigurations: { 100: { machine: "M1" } },
+    articleConfigurations: { P1: { manualUnitPrice: 3 } },
+    operationPlanStatuses: { "100|1": { status: "HECHA", origin: "draft" } },
+    machines: [{ id: "M1" }],
+    toolCatalog: [],
+    calendarExceptions: [],
+    subcontracts: [],
+    otTypes: [],
+    workSchedule: {},
+    dailyBreaks: {},
+    operators: ["ANA"],
+    operatorProfiles: {},
+    operatorCapacity: {},
+    operatorPerformance: {},
+    configuredCapabilities: [],
+    customCapabilities: [],
+    hiddenCapabilities: [],
+    capacityModes: {},
+    operationRules: {},
+    operationCatalog: [],
+    matrix: {},
+    excludedCapabilities: [],
+    selectedOts: [],
+    lockedOts: [],
+    expandedOts: [],
+  };
+  const api = Function(
+    "state",
+    "clone",
+    "normalizeCapabilityKeys",
+    `${payloads}; return { planningSavePayload, catalogSavePayload, matrixSavePayload };`,
+  )(
+    state,
+    (value) => JSON.parse(JSON.stringify(value)),
+    (value) => value,
+  );
+
+  const planning = api.planningSavePayload();
+  assert.equal(planning.operations, state.operations);
+  assert.equal(planning.workOrders, state.workOrders);
+  assert.equal(planning.operationPlanStatuses, state.operationPlanStatuses);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.operations)), state.operations);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.operationPlanStatuses)), state.operationPlanStatuses);
+  assert.deepEqual(JSON.parse(JSON.stringify(planning.otConfigurations)), state.otConfigurations);
+
+  const catalog = api.catalogSavePayload();
+  assert.equal(catalog.otConfigurations, state.otConfigurations);
+  assert.equal(catalog.articleConfigurations, state.articleConfigurations);
+  assert.deepEqual(JSON.parse(JSON.stringify(catalog.machines)), state.machines);
+
+  const matrix = api.matrixSavePayload();
+  assert.equal(matrix.operations, state.operations);
+  assert.deepEqual(JSON.parse(JSON.stringify(matrix.operators)), state.operators);
+});
+
+// ============================================================================
+// LA CREDENCIAL DE SUPABASE: DE DONDE SALE Y QUE NO PUEDE SALIR
+// MEDIDO 2026-10-02. Que se lea del portapapeles no es un detalle de comodidad: es la diferencia
+// entre pegar la clave y pegar el EJEMPLO. La primera vez que se intento, la linea
+// `$env:SUPABASE_ANON_KEY = '<sb_publishable_...>'` de ejemplo del aviso se copio tal cual, el build
+// paso las 1365 pruebas y "Validacion correcta", y salio un bundle con
+// `DEFAULT_ANON_KEY = "<sb_publishable_...>"`: el lector ENCENDIDO (isConfigured() da true porque
+// es un string no vacio) saliendo a pedir las 24 tablas y volviendo 401 en todas, sin ningun aviso.
+// Estos tests fijan las tres reglas que evitan que eso vuelva: el entorno gana, el portapapeles se
+// lee entero y por FORMA, y lo que no tiene forma de credencial no se publica.
+// ============================================================================
+
+// El entorno se limpia y se restaura porque estas pruebas no pueden depender de que la consola que
+// las corre tenga (o no tenga) las variables exportadas: el caso que importa es "no hay variable".
+function sinCredencialesEnElEntorno(ejecutar) {
+  const antes = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  try {
+    return ejecutar();
+  } finally {
+    if (antes.url === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = antes.url;
+    if (antes.key === undefined) delete process.env.SUPABASE_ANON_KEY;
+    else process.env.SUPABASE_ANON_KEY = antes.key;
+  }
+}
+
+const URL_REAL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+const CLAVE_REAL = "sb_publishable_abcdef0123456789abcdef";
+
+test("la variable de entorno gana sobre el portapapeles, y no al reves", () => {
+  sinCredencialesEnElEntorno(() => {
+    process.env.SUPABASE_URL = URL_REAL;
+    process.env.SUPABASE_ANON_KEY = CLAVE_REAL;
+    const desdePortapapeles = resolverCredencialesSupabase({
+      portapapeles: ["https://otro-proyecto.supabase.co", "sb_publishable_del_portapapeles_000"],
+    });
+    // El orden importa por un motivo concreto: si el portapapeles llegara a ganarle, un
+    // `npm run check` en una consola que no exporto nada meteria una clave vieja que alguien
+    // copio hace tres dias, y el aviso del gate no diria nada porque para el build si hay credencial.
+    assert.equal(desdePortapapeles.url.valor, URL_REAL);
+    assert.equal(desdePortapapeles.anonKey.valor, CLAVE_REAL);
+    assert.match(desdePortapapeles.url.origen, /variable de entorno SUPABASE_URL/);
+    assert.match(desdePortapapeles.anonKey.origen, /variable de entorno SUPABASE_ANON_KEY/);
+  });
+});
+
+test("una sola copia con las dos credenciales resuelve las dos", () => {
+  sinCredencialesEnElEntorno(() => {
+    // El caso real: en el panel de API Keys hay URL y clave. Copiar las dos lineas y construir UNA
+    // vez. Antes, cuando solo se leia la primera linea, habia que copiar, construir, copiar y
+    // volver a construir, y en el medio un bundle salia con la URL y sin la clave.
+    const dos = resolverCredencialesSupabase({ portapapeles: [URL_REAL, CLAVE_REAL] });
+    assert.equal(dos.url.valor, URL_REAL);
+    assert.equal(dos.anonKey.valor, CLAVE_REAL);
+    assert.equal(dos.url.origen, "portapapeles");
+    assert.equal(dos.anonKey.origen, "portapapeles");
+
+    // Y al reves, que tambien es como se copia segun de donde este el bloque en la pagina.
+    const alRevez = resolverCredencialesSupabase({ portapapeles: [CLAVE_REAL, URL_REAL] });
+    assert.equal(alRevez.url.valor, URL_REAL);
+    assert.equal(alRevez.anonKey.valor, CLAVE_REAL);
+  });
+});
+
+test("copiar la pagina de API Keys entera no cuela texto de interfaz como credencial", () => {
+  sinCredencialesEnElEntorno(() => {
+    // MEDIDO 2026-10-02: la URL tenia filtro de forma y por eso no pasaba; la CLAVE no tenia
+    // ninguno, y con el portapapeles la primera linea que no era un ejemplo ganaba. Copiando la
+    // pagina entera, la clave del bundle llego a ser literalmente la palabra "supabase".
+    const pagina = resolverCredencialesSupabase({
+      portapapeles: [
+        "supabase",
+        "API Keys",
+        "Project URL",
+        URL_REAL,
+        "anon public",
+        "Publishable key",
+        CLAVE_REAL,
+        "secret key",
+      ],
+    });
+    assert.equal(pagina.url.valor, URL_REAL);
+    assert.equal(pagina.anonKey.valor, CLAVE_REAL, "la clave del panel no debe caer en 'supabase' ni en 'Project URL'");
+  });
+});
+
+test("el texto de ejemplo del aviso y las claves que no son de la API no se toman", () => {
+  sinCredencialesEnElEntorno(() => {
+    // El caso que rompio el build: la linea DE EJEMPLO del propio aviso. Con la variable de
+    // entorno esto no pasaba porque el nombre de la variable era la llave; del portapapeles puede
+    // llegar cualquier cosa, y este texto es el mas probable de todos porque es lo que el propio
+    // proyecto le pide al usuario que copie.
+    const ejemplo = resolverCredencialesSupabase({ portapapeles: ["<sb_publishable_...>", URL_REAL] });
+    assert.equal(ejemplo.anonKey.valor, "", "el texto de ejemplo se colaria como credencial");
+    assert.equal(ejemplo.anonKey.vacia ?? true, true);
+    assert.equal(ejemplo.url.valor, URL_REAL, "una credencial sucia no puede tumbar a la otra");
+
+    // Y lo que no tiene forma de clave: ni el portapapeles ni un ejemplo, solo texto.
+    const texto = resolverCredencialesSupabase({ portapapeles: ["Settings > API Keys", "copiar", "anon"] });
+    assert.equal(texto.url.valor, "");
+    assert.equal(texto.anonKey.valor, "");
+
+    // Una clave de servicio (sb_secret_) NO es la credencial del cliente: el bundle es publico, y
+    // RLS es lo unico entre esa clave y los datos. Por eso se rechaza por forma y no por valor.
+    const secreto = resolverCredencialesSupabase({ portapapeles: [URL_REAL, "sb_secret_abcdef0123456789abcdef"] });
+    assert.equal(secreto.anonKey.valor, "", "una secret key jamas debe entrar en el bundle del cliente");
+
+    // Una URL que no es de Supabase tampoco: el filtro es de forma de proyecto, no "algo que
+    // empiece por https".
+    const otraUrl = resolverCredencialesSupabase({ portapapeles: ["https://mi-servidor.example.com/api"] });
+    assert.equal(otraUrl.url.valor, "");
+  });
+});
+
+test("portapapeles: [] deja el build sin credenciales sin volver a preguntar al portapapeles", () => {
+  sinCredencialesEnElEntorno(() => {
+    // Que `[]` sea un caso valido y no un "no me pases nada" es lo que hace falta para que las
+    // pruebas sean hermeticas: si `[]` cayera en la lectura real, estas pruebas volverian a
+    // depender de lo que tenga copiado quien las corre.
+    const vacio = resolverCredencialesSupabase({ portapapeles: [] });
+    assert.equal(vacio.url.valor, "");
+    assert.equal(vacio.anonKey.valor, "");
+    assert.equal(vacio.url.origen, "ninguno");
+    assert.equal(vacio.anonKey.origen, "ninguno");
+  });
+});
+
+test("el bundle sale con la credencial del portapapeles en los TRES modulos que la llevan", async () => {
+  const antes = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  try {
+    const result = await buildProject({ portapapeles: [URL_REAL, CLAVE_REAL] });
+    const destinos = [
+      path.join(result.distDir, "Index.html"),
+      path.join(result.siteDir, "index.html"),
+      path.join(result.siteDir, "skills.html"),
+      path.join(result.siteDir, "operator.html"),
+    ];
+    // MEDIDO 2026-10-07: TRES de esos cuatro archivos montan los clientes. `skills.html`
+    // tambien los monta desde la migracion a Supabase (RULE-MAT-012, 2026-10-07); solo
+    // `operator.html` va por su propia plantilla (IndexOperator.html) y no lleva lector ni
+    // escritor. La primera version de esta prueba exigia las credenciales en los cuatro y
+    // fallaba con "aparecio 0" en skills.html, o sea que estaba pidiendo una credencial en
+    // una pagina que no la usa.
+    const conClientes = [
+      path.join(result.distDir, "Index.html"),
+      path.join(result.siteDir, "index.html"),
+      path.join(result.siteDir, "skills.html"),
+    ];
+    // MEDIDO 2026-10-02: son TRES, no cuatro. `catalog-boot` no lleva marcador: pide url y clave a
+    // `PPSupabaseReader.config()` (supabase-catalog-boot.js:200), o sea que hereda la credencial. La
+    // primera version de esta prueba decia cuatro, asi que ademas de fallar estaba affirmando una
+    // regla del build que no existe; el conteo se usa para que un cliente que se quede con el
+    // marcador o con "" salga con nombre y todo.
+    for (const archivo of conClientes) {
+      const txt = await readFile(archivo, "utf8");
+      const urls = txt.match(/https:\/\/xtgtfjcwxcoxvixholpj\.supabase\.co/g) || [];
+      const claves = txt.match(/sb_publishable_abcdef0123456789abcdef/g) || [];
+      assert.equal(urls.length, 3, `${path.basename(archivo)}: la URL debe aparecer en lector, auth y escritor (3 veces), aparecio ${urls.length}`);
+      assert.equal(claves.length, 3, `${path.basename(archivo)}: la clave debe aparecer en lector, auth y escritor (3 veces), aparecio ${claves.length}`);
+      assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/);
+    }
+    // catalog-boot tiene que seguir TOMANDO la config del lector. Si algum dia le ponen su
+    // propio marcador, el conteo de arriba no lo nota, pero esta linea si: seria una quinta
+    // fuente de credencial, y de las que se contradicen solas. Solo va en las dos paginas de
+    // planeacion: skills.html no monta catalog-boot (RULE-MAT-012, 2026-10-07).
+    for (const archivo of [path.join(result.distDir, "Index.html"), path.join(result.siteDir, "index.html")]) {
+      const txt = await readFile(archivo, "utf8");
+      assert.match(txt, /PPSupabaseReader[\s\S]{0,400}?\bconfig\(\)|\bconfig\(\)[\s\S]{0,200}?PPSupabaseReader/);
+    }
+    // En las cuatro, en cambio, no puede quedar ni un marcador sin reemplazar: publicar una pagina
+    // con `__PP_SUPABASE_ANON_KEY__` metido en el JavaScript es publicar algo roto.
+    for (const archivo of destinos) {
+      const txt = await readFile(archivo, "utf8");
+      assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/, `${path.basename(archivo)} quedo con un marcador de credencial sin reemplazar`);
+    }
+    // Y el build dice DE DONDE salio, sin imprimir el valor.
+    assert.deepEqual(result.credenciales, [
+      { nombre: "SUPABASE_URL", origen: "portapapeles", vacia: false },
+      { nombre: "SUPABASE_ANON_KEY", origen: "portapapeles", vacia: false },
+    ]);
+    assert.doesNotMatch(JSON.stringify(result.credenciales), new RegExp(CLAVE_REAL));
+  } finally {
+    if (antes.url === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = antes.url;
+    if (antes.key === undefined) delete process.env.SUPABASE_ANON_KEY;
+    else process.env.SUPABASE_ANON_KEY = antes.key;
+  }
+});
+
+test("el aviso de credenciales dice que hay portapapeles y que el texto de ejemplo NO sirve", async () => {
+  // El aviso de check-project.mjs es lo primero que lee quien no sabe que falta la clave, y el
+  // 2026-10-02 se demostro que su propio texto de ejemplo se puede copiar por error. Si el aviso no
+  // dice que existe el atajo del portapapeles, el unico camino que ofrece es teclear, o sea volver
+  // al problema. Y si vuelve a poner una clave de ejemplo en el texto, tiene que decir que no se
+  // copie tal cual.
+  const check = await readFile(new URL("../scripts/check-project.mjs", import.meta.url), "utf8");
+  const bloqueDelAviso = check.slice(check.indexOf("AVISO: el build salio SIN credenciales"));
+  assert.match(bloqueDelAviso, /PORTAPAPELES|portapapeles/);
+  assert.match(bloqueDelAviso, /no (se )?(copie|copie|tome|tomes) tal cual/i);
+});
+
+test("RULE-REP-026: Generar PDF elige entre Borrador y los planes guardados", async () => {
+  // El clic en Generar PDF ya no pasa el evento como id de snapshot: la fuente la resuelve
+  // choosePdfSource con un dialogo que ofrece el borrador en edicion y los planes guardados.
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const source = app.slice(app.indexOf("function pdfSourceOptions("), app.indexOf("async function generatePlanPdf("));
+  const snapshots = [
+    { snapshotId: "snap-1", generatedAt: "2026-10-17T18:00:00Z", planStart: "2026-10-19", operations: 120, publishedAt: "2026-10-17T19:00:00Z" },
+    { snapshotId: "snap-2", generatedAt: "2026-10-16T18:00:00Z", planStart: "2026-10-19", operations: 118 },
+  ];
+  const helpersWith = (list, published, dialog) => Function(
+    "planSnapshots", "publishedSnapshotIds", "formatDateTime", "escapeHtml", "reportSnapshot", "openPlanningDialog",
+    `${source}; return { pdfSourceOptions, choosePdfSource };`,
+  )(list, () => new Set(published), (date) => date.toISOString(), (value) => String(value), { snapshotId: "draft" }, dialog);
+
+  const conPlanes = helpersWith(snapshots, ["snap-1"], async (config) => { conPlanes.dialog = config; return { snapshot_id: "snap-2" }; });
+  const options = conPlanes.pdfSourceOptions();
+  assert.equal(options.length, 3);
+  assert.deepEqual(options.map((option) => option.id), ["draft", "snap-1", "snap-2"]);
+  assert.match(options[0].label, /Borrador/);
+  assert.match(options[1].label, /PLAN PUBLICADO/);
+  assert.match(options[2].label, /PLAN GUARDADO/);
+  assert.equal(await conPlanes.choosePdfSource(), "snap-2");
+  assert.match(conPlanes.dialog.body, /<option value="draft"/);
+  assert.match(conPlanes.dialog.body, /name="snapshot_id"/);
+  assert.match(conPlanes.dialog.confirmLabel, /Generar PDF/);
+
+  const sinPlanes = helpersWith([], [], async () => { throw new Error("no debe abrir dialogo sin planes"); });
+  assert.equal(await sinPlanes.choosePdfSource(), "draft");
+
+  const cancelado = helpersWith(snapshots, ["snap-1"], async () => null);
+  assert.equal(await cancelado.choosePdfSource(), null);
 });

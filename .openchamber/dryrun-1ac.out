@@ -1,0 +1,132 @@
+[planning dry-run] cargando base incremental
+[planning dry-run] validando OTs listas
+[planning dry-run] preparando borrador temporal
+[planning dry-run] iniciando scheduler; el navegador puede estar ocupado hasta 300s
+[planner-budget-init] strategy=balanced budgetCheckLimit=150000000 timeBudgetMs=300000 startedAtWallMs=1788041123237 now=1788041123243
+[planning dry-run] scheduler progress {phase: strategy:balanced:start, elapsedMs: 7, scheduled: 0, total: 0, stats: Object}
+[planner-budget] checks=100000 limit=150000000 wallMs=377 perfMs=377.2999999523163 phase=allocate-work
+[planner-budget] checks=200000 limit=150000000 wallMs=643 perfMs=643.5 phase=slot-probes
+[planner-budget] checks=300000 limit=150000000 wallMs=935 perfMs=935.4000000953674 phase=allocate-work:calendar
+[planner-budget] checks=400000 limit=150000000 wallMs=1160 perfMs=1159.9000000953674 phase=allocate-work
+[planner-budget] checks=500000 limit=150000000 wallMs=1392 perfMs=1392.2000000476837 phase=slot-probes
+[planner-budget] checks=600000 limit=150000000 wallMs=1616 perfMs=1616.7000000476837 phase=busy-conflict-scan
+[planner-budget] checks=700000 limit=150000000 wallMs=1838 perfMs=1838.2999999523163 phase=slot-probes
+[planner-budget] checks=800000 limit=150000000 wallMs=2046 perfMs=2046.2000000476837 phase=allocate-work
+[planner-budget] checks=900000 limit=150000000 wallMs=2227 perfMs=2227.4000000953674 phase=slot-probes
+[planner-budget] checks=1000000 limit=150000000 wallMs=2405 perfMs=2405.4000000953674 phase=slot-probes
+[planner-budget] checks=1100000 limit=150000000 wallMs=2605 perfMs=2604.9000000953674 phase=busy-conflict-scan
+[planner-budget] checks=1200000 limit=150000000 wallMs=2801 perfMs=2801.7000000476837 phase=allocate-work
+[planner-budget] checks=1300000 limit=150000000 wallMs=2994 perfMs=2994.7999999523163 phase=slot-probes
+[planner-budget] checks=1400000 limit=150000000 wallMs=3199 perfMs=3199.600000143051 phase=job-scan
+[planner-budget] checks=1500000 limit=150000000 wallMs=3426 perfMs=3426.2000000476837 phase=job-scan
+[planning dry-run] scheduler progress {phase: strategy:finish:start, elapsedMs: 68225, scheduled: 1281, total: 1444, stats: Object}
+[planner-budget-init] strategy=finish budgetCheckLimit=150000000 timeBudgetMs=300000 startedAtWallMs=1788041123237 now=1788041191473
+[planning dry-run] scheduler progress {phase: strategy:finish:start, elapsedMs: 68237, scheduled: 1281, total: 1444, stats: Object}
+[planner-budget] checks=1600000 limit=150000000 wallMs=69107 perfMs=69107.40000009537 phase=job-scan
+[planner-budget] checks=1700000 limit=150000000 wallMs=69444 perfMs=69443.90000009537 phase=allocate-work
+[planner-budget] checks=1800000 limit=150000000 wallMs=69713 perfMs=69712.90000009537 phase=calendar-next-available
+[planner-budget] checks=1900000 limit=150000000 wallMs=69983 perfMs=69982.90000009537 phase=allocate-work
+[planner-budget] checks=2000000 limit=150000000 wallMs=70241 perfMs=70241.40000009537 phase=busy-conflict-scan
+[planner-budget] checks=2100000 limit=150000000 wallMs=70497 perfMs=70497.20000004768 phase=slot-probes
+[planner-budget] checks=2200000 limit=150000000 wallMs=70707 perfMs=70707.40000009537 phase=allocate-work
+[planner-budget] checks=2300000 limit=150000000 wallMs=70928 perfMs=70928 phase=slot-probes
+[planner-budget] checks=2400000 limit=150000000 wallMs=71116 perfMs=71116.29999995232 phase=slot-probes
+[planner-budget] checks=2500000 limit=150000000 wallMs=71325 perfMs=71325.20000004768 phase=allocate-work
+[planner-budget] checks=2600000 limit=150000000 wallMs=71529 perfMs=71529.20000004768 phase=slot-probes
+[planner-budget] checks=2700000 limit=150000000 wallMs=71728 perfMs=71728.79999995232 phase=allocate-work
+[planner-budget] checks=2800000 limit=150000000 wallMs=71900 perfMs=71900.20000004768 phase=slot-probes
+[planner-budget] checks=2900000 limit=150000000 wallMs=72091 perfMs=72091.79999995232 phase=allocate-work
+[planner-budget] checks=3000000 limit=150000000 wallMs=72279 perfMs=72279.70000004768 phase=allocate-work
+[planning dry-run] scheduler progress {phase: strategy:load:start, elapsedMs: 144926, scheduled: 1281, total: 1444, stats: Object}
+[planner-budget-init] strategy=load budgetCheckLimit=150000000 timeBudgetMs=300000 startedAtWallMs=1788041123237 now=1788041268168
+[planning dry-run] scheduler progress {phase: strategy:load:start, elapsedMs: 144932, scheduled: 1281, total: 1444, stats: Object}
+[planner-budget] checks=3100000 limit=150000000 wallMs=145201 perfMs=145201.29999995232 phase=calendar-next-available
+[planner-budget] checks=3200000 limit=150000000 wallMs=145498 perfMs=145498.40000009537 phase=allocate-work
+[planner-budget] checks=3300000 limit=150000000 wallMs=145773 perfMs=145773 phase=busy-conflict-scan
+[planner-budget] checks=3400000 limit=150000000 wallMs=146057 perfMs=146057.40000009537 phase=slot-probes
+[planner-budget] checks=3500000 limit=150000000 wallMs=146298 perfMs=146298.10000014305 phase=slot-probes
+[planner-budget] checks=3600000 limit=150000000 wallMs=146537 perfMs=146537.10000014305 phase=allocate-work
+[planner-budget] checks=3700000 limit=150000000 wallMs=146768 perfMs=146768 phase=slot-probes
+[planner-budget] checks=3800000 limit=150000000 wallMs=146998 perfMs=146998.40000009537 phase=slot-probes
+[planner-budget] checks=3900000 limit=150000000 wallMs=147184 perfMs=147184 phase=busy-conflict-scan
+[planner-budget] checks=4000000 limit=150000000 wallMs=147382 perfMs=147381.90000009537 phase=slot-probes
+[planner-budget] checks=4100000 limit=150000000 wallMs=147579 perfMs=147579.70000004768 phase=allocate-work
+[planner-budget] checks=4200000 limit=150000000 wallMs=147779 perfMs=147779.40000009537 phase=allocate-work
+[planner-budget] checks=4300000 limit=150000000 wallMs=147955 perfMs=147955.20000004768 phase=allocate-work
+[planner-budget] checks=4400000 limit=150000000 wallMs=148142 perfMs=148142.20000004768 phase=slot-probes
+[planner-budget] checks=4500000 limit=150000000 wallMs=148333 perfMs=148333.20000004768 phase=allocate-work
+[planning dry-run] scheduler finalizado
+[planning dry-run] {ok: true, dryRun: true, aborted: false, reason: , startedAt: 2026-08-29T22:05:22.779Z}
+{
+  "selectedOts": 140,
+  "elapsedMs": 221007,
+  "ok": true,
+  "readyOts": 140,
+  "scheduled": 1281,
+  "unscheduled": 163,
+  "strategy": "load",
+  "strategiesStarted": 3,
+  "aborted": false,
+  "reason": "",
+  "lastPhase": "job-scan",
+  "plannerElapsedMs": 220534,
+  "slotProbes": 1536031,
+  "candidateEvals": 44544,
+  "busyScans": 454909,
+  "toolScans": 456030,
+  "blockers": [],
+  "unscheduledByCause": {
+    "SIN_MAQUINA_O_HERRAMENTAL_VALIDO": 12,
+    "SIN_CAPACIDAD_O_HUECO_EN_HORIZONTE_TECNICO": 146,
+    "SIN_OPERADOR_CONFIGURADO": 5
+  },
+  "diagnosticsByCode": {
+    "UNSCHEDULED": 163
+  },
+  "unscheduledAnalysisCount": 163,
+  "unscheduledSample": [],
+  "unscheduledOts": [],
+  "unscheduledOtsCount": 4,
+  "unscheduledOtBreakdown": [
+    {
+      "ot": "3295",
+      "ops": 27
+    },
+    {
+      "ot": "3098",
+      "ops": 25
+    },
+    {
+      "ot": "3186",
+      "ops": 25
+    },
+    {
+      "ot": "3112",
+      "ops": 21
+    },
+    {
+      "ot": "3218",
+      "ops": 20
+    },
+    {
+      "ot": "1905",
+      "ops": 19
+    },
+    {
+      "ot": "3109",
+      "ops": 19
+    },
+    {
+      "ot": "3124",
+      "ops": 19
+    },
+    {
+      "ot": "2748",
+      "ops": 18
+    },
+    {
+      "ot": "2938",
+      "ops": 18
+    }
+  ]
+}

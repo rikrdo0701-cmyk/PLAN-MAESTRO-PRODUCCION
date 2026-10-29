@@ -1,0 +1,54 @@
+{
+  "prep": {
+    "selectedOts": 204,
+    "readyOts": 204,
+    "planStart": "2026-08-28",
+    "horizonDays": 5
+  },
+  "fixPre": {
+    "baseOps": 1121,
+    "week": "2026-08-24",
+    "operationsStartingInWeek": 4,
+    "shouldTriggerFix": false
+  },
+  "dir": {
+    "readyOts": 204,
+    "engineSelectedOts": 204,
+    "resultOpsCount": 2096,
+    "scheduled": 1201,
+    "unscheduled": 886,
+    "minFi": "2026-08-28",
+    "maxFi": "2026-09-25",
+    "opsOn0828": 243,
+    "opsBefore0828": 0,
+    "phase": "busy-conflict-scan",
+    "aborted": true,
+    "reason": "TIME_BUDGET_EXCEEDED",
+    "elapsedMs": 120492,
+    "stats": {
+      "started": 1,
+      "iterations": 1202
+    },
+    "ot3143": [
+      {
+        "fi": "2026-08-28",
+        "hi": "07:00",
+        "sec": 1,
+        "desc": "1OC : CORTE DE DIMENSIÓN"
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "07:24",
+        "sec": 2,
+        "desc": "3OC : REBABEO DE TUBO PARA"
+      },
+      {
+        "fi": "2026-08-28",
+        "hi": "08:24",
+        "sec": 3,
+        "desc": "8OC : LAVADO"
+      }
+    ],
+    "lastScheduleOps": "n/a"
+  }
+}

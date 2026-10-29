@@ -8,6 +8,7 @@
     <title>Planeacion de Produccion</title>
     <style>
 {{PLANNING_STYLES}}
+{{INSPECTION_STYLES}}
 </style>
   </head>
   <body>
@@ -44,9 +45,17 @@
             <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
             <span>Cargas</span>
           </a>
+          <a href="#cuello-botella" class="nav-item" data-section="cuello-botella">
+            <svg viewBox="0 0 24 24"><path d="M8 3h8v4l-2 2v5h2l1 3-1 4H8l-1-4 1-3h2V9L8 7V3Z"/></svg>
+            <span>Cuello de botella</span>
+          </a>
           <a href="#reportes" class="nav-item" data-section="reportes" data-tab="week">
             <svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 11h6M9 15h6"/></svg>
             <span>Reportes</span>
+          </a>
+          <a href="#hoja-inspeccion" class="nav-item" data-section="hoja-inspeccion">
+            <svg viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></svg>
+            <span>Hoja de inspección</span>
           </a>
         </nav>
 
@@ -71,11 +80,16 @@
             <button id="generatePlanBtn" class="button primary" type="button">
               <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg></span>
               <span data-schedule-label>Generar plan</span>
+              <span class="schedule-percent" data-schedule-percent hidden>0%</span>
+              <span class="schedule-progress" aria-hidden="true"><span class="schedule-progress-fill" data-schedule-fill></span></span>
             </button>
             <button id="publishPlanBtn" class="button" type="button">
               <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
-              Publicar plan
+              <span data-schedule-label>Publicar plan</span>
+              <span class="schedule-percent" data-schedule-percent hidden>0%</span>
+              <span class="schedule-progress" aria-hidden="true"><span class="schedule-progress-fill" data-schedule-fill></span></span>
             </button>
+            <button id="restoreDraftBtn" class="button restore-draft-action" type="button">Restaurar borrador</button>
             <button id="undoBtn" class="icon-button" type="button" aria-label="Deshacer ultimo cambio" title="Deshacer">
               <svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M5 12h8a6 6 0 0 1 6 6"/></svg>
             </button>
@@ -91,6 +105,7 @@
               <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h10v6h2a2 2 0 0 1 2 2v5h-4v5H7v-5H3v-5a2 2 0 0 1 2-2h2zM9 17h6M9 13h6"/></svg></span>
               Generar PDF
             </button>
+            <label class="compact-control report-plan-selector"><span>Exportar</span><select id="exportSnapshotSelect"><option value="draft">Borrador</option><option value="">Ultima publicada</option></select></label>
             <button id="exportCsvBtn" class="button" type="button">
               <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg></span>
               Exportar
@@ -121,6 +136,10 @@
           <section class="panel priorities-panel" id="prioridades">
             <div class="panel-header">
               <div><h2>Backlog</h2><span id="priorityCount">0 OTs</span></div>
+              <div class="backlog-actions">
+                <button id="exportBacklogXlsxBtn" class="button small" type="button" title="Descargar el backlog en Excel (.xlsx)">Exportar</button>
+                <button id="syncBacklogOtsBtn" class="button small backlog-sync-button" type="button">Sincronizar OTs</button>
+              </div>
             </div>
             <div class="filter-stack">
               <div class="search-field">
@@ -135,19 +154,26 @@
             <div class="priority-table-head" aria-hidden="true">
               <span>OT / Articulo</span><span>Carga</span>
             </div>
-            <div id="priorityList" class="priority-list"></div>
+            <div class="priority-scroll">
+              <div id="priorityList" class="priority-list"></div>
+              <div id="priorityLoadMoreSentinel" class="backlog-load-more">
+                <button id="priorityLoadMore" class="button small" type="button">Cargar mas OT</button>
+              </div>
+            </div>
           </section>
 
           <section class="panel queue-panel" aria-label="OTs en el plan">
             <div class="panel-header">
               <div><h2>Planeado / Por planear</h2><span id="selectedJobCount">0 en el plan</span></div>
               <div class="queue-actions">
+                <button id="exportQueueXlsxBtn" class="button small" type="button" title="Descargar Planeado / Por planear en Excel (.xlsx)">Exportar</button>
                 <button id="lockAllBtn" class="icon-button" type="button" aria-label="Bloquear todos los trabajos" title="Bloquear todos">
                   <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
                 </button>
                 <button id="unlockAllBtn" class="icon-button" type="button" aria-label="Desbloquear todos los trabajos" title="Desbloquear todos">
                   <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 7.4-2"/></svg>
                 </button>
+                <button id="returnUnlockedToBacklogBtn" class="button small" type="button" aria-label="Enviar trabajos no bloqueados a backlog" title="Enviar no bloqueados a backlog">A backlog</button>
               </div>
             </div>
             <div class="queue-filter">
@@ -157,6 +183,7 @@
               </div>
             </div>
             <p class="queue-help">Arrastra para definir el orden del plan</p>
+            <div id="queueMoveStatus" class="queue-move-status" hidden></div>
             <div id="priorityQueue" class="priority-queue" aria-label="Trabajos planeados en orden manual"></div>
           </section>
 
@@ -167,10 +194,10 @@
                 <label class="compact-control"><span>Inicio</span><input id="planStartInput" type="date" /></label>
                 <label class="compact-control"><span>Horizonte</span><select id="horizonSelect"><option value="5">5 dias</option><option value="10">10 dias</option><option value="15">15 dias</option><option value="30">30 dias</option></select></label>
                 <div class="segmented" role="tablist" aria-label="Vista Gantt">
-                  <button class="segmented-active" data-view="job" type="button">OT</button>
-                  <button data-view="operator" type="button">Operador</button>
-                  <button data-view="machine" type="button">Maquina</button>
-                  <button data-view="ct" type="button">CT</button>
+                  <button class="segmented-active" aria-selected="true" data-view="job" type="button" onclick="setGanttView('job')">OT</button>
+                  <button aria-selected="false" data-view="operator" type="button" onclick="setGanttView('operator')">Operador</button>
+                  <button aria-selected="false" data-view="machine" type="button" onclick="setGanttView('machine')">Maquina</button>
+                  <button aria-selected="false" data-view="ct" type="button" onclick="setGanttView('ct')">CT</button>
                 </div>
                 <div class="gantt-zoom" role="group" aria-label="Resolucion del Gantt">
                   <button id="ganttZoomOut" class="icon-button gantt-tool-button" type="button" aria-label="Reducir resolucion del Gantt" title="Reducir resolucion">
@@ -196,6 +223,7 @@
               <button id="closeDetailPanelBtn" class="icon-button" type="button" aria-label="Cerrar detalle" title="Cerrar detalle">
                 <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
               </button>
+              <button id="returnToBacklogBtn" class="button small" type="button">Regresar a backlog</button>
             </div>
             <div id="selectedJobPanel" class="selected-job-panel"></div>
           </aside>
@@ -205,11 +233,17 @@
           <div class="load-screen-heading">
             <div><h2 id="operatorLoadTitle">Cargas de operadores</h2><span id="loadWeekRange">Semana seleccionada</span></div>
             <div class="load-screen-actions">
-              <label class="compact-control"><span>Semana</span><input id="loadWeekInput" type="date" /></label>
-              <button id="balanceBtn" class="button small" type="button">
-                <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M8 7l-3 7h6L8 7Zm8 0-3 7h6l-3-7ZM12 4v17"/></svg></span>
-                Balancear
-              </button>
+              <div class="week-stepper">
+                <button id="loadWeekPrevBtn" class="icon-button" type="button" aria-label="Semana anterior" title="Semana anterior">
+                  <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg>
+                </button>
+                <label class="compact-control"><span>Semana</span><input id="loadWeekStartInput" type="date" /></label>
+                <button id="loadWeekNextBtn" class="icon-button" type="button" aria-label="Semana siguiente" title="Semana siguiente">
+                  <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                </button>
+              </div>
+              <label class="compact-control"><span>Plan</span><select id="loadPlanSelect"></select></label>
+              <label class="compact-control"><span>Estado</span><select id="loadModeSelect"><option value="pending">Pendientes</option><option value="completed">Completadas</option><option value="original">Plan original</option></select></label>
             </div>
           </div>
           <div class="operator-load-wrap">
@@ -217,10 +251,35 @@
           </div>
         </section>
 
+        <section class="panel operator-load-screen" id="cuello-botella" aria-labelledby="bottleneckTitle">
+          <div class="load-screen-heading">
+            <div><h2 id="bottleneckTitle">Cuello de botella</h2><span id="bottleneckWeekRange">Semana seleccionada</span></div>
+            <div class="load-screen-actions">
+              <label class="compact-control"><span>Plan</span><select id="bottleneckPlanSelect"></select></label>
+              <label class="compact-control"><span>Estado</span><select id="bottleneckModeSelect"><option value="pending">Pendientes</option><option value="completed">Completadas</option><option value="original">Plan original</option></select></label>
+            </div>
+          </div>
+          <div class="bottleneck-grid">
+            <section class="bottleneck-panel" aria-labelledby="bottleneckOperatorsTitle">
+              <header><h3 id="bottleneckOperatorsTitle">Cuello de botella operador</h3><span>Operadores con carga mayor a 100%</span></header>
+              <div class="operator-load-wrap"><table id="bottleneckOperators" class="operator-load-table"></table></div>
+            </section>
+            <section class="bottleneck-panel" aria-labelledby="bottleneckOperationsTitle">
+              <header><h3 id="bottleneckOperationsTitle">Cuello de botella operación</h3><span>Top 10 operaciones de mayor tiempo</span></header>
+              <div class="operator-load-wrap"><table id="bottleneckOperations" class="operator-load-table"></table></div>
+            </section>
+          </div>
+        </section>
+
         <section class="bottom-panel config-panel config-view matrix-view" id="matriz">
           <div class="config-view-heading"><div><h2>Matriz de habilidades</h2><span>Operaciones, capacidad, solapamiento, eficiencia y operadores habilitados</span></div></div>
           <div class="config-view-body">
             <div class="matrix-toolbar">
+              <div class="matrix-search" role="search">
+                <input id="matrixSearchInput" class="matrix-search-input" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" />
+                <output id="matrixSearchCount" aria-live="polite">0 de 0 operaciones</output>
+                <button id="clearMatrixSearchBtn" class="button small" type="button">Limpiar</button>
+              </div>
               <div class="inline-form">
                 <input id="newOperatorInput" type="text" placeholder="Operador nuevo" />
                 <button id="addOperatorBtn" class="button small" type="button">Agregar operador</button>
@@ -287,10 +346,30 @@
               <div class="table-wrap config-table"><table id="articleConfigTable"></table></div>
             </div>
             <div class="config-section">
+              <div class="section-heading"><div><h2>Tramos de inspección</h2><span>Valores guardados por artículo y material para la hoja de inspección</span></div></div>
+              <div class="config-form inspection-route-catalog-form">
+                <label><span>Buscar</span><input id="inspectionRouteCatalogSearch" type="search" placeholder="Artículo o material" /></label>
+                <button id="refreshInspectionRouteCatalogBtn" class="button small" type="button">Actualizar</button>
+              </div>
+              <div id="inspectionRouteCatalogError" class="catalog-load-error" role="alert" hidden>
+                <span id="inspectionRouteCatalogErrorMessage"></span>
+                <button id="retryInspectionRouteCatalogBtn" class="button small" type="button">Reintentar</button>
+              </div>
+              <div class="table-wrap config-table inspection-route-catalog-table"><table id="inspectionRouteCatalogTable"></table></div>
+            </div>
+            <div class="config-section">
               <div class="section-heading"><div><h2>Objetivo semanal</h2><span>Meta de liberacion de produccion en valor monetario</span></div></div>
               <div class="config-form target-form">
                 <label><span>Meta semanal ($)</span><input id="weeklyReleaseTargetInput" type="text" inputmode="numeric" /></label>
               </div>
+            </div>
+            <div class="config-section">
+              <div class="section-heading"><div><h2>Balance de flujo</h2><span>Preferencias para elegir la mejor estrategia al generar el plan</span></div></div>
+              <div class="config-form target-form">
+                <label><span>Optimizar flujo</span><input id="flowBalancedEnabledInput" type="checkbox" /></label>
+                <label><span>WIP objetivo</span><input id="flowWipTargetInput" type="number" min="1" max="50" step="1" inputmode="numeric" /></label>
+              </div>
+              <p id="flowOptimizationDiagnostics" class="status-note" hidden></p>
             </div>
           </div>
         </section>
@@ -309,8 +388,9 @@
             <div class="config-section">
             <div class="section-heading"><div><h2>Dias y periodos no laborales</h2><span>Paros generales, maquinas, asuetos y vacaciones</span></div></div>
             <div class="config-form calendar-form">
-              <label><span>Concepto</span><select id="calendarConceptInput"><option value="GENERAL">General</option><option value="MAQUINA">Maquina</option><option value="ASUETO">Asueto</option><option value="VACACIONES">Periodo vacacional</option></select></label>
+              <label><span>Concepto</span><select id="calendarConceptInput"><option value="GENERAL">General</option><option value="MAQUINA">Maquina</option><option value="OPERADOR">Operador</option><option value="ASUETO">Asueto</option><option value="VACACIONES">Periodo vacacional</option></select></label>
               <label id="calendarMachineField" hidden><span>Maquina</span><select id="calendarMachineInput"><option value="">Selecciona una maquina</option></select></label>
+              <label id="calendarOperatorField" hidden><span>Operador</span><select id="calendarOperatorInput"><option value="">Selecciona un operador</option></select></label>
               <label class="calendar-reason-field"><span>Motivo</span><input id="calendarReasonInput" type="text" placeholder="Motivo del paro" required /></label>
               <label><span>Fecha inicial</span><input id="calendarStartDateInput" type="date" required /></label>
               <label id="calendarEndDateField" hidden><span>Fecha final</span><input id="calendarEndDateInput" type="date" /></label>
@@ -330,18 +410,28 @@
             <button data-tab="operator" type="button">Plan por operador</button>
             <button data-tab="adjuster" type="button">Ajustador</button>
             <button data-tab="subcontractReport" type="button">Subcontratos</button>
+            <button data-tab="release" type="button">Liberación final</button>
+            <button data-tab="releaseReal" type="button">Liberación real</button>
           </div>
           <section id="weekTab" class="tab-panel">
-            <div class="report-toolbar">
-              <div><h2>Plan de la semana</h2><span id="reportSnapshotMeta">Plan vigente</span></div>
-              <div class="report-actions">
-                <label class="compact-control report-plan-selector"><span>Plan guardado</span><select id="planSnapshotSelect"><option value="">Plan vigente</option></select></label>
+<div class="report-toolbar">
+                <div><h2>Plan de la semana</h2><span id="reportSnapshotMeta">Plan vigente</span></div>
+                <div class="report-actions">
+                  <div class="week-stepper">
+                    <button id="reportWeekPrevBtn" class="icon-button" type="button" aria-label="Semana anterior" title="Semana anterior">
+                      <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg>
+                    </button>
+                    <label class="compact-control"><span>Semana</span><input id="reportWeekStartInput" type="date" /></label>
+                    <button id="reportWeekNextBtn" class="icon-button" type="button" aria-label="Semana siguiente" title="Semana siguiente">
+                      <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                    </button>
+                  </div>
+                  <label class="compact-control report-plan-selector"><span>Plan</span><select id="planSnapshotSelect"><option value="draft">Borrador</option><option value="">Ultima publicada</option></select></label>
                 <button id="refreshSnapshotsBtn" class="icon-button" type="button" aria-label="Actualizar planes guardados" title="Actualizar planes guardados"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 18 15"/></svg></button>
-                <label class="compact-control"><span>Semana</span><input id="weekReportStartInput" type="date" /></label>
                 <button id="printWeekBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
               </div>
             </div>
-            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="weekPrintContext" class="report-print-context"></div></div>
+            <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>PLAN DE PRODUCCIÓN SEMANAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="weekPrintContext" class="individual-print-date"></strong></div></header>
             <section id="weekExecutiveSummary" class="executive-summary" aria-label="Resumen ejecutivo del plan"></section>
             <div id="weekReport" class="weekly-job-reports"></div>
           </section>
@@ -350,15 +440,16 @@
             <div class="report-toolbar">
               <h2>Plan por operador</h2>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para operador"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="operatorReportStartInput" type="date" /></label>
                 <select id="operatorReportSelect" aria-label="Operador reporte"></select>
                 <select id="operatorReportStatus" aria-label="Estado del plan"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
-                <label class="report-show-all"><input id="operatorReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="operatorReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
                 <output id="operatorReportCount" class="report-row-count"></output>
                 <button id="printOperatorBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
               </div>
             </div>
-            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="operatorPrintContext" class="report-print-context"></div></div>
+            <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="operatorPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="operatorReport" class="production-report-table report-page-table"></table></div>
           </section>
 
@@ -366,14 +457,15 @@
             <div class="report-toolbar">
               <div><h2>Cambios de herramental - Ajustador</h2><span>Solo actividades generadas por cambio de herramental o kit</span></div>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para ajustador"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="adjusterReportStartInput" type="date" /></label>
                 <select id="adjusterReportStatus" aria-label="Estado del ajuste"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
-                <label class="report-show-all"><input id="adjusterReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="adjusterReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
                 <output id="adjusterReportCount" class="report-row-count"></output>
                 <button id="printAdjusterBtn" class="button small" type="button">Imprimir</button>
               </div>
             </div>
-            <div class="report-print-header"><div class="report-document-brand"><strong>MALDONADO</strong><span>MP CD 28-02 V02</span></div><div id="adjusterPrintContext" class="report-print-context"></div></div>
+            <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="adjusterPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="adjusterReport" class="specialized-report-table report-page-table"></table></div>
           </section>
 
@@ -381,13 +473,71 @@
             <div class="report-toolbar">
               <div><h2>Subcontratos por OT</h2><span>Tipo y dias configurados en CONFIGURACION_OT</span></div>
               <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para subcontratos"><option value="draft">Borrador</option></select></label>
                 <label class="compact-control"><span>Dia</span><input id="subcontractReportStartInput" type="date" /></label>
-                <label class="report-show-all"><input id="subcontractReportShowAll" type="checkbox" /><span>Ver todo</span></label>
+                <label class="compact-control"><span>Dias futuros</span><select id="subcontractReportFutureDays"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+                <select id="subcontractReportStatus" aria-label="Estado del subcontrato"><option value="PENDIENTES">Pendientes</option><option value="COMPLETADAS">Completadas</option><option value="TODAS">Todas</option></select>
                 <output id="subcontractReportCount" class="report-row-count"></output>
+                <button id="printSubcontractBtn" class="button small" type="button">Imprimir</button>
               </div>
             </div>
+            <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="subcontractPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="subcontractReport" class="specialized-report-table report-page-table"></table></div>
           </section>
+
+          <section id="releaseTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Liberación</h2></div>
+              <div class="report-actions">
+                <label class="compact-control report-plan-selector"><span>Plan</span><select data-report-source-select aria-label="Plan para liberacion final"><option value="draft">Borrador</option></select></label>
+                <output id="releaseReportCount" class="report-row-count"></output>
+                <button id="exportReleaseXlsxBtn" class="button small" type="button" title="Descargar listado 16OC / 39OTD en Excel (.xlsx)">Exportar</button>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="releaseReport" class="production-report-table report-page-table"></table></div>
+          </section>
+
+          <section id="releaseRealTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Liberación real</h2><span>Lo que realmente se ensambló, por fecha de ensamble · planta MM del Llano · últimos 2 meses</span></div>
+              <div class="report-actions">
+                <output id="releaseRealReportCount" class="report-row-count"></output>
+                <button id="exportReleaseRealXlsxBtn" class="button small" type="button" title="Descargar lo ensamblado real en Excel (.xlsx)">Exportar</button>
+                <button id="printReleaseRealBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
+                <button id="syncReleaseRealBtn" class="button small" type="button" title="Forzar carga de datos de ensambles (sync UI no incluye esta acción)">Sincronizar datos</button>
+              </div>
+            </div>
+            <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>LIBERACIÓN REAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="releaseRealPrintContext" class="individual-print-date"></strong></div></header>
+            <div class="table-wrap"><table id="releaseRealReport" class="release-real-table report-page-table"></table></div>
+          </section>
+        </section>
+
+        <section id="hoja-inspeccion" class="inspection-screen" aria-labelledby="inspectionTitle">
+          <aside class="inspection-controls">
+            <h2 id="inspectionTitle">Hoja Inspec</h2>
+            <p>Selecciona una WO para generar la hoja de inspección con materiales, tramos, operaciones y dibujo ligado.</p>
+            <label>TRABAJO WO<select id="inspectionWorkOrder"></select></label>
+            <label>BUSCAR WO<input id="inspectionSearch" type="search" placeholder="Ej. 28, CM 350"></label>
+            <section id="inspectionJobStatus" class="inspection-side-card inspection-status"><strong class="inspection-card-title">Estado del trabajo</strong><span class="inspection-status-pill">Selecciona una WO</span></section>
+            <section id="inspectionHistory" class="inspection-side-card inspection-history"><strong class="inspection-card-title">Impresiones</strong></section>
+            <section id="inspectionPrintCheck" class="inspection-side-card inspection-status"><strong class="inspection-card-title">Semáforo de impresión</strong></section>
+            <div class="inspection-actions">
+              <button id="inspectionReload" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">↻</span>Cargar</button>
+              <button id="inspectionDrawing" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">◉</span>Ver dibujo</button>
+              <button id="inspectionEditLink" class="button" type="button"><span class="inspection-action-icon" aria-hidden="true">✎</span>Editar liga</button>
+              <button id="inspectionPrint" class="button primary" type="button"><span class="inspection-action-icon" aria-hidden="true">⎙</span>Imprimir</button>
+              <button id="inspectionSelectOps" class="button secondary" type="button"><span class="inspection-action-icon" aria-hidden="true">☷</span>Seleccionar operaciones</button>
+            </div>
+            <div id="inspectionOperationChoices" class="inspection-operation-choices" hidden></div>
+            <p class="inspection-note">El dibujo se guarda por artículo fabricado. El tramo se guarda por artículo + materia prima, usando la tabla Tramos.</p>
+          </aside>
+          <div class="inspection-document-wrap">
+            <article id="inspectionDocument" class="inspection-sheet inspection-document">
+              <div class="inspection-grid" id="inspectionSheetGrid"></div>
+              <section id="inspectionSecondCapture"></section>
+              <footer id="inspectionReleaseFooter" class="inspection-document-footer"></footer>
+            </article>
+          </div>
         </section>
 
         <dialog id="planningDialog" class="planning-dialog" aria-labelledby="planningDialogTitle">
@@ -414,7 +564,10 @@
 {{PLANNER_CORE}}
 </script>
     <script>
+{{PLANNING_WORKFLOW_CORE}}
+{{INSPECTION_CORE}}
 {{PLANNING_APP}}
+{{INSPECTION_APP}}
 </script>
   </body>
 </html>

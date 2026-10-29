@@ -1,0 +1,25 @@
+{
+  "loaded": {
+    "ok": true,
+    "rsId": "8c14a62f-7fc8-419c-b9b8-2d88de977477",
+    "ops": 2087,
+    "planStart": "2026-08-28"
+  },
+  "rsCheck": {
+    "rsId": "8c14a62f-7fc8-419c-b9b8-2d88de977477"
+  },
+  "report": {
+    "rsId": "8c14a62f-7fc8-419c-b9b8-2d88de977477",
+    "selectValue": "draft",
+    "weekInput": "2026-08-24",
+    "hasSinOTs": false,
+    "minFi": "2026-08-28",
+    "planStart": "2026-08-28",
+    "opsCount": 2087,
+    "opsInWeekCount": 235,
+    "distinctOtsInWeek": 50,
+    "summarySample": "Resumen ejecutivo\nIndicadores de liberacion, productividad y carga semanal\nMeta semanal no alcanzada: $25,873.05 / $1,110,000.00. Faltan $1,084,126.95\nFactores probables\nPocas OTs terminando en Acabad",
+    "startPanelSample": "OT que inician\nFecha de la primera operacion\n28/08/2026\nViernes\nNO.\tORD\tPARTE\tPZAS\n1\t1803\tE-4473\t5\n2\t2233\tCOMP-2505\t10\n3\t2497\tR 4 - 3.5\t4\n4\t2667\tCOMP UADA A\t32\n5\t2674\tBRIDA-2668\t956\n6\t2708\tCOMP-4509\t3\n7\t3143\tCPT 1/2\t15\n8\t2151\tCM 400\t200\n9\t3",
+    "ot3143InWeek": 4
+  }
+}

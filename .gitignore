@@ -1,8 +1,60 @@
 node_modules/
 dist/
+site/
 .clasp.json
 .clasprc.json
 .env
 *.log
 .DS_Store
 Thumbs.db
+.worktrees/
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+credentials*.json
+secrets*.json
+oauth*.json
+service-account*.json
+service_account*.json
+.codex/
+.openchamber/
+reports/
+__pycache__/
+*.pyc
+
+# Scripts de prueba / probes locales (no se versionan)
+probe_*.mjs
+probe_*.py
+perf_probe*.py
+perf_probe*.mjs
+perf_measure.mjs
+perf_*.py
+ccheck.mjs
+fetch_deployed.py
+fetch_index.py
+run_perf_local.ps1
+test-generate-plan.mjs
+test-report-view.mjs
+test_mock_reports.py
+test_plan_reports.py
+test_webapp_legacy_completed.py
+plan-generated.png
+.playwright-cli/
+# docs/performance/ NO se excluye a proposito: docs/rules/RULES.md, docs/REGLAS.md y
+# .project-memory/rules.json lo enlazan como fuente de evidencia, asi que dejarlo fuera
+# mantenia la medicion solo en la maquina que la hizo. Si hay que excluir algo de ahi, que
+# sea archivo por archivo y no la carpeta entera.
+
+tests/artifacts/
+artifacts/
+
+# Cache/estado local de herramientas y respaldos de la maquina (no son fuente del proyecto)
+.gas-sync/
+.agents/
+.claude/
+.vscode/
+backups/
+restlet-headers.json

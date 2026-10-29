@@ -5,25 +5,37 @@ const PP_SHEETS = {
     'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'CANT_PENDIENTE',
     'TIEMPO_CICLO', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN',
     'HORA_FIN', 'TIPO_INSERCION', 'ESTATUS', 'LOG', 'GENERATED_BY', 'LOCKED', 'DIAS_SUBCONTRATO', 'KIT_PENDIENTE', 'AUTO_FROZEN', 'TIPO_SUBCONTRATO',
-    'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'COMENTARIO'
+    'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'COMENTARIO', 'TIEMPO_FALLBACK'
   ],
   OPERADORES: ['OPERADOR', 'ACTIVO', 'MINUTOS_CAPACIDAD', 'RENDIMIENTO_PCT', 'NOMBRE', 'CATEGORIA'],
   CAPACIDADES: ['KEY', 'CT', 'OPERACION', 'ACTIVA', 'CAPACIDAD', 'SOLAPAMIENTO', 'PALABRAS_CLAVE', 'REQUIERE_HERRAMENTAL', 'REQUIERE_KIT', 'CUSTOM', 'EFICIENCIA_PCT'],
   CATALOGO_OPERACIONES: ['KEY', 'CT', 'OPERACION', 'ORIGEN', 'ACTIVA'],
-  ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA'],
-  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO'],
-  CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'ACTUALIZADO'],
+  ORDENES_TRABAJO: ['ID', 'WO_INTERNAL_ID', 'OT', 'ARTICULO', 'DESCRIPCION', 'FOTO_URL', 'FECHA_INICIO_NS', 'FECHA_FIN_NS', 'FECHA_VENCIMIENTO', 'FECHA_ENTREGA_AJUSTADA', 'CANTIDAD', 'ESTATUS', 'CLIENTE', 'CANT_ENSAMBLADA', 'CANT_PENDIENTE', 'PRECIO_PROMEDIO_VENTA', 'PRECIO_DESDE', 'PRECIO_HASTA', 'PRECIO_ULTIMA_VENTA'],
+  CONFIGURACION_OT: ['OT', 'MAQUINA', 'KIT_HERRAMENTAL', 'KIT_PENDIENTE', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'ACTUALIZADO', 'HERRAMENTAL', 'HERRAMENTALES_EXTRA_JSON'],
+  // PRECIO_MANUAL lo escribe una persona (dialogo de preparar trabajo o la tabla de
+  // Catalogos). PRECIO_REF_VENTA lo escribe el sync con el precio de venta de NetSuite y SI
+  // baja cuando el precio baja. Antes los dosAMIN compartian columna, con un max que solo
+  // subia, y por eso un precio equivocado se quedaba pegado para siempre (RULE-REP-021).
+  // PP_writeTable_ hace clearContents y reescribe el encabezado, asi que la columna nueva
+  // aparece sola en la hoja, sin migracion.
+  CONFIGURACION_ARTICULO: ['ARTICULO', 'TIPO_OT', 'TIPO_TRABAJO', 'PRECIO_MANUAL', 'PRECIO_REF_VENTA', 'ACTUALIZADO'],
   MATRIZ: ['CAPACIDAD_KEY', 'OPERADOR', 'HABILITADO'],
-  MAQUINAS: ['ID', 'ACTIVA'],
+  // EXCLUIDA es la decision de la PLANIFICACION de no agendar en esa maquina aunque
+  // NetSuite la de activa (decision del usuario 2026-09-29, RULE-SUP-017). ACTIVA se
+  // sigue escribiendo como "utilizable", que es lo que Historically ha significado.
+  MAQUINAS: ['ID', 'ACTIVA', 'EXCLUIDA'],
   HERRAMENTALES: ['ID', 'PARTE', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIEMPO_AJUSTE_HERR', 'TIEMPO_AJUSTE_KIT', 'ACTIVO'],
   MATERIALES: ['ID', 'OT', 'WO_INTERNAL_ID', 'ENSAMBLE', 'COMPONENTE_ID', 'COMPONENTE', 'DESCRIPCION', 'UNIDAD', 'REQUERIDO', 'EMITIDO', 'PENDIENTE'],
   CALENDARIO: ['ID', 'CONCEPTO', 'MAQUINA', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'MOTIVO', 'ACTIVO'],
   SUBCONTRATOS: ['ID', 'PARTE', 'TIPO', 'DIAS_HABILES', 'ACTIVO'],
   TIPOS_OT: ['ID', 'NOMBRE', 'ACTIVO'],
-  ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA'],
-  PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO'],
+  ESTADOS_OPERACION_PLAN: ['KEY', 'TIPO', 'ESTATUS_PLAN', 'OPERATION_ID', 'OT', 'SECUENCIA', 'CT', 'OPERADOR', 'MAQUINA', 'ARTICULO', 'DESCRIPCION', 'FECHA_INICIO', 'HORA_INICIO', 'FECHA_FIN', 'HORA_FIN', 'HERRAMENTAL_ORIGEN', 'KIT_ORIGEN', 'HERRAMENTAL_DESTINO', 'KIT_DESTINO', 'TOOL_KEY_DESTINO', 'FECHA_COMPLETADO', 'FECHA_REAPERTURA', 'ORIGEN'],
+  PLANES_HISTORICOS: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
+  BORRADOR_PLAN: ['SNAPSHOT_ID', 'FECHA_GENERACION', 'USUARIO', 'PLAN_INICIO', 'HORIZONTE_DIAS', 'NUM', 'OT', 'PARTE', 'OP', 'MAQ_AREA', 'OPERADOR', 'TC_MIN', 'TIEMPO_SETUP', 'TIEMPO_PROD', 'F_INICIO', 'H_INICIO', 'F_FIN', 'H_FIN', 'COMENTARIOS', 'PRIORIDAD', 'ESTATUS', 'BLOQUEADA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'TIPO_SUBCONTRATO', 'DIAS_SUBCONTRATO', 'PZAS_PENDIENTES', 'TIPO_OT', 'PRECIO_UNITARIO', 'MONTO', 'COMPLETION_KEY'],
+  SNAPSHOT_PAYLOADS: ['KEY', 'VALUE'],
   AUDITORIA: ['FECHA', 'USUARIO', 'ACCION', 'REVISION', 'DETALLE']
 };
+const PP_TOOL_CHANGE_CAPABILITY_KEY = 'TOOL_CHANGE::CAMBIO_DE_HERRAMENTAL';
 
 const PP_OPERATION_FIELDS = {
   ID: 'id', NUM: 'num', OT: 'ot', PARTE: 'parte', DESCRIPCION: 'descripcion', CONTENIDO: 'contenido',
@@ -34,7 +46,8 @@ const PP_OPERATION_FIELDS = {
   HORA_FIN: 'horaFin', TIPO_INSERCION: 'tipoInsercion', ESTATUS: 'estatus', LOG: 'log',
   GENERATED_BY: 'generatedBy', LOCKED: 'locked', DIAS_SUBCONTRATO: 'subcontractDays', KIT_PENDIENTE: 'kitPending', AUTO_FROZEN: 'autoFrozen', TIPO_SUBCONTRATO: 'subcontractType',
   HERRAMENTAL_ORIGEN: 'toolChangeFromHerramental', KIT_ORIGEN: 'toolChangeFromKit',
-  HERRAMENTAL_DESTINO: 'toolChangeToHerramental', KIT_DESTINO: 'toolChangeToKit', COMENTARIO: 'comentario'
+  HERRAMENTAL_DESTINO: 'toolChangeToHerramental', KIT_DESTINO: 'toolChangeToKit', COMENTARIO: 'comentario',
+  TIEMPO_FALLBACK: 'tiempoFallback'
 };
 
 function PP_getWorkbook_() {
@@ -47,15 +60,63 @@ function PP_getWorkbook_() {
   return SpreadsheetApp.openById(spreadsheetId);
 }
 
+// Calcula dónde hay que INSERTAR columnas para pasar de un encabezado a otro sin perder de
+// vista ningún dato. Devuelve un array con un índice por columna nueva: el número de
+// columnas viejas que quedan ANTES de cada inserción. O null si la transición no es
+// puramente de altas, en cuyo caso el llamador no toca la data.
+//
+// POR QUÉ EXISTE. Reescribir solo la fila 1 del encabezado cuando PP_SHEETS gana columnas
+// descuadra la hoja: los datos se quedan donde estaban. Al meter PRECIO_REF_VENTA en medio
+// de CONFIGURACION_ARTICULO (2.45.0), el ACTUALIZADO viejo pasó a leerse como
+// PRECIO_REF_VENTA y el ACTUALIZADO nuevo quedó vacío: 230 de 230 filas, medido con
+// DESALINEA_ARTICULO el 2026-09-26.
+//
+// QUÉ NO ACEPTA, a propósito, porque este código corre en cada request y una poda de columna
+// equivocada destruye datos de forma irreversible:
+//   - que desaparezca alguna columna vieja (una baja es otra migración, con otra decisión),
+//   - que no se emparejen todas las columnas viejas con la secuencia nueva.
+// Acepta de una a tres columnas nuevas, en cualquier posición, incluso en medio.
+function PP_headerInserts_(current, headers) {
+  const nuevos = new Set(headers);
+  for (const nombre of current) {
+    if (nombre && !nuevos.has(nombre)) return null;   // una columna vieja desaparece
+  }
+  const inserts = [];
+  let i = 0;
+  for (let j = 0; j < headers.length; j += 1) {
+    if (i < current.length && current[i] === headers[j]) { i += 1; continue; }
+    inserts.push(i);                                   // columna nueva antes de la vieja i
+  }
+  if (i !== current.length) return null;               // quedaron columnas viejas sin pares
+  return inserts.length <= 3 ? inserts : null;        // más de tres: no es una alta simple
+}
+
 function PP_ensureWorkbook_(spreadsheet) {
   Object.keys(PP_SHEETS).forEach(function(name) {
     let sheet = spreadsheet.getSheetByName(name);
-    if (!sheet) sheet = spreadsheet.insertSheet(name);
     const headers = PP_SHEETS[name];
-    const current = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
-    if (current.join('|') !== headers.join('|')) {
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(name);
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
+      return;
     }
+    // Se lee el encabezado REAL de toda la hoja, no solo las primeras N celdas: si la hoja
+    // tiene menos columnas de las que el codigo espera, hay que insertar las que faltan
+    // para que los datos sigan debajo de su propio encabezado.
+    const current = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getDisplayValues()[0]
+      .map(function(value) { return String(value || '').trim(); });
+    if (current.length === headers.length && current.join('|') === headers.join('|')) return;
+    const inserts = PP_headerInserts_(current, headers);
+    if (inserts) {
+      // De derecha a izquierda, para que los indices de la izquierda sigan siendo validos.
+      // insertColumnsAfter(0, 1) mete la columna antes de la primera.
+      for (let k = inserts.length - 1; k >= 0; k -= 1) {
+        sheet.insertColumnsAfter(inserts[k], 1);
+      }
+    }
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.setFrozenRows(1);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef1');
   });
@@ -91,15 +152,250 @@ function PP_ensureWorkbook_(spreadsheet) {
   }
 }
 
+var PP_STATE_CACHE_SHEET_ = 'PP_STATE_CACHE';
+
+function PP_stateCacheRevision_(spreadsheet) {
+  try {
+    const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+    return Number(config.PP_STATE_CACHE_REVISION || 0);
+  } catch (error) {
+    return -1;
+  }
+}
+
+// Lector CRUDO de la cache: NO mira la revision. Existe para el parche posterior a un
+// guardado (PP_patchCachedState_), que necesita la ultima foto valida aunque el writer
+// ya haya subido CONFIG.revision y la haya dejado obsoleta. Para SERVIR el estado solo
+// se usa PP_readCachedState_, que si exige PP_STATE_CACHE_REVISION == CONFIG.revision:
+// una foto vieja servida como actual es un estado equivocado, y eso no se acepta.
+function PP_readCachedStateRaw_(spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet || sheet.getLastRow() < 2) return null;
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    let json = '';
+    for (let i = 0; i < values.length; i++) json += String(values[i][0] || '');
+    return JSON.parse(json);
+  } catch (error) {
+    return null;
+  }
+}
+
+// LO MISMO, PERO DICIENDO POR QUE FALLO. PP_readCachedStateRaw_ se traga el error en un catch
+// mudo, y PP_readCachedState_ devuelve null tanto si la revision esta desfasada como si el JSON
+// esta roto. Son dos problemas distintos con dos arreglos distintos, y debugStateCacheInfo
+// reportaba 'null' para los dos (15-performance-service.js:76). Medido el 2026-09-27:
+// cacheRevision 4101 contra revision 4103, readTest {hit:false, reason:'null'} -> no se podia
+// saber si la cache estaba desfasada (lo normal) o corrupta (un fallo de verdad).
+function PP_readCachedStateRawWithReason_(spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet || sheet.getLastRow() < 2) return { state: null, reason: 'sin_cache' };
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    let json = '';
+    for (let i = 0; i < values.length; i++) json += String(values[i][0] || '');
+    return { state: JSON.parse(json), reason: '' };
+  } catch (error) {
+    return { state: null, reason: String(error && error.message || error).slice(0, 120) };
+  }
+}
+
+function PP_readCachedState_(spreadsheet, revision) {
+  try {
+    if (PP_stateCacheRevision_(spreadsheet) !== Number(revision || 0)) return null;
+    return PP_readCachedStateRaw_(spreadsheet);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Invalida la cache de estado para writers que tocan una hoja de PP_buildState_ SIN subir
+// CONFIG.revision. Sin esto, la cache queda "al dia" para PP_readCachedState_ y se sirve un
+// estado que ya no refleja las hojas: un estado viejo servido como actual.
+//
+// Revalidado 2026-09-27 al arreglar la cache del writer de OTs. El unico writer en esa
+// situacion es PP_clearAllOperationPlanStatuses_ ("Reabrir todo"): vacia
+// ESTADOS_OPERACION_PLAN y NO cambia la revision, porque no es un guardado de plan y no debe
+// invalidar la concurrencia optimista del cliente (CONFLICT_REVISION). El test
+// "reabrir todo: PP_clearAllOperationPlanStatuses_ vacia los buckets de estados" lo fijo.
+//
+// -1 no puede coincidir con una revision real: PP_nextRevision_ solo suma sobre
+// CONFIG.revision, que es 0 o mayor.
+function PP_invalidateStateCache_(spreadsheet) {
+  try {
+    PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: -1 });
+  } catch (error) {}
+}
+
+function PP_writeCachedState_(spreadsheet, revision, state) {
+  try {
+    let sheet = spreadsheet.getSheetByName(PP_STATE_CACHE_SHEET_);
+    if (!sheet) sheet = spreadsheet.insertSheet(PP_STATE_CACHE_SHEET_);
+    const json = JSON.stringify(state);
+    const CHUNK = 48000;
+    const chunks = [];
+    for (let j = 0; j < json.length; j += CHUNK) chunks.push([json.slice(j, j + CHUNK)]);
+    // ATOMICO, Y POR QUE NO clearContents() PRIMERO. Antes se vaciaba la hoja y despues se
+    // escribian los chunks: cualquier interrupcion dejaba la cache vacia o a medias, y como
+    // PP_readCachedStateRaw_ se traga el error, una cache rota era indistinguible de una ausente
+    // y el siguiente getAppState reconstruia entero sin que nadie pudiera ver el motivo. Ahora se
+    // escriben los chunks nuevos, se recortan las filas que sobran y SOLO AL FINAL se sella la
+    // revision: en cualquier instante la hoja tiene la cache vieja completa o la nueva completa.
+    // Un lector con la revision vieja que lea en la ventana ve un JSON raro -> null -> reconstruye
+    // (fallo seguro, no un estado equivocado); un lector con la revision nueva no puede correr
+    // todavia porque el sello es lo ultimo.
+    sheet.getRange(1, 1).setValue('CHUNK');
+    if (chunks.length) sheet.getRange(2, 1, chunks.length, 1).setValues(chunks);
+    const sobran = sheet.getLastRow() - (chunks.length + 1);
+    if (sobran > 0) sheet.getRange(chunks.length + 2, 1, sobran, 1).clearContent();
+    PP_writeConfigPatch_(spreadsheet, { PP_STATE_CACHE_REVISION: Number(revision || 0) });
+  } catch (error) {}
+}
+
+// POR QUE EXISTE, Y POR QUE NO ES PP_buildState_.
+//
+// Medido 2026-09-27 (RULE-PERF-014): getAppState TIBIO (lee la cache) responde en ~10 s y
+// getAppState FRIO (reconstruye con PP_buildState_) pasa de 120 s, que es el CALL_TIMEOUT_MS
+// del cliente. El arranque SIEMPRE cae en el frio, porque TODO writer de estado sube
+// CONFIG.revision por PP_nextRevision_ y eso deja PP_STATE_CACHE_REVISION vieja: en una sesion
+// normal siempre hay un guardado antes del siguiente arranque, asi que la cache nunca alcanza
+// a servir. Al agotarse los 120 s, loadAppStateInBackground cae al catch y la app se queda
+// con sampleState (189 operaciones de demostracion, 0 materiales, sin cache local).
+//
+// El parche NO puede llamar a PP_buildState_ dentro del writer: eso trasplanta un rebuild de
+// >120 s al CAMINO DE GUARDADO, que ya de por si es lento (la sincronizacion de OTs mide
+// 43-73 s), y lo multiplica por cada writer. Un guardado asi no finishes nunca y tumba la
+// sincronizacion entera, que es un fallo peor que un arranque lento.
+//
+// En vez de eso se parchea la cache por el scope que el writer toco, releyendo SOLO esas
+// hojas. Es correcto por construccion: cada campo se recalcula con la MISMA funcion que
+// PP_buildState_ usa, sobre la hoja que el writer acaba de escribir. Si no hubiera cache
+// previa no se inventa nada: se devuelve false y el proximo getAppState reconstruye, igual
+// que antes del fix.
+//
+// SCOPE. Solo para PP_writeNetSuiteWorkOrdersState_, que escribe CONFIG, ORDENES_TRABAJO y
+// ESTADOS_OPERACION_PLAN. Los campos del estado que dependen de esas hojas son:
+//   CONFIG                  -> revision, savedAt, syncedAt, source, selectedOts, lockedOts,
+//                              expandedOts, plant, invoicePriceWindow
+//   ORDENES_TRABAJO         -> workOrders, y articleConfigurations (PP_buildArticleConfigurations_
+//                              mapea OT -> articulo con workOrders antes que con operations)
+//   ESTADOS_OPERACION_PLAN  -> operationPlanStatuses, publishedPlanStatuses
+// NO se tocan y por que NO:
+//   OPERACIONES             -> este writer no la escribe; y leerla son 4.6M celdas, que es
+//                              justamente lo que hay que evitar. Se toma operations de la cache.
+//   PLANES_HISTORICOS       -> machineToolHistory es DATO DERIVADO y este writer no lo cambia;
+//                              se conserva el valor cacheado (regla de no pesar la cache en cada
+//                              guardado). Solo PP_deletePlanSnapshot_ lo invalida.
+function PP_patchCachedStateAfterWorkOrderSync_(spreadsheet, revision) {
+  const cached = PP_readCachedStateRaw_(spreadsheet);
+  if (!cached) return false;
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const workOrders = PP_readRows_(spreadsheet.getSheetByName('ORDENES_TRABAJO')).map(PP_mapWorkOrder_);
+  const operations = Array.isArray(cached.operations) ? cached.operations : [];
+  const merged = Object.assign({}, cached, {
+    revision: Number(revision || 0),
+    savedAt: config.savedAt || '',
+    syncedAt: config.syncedAt || '',
+    source: config.source || cached.source || 'apps-script-spreadsheet',
+    selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
+    lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : [],
+    expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : [],
+    plant: config.plant || cached.plant || null,
+    invoicePriceWindow: config.invoicePriceWindow || null,
+    workOrders: workOrders,
+    operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
+    articleConfigurations: PP_buildArticleConfigurations_(
+      PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO')),
+      PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT')),
+      workOrders,
+      operations
+    )
+  });
+  PP_writeCachedState_(spreadsheet, revision, merged);
+  return true;
+}
+
 function PP_readState_(spreadsheet) {
   const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
-  const operationRows = PP_readRows_(spreadsheet.getSheetByName('OPERACIONES'));
+  const revision = Number(config.revision || 0);
+  const cached = PP_readCachedState_(spreadsheet, revision);
+  if (cached) return cached;
+  const state = PP_buildState_(spreadsheet);
+  // Se sella SIN lock, y a proposito. La tentacion era serializar los getAppState concurrentes
+  // para que no escriban la cache a la vez, pero el lock del script espera 30 s y falla: si hay
+  // dos lecturas en carrera, NINGUNA consigue el lock y NINGUNA sella, o sea que la cache queda
+  // desfasada para siempre. Peor que el rebuild duplicado que se quiere evitar. Y la escritura ya
+  // es atomica (PP_writeCachedState_), que es lo que de verdad evita una cache rota: dos escritores
+  // concurrentes escriben filas enteras y cada una deja un JSON completo y parseable. Sin lock,
+  // en el peor caso se reconstruye dos veces, que es exactamente el comportamiento de siempre.
+  PP_writeCachedState_(spreadsheet, revision, state);
+  return state;
+}
+
+// SELLO PARA EL ESCRITOR DE LA SINCRONIZACION LIGERA DE OTs, que es el que usa el boton
+// "Sincronizar OTs" (saveWorkOrderSyncState -> PP_writeWorkOrderSyncState_). Sin este sello CADA
+// sincronizacion dejaba la cache de estado desfasada y el siguiente getAppState reconstruia entero
+// (>120 s medido 4 veces el 2026-09-27), que es lo que tumbaba el arranque de la pagina: la app
+// caia a sampleState y mostraba las OTs de demostracion.
+//
+// POR QUE NO ES COPIA DE PP_patchCachedStateAfterWorkOrderSync_. Aquel cubre CONFIG + ORDENES_TRABAJO
+// + ESTADOS_OPERACION_PLAN. Este cubre, ademas, CONFIGURACION_OT y MATERIALES. Y la diferencia
+// de fondo: OPERACIONES NO SE RELEE. El payload de la sync ligera ya trae la lista completa de
+// operaciones (syncBacklogWorkOrders manda nextState.operations, que es la lista reconciliada), y
+// releer OPERACIONES son 4.6M de celdas, que es justo lo que RULE-PERF-014 se cuido de evitar.
+// Asi que operations sale del payload y solo se releen las hojas baratas.
+//
+// Si no hay cache previa devuelve false y no inventa nada: el siguiente getAppState reconstruye,
+// igual que antes. Va en try/catch en el writer y nunca puede romper una sincronizacion.
+function PP_patchCachedStateAfterWorkOrderSyncLite_(spreadsheet, revision, payload) {
+  const cached = PP_readCachedStateRaw_(spreadsheet);
+  if (!cached) return false;
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const workOrders = PP_readRows_(spreadsheet.getSheetByName('ORDENES_TRABAJO')).map(PP_mapWorkOrder_);
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const otConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT'));
+  const articleConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'));
+  const materials = PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_);
+  const operations = Array.isArray(payload && payload.operations) ? payload.operations : (cached.operations || []);
+  const merged = Object.assign({}, cached, {
+    revision: Number(revision || 0),
+    savedAt: config.savedAt || '',
+    syncedAt: config.syncedAt || '',
+    source: config.source || cached.source || 'apps-script-spreadsheet',
+    selectedOperationId: config.selectedOperationId || '',
+    selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : [],
+    lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : [],
+    expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : [],
+    preparedPlanningByOt: config.preparedPlanningByOt || {},
+    closedWorkOrderSummaries: config.closedWorkOrderSummaries || {},
+    unconfirmedWorkOrders: PP_parseUnconfirmedWorkOrderMarks_(config.UNCONFIRMED_WORK_ORDERS),
+    lastSchedule: config.lastSchedule || null,
+    plant: config.plant || cached.plant || null,
+    invoicePriceWindow: config.invoicePriceWindow || null,
+    workOrders: workOrders,
+    operations: operations,
+    otConfigurations: PP_buildOtConfigurations_(otConfigurationRows, operations),
+    materials: materials,
+    operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
+    articleConfigurations: PP_buildArticleConfigurations_(articleConfigurationRows, otConfigurationRows, workOrders, operations)
+  });
+  PP_writeCachedState_(spreadsheet, revision, merged);
+  return true;
+}
+
+
+function PP_buildState_(spreadsheet) {
+  const config = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const operationRows = PP_readRowsFast_(spreadsheet.getSheetByName('OPERACIONES'));
   const capabilities = PP_readRows_(spreadsheet.getSheetByName('CAPACIDADES'));
   const matrixRows = PP_readRows_(spreadsheet.getSheetByName('MATRIZ'));
   const operators = PP_readRows_(spreadsheet.getSheetByName('OPERADORES'));
   const otConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_OT'));
   const articleConfigurationRows = PP_readRows_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'));
-  const operationStatusRows = PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
+  const operationStatusRows = PP_readRowsFast_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'));
 
   const state = {
     schemaVersion: PP_SCHEMA_VERSION,
@@ -107,7 +403,9 @@ function PP_readState_(spreadsheet) {
     source: config.source || 'apps-script-spreadsheet',
     savedAt: config.savedAt || '',
     syncedAt: config.syncedAt || '',
+    operationsSyncedAt: config.operationsSyncedAt || {},
     invoicePriceWindow: config.invoicePriceWindow || null,
+    operationCatalogWarning: String(config.operationCatalogWarning || ''),
     ganttView: config.ganttView || 'job',
     ganttDayWidth: Number(config.ganttDayWidth || 180),
     selectedOperationId: config.selectedOperationId || '',
@@ -117,6 +415,13 @@ function PP_readState_(spreadsheet) {
     loadWeekStart: config.loadWeekStart || '',
     reportWeekStart: config.reportWeekStart || '',
     reportFilters: config.reportFilters || null,
+    preparedPlanningByOt: config.preparedPlanningByOt || {},
+    closedWorkOrderSummaries: config.closedWorkOrderSummaries || {},
+    // Las marcas de "por confirmar" de RULE-OT-051 capa 2. Se guardan y se devuelven por la
+    // MISMA razon que closedWorkOrderSummaries: si no viajan, la red que evita podar una OT sin
+    // evidencia de cierre dura solo hasta la primera recarga.
+    unconfirmedWorkOrders: PP_parseUnconfirmedWorkOrderMarks_(config.UNCONFIRMED_WORK_ORDERS),
+    excludedCapabilities: PP_normalizeExcludedCapabilities_(config.EXCLUDED_CAPABILITIES),
     selectedOts: Array.isArray(config.selectedOts) ? config.selectedOts : null,
     lockedOts: Array.isArray(config.lockedOts) ? config.lockedOts : null,
     expandedOts: Array.isArray(config.expandedOts) ? config.expandedOts : null,
@@ -159,7 +464,7 @@ function PP_readState_(spreadsheet) {
     }, {}),
     machines: PP_readRows_(spreadsheet.getSheetByName('MAQUINAS')).map(PP_mapMachine_),
     toolCatalog: PP_readRows_(spreadsheet.getSheetByName('HERRAMENTALES')).map(PP_mapTool_),
-    machineToolHistory: PP_readMachineToolHistory_(spreadsheet),
+    machineToolHistory: PP_readMachineToolHistoryCached_(spreadsheet),
     materials: PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_),
     calendarExceptions: PP_readRows_(spreadsheet.getSheetByName('CALENDARIO')).map(PP_mapCalendar_),
     subcontracts: PP_readRows_(spreadsheet.getSheetByName('SUBCONTRATOS')).map(PP_mapSubcontract_),
@@ -167,6 +472,7 @@ function PP_readState_(spreadsheet) {
       return { id: String(row.ID || ''), name: String(row.NOMBRE || '').trim().toUpperCase(), active: PP_bool_(row.ACTIVO, true) };
     }).filter(function(item) { return Boolean(item.name); }),
     operationPlanStatuses: PP_buildOperationPlanStatuses_(operationStatusRows),
+    publishedPlanStatuses: PP_buildPublishedPlanStatuses_(operationStatusRows),
     operations: operationRows.map(PP_mapOperation_)
   };
 
@@ -205,14 +511,15 @@ function PP_readState_(spreadsheet) {
 }
 
 function PP_writeCatalogState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO, PP_articleConfigurationRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
+  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false, item.excluded === true]; }));
   PP_writeTable_(spreadsheet.getSheetByName('HERRAMENTALES'), PP_SHEETS.HERRAMENTALES, (payload.toolCatalog || []).map(function(item) {
     return [item.id, item.part || item.parte, item.herramental, item.kitHerramental, Number(item.toolSetupMinutes || 0), Number(item.kitSetupMinutes || 0), item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CALENDARIO'), PP_SHEETS.CALENDARIO, (payload.calendarExceptions || []).map(function(item) {
-    return [item.id, item.concept || item.concepto || 'GENERAL', item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
+    return [item.id, item.concept || item.concepto || 'GENERAL', item.resource || item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('SUBCONTRATOS'), PP_SHEETS.SUBCONTRATOS, (payload.subcontracts || []).map(function(item) {
     return [item.id, item.part || item.parte || '*', item.name || item.tipo, Number(item.days || item.dias || 3), item.active !== false];
@@ -228,10 +535,11 @@ function PP_writeCatalogState_(spreadsheet, payload, user) {
     machines: (payload.machines || []).length,
     tools: (payload.toolCatalog || []).length,
     subcontracts: (payload.subcontracts || []).length
-  });
+  }, PP_CATALOGO_TABLAS_CATALOGOS_);
 }
 
 function PP_writeSkillState_(spreadsheet, payload, user) {
+  PP_assertCurrentRevision_(spreadsheet, payload);
   PP_writeTable_(spreadsheet.getSheetByName('OPERADORES'), PP_SHEETS.OPERADORES, PP_operatorRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CAPACIDADES'), PP_SHEETS.CAPACIDADES, PP_capabilityRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || payload.capabilities || []).map(function(item) {
@@ -240,25 +548,34 @@ function PP_writeSkillState_(spreadsheet, payload, user) {
   PP_writeTable_(spreadsheet.getSheetByName('MATRIZ'), PP_SHEETS.MATRIZ, PP_matrixRows_(payload));
   return PP_finishPartialWrite_(spreadsheet, payload, user, 'GUARDAR_MATRIZ', {
     capacityMinutes: Number(payload.capacityMinutes || 2400),
+    EXCLUDED_CAPABILITIES: PP_normalizeExcludedCapabilities_(payload.excludedCapabilities),
     settings: payload.settings || {}
   }, {
     operators: (payload.operators || []).length,
     capabilities: (payload.configuredCapabilities || []).length
-  });
+  }, PP_CATALOGO_TABLAS_MATRIZ_);
 }
 
 function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
   const savedAt = new Date().toISOString();
   const revision = PP_nextRevision_(spreadsheet);
+  const syncedAt = payload.syncedAt || savedAt;
+  const operationsSyncedAt = {};
+  (payload.operations || []).forEach(function(item) {
+    const ot = PP_normalizeKey_(item.ot);
+    if (ot && !operationsSyncedAt[ot]) operationsSyncedAt[ot] = syncedAt;
+  });
   PP_writeConfigPatch_(spreadsheet, {
     schemaVersion: PP_SCHEMA_VERSION,
     appVersion: PP_APP_VERSION,
     revision: revision,
     savedAt: savedAt,
     source: payload.source || 'NetSuite RESTlets / Apps Script',
-    syncedAt: payload.syncedAt || savedAt,
+    syncedAt: syncedAt,
+    operationsSyncedAt: Object.keys(operationsSyncedAt).length ? operationsSyncedAt : (payload.operationsSyncedAt || {}),
     plant: payload.plant || {},
-    invoicePriceWindow: payload.invoicePriceWindow || null
+    invoicePriceWindow: payload.invoicePriceWindow || null,
+    operationCatalogWarning: String(payload.operationCatalogWarning || '')
   });
   PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('CATALOGO_OPERACIONES'), PP_SHEETS.CATALOGO_OPERACIONES, (payload.operationCatalog || []).map(function(item) {
@@ -266,13 +583,16 @@ function PP_writeNetSuiteSyncState_(spreadsheet, payload, user) {
   }));
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
   PP_writeTable_(spreadsheet.getSheetByName('MATERIALES'), PP_SHEETS.MATERIALES, PP_materialRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_NETSUITE', revision, JSON.stringify({
     operations: (payload.operations || []).length,
     workOrders: (payload.workOrders || []).length,
     materials: (payload.materials || []).length
   })]);
   SpreadsheetApp.flush();
+  // El sync de NetSuite solo puede cambiar el catalogo de operaciones; se espeja
+  // despues del flush porque la hoja es la autoridad y Supabase es el espejo.
+  PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet, PP_CATALOGO_TABLAS_SYNC_), 'SINCRONIZAR_NETSUITE', revision);
   return PP_writeStateAck_(revision, savedAt, {
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
@@ -290,15 +610,33 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
     savedAt: savedAt,
     source: payload.source || 'NetSuite RESTlets / Apps Script (OTs)',
     syncedAt: payload.syncedAt || savedAt,
+    // La cola del plan se poda aqui, no solo en el cliente: PP_applyNetSuiteWorkOrdersData_
+    // ya la dejo filtrada contra las OTs abiertas de NetSuite, y sin persistirla
+    // CONFIG.selectedOts resucitaba en cada carga a la OT cerrada.
+    selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
+    lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
+    expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
     plant: payload.plant || {},
     invoicePriceWindow: payload.invoicePriceWindow || null
   });
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_NETSUITE_OT', revision, JSON.stringify({
     workOrders: (payload.workOrders || []).length
   })]);
   SpreadsheetApp.flush();
+  // FIX (RULE-PERF-014): este writer sube CONFIG.revision, asi que dejaba
+  // PP_STATE_CACHE_REVISION vieja y el siguiente getAppState reconstruia entero (>120 s) ->
+  // timeout -> sampleState. Ahora la cache se parchea con el scope de este writer
+  // (CONFIG + ORDENES_TRABAJO + ESTADOS_OPERACION_PLAN) y se sella con la revision nueva.
+  //
+  // NO se reconstruye con PP_buildState_ aqui: eso trasplanta un rebuild de >120 s al camino
+  // de guardado y tumba la sincronizacion de OTs, que ya mide 43-73 s. Ver
+  // PP_patchCachedStateAfterWorkOrderSync_. Si la cache no existia, o el parche falla, el
+  // siguiente getAppState reconstruye como antes: el parche nunca rompe el guardado.
+  try {
+    PP_patchCachedStateAfterWorkOrderSync_(spreadsheet, revision);
+  } catch (ignored) {}
   return PP_writeStateAck_(revision, savedAt, {
     syncedAt: payload.syncedAt || savedAt,
     plant: payload.plant || {},
@@ -306,9 +644,74 @@ function PP_writeNetSuiteWorkOrdersState_(spreadsheet, payload, user) {
   });
 }
 
-function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail) {
+function PP_writeWorkOrderSyncState_(spreadsheet, payload, user) {
+  const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
   const savedAt = new Date().toISOString();
-  const revision = PP_nextRevision_(spreadsheet);
+  const revision = currentRevision + 1;
+  const removedOts = (payload.removedWorkOrderOts || []).reduce(function(out, ot) {
+    const key = String(ot || '').trim().toUpperCase();
+    if (key) out[key] = true;
+    return out;
+  }, {});
+  const activeMaterials = PP_readRows_(spreadsheet.getSheetByName('MATERIALES')).map(PP_mapMaterial_).filter(function(item) {
+    return !removedOts[String(item.ot || '').trim().toUpperCase()];
+  });
+
+  PP_writeConfigPatch_(spreadsheet, {
+    schemaVersion: PP_SCHEMA_VERSION,
+    appVersion: PP_APP_VERSION,
+    revision: revision,
+    savedAt: savedAt,
+    source: payload.source || 'Sincronizacion ligera de OTs',
+    syncedAt: payload.syncedAt || savedAt,
+    selectedOperationId: payload.selectedOperationId || '',
+    selectedOts: Array.isArray(payload.selectedOts) ? payload.selectedOts : [],
+    lockedOts: Array.isArray(payload.lockedOts) ? payload.lockedOts : [],
+    expandedOts: Array.isArray(payload.expandedOts) ? payload.expandedOts : [],
+    preparedPlanningByOt: payload.preparedPlanningByOt || {},
+    closedWorkOrderSummaries: payload.closedWorkOrderSummaries || {},
+    UNCONFIRMED_WORK_ORDERS: PP_serializeUnconfirmedWorkOrderMarks_(payload.unconfirmedWorkOrders, spreadsheet),
+    lastSchedule: payload.lastSchedule || null
+  });
+  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, PP_workOrderRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT, PP_otConfigurationRows_(payload));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
+  PP_writeTable_(spreadsheet.getSheetByName('MATERIALES'), PP_SHEETS.MATERIALES, PP_materialRows_({ materials: activeMaterials }));
+  spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, 'SINCRONIZAR_OT_LIGERA', revision, JSON.stringify({
+    operations: (payload.operations || []).length,
+    workOrders: (payload.workOrders || []).length,
+    materials: activeMaterials.length,
+    removedWorkOrderOts: Object.keys(removedOts).length
+  })]);
+  SpreadsheetApp.flush();
+  // SELLO DE LA CACHE DE ESTADO. Este writer es el que usa el boton "Sincronizar OTs"
+  // (saveWorkOrderSyncState) y antes era el que mas dejaba la cache desfasada: sube CONFIG.revision
+  // sin tocar PP_STATE_CACHE_REVISION, asi que el siguiente getAppState reconstruia entero (>120 s,
+  // medido 4 veces) y la pagina caia a sampleState mostrando las OTs de demostracion. Ver
+  // PP_patchCachedStateAfterWorkOrderSyncLite_. Si no hay cache, o el parche falla, el siguiente
+  // getAppState reconstruye como antes: nunca rompe la sincronizacion.
+  try {
+    PP_patchCachedStateAfterWorkOrderSyncLite_(spreadsheet, revision, payload);
+  } catch (ignored) {}
+  return PP_writeStateAck_(revision, savedAt, { syncedAt: payload.syncedAt || savedAt });
+}
+
+/**
+ * Cierra un guardado parcial: sube la revision, deja la fila de auditoria, hace
+ * flush y devuelve el acuse.
+ *
+ * `catalogoTablas` (opcional) son las tablas de catalogo que este guardado toco:
+ * despues del flush se espejan a Supabase para que la pagina pueda leerlas de
+ * alla. Se hace DESPUES del flush a proposito: la hoja es la autoridad y un fallo
+ * de Supabase jamas puede impedir que el plan quede guardado. El espejo tampoco
+ * lanza (ver PP_mirrorCatalogosSupabase_), asi que un Supabase caido solo se
+ * refleja en el log y en la fila de auditoria.
+ */
+function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch, detail, catalogoTablas) {
+  const currentRevision = PP_assertCurrentRevision_(spreadsheet, payload);
+  const savedAt = new Date().toISOString();
+  const revision = currentRevision + 1;
   PP_writeConfigPatch_(spreadsheet, Object.assign({
     schemaVersion: PP_SCHEMA_VERSION,
     appVersion: PP_APP_VERSION,
@@ -317,7 +720,20 @@ function PP_finishPartialWrite_(spreadsheet, payload, user, action, configPatch,
   }, configPatch || {}));
   spreadsheet.getSheetByName('AUDITORIA').appendRow([savedAt, user, action, revision, JSON.stringify(detail || {})]);
   SpreadsheetApp.flush();
+  if (catalogoTablas && catalogoTablas.length) {
+    PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet, catalogoTablas), action, revision);
+  }
   return PP_writeStateAck_(revision, savedAt);
+}
+
+function PP_assertCurrentRevision_(spreadsheet, payload) {
+  const currentConfig = PP_readConfig_(spreadsheet.getSheetByName('CONFIG'));
+  const currentRevision = Number(currentConfig.revision || 0);
+  const incomingRevision = Number(payload.revision || 0);
+  if (incomingRevision !== currentRevision) {
+    throw new Error('CONFLICT_REVISION: el plan cambio desde la ultima carga. Recarga antes de guardar.');
+  }
+  return currentRevision;
 }
 
 function PP_nextRevision_(spreadsheet) {
@@ -334,12 +750,119 @@ function PP_writeConfigPatch_(spreadsheet, patch) {
   PP_writeTable_(sheet, PP_SHEETS.CONFIG, keys.map(function(key) { return [key, JSON.stringify(config[key])]; }));
 }
 
+// Las marcas de "por confirmar" de RULE-OT-051 capa 2: que OTs no vinieron en el ultimo payload
+// de NetSuite sin que haya evidencia de que esten cerradas. Mientras dure la marca, la app NO las
+// poda, y con esto la marca sobrevive a una recarga.
+//
+// El formato de cada marca es {ot, firstSeenAt, lastSeenAt, misses}, la misma que produce
+// normalizeUnconfirmedMap en planning-workflow-core.js. Se acepta objeto o texto JSON porque
+// PP_readConfig_ intenta JSON.parse y, si el valor estaba corrupto, deja el texto tal cual:
+// un valor ilegible se devuelve como {} y no revienta la carga, que es lo que debe pasar con
+// una fila de CONFIG dañada.
+function PP_parseUnconfirmedWorkOrderMarks_(source) {
+  let raw = source;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) return {};
+    try { raw = JSON.parse(text); } catch (error) { return {}; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  Object.keys(raw).forEach(function(key) {
+    const value = raw[key];
+    if (!value || typeof value !== 'object') return;
+    const ot = String(value.ot || key || '').trim();
+    if (!ot) return;
+    const misses = Number(value.misses);
+    out[ot] = {
+      ot: ot,
+      firstSeenAt: String(value.firstSeenAt || ''),
+      lastSeenAt: String(value.lastSeenAt || ''),
+      misses: misses > 0 ? misses : 1
+    };
+  });
+  return out;
+}
+
+// Que se escribe en CONFIG. REGLA: si el cliente NO mando el campo, NO se toca lo que hay.
+// Un cliente viejo (o cualquier guardado que no conozca la fila) no puede borrar las marcas que
+// otro cliente si guardo: seria la ausencia de un campo tratada como "ya no hay nada por
+// confirmar", que es exactamente el error de RULE-OT-051 en su forma mas breve. Se distingue
+// "no vino el campo" de "vino vacio" con Object.prototype.hasOwnProperty, no con truthiness:
+// un {} explicito SI es una orden de borrar marcas, y el siguiente sync lo decide con
+// evidencia de NetSuite, no con una omision.
+function PP_serializeUnconfirmedWorkOrderMarks_(value, spreadsheet) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    try {
+      const current = PP_readConfig_(spreadsheet.getSheetByName('CONFIG')).UNCONFIRMED_WORK_ORDERS;
+      return JSON.stringify(PP_parseUnconfirmedWorkOrderMarks_(current));
+    } catch (error) {
+      return JSON.stringify({});
+    }
+  }
+  return JSON.stringify(PP_parseUnconfirmedWorkOrderMarks_(value));
+}
+
 function PP_writeStateAck_(revision, savedAt, extra) {
   return Object.assign({ ok: true, revision: revision, savedAt: savedAt }, extra || {});
 }
 
+function PP_dedupeOperationGenerations_(operations) {
+  const GENERATION_GAP = 200;
+  const norm = function(value) {
+    return String(value || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+  };
+  if (!Array.isArray(operations) || operations.length < 2) return operations || [];
+  const groups = {};
+  operations.forEach(function(op) {
+    const key = norm(op.ot) + '::' + norm(op.parte);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(op);
+  });
+  const output = [];
+  Object.keys(groups).forEach(function(key) {
+    const group = groups[key];
+    const toolChanges = [];
+    const others = [];
+    const numerics = [];
+    group.forEach(function(op) {
+      if (norm(op.tipoInsercion) === 'CAMBIO_HERRAMENTAL') { toolChanges.push(op); return; }
+      const m = /^ns-(\d+)$/.exec(String(op.id || '').trim());
+      if (m) numerics.push({ num: parseInt(m[1], 10), op: op });
+      else others.push(op);
+    });
+    toolChanges.forEach(function(op) { output.push(op); });
+    if (numerics.length < 2) {
+      others.forEach(function(op) { output.push(op); });
+      numerics.forEach(function(item) { output.push(item.op); });
+      return;
+    }
+    numerics.sort(function(a, b) { return a.num - b.num; });
+    const families = [];
+    let current = [numerics[0]];
+    for (let i = 1; i < numerics.length; i++) {
+      if (numerics[i].num - numerics[i - 1].num > GENERATION_GAP) { families.push(current); current = []; }
+      current.push(numerics[i]);
+    }
+    families.push(current);
+    if (families.length < 2) {
+      others.forEach(function(op) { output.push(op); });
+      numerics.forEach(function(item) { output.push(item.op); });
+      return;
+    }
+    let maxLast = -1;
+    let keepIndex = -1;
+    families.forEach(function(family, index) {
+      const last = family[family.length - 1].num;
+      if (last > maxLast) { maxLast = last; keepIndex = index; }
+    });
+    families[keepIndex].forEach(function(item) { output.push(item.op); });
+  });
+  return output;
+}
+
 function PP_operationRows_(payload) {
-  return (payload.operations || []).map(function(op) {
+  return PP_dedupeOperationGenerations_(payload.operations || []).map(function(op) {
     return PP_SHEETS.OPERACIONES.map(function(header) { return PP_cellValue_(op[PP_OPERATION_FIELDS[header]]); });
   });
 }
@@ -412,7 +935,7 @@ function PP_matrixRows_(payload) {
 
 function PP_workOrderRows_(payload) {
   return (payload.workOrders || []).map(function(item) {
-    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || ''];
+    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || '', Number(item.lastSalePrice || 0)];
   });
 }
 
@@ -426,7 +949,9 @@ function PP_otConfigurationRows_(payload) {
       item.kitPending === true,
       item.subcontractType || item.tipoSubcontrato || '',
       Number(item.subcontractDays || item.diasSubcontrato || 0),
-      item.updatedAt || item.actualizado || new Date().toISOString()
+      item.updatedAt || item.actualizado || new Date().toISOString(),
+      item.herramental || item.tool || '',
+      JSON.stringify(PP_additionalToolList_(item.additionalHerramentales || item.herramentalesExtra || []))
     ];
   });
 }
@@ -439,6 +964,7 @@ function PP_articleConfigurationRows_(payload) {
       String(item.jobType || item.tipoOt || '').trim().toUpperCase(),
       String(item.planningType || item.tipoTrabajo || '').trim().toUpperCase(),
       Number(item.manualUnitPrice || item.precioManual || 0),
+      Number(item.referenceSalePrice || item.precioRefVenta || 0),
       item.updatedAt || item.actualizado || new Date().toISOString()
     ];
   });
@@ -450,20 +976,48 @@ function PP_materialRows_(payload) {
   });
 }
 
+function PP_operationStatusRow_(item) {
+  return [
+    item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
+    item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
+    item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
+    item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
+    item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
+    item.completedAt || '', item.reopenedAt || '', String(item.origin || item.origen || '').trim() || 'draft'
+  ];
+}
+
 function PP_operationStatusRows_(payload) {
-  const statusRows = Array.isArray(payload.operationPlanStatuses)
-    ? payload.operationPlanStatuses
-    : Object.keys(payload.operationPlanStatuses || {}).map(function(key) { return Object.assign({ key: key }, payload.operationPlanStatuses[key]); });
-  return statusRows.map(function(item) {
-    return [
-      item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
-      item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
-      item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
-      item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
-      item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
-      item.completedAt || '', item.reopenedAt || ''
-    ];
+  const rows = [];
+  const pushFlat = function(map, origin) {
+    Object.keys(map || {}).forEach(function(key) {
+      const item = map[key] || {};
+      rows.push({ origin: origin, ...item, key: String(item.key || key || '') });
+    });
+  };
+  if (Array.isArray(payload.operationPlanStatuses)) {
+    payload.operationPlanStatuses.forEach(function(item) {
+      if (!item) return;
+      rows.push({ ...item, origin: String(item.origin || item.origen || '').trim() || 'draft' });
+    });
+  } else {
+    pushFlat(payload.operationPlanStatuses, 'draft');
+  }
+  Object.keys(payload.publishedPlanStatuses || {}).forEach(function(origin) {
+    pushFlat(payload.publishedPlanStatuses[origin], origin);
   });
+  return rows.map(PP_operationStatusRow_);
+}
+
+function PP_preservePublishedPlanStatuses_(spreadsheet, payload) {
+  const byOrigin = PP_readOperationStatusesByOrigin_(PP_readRows_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN')));
+  const hasPublished = payload.publishedPlanStatuses && Object.keys(payload.publishedPlanStatuses).length;
+  return {
+    operationPlanStatuses: Object.assign({}, byOrigin['draft'] || {}, payload.operationPlanStatuses || {}),
+    publishedPlanStatuses: hasPublished ? payload.publishedPlanStatuses
+      : Object.keys(byOrigin).filter(function(origin) { return origin !== 'draft'; })
+        .reduce(function(out, origin) { out[origin] = byOrigin[origin]; return out; }, {})
+  };
 }
 
 function PP_writeState_(spreadsheet, payload, user, force) {
@@ -490,6 +1044,13 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['loadWeekStart', JSON.stringify(payload.loadWeekStart || '')],
     ['reportWeekStart', JSON.stringify(payload.reportWeekStart || '')],
     ['reportFilters', JSON.stringify(payload.reportFilters || {})],
+    ['preparedPlanningByOt', JSON.stringify(payload.preparedPlanningByOt || {})],
+    ['closedWorkOrderSummaries', JSON.stringify(payload.closedWorkOrderSummaries || {})],
+    // Una fila mas en CONFIG. Antes las marcas vivian solo en el navegador: un sync las
+    // escribia, un reload las borraba, y la OT se caia de la cola en el siguiente normalizeState.
+    ['UNCONFIRMED_WORK_ORDERS', PP_serializeUnconfirmedWorkOrderMarks_(payload.unconfirmedWorkOrders, spreadsheet)],
+    ['operationCatalogWarning', JSON.stringify(String(payload.operationCatalogWarning || ''))],
+    ['EXCLUDED_CAPABILITIES', JSON.stringify(PP_normalizeExcludedCapabilities_(payload.excludedCapabilities))],
     ['selectedOts', JSON.stringify(Array.isArray(payload.selectedOts) ? payload.selectedOts : [])],
     ['lockedOts', JSON.stringify(Array.isArray(payload.lockedOts) ? payload.lockedOts : [])],
     ['expandedOts', JSON.stringify(Array.isArray(payload.expandedOts) ? payload.expandedOts : [])],
@@ -497,14 +1058,12 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     ['dailyBreaks', JSON.stringify(payload.dailyBreaks || {})],
     ['plant', JSON.stringify(payload.plant || {})],
     ['settings', JSON.stringify(payload.settings || {})],
-    ['lastSchedule', JSON.stringify(payload.lastSchedule || null)]
+    ['lastSchedule', JSON.stringify(payload.lastSchedule || null)],
+    ['operationsSyncedAt', JSON.stringify(payload.operationsSyncedAt || {})]
   ];
   PP_writeTable_(spreadsheet.getSheetByName('CONFIG'), PP_SHEETS.CONFIG, configRows);
 
-  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES,
-    (payload.operations || []).map(function(op) {
-      return PP_SHEETS.OPERACIONES.map(function(header) { return PP_cellValue_(op[PP_OPERATION_FIELDS[header]]); });
-    }));
+  PP_writeTable_(spreadsheet.getSheetByName('OPERACIONES'), PP_SHEETS.OPERACIONES, PP_operationRows_(payload));
 
   PP_writeTable_(spreadsheet.getSheetByName('OPERADORES'), PP_SHEETS.OPERADORES,
     (payload.operators || []).map(function(operator) {
@@ -561,7 +1120,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     return [item.key, item.ct, item.label || item.operation, item.source || 'NETSUITE', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('ORDENES_TRABAJO'), PP_SHEETS.ORDENES_TRABAJO, (payload.workOrders || []).map(function(item) {
-    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || ''];
+    return [item.id, item.workOrderId, item.ot, item.item, item.description, item.photoUrl, item.startDate, item.endDate, item.dueDate, item.dueDateOverride || '', Number(item.quantity || 0), item.status, item.customer, Number(item.builtQuantity || 0), Number(item.pendingQuantity || 0), Number(item.averageSalePrice || 0), item.averageSalePriceFrom || '', item.averageSalePriceTo || '', Number(item.lastSalePrice || 0)];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_OT'), PP_SHEETS.CONFIGURACION_OT,
     Object.keys(payload.otConfigurations || {}).sort().map(function(ot) {
@@ -573,7 +1132,9 @@ function PP_writeState_(spreadsheet, payload, user, force) {
         item.kitPending === true,
         item.subcontractType || item.tipoSubcontrato || '',
         Number(item.subcontractDays || item.diasSubcontrato || 0),
-        item.updatedAt || item.actualizado || new Date().toISOString()
+        item.updatedAt || item.actualizado || new Date().toISOString(),
+        item.herramental || item.tool || '',
+        JSON.stringify(PP_additionalToolList_(item.additionalHerramentales || item.herramentalesExtra || []))
       ];
     }));
   PP_writeTable_(spreadsheet.getSheetByName('CONFIGURACION_ARTICULO'), PP_SHEETS.CONFIGURACION_ARTICULO,
@@ -595,7 +1156,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     });
   });
   PP_writeTable_(spreadsheet.getSheetByName('MATRIZ'), PP_SHEETS.MATRIZ, matrixRows);
-  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false]; }));
+  PP_writeTable_(spreadsheet.getSheetByName('MAQUINAS'), PP_SHEETS.MAQUINAS, (payload.machines || []).map(function(item) { return [item.id || item.machine || item.maquina, item.active !== false, item.excluded === true]; }));
   PP_writeTable_(spreadsheet.getSheetByName('HERRAMENTALES'), PP_SHEETS.HERRAMENTALES, (payload.toolCatalog || []).map(function(item) {
     return [item.id, item.part || item.parte, item.herramental, item.kitHerramental, Number(item.toolSetupMinutes || 0), Number(item.kitSetupMinutes || 0), item.active !== false];
   }));
@@ -603,7 +1164,7 @@ function PP_writeState_(spreadsheet, payload, user, force) {
     return [item.id, item.ot, item.workOrderId, item.assembly, item.componentId, item.component, item.description, item.unit, Number(item.required || 0), Number(item.issued || 0), Number(item.pending || 0)];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('CALENDARIO'), PP_SHEETS.CALENDARIO, (payload.calendarExceptions || []).map(function(item) {
-    return [item.id, item.concept || item.concepto || 'GENERAL', item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
+    return [item.id, item.concept || item.concepto || 'GENERAL', item.resource || item.machine || item.maquina || '', item.startDate || item.fechaInicio, item.start, item.endDate || item.fechaFin, item.end, item.reason || item.motivo || '', item.active !== false];
   }));
   PP_writeTable_(spreadsheet.getSheetByName('SUBCONTRATOS'), PP_SHEETS.SUBCONTRATOS, (payload.subcontracts || []).map(function(item) {
     return [item.id, item.part || item.parte || '*', item.name || item.tipo, Number(item.days || item.dias || 3), item.active !== false];
@@ -611,22 +1172,14 @@ function PP_writeState_(spreadsheet, payload, user, force) {
   PP_writeTable_(spreadsheet.getSheetByName('TIPOS_OT'), PP_SHEETS.TIPOS_OT, (payload.otTypes || []).map(function(item) {
     return [item.id, String(item.name || item.nombre || '').trim().toUpperCase(), item.active !== false];
   }));
-  const statusRows = Array.isArray(payload.operationPlanStatuses)
-    ? payload.operationPlanStatuses
-    : Object.keys(payload.operationPlanStatuses || {}).map(function(key) { return Object.assign({ key: key }, payload.operationPlanStatuses[key]); });
-  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, statusRows.map(function(item) {
-    return [
-      item.key || item.completionKey || '', item.type || item.tipo || 'OPERATION', item.status || item.planStatus || 'PENDIENTE',
-      item.operationId || '', item.ot || '', Number(item.sequence || item.secuencia || 0), item.ct || '', item.operator || item.operador || '',
-      item.machine || item.maquina || '', item.article || item.articulo || '', item.description || item.descripcion || '',
-      item.startDate || item.fechaInicio || '', item.startTime || item.horaInicio || '', item.endDate || item.fechaFin || '', item.endTime || item.horaFin || '',
-      item.fromHerramental || '', item.fromKit || '', item.toHerramental || '', item.toKit || '', item.toToolKey || item.toolKey || '',
-      item.completedAt || '', item.reopenedAt || ''
-    ];
-  }));
+  PP_writeTable_(spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN'), PP_SHEETS.ESTADOS_OPERACION_PLAN, PP_operationStatusRows_(PP_preservePublishedPlanStatuses_(spreadsheet, payload)));
   const audit = spreadsheet.getSheetByName('AUDITORIA');
   audit.appendRow([savedAt, user, 'GUARDAR_PLAN', revision, JSON.stringify({ operations: (payload.operations || []).length })]);
   SpreadsheetApp.flush();
+  // El guardado completo reescribe TODOS los catalogos, asi que aqui si se
+  // espejan los diez (sin filtro). Va despues del flush y nunca lanza: la hoja
+  // quedo escrita y el guardado esta hecho.
+  PP_logCatalogoSupabase_(spreadsheet, PP_mirrorCatalogosSupabase_(spreadsheet), 'GUARDAR_PLAN', revision);
   const saved = PP_readState_(spreadsheet);
   saved.ok = true;
   return saved;
@@ -635,6 +1188,19 @@ function PP_writeState_(spreadsheet, payload, user, force) {
 function PP_readRows_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return [];
   const values = sheet.getDataRange().getDisplayValues();
+  const headers = values.shift();
+  return values.filter(function(row) { return row.some(function(value) { return value !== ''; }); }).map(function(row) {
+    return headers.reduce(function(out, header, index) { out[header] = row[index]; return out; }, {});
+  });
+}
+
+// Variante con getValues() para hojas cuyas columnas son TODAS texto plano escrito por el
+// servidor (sin fecha, sin fórmula, sin formato de celda que getDisplayValues() pudiera
+// convertir a otra cosa). OPERACIONES es la hoja más grande (~139 876 filas × 33 columnas)
+// y getDisplayValues() formatea cada celda: en 4.6M celdas esa diferencia es de segundos.
+function PP_readRowsFast_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const values = sheet.getDataRange().getValues();
   const headers = values.shift();
   return values.filter(function(row) { return row.some(function(value) { return value !== ''; }); }).map(function(row) {
     return headers.reduce(function(out, header, index) { out[header] = row[index]; return out; }, {});
@@ -663,9 +1229,288 @@ function PP_cleanSnapshotUserComment_(value) {
   return /(?:_APP\b|PLANNER_CORE|WARN_|NETSUITE_APPS_SCRIPT|PRIORIDAD_COLA)/i.test(comment) ? '' : comment;
 }
 
-function PP_appendPlanSnapshot_(spreadsheet, payload, user) {
-  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
-  const snapshotId = Utilities.getUuid();
+function PP_planSnapshotPayloadKey_(snapshotId) {
+  return 'PLAN_SNAPSHOT_PAYLOAD::' + String(snapshotId || '').trim();
+}
+
+function PP_getPayloadSheet_() {
+  const spreadsheet = PP_getWorkbook_();
+  PP_ensureWorkbook_(spreadsheet);
+  return spreadsheet.getSheetByName('SNAPSHOT_PAYLOADS');
+}
+
+function PP_payloadStore_() {
+  function findIndex_(entries, key) {
+    for (let index = 0; index < entries.length; index += 1) {
+      if (String(entries[index].KEY || '') === key) return index;
+    }
+    return -1;
+  }
+  return {
+    getProperty: function(key) {
+      const sheet = PP_getPayloadSheet_();
+      if (!sheet || sheet.getLastRow() < 2) return null;
+      const keysColumn = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+      for (let index = 0; index < keysColumn.length; index += 1) {
+        if (String(keysColumn[index][0] || '') === key) {
+          const valueCell = sheet.getRange(index + 2, 2, 1, 1).getDisplayValues();
+          return valueCell[0][0] != null ? String(valueCell[0][0]) : null;
+        }
+      }
+      return null;
+    },
+    setProperty: function(key, value) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const index = findIndex_(entries, key);
+      if (index < 0) sheet.appendRow([key, String(value)]);
+      else sheet.getRange(index + 2, 1, 1, 2).setValues([[key, String(value)]]);
+      return this;
+    },
+    setProperties: function(values, allowUpdate) {
+      const store = this;
+      Object.keys(values || {}).forEach(function(key) {
+        if (!allowUpdate && store.getProperty(key) != null) return;
+        store.setProperty(key, values[key]);
+      });
+      return this;
+    },
+    setMany: function(values, appendOnly) {
+      const sheet = PP_getPayloadSheet_();
+      const newRows = [];
+      const updates = [];
+      if (appendOnly) {
+        Object.keys(values || {}).forEach(function(entryKey) {
+          newRows.push([entryKey, String(values[entryKey] == null ? '' : values[entryKey])]);
+        });
+      } else {
+        const entries = PP_readRows_(sheet);
+        const indexByKey = {};
+        entries.forEach(function(row, index) { indexByKey[String(row.KEY || '')] = index; });
+        Object.keys(values || {}).forEach(function(entryKey) {
+          const value = String(values[entryKey] == null ? '' : values[entryKey]);
+          const existingIndex = indexByKey[entryKey];
+          if (existingIndex == null) newRows.push([entryKey, value]);
+          else updates.push([existingIndex + 2, [entryKey, value]]);
+        });
+      }
+      if (newRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 2).setValues(newRows);
+      updates.forEach(function(update) { sheet.getRange(update[0], 1, 1, 2).setValues([update[1]]); });
+      return this;
+    },
+    deleteProperty: function(key) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const index = findIndex_(entries, key);
+      if (index >= 0) sheet.deleteRow(index + 2);
+      return this;
+    },
+    deleteMany: function(keys) {
+      const sheet = PP_getPayloadSheet_();
+      const entries = PP_readRows_(sheet);
+      const deleteSet = {};
+      (keys || []).forEach(function(key) { deleteSet[String(key)] = true; });
+      const kept = [];
+      entries.forEach(function(row) {
+        if (!deleteSet[String(row.KEY || '')]) kept.push([row.KEY, row.VALUE]);
+      });
+      if (kept.length === entries.length) return this;
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 2).clearContent();
+      if (kept.length) sheet.getRange(2, 1, kept.length, 2).setValues(kept);
+      return this;
+    },
+    getProperties: function() {
+      const out = {};
+      PP_readRows_(PP_getPayloadSheet_()).forEach(function(row) { out[String(row.KEY || '')] = String(row.VALUE); });
+      return out;
+    },
+    getManifestProperties: function() {
+      const sheet = PP_getPayloadSheet_();
+      if (!sheet || sheet.getLastRow() < 2) return {};
+      const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+      const lastRow = sheet.getLastRow();
+      const keysColumn = sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+      const manifestRows = [];
+      for (let index = 0; index < keysColumn.length; index += 1) {
+        const key = String(keysColumn[index][0] || '');
+        if (key.indexOf(prefix) !== 0) continue;
+        const snapshotId = key.slice(prefix.length);
+        if (snapshotId && snapshotId.indexOf('::') < 0) manifestRows.push({ row: index + 2, key: key });
+      }
+      if (!manifestRows.length) return {};
+      const out = {};
+      manifestRows.forEach(function(entry) {
+        const valueCell = sheet.getRange(entry.row, 2, 1, 1).getDisplayValues();
+        out[entry.key] = valueCell[0][0] != null ? String(valueCell[0][0]) : '';
+      });
+      return out;
+    }
+  };
+}
+
+function PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest) {
+  const generation = String(manifest && manifest.generation || '');
+  const keys = [];
+  for (let index = 0; index < Number(manifest && manifest.chunks || 0); index += 1) {
+    keys.push(generation ? key + '::' + generation + '::' + index : key + '::' + index);
+  }
+  properties.deleteMany(keys);
+}
+
+function PP_finalizePlanSnapshotPayload_(transaction) {
+  if (!transaction || !transaction.previousManifest) return;
+  try { PP_deletePlanSnapshotPayloadGeneration_(transaction.properties, transaction.key, transaction.previousManifest); } catch (ignored) {}
+}
+
+function PP_rollbackPlanSnapshotPayload_(transaction) {
+  if (!transaction) return;
+  if (transaction.previousValue == null) transaction.properties.deleteProperty(transaction.key);
+  else transaction.properties.setProperty(transaction.key, transaction.previousValue);
+  PP_deletePlanSnapshotPayloadGeneration_(transaction.properties, transaction.key, transaction.newManifest);
+}
+
+function PP_storePlanSnapshotPayload_(snapshotId, payload, metadata, options) {
+  const properties = PP_payloadStore_();
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const appendOnly = Boolean(options && options.appendOnly);
+  let previousValue = null;
+  if (!appendOnly) previousValue = properties.getProperty(key);
+  let previousManifest = null;
+  try { previousManifest = previousValue ? JSON.parse(previousValue) : null; } catch (ignored) {}
+  const serialized = JSON.stringify(payload || {});
+  const chunks = [];
+  for (let offset = 0; offset < serialized.length; offset += 32000) chunks.push(serialized.slice(offset, offset + 32000));
+  const generation = Utilities.getUuid();
+  const stagingKey = key + '::' + generation + '::';
+  const staged = {};
+  chunks.forEach(function(chunk, index) { staged[stagingKey + index] = JSON.stringify(chunk); });
+  const details = metadata || {};
+  const manifest = {
+    chunks: chunks.length, generation: generation,
+    generatedAt: String(details.generatedAt || payload.generatedAt || payload.savedAt || ''),
+    user: String(details.user || ''), planStart: String(payload.planStart || ''),
+    horizonDays: Number(payload.horizonDays || 0), operations: Number(details.operations != null ? details.operations : (payload.operations || []).length),
+    weekStart: String(payload.weekStart || payload.planStart || ''), version: Number(payload.version || 0),
+    publicationReason: String(payload.publicationReason || ''), changeSummary: payload.changeSummary || null,
+    publishedAt: String(payload.publishedAt || '')
+  };
+  staged[key] = JSON.stringify(manifest);
+  try {
+    properties.setMany(staged, appendOnly);
+  } catch (error) {
+    PP_deletePlanSnapshotPayloadGeneration_(properties, key, manifest);
+    throw error;
+  }
+  PP_upsertManifestIndexRecord_(snapshotId, manifest, payload);
+  const transaction = {
+    properties: properties, key: key, previousValue: previousValue,
+    previousManifest: previousManifest, newManifest: manifest
+  };
+  if (!(options && options.keepPrevious)) PP_finalizePlanSnapshotPayload_(transaction);
+  return transaction;
+}
+
+function PP_readPlanSnapshotPayload_(snapshotId) {
+  const properties = PP_payloadStore_();
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const value = properties.getProperty(key);
+  if (value == null) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || !parsed.chunks) return parsed;
+    let serialized = '';
+    const generation = String(parsed.generation || '');
+    for (let index = 0; index < Number(parsed.chunks); index += 1) {
+      const chunkKey = key + (generation ? '::' + generation : '') + '::' + index;
+      const rawChunk = properties.getProperty(chunkKey);
+      if (rawChunk != null) serialized += JSON.parse(rawChunk);
+    }
+    return JSON.parse(serialized);
+  } catch (error) { throw new Error('El payload completo de la instantanea esta corrupto'); }
+}
+
+function PP_deletePlanSnapshotPayload_(snapshotId) {
+  const properties = PP_payloadStore_();
+  const key = PP_planSnapshotPayloadKey_(snapshotId);
+  const values = properties.getProperties();
+  const keys = [key];
+  try {
+    const parsed = values[key] == null ? null : JSON.parse(values[key]);
+    if (parsed) {
+      const generation = String(parsed.generation || '');
+      for (let index = 0; index < Number(parsed.chunks || 0); index += 1) {
+        keys.push(generation ? key + '::' + generation + '::' + index : key + '::' + index);
+      }
+    }
+  } catch (ignored) {}
+  properties.deleteMany(keys);
+  PP_removeManifestIndexRecord_(snapshotId);
+}
+
+function PP_deletePlanSnapshot_(spreadsheet, snapshotId) {
+  const key = String(snapshotId || '').trim();
+  if (!key || key === 'draft') return { ok: false, skipped: true };
+  ['PLANES_HISTORICOS', 'BORRADOR_PLAN'].forEach(function(sheetName) {
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) return;
+    let header = [];
+    try { header = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0] || []; } catch (ignored) {}
+    const colIndex = header.indexOf('SNAPSHOT_ID');
+    if (colIndex < 0) return;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    // UNA lectura de la columna entera (una llamada), no una por fila.
+    const valores = sheet.getRange(2, colIndex + 1, lastRow - 1, 1).getValues();
+    // Bloques contiguos de este snapshot, de abajo hacia arriba: deleteRows desplaza
+    // lo de abajo, asi que borrar el bloque de mayor posicion primero mantiene validas
+    // las de los bloques de arriba.
+    let cuenta = 0;
+    let borro = false;
+    for (let i = valores.length - 1; i >= 0; i -= 1) {
+      const es = String(valores[i][0] == null ? '' : valores[i][0]).trim() === key;
+      if (es) { cuenta += 1; continue; }
+      if (cuenta > 0) { sheet.deleteRows(i + 2, cuenta); cuenta = 0; borro = true; }
+    }
+    if (cuenta > 0) { sheet.deleteRows(2, cuenta); borro = true; }
+    // Borrar filas DESPLAZA todo lo de abajo, asi que el conteo guardado en el script cache ya no
+    // describe esta hoja. Se tira entero y la siguiente lectura lo reconstruye. No hay forma de
+    // "restar" las filas de este snapshot sin saber cuantas habia de cada uno.
+    if (borro && sheetName === 'PLANES_HISTORICOS') {
+      PP_invalidatePlanHistoryCountsCache_();
+      PP_invalidateMachineToolHistoryCache_();
+    }
+  });
+  PP_deletePlanSnapshotPayload_(key);
+  PP_removeManifestIndexRecord_(key);
+  SpreadsheetApp.flush();
+  return { ok: true, snapshotId: key };
+}
+
+function PP_clearDraftSnapshot_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.BORRADOR_PLAN.length).clearContent();
+  PP_deletePlanSnapshotPayload_('draft');
+}
+
+function PP_clearAllOperationPlanStatuses_() {
+  const spreadsheet = PP_getWorkbook_();
+  const sheet = spreadsheet.getSheetByName('ESTADOS_OPERACION_PLAN');
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, PP_SHEETS.ESTADOS_OPERACION_PLAN.length).clearContent();
+  // No se sube CONFIG.revision a proposito: "Reabrir todo" no es un guardado de plan y no debe
+  // invalidar la concurrencia optimista del cliente. Pero si deja la cache de estado vigente,
+  // PP_readState_ serviria los estados que se acaban de borrar. Se invalida la cache, no la
+  // revision: el siguiente getAppState reconstruye y el cliente no recibe CONFLICT_REVISION.
+  PP_invalidateStateCache_(spreadsheet);
+  return { clearedRows: Math.max(0, lastRow - 1) };
+}
+
+function PP_appendPlanSnapshot_(spreadsheet, payload, user, options) {
+  const sheetName = String(options && options.sheetName || 'PLANES_HISTORICOS');
+  const sheet = spreadsheet.getSheetByName(sheetName);
+  const snapshotId = String(options && options.snapshotId || '').trim() || Utilities.getUuid();
   const generatedAt = new Date().toISOString();
   const scheduledOts = (payload.lastSchedule && Array.isArray(payload.lastSchedule.scheduledOts))
     ? payload.lastSchedule.scheduledOts.map(PP_normalizeKey_)
@@ -684,7 +1529,7 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user) {
     const configurationKey = Object.keys(articleConfigurations).find(function(key) { return PP_normalizeKey_(key) === PP_normalizeKey_(article); });
     const configuration = configurationKey ? articleConfigurations[configurationKey] || {} : {};
     const pendingPieces = Math.max(0, Number(workOrder.pendingQuantity != null ? workOrder.pendingQuantity : (Number(workOrder.quantity || 0) - Number(workOrder.builtQuantity || 0))));
-    const invoicePrice = Math.max(0, Number(workOrder.averageSalePrice || 0));
+    const invoicePrice = Math.max(Math.max(0, Number(workOrder.lastSalePrice || 0)), Math.max(0, Number(workOrder.averageSalePrice || 0)));
     const unitPrice = invoicePrice > 0 ? invoicePrice : Math.max(0, Number(configuration.manualUnitPrice || configuration.precioManual || 0));
     const machine = String(op.maquina || '').trim();
     const machineArea = machine && PP_normalizeKey_(machine) !== 'SIN_MAQUINA' ? machine : (op.ct ? 'CT ' + op.ct : '');
@@ -695,19 +1540,234 @@ function PP_appendPlanSnapshot_(spreadsheet, payload, user) {
       op.fechaInicio || '', op.horaInicio || '', op.fechaFin || '', op.horaFin || '', PP_snapshotComment_(op),
       Number(op.prioridad || 999), op.estatus || '', op.locked === true,
       op.herramental || '', op.kitHerramental || '', op.subcontractType || '', Number(op.subcontractDays || 0),
-      pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces
+      pendingPieces, String(configuration.jobType || configuration.tipoOt || '').trim().toUpperCase(), unitPrice, unitPrice * pendingPieces,
+      op.id || ''
     ];
   });
+  if (options && options.requireRows && !rows.length) throw new Error('La instantanea no contiene operaciones programadas para guardar');
+  const payloadTransaction = PP_storePlanSnapshotPayload_(snapshotId, payload,
+    { generatedAt: generatedAt, user: user, operations: rows.length },
+    { keepPrevious: Boolean(options && options.keepPreviousPayload), appendOnly: !(options && options.snapshotId) || Boolean(options && options.keepPreviousPayload) });
+  if (options && options.payloadTransaction) options.payloadTransaction.value = payloadTransaction;
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, PP_SHEETS.PLANES_HISTORICOS.length).setValues(rows);
   spreadsheet.getSheetByName('AUDITORIA').appendRow([generatedAt, user, 'INSTANTANEA_PLAN', Number(payload.revision || 0), JSON.stringify({ snapshotId: snapshotId, operations: rows.length })]);
   SpreadsheetApp.flush();
-  return { ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt };
+  if (options && options.keepPreviousPayload) PP_finalizePlanSnapshotPayload_(payloadTransaction);
+  return {
+    ok: true, snapshotId: snapshotId, operations: rows.length, generatedAt: generatedAt,
+    planStart: String(payload.planStart || ''), weekStart: String(payload.weekStart || payload.planStart || ''),
+    version: Number(payload.version || 0), publicationReason: String(payload.publicationReason || ''),
+    changeSummary: payload.changeSummary || null, publishedAt: String(payload.publishedAt || '')
+  };
+}
+
+function PP_replaceDraftSnapshot_(spreadsheet, payload, user) {
+  const sheet = spreadsheet.getSheetByName('BORRADOR_PLAN');
+  const lastRow = sheet.getLastRow();
+  const width = PP_SHEETS.PLANES_HISTORICOS.length;
+  const previous = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
+  const payloadTransaction = { value: null };
+  try {
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
+    return PP_appendPlanSnapshot_(spreadsheet, payload, user, {
+      snapshotId: 'draft', sheetName: 'BORRADOR_PLAN', keepPreviousPayload: true, payloadTransaction: payloadTransaction, requireRows: true
+    });
+  } catch (error) {
+    const restoreRows = Math.max(sheet.getLastRow() - 1, previous.length);
+    if (restoreRows > 0) sheet.getRange(2, 1, restoreRows, width).clearContent();
+    if (previous.length) sheet.getRange(2, 1, previous.length, width).setValues(previous);
+    PP_rollbackPlanSnapshotPayload_(payloadTransaction.value);
+    throw error;
+  }
+}
+
+function PP_manifestIndexKey_() { return 'SNAPSHOT_MANIFESTS_INDEX'; }
+
+function PP_readManifestIndex_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PP_manifestIndexKey_());
+    if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed; }
+  } catch (ignored) {}
+  return null;
+}
+
+function PP_writeManifestIndex_(list) {
+  try { PropertiesService.getScriptProperties().setProperty(PP_manifestIndexKey_(), JSON.stringify(list)); } catch (ignored) {}
+}
+
+function PP_manifestToRecord_(manifest, snapshotId, payload) {
+  return {
+    snapshotId: snapshotId,
+    generatedAt: String(manifest.generatedAt || payload.generatedAt || payload.savedAt || ''),
+    user: String(manifest.user || ''),
+    planStart: String(manifest.planStart || payload.planStart || ''),
+    horizonDays: Number(manifest.horizonDays || 0),
+    operations: Number(manifest.operations != null ? manifest.operations : Number(manifest.operations || 0)),
+    weekStart: String(manifest.weekStart || manifest.planStart || payload.planStart || ''),
+    version: Number(manifest.version || 0),
+    publicationReason: String(manifest.publicationReason || ''),
+    changeSummary: manifest.changeSummary || null,
+    publishedAt: String(manifest.publishedAt || '')
+  };
+}
+
+function PP_upsertManifestIndexRecord_(snapshotId, manifest, payload) {
+  try {
+    const list = PP_readManifestIndex_() || [];
+    const record = PP_manifestToRecord_(manifest, snapshotId, payload || {});
+    const index = list.findIndex(function(item) { return item.snapshotId === snapshotId; });
+    if (index >= 0) list[index] = record; else list.push(record);
+    PP_writeManifestIndex_(list);
+  } catch (ignored) {}
+}
+
+function PP_removeManifestIndexRecord_(snapshotId) {
+  const list = PP_readManifestIndex_();
+  if (!list) return;
+  try { PP_writeManifestIndex_(list.filter(function(item) { return item.snapshotId !== snapshotId; })); } catch (ignored) {}
+}
+
+function PP_ensureManifestIndex_() {
+  const existing = PP_readManifestIndex_();
+  if (existing && existing.length) return existing;
+  const manifests = PP_payloadStore_().getManifestProperties();
+  const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+  const list = [];
+  Object.keys(manifests).forEach(function(propertyKey) {
+    if (propertyKey.indexOf(prefix) !== 0) return;
+    const snapshotId = propertyKey.slice(prefix.length);
+    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0) return;
+    try {
+      const manifest = JSON.parse(manifests[propertyKey]);
+      if (!manifest || !manifest.chunks) return;
+      list.push(PP_manifestToRecord_(manifest, snapshotId, {}));
+    } catch (ignored) {}
+  });
+  PP_writeManifestIndex_(list);
+  return list;
+}
+
+// MEDIDO 2026-09-26: getDisplayValues() sobre la columna SNAPSHOT_ID de las 138 714 filas de
+// PLANES_HISTORICOS tarda 31 s, y PP_listPlanSnapshots_ la pide COMPLETA en cada carga del estado y
+// otra vez despues de CADA guardado (RULE-PERF-013). Es la lectura mas cara del servidor y no
+// cambia NADA entre dos guardados: solo cambia el numero de filas del final.
+//
+// QUE HACE ESTA PARTE. Cuenta por snapshotId UNA SOLA VEZ y guarda el conteo en el script cache. En
+// la llamada siguiente solo lee la COLA que todavia no se habia leido, y la suma al conteo guardado.
+// El resultado es identico al de leer todo, por construccion: la hoja SOLO crece por
+// PP_appendPlanSnapshot_, que siempre anexa al final (linea 1287). No hay ninguna operacion que
+// escriba o borre en medio de la tabla.
+//
+// POR QUE NO ES UN ACORTE POR RANGO. El bug de la nota de mas abajo en este archivo fue justamente
+// recortar filas, y por ahi no se vuelve: aqui no se descarta NINGUNA fila. Todas se cuentan, las
+// viejas con el conteo guardado y las nuevas leyendolas. La unica diferencia es de donde sale cada
+// fila, y las dos viene de la misma columna de la misma hoja.
+//
+// CUANDO SE RECONSTRUYE ENTERO, Y CADA CASO CON SU RAZON:
+//   - no hay conteo guardado, o no es de ESTA hoja, o cambio de columna, o la cache no cabe:
+//     no hay de donde continuar.
+//   - getLastRow() es MENOR que el de la cache: alguien borro filas. Un conteo guardado mas grande
+//     que la hoja no se puede "restar", porque deleteRow() desplaza todo y no sabemos cuantas
+//     filas de cada snapshot se fueron. Por eso PP_deletePlanSnapshot_ borra la clave de la cache
+//     (PP_invalidatePlanHistoryCountsCache_): borrar es raro y caro, y medirse mal ahi seria peor
+//     que volver a leer entero.
+//
+// SI LA CACHE NO SIRVE, NO SE ROMPE NADA. Todo el bloque esta en try/catch y cae a la lectura
+// completa, que es la de siempre. Un fallo de CacheService cuesta 31 s; no cuesta un error.
+const PP_PLAN_HISTORY_COUNTS_KEY_ = 'PP_PLAN_HISTORY_COUNTS_V1';
+const PP_PLAN_HISTORY_COUNTS_TTL_ = 21600;        // tope de CacheService.put (6 h)
+const PP_PLAN_HISTORY_COUNTS_MAX_CHARS_ = 90000;  // el limite por valor es 100 KB
+
+function PP_planHistoryCountsCache_() {
+  try {
+    if (typeof CacheService === 'undefined' || !CacheService.getScriptCache) return null;
+    return CacheService.getScriptCache();
+  } catch (_) { return null; }
+}
+
+function PP_planHistorySheetId_(sheet) {
+  try { return Number(sheet.getSheetId()); } catch (_) { return 0; }
+}
+
+function PP_readPlanHistoryCountsCache_(cache) {
+  if (!cache) return null;
+  let raw = '';
+  try { raw = cache.get(PP_PLAN_HISTORY_COUNTS_KEY_); } catch (_) { return null; }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.counts || typeof parsed.counts !== 'object') return null;
+    if (Number(parsed.lastRow || 0) < 2) return null;
+    return { sheetId: Number(parsed.sheetId || 0), snapshotCol: Number(parsed.snapshotCol), lastRow: Number(parsed.lastRow), counts: parsed.counts };
+  } catch (_) { return null; }
+}
+
+function PP_writePlanHistoryCountsCache_(cache, payload) {
+  if (!cache) return;
+  let json = '';
+  try { json = JSON.stringify(payload); } catch (_) { return; }
+  try {
+    // Un conteo que no cabe NO se guarda a medias: se saca la clave y se recalcula la vez
+    // siguiente. Guardar 100 KB de conteo parcial seria peor que no guardar nada.
+    if (json.length > PP_PLAN_HISTORY_COUNTS_MAX_CHARS_) { cache.remove(PP_PLAN_HISTORY_COUNTS_KEY_); return; }
+    cache.put(PP_PLAN_HISTORY_COUNTS_KEY_, json, PP_PLAN_HISTORY_COUNTS_TTL_);
+  } catch (_) {}
+}
+
+function PP_invalidatePlanHistoryCountsCache_() {
+  const cache = PP_planHistoryCountsCache_();
+  if (!cache) return;
+  try { cache.remove(PP_PLAN_HISTORY_COUNTS_KEY_); } catch (_) {}
+}
+
+// Devuelve { snapshotId: numeroDeFilas }. Equivalente a contar la columna SNAPSHOT_ID entera.
+function PP_planHistorySnapshotCounts_(sheet, snapshotCol) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return {};
+  const sheetId = PP_planHistorySheetId_(sheet);
+  const cache = PP_planHistoryCountsCache_();
+  const cached = PP_readPlanHistoryCountsCache_(cache);
+  const counts = {};
+  let startRow = 2;
+  const reusa = cached && cached.sheetId === sheetId && cached.snapshotCol === snapshotCol && cached.lastRow <= lastRow;
+  if (reusa) {
+    Object.keys(cached.counts).forEach(function(key) { counts[key] = Number(cached.counts[key] || 0); });
+    startRow = cached.lastRow + 1;
+  }
+  if (startRow > lastRow) return counts;                     // la hoja no crecio: nada que leer
+  // getValues() y NO getDisplayValues(). La columna se escribe con el SNAPSHOT_ID tal cual en
+  // PP_appendPlanSnapshot_ (un UUID o 'draft'), sin formato de celda que getDisplayValues pueda
+  // convertir a otra cosa, asi que el texto es identico. Y es la lectura cruda, sin formatear cada
+  // celda: en 138 714 celdas esa diferencia es de segundos.
+  const tail = sheet.getRange(startRow, snapshotCol + 1, lastRow - startRow + 1, 1).getValues();
+  tail.forEach(function(cell) {
+    const snapshotId = String(cell[0] == null ? '' : cell[0]).trim();
+    if (!snapshotId) return;
+    counts[snapshotId] = (counts[snapshotId] || 0) + 1;
+  });
+  PP_writePlanHistoryCountsCache_(cache, { sheetId: sheetId, snapshotCol: snapshotCol, lastRow: lastRow, counts: counts });
+  return counts;
 }
 
 function PP_listPlanSnapshots_(spreadsheet) {
-  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS'));
   const grouped = {};
-  rows.forEach(function(row) {
+  const historySheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  if (historySheet && historySheet.getLastRow() >= 2) {
+    const historyHeader = historySheet.getRange(1, 1, 1, historySheet.getLastColumn()).getDisplayValues()[0];
+    const snapshotCol = historyHeader ? historyHeader.indexOf('SNAPSHOT_ID') : -1;
+    if (snapshotCol >= 0) {
+      // El orden de las claves es el de primera aparicion en la hoja, igual que con el bucle por
+      // filas, y el sort final es estable: los snapshots con la MISMA fecha siguen saliendo en el
+      // mismo orden que antes.
+      const counts = PP_planHistorySnapshotCounts_(historySheet, snapshotCol);
+      Object.keys(counts).forEach(function(snapshotId) {
+        if (!counts[snapshotId]) return;
+        if (!grouped[snapshotId]) grouped[snapshotId] = { snapshotId: snapshotId, generatedAt: '', user: '', planStart: '', horizonDays: 0, operations: 0 };
+        grouped[snapshotId].operations = counts[snapshotId];
+      });
+    }
+  }
+  PP_readRows_(spreadsheet.getSheetByName('BORRADOR_PLAN')).forEach(function(row) {
     const snapshotId = String(row.SNAPSHOT_ID || '').trim();
     if (!snapshotId) return;
     if (!grouped[snapshotId]) {
@@ -722,13 +1782,70 @@ function PP_listPlanSnapshots_(spreadsheet) {
     }
     grouped[snapshotId].operations += 1;
   });
+  const prefix = 'PLAN_SNAPSHOT_PAYLOAD::';
+  PP_ensureManifestIndex_().forEach(function(record) {
+    const snapshotId = String(record.snapshotId || '');
+    if (!snapshotId || snapshotId.indexOf('::') >= 0 || snapshotId.indexOf('technical-') === 0) return;
+    const metadata = {
+      snapshotId: snapshotId, generatedAt: String(record.generatedAt || ''), user: String(record.user || ''),
+      planStart: String(record.planStart || ''), horizonDays: Number(record.horizonDays || 0), operations: Number(record.operations || 0),
+      weekStart: String(record.weekStart || record.planStart || ''), version: Number(record.version || 0),
+      publicationReason: String(record.publicationReason || ''), changeSummary: record.changeSummary || null,
+      publishedAt: String(record.publishedAt || '')
+    };
+    // EL ORDEN DE ESTE Object.assign ESTABA MAL Y POR ESO LAS FECHAS SALIAN VACIAS. grouped se
+    // arma desde la hoja con generatedAt: '' (esta funcion no lee la columna FECHA_GENERACION de
+    // PLANES_HISTORICOS, linea 1396), y se aplicaba DESPUES de metadata, que si trae la fecha
+    // real del indice del manifiesto. O sea que el vacio de la hoja pisaba la fecha buena.
+    // Medido el 2026-09-26: el selector de versiones mostraba "(sin fecha)" en los 123 snapshots
+    // publicados, y solo draft traia fecha, porque la rama de BORRADOR_PLAN si la lee.
+    // weekStart no tenia el problema porque se reasignaba explicitamente aqui; generatedAt no.
+    //
+    // Que se reasignen los dos tiene tres efectos, y los tres son correcciones, no cosmetics:
+    //  1. La fecha real llega al selector de versiones, que es lo que hace falta para poder
+    //    implementar un corte por antiguedad ("borrar lo de mas de un mes atras") con criterio
+    //     auditable en vez de por cantidad.
+    //  2. El orden del selector deja de ser arbitrario. La funcion final ordena por
+    //     generatedAt (linea 1432), y con todas las fechas vacias esa comparacion no decidia nada,
+    //     o sea que el orden que se ve era el de insercion de la hoja por casualidad.
+    //  3. No cambia nada de las filas: ni una celda de PLANES_HISTORICOS se toca. Es un cambio de
+    //     lectura, no de escritura.
+    grouped[snapshotId] = Object.assign({}, metadata, grouped[snapshotId] || {}, {
+      generatedAt: metadata.generatedAt || (grouped[snapshotId] || {}).generatedAt || '',
+      user: metadata.user || (grouped[snapshotId] || {}).user || '',
+      weekStart: metadata.weekStart, version: metadata.version, publicationReason: metadata.publicationReason,
+      changeSummary: metadata.changeSummary, publishedAt: metadata.publishedAt
+    });
+  });
   return Object.keys(grouped).map(function(key) { return grouped[key]; }).sort(function(a, b) {
     return String(b.generatedAt).localeCompare(String(a.generatedAt));
   });
 }
 
+// MEDIDO 2026-09-26 (sonda ORIGENES_REALES): PLANES_HISTORICOS tiene 138 715 filas en 123
+// snapshots, y leerla ENTERA tardo 38 s. Esta funcion esta en el camino de getAppState
+// (PP_readState_ la llama en la linea 279), o sea que ese costo se paga en CADA carga del estado.
+//
+// LO QUE SE INTENTO Y SE DESHIZO, Y POR QUE, QUE ES LO IMPORTANTE DE ESTA NOTA. Se intento leer
+// solo la COLA de la hoja, con un bucle que sube el tamano hasta llegar a 2 000 filas validas.
+// Parecia equivalente porque el resultado final es un slice(-2000). NO LO ES, y el test lo
+// demonstro: la lectura completa devolvia fechas de fin MAS NUEVAS (2026-09-28, del snapshot 060)
+// que la cola (2026-09-26, del snapshot 088). La razon es que la hoja se anexa por orden de
+// GENERACION y esta funcion ordena por FECHA DE FIN DE LA OPERACION, y una operacion puede
+// terminar antes que otra de un snapshot mas nuevo. Acotar por filas cambia el resultado. NO SE
+// VUELVE A INTENTAR con recorte de filas; hay un test que fija este hallazgo para que no se
+// reintente. El arreglo de raiz es que la hoja no crezca, y eso es borrar snapshots, que es
+// decision de la persona.
+//
+// LO QUE SI SE HACE, Y ES EQUIVALENTE POR CONSTRUCCION: leer solo las columnas que esta funcion
+// usa. PP_readRows_ trae las 31 columnas de PP_SHEETS.PLANES_HISTORICOS y esta funcion mira ocho:
+// SNAPSHOT_ID, NUM, OT, MAQ_AREA, HERRAMENTAL, KIT_HERRAMENTAL, F_FIN y H_FIN. Leer 8 de 31 es
+// un 74 % menos de celdas con el MISMO resultado, porque las otras 23 no se usan aqui y no pueden
+// cambiar un slice. No hay aproximacion: es la misma aritmetica con menos datos.
+const PP_PLAN_HISTORY_COLS_ = ['SNAPSHOT_ID', 'NUM', 'OT', 'MAQ_AREA', 'HERRAMENTAL', 'KIT_HERRAMENTAL', 'F_FIN', 'H_FIN'];
+
 function PP_readMachineToolHistory_(spreadsheet) {
-  return PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).map(function(row, index) {
+  const mapped = PP_readRowsCols_(spreadsheet.getSheetByName('PLANES_HISTORICOS'), PP_PLAN_HISTORY_COLS_).map(function(row, index) {
     const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
     const herramental = String(row.HERRAMENTAL || '').trim();
     const kit = String(row.KIT_HERRAMENTAL || '').trim();
@@ -746,62 +1863,269 @@ function PP_readMachineToolHistory_(spreadsheet) {
       endDate: endDate,
       endTime: endTime
     };
+  }).filter(function(item) { return item !== null; });
+  return PP_historyLatest_(mapped);
+}
+
+// Cache incremental de machineToolHistory: la hoja PLANES_HISTORICOS tiene 139 876 filas y
+// PP_readMachineToolHistory_ las lee TODAS en cada rebuild frio del estado. Con cache, la primera
+// lectura cuesta ~30-60 s pero las siguientes devuelven el cache si la hoja no crecio, o leen SOLO
+// la cola nueva si crecio. Sin riesgo de doble-booking: el dato siempre esta disponible.
+//
+// La hoja SOLO crece (PP_appendPlanSnapshot_ anexa al final), excepto cuando PP_deletePlanSnapshot_
+// borra filas (poda). Por eso se invalida la cache en PP_deletePlanSnapshot_: borrar desplaza filas
+// y el incremental ya no es valido.
+const PP_MACHINE_TOOL_HISTORY_CACHE_KEY_ = 'PLAN_HISTORY_MACHINE_TOOL_HISTORY';
+
+function PP_readMachineToolHistoryCache_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PP_MACHINE_TOOL_HISTORY_CACHE_KEY_);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.lastRow !== 'number' || !Array.isArray(parsed.data)) return null;
+    return parsed;
+  } catch (ignored) { return null; }
+}
+
+function PP_writeMachineToolHistoryCache_(lastRow, data) {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      PP_MACHINE_TOOL_HISTORY_CACHE_KEY_,
+      JSON.stringify({ lastRow: lastRow, data: data })
+    );
+  } catch (ignored) {
+    // Si PropertiesService no esta disponible, la cache no se persiste pero la
+    // memoria del proceso sigue funcionando para esta llamada.
+  }
+}
+
+function PP_invalidateMachineToolHistoryCache_() {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty(PP_MACHINE_TOOL_HISTORY_CACHE_KEY_);
+  } catch (ignored) { /* sin PropertiesService, la cache en memoria ya se descarta */ }
+}
+
+function PP_readMachineToolHistoryCached_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('PLANES_HISTORICOS');
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const cache = PP_readMachineToolHistoryCache_();
+  // Mismo lastRow: la hoja no cambio, devolver cache
+  if (cache && cache.lastRow === lastRow) return cache.data;
+  // lastRow menor: borraron filas, cache invalido, reconstruir entero
+  if (cache && cache.lastRow > lastRow) {
+    const data = PP_readMachineToolHistory_(spreadsheet);
+    PP_writeMachineToolHistoryCache_(lastRow, data);
+    return data;
+  }
+  // lastRow mayor: leer SOLO la cola nueva y mergear, con el mismo criterio de cierre
+  // (PP_historyLatest_) que aplica el rebuild completo.
+  //
+  // QUE SE CORRIGIO 2026-09-27. Esta rama se llamaba "leer solo la cola" pero no leia la cola:
+  // PP_readMachineToolHistoryTail_ traia la hoja COMPLETA con PP_readRowsCols_ (139 876 filas x
+  // 8 columnas, ~30 s medidos) y despues filtraba en memoria lo que ya estaba en la cache. O sea
+  // que el incremental costaba lo mismo que el rebuild completo y la cache no ahorraba nada.
+  // Ahora la cola se lee desde su propia fila con el parametro firstRow de PP_readRowsCols_.
+  // Y el merge pasa por PP_historyLatest_ porque el concat crudo devolvia una lista mas larga y
+  // sin ordenar, o sea DISTINTA de la del rebuild completo.
+  if (cache && cache.lastRow < lastRow) {
+    const tail = PP_readMachineToolHistoryTail_(sheet, cache.lastRow + 1);
+    const merged = PP_historyLatest_(cache.data.concat(tail));
+    PP_writeMachineToolHistoryCache_(lastRow, merged);
+    return merged;
+  }
+  // Sin cache: primera lectura, todo desde el principio
+  const data = PP_readMachineToolHistory_(spreadsheet);
+  PP_writeMachineToolHistoryCache_(lastRow, data);
+  return data;
+}
+
+// Las filas desde startRow (base 1, como getRange).
+//
+// EL INDICE, Y POR QUE ES startRow - 1. machineToolHistory se compara por id, asi que la cola
+// tiene que producir LOS MISMOS id que produciria la lectura completa de la hoja. En la lectura
+// completa la fila R de la hoja lleva el indice R - 2 (base 0 desde la fila 2) y el id termina
+// en indice + 1 = R - 1. En la cola la fila R cae en la posicion index, con R = startRow +
+// index, asi que el id tiene que terminar en startRow + index - 1. Con index + startRow (como
+// estaba) TODOS los id de la cola salian corridos en uno respecto del rebuild, y el mismo
+// registro tenia dos id distintos segun por que camino se leyera.
+function PP_readMachineToolHistoryTail_(sheet, startRow) {
+  if (startRow > sheet.getLastRow()) return [];
+  const rows = PP_readRowsCols_(sheet, PP_PLAN_HISTORY_COLS_, startRow);
+  return rows.map(function(row, index) {
+    const machine = String(row.MAQ_AREA || '').trim().toUpperCase();
+    const herramental = String(row.HERRAMENTAL || '').trim();
+    const kit = String(row.KIT_HERRAMENTAL || '').trim();
+    const endDate = String(row.F_FIN || '').trim();
+    const endTime = String(row.H_FIN || '').trim();
+    if (!machine || /^CT\s+/i.test(machine) || !herramental || !endDate || !endTime) return null;
+    const numeroFila = index + startRow - 1;
+    return {
+      id: 'history-' + String(row.SNAPSHOT_ID || '') + '-' + numeroFila,
+      operationId: 'snapshot-' + String(row.SNAPSHOT_ID || '') + '-' + String(row.NUM || numeroFila),
+      snapshotId: String(row.SNAPSHOT_ID || ''),
+      ot: String(row.OT || ''),
+      machine: machine,
+      herramental: herramental,
+      kitHerramental: kit,
+      endDate: endDate,
+      endTime: endTime
+    };
   }).filter(function(item) { return item !== null; }).sort(function(a, b) {
+    return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
+  });
+}
+
+// Igual que PP_readRows_, pero SOLO las columnas pedidas. Se lee una columna por getRange y se
+// juntan por encabezado, en el orden pedido. Es lo que hace mas barato leer 8 columnas sueltas
+// que traer las 31 de una vez: la hoja tiene 138 715 filas y el costo de Apps Script crece sobre
+// todo con las filas, asi que recortar columnas recorta celdas.
+//
+// Si una columna pedida NO existe en esa hoja, se deja como cadena vacia en vez de romper: una
+// hoja vieja a la que le falte una columna no puede hacer que getAppState se caiga.
+// El criterio con el que PP_readMachineToolHistory_ cierra la lista: ordenar por fecha de fin de
+// operacion y quedarse con las 2000 mas nuevas. Vive aqui, y no duplicado, para que el camino
+// completo y el incremental apliquen EXACTAMENTE el mismo criterio.
+//
+// POR QUE ESTO NO ES COSMETICO. El incremental guardaba cache.data (ya recortada a 2000) y le
+// concatenaba la cola con cache.data.concat(tail) SIN ordenar ni recortar. O sea que la version
+// incremental devolvia una lista distinta de la del rebuild completo: mas larga y sin ordenar por
+// fecha de fin. machineToolHistory alimenta seedMachineToolHistory (planner-core.js), que es lo
+// que evita el doble booking de herramental, asi que "casi lo mismo" no es lo mismo: el
+// planeador estaba recibiendo un historial distinto segun si la hoja habia crecido o no.
+function PP_historyLatest_(items) {
+  return (items || []).sort(function(a, b) {
     return (a.endDate + ' ' + a.endTime).localeCompare(b.endDate + ' ' + b.endTime);
   }).slice(-2000);
 }
 
-function PP_getPlanSnapshot_(spreadsheet, snapshotId) {
+function PP_readRowsCols_(sheet, columns, firstRow) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const wanted = Array.isArray(columns) && columns.length ? columns : [];
+  if (!wanted.length) return [];
+  const desde = Number(firstRow || 2);
+  if (desde > sheet.getLastRow()) return [];
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0] || [];
+  const total = sheet.getLastRow() - desde + 1;
+  const columnsLeidas = wanted.map(function(name) {
+    const index = header.indexOf(name);
+    if (index < 0) return null;   // la columna no existe en esta hoja
+    return sheet.getRange(desde, index + 1, total, 1).getValues().map(function(cell) { return cell[0]; });
+  });
+  const rows = [];
+  for (let r = 0; r < total; r += 1) {
+    const row = {};
+    let tieneAlgo = false;
+    for (let c = 0; c < wanted.length; c += 1) {
+      const values = columnsLeidas[c];
+      const value = values ? (values[r] === undefined ? '' : values[r]) : '';
+      row[wanted[c]] = value;
+      if (value !== '') tieneAlgo = true;
+    }
+    if (tieneAlgo) rows.push(row);
+  }
+  return rows;
+}
+
+function PP_getPlanSnapshot_(spreadsheet, snapshotId, options) {
+  const opts = options || {};
   const key = String(snapshotId || '').trim();
-  const rows = PP_readRows_(spreadsheet.getSheetByName('PLANES_HISTORICOS')).filter(function(row) {
+  const sourceSheet = key === 'draft' ? 'BORRADOR_PLAN' : 'PLANES_HISTORICOS';
+  const rows = PP_readRows_(spreadsheet.getSheetByName(sourceSheet)).filter(function(row) {
     return String(row.SNAPSHOT_ID || '').trim() === key;
   });
-  if (!rows.length) throw new Error('Plan guardado no encontrado');
-  const first = rows[0];
-  return {
+  const fullState = opts.skipFullState ? null : PP_readPlanSnapshotPayload_(key);
+  const manifest = (opts.skipFullState ? (PP_readManifestIndex_() || []).find(function(item) { return item.snapshotId === key; }) || null : null);
+  if (!rows.length && !fullState) throw new Error('Plan guardado no encontrado');
+  const first = rows[0] || {};
+  const metaState = fullState || manifest || {};
+  const result = {
     snapshotId: key,
-    generatedAt: String(first.FECHA_GENERACION || ''),
-    user: String(first.USUARIO || ''),
-    planStart: String(first.PLAN_INICIO || ''),
-    horizonDays: Number(first.HORIZONTE_DIAS || 0),
-    operations: rows.map(function(row, index) {
-      const description = String(row.OP || '');
-      const comments = String(row.COMENTARIOS || '');
-      const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
-      const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
-      return {
-        id: 'snapshot-' + key + '-' + (index + 1),
-        num: Number(row.NUM || index + 1),
-        ot: String(row.OT || ''),
-        parte: String(row.PARTE || ''),
-        descripcion: description,
-        contenido: '',
-        comentario: userComment,
-        prioridad: Number(row.PRIORIDAD || 999),
-        secuencia: Number(row.NUM || index + 1),
-        operador: String(row.OPERADOR || ''),
-        maquina: String(row.MAQ_AREA || ''),
-        tiempoCiclo: Number(row.TC_MIN || 0),
-        tiempoSetup: Number(row.TIEMPO_SETUP || 0),
-        tiempoProd: Number(row.TIEMPO_PROD || 0),
-        fechaInicio: String(row.F_INICIO || ''),
-        horaInicio: String(row.H_INICIO || ''),
-        fechaFin: String(row.F_FIN || ''),
-        horaFin: String(row.H_FIN || ''),
-        tipoInsercion: isToolChange ? 'CAMBIO_HERRAMENTAL' : 'OPERACION',
-        estatus: String(row.ESTATUS || ''),
-        log: isToolChange ? comments : '',
-        locked: PP_bool_(row.BLOQUEADA, false),
-        herramental: String(row.HERRAMENTAL || ''),
-        kitHerramental: String(row.KIT_HERRAMENTAL || ''),
-        subcontractType: String(row.TIPO_SUBCONTRATO || ''),
-        subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
-        pendingPieces: Number(row.PZAS_PENDIENTES || 0),
-        jobType: String(row.TIPO_OT || ''),
-        unitPrice: Number(row.PRECIO_UNITARIO || 0),
-        amount: Number(row.MONTO || 0)
-      };
-    })
+    generatedAt: String(first.FECHA_GENERACION || metaState.generatedAt || metaState.savedAt || ''),
+    user: String(first.USUARIO || metaState.user || ''),
+    planStart: String(first.PLAN_INICIO || metaState.planStart || ''),
+    horizonDays: Number(first.HORIZONTE_DIAS || metaState.horizonDays || 0),
+    operations: rows.length ? rows.map(function(row, index) {
+      return PP_snapshotOperationFromRow_(row, key, index);
+    }) : (fullState && fullState.operations || []).map(function(operation) { return Object.assign({}, operation); })
+  };
+  result.weekStart = String(metaState.weekStart || metaState.planStart || first.PLAN_INICIO || '');
+  result.version = Number(metaState.version || 0);
+  result.publicationReason = String(metaState.publicationReason || '');
+  result.changeSummary = metaState.changeSummary || null;
+  result.publishedAt = String(metaState.publishedAt || '');
+  if (fullState) result.fullState = fullState;
+  return result;
+}
+
+function PP_getPlanSnapshotLight_(spreadsheet, snapshotId) {
+  return PP_getPlanSnapshot_(spreadsheet, snapshotId, { skipFullState: true });
+}
+
+function PP_snapshotOperationFromRow_(row, key, index) {
+  const description = String(row.OP || '');
+  const comments = String(row.COMENTARIOS || '');
+  const isToolChange = /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/i.test(description + ' ' + comments);
+  const userComment = isToolChange ? comments : PP_cleanSnapshotUserComment_(comments);
+  const toolChangeFields = isToolChange ? PP_parseSnapshotToolChangeComment_(comments) : null;
+  return {
+    id: String(row.COMPLETION_KEY || '').trim() || 'snapshot-' + key + '-' + (index + 1),
+    num: Number(row.NUM || index + 1),
+    ot: String(row.OT || ''),
+    parte: String(row.PARTE || ''),
+    descripcion: description,
+    contenido: '',
+    comentario: userComment,
+    prioridad: Number(row.PRIORIDAD || 999),
+    secuencia: Number(row.NUM || index + 1),
+    operador: String(row.OPERADOR || ''),
+    maquina: String(row.MAQ_AREA || ''),
+    tiempoCiclo: Number(row.TC_MIN || 0),
+    tiempoSetup: Number(row.TIEMPO_SETUP || 0),
+    tiempoProd: Number(row.TIEMPO_PROD || 0),
+    fechaInicio: String(row.F_INICIO || ''),
+    horaInicio: String(row.H_INICIO || ''),
+    fechaFin: String(row.F_FIN || ''),
+    horaFin: String(row.H_FIN || ''),
+    tipoInsercion: isToolChange ? 'CAMBIO_HERRAMENTAL' : 'OPERACION',
+    estatus: String(row.ESTATUS || ''),
+    log: isToolChange ? comments : '',
+    locked: PP_bool_(row.BLOQUEADA, false),
+    herramental: String(row.HERRAMENTAL || ''),
+    kitHerramental: String(row.KIT_HERRAMENTAL || ''),
+    toolChangeFromHerramental: toolChangeFields ? toolChangeFields.fromHerramental : '',
+    toolChangeFromKit: toolChangeFields ? toolChangeFields.fromKit : '',
+    toolChangeToHerramental: toolChangeFields ? toolChangeFields.toHerramental : '',
+    toolChangeToKit: toolChangeFields ? toolChangeFields.toKit : '',
+    subcontractType: String(row.TIPO_SUBCONTRATO || ''),
+    subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
+    pendingPieces: Number(row.PZAS_PENDIENTES || 0),
+    jobType: String(row.TIPO_OT || ''),
+    unitPrice: Number(row.PRECIO_UNITARIO || 0),
+    amount: Number(row.MONTO || 0)
+  };
+}
+
+function PP_parseSnapshotToolChangeComment_(comments) {
+  const match = String(comments || '').match(/Cambio de herramental de \((.+?) --> (.+)\)\s*$/);
+  if (!match) return null;
+  const parsePair = function(value) {
+    const parts = String(value || '').trim().split('/');
+    const clean = function(item) {
+      const text = String(item || '').trim();
+      const key = PP_normalizeKey_(text);
+      return (!key || key === 'SIN_HERR' || key === 'SIN_HERRAMENTAL' || key === 'SIN_KIT' || key === 'SIN_ANTECEDENTE') ? '' : text;
+    };
+    return { herramental: clean(parts[0]), kit: clean(parts[1]) };
+  };
+  const from = parsePair(match[1]);
+  const to = parsePair(match[2]);
+  return {
+    fromHerramental: from.herramental,
+    fromKit: from.kit,
+    toHerramental: to.herramental,
+    toKit: to.kit
   };
 }
 
@@ -825,8 +2149,11 @@ function PP_mapOperation_(row) {
     const field = PP_OPERATION_FIELDS[header];
     let value = row[header];
     if (['num', 'prioridad', 'cantTotal', 'secuencia', 'cantPendiente', 'tiempoCiclo', 'tiempoSetup', 'tiempoProd', 'subcontractDays'].indexOf(field) >= 0) value = Number(value || 0);
-    if (field === 'locked' || field === 'kitPending' || field === 'autoFrozen') value = PP_bool_(value, false);
+    if (field === 'locked' || field === 'kitPending' || field === 'autoFrozen' || field === 'tiempoFallback') value = PP_bool_(value, false);
     out[field] = value;
+    if (header === 'TIPO_SUBCONTRATO' && value && String(value).trim()) {
+      out.is_subcontract = true;
+    }
     return out;
   }, {});
 }
@@ -852,22 +2179,39 @@ function PP_mapWorkOrder_(row) {
     photoUrl: row.FOTO_URL, startDate: row.FECHA_INICIO_NS, endDate: row.FECHA_FIN_NS, dueDate: row.FECHA_VENCIMIENTO,
     dueDateOverride: row.FECHA_ENTREGA_AJUSTADA, quantity: quantity, status: row.ESTATUS, customer: row.CLIENTE,
     builtQuantity: builtQuantity, pendingQuantity: pendingQuantity,
-    averageSalePrice: Number(row.PRECIO_PROMEDIO_VENTA || 0), averageSalePriceFrom: row.PRECIO_DESDE, averageSalePriceTo: row.PRECIO_HASTA
+    averageSalePrice: Number(row.PRECIO_PROMEDIO_VENTA || 0), averageSalePriceFrom: row.PRECIO_DESDE, averageSalePriceTo: row.PRECIO_HASTA,
+    lastSalePrice: Number(row.PRECIO_ULTIMA_VENTA || 0)
   };
 }
 
-function PP_buildOperationPlanStatuses_(rows) {
-  return (rows || []).reduce(function(out, row) {
+function PP_readOperationStatusesByOrigin_(rows) {
+  return (rows || []).reduce(function(byOrigin, row) {
     const key = String(row.KEY || '').trim();
-    if (!key) return out;
-    out[key] = {
+    if (!key) return byOrigin;
+    const origin = String(row.ORIGEN || '').trim() || 'draft';
+    if (!byOrigin[origin]) byOrigin[origin] = {};
+    byOrigin[origin][key] = {
       key: key, type: String(row.TIPO || 'OPERATION').trim().toUpperCase(), status: String(row.ESTATUS_PLAN || 'PENDIENTE').trim().toUpperCase(),
       operationId: String(row.OPERATION_ID || ''), ot: String(row.OT || ''), sequence: Number(row.SECUENCIA || 0), ct: String(row.CT || ''),
       operator: String(row.OPERADOR || ''), machine: String(row.MAQUINA || ''), article: String(row.ARTICULO || ''), description: String(row.DESCRIPCION || ''),
       startDate: String(row.FECHA_INICIO || ''), startTime: String(row.HORA_INICIO || ''), endDate: String(row.FECHA_FIN || ''), endTime: String(row.HORA_FIN || ''),
       fromHerramental: String(row.HERRAMENTAL_ORIGEN || ''), fromKit: String(row.KIT_ORIGEN || ''), toHerramental: String(row.HERRAMENTAL_DESTINO || ''),
-      toKit: String(row.KIT_DESTINO || ''), toToolKey: String(row.TOOL_KEY_DESTINO || ''), completedAt: String(row.FECHA_COMPLETADO || ''), reopenedAt: String(row.FECHA_REAPERTURA || '')
+      toKit: String(row.KIT_DESTINO || ''), toToolKey: String(row.TOOL_KEY_DESTINO || ''), completedAt: String(row.FECHA_COMPLETADO || ''), reopenedAt: String(row.FECHA_REAPERTURA || ''),
+      origin: origin
     };
+    return byOrigin;
+  }, {});
+}
+
+function PP_buildOperationPlanStatuses_(rows) {
+  return PP_readOperationStatusesByOrigin_(rows)['draft'] || {};
+}
+
+function PP_buildPublishedPlanStatuses_(rows) {
+  const byOrigin = PP_readOperationStatusesByOrigin_(rows);
+  return Object.keys(byOrigin).reduce(function(out, origin) {
+    if (origin === 'draft') return out;
+    out[origin] = byOrigin[origin];
     return out;
   }, {});
 }
@@ -882,11 +2226,13 @@ function PP_buildOtConfigurations_(rows, operations) {
     configurations[ot] = {
       ot: ot,
       machine: PP_normalizeKey_(storedMachine) === 'SIN_MAQUINA' ? '' : storedMachine,
+      herramental: String(row.HERRAMENTAL || '').trim(),
       kitHerramental: String(row.KIT_HERRAMENTAL || '').trim(),
       kitPending: PP_bool_(row.KIT_PENDIENTE, false),
       subcontractType: String(row.TIPO_SUBCONTRATO || '').trim(),
       subcontractDays: Number(row.DIAS_SUBCONTRATO || 0),
-      updatedAt: String(row.ACTUALIZADO || '').trim()
+      updatedAt: String(row.ACTUALIZADO || '').trim(),
+      additionalHerramentales: PP_additionalToolList_(row.HERRAMENTALES_EXTRA_JSON)
     };
     explicit[PP_normalizeKey_(ot)] = true;
   });
@@ -894,11 +2240,12 @@ function PP_buildOtConfigurations_(rows, operations) {
     const ot = String(op.ot || '').trim();
     if (!ot || explicit[PP_normalizeKey_(ot)]) return;
     if (!configurations[ot]) {
-      configurations[ot] = { ot: ot, machine: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '' };
+      configurations[ot] = { ot: ot, machine: '', herramental: '', kitHerramental: '', kitPending: false, subcontractType: '', subcontractDays: 0, updatedAt: '', additionalHerramentales: [] };
     }
     const item = configurations[ot];
     const bending = ['5459', '5527'].indexOf(String(op.ct || '').trim()) >= 0;
     if (bending && !item.machine && op.maquina && String(op.maquina) !== 'SIN_MAQUINA') item.machine = String(op.maquina);
+    if (bending && !item.herramental && op.herramental) item.herramental = String(op.herramental);
     if (bending && !item.kitHerramental && op.kitHerramental) item.kitHerramental = String(op.kitHerramental);
     if (bending && op.kitPending === true) item.kitPending = true;
     if (!item.subcontractType && op.subcontractType) item.subcontractType = String(op.subcontractType);
@@ -907,17 +2254,56 @@ function PP_buildOtConfigurations_(rows, operations) {
   return configurations;
 }
 
+// CORRIMIENTO DE COLUMNAS en CONFIGURACION_ARTICULO, introducido por RULE-REP-021.
+//
+// QUE PASÓ. PP_SHEETS.CONFIGURACION_ARTICULO pasó de 5 a 6 columnas en 2.45.0 al meter
+// PRECIO_REF_VENTA ANTES de ACTUALIZADO, o sea en medio de la lista. PP_ensureWorkbook_
+// (más abajo en este archivo) compara el encabezado existente con PP_SHEETS y, cuando no
+// cuadra, reescribe SOLO la fila 1: no hace clearContents y no mueve las filas de datos. Las
+// filas siguieron teniendo su ACTUALIZADO viejo en la columna E, que pasó a llamarse
+// PRECIO_REF_VENTA, y la columna F, ahora ACTUALIZADO, quedó vacía.
+//
+// POR QUE HACE FALTA ESTE SHIM Y NO SOLO REESCRIBIR LA HOJA. PP_readRows_ mapea por índice
+// de encabezado, así que el corrimiento se propaga solo: PRECIO_REF_VENTA lee una fecha y
+// Number("2026-09-07T03:11:36.013Z") es NaN, que con || 0 queda 0; ACTUALIZADO lee vacío.
+// Medido el 2026-09-26 con DESALINEA_ARTICULO: 230 de 230 filas con fecha en la columna E y
+// 0 de 230 con fecha en la F.
+//
+// QUE HACE ESTE SHIM. Si ACTUALIZADO está vacío y la celda de PRECIO_REF_VENTA parece una
+// fecha, esa celda ES el ACTUALIZADO viejo: se recupera como updatedAt y el precio de venta
+// queda en 0, que es su valor real hasta que el sync escriba. Con el shim, el siguiente
+// guardado (PP_writeTable_ hace clearContents y reescribe desde el payload) deja la hoja
+// alineada de verdad, y las fechas sobreviven en vez de perderse.
+//
+// POR QUE ES INOFENSIVO. Solo dispara cuando ACTUALIZADO está vacío Y la celda de
+// PRECIO_REF_VENTA tiene forma de fecha ISO. En una hoja bien alineada PRECIO_REF_VENTA es
+// un número y la condición nunca se cumple.
+var PP_ISO_DATE_LIKE_ = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?/;
+
+function PP_articlePriceCells_(row) {
+  var raw = String(row.PRECIO_REF_VENTA === undefined || row.PRECIO_REF_VENTA === null ? '' : row.PRECIO_REF_VENTA).trim();
+  var updatedAt = String(row.ACTUALIZADO || '').trim();
+  if (!updatedAt && raw && PP_ISO_DATE_LIKE_.test(raw)) {
+    // Celda desplazada: es la fecha, no un precio.
+    return { referenceSalePrice: 0, updatedAt: raw };
+  }
+  var price = Number(raw || 0);
+  return { referenceSalePrice: isFinite(price) ? price : 0, updatedAt: updatedAt };
+}
+
 function PP_buildArticleConfigurations_(articleRows, legacyOtRows, workOrders, operations) {
   const configurations = {};
   (articleRows || []).forEach(function(row) {
     const article = String(row.ARTICULO || '').trim().toUpperCase();
     if (!article) return;
+    const precio = PP_articlePriceCells_(row);
     configurations[article] = {
       article: article,
       jobType: String(row.TIPO_OT || '').trim().toUpperCase(),
       planningType: String(row.TIPO_TRABAJO || '').trim().toUpperCase(),
       manualUnitPrice: Number(row.PRECIO_MANUAL || 0),
-      updatedAt: String(row.ACTUALIZADO || '').trim()
+      referenceSalePrice: precio.referenceSalePrice,
+      updatedAt: precio.updatedAt
     };
   });
 
@@ -941,6 +2327,7 @@ function PP_buildArticleConfigurations_(articleRows, legacyOtRows, workOrders, o
       jobType: '',
       planningType: '',
       manualUnitPrice: 0,
+      referenceSalePrice: 0,
       updatedAt: ''
     };
     if (!current.jobType) current.jobType = String(row.TIPO_OT || '').trim().toUpperCase();
@@ -959,7 +2346,14 @@ function PP_capabilityFromKey_(key) {
   return { key: text, ct: text.slice(0, separator), label: text.slice(separator + 2).replace(/_/g, ' '), custom: false };
 }
 
-function PP_mapMachine_(row) { return { id: row.ID, active: PP_bool_(row.ACTIVA, true) }; }
+// `active` es la bandera EFECTIVA de "esta maquina se puede agendar": lo que diga la
+// hoja (ACTIVA) menos lo que la planificacion decidio apartar (EXCLUIDA). Se calcula
+// aqui, en un solo lugar, para que los ~6 filtros que hacen `.filter(m => m.active !==
+// false)` de la pagina sigan funcionando sin cambios (RULE-SUP-017).
+function PP_mapMachine_(row) {
+  const excluded = PP_bool_(row.EXCLUIDA, false);
+  return { id: row.ID, excluded: excluded, active: PP_bool_(row.ACTIVA, true) && !excluded };
+}
 function PP_mapTool_(row) { return { id: row.ID, part: row.PARTE, herramental: row.HERRAMENTAL, kitHerramental: row.KIT_HERRAMENTAL, toolSetupMinutes: Number(row.TIEMPO_AJUSTE_HERR || 0), kitSetupMinutes: Number(row.TIEMPO_AJUSTE_KIT || 0), active: PP_bool_(row.ACTIVO, true) }; }
 function PP_mapMaterial_(row) { return { id: row.ID, ot: row.OT, workOrderId: row.WO_INTERNAL_ID, assembly: row.ENSAMBLE, componentId: row.COMPONENTE_ID, component: row.COMPONENTE, description: row.DESCRIPCION, unit: row.UNIDAD, required: Number(row.REQUERIDO || 0), issued: Number(row.EMITIDO || 0), pending: Number(row.PENDIENTE || 0) }; }
 function PP_mapCalendar_(row) { return { id: row.ID, concept: row.CONCEPTO, machine: row.MAQUINA, startDate: row.FECHA_INICIO, start: row.HORA_INICIO, endDate: row.FECHA_FIN, end: row.HORA_FIN, reason: row.MOTIVO, active: PP_bool_(row.ACTIVO, true) }; }
@@ -968,6 +2362,50 @@ function PP_cellValue_(value) {
   if (value == null) return '';
   if (typeof value === 'object') return JSON.stringify(value);
   return value;
+}
+
+function PP_toolList_(value) {
+  let values = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (ignored) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  values.forEach(function(item) {
+    const text = String(item || '').trim();
+    if (text && out.indexOf(text) < 0) out.push(text);
+  });
+  return out;
+}
+
+function PP_additionalToolList_(value) {
+  let values = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (ignored) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  const seen = {};
+  values.forEach(function(item) {
+    let herramental = '';
+    let machine = '';
+    if (item && typeof item === 'object') {
+      herramental = String(item.herramental || item.tool || '').trim();
+      machine = String(item.machine || item.maquina || '').trim();
+    } else {
+      herramental = String(item || '').trim();
+    }
+    if (!herramental) return;
+    const key = PP_normalizeKey_(herramental) + '|' + PP_normalizeKey_(machine);
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(machine ? { herramental: herramental, machine: machine } : herramental);
+  });
+  return out;
 }
 
 function PP_bool_(value, fallback) {
@@ -994,5 +2432,18 @@ function PP_normalizeCapabilityKey_(value) {
   const text = String(value || '').trim();
   const separator = text.indexOf('::');
   if (separator < 0) return text;
-  return text.slice(0, separator) + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+  return text.slice(0, separator).trim() + '::' + PP_normalizeKey_(text.slice(separator + 2).replace(/_/g, ' '));
+}
+
+function PP_normalizeExcludedCapabilities_(values) {
+  const normalized = [];
+  (Array.isArray(values) ? values : []).forEach(function(value) {
+    const key = PP_normalizeCapabilityKey_(value);
+    if (
+      key &&
+      PP_normalizeKey_(key) !== PP_TOOL_CHANGE_CAPABILITY_KEY &&
+      normalized.indexOf(key) < 0
+    ) normalized.push(key);
+  });
+  return normalized;
 }

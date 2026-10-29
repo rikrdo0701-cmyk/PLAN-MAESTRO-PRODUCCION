@@ -1,8 +1,8 @@
 {
   "name": "plan-maestro-produccion-appscript",
-  "version": "2.39.0",
+  "version": "2.51.0",
   "private": true,
-  "description": "Plan maestro de producción administrado en GitHub y desplegado en Google Apps Script.",
+  "description": "Plan maestro de producciÃ³n con frontend en GitHub Pages y backend en Google Apps Script.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -11,10 +11,23 @@
     "build": "node scripts/build-appscript.mjs",
     "check": "node scripts/check-project.mjs",
     "test": "node --test tests/*.test.mjs",
-    "push": "npm run check && clasp push",
+    "preservar-config": "node scripts/appsscript-preservar-config.mjs",
+    "push": "npm run check && npm run preservar-config && clasp push",
     "pull": "clasp pull",
     "open": "clasp open-script",
     "versions": "clasp versions",
-    "deploy": "npm run check && clasp deploy"
+    "deploy": "npm run check && npm run preservar-config && node scripts/deploy-appsscript.mjs",
+    "build:pages": "node scripts/build-appscript.mjs",
+    "preview:pages": "python -m http.server 4173 --directory site",
+    "probe": "node scripts/web-probe.mjs",
+    "probe:lectura:supabase": "node scripts/supabase-read-test.mjs",
+    "probe:lectura:frontend": "node scripts/supabase-reader-verify.mjs",
+    "probe:lectura:appscript": "node scripts/appsscript-bridge-read-test.mjs",
+    "probe:generar": "node scripts/web-probe-generar-plan.mjs",
+    "probe:generar:seco": "node scripts/web-probe-generar-plan.mjs --dry",
+    "probe:cierre": "node scripts/web-probe-cierre-ot.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }

@@ -1,0 +1,497 @@
+-- =============================================================================
+-- CIERRE DE CATALOGOS — lo que le falta a Supabase para poder ser la fuente
+-- MEDIDO el 2026-09-29 contra el esquema REAL desplegado (no contra el DDL
+-- objetivo) y contra los encabezados reales de las hojas (PP_SHEETS,
+-- src/server/02-storage.js:1-34).
+--
+-- POR QUE ESTE ARCHIVO. El proyecto quedo con la decision de que Supabase es el
+-- almacen de lectura Y escritura (la web lee por PostgREST con la clave
+-- publicable; Apps Script escribe con la service role key, que salta RLS).
+-- PERO el esquema desplegado NO puede representar todo lo que las hojas guardan:
+-- al sembrar los catalogos el 2026-09-28 se perdieron columnas. Medido:
+--
+--   hoja OPERADORES      OPERADOR, NOMBRE        -> operators.nombre = OPERADOR
+--                                                 (muestra: 'CORTADOR INICIAL')
+--                                                 NOMBRE (el nombre real) NO EXISTE
+--   hoja CAPACIDADES     SOLAPAMIENTO es RATIO   -> capabilities.solapamiento es
+--                                                 BOOLEAN. Se perdio el factor.
+--                          PALABRAS_CLAVE         -> no existe columna
+--                          CUSTOM                 -> no existe columna
+--   hoja HERRAMENTALES   ID                      -> tools.id es uuid; el ID de la
+--                                                 hoja NO EXISTE
+--   hoja SUBCONTRATOS    ID                      -> subcontracts.id es uuid; igual
+--   hoja CALENDARIO      FECHA_INICIO/HORA_INICIO
+--                         /FECHA_FIN/HORA_FIN    -> calendar_exceptions.fecha es UN
+--                                                 solo dia: 3 columnas perdidas
+--   hoja CONFIGURACION_ARTICULO PRECIO_REF_VENTA -> no existe columna (RULE-REP-021)
+--
+-- Que la columna este en la tabla y que la app la lea es otra cosa: PP_buildState_
+-- lee capabilities.SOLAPAMIENTO con Number(... || 1) (02-storage.js:484), o sea
+-- RATIO con default 1, y la UI lo edita como porcentaje (app.js:5067 y 5114:
+-- percent/100). Un booleano ahi no es un detalle de tipo: es un factor de
+-- planificacion perdido.
+--
+-- COMO SE APLICA. Requiere SUPABASE_DB_PASSWORD. La contrasena NO se teclea en la
+-- linea de comando: psReadLine guarda historial de todo lo que se escribe y ahi
+-- se quedaria en texto plano. El envoltorio la pide en un prompt oculto, la pasa
+-- solo por la memoria del proceso hijo y la borra al terminar:
+--
+--   powershell -NoProfile -File scripts\aplicar-ddl-cierre.ps1
+--
+-- (equivale a poner SUPABASE_DB_PASSWORD en el entorno y correr
+-- scripts/apply-sql-supabase.mjs con este archivo, que sigue siendo la via si ya
+-- tenes la variable en el entorno.)
+--
+-- Es IDEMPOTENTE: todo es add column if not exists / create index if not exists,
+-- y la conversion de solapamiento fija 1 (el default documentado de la hoja).
+-- NO se inventa ningun valor: los ratios true los pondra el siguiente espejo de
+-- catalogos desde las Hojas, que reescribe la tabla completa.
+--
+-- No lleva begin/commit: scripts/apply-sql-supabase.mjs ya envuelve el archivo en
+-- una transaccion, y anidar un BEGIN dentro daria solo un warning.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. operators: el NOMBRE real de la persona (la hoja tiene OPERADOR y NOMBRE)
+-- -----------------------------------------------------------------------------
+alter table public.operators
+  add column if not exists nombre_real text not null default '';
+
+comment on column public.operators.nombre is
+  'OPERADOR: la clave con la que se programa (unico).';
+comment on column public.operators.nombre_real is
+  'NOMBRE: el nombre real de la persona. La hoja OPERADORES tiene las dos columnas; sin esta, el nombre real se perdia al sembrar.';
+
+-- -----------------------------------------------------------------------------
+-- 2. capabilities: el factor de solapamiento, las palabras clave y el flag custom
+-- -----------------------------------------------------------------------------
+-- 2.1 SOLAPAMIENTO: boolean -> numeric (ratio 0..1, default 1).
+--     El USING fija 1 en las filas que ya existen porque el boolean sembrado no
+--     permite saber el factor original: no se adivina. El siguiente espejo de
+--     catalogos sobrescribe la tabla entera con el valor real de la hoja.
+--
+--     MEDIDO 2026-09-29 (intento 1, rollback): el ALTER ... TYPE falla con
+--     'default for column "solapamiento" cannot be cast automatically to type
+--     numeric'. Al cambiar el tipo, Postgres castea TAMBIÉN la expresión del
+--     DEFAULT, y el default sembrado era boolean, que no tiene conversion
+--     automatica a numeric. Por eso el ORDEN importa: primero se quita el
+--     default, despues se cambia el tipo, y al final se vuelve a poner ya en
+--     numeric. Con las tres en el orden correcto el archivo es idempotente.
+alter table public.capabilities
+  alter column solapamiento drop default;
+alter table public.capabilities
+  alter column solapamiento type numeric using (1::numeric);
+alter table public.capabilities
+  alter column solapamiento set default 1;
+alter table public.capabilities
+  alter column solapamiento set not null;
+
+comment on column public.capabilities.solapamiento is
+  'RATIO de solapamiento 0..1 (la hoja lo edita como porcentaje y lo divide entre 100; default 1). MEDIDO 2026-09-29: venia boolean y se perdia el factor.';
+
+-- 2.2 PALABRAS_CLAVE: texto separado por comas (lo consume state.operationRules.keywords).
+alter table public.capabilities
+  add column if not exists palabras_clave text not null default '';
+
+-- 2.3 CUSTOM: marca de capacidad creada a mano (state.customCapabilities).
+alter table public.capabilities
+  add column if not exists custom boolean not null default false;
+
+-- -----------------------------------------------------------------------------
+-- 3. tools / subcontracts: el ID textual de la hoja (hoy solo hay uuid)
+-- -----------------------------------------------------------------------------
+-- El id uuid lo genera la base; el codigo es el identificador de la hoja, que es
+-- el que usan las referencias del plan. Se indexa solo cuando viene informado
+-- (las filas sembradas antes de esta migracion lo traian vacio).
+alter table public.tools
+  add column if not exists codigo text not null default '';
+
+alter table public.subcontracts
+  add column if not exists codigo text not null default '';
+
+-- MEDIDO 2026-09-30 en la pagina real, guardando los catalogos: 4 tablas con HTTP 400
+--   {"code":"42P01","message":"there is no unique or exclusion constraint matching
+--    the ON CONFLICT specification"}
+-- La primera era tools. Y la causa es el `where codigo <> ''` de los indices de mas abajo:
+-- un indice UNICO PARCIAL no lo puede inferir ON CONFLICT (columna). PostgreSQL solo
+-- infiere un indice sin predicado, o uno cuyo predicado se escriba EXACTAMENTE igual en la
+-- clausula, y PostgREST manda `on_conflict=codigo`, que no lleva predicado. O sea que el
+-- indice existia, se llamaba tools_codigo_uniq, y aun asi el INSERT con on_conflict fallaba.
+--
+-- POR QUE NO SE ARREGLA PONIENDO EL PREDICADO EN EL ESCRITOR. Se podria, con un
+-- `merge-duplicates` y una columna expression, pero eso obliga a que la columna del ON
+-- CONFLICT sea la expresion (`on coalesce(codigo,'')`) en vez del nombre, y entonces cada
+-- catalogo que se lea y se vuelva a mandar tiene que expresarse igual. Un indice unico
+-- COMPLETO es mas simple de razonar y es lo que la base puede usar sola.
+--
+-- POR QUE SE PUEDE HACER COMPLETO. El predicado existia porque las filas sembradas antes
+-- traian `codigo` vacio, y varias vacias rompen un indice unico. El escritor NUNCA manda
+-- `codigo` vacio (filtra `Boolean(fila.codigo)`), asi que de ahora en adelante no puede
+-- haber duplicados de verdad. Las filas viejas se numeran para que el indice se pueda
+-- crear, y eso es una decision medida, no un dato inventado: se prefijan con
+-- 'LEGADO-' + el id, que es unico por construccion, y el siguiente espejo de catalogos
+-- reescribe la tabla entera con el codigo real de la hoja.
+update public.tools
+   set codigo = 'LEGADO-' || id::text
+ where codigo is null or btrim(codigo) = '';
+
+update public.subcontracts
+   set codigo = 'LEGADO-' || id::text
+ where codigo is null or btrim(codigo) = '';
+
+-- EL DROP DE ABAJO NO ES OPCIONAL, Y ES LO QUE HACE QUE ESTA SECCION SIRVA DE ALGO.
+-- Los indices tools_codigo_uniq y subcontracts_codigo_uniq YA EXISTEN en la base: los creo
+-- la seccion 3 de este mismo archivo, como PARCIALES (con where codigo <> ''). Y un
+-- 'create unique index if not exists' sobre un nombre que ya existe NO HACE NADA: no
+-- reemplaza el indice, no lo convierte en completo, se va en silencio. Sin el drop, aplicar
+-- este archivo otra vez no arreglaria nada y el 42P01 seguiria igual, con el schema del repo
+-- diciendo una cosa y la base teniendo otra. Un DDL que parece arreglado y no lo esta es peor
+-- que uno que no existe, porque el que existe da por hecho que se aplico.
+drop index if exists public.tools_codigo_uniq;
+drop index if exists public.subcontracts_codigo_uniq;
+
+create unique index tools_codigo_uniq
+  on public.tools (codigo);
+
+create unique index subcontracts_codigo_uniq
+  on public.subcontracts (codigo);
+
+-- -----------------------------------------------------------------------------
+-- 3.b calendar_exceptions, ot_configurations, article_configurations y
+--     machine_planning_overrides: NO NECESITAN NADA. MEDIDO 2026-09-30 contra la base real,
+-- con un INSERT de prueba dentro de un begin/rollback (no se escribio nada):
+--
+--   on_conflict (codigo)          en tools                -> ERROR (el indice es PARCIAL)
+--   on_conflict (codigo)          en subcontracts         -> ERROR (el indice es PARCIAL)
+--   on_conflict (fecha_inicio, concepto, maquina)          -> ERROR (columna equivocada)
+--   on_conflict (fecha,        concepto, maquina)          -> ok
+--   on_conflict (ot)            en ot_configurations      -> ok
+--   on_conflict (articulo)      en article_configurations -> ok
+--
+-- Los cuatro indices de esas tablas YA EXISTEN y son COMPLETOS:
+--   calendar_exceptions_fecha_concepto_maquina_key  (fecha, concepto, maquina)
+--   ot_configurations_ot_key                          (ot)
+--   article_configurations_articulo_key               (articulo)
+--   machine_planning_overrides_machine_nombre_key     (machine_nombre)
+--
+-- La version anterior de este archivo declaraba los cuatro con create unique index, creyendo
+-- que faltaban. Eso habria dejado DOS indices unicos sobre las mismas columnas en cada
+-- tabla, que es ruido que no deduplica nada. Y en calendar_exceptions habria sido peor: el
+-- indice nuevo era sobre (fecha_inicio, concepto, maquina), con fecha_inicio NULLABLE, y en
+-- PostgreSQL los NULL no se consideran iguales entre si, o sea que NULL != NULL y el indice
+-- no Impone unicidad sobre las filas con fecha_inicio nula. Se habria hecho LOOKING correct
+-- sin deduplicar nada.
+--
+-- Y el problema de calendar_exceptions era del ESCRITOR, no de la base: mandaba
+-- on_conflict=(fecha_inicio,concepto,maquina) cuando el indice es sobre (fecha, concepto,
+-- maquina). Esta nota se queda porque el error de produccion (42P01) es el mismo para un
+-- indice parcial y para una columna equivocada, y esa ambiguedad es la que hizo perder dos
+-- rondas de diagnostico: el nombre del indice no dice si es parcial, y el mensaje de
+-- Postgres no dice cual columna no cuadra.
+comment on column public.tools.codigo is
+  'ID de la hoja HERRAMENTALES. Distinto de id (uuid interno).';
+comment on column public.subcontracts.codigo is
+  'ID de la hoja SUBCONTRATOS. Distinto de id (uuid interno).';
+
+-- -----------------------------------------------------------------------------
+-- 4. article_configurations: el precio de referencia de venta (RULE-REP-021)
+-- -----------------------------------------------------------------------------
+-- PRECIO_MANUAL lo escribe una persona; PRECIO_REF_VENTA lo baja el sync con el
+-- precio de venta de NetSuite. Sin esta columna, el precio de venta del reporte
+-- se pierde al sembrar.
+alter table public.article_configurations
+  add column if not exists precio_ref_venta numeric not null default 0;
+
+comment on column public.article_configurations.precio_ref_venta is
+  'PRECIO_REF_VENTA: lo baja el sync con el precio de venta de NetSuite (RULE-REP-021). Distinto de precio_manual, que escribe una persona.';
+
+-- -----------------------------------------------------------------------------
+-- 5. calendar_exceptions: la ventana completa, no un solo dia
+-- -----------------------------------------------------------------------------
+-- La hoja CALENDARIO tiene ID, CONCEPTO, MAQUINA, FECHA_INICIO, HORA_INICIO,
+-- FECHA_FIN, HORA_FIN, MOTIVO, ACTIVO. La tabla solo traia 'fecha' (un dia), que
+-- ademas es NOT NULL y forma parte del unique (fecha, concepto, maquina).
+-- Se conservan 'fecha' y ese unique (miles de lectores pueden depender de la
+-- forma) y se agregan las tres columnas que faltaban. El escritor de catalogos
+-- pondra fecha = coalesce(fecha_inicio, fecha).
+alter table public.calendar_exceptions
+  add column if not exists fecha_inicio date,
+  add column if not exists hora_inicio text not null default '',
+  add column if not exists fecha_fin date,
+  add column if not exists hora_fin text not null default '';
+
+comment on column public.calendar_exceptions.fecha is
+  'Dia de inicio de la excepcion. Se mantiene por el unique (fecha, concepto, maquina); el escritor de catalogos la iguala a coalesce(fecha_inicio, fecha).';
+comment on column public.calendar_exceptions.hora_inicio is
+  'HORA_INICIO de la hoja CALENDARIO (texto, tal como lo guarda la hoja).';
+comment on column public.calendar_exceptions.fecha_fin is
+  'FECHA_FIN de la hoja CALENDARIO. Sin esta, una excepcion de varios dias se perdia.';
+comment on column public.calendar_exceptions.hora_fin is
+  'HORA_FIN de la hoja CALENDARIO (texto, tal como lo guarda la hoja).';
+
+-- -----------------------------------------------------------------------------
+-- 6. machine_planning_overrides: la planificacion puede apartar una maquina
+-- -----------------------------------------------------------------------------
+-- DECISION DEL USUARIO 2026-09-29: "si, la planificacion puede apartar una
+-- maquina que NetSuite da por activa". RULE-SUP-017.
+--
+-- POR QUE UNA TABLA APARTE Y NO UNA COLUMNA EN `machines`. `machines` la escribe
+-- el RESTlet 2246 con public.ingesta_mirror, que BORRA la tabla entera e inserta
+-- lo que devuelve NetSuite. Cualquier columna que la app escribiera ahi se
+-- perderia en la siguiente corrida (cada 15 minutos). Poner el override aqui es
+-- lo que hace falta para que no se pierda, y ademas deja un solo escritor por
+-- tabla: `machines` = NetSuite, esta = Apps Script.
+--
+-- QUE ES Y QUE NO ES. Es SOLO lo que la planificacion puede hacer por su cuenta:
+-- APARTAR una maquina. La direccion contraria (usar una maquina que NetSuite da
+-- por inactiva) NO esta autorizada y por eso no hay columna para forzarla:
+-- inventar esa regla seria inventar un permiso que nadie concedio.
+--
+-- COMO SE LEE. La maquina es utilizable si NetSuite la da activa Y nadie la
+-- aparto:  activa_efectiva = machines.activa AND NOT excluida.  El `false` de
+-- `excluida` significa "usala", y ausencia de fila tambien significa "usala":
+-- por eso la columna es NOT NULL DEFAULT false y el espejo escribe la fila de
+-- TODAS las maquinas, no solo las excluidas, para que no haya dos formas de
+-- decir lo mismo.
+create table if not exists public.machine_planning_overrides (
+  id              uuid primary key default gen_random_uuid(),
+  machine_nombre  text not null unique,        -- machines.nombre / hoja MAQUINAS.ID
+  excluida        boolean not null default false,
+  actualizado     timestamptz not null default now(),
+  created_at      timestamptz not null default now()
+);
+
+comment on table public.machine_planning_overrides is
+  'Maquinas que la PLANIFICACION aparta. Decision del usuario 2026-09-29: la planificacion puede apartar una maquina que NetSuite da por activa. Tabla aparte a proposito: `machines` la reescribe por completo el RESTlet 2246 cada 15 minutos y se llevaria cualquier columna de la app. Solo se autoriza APARTAR, no forzar el uso de una maquina inactiva en NetSuite.';
+comment on column public.machine_planning_overrides.machine_nombre is
+  'Nombre de la maquina, el mismo texto que machines.nombre y que la hoja MAQUINAS guarda en ID. Se compara normalizado (trim + upper) porque el state normaliza a mayusculas.';
+
+-- RLS: igual que las demas, pero SOLO para quien entro con correo. Quien escribe es Apps Script
+-- con la service role key, que se salta RLS. A `anon` no se le da escritura ni aqui ni en ninguna
+-- otra tabla (RULE-SUP-015), y desde el 2026-09-30 tampoco LECTURA: la pagina exige sesion
+-- (schema-supabase-login-correo.sql).
+--
+-- MEDIDO 2026-10-01: esta linea decia `create policy "lectura_web" ... to anon`, que es lo que
+-- hacia el DDL de login. Los DDL se pisan: este se aplico el 2026-09-30, DESPUES del de login, y
+-- le devolvio a anon la lectura de la tabla. MEDIDO con la publicable y sin sesion: esta tabla
+-- devolvia sus 8 filas y las otras 24 devolvian 0. RLS si seguia habilitado, o sea que solo se
+-- abrio LEER.(drop policy de los DOS nombres antes del create, igual que schema-supabase-plan.sql:
+-- si solo se borra el que va a crear, reaplicar este archivo tras el de login deja las dos
+-- politicas y gana la que se creo despues.)
+alter table public.machine_planning_overrides enable row level security;
+drop policy if exists lectura_web on public.machine_planning_overrides;
+drop policy if exists lectura_app on public.machine_planning_overrides;
+create policy "lectura_app" on public.machine_planning_overrides for select to authenticated using (true);
+
+-- -----------------------------------------------------------------------------
+-- 7. El espejo: admision de las tablas de catalogo en la whitelist de ingesta_mirror
+-- -----------------------------------------------------------------------------
+-- !!! SUPERADO EL 2026-10-01. ESTA SECCION ESTA PRESENTE PERO NO DEBE APLICARSE. !!!
+-- Esta seccion fue la que MATO la version del RPC que leia la tabla. MEDIDO: el
+-- orden real de aplicacion fue (1) docs/schema-supabase-plan.sql, que dejo
+-- public.ingesta_mirror leyendo public.ingesta_mirror_whitelist, y (2) ESTE
+-- archivo, aplicado despues el 2026-09-29, que volvio a definir el mismo RPC con
+-- una lista de 17 tablas metida en el cuerpo. `create or replace` no avisa que
+-- pisa una version, asi que el paso 2 borro el paso 1 sin dejar rastro. Se
+-- manifesto el 2026-10-01 con la migracion de la hoja `Tramos`: el importador
+-- devolvio 'tabla no permitida: inspection_routes' con la fila ya presente en la
+-- whitelist, que es el sintoma exacto de "la fila esta bien y la funcion ni la
+-- mira".
+--
+-- LA COPIA CANONICA ES docs/rpc-ingesta-mirror.sql. Si vas a cambiar el RPC, cambiala
+-- alla. Aplicar este archivo tal cual devuelve el RPC a la lista en el cuerpo.
+-- No borres esta seccion: deja el registro de lo que paso.
+--
+-- El RPC es SECURITY INVOKER y solo service_role puede ejecutarlo (revoke de
+-- PUBLIC al final), asi que ampliar la whitelist NO abre escritura a anon: el
+-- rol que escribe sigue siendo el Apps Script. La razon de la whitelist es que
+-- p_tabla no pueda apuntar a cualquier tabla, no que los catalogos queden fuera.
+create or replace function public.ingesta_mirror(
+  p_tabla text,
+  p_filas jsonb
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_tabla       regclass;
+  v_cols        text[];
+  v_cols_i      text;
+  v_cols_r      text;
+  v_desconoc    text[];
+  v_borradas    bigint;
+  v_insertadas  int;
+  v_sql         text;
+begin
+  -- Whitelist: las 7 tablas de la ingesta de NetSuite MAS las de catalogos que
+  -- espeja el escritor src/server/16-supabase-catalogo.js. Sigue sin incluir
+  -- app_state, selected_ots, locked_ots, operation_plan_statuses ni
+  -- plan_snapshots: esas son escritura de la app (fase 4) y no se espejan.
+  -- machine_planning_overrides entra: la escribe Apps Script (la app es quien
+  -- aparta maquinas) y el RESTlet NUNCA la toca, asi que no hay dos escritores.
+  if p_tabla not in ('work_orders','operations','materials','items','machines',
+                     'inventory','sales_orders',
+                     'operators','capabilities','operation_catalog','matrix',
+                     'tools','subcontracts','ot_types','calendar_exceptions',
+                     'ot_configurations','article_configurations',
+                     'machine_planning_overrides') then
+    raise exception 'ingesta_mirror: tabla no permitida: %', p_tabla;
+  end if;
+  if p_filas is null or jsonb_typeof(p_filas) <> 'array' then
+    raise exception 'ingesta_mirror: p_filas debe ser un arreglo jsonb';
+  end if;
+  v_tabla := format('public.%I', p_tabla)::regclass;
+
+  execute format('delete from %s where id <> ''00000000-0000-0000-0000-000000000000''', v_tabla);
+  get diagnostics v_borradas = row_count;
+
+  if jsonb_array_length(p_filas) > 0 then
+    select array_agg(c) into v_cols
+      from jsonb_object_keys(p_filas -> 0) as c;
+
+    select array_agg(c) into v_desconoc
+      from unnest(v_cols) as c
+     where c not in ('id','created_at','updated_at')
+       and not exists (
+            select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = p_tabla
+               and column_name = c);
+    if v_desconoc is not null then
+      raise exception 'ingesta_mirror: columnas no existen en %.%: %',
+        'public', p_tabla, array_to_string(v_desconoc, ', ');
+    end if;
+
+    select array_agg(c) into v_cols
+      from unnest(v_cols) as c
+     where c not in ('id','created_at','updated_at');
+
+    select string_agg(format('"%s"', c), ','),
+           string_agg(format('r."%s"', c), ',')
+      into v_cols_i, v_cols_r
+      from unnest(v_cols) as c;
+
+    if v_cols_i is null then
+      raise exception 'ingesta_mirror: payload sin columnas insertables';
+    end if;
+
+    v_sql := format(
+      'insert into %s (%s) select %s from jsonb_populate_recordset(null::%s, $1) as r',
+      v_tabla, v_cols_i, v_cols_r, v_tabla);
+    execute v_sql using p_filas;
+    get diagnostics v_insertadas = row_count;
+  else
+    v_insertadas := 0;
+  end if;
+
+  return jsonb_build_object('ok', true, 'tabla', p_tabla,
+                            'borradas', v_borradas, 'insertadas', v_insertadas);
+end
+$$;
+
+revoke all on function public.ingesta_mirror(text, jsonb) from public;
+grant execute on function public.ingesta_mirror(text, jsonb) to service_role;
+
+-- =============================================================================
+-- 7. updated_at se pone solo. MEDIDO 2026-09-30 y APLICADO (8 de 8 tablas).
+--
+-- La pagina no puede saber si escribio una tabla si la marca no se mueve, y con un UPSERT
+-- de PostgREST la marca no se mueve: solo se tocan las columnas del payload, y los
+-- catalogos no mandan updated_at. MEDIDO: la alerta de datos viejos decia que operators
+-- llevaba 70 h sin escribirse, y la fila si se habia escrito.
+--
+-- Lo pone la BASE, no la pagina, para que marquen los dos escritores: la pagina y la ingesta
+-- del RESTlet 2246. Si lo mandara la pagina, la ingesta seguiria sin marcar.
+--
+-- machine_planning_overrides NO entra: no tiene updated_at, tiene actualizado. Queda
+-- fuera a proposito y no en silencio, porque su aviso de antiguedad tampoco funciona.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 6. updated_at se pone solo: sin esto, la pagina no puede saber que escribio
+-- -----------------------------------------------------------------------------
+-- MEDIDO 2026-09-30. La alerta de "Datos viejos en Supabase" decia que operators,
+-- subcontracts y matrix llevaban 70 h y 29 h sin escribirse. Se comprobo que NO era cierto:
+-- un UPSERT de PostgREST actualiza SOLO las columnas que van en el payload, y los catalogos no
+-- mandan updated_at, o sea que la fila se escribia y la columna no se movia. La alerta media
+-- bien y la pagina miente. Peor: es el caso de siempre, una alerta que dice algo falso
+-- entrena a ignorar las alertas.
+--
+-- POR QUE UN DISPARADOR Y NO QUE LA PAGINA MANDE updated_at. updated_at es asunto de la base,
+-- no del que escribe. Con el disparador lo marcan los DOS escritores: la pagina Y la ingesta
+-- del RESTlet 2246, sin que ninguno tenga que acordarse. Si lo manda la pagina, la ingesta
+-- sigue sin marcar, y el aviso volveria a mentir cada vez que los datos vinieran del ERP, que
+-- es justo cuando mas importa saberlo.
+--
+-- QUE NO HACE ESTE DISPARADOR. Solo actualiza la marca. No borra, no decide, no toca ninguna
+-- otra columna, y no cambia quien escribe cada tabla. Una fila que se inserta por primera vez
+-- NO lo dispara (es BEFORE UPDATE), y sus created_at y updated_at quedan con el now() del
+-- DEFAULT, que es lo correcto: una fila nueva es nueva, no editada.
+--
+-- El reloj es el de la base (now()), no el del navegador. Si lo mandara la pagina, un reloj
+-- mal puesto del navegador fecharia la fila en el pasado y la alerta volveria a mentir.
+create or replace function public.tocar_updated_at() returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+comment on function public.tocar_updated_at() is
+  'Marca updated_at en cada UPDATE. Existe porque un UPSERT de PostgREST solo toca las columnas del payload, y los catalogos no mandan updated_at: la fila se escribia y la marca no se movia, con lo que el aviso de datos viejos mentia. Lo pone la base para que manden los dos escritores, la pagina y la ingesta.';
+
+-- Uno por tabla. Se tiran antes porque CREATE TRIGGER no es IF NOT EXISTS, y porque si el
+-- nombre cambia hay que reemplazar el viejo, no acumular dos disparadores que escribirian la
+-- misma columna dos veces.
+drop trigger if exists trg_tocar_updated_at on public.operators;
+create trigger trg_tocar_updated_at before update on public.operators
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.capabilities;
+create trigger trg_tocar_updated_at before update on public.capabilities
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.matrix;
+create trigger trg_tocar_updated_at before update on public.matrix
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.tools;
+create trigger trg_tocar_updated_at before update on public.tools
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.subcontracts;
+create trigger trg_tocar_updated_at before update on public.subcontracts
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.calendar_exceptions;
+create trigger trg_tocar_updated_at before update on public.calendar_exceptions
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.ot_configurations;
+create trigger trg_tocar_updated_at before update on public.ot_configurations
+  for each row execute function public.tocar_updated_at();
+
+drop trigger if exists trg_tocar_updated_at on public.article_configurations;
+create trigger trg_tocar_updated_at before update on public.article_configurations
+  for each row execute function public.tocar_updated_at();
+
+-- machine_planning_overrides. MEDIDO 2026-09-30, APLICADO y verificado con una escritura
+-- real: updated_at se movio y actualizado NO. Es la unica de las nueve que no tenia la
+-- columna, y por eso su aviso de antiguedad no podia funcionar. Se le da la misma regla
+-- que las otras ocho en vez de un disparador propio sobre actualizado: actualizado solo la
+-- mueve quien la mande en el payload, y el UPSERT de la pagina no la manda, o sea que con
+-- actualizado la tabla se veria vieja siempre que solo la escribiera la pagina. Con el
+-- disparador se mueven los dos escritores.
+alter table public.machine_planning_overrides
+  add column if not exists updated_at timestamptz not null default now();
+
+comment on column public.machine_planning_overrides.updated_at is
+  'Ultima escritura, puesta por el disparador trg_tocar_updated_at. Se anade ademas de actualizado porque un UPSERT no mueve actualizado si el escritor no lo manda, y el aviso de antiguedad lee esta.';
+
+drop trigger if exists trg_tocar_updated_at on public.machine_planning_overrides;
+create trigger trg_tocar_updated_at before update on public.machine_planning_overrides
+  for each row execute function public.tocar_updated_at();

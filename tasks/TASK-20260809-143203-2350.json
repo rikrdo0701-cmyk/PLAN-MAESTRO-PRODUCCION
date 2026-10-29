@@ -1,0 +1,129 @@
+{
+  "id": "TASK-20260809-143203-2350",
+  "objective": "Investigate and document every relevant business rule in the repository as a canonical, evidence-backed, non-duplicating catalog synchronized with Project Memory.",
+  "allowed_files": [
+    "docs/REGLAS.md",
+    ".project-memory/rules.json",
+    ".project-memory/data-sources.json",
+    ".project-memory/modules.json",
+    ".project-memory/integrations.json",
+    "CHANGELOG.md",
+    "docs/changes/TASK-20260809-143203-2350.md"
+  ],
+  "requirements": [
+    "Read Project Memory before targeted repository evidence.",
+    "Cover every business-rule domain relevant to planning and system boundaries, not only the original seven domains.",
+    "Every definitive rule cites an exact existing repository source.",
+    "Use globally unique RULE identifiers and define each semantic rule only once.",
+    "Synchronize docs/REGLAS.md with structured Project Memory.",
+    "Do not modify production code, tests, deployment files, or runtime configuration."
+  ],
+  "acceptance_criteria": [
+    "All modified Project Memory JSON parses successfully.",
+    "Canonical RULE IDs are globally unique and human/structured catalogs agree.",
+    "Every relevant discovered domain is covered or explicitly marked as lacking sufficient evidence.",
+    "All definitive rules have exact existing sources; ambiguities and contradictions remain visible.",
+    "Documentation Gate, scope validation, secret scan, and technical review pass.",
+    "No deployment is executed."
+  ],
+  "plan_review": {
+    "required": false
+  },
+  "execution_plan": {
+    "executor_mode": "balanced",
+    "max_attempts": 2,
+    "smoke_test_commands": [
+      "powershell -NoProfile -Command \"Get-Content -Raw .project-memory/rules.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/data-sources.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/modules.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/integrations.json | ConvertFrom-Json | Out-Null\"",
+      "powershell -NoProfile -Command \"if (-not (Test-Path docs/REGLAS.md)) { exit 1 }; if ((Select-String -Path docs/REGLAS.md -Pattern 'RULE-' -AllMatches).Count -eq 0) { exit 1 }\""
+    ]
+  },
+  "validation_plan": {
+    "syntax": {
+      "required": true,
+      "commands": [
+        "powershell -NoProfile -Command \"Get-Content -Raw .project-memory/rules.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/data-sources.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/modules.json | ConvertFrom-Json | Out-Null; Get-Content -Raw .project-memory/integrations.json | ConvertFrom-Json | Out-Null\""
+      ]
+    },
+    "functional_tests": {
+      "required": true,
+      "commands": [
+        "powershell -NoProfile -Command \"$ids = Select-String -Path docs/REGLAS.md -Pattern 'RULE-[A-Z0-9_-]+-\\d{3}' -AllMatches | ForEach-Object { $_.Matches.Value }; if (($ids | Group-Object | Where-Object Count -gt 1).Count) { exit 1 }\""
+      ]
+    },
+    "technical_review": {
+      "required": true,
+      "reviewer": "laguna"
+    },
+    "visual_review": {
+      "required": false,
+      "reviewer": "mimo",
+      "files": []
+    }
+  },
+  "specialist_plan": [
+    {
+      "id": "scope_map",
+      "role": "Map Project Memory and rule-bearing repository domains",
+      "required": true,
+      "depends_on": []
+    },
+    {
+      "id": "planning_rules",
+      "role": "Extract and cross-check planning, capacity, resources, calendars, and lifecycle rules",
+      "required": true,
+      "depends_on": [
+        "scope_map"
+      ]
+    },
+    {
+      "id": "data_integration_rules",
+      "role": "Extract and cross-check data-source, NetSuite, persistence, reporting, and inspection rules",
+      "required": true,
+      "depends_on": [
+        "scope_map"
+      ]
+    },
+    {
+      "id": "test_coverage",
+      "role": "Verify candidate rules against tests and identify contradictions or missing acceptance evidence",
+      "required": true,
+      "depends_on": [
+        "planning_rules",
+        "data_integration_rules"
+      ]
+    },
+    {
+      "id": "dedup_review",
+      "role": "Detect semantic duplicates, ID collisions, unsupported claims, and cross-domain references",
+      "required": true,
+      "depends_on": [
+        "test_coverage"
+      ]
+    }
+  ],
+  "documentation_plan": {
+    "rules_affected": [
+      "all relevant business-rule domains discovered in repository evidence"
+    ],
+    "data_sources_affected": [
+      "verified sheets, endpoints, configuration stores, and NetSuite sources"
+    ],
+    "module_docs": [
+      "docs/REGLAS.md",
+      ".project-memory/rules.json",
+      ".project-memory/data-sources.json",
+      ".project-memory/modules.json",
+      ".project-memory/integrations.json"
+    ],
+    "adr_required": false,
+    "changelog_required": true,
+    "task_journal_required": true
+  },
+  "commit_message": "docs(rules): catalog verified business rules",
+  "hybrid_subagents": {
+    "mode": "auto",
+    "strategy": "read_only_specialists"
+  },
+  "cloud_allowed": true,
+  "plan_file": "docs/superpowers/plans/2026-08-09-comprehensive-business-rules-catalog.md"
+}

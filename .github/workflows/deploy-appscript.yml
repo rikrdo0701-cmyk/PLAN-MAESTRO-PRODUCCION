@@ -2,22 +2,125 @@ name: Desplegar a Apps Script
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/server/**"
+      - "src/web/**"
+      - "scripts/build-appscript.mjs"
+      - "scripts/check-project.mjs"
+      # La propia herramienta del despliegue. MEDIDO 2026-09-29: sin estos dos,
+      # un commit que los cambia no dispara nada, y la logica que decide que se
+      # preserva y que se borra puede quedar sin probarse contra el proyecto real
+      # hasta que haya otro cambio de codigo que la dispare.
+      - "scripts/appsscript-preservar-config.mjs"
+      - "scripts/verificar-deploy-appscript.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-appscript.yml"
+
+concurrency:
+  group: apps-script-production
+  cancel-in-progress: false
+
+env:
+  EXPECTED_SCRIPT_ID: 1HFWb7JgrmhUb6bp8W-cztQHnQgFYX7-4K3d0nqen-008lqdnD1amb3l_
+  PROTECTED_SCRIPT_ID: 1ew3Nqi0e8SHid_zWv1z5cl6ATCZzqVLqc2lkbfox5CMNsh8FH5tL8zKx
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # MEDIDO 2026-10-02: ESTE WORKFLOW NO TENIA LAS CREDENCIALES Y POR ESO SUBIA UNA PAGINA CON
+      # EL LECTOR APAGADO. `deploy-pages.yml:37-38` si las declara; aqui no habia nada, asi que el
+      # `npm run check` de la linea 38 construia `dist/Index.html` con `DEFAULT_ANON_KEY = ""`, y ese
+      # dist es EXACTAMENTE lo que sube el `clasp push --force` de mas abajo. O sea: el frontend de
+      # GitHub Pages salia con el lector encendido y la copia de Apps Script del mismo Index.html
+      # salia con el lector apagado, sin que nada lo dijera.
+      #
+      # El aviso de `scripts/check-project.mjs` ("el build salio SIN credenciales... el lector queda
+      # APAGADO") es un AVISO, no un error: sale con codigo 0 y el pipeline sigue en verde. Asi que
+      # esto no se rompe solo, se publica solo. Es el incidente del 2026-10-01 que ya esta
+      # documentado en la cabecera de ese archivo, repetirido por el lado de Apps Script.
+      #
+      # Son las MISMAS variables de repositorio que ya usa Pages, y a proposito no son secretos: la
+      # clave publishable va dentro del bundle publico de todos modos. La service role key no esta
+      # aqui y no debe estar nunca: vive en `config.js`, dentro del proyecto de Apps Script, y la
+      # preserva `scripts/appsscript-preservar-config.mjs`.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
       - run: npm run check
       - name: Configurar clasp
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           CLASP_JSON: ${{ secrets.CLASP_JSON }}
         run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::CLASPRC_JSON no esta configurado o esta vacio"
+            exit 1
+          fi
+          if [ -z "$CLASP_JSON" ]; then
+            echo "::error::CLASP_JSON no esta configurado o esta vacio"
+            exit 1
+          fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          # MEDIDO 2026-10-02, POR QUE ESTAS DOS LINEAS. CLASP_JSON es un SECRETO y este paso
+          # SOBRESCRIBE .clasp.json entero, a proposito: el scriptId no puede cambiarse desde el
+          # repo, y por eso se valida contra EXPECTED_SCRIPT_ID. El efecto secundario es que ese
+          # overwrite se lleva por delante el deploymentId, que vive en el repo. MEDIDO: sin esto
+          # el pipeline se caia en "no trae deploymentId" y no desplegaba NADA.
+          # O sea que el identificador del deployment es lo unico que el repo aporta ahi. Se lee
+          # ANTES de sobrescribir y se vuelve a poner despues.
+          repo_deployment_id=$(node -p "require('./.clasp.json').deploymentId || ''")
           printf '%s' "$CLASP_JSON" > .clasp.json
+          REPO_DEPLOYMENT_ID="$repo_deployment_id" node -e "const fs = require('fs'); JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8')); const config = JSON.parse(fs.readFileSync('.clasp.json', 'utf8')); if (!config.scriptId) throw new Error('CLASP_JSON no contiene scriptId'); if (/^AKfy/.test(config.scriptId)) throw new Error('CLASP_JSON contiene un deploymentId, no un scriptId'); if (config.scriptId === process.env.PROTECTED_SCRIPT_ID) throw new Error('CLASP_JSON apunta al script protegido y el despliegue fue bloqueado'); if (config.scriptId !== process.env.EXPECTED_SCRIPT_ID) throw new Error('CLASP_JSON no apunta al script autorizado ' + process.env.EXPECTED_SCRIPT_ID); config.rootDir = 'dist'; if (process.env.REPO_DEPLOYMENT_ID) config.deploymentId = process.env.REPO_DEPLOYMENT_ID; fs.writeFileSync('.clasp.json', JSON.stringify(config, null, 2))"
+      - name: Preservar los archivos que el pipeline no publica
+        # MEDIDO 2026-09-29: este paso se llamaba por supabase-config.gs y no
+        # preservaba nada, porque el archivo del usuario se llamaba config.js y luego
+        # CONFIG.js. Un nombre es un detalle. Ahora baja el proyecto y devuelve a
+        # dist/ todo lo que no venga de dist/, y avisa de cada uno.
+        run: node scripts/appsscript-preservar-config.mjs
       - name: Subir a Apps Script
-        run: npx --yes @google/clasp push --force
+        run: |
+          set +e
+          output=$(npx --yes @google/clasp push --force 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            reason=$(printf '%s\n' "$output" | tail -n 5 | tr '\n' ' ')
+            echo "::error title=clasp push::$reason"
+            exit "$status"
+          fi
+      - name: Leer el deployment destino
+        id: destino
+        # MEDIDO 2026-10-02: el identificador SE LEE DE .clasp.json, no se repite aqui. Estaba
+        # escrito en los dos lados y nadie los comparaba: si se cambia en uno, el push a main
+        # despliega a un deployment y `npm run deploy` a otro, y la pagina (que usa la URL
+        # horneada en el bundle) se queda en el viejo sin que nada lo diga.
+        run: |
+          deployment_id=$(node -p "require('./.clasp.json').deploymentId || ''")
+          if [ -z "$deployment_id" ]; then
+            echo "::error title=deployment::.clasp.json no trae deploymentId: no se sabe que deployment actualizar"
+            exit 1
+          fi
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+          echo "Deployment destino: $deployment_id"
+      - name: Actualizar implementacion web
+        env:
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ steps.destino.outputs.deployment_id }}
+        run: npx --yes @google/clasp deploy --deploymentId "$APPS_SCRIPT_DEPLOYMENT_ID" --description "GitHub $GITHUB_SHA"
+      - name: Verificar que el proyecto quedo igual que dist/
+        # MEDIDO 2026-09-29: dos despliegues seguidos dijeron "Pushed 26 files" con
+        # el archivo listado, y el proyecto seguia con la version anterior (13620
+        # bytes en el remoto contra 14563 en dist/). La comprobacion de antes, que
+        # la funcion exista en la lista de desplegadas, no lo ve: el bug no
+        # cambiaba ningun nombre, cambiaba el cuerpo de la funcion. Aqui se baja el
+        # proyecto y se compara byte a byte contra dist/, con lo que un despliegue
+        # que no subio lo que decia sale en ROJO en vez de en verde.
+        run: node scripts/verificar-deploy-appscript.mjs

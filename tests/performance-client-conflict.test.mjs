@@ -1,0 +1,1149 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import vm from "node:vm";
+import { readFile } from "node:fs/promises";
+
+const source = await readFile(new URL("../src/web/shared/performance-client.js", import.meta.url), "utf8");
+const CACHE_IDENTITY = "plan-produccion-cache-v5";
+
+function coherentLocalState(revision, patch = {}) {
+  return JSON.stringify({
+    revision,
+    operations: [],
+    workOrders: [],
+    materials: [],
+    ...patch,
+    performanceCache: { identity: CACHE_IDENTITY, revision },
+  });
+}
+
+function coherentMetadata(revision, patch = {}) {
+  return JSON.stringify({
+    revision,
+    cacheIdentity: CACHE_IDENTITY,
+    cacheRevision: revision,
+    ...patch,
+  });
+}
+
+function deferredPromise() {
+  let resolve;
+  let reject;
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function settleMicrotasks() {
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
+}
+
+function loadClient(options = {}) {
+  const calls = [];
+  const timers = [];
+  const toasts = [];
+  const rootListeners = new Map();
+  const documentListeners = new Map();
+  const applyImportedCalls = [];
+  const metadataWrites = [];
+  const storageReads = [];
+  const loadPlanSnapshotsCalls = [];
+  const snapshotStateAtLoad = [];
+  const syncNetSuiteDataCalls = [];
+  let restoreDraftCalls = 0;
+  const state = {
+    revision: options.revision ?? 1,
+    excludedCapabilities: [],
+    materials: [],
+    operations: [],
+    workOrders: [],
+    ...(options.state || {}),
+  };
+  const remote = {
+    revision: 2,
+    excludedCapabilities: ["5527::SOLDADURA"],
+    materials: [],
+    operations: [],
+    workOrders: [],
+    ...(options.remote || {}),
+  };
+  const storage = options.storage || new Map();
+  if (options.localState !== undefined) storage.set("test", options.localState);
+  if (options.metadata !== undefined) storage.set("plan-produccion-performance-v2", options.metadata);
+  const bridgeResults = {
+    getAppState: structuredClone(remote),
+    ...(options.bridgeResults || {}),
+  };
+  // MEDIDO 2026-09-30: el puente de Apps Script quedo deshabilitado porque NetSuite ya
+  // carga a Supabase (RULE-SUP-030). `performance-client.js` ahora lee por
+  // `PPSupabaseBridgeReplacement` en vez de `PPAppsScriptBridge.call`, asi que el doble
+  // tiene que dejar la misma traza: una entrada `{ method, args }` por llamada, con los
+  // argumentos en la posicion en que los recibia el metodo del puente.
+  const responder = async (method, args) => {
+    calls.push({ method, args });
+    const result = bridgeResults[method];
+    if (result instanceof Error) throw result;
+    return structuredClone(typeof result === "function" ? result(...args) : (result ?? {}));
+  };
+  const root = {
+    location: { hostname: "localhost" },
+    setTimeout: (callback) => { timers.push(callback); return timers.length; },
+    clearTimeout: () => {},
+    addEventListener: (type, listener) => { rootListeners.set(type, listener); },
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    requestAnimationFrame: (callback) => { callback(); return 1; },
+    PPAppsScriptBridge: {
+      isConfigured: () => true,
+      // MEDIDO 2026-09-29 en el navegador: `isConfigured` dice "el puente esta configurado",
+      // que en el sitio estatico es cierto porque la URL del backend va embebida en el bundle.
+      // `nativeRuntimeAvailable` es el unico predicado que responde "estoy dentro de
+      // HtmlService", y es el que decide a donde se escribe el plan. Por defecto el arnes
+      // describe el runtime de Apps Script; `runtimeDeAppscript: false` describe el sitio
+      // estatico, donde el guardado optimized tiene que delegar en app.js (Supabase).
+      nativeRuntimeAvailable: () => options.runtimeDeAppscript !== false,
+      ensureReady: async () => {
+        if (options.ensureReady) await options.ensureReady(context);
+      },
+      call: async (method, args) => {
+        calls.push({ method, args });
+        if (method === "saveSkillState") throw new Error("CONFLICT_REVISION: recarga");
+        const result = bridgeResults[method];
+        if (result instanceof Error) throw result;
+        return structuredClone(typeof result === "function" ? result(args) : (result ?? {}));
+      },
+    },
+    PPSupabaseBridgeReplacement: {
+      getAppStateIfChanged: (revision, opts) => responder("getAppStateIfChanged", [revision, opts]),
+      getAppState: () => responder("getAppState", []),
+      getMaterialsForOt: (ot, revision) => responder("getMaterialsForOt", [ot, revision]),
+      syncNetSuitePlanningData: async () => ({ operations: [], materials: [], source: "supabase" }),
+      syncNetSuitePlant: async () => ({ source: "supabase" }),
+      syncNetSuiteWorkOrders: async () => ({ workOrders: [], syncedAt: new Date().toISOString() }),
+      fetchNetSuiteWorkOrdersLite: async () => ({ workOrders: [], syncedAt: new Date().toISOString() }),
+      getPlanningWorkOrderData: async () => ({ ok: true, data: { operations: [], materials: [], workOrder: null } }),
+      getPlanningWorkOrderDataBatch: async () => ({ ok: true, data: [] }),
+      getInspectionWorkOrder: async () => ({ ok: true, data: { workOrder: { quantity: 0, builtQuantity: 0, pendingQuantity: 0, status: "" } } }),
+      getInspectionWorkOrderBundle: async () => ({ ok: true, data: { workOrder: null, materials: [], drawing: "" } }),
+      getInspectionDrawingRoutes: async () => ({ ok: true, data: [] }),
+      saveInspectionLink: async () => ({ ok: true, data: null }),
+      saveOperationPlanStatus: async (payload) => ({ revision: payload?.revision || 1, savedAt: new Date().toISOString() }),
+      savePlanSnapshot: async (payload) => ({ ...payload, snapshotId: payload?.snapshotId || "snap-test" }),
+      saveDraftSnapshot: async (payload) => ({ ...payload, snapshotId: payload?.snapshotId || "snap-test" }),
+      publishDraftPlan: async (payload) => ({ ok: true, activeVersion: { ...payload, snapshotId: payload?.snapshotId || "snap-test" } }),
+      getPlanSnapshot: async () => null,
+      getPlanSnapshotLight: async () => null,
+      listPlanSnapshots: async () => [],
+      restorePublishedPlanAsDraft: async () => ({ state: {} }),
+      confirmWorkOrderClosures: async () => ({ results: {}, asked: 0 }),
+    },
+  };
+  const context = {
+    window: root,
+    navigator: {},
+    PPSupabaseBridgeReplacement: root.PPSupabaseBridgeReplacement,
+    document: {
+      visibilityState: "visible",
+      addEventListener: (type, listener) => { documentListeners.set(type, listener); },
+      createElement: () => ({ textContent: "" }),
+      head: { appendChild: () => {} },
+      body: { dataset: {} },
+    },
+    localStorage: {
+      getItem: (key) => { storageReads.push(key); return storage.get(key) ?? null; },
+      setItem: (key, value) => {
+        storage.set(key, value);
+        if (key === "plan-produccion-performance-v2") metadataWrites.push(JSON.parse(value));
+      },
+    },
+    STORAGE_KEY: "test",
+    state,
+    stateHistory: [],
+    materialOtKey: (value) => String(value || ""),
+    normalizeCapabilityKeys: (values) => [...new Set(values || [])],
+    scheduleLocalStorageFlush: () => {},
+    checkpointState: () => {},
+    undoLastChange: () => {},
+    renderPriorityList: () => {},
+    renderPriorityQueue: () => {},
+    enhanceRenderedImages: () => {},
+    els: { priorityList: {}, priorityQueue: {}, selectedJobPanel: null },
+    applyImported: (imported, importedOptions) => {
+      applyImportedCalls.push({ imported: structuredClone(imported), options: importedOptions });
+      Object.assign(state, structuredClone(imported));
+      options.onApplyImported?.(state);
+    },
+    // Doble del `saveAppSheet` REAL de app.js. Ese devuelve false cuando
+    // `guardarPlanEnSupabase` devuelve false, y un CONFLICT_REVISION deja su marca en
+    // `state._conflictoSupabase` (ver guardarPlanEnSupabase en app.js), que es la senal que
+    // usa el guardado optimized para saber que hay que recargar y reaplicar. Aqui se pone
+    // la marca salvo que el test diga que el fallo NO es de conflicto (`guardadoConConflicto:
+    // false`): asi el arnes no depende de que el test adivine el texto de un error que ya no
+    // existe, porque la escritura ya no pasa por `callAppsScript`.
+    saveAppSheet: async () => {
+      context.saveAppSheetLlamadas = (context.saveAppSheetLlamadas || 0) + 1;
+      // El `saveAppSheet` real de app.js consume los ambitos sucios al empezar el guardado.
+      context.appSheetConsumeDirtyScopes();
+      if (options.guardadoConConflicto !== false) {
+        state._conflictoSupabase = { revisionActual: 2, revisionEsperada: 1 };
+      }
+      return false;
+    },
+    // DECIDIDO 2026-09-30: la recarga tras un conflicto se lee de SUPABASE. Antes era
+    // `callAppsScript("getAppState")`, o sea las Hojas, que ya no son el destino de la
+    // escritura: recargar de ahi era consolidar contra el destino viejo.
+    PPSupabaseReader: {
+      readCatalogs: async () => {
+        const leido = options.supabaseReadCatalogs?.(remote) ?? remote;
+        if (leido instanceof Error) throw leido;
+        return structuredClone(leido);
+      },
+    },
+    queueAppSheetSave: () => {},
+    appSheetMarkDirtyScope: (scope) => context.appSheetDirtyScopes.add(scope),
+    appSheetConsumeDirtyScopes: () => {
+      const scopes = [...context.appSheetDirtyScopes];
+      context.appSheetDirtyScopes.clear();
+      return scopes;
+    },
+    appSheetDirtyScopes: new Set(["matrix"]),
+    appSheetAvailable: true,
+    appSheetSaveInFlight: false,
+    appSheetSavePending: false,
+    appSheetSaveTimer: null,
+    appSheetSaveOwner: null,
+    appSheetTryAcquireSaveGate: () => {
+      if (context.appSheetSaveOwner) return null;
+      const owner = {};
+      context.appSheetSaveOwner = owner;
+      context.appSheetSaveInFlight = true;
+      return owner;
+    },
+    appSheetReleaseSaveGate: (owner) => {
+      if (!owner || owner !== context.appSheetSaveOwner) return false;
+      context.appSheetSaveOwner = null;
+      context.appSheetSaveInFlight = false;
+      return true;
+    },
+    netSuiteSyncInFlight: options.netSuiteSyncInFlight === true,
+    netSuitePlanningSyncInFlight: options.netSuitePlanningSyncInFlight === true,
+    planningActionsBusy: options.planningActionsBusy || "",
+    planSnapshots: structuredClone(options.planSnapshots || []),
+    showToast: (message) => { toasts.push(String(message || "")); },
+    loadAppStateInBackground: async () => {},
+    loadPlanSnapshots: async (...args) => {
+      loadPlanSnapshotsCalls.push(args);
+      snapshotStateAtLoad.push(structuredClone(state));
+      if (options.loadPlanSnapshotsImpl) return options.loadPlanSnapshotsImpl(context);
+      return options.loadPlanSnapshotsResult ?? { ok: true, count: context.planSnapshots.length };
+    },
+    restoreDraftPlanFromSharedState: async () => false,
+    openRestoreDraftDialog: async () => {
+      restoreDraftCalls += 1;
+      if (options.restoreDraftError) throw options.restoreDraftError;
+      if (options.restoreLoadsSnapshots !== false) return context.loadPlanSnapshots(false);
+    },
+    saveState: () => {
+      if (options.saveStateFlush) context.scheduleLocalStorageFlush();
+    },
+    render: (renderOptions) => options.onRender?.(renderOptions),
+    purgeClosedWorkOrderRetention: () => options.onPurge?.(state),
+    applyInitialWorkspaceView: () => {
+      if (options.initialSection) context.showWorkspaceView(options.initialSection);
+    },
+    ...(options.captureLocalPlanningState
+      ? { captureLocalPlanningState: options.captureLocalPlanningState }
+      : {}),
+    ...(options.confirmLatestModificationRefresh
+      ? { confirmLatestModificationRefresh: options.confirmLatestModificationRefresh }
+      : {}),
+    syncNetSuiteData: async (...args) => {
+      syncNetSuiteDataCalls.push(args);
+      return false;
+    },
+    syncWorkOrdersOnce: () => context.syncNetSuiteData(false, { mode: "workOrders" }),
+    renderTop: () => {},
+    renderPlanAlerts: () => {},
+    showWorkspaceView: () => {},
+    renderSelectedJobPanel: () => {},
+    getSelectedPriorityJob: () => options.selectedJob || null,
+    selectedJobOt: () => options.selectedJob?.ot || "",
+    ensurePlanningDataLoaded: async () => ({ ready: false }),
+    console: { warn: () => {}, info: () => {} },
+    structuredClone,
+    Date,
+    Set,
+    Map,
+    Promise,
+    requestAnimationFrame: root.requestAnimationFrame,
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: "performance-client.js" });
+  return {
+    context,
+    state,
+    calls,
+    timers,
+    toasts,
+    rootListeners,
+    documentListeners,
+    applyImportedCalls,
+    metadataWrites,
+    storageReads,
+    loadPlanSnapshotsCalls,
+    syncNetSuiteDataCalls,
+    snapshotStateAtLoad,
+    storage,
+    get restoreDraftCalls() { return restoreDraftCalls; },
+  };
+}
+
+test("un conflicto recarga la coleccion remota y no reintenta el payload obsoleto", async () => {
+  const fixture = loadClient();
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  // DECIDIDO 2026-09-30: el plan se escribe en Supabase y la recarga tras el conflicto
+  // se lee de Supabase, asi que en un conflicto con exito NO se toca el puente de Apps
+  // Script. Lo que se mira es que el estado remoto se aplico y que no se reintento el
+  // payload obsoleto (el aviso dice que recargue, no que reintente).
+  assert.deepEqual(fixture.calls.map((call) => call.method), []);
+  assert.equal(fixture.state.revision, 2);
+  assert.deepEqual(fixture.state.excludedCapabilities, ["5527::SOLDADURA"]);
+  assert.equal(fixture.context.appSheetDirtyScopes.size, 0);
+  assert.equal(fixture.timers.length, 0);
+});
+
+test("un conflicto no revive OTs devueltas a backlog desde el estado remoto obsoleto", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyRemovedDraftOts: ["100"],
+      selectedOts: ["200"],
+      lockedOts: ["200"],
+      expandedOts: ["200"],
+      lastSchedule: { scheduledOts: ["200"] },
+      preparedPlanningByOt: { 200: "firma-200" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["100", "200"],
+      lockedOts: ["100", "200"],
+      expandedOts: ["100", "200"],
+      lastSchedule: { scheduledOts: ["100", "200"] },
+      preparedPlanningByOt: { 100: "firma-100", 200: "firma-200" },
+      operations: [],
+      workOrders: [{ ot: "100" }, { ot: "200" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(fixture.state.selectedOts, ["200"]);
+  assert.deepEqual(fixture.state.lockedOts, ["200"]);
+  assert.deepEqual(fixture.state.expandedOts, ["200"]);
+  assert.deepEqual(fixture.state.lastSchedule.scheduledOts, ["200"]);
+  assert.equal(fixture.state.preparedPlanningByOt[100], undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state._locallyRemovedDraftOts)), ["100"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
+test("un conflicto conserva una OT recien agregada localmente y la reintenta persistir", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200", 300: "firma-300" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200" },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.equal(fixture.state.preparedPlanningByOt["300"], "firma-300");
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state._locallyAddedDraftOts)), ["300"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
+test("un conflicto no revive una OT agregada localmente que no existe en el estado remoto", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["404"],
+      selectedOts: ["200"],
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      operations: [{ ot: "200", id: "op-200" }],
+      workOrders: [{ ot: "200" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual(fixture.state.selectedOts, ["200"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], []);
+});
+
+test("un conflicto conserva configuraciones de OT editadas localmente y no pierde la maquina", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyEditedOtConfigurations: ["300"],
+      otConfigurations: {
+        300: { ot: "300", machine: "DOBLADORA 2", herramental: "H1", additionalHerramentales: [], kitPending: false },
+      },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: {
+        300: { ot: "300", machine: "", herramental: "", kitPending: false },
+      },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "300" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.equal(fixture.state.revision, 2);
+  assert.equal(fixture.state.otConfigurations["300"].machine, "DOBLADORA 2");
+  assert.equal(fixture.state.otConfigurations["300"].herramental, "H1");
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  assert.equal(fixture.timers.length, 1);
+});
+
+test("un conflicto reinserta la configuracion local cuando el remoto no tiene la fila", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyEditedOtConfigurations: ["500"],
+      otConfigurations: {
+        500: { ot: "500", machine: "PRENSA 1", herramental: "", kitPending: false },
+      },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: {},
+      operations: [{ ot: "500", id: "op-500" }],
+      workOrders: [{ ot: "500" }],
+    },
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.equal(fixture.state.otConfigurations["500"].machine, "PRENSA 1");
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+});
+
+test("el arranque optimizado purga despues de importar y renderiza sin guardar", async () => {
+  const events = [];
+  const fixture = loadClient({
+    revision: 0,
+    remote: { revision: 2, operations: [{ id: "remote" }], workOrders: [{ ot: "WO-2" }] },
+    onApplyImported: (state) => events.push(`import:${state.revision}`),
+    onPurge: (state) => events.push(`purge:${state.revision}`),
+    onRender: (options) => events.push(`render:${JSON.stringify(options)}`),
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(events.slice(0, 3), ["import:2", "purge:2", "render:{\"save\":false}"]);
+});
+
+test("el arranque evita descargar el estado cuando la revision y la cache utilizable no cambiaron", async () => {
+  const fixture = loadClient({
+    revision: 12,
+    localState: coherentLocalState(12),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: { unchanged: true, revision: 12, savedAt: "2026-07-27T10:00:00.000Z" },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
+  assert.equal(fixture.calls[0].args[0], 12);
+  assert.equal(fixture.calls[0].args[1].includeMaterials, false);
+  assert.equal(fixture.applyImportedCalls.length, 0);
+  assert.equal(fixture.state.revision, 12);
+  assert.equal(fixture.metadataWrites.at(-1).revision, 12);
+});
+
+test("una cobertura incompleta de OTs fuerza sincronizacion aunque el estado sea reciente", async () => {
+  const operations = ["1803", "1954", "1962", "2001"].map((ot, index) => ({
+    id: `op-${index}`,
+    ot,
+    tipoInsercion: "OPERACION",
+  }));
+  const workOrders = [{ ot: "1803", dueDate: "2026-05-21", description: "Ensamble brida 4473" }];
+  const fixture = loadClient({
+    revision: 12,
+    state: {
+      operations,
+      workOrders,
+      syncedAt: new Date().toISOString(),
+    },
+    localState: coherentLocalState(12, { operations, workOrders }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations,
+        workOrders,
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+  await settleMicrotasks();
+
+  assert.equal(fixture.syncNetSuiteDataCalls.length, 1);
+});
+
+test("metadata positiva no vuelve utilizable una cache sin identidad y revision propias", async () => {
+  const fixture = loadClient({
+    revision: 0,
+    localState: JSON.stringify({ operations: [], workOrders: [] }),
+    metadata: JSON.stringify({ revision: 12 }),
+    bridgeResults: {
+      getAppStateIfChanged: { unchanged: true, revision: 12 },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppState"]);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+});
+
+test("una cache sellada no es utilizable si su revision difiere del estado en memoria", async () => {
+  const fixture = loadClient({
+    revision: 13,
+    localState: coherentLocalState(12),
+    metadata: coherentMetadata(12),
+    remote: { revision: 14 },
+    bridgeResults: {
+      getAppStateIfChanged: { unchanged: true, revision: 12 },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppState"]);
+  assert.equal(fixture.state.revision, 14);
+});
+
+test("una revision cero exige el estado completo", async () => {
+  const fixture = loadClient({
+    revision: 0,
+    localState: JSON.stringify({ revision: 0, operations: [], workOrders: [] }),
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppState"]);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.equal(fixture.applyImportedCalls[0].options.preserveLocalPlanning, false);
+});
+
+test("el arranque condicional aplica un payload remoto cambiado sin materiales", async () => {
+  const changed = {
+    revision: 13,
+    operations: [{ id: "remote-op" }],
+    workOrders: [{ ot: "WO-13" }],
+    materials: [],
+    performance: { deferred: { materials: true }, revision: 13 },
+  };
+  const fixture = loadClient({
+    revision: 12,
+    localState: coherentLocalState(12),
+    metadata: coherentMetadata(12),
+    bridgeResults: { getAppStateIfChanged: changed },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.equal(fixture.state.revision, 13);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+});
+
+for (const [name, localState] of [
+  ["inexistente", undefined],
+  ["corrupta", "{revision:"],
+  ["incompleta", JSON.stringify({ revision: 12 })],
+]) {
+  test(`una cache local ${name} no acepta una respuesta unchanged`, async () => {
+    const fixture = loadClient({
+      revision: 12,
+      localState,
+      metadata: JSON.stringify({ revision: 12 }),
+      bridgeResults: {
+        getAppStateIfChanged: { unchanged: true, revision: 12 },
+      },
+    });
+
+    await fixture.context.loadAppStateInBackground();
+
+    assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppState"]);
+    assert.equal(fixture.applyImportedCalls.length, 1);
+  });
+}
+
+test("un fallo condicional conserva el estado local y carga solo la lista de historicos en el arranque", async () => {
+  const fixture = loadClient({
+    revision: 12,
+    state: { operations: [{ id: "local-op" }] },
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    bridgeResults: { getAppStateIfChanged: new Error("backend fuera de linea") },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(fixture.applyImportedCalls.length, 0);
+  // [...x].map en vez de deepEqual: state.operations viene de JSON.parse dentro del vm y es un
+  // Array de otro realm (y .map sobre un array de vm devuelve otro de vm). deepEqual estricto
+  // compara prototipos. Lo que se juzga es que la operacion local sobrevive, no el realm.
+  assert.deepEqual([...fixture.state.operations].map((op) => op.id), ["local-op"]);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+});
+
+test("unchanged restaura materiales diferidos desde metadata y los carga bajo demanda", async () => {
+  const fixture = loadClient({
+    revision: 12,
+    state: { workOrders: [{ ot: "WO-12" }] },
+    selectedJob: { ot: "WO-12" },
+    localState: coherentLocalState(12, { workOrders: [{ ot: "WO-12" }] }),
+    metadata: coherentMetadata(12, { deferredMaterials: true }),
+    bridgeResults: {
+      getAppStateIfChanged: { unchanged: true, revision: 12 },
+      getMaterialsForOt: { revision: 12, materials: [{ ot: "WO-12", material: "TUBO" }] },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+  fixture.context.renderSelectedJobPanel();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged", "getMaterialsForOt"]);
+  assert.equal(fixture.state.materials.length, 1);
+  assert.equal(fixture.state.materials[0].material, "TUBO");
+});
+
+test("un payload cambiado que difiere materiales limpia las OTs marcadas como cargadas", async () => {
+  const fixture = loadClient({
+    revision: 12,
+    state: { materials: [{ ot: "WO-12", material: "LOCAL" }] },
+    selectedJob: { ot: "WO-12" },
+    localState: JSON.stringify({
+      revision: 12,
+      operations: [],
+      workOrders: [{ ot: "WO-12" }],
+      materials: [{ ot: "WO-12", material: "LOCAL" }],
+      performanceCache: { identity: CACHE_IDENTITY, revision: 12 },
+    }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [],
+        workOrders: [{ ot: "WO-12" }],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+      getMaterialsForOt: { revision: 13, materials: [{ ot: "WO-12", material: "REMOTO" }] },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+  fixture.context.renderSelectedJobPanel();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged", "getMaterialsForOt"]);
+  assert.equal(fixture.state.materials.length, 1);
+  assert.equal(fixture.state.materials[0].material, "REMOTO");
+});
+
+test("getAppState completo seguido de cache compacta conserva materiales bajo demanda en unchanged", async () => {
+  const storage = new Map();
+  const first = loadClient({
+    revision: 0,
+    storage,
+    saveStateFlush: true,
+    remote: {
+      revision: 21,
+      operations: [{ id: "remote-op" }],
+      workOrders: [{ ot: "WO-21" }],
+      materials: [{ ot: "WO-21", material: "TUBO-COMPLETO" }],
+    },
+  });
+
+  await first.context.loadAppStateInBackground();
+
+  const compacted = JSON.parse(storage.get("test"));
+  const metadata = JSON.parse(storage.get("plan-produccion-performance-v2"));
+  assert.deepEqual(compacted.materials, []);
+  assert.equal(compacted.performanceCache.identity, CACHE_IDENTITY);
+  assert.equal(compacted.performanceCache.revision, 21);
+  assert.equal(metadata.deferredMaterials, true);
+  assert.equal(metadata.cacheRevision, 21);
+
+  const second = loadClient({
+    revision: compacted.revision,
+    state: compacted,
+    storage,
+    selectedJob: { ot: "WO-21" },
+    bridgeResults: {
+      getAppStateIfChanged: { unchanged: true, revision: 21 },
+      getMaterialsForOt: { revision: 21, materials: [{ ot: "WO-21", material: "TUBO-DEFERIDO" }] },
+    },
+  });
+
+  await second.context.loadAppStateInBackground();
+  second.context.renderSelectedJobPanel();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(second.calls.map((call) => call.method), ["getAppStateIfChanged", "getMaterialsForOt"]);
+  assert.equal(second.state.materials[0].material, "TUBO-DEFERIDO");
+});
+
+test("el cache local se lee una sola vez, ni al evaluar el modulo ni despues del primer uso", async () => {
+  const localState = coherentLocalState(12, { workOrders: [{ ot: "WO-12" }] });
+  const storage = new Map([
+    ["test", localState],
+    ["plan-produccion-performance-v2", coherentMetadata(12)],
+  ]);
+  const fixture = loadClient({
+    revision: 12,
+    localState,
+    storage,
+    bridgeResults: { getAppStateIfChanged: { unchanged: true, revision: 12 } },
+  });
+  const stateReads = () => fixture.storageReads.filter((key) => key === "test").length;
+
+  assert.equal(stateReads(), 0, "evaluar el modulo no lee el estado cacheado");
+
+  await fixture.context.loadAppStateInBackground();
+  assert.equal(stateReads(), 1, "el arranque lee el cache una vez");
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"]);
+
+  await fixture.context.loadAppStateInBackground();
+  assert.equal(stateReads(), 1, "una segunda carga no vuelve a leer el cache");
+});
+
+test("la validez de cache se captura ANTES de esperar al remoto, y lo que se escriba durante la espera no la invalida", async () => {
+  // MEDIDO 2026-09-30: esta prueba se llamaba "la validez de cache se captura antes de
+  // ensureReady...", y su "espera" era el ensureReady del puente, que montaba un iframe. Con
+  // el puente deshabilitado (RULE-SUP-030) ese await ya no existe, asi que la espera paso a
+  // ser la lectura remota, que es el unico await real que queda entre decidir y preguntar.
+  //
+  // Y al moverla se vio que el fixture no hacia lo que decia: noponia `localState`, o sea que
+  // `readUsableLocalStateCache` no encontraba nada en la clave `test` y la cache nunca fue
+  // utilizable. El test pasaba por otra via, no por la que queria comprobar. Aqui ya se pone
+  // `localState` coherente, asi que la cache SI es utilizable y lo que se afirma es de verdad
+  // la captura anticipada.
+  const storage = new Map([
+    ["test", coherentLocalState(12, { workOrders: [{ ot: "CACHE-WO" }] })],
+    ["plan-produccion-performance-v2", coherentMetadata(12)],
+  ]);
+  const remoteState = {
+    revision: 13,
+    operations: [{ id: "remote-op" }],
+    workOrders: [{ ot: "REMOTE-WO" }],
+  };
+  const fixture = loadClient({
+    revision: 12,
+    state: {
+      operations: [{ id: "sample-op" }],
+      workOrders: [{ ot: "SAMPLE-WO" }],
+    },
+    storage,
+    remote: remoteState,
+    bridgeResults: {
+      // La escritura durante la espera: mientras el remoto responde, alguien escribe un
+      // sampleState NUEVO en la clave del estado. Si la decision de "¿usable?" se tomara
+      // despues de este await, ese sampleState (sin la marca performanceCache) la
+      // invalidaria y la app bajaria el estado entero otra vez.
+      getAppStateIfChanged: (revision) => {
+        storage.set("test", JSON.stringify({ revision: 99, operations: [], workOrders: [] }));
+        assert.equal(revision, 12, "se le debe preguntar por la revision de la cache, no por la del sampleState");
+        return structuredClone(remoteState);
+      },
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(fixture.calls.map((call) => call.method), ["getAppStateIfChanged"],
+    "la cache era utilizable: hay que preguntar por el cambio, no bajar el estado entero");
+  assert.equal(fixture.state.revision, 13);
+  assert.equal(fixture.state.operations[0].id, "remote-op");
+});
+
+test("Reportes solicita snapshots solo al primer acceso", async () => {
+  const fixture = loadClient();
+
+  await fixture.context.loadAppStateInBackground();
+  fixture.context.showWorkspaceView("reportes");
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+});
+
+test("Reportes espera a que termine el estado inicial antes de elegir su snapshot", async () => {
+  const fixture = loadClient({
+    revision: 12,
+    initialSection: "reportes",
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    state: { operations: [{ id: "local-op" }] },
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+  });
+
+  fixture.context.showWorkspaceView("reportes");
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 0);
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+  assert.deepEqual(fixture.snapshotStateAtLoad[0].operations, [{ id: "local-op" }]);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+});
+
+test("Restaurar marca los snapshots como solicitados antes de abrir el flujo", async () => {
+  const fixture = loadClient({ planSnapshots: [{ snapshotId: "published-1" }] });
+
+  await fixture.context.loadAppStateInBackground();
+  await fixture.context.openRestoreDraftDialog();
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+
+  assert.equal(fixture.restoreDraftCalls, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+});
+
+test("Restaurar conserva una lista vacia valida al abrir Reportes", async () => {
+  const fixture = loadClient({ planSnapshots: [] });
+
+  await fixture.context.loadAppStateInBackground();
+  await fixture.context.openRestoreDraftDialog();
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+
+  assert.equal(fixture.restoreDraftCalls, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 2);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+});
+
+test("Reportes reintenta cuando loadPlanSnapshots informa fallo", async () => {
+  const fixture = loadClient({
+    loadPlanSnapshotsResult: { ok: false, count: 0, error: "backend fuera de linea" },
+  });
+  await fixture.context.loadAppStateInBackground();
+
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+  fixture.context.showWorkspaceView("reportes");
+  await settleMicrotasks();
+
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 3);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][0], false);
+  assert.equal(fixture.loadPlanSnapshotsCalls[0][1].deferPublishedLoad, true);
+});
+
+test("Reportes y Restaurar concurrentes comparten una sola promesa de snapshots", async () => {
+  const gate = deferredPromise();
+  const fixture = loadClient({
+    loadPlanSnapshotsImpl: async (context) => {
+      const snapshots = await gate.promise;
+      context.planSnapshots = snapshots;
+      return { ok: true, count: snapshots.length };
+    },
+  });
+  await fixture.context.loadAppStateInBackground();
+
+  fixture.context.showWorkspaceView("reportes");
+  const restorePromise = fixture.context.openRestoreDraftDialog();
+  await Promise.resolve();
+
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+
+  gate.resolve([{ snapshotId: "published-1" }]);
+  await restorePromise;
+  fixture.context.showWorkspaceView("reportes");
+  await Promise.resolve();
+
+  assert.equal(fixture.restoreDraftCalls, 1);
+  assert.equal(fixture.loadPlanSnapshotsCalls.length, 1);
+});
+
+test("al cancelar el arranque conserva el borrador local cuando remoto es mas reciente y distinto", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    state: { operations: [{ id: "local-op" }] },
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [{ id: "local-op" }] }),
+    confirmLatestModificationRefresh: async (localDraft, remoteDraft) => {
+      promptCalls.push({ localDraft, remoteDraft });
+      return false;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 1);
+  assert.equal(fixture.applyImportedCalls.length, 0);
+  assert.deepEqual(fixture.state.operations, [{ id: "local-op" }]);
+  assert.equal(fixture.state.revision, 12);
+  assert.equal(fixture.metadataWrites.at(-1).revision, 12);
+});
+
+test("al confirmar el arranque refresca con la ultima modificacion remota", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    state: { operations: [{ id: "local-op" }] },
+    localState: coherentLocalState(12, { operations: [{ id: "local-op" }] }),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [{ id: "local-op" }] }),
+    confirmLatestModificationRefresh: async (localDraft, remoteDraft) => {
+      promptCalls.push({ localDraft, remoteDraft });
+      return true;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 1);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+  assert.equal(fixture.state.revision, 13);
+});
+
+test("el arranque con borrador local vacio no pregunta y aplica lo remoto", async () => {
+  const promptCalls = [];
+  const fixture = loadClient({
+    revision: 12,
+    localState: coherentLocalState(12),
+    metadata: coherentMetadata(12),
+    bridgeResults: {
+      getAppStateIfChanged: {
+        revision: 13,
+        operations: [{ id: "remote-op" }],
+        workOrders: [],
+        materials: [],
+        performance: { deferred: { materials: true }, revision: 13 },
+      },
+    },
+    captureLocalPlanningState: () => ({ operations: [] }),
+    confirmLatestModificationRefresh: async (localDraft) => {
+      if (!(localDraft?.operations?.length || localDraft?.selectedOts?.length)) return true;
+      promptCalls.push("llamado");
+      return true;
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(promptCalls.length, 0);
+  assert.equal(fixture.applyImportedCalls.length, 1);
+  assert.deepEqual(fixture.state.operations, [{ id: "remote-op" }]);
+  assert.equal(fixture.state.revision, 13);
+});
+
+test("un conflicto que no puede recargar conserva el ambito sucio, avisa la OT y reintenta", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      lockedOts: ["200", "300"],
+    },
+    // DECIDIDO 2026-09-30: el conflicto lo publica el escritor de Supabase y la recarga
+    // lee de Supabase. Antes los dos ventanas eran `callAppsScript`, asi que aqui lo que
+    // falla es la LECTURA de Supabase despues del conflicto.
+    supabaseReadCatalogs: () => new Error("red caida"),
+  });
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  // La OT sigue en la cola local y el ambito "plan" no se descarta en silencio.
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  // Un temporizador es el reintento con espera creciente y otro el rearmado del debounce.
+  assert.equal(fixture.timers.length, 2);
+  assert.deepEqual(fixture.toasts, ["No se pudo guardar el plan (OT 300); se reintentara en segundo plano"]);
+  assert.equal(fixture.context.document.body.dataset.saveStatus, "pending");
+});
+
+test("un fallo de red en el guardado avisa la OT y conserva el cache local con la cola", async () => {
+  const fixture = loadClient({
+    state: {
+      revision: 1,
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+    // El plan se guarda en Supabase: este fallo es del escritor, y NO es un conflicto de
+    // revision, asi que no se recarga nada: se conserva la cola y se reintenta.
+    guardadoConConflicto: false,
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+
+  const saved = await fixture.context.saveAppSheet(false);
+
+  assert.equal(saved, false);
+  assert.deepEqual([...fixture.context.appSheetDirtyScopes], ["plan"]);
+  // Reintento con espera creciente mas el rearmado del debounce del finally.
+  assert.equal(fixture.timers.length, 2);
+  assert.deepEqual(fixture.toasts, ["No se pudo guardar el plan (OT 300); se reintentara en segundo plano"]);
+  const cached = JSON.parse(fixture.storage.get("test"));
+  assert.deepEqual(cached.selectedOts, ["200", "300"]);
+  assert.deepEqual(cached.operations, []);
+});
+
+test("ocultar la pestana fuerza el guardado pendiente antes del debounce", async () => {
+  const fixture = loadClient({
+    state: { revision: 1, selectedOts: ["300"], workOrders: [{ ot: "300" }] },
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+
+  fixture.rootListeners.get("pagehide")();
+  await settleMicrotasks();
+
+  // DECIDIDO 2026-09-30: al ocultar la pestana el guardado ya no es un job de Hojas, es el
+  // guardado de app.js (Supabase). Lo que se comprueba es que se lanza el guardado y que
+  // no se toca el puente de Apps Script.
+  assert.deepEqual(fixture.calls.map((call) => call.method), []);
+  assert.ok(fixture.context.saveAppSheetLlamadas >= 1, "y que el guardado se disparo");
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["300"]);
+});
+
+test("el cierre de pagina no duplica el guardado mientras hay uno en curso", async () => {
+  const fixture = loadClient({
+    state: { revision: 1, selectedOts: ["300"], workOrders: [{ ot: "300" }] },
+  });
+  fixture.context.appSheetDirtyScopes.clear();
+  fixture.context.appSheetMarkDirtyScope("plan");
+  fixture.context.appSheetTryAcquireSaveGate();
+
+  fixture.rootListeners.get("beforeunload")();
+  fixture.context.document.visibilityState = "hidden";
+  fixture.documentListeners.get("visibilitychange")();
+  await settleMicrotasks();
+
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("la carga remota reaplica una OT agregada localmente y la deja sucia para reintentar", async () => {
+  const fixture = loadClient({
+    revision: 1,
+    state: {
+      _locallyAddedDraftOts: ["300"],
+      selectedOts: ["200", "300"],
+      preparedPlanningByOt: { 200: "firma-200", 300: "firma-300" },
+    },
+    remote: {
+      revision: 2,
+      selectedOts: ["200"],
+      preparedPlanningByOt: { 200: "firma-200" },
+      operations: [{ ot: "200", id: "op-200" }],
+      workOrders: [{ ot: "200" }, { ot: "300" }],
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.state.selectedOts)), ["200", "300"]);
+  assert.equal(fixture.state.preparedPlanningByOt[300], "firma-300");
+  assert.ok([...fixture.context.appSheetDirtyScopes].includes("plan"));
+});
+
+test("la carga remota conserva la maquina editada de una OT todavia no guardada", async () => {
+  const fixture = loadClient({
+    revision: 1,
+    state: {
+      _locallyEditedOtConfigurations: ["300"],
+      otConfigurations: { 300: { ot: "300", machine: "DOBLADORA 2", herramental: "H1" } },
+    },
+    remote: {
+      revision: 2,
+      otConfigurations: { 300: { ot: "300", machine: "", herramental: "" } },
+      operations: [{ ot: "300", id: "op-300" }],
+      workOrders: [{ ot: "300" }],
+    },
+  });
+
+  await fixture.context.loadAppStateInBackground();
+
+  assert.equal(fixture.state.otConfigurations["300"].machine, "DOBLADORA 2");
+  assert.equal(fixture.state.otConfigurations["300"].herramental, "H1");
+  assert.ok([...fixture.context.appSheetDirtyScopes].includes("plan"));
+});

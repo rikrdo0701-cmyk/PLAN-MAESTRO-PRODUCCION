@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <!-- Fuente de la vista de operador. -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plan de operador</title>
+  <style>
+:root {
+  color: #172026;
+  background: #f4f6f7;
+  font-family: Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  padding: 24px;
+}
+
+.app-kicker {
+  color: #087f78;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 8px 0 4px;
+  font-size: 24px;
+}
+
+p {
+  margin: 0;
+  color: #566873;
+}
+
+.operator-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  border-bottom: 1px solid #d8e0e4;
+}
+
+.operator-tab {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #34434c;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 10px 12px;
+}
+
+.operator-tab.is-active {
+  border-bottom-color: #087f78;
+  color: #087f78;
+}
+
+</style>
+</head>
+<body>
+  <main id="app" class="app-shell" data-app="operator">
+    <span class="app-kicker">Ejecucion</span>
+    <h1>Plan de operador</h1>
+    <p>Cargando ultima version publicada...</p>
+  </main>
+  <script>
+"use strict";
+
+document.documentElement.dataset.app = "operator";
+
+const OPERATOR_TABS = [
+  { id: "individual", label: "Plan individual" },
+  { id: "doblado", label: "Plan de doblado" },
+  { id: "surtido", label: "Surtido de subensambles" },
+];
+
+function renderOperatorTabs() {
+  const app = document.getElementById("app");
+  if (!app) return;
+  const nav = document.createElement("nav");
+  nav.className = "operator-tabs";
+  nav.setAttribute("aria-label", "Vistas de operador");
+  nav.innerHTML = OPERATOR_TABS.map((tab, index) =>
+    `<button class="operator-tab${index === 0 ? " is-active" : ""}" type="button" data-tab="${tab.id}">${tab.label}</button>`
+  ).join("");
+  app.appendChild(nav);
+}
+
+renderOperatorTabs();
+
+</script>
+</body>
+</html>

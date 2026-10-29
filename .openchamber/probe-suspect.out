@@ -1,0 +1,85 @@
+{
+  "bendUnscheduled": 108,
+  "suspectNonEmptyInvalid": 74,
+  "maquinaCounts": {
+    "1": 1,
+    "39": 3,
+    "40": 6,
+    "42": 28,
+    "113": 9,
+    "188": 14,
+    "209": 5,
+    "211": 8
+  },
+  "sample": [
+    {
+      "ot": "2159",
+      "ct": "5459",
+      "maquina": "211",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2613",
+      "ct": "5459",
+      "maquina": "209",
+      "herr": "1 x 2",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2624",
+      "ct": "5459",
+      "maquina": "40",
+      "herr": "5 x 6",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2637",
+      "ct": "5459",
+      "maquina": "40",
+      "herr": "5 x 6",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2642",
+      "ct": "5459",
+      "maquina": "188",
+      "herr": "5 x 8",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2700",
+      "ct": "5459",
+      "maquina": "209",
+      "herr": "2.5 x 3",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2738",
+      "ct": "5459",
+      "maquina": "113",
+      "herr": "3 x 4.5",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2748",
+      "ct": "5459",
+      "maquina": "113",
+      "herr": "1.75 X 3",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2758",
+      "ct": "5459",
+      "maquina": "188",
+      "herr": "3.5 X 5.5",
+      "tipo": "OPERACION"
+    },
+    {
+      "ot": "2760",
+      "ct": "5459",
+      "maquina": "188",
+      "herr": "3.5 X 5.5",
+      "tipo": "OPERACION"
+    }
+  ]
+}

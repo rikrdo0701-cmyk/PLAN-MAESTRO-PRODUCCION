@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>Apps Script Bridge</title>
+</head>
+<body>
+<script>
+(function initBridge() {
+  "use strict";
+
+  const CLIENT_SOURCE = "pp-github-client";
+  const BRIDGE_SOURCE = "pp-appscript-bridge";
+  const ALLOWED_ORIGIN = <?!= JSON.stringify(frontendOrigin) ?>;
+  const CLIENT_WINDOW = window.top !== window ? window.top : window.parent;
+  const ALLOWED_METHODS = Object.freeze({
+    getAppState: true,
+    getAppRevision: true,
+    readSheetRows: true,
+    getAppStateIfChanged: true,
+    debugStateCacheInfo: true,
+    getMaterialsForOt: true,
+    savePlanningStateOptimized: true,
+    saveOperationPlanStatus: true,
+    saveAppState: true,
+    saveWorkOrderSyncState: true,
+    saveCatalogState: true,
+    saveSkillState: true,
+    savePlanSnapshot: true,
+    saveDraftSnapshot: true,
+    getInspectionWorkOrders: true,
+    getInspectionWorkOrder: true,
+    getInspectionWorkOrderBundle: true,
+    getPlanningWorkOrderData: true,
+    getPlanningWorkOrderDataBatch: true,
+    // MEDIDO 2026-10-01 (RULE-INS-001): saveInspectionLink SE QUEDA en la lista a
+    // proposito, y la razon es lo que hace la lista, no la funcion.
+    //
+    // QUITA de la lista lo que NO esta en la allowlist. Eso esta bien para una
+    // funcion que no debe existir. saveInspectionLink SI existe, pero ya no
+    // escribe: el catalogo de tramos se migro de la hoja `Tramos` a la tabla
+    // inspection_routes de Supabase y el unico escritor es la pagina
+    // (PPSupabaseWriter.guardarInspectionRoute). Si se quitara de aqui, quien
+    // llegara por el puente -- la pagina vieja de /exec, un enlace guardado, un
+    // script de pruebas -- recibiria 'function not found', que no dice ni que
+    // paso ni donde esta ahora. Con la funcion en su sitio, el error dice las dos
+    // cosas, y con la Allowlist puesta no puede hacer nada: no escribe.
+    //
+    // O sea que la lista aqui no es la de 'lo que funciona', es la de 'lo que
+    // responde'. Eso solo tiene sentido para una funcion que se niega.
+    saveInspectionLink: true,
+    getInspectionHistory: true,
+    recordInspectionPrint: true,
+    // getInspectionDrawingRoutes SI lee: ahora arma su indice sobre las filas de
+    // inspection_routes (PP_Inspection_routeIndexV2_ en
+    // src/server/17-inspection-drawing-service.js) y cae a la hoja CONGELADA si
+    // Supabase no responde. Su contrato sigue siendo una lista, asi que el aviso
+    // del plan B va al log, no en el valor de retorno.
+    getInspectionDrawingRoutes: true,
+    listPlanSnapshots: true,
+    getPlanSnapshot: true,
+    getPlanSnapshotLight: true,
+    restorePublishedPlanAsDraft: true,
+    syncNetSuitePlant: true,
+    syncNetSuiteWorkOrders: true,
+    syncNetSuiteWorkOrdersLite: true,
+    fetchNetSuiteWorkOrdersLite: true,
+    syncNetSuitePlanningData: true,
+    publishDraftPlan: true,
+    getDeploymentStatus: true,
+    getPhotoSourceStatus: true,
+    // MEDIDO 2026-10-02: SOLO LECTURA de ScriptApp.getProjectTriggers(). No crea ni borra
+    // activadores (para eso estan PP_creaTriggerIngesta_ y PP_borraTriggerIngesta_, que se
+    // ejecutan a mano). Entra porque `clasp push` sube codigo y NO crea activadores, asi que
+    // la unica forma de saber si el de la ingesta estaba puesto era adivinarlo.
+    getTriggerStatus: true,
+    PP_getActiveOperatorPlan: true,
+    PP_completeOperation: true,
+    PP_registerSubassemblyPicking: true,
+    PP_saveSkillMatrix: true
+  });
+
+  let parentOrigin = "";
+  let channel = "";
+
+  function originAllowed(origin) {
+    if (origin === ALLOWED_ORIGIN) return true;
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  }
+
+  function send(message, targetOrigin) {
+    CLIENT_WINDOW.postMessage(Object.assign({ source: BRIDGE_SOURCE }, message), targetOrigin || parentOrigin || "*");
+  }
+
+  function errorMessage(error) {
+    return error && error.message ? error.message : String(error || "Error desconocido");
+  }
+
+  window.addEventListener("message", function(event) {
+    if (event.source !== CLIENT_WINDOW) return;
+    const message = event.data || {};
+    if (message.source !== CLIENT_SOURCE) return;
+
+    if (message.type === "init") {
+      if (!originAllowed(event.origin)) {
+        send({ type: "denied", error: "Origen no autorizado" }, event.origin);
+        return;
+      }
+      parentOrigin = event.origin;
+      channel = String(message.channel || "");
+      send({ type: "ready", channel: channel }, parentOrigin);
+      return;
+    }
+
+    if (!parentOrigin || event.origin !== parentOrigin || message.channel !== channel) return;
+    if (message.type !== "call" || !message.id) return;
+
+    const method = String(message.method || "");
+    if (!ALLOWED_METHODS[method]) {
+      send({ type: "result", channel: channel, id: message.id, ok: false, error: "Metodo no permitido: " + method });
+      return;
+    }
+
+    const runner = google.script.run
+      .withSuccessHandler(function(result) {
+        send({ type: "result", channel: channel, id: message.id, ok: true, result: result });
+      })
+      .withFailureHandler(function(error) {
+        send({ type: "result", channel: channel, id: message.id, ok: false, error: errorMessage(error) });
+      });
+
+    try {
+      runner[method](...(Array.isArray(message.args) ? message.args : []));
+    } catch (error) {
+      send({ type: "result", channel: channel, id: message.id, ok: false, error: errorMessage(error) });
+    }
+  });
+
+  send({ type: "hello" }, "*");
+})();
+</script>
+</body>
+</html>

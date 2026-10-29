@@ -1,9 +1,39 @@
 "use strict";
 
+var scheduleLocalStorageFlush;
+
 const STORAGE_KEY = "plan-produccion-app-v1";
 const APP_SHEET_API = "/api/plan-sheet";
 const NETSUITE_EXERCISE_API = "/api/netsuite-exercise";
+const NETSUITE_PLANNING_TIMEOUT_MS = 15000;
+// Un fetch completo tarda 43-73 s en produccion (1764 paginado + 1766 REQ_FIFO) y el
+// reintento ante limite de solicitudes agrega ~5 s; el puente corta a 120 s.
+// Presupuesto por intento de la sincronizacion ligera de OTs. El fetch real mide 43-73 s en
+// produccion (decenas de paginas del RESTlet 1766 REQ_FIFO) y cada peticion que sufra el
+// limite de solicitudes de NetSuite anade hasta 17 s de espera en el servidor (2+5+10). Con
+// 110 s bastaba para que un dia con dos peticiones limitadas se pasara de 124 s y el corte
+// dejara el plan sin generar. 180 s deja holgura sobre el peor caso medido sin dejar el
+// prompt colgado de forma indefinida. El reloj del puente va por encima (420 s) porque el
+// cliente reintenta una vez: 2 x 180 + 5 s de espera.
+const NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180000;
+// DECIDIDO 2026-10-03 por el usuario: vuelve a 24 h, el valor que declara RULE-OT-013 y
+// docs/data/sources.md. El 72 h (3 * 24) que estaba aqui no estaba documentado en ninguna
+// parte, o sea que era un cambio de conducta sin registro. Con 24 h, una OT cuyos datos de
+// planeacion tengan mas de un dia de Antiguedad se re-sincroniza antes de generar el plan.
+const NETSUITE_PLANNING_FRESH_MS = 24 * 60 * 60 * 1000;
+const NETSUITE_WORKORDER_FRESH_MS = 15 * 60 * 1000;
+const PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS = 60000;
+const PLANNING_PLAN_TIME_BUDGET_MS = 300000;
+const PLANNING_PLAN_BUDGET_BASE_MS = 45000;
+const PLANNING_PLAN_BUDGET_PER_OT_MS = 45000;
+function planningPlanTimeBudgetMs(affectedOts) {
+  const count = Array.isArray(affectedOts) ? affectedOts.length : 0;
+  const scaled = PLANNING_PLAN_BUDGET_BASE_MS + count * PLANNING_PLAN_BUDGET_PER_OT_MS;
+  return Math.min(scaled, PLANNING_PLAN_TIME_BUDGET_MS);
+}
 const PLAN_SNAPSHOTS_API = "/api/plan-snapshots";
+const PLAN_SNAPSHOTS_CACHE_KEY = "plan-snapshots-cache-v1";
+const PLAN_VERSION_COUNTER_KEY = "plan-version-counter-v1";
 const MIN_OPERATION_MINUTES = 1;
 const WORK_START_HOUR = 7;
 const WORK_END_HOUR = 17;
@@ -61,6 +91,9 @@ const PLAN_HEADERS = [
   "HERRAMENTAL_DESTINO",
   "KIT_DESTINO",
   "COMENTARIO",
+  "PRECIO",
+  "MONTO",
+  "GENERADO_EL",
 ];
 
 const FIELD_MAP = {
@@ -97,6 +130,8 @@ const FIELD_MAP = {
   HERRAMENTAL_DESTINO: "toolChangeToHerramental",
   KIT_DESTINO: "toolChangeToKit",
   COMENTARIO: "comentario",
+  PRECIO: "unitPrice",
+  MONTO: "amount",
 };
 
 const LEGACY_PRIORITY = { ALTA: 1, ALTO: 1, NORMAL: 50, MEDIO: 50, MEDIA: 50, BAJA: 100, BAJO: 100 };
@@ -122,6 +157,8 @@ const WORKSPACE_TITLES = {
   calendario: "Calendario de capacidad",
   herramentales: "Catalogos",
   cargas: "Cargas de operadores",
+  "cuello-botella": "Cuello de botella",
+  "hoja-inspeccion": "Hoja de inspección",
   reportes: "Reportes de produccion",
 };
 const DEFAULT_SUBCONTRACTS = [
@@ -149,6 +186,8 @@ const sampleState = {
   ganttView: "job",
   ganttDayWidth: DEFAULT_GANTT_DAY_WIDTH,
   selectedOperationId: "op-1",
+  selectedDetailOt: "",
+  queueMoveOt: "",
   capacityMinutes: DEFAULT_CAPACITY_MINUTES,
   planStart: "2026-06-29",
   horizonDays: DEFAULT_HORIZON_DAYS,
@@ -172,6 +211,8 @@ const sampleState = {
     toolChangeMinutes: 120,
     toolChangeOperator: "AJUSTADOR",
     weeklyReleaseTarget: DEFAULT_WEEKLY_RELEASE_TARGET,
+    flowBalancedEnabled: true,
+    flowWipTarget: 10,
   },
   operators: ["DOBLADOR 1", "DOBLADOR 2", "SOLDADOR 1", "PINTURA 1", "AJUSTADOR"],
   operatorProfiles: {
@@ -184,6 +225,7 @@ const sampleState = {
   cts: ["5459", "5527", "6462", "5495", "122", TOOL_CHANGE_CAPABILITY.ct],
   customCapabilities: [{ ...TOOL_CHANGE_CAPABILITY }],
   hiddenCapabilities: [],
+  excludedCapabilities: [],
   operationRules: {
     5459: { overlap: 0.6, keywords: "DOBLADO" },
     5527: { overlap: 0.6, keywords: "DOBLADO" },
@@ -193,6 +235,15 @@ const sampleState = {
   toolCatalog: [],
   machineToolHistory: [],
   workOrders: [],
+  closedWorkOrderSummaries: {},
+  // Las marcas de "esta OT no vino en el payload y no hay evidencia de que este cerrada"
+  // (RULE-OT-051, capa 2). Antes este campo existia SOLO en memoria: lo escribia el
+  // reconciliador durante un sync y lo leian normalizeState, la cola y la confirmacion, pero
+  // NINGUN escritor lo guardaba en la hoja y applyImported no lo restauraba. O sea que la red
+  // de seguridad duraba hasta la primera recarga: al recargar, la marca se perdia,
+  // normalizeState veia la OT sin ficha ni operaciones y la sacaba de la cola. Ahora se
+  // persiste igual que closedWorkOrderSummaries y se restaura al cargar.
+  unconfirmedWorkOrders: {},
   otConfigurations: {},
   articleConfigurations: {},
   materials: [],
@@ -200,8 +251,11 @@ const sampleState = {
   subcontracts: DEFAULT_SUBCONTRACTS.map((item) => ({ ...item })),
   otTypes: DEFAULT_OT_TYPES.map((item) => ({ ...item })),
   operationPlanStatuses: {},
+  publishedPlanStatuses: {},
   netSuiteChangeAlerts: [],
   netSuiteSyncAlert: null,
+  operationCatalogWarning: "",
+  syncWarnings: [],
   capacityModes: {
     5459: "FINITA",
     5527: "FINITA",
@@ -418,24 +472,184 @@ const sampleState = {
   ],
 };
 
+const BACKLOG_PAGE_SIZE = 30;
+let backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+let backlogLoadMoreObserver = null;
+let backlogObserverArmed = true;
+
+function resetBacklogWindow() {
+  backlogVisibleLimit = BACKLOG_PAGE_SIZE;
+  backlogObserverArmed = true;
+}
+
+function showMoreBacklogJobs() {
+  backlogVisibleLimit += BACKLOG_PAGE_SIZE;
+  renderPriorityList();
+}
+
+function handleBacklogIntersection(entries) {
+  const entry = entries[0];
+  if (!entry) return;
+  if (!entry.isIntersecting) {
+    backlogObserverArmed = true;
+    return;
+  }
+  if (!backlogObserverArmed || els.priorityLoadMore.hidden) return;
+  backlogObserverArmed = false;
+  showMoreBacklogJobs();
+}
+
+function bindBacklogLoadMoreObserver() {
+  if (!("IntersectionObserver" in window) || backlogLoadMoreObserver) return;
+  backlogLoadMoreObserver = new window.IntersectionObserver(handleBacklogIntersection);
+  backlogLoadMoreObserver.observe(els.priorityLoadMoreSentinel);
+}
+
 let state = loadState();
+state.matrixSearch = "";
 let drag = null;
+// MEDIDO 2026-09-29 en el navegador (sitio estatico, sesion de Supabase): esta bandera
+// NO existia. app.js la leia (appSheetDisponible) y la escribia (saveAppSheet,
+// loadAppSheetIfAvailable, y las tres de performance-client) sin haberla declarado nunca:
+// el bundle es un <script> clasico con "use strict" arriba, asi que la LECTURA antes de
+// cualquier escritura lanza `ReferenceError: appSheetAvailable is not defined` y la
+// ESCRITURA tambien. El sintoma era que el guardado por debonce no llegaba a encolarse y
+// que la pagina no avisaba de nada. Se declara aqui, con su valor de arranque: false, que
+// es lo que el resto del archivo ya asumia ("el puente todavia no contesto").
 let appSheetAvailable = false;
+/**
+ * ESTOY DENTRO DEL RUNTIME DE Apps Script, y solo de ahi.
+ *
+ * POR QUE NO SE USA `isAppsScriptRuntime` PARA DECIDIR A DONDE SE ESCRIBE EL PLAN.
+ * MEDIDO 2026-09-29 en el sitio estatico: `window.isAppsScriptRuntime` NO es la funcion
+ * de app.js. Los dos instaladores la pisan: performance-client.js:113 la deja en
+ * `bridgeAvailable` (que es `PPAppsScriptBridge.isConfigured()`) y
+ * apps-script-bridge-client.js:204 la deja en `nativeRuntimeAvailable() || isConfigured()`.
+ * Con la URL del backend embebida en el build, las dos dan TRUE en GitHub Pages, donde
+ * `google` no existe. O sea: el predicado decia "hay un destino que es el puente" cuando
+ * lo unico que hay es un iframe que nadie ha abierto. Por eso el guardado del plan caia
+ * en la rama de Apps Script, que sube el estado por `callAppsScript` y NO sube catalogos.
+ *
+ * LO QUE SE PREGUNTA AQUI es otra cosa y tiene otra respuesta: `google.script.run` existe
+ * de verdad unicamente dentro de HtmlService.
+ *
+ * DECIDIDO 2026-09-30: el destino de la escritura es UNO SOLO, Supabase, tambien dentro
+ * de HtmlService. Asi que este predicado ya NO decide a donde se escribe el plan (esa rama
+ * se borro de `saveAppSheet`). Queda para lo que si distingue el runtime nativo del sitio
+ * estatico: preguntar a NetSuite por `google.script.run` en vez de por el iframe del puente.
+ * Afuera de HtmlService el iframe solo LEE, no escribe las Hojas.
+ */
+function enRuntimeAppsScript() {
+  const bridge = typeof PPAppsScriptBridge !== "undefined" ? PPAppsScriptBridge : null;
+  if (bridge && typeof bridge.nativeRuntimeAvailable === "function") {
+    return Boolean(bridge.nativeRuntimeAvailable());
+  }
+  return typeof google !== "undefined" && Boolean(google.script?.run);
+}
+/**
+ * `appSheetAvailable` decia "el puente de Apps Script contesto". MEDIDO 2026-09-29 en
+ * el sitio estatico eso es SIEMPRE falso: `loadAppSheetIfAvailable` pide
+ * `/api/plan-sheet`, que en GitHub Pages da 404, y lo deja en false para siempre. Y
+ * las tres puertas de guardado (`queueAppSheetSave`, `flushPlanSave` y
+ * `appSheetFlushPendingScopes`) se devolvian con ese false: en el sitio estatico no se
+ * guardaba NADA por debounce, y `flushPlanSave` —la que usa el traslado
+ * Backlog -> Planeado— devolvia false sin guardar. Los cambios de catalogo si pasaban
+ * porque addCalendarException llama a saveAppSheet directo, y por eso el fallo era
+ * invisible: unas cosas se guardaban y otras no.
+ *
+ * LO QUE SIGNIFICA AHORA. `appSheetAvailable` sigue siendo lo que dice del PUENTE, y
+ * esta funcion dice si hay ALGUN destino de guardado. En el runtime de Apps Script es
+ * el puente (que es quien sigue Reinventado en ese runtime); fuera de el, es Supabase,
+ * que es la fuente pedida. Con Supabase sin configurar en el build, esta devuelve
+ * false y se sigue sin guardar, que es lo honesto.
+ */
+function appSheetDisponible() {
+  if (enRuntimeAppsScript()) return appSheetAvailable;
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  return Boolean(writer && typeof writer.isConfigured === "function" && writer.isConfigured());
+}
+
 let appSheetSaveTimer = null;
 let appSheetSaveInFlight = false;
 let appSheetSavePending = false;
+let appSheetSaveCompletion = Promise.resolve();
+let resolveAppSheetSaveCompletion = null;
+let appSheetSaveOwner = null;
 let appSheetDirtyScopes = new Set();
+let operationStatusSavesInFlight = 0;
 let netSuiteSyncInFlight = false;
 let netSuitePlanningSyncInFlight = false;
+let backlogSyncInFlight = false;
+let planningActionsBusy = "";
 let stateHistory = [];
 let queuePointerDrag = null;
 let backlogPointerDrag = null;
 let suppressQueueClick = false;
 let suppressBacklogClick = false;
 let planningDialogResolve = null;
+let planningDialogSubmit = null;
 let resourceCategoryDrag = null;
 let planSnapshots = [];
+let planSnapshotsLoading = false;
+let planSnapshotsRequest = null;
+
+function loadPlanSnapshotsCache() {
+  try {
+    const raw = localStorage.getItem(PLAN_SNAPSHOTS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function savePlanSnapshotsCache(snapshots) {
+  try {
+    localStorage.setItem(PLAN_SNAPSHOTS_CACHE_KEY, JSON.stringify(snapshots));
+  } catch (_) {}
+}
+
+function readPlanVersionCounter(weekStart) {
+  try {
+    const raw = localStorage.getItem(PLAN_VERSION_COUNTER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Number(parsed?.[weekStart] || 0) || 0;
+    }
+  } catch (_) {}
+  return 0;
+}
+
+function writePlanVersionCounter(weekStart, version) {
+  try {
+    const raw = localStorage.getItem(PLAN_VERSION_COUNTER_KEY);
+    const parsed = raw ? (JSON.parse(raw) || {}) : {};
+    if (typeof parsed === "object") parsed[weekStart] = Math.max(Number(parsed[weekStart] || 0), Number(version || 0));
+    localStorage.setItem(PLAN_VERSION_COUNTER_KEY, JSON.stringify(parsed));
+  } catch (_) {}
+}
 let reportSnapshot = null;
+let loadSnapshot = null;
+let planSourceLoadVersion = 0;
+let loadMode = "pending";
+let inspectionRouteCatalogRows = [];
+let inspectionRouteCatalogReady = false;
+let inspectionRouteCatalogLoading = false;
+let inspectionRouteCatalogLoadError = "";
+let otDrawingCache = {};
+let currentPlanOperationsCache = null;
+let priorityJobsCache = null;
+let planningStateIndexesCache = null;
+let planAlertItemsCache = null;
+let operatorLoadsCache = null;
+let operatorLoadsRenderMemo = null;
+let reportOperatorLoadsRenderMemo = null;
+let planStateMutationVersion = 0;
+let planStatusBackgroundRefreshPending = false;
+let jobLockBackgroundRefreshPending = false;
+let renderGanttStructureMemo = null;
+let ganttStructureDomCache = new Map();
 const els = {};
 
 const GANTT_GROUPS_CACHE = new Map();
@@ -452,27 +666,370 @@ function invalidateGanttGroupsCache() {
   GANTT_GROUPS_CACHE_VERSION++;
 }
 
-window.addEventListener("beforeunload", () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-});
+window.addEventListener("beforeunload", () => {});
 
-document.addEventListener("DOMContentLoaded", () => {
+window.runPlanningPerformanceDryRun = dryRunCurrentPlanPerformance;
+
+// FIX 2026-10-24 (bug usuario): la matriz de habilidades se ajusta en skills.html (o en la
+// pestana Matriz) y al volver a esta pestana "Generar plan" usaba la matriz VIEJA del arranque.
+// Esta pagina solo leia la matriz UNA vez al arrancar (supabase-catalog-apply -> applyImported,
+// app.js:11740) y no tenia ningun listener de `visibilitychange` (a diferencia de skills.html,
+// IndexSkills.html:1114). La generacion (planner-core.operatorCandidates) lee `state.matrix` en
+// memoria, que quedaba congelado. Al volver la pestana a visible se compara `state.revision`
+// contra la base con getAppStateIfChanged y, si cambio, se re-aplican SOLO los campos de la
+// matriz (y catalagos afines), sin tocar el plan ni la cola que la persona tiene en pantalla:
+// re-aplicar TODO (aplicarEstadoDesdeSupabase entero) arrastraria `operations`/`selectedOts` del
+// servidor y pisaria un borrador no guardado.
+async function refreshMatrixOnVisibility() {
+  const bridge = typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement : null;
+  if (!bridge || typeof bridge.getAppStateIfChanged !== "function") return;
+  if (appSheetSaveInFlight || appSheetDirtyScopes.has("matrix") || state._locallyEditedCapabilityConfig) return;
+  const known = Number(state.revision || 0);
+  if (!(known > 0)) return;
+  let imported;
+  try {
+    imported = await bridge.getAppStateIfChanged(known, { includeMaterials: false });
+  } catch (_) {
+    return;
+  }
+  if (!imported || imported.unchanged) return;
+  const next = typeof imported.catalogs === "object" && imported.catalogs
+    ? Object.assign({}, imported.catalogs, imported)
+    : imported;
+  let cambio = false;
+  for (const key of CAPABILITY_CONFIG_KEYS) {
+    if (next[key] !== undefined && next[key] !== null) {
+      state[key] = key === "matrix" || key === "capacityModes" || key === "operationRules"
+        ? deepClone(next[key])
+        : (Array.isArray(next[key]) ? next[key].slice() : deepClone(next[key]));
+      cambio = true;
+    }
+  }
+  if (next.matrixFull !== undefined) state.matrixFull = next.matrixFull;
+  if (Number.isFinite(Number(next.revision))) state.revision = Number(next.revision);
+  if (next.savedAt) state.savedAt = next.savedAt;
+  if (!cambio) return;
+  if (typeof renderMatrix === "function") renderMatrix();
+  render({ parts: { capabilityConfig: true, matrix: true }, save: false });
+}
+
+// FIX 2026-10-24 (bug usuario): receptor del aviso entre pestañas de que la matriz cambio en
+// skills.html (emitido por BroadcastChannel o el evento `storage`, misma clave). Al recibirlo,
+// se refresca la matriz de inmediato; si ESTA pestana fue la que guardo, las guardas de
+// refreshMatrixOnVisibility (appSheetDirtyScopes.has("matrix") / _locallyEditedCapabilityConfig)
+// hacen que se salte, asi que nunca se pisa una edicion propia sin guardar. El `typeof` es por
+// los tests que evaluan app.js en un vm sin window/document.
+const MATRIZ_CAMBIO_CANAL = "pp-matriz-refresh";
+const MATRIZ_CAMBIO_KEY = "pp-matriz-refresh-key";
+let ultimoRefrescoMatrizAt = 0;
+function refrescarMatrizCoalescido() {
+  const ahora = Date.now();
+  if (ahora - ultimoRefrescoMatrizAt < 500) return; // coalesce toggles rapidos en skills
+  ultimoRefrescoMatrizAt = ahora;
+  void refreshMatrixOnVisibility();
+}
+function suscribirMatrizCambio() {
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const canal = new BroadcastChannel(MATRIZ_CAMBIO_CANAL);
+      canal.addEventListener("message", (event) => {
+        const dato = event && event.data;
+        if (!dato || dato.kind !== "matrix") return;
+        refrescarMatrizCoalescido();
+      });
+      window.__canalMatriz = canal;
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (typeof window !== "undefined" && window.localStorage && typeof window.addEventListener === "function") {
+      window.addEventListener("storage", (event) => {
+        if (!event || event.key !== MATRIZ_CAMBIO_KEY) return;
+        refrescarMatrizCoalescido();
+      });
+    }
+  } catch (_) {}
+}
+
+function initializePlanningApp() {
   bindElements();
   bindEvents();
-  render();
+  purgeClosedWorkOrderRetention();
+  resetDailyReportFiltersToToday();
+  render({ save: false });
+  bindBacklogLoadMoreObserver();
   saveState("ui");
+  applyInitialWorkspaceView();
   loadAppStateInBackground();
-});
+  // FIX 2026-10-24 (bug usuario): al volver a esta pestana despues de editar la matriz en
+  // skills.html, se re-lee la matriz de Supabase si la revision cambio. Mismo patron que
+  // skills.html (IndexSkills.html:1114-1118). El `typeof document` es porque hay un test que
+  // evalua initializePlanningApp en un vm sin `document`.
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void refreshMatrixOnVisibility();
+    });
+  }
+  // FIX 2026-10-24 (bug usuario): aviso entre pestañas de que la matriz cambio en skills.html.
+  // skills.html lo emite por BroadcastChannel (o el evento `storage`) tras guardar; aqui se
+  // refresca la matriz de inmediato, sin esperar a que esta pestana vuelva a ser visible. El
+  // `typeof` es porque un test evalua initializePlanningApp en un vm sin la funcion en scope.
+  if (typeof suscribirMatrizCambio === "function") suscribirMatrizCambio();
+}
 
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializePlanningApp, { once: true });
+else initializePlanningApp();
+
+// MEDIDO 2026-09-30 en la pagina real: el bootSync de esta funcion estaba compuerteado por
+// isAppsScriptRuntime(), que da false desde que el puente quedo deshabilitado (RULE-SUP-030).
+// O sea que el sync de arranque NO se lanzaba nunca en el sitio estatico: la pagina abria con
+// el estado cacheado y sin pedir OTs a Supabase. syncNetSuiteInBackground ya va a Supabase,
+// que esta en los dos runtimes, asi que la pregunta no tiene a que existir. El caso grave, el
+// que rompia Generar plan, esta en ensurePlanningDataLoaded mas abajo.
+//
+// NOTA PARA QUIEN TOQUE ESTA LINEA: scripts/build-appscript.mjs parchea este bloque por TEXTO
+// exacto, asi que el cuerpo tiene que quedar igual que el startupMarker de ahi, sin comentarios
+// en medio. La explicacion de arriba va aqui arriba, no entre las lineas del bloque.
 async function loadAppStateInBackground() {
+  const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
+    console.warn("No se pudieron cargar los historicos:", error);
+    return null;
+  });
+  const selectedDetailOt = state.selectedDetailOt;
+  const selectedOperationId = state.selectedOperationId;
   const loaded = await loadAppSheetIfAvailable(false);
   if (loaded) await new Promise((resolve) => requestAnimationFrame(resolve));
-  state.selectedOperationId = "";
+  purgeClosedWorkOrderRetention();
+  syncReportFiltersToPlanWeekOrToday();
+  if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
+  if (selectedOperationId) state.selectedOperationId = selectedOperationId;
   saveState("ui");
-  render();
-  applyInitialWorkspaceView();
-  if (isAppsScriptRuntime()) syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0 });
-  loadPlanSnapshots(false);
+  render({ save: false });
+  applyInitialWorkspaceView({ scrollToTop: false });
+  const bootSync = syncNetSuiteInBackground({ showMessage: state.workOrders.length === 0, background: true });
+  // Los dos .catch NO son cosmeticos. Este Promise.all es UNO de los dos disparadores de
+  // maybeRestoreSavedDraftOnBoot; el otro es la cadena de reintentos de scheduleDraftBootRestoreRetry.
+  // Un Promise.all SIN catch se rechaza entero si UNA de las dos ramas falla, y entonces el .then de
+  // abajo no corre nunca. snapshotsRequest es una lectura de red: si esa falla, el borrador no se
+  // restauraba nunca aunque la sincronizacion hubiera terminado bien. Y al reventar el sync, la
+  // red de seguridad se caia justo cuando se necesitaba: que es el escenario entero del rescate.
+  void Promise.all([
+    Promise.resolve(bootSync).catch(() => false),
+    Promise.resolve(snapshotsRequest).catch(() => null),
+  ]).then(([bootResult]) => {
+    void Promise.resolve(bootResult);
+    if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
+    return null;
+  });
+  void snapshotsRequest.then(() => {
+    if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
+    return null;
+  });
+}
+
+async function maybeRestoreSavedDraftOnBoot() {
+  // REHABILITADA 2026-10-04 (RULE-PLAN-015): al abrir la web se ve el borrador.
+  //
+  // QUE HACIA Y POR QUE SE APAGO (RULE-PLAN-014, decision de la persona el 2026-09-27). Esta
+  // funcion resucitaba el borrador de `plan_snapshots` cuando el arranque no conseguia el estado
+  // del servidor: leia el snapshot 'draft' y hacia state.selectedOts = payload.selectedOts (o
+  // uniq(restored.map(ot))) y despues saveState("plan"), o sea que DEJABA LA COLA ORDENADA COMO EL
+  // BORRADOR y la guardaba asi. El orden de las operaciones del borrador es el orden de
+  // PROGRAMACION; el de la cola es el MANUAL que puso la persona, y el segundo no tiene por que
+  // seguir al primero. Como __planningRestoredFromServer no se marca en el camino normal de
+  // getAppState (solo en el build-patch restoreDraftPlanFromSharedState, build-appscript.mjs:196), el
+  // rescate corria en cada arranque y reordenaba la cola de la persona en silencio.
+  //
+  // QUE HACE AHORA: RESTAURA EL PLAN Y NO LA COLA. Se trayendo `operations` con sus fechas y horas
+  // (que es lo que no existe en el arranque de hoy), `lastSchedule`, `planStart` y `horizonDays`, y
+  // de las operaciones SOLO las de las OTs que siguen en la cola, que es la autoridad de la persona
+  // (RULE-OT-047: la cola vive en `selected_ots` y se lee de ahi). `state.selectedOts` y
+  // `state.lockedOts` NO se tocan: una OT que la persona saco de la cola no vuelve con el plan, y el
+  // orden manual se queda como esta. Esa es la razon del apagado, y por eso no vuelve.
+  //
+  // POR QUE HACE FALTA, MEDIDO 2026-10-04 en produccion con una carga nueva de la pagina. La cola
+  // vuelve entera (4 OTs, mismo orden manual) pero el PLAN NO, y no es que no este guardado: el
+  // borrador esta en `plan_snapshots` (1 fila, snapshot_id 'draft', medida el mismo dia). Lo que no
+  // vuelve es el plan, porque lo unico que la pagina lee al arrancar es el espejo `operations`, y ese
+  // lo escribe la ingesta de NetSuite con `start_planned` a medianoche y SIN horas (lector,
+  // MEDIDO 2026-09-29). El sintoma: la pagina se ve armada y el reporte de la semana dice "Sin OTs
+  // para esta semana". Y este rescate estaba apagado, y el boton "Restaurar borrador" descarta el
+  // borrador de su lista (restoreDraftCandidateSnapshots), o sea que no habia NINGUNA via de vuelta.
+  //
+  // EL RELOJ DE FRESCURA SIGUE SIENDO EL DE RULE-PLAN-013 (`lastSchedule.generatedAt`), con una
+  // segunda via de entrada: el rescate entra tambien cuando en pantalla NO HAY NADA PROGRAMADO y el
+  // borrador si. Sin esa via no entraria nunca en el caso de arriba, porque el `generatedAt` del
+  // snapshot y el de `app_state.last_schedule` los escribe el MISMO guardado y salen iguales, y con
+  // `savedIsNewer` a false solo pasaban los recados de herramental.
+  if (globalThis.__draftBootRestoreAttempted === true) return;
+  if (globalThis.__planningRestoredFromServer === true) return;
+  globalThis.__draftBootRestoreAttempted = true;
+  try {
+    if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight || planningActionsBusy) {
+      globalThis.__draftBootRestoreAttempted = false;
+      scheduleDraftBootRestoreRetry();
+      return;
+    }
+    const draftMeta = planSnapshots.find((snapshot) => snapshot.snapshotId === "draft") || null;
+    if (!draftMeta || Number(draftMeta.operations || 0) <= 0) {
+      globalThis.__draftBootRestoreAttempted = false;
+      scheduleDraftBootRestoreRetry();
+      return;
+    }
+    const snapshot = await fetchPlanSnapshot("draft");
+    const payload = (snapshot && snapshot.fullState) || snapshot || {};
+    const savedOps = Array.isArray(snapshot?.operations) && snapshot.operations.length
+      ? snapshot.operations
+      : (Array.isArray(payload.operations) ? payload.operations : []);
+    if (!savedOps.length) return;
+    // LA COLA MANDA, Y NO SE TOCA. Las operaciones del borrador se filtran por las OTs que
+    // siguen en la cola: las de una OT que la persona saco de la cola no vuelven con el plan, y las
+    // de una OT que se agrego DESPUES de generar se quedan con lo que traia el espejo, o sea por
+    // programar, que es la verdad (el borrador no las programo y no hay de donde sacarlas con hora).
+    const cola = uniq((state.selectedOts || []).map((ot) => normalizeKey(ot)).filter(Boolean));
+    if (!cola.length) return;
+    const enCola = (op) => cola.includes(normalizeKey(op && op.ot));
+    const savedOpsEnCola = savedOps.filter(enCola);
+    if (!savedOpsEnCola.length) return;
+    // "CAMBIO EL BORRADOR?" se pregunta SOLO sobre lo que este rescate va a restaurar. Por eso
+    // selectedOts y lockedOts se comparan contra los del propio estado: compararlos contra los del
+    // borrador haria que el rescate entrara en cada arranque solo porque el borrador trae su propia
+    // cola, que es exactamente lo que se dejo de hacer en RULE-PLAN-014.
+    const localDraft = captureLocalPlanningState();
+    if (!planningDraftDiffers(localDraft, {
+      ...payload,
+      operations: savedOpsEnCola,
+      selectedOts: state.selectedOts,
+      lockedOts: state.lockedOts,
+    })) return;
+    const savedGeneratedAtMs = Date.parse((snapshot && (snapshot.generatedAt || payload.generatedAt)) || "") || 0;
+    const currentGeneratedAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
+    const savedIsNewer = savedGeneratedAtMs > 0 && savedGeneratedAtMs > currentGeneratedAtMs;
+    // EL PLAN DE PANTALLA ES MAS NUEVO QUE EL BORRADOR Y YA TIENE PLAN: NO SE TOCA. Si la persona
+    // genero despues de este borrador, su plan es la autoridad y el rescate no puede atrasarlo
+    // (ERR-DATOS-VIEJOS-BORRADOR-001). En cualquier otro caso el rescate entra cuando el plan en
+    // pantalla difiere del borrador, que es la comparacion de arriba (planningDraftDiffers) hecha
+    // SOLO sobre lo que este rescate restaura: las operaciones del borrador para las OTs de la cola,
+    // contra las que hay en pantalla.
+    //
+    // ANTES LA PUERTA ERA "no hay nada programado en pantalla" (`noHayPlanEnPantalla`), y eso ya no
+    // sirve: el espejo `operations` hoy SI trae horas (1168/2232 filas con hora_inicio no nula,
+    // MEDIDO 2026-10-04; el lector documentaba 0/1000 el 2026-09-29), o sea que la pantalla nunca
+    // esta "vacia" y el rescate no entraba. Y `savedIsNewer` tampoco: los dos generatedAt los escribe
+    // el MISMO guardado de "Generar plan" y salen iguales (MEDIDO 2026-10-04).
+    const pantallaEsMasNueva = currentGeneratedAtMs > 0 && currentGeneratedAtMs > savedGeneratedAtMs;
+    const hayPlanEnPantalla = (state.operations || []).some((op) => enCola(op) && Boolean(opStart(op)));
+    if (pantallaEsMasNueva && hayPlanEnPantalla) return;
+    const restored = savedOpsEnCola.map((op, index) => normalizeOperation({
+      ...op,
+      id: op.id || `draft-boot-${snapshot.snapshotId || "draft"}-${index + 1}`,
+    }, index));
+    const draftByOt = new Map();
+    for (const op of restored) {
+      const key = normalizeKey(op.ot);
+      if (!key) continue;
+      if (!draftByOt.has(key)) draftByOt.set(key, []);
+      draftByOt.get(key).push(op);
+    }
+    const merged = [];
+    const emittedIds = new Set();
+    const pushUnique = (op) => {
+      const id = String(op.id || "");
+      if (id && emittedIds.has(id)) return;
+      if (id) emittedIds.add(id);
+      merged.push(op);
+    };
+    for (const op of (state.operations || [])) {
+      const key = normalizeKey(op.ot);
+      if (!draftByOt.has(key)) { pushUnique(op); continue; }
+      for (const rop of draftByOt.get(key)) pushUnique(rop);
+      draftByOt.delete(key);
+    }
+    for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
+    state.operations = merged;
+    // `state.selectedOts` y `state.lockedOts` NO SE TOCAN. Es la decision de RULE-PLAN-014 y lo unico
+    // que este rescate dejo de hacer respecto al de antes: el borrador dice en que ORDEN se programo y
+    // la persona dice en que ORDEN se trabaja. La autoridad de la cola es la persona y su tabla
+    // (`selected_ots`), y este rescate no tiene opinion sobre eso. Lo que si restaura son las
+    // operaciones: el `locked` de cada una viaja en la propia operacion y lo ve el plan.
+    if (payload.lastSchedule && typeof payload.lastSchedule === "object") state.lastSchedule = payload.lastSchedule;
+    else state.lastSchedule = {
+      ...(state.lastSchedule || {}),
+      scheduled: restored.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").length,
+      scheduledOts: uniq(restored.map((op) => String(op.ot || "").trim()).filter(Boolean)),
+      changes: restored.filter(isToolChangeReportOperation).length,
+      restoredFromSnapshot: true,
+    };
+    if (state.lastSchedule && savedIsNewer) {
+      const embeddedAtMs = Date.parse(state.lastSchedule.generatedAt || "") || 0;
+      if (savedGeneratedAtMs > embeddedAtMs) state.lastSchedule.generatedAt = String(snapshot.generatedAt || state.lastSchedule.generatedAt || "");
+    }
+    if (snapshot.planStart || payload.planStart) state.planStart = snapshot.planStart || payload.planStart;
+    if (Number.isFinite(Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays))) state.horizonDays = Number(snapshot.horizonDays != null ? snapshot.horizonDays : payload.horizonDays);
+    normalizeState();
+    invalidateCurrentPlanOperationsCache();
+    alignReportWeekStartToFirstScheduledOperation(restored, new Date());
+    // EL RESCATE NO GUARDA EL PLAN. MEDIDO 2026-10-07 (usuario, en produccion): el
+    // `saveState("plan")` que habia aqui re-marcaba el plan sucio y el debounce de 850-900 ms
+    // guardaba el plan entero en CADA arranque con borrador; ese guardado cae al camino viejo
+    // por el freno (RULE-SUP-062: una lista vacia sin vaciarSiEstaVacio) y sacaba la cascada
+    // de avisos por tabla (materials incluido) como toasts que no distinguian confirmacion de
+    // error, y parcheaba app_state y su revision en cada carga. Restaurar es VER, no guardar:
+    // el plan restaurado se sube cuando la persona cambia algo o pulsa Guardar, con el estado
+    // ya completo.
+    // ARREGLO B (RULE-PLAN-015, 2026-10-04): el reloj queda 1 ms por encima del generatedAt
+    // del borrador, PERO EN MEMORIA NOMBRE: la base ni lo ve. Asi el import de fondo
+    // (applyImported) ve el plan como "de pantalla, mas nuevo" (importedIsStaleSchedule es
+    // verdadero) y lo deja intacto, y a la vez el rescate puede re-dispararse en la siguiente
+    // ingesta, porque el reloj de la base sigue siendo el del ultimo guardado real (no el del
+    // rescate). Sin este sello el import vuelve a poner las operaciones del espejo a los
+    // ~120 s y el rescate dura dos minutos (MEDIDO 2026-10-04: el Gantt volvio a 15 ops para
+    // 2624).
+    if (savedGeneratedAtMs > 0 && state.lastSchedule) {
+      state.lastSchedule.generatedAt = new Date(savedGeneratedAtMs + 1).toISOString();
+    }
+    render({ save: false });
+    const changes = restored.filter(isToolChangeReportOperation).length;
+    showToast(`Borrador restaurado al iniciar: ${restored.length} operaciones programadas (${changes} cambios de herramental)`, 3200);
+  } catch (error) {
+    console.warn("[maybeRestoreSavedDraftOnBoot] No se pudo restaurar el borrador guardado:", error && error.message || error);
+  }
+}
+
+// POR QUE EL PRESUPUESTO ESTA EN TIEMPO Y NO EN INTENTOS, Y POR QUE 240 s.
+//
+// Este reintento existe para esperar a que se libere netSuiteSyncInFlight, en la puerta de
+// maybeRestoreSavedDraftOnBoot. Con el presupuesto anterior de 15 intentos cada 2 500 ms, la
+// cadena se agotaba a los 37,5 s, y para entonces no quedaba ningun disparador vivo: el unico
+// que quedaba dependia de que la sincronizacion resolviera, o sea de lo mismo que la estaba
+// bloqueando. Es decir, el rescate del borrador se agotaba justo en el escenario para el que
+// existe, que es cuando el servidor NO responde.
+//
+// MEDIDO 2026-09-30: el techo del que este rescate espera ya no es el CALL_TIMEOUT_MS del
+// puente (120 000 ms, apps-script-bridge-client.js), porque el puente quedo deshabilitado
+// (RULE-SUP-030). Ahora lo que puede tener ocupado al flag es el presupuesto del cliente,
+// NETSUITE_BACKLOG_SYNC_TIMEOUT_MS = 180 000 ms, que esta en ESTE MISMO archivo, linea 18.
+//
+// POR QUE 240 000 y no 180 000, que es el numero que habia. Con el puente, el sync se cortaba
+// a los 120 s aunque el cliente pidiera 180, y por eso 180 s de presupuesto iban con margen.
+// Al quitar el puente el sync puede ocupar el flag los 180 s completos, y un presupuesto de
+// 180 s se agota EN EL MISMO INSTANTE en que se libera: exactamente el fallo que el parrafo
+// de arriba ya describio una vez, con la misma forma y por el mismo motivo. 180 000 + 60 000
+// de margen = 240 000, que ademas es multiplo del paso de 2 500, asi que el ultimo tramo
+// completo no se desperdicia.
+//
+// La debilidad anterior era que el numero estaba escrito a mano porque la constante que
+// compara vive en otro archivo y no se puede leer desde aqui. Ya no: las dos estan en este
+// archivo, y tests/plan-draft-boot-restore.test.mjs las lee y falla si el presupuesto deja
+// de durar mas que el timeout que espera.
+const DRAFT_BOOT_RESTORE_RETRY_MS = 2500;
+const DRAFT_BOOT_RESTORE_BUDGET_MS = 240000;
+
+function scheduleDraftBootRestoreRetry() {
+  const spent = Number(globalThis.__draftBootRestoreRetrySpentMs || 0);
+  if (spent >= DRAFT_BOOT_RESTORE_BUDGET_MS) return;
+  globalThis.__draftBootRestoreRetrySpentMs = spent + DRAFT_BOOT_RESTORE_RETRY_MS;
+  setTimeout(() => { void maybeRestoreSavedDraftOnBoot(); }, DRAFT_BOOT_RESTORE_RETRY_MS);
 }
 
 function bindElements() {
@@ -490,9 +1047,13 @@ function bindElements() {
     "draftExecutiveSummary",
     "draftExecutiveBody",
     "weeklyReleaseTargetInput",
+    "flowBalancedEnabledInput",
+    "flowWipTargetInput",
+    "flowOptimizationDiagnostics",
     "generatePlanBtn",
     "publishPlanBtn",
     "pdfBtn",
+    "restoreDraftBtn",
     "planAlerts",
     "scheduleBtn",
     "undoBtn",
@@ -504,46 +1065,78 @@ function bindElements() {
     "ganttFullscreenBtn",
     "gantt",
     "priorityCount",
+    "syncBacklogOtsBtn",
     "searchInput",
     "statusFilter",
     "priorityList",
+    "priorityLoadMore",
+    "priorityLoadMoreSentinel",
     "priorityQueue",
+    "queueMoveStatus",
     "queueSearchInput",
     "selectedJobCount",
     "lockAllBtn",
     "unlockAllBtn",
+    "returnUnlockedToBacklogBtn",
     "selectedJobPanel",
+    "returnToBacklogBtn",
     "closeDetailPanelBtn",
     "ganttCanvas",
     "loadList",
-    "loadWeekInput",
     "loadWeekRange",
+    "loadWeekStartInput",
+    "loadWeekPrevBtn",
+    "loadWeekNextBtn",
+    "loadPlanSelect",
+    "loadModeSelect",
+    "bottleneckOperators",
+    "bottleneckOperations",
+    "bottleneckPlanSelect",
+    "bottleneckModeSelect",
+    "bottleneckWeekRange",
     "matrixWrap",
+    "matrixSearchInput",
+    "matrixSearchCount",
+    "clearMatrixSearchBtn",
     "newOperatorInput",
     "addOperatorBtn",
     "newCtInput",
     "addCtBtn",
     "weekReport",
     "weekExecutiveSummary",
-    "weekReportStartInput",
     "operatorReport",
     "operatorReportSelect",
     "operatorReportStatus",
     "operatorReportStartInput",
-    "operatorReportShowAll",
+    "operatorReportFutureDays",
     "operatorReportCount",
     "printOperatorBtn",
     "adjusterReport",
     "adjusterReportStartInput",
     "adjusterReportStatus",
-    "adjusterReportShowAll",
+    "adjusterReportFutureDays",
     "adjusterReportCount",
     "printAdjusterBtn",
     "subcontractReport",
     "subcontractReportStartInput",
-    "subcontractReportShowAll",
+    "subcontractReportFutureDays",
+    "subcontractReportStatus",
+    "printSubcontractBtn",
+    "subcontractPrintContext",
     "subcontractReportCount",
+    "releaseReport",
+    "releaseReportCount",
+    "exportReleaseXlsxBtn",
+    // RULE-SUP-078: el reporte "Liberacion real".
+    "releaseRealReport",
+    "releaseRealReportCount",
+    "exportReleaseRealXlsxBtn",
+    "printReleaseRealBtn",
+    "releaseRealPrintContext",
     "planSnapshotSelect",
+    "reportWeekStartInput",
+    "reportWeekPrevBtn",
+    "reportWeekNextBtn",
     "refreshSnapshotsBtn",
     "reportSnapshotMeta",
     "weekPrintContext",
@@ -553,7 +1146,10 @@ function bindElements() {
     "loadNsExerciseBtn",
     "saveBtn",
     "saveAppSheetBtn",
+    "exportSnapshotSelect",
     "exportCsvBtn",
+    "exportBacklogXlsxBtn",
+    "exportQueueXlsxBtn",
     "balanceBtn",
     "printWeekBtn",
     "toolPartInput",
@@ -572,6 +1168,8 @@ function bindElements() {
     "calendarConceptInput",
     "calendarMachineField",
     "calendarMachineInput",
+    "calendarOperatorField",
+    "calendarOperatorInput",
     "calendarStartDateInput",
     "calendarEndDateField",
     "calendarEndDateInput",
@@ -596,6 +1194,12 @@ function bindElements() {
     "articleConfigPriceInput",
     "saveArticleConfigBtn",
     "articleConfigTable",
+    "inspectionRouteCatalogSearch",
+    "refreshInspectionRouteCatalogBtn",
+    "inspectionRouteCatalogError",
+    "inspectionRouteCatalogErrorMessage",
+    "retryInspectionRouteCatalogBtn",
+    "inspectionRouteCatalogTable",
     "planningDialog",
     "planningDialogForm",
     "planningDialogTitle",
@@ -613,6 +1217,20 @@ function bindElements() {
   els.saveAppSheetBtn = els.saveBtn || els.saveAppSheetBtn;
 }
 
+function bindWeekStepper(inputEl, prevBtn, nextBtn, onChange) {
+  if (!inputEl) return;
+  const shiftWeek = (deltaDays) => {
+    const current = normalizeWeekStartValue(inputEl.value || state.planStart || formatDate(new Date()));
+    const base = parseDate(current);
+    const date = new Date(base.year, base.month - 1, base.day);
+    inputEl.value = formatDate(addDays(date, deltaDays));
+    onChange(inputEl.value);
+  };
+  inputEl.addEventListener("change", () => onChange(normalizeWeekStartValue(inputEl.value)));
+  if (prevBtn) prevBtn.addEventListener("click", () => shiftWeek(-7));
+  if (nextBtn) nextBtn.addEventListener("click", () => shiftWeek(7));
+}
+
 function debounce(fn, ms) {
   let timer;
   return (...args) => {
@@ -621,21 +1239,94 @@ function debounce(fn, ms) {
   };
 }
 
+function printPlanHeader(title) {
+  return `<header class="individual-print-header">
+    <strong class="individual-print-logo">MALDONADO</strong>
+    <h2>${escapeHtml(title)}</h2>
+    <div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong class="individual-print-date"></strong></div>
+  </header>`;
+}
+
+function prepareIndividualPrint(target, orientation = "portrait") {
+  if (!target) return;
+  if (!target.querySelector(".individual-print-header")) {
+    const title = target.id === "weekTab" ? "PLAN DE PRODUCCIÓN SEMANAL" : "PLAN DE PRODUCCIÓN DIARIO INDIVIDUAL";
+    target.insertAdjacentHTML("afterbegin", printPlanHeader(title));
+  }
+  document.querySelectorAll(".print-target").forEach((node) => node.classList.remove("print-target"));
+  target.classList.add("print-target");
+  const date = target.querySelector(".individual-print-date");
+  if (date) date.textContent = formatReportDateTime(new Date());
+  document.body.classList.add("printing-individual-plan");
+  if (orientation === "landscape") document.documentElement.classList.add("printing-landscape");
+  const pageSize = orientation === "landscape"
+    ? "@media print { @page { size: 297mm 210mm; margin: 12mm; } }"
+    : "@media print { @page { size: 210mm 297mm; margin: 12mm; } }";
+  const styleEl = document.createElement("style");
+  styleEl.id = "planning-print-page-size";
+  styleEl.textContent = pageSize;
+  document.head.appendChild(styleEl);
+  const cleanup = () => {
+    target.classList.remove("print-target");
+    document.body.classList.remove("printing-individual-plan");
+    document.documentElement.classList.remove("printing-landscape");
+    const injected = document.getElementById("planning-print-page-size");
+    if (injected) injected.remove();
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.print();
+}
+
 function bindEvents() {
-  els.searchInput.addEventListener("input", debounce(renderPriorityList, 150));
-  els.statusFilter.addEventListener("change", renderPriorityList);
+  document.querySelectorAll(".segmented button").forEach((button) => {
+    button.onclick = () => setGanttView(button.dataset.view);
+  });
+  els.searchInput.addEventListener("input", debounce(() => {
+    resetBacklogWindow();
+    renderPriorityList();
+  }, 120));
+  els.matrixSearchInput.addEventListener("input", () => {
+    state.matrixSearch = els.matrixSearchInput.value;
+    renderMatrix();
+  });
+  els.clearMatrixSearchBtn.addEventListener("click", () => {
+    state.matrixSearch = "";
+    renderMatrix();
+    els.matrixSearchInput.focus();
+  });
+  // La funcion NO se engancha directa: el click se pasaria como argumento y
+  // `options.dispararIngesta !== false` daria true por casualidad, no por decision. Con el
+  // envoltorio, el boton dice que dispara la ingesta y la comprobacion automatica de arriba
+  // dice que no.
+  els.syncBacklogOtsBtn.addEventListener("click", () => syncBacklogWorkOrders({ dispararIngesta: true }));
+  els.statusFilter.addEventListener("change", () => {
+    resetBacklogWindow();
+    renderPriorityList();
+  });
+  els.priorityLoadMore.addEventListener("click", showMoreBacklogJobs);
   els.queueSearchInput.addEventListener("input", debounce(renderPriorityQueue, 150));
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
-  els.pdfBtn.addEventListener("click", generatePlanPdf);
+  els.restoreDraftBtn.addEventListener("click", openRestoreDraftDialog);
+  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. generatePlanPdf
+  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado).
+  els.pdfBtn.addEventListener("click", () => generatePlanPdf());
   els.undoBtn.addEventListener("click", undoLastChange);
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
     state.planStart = els.planStartInput.value;
-    const hasScheduledDraft = Boolean(scheduledPlanWindowStart());
-    saveAndRender(hasScheduledDraft
-      ? "Inicio guardado para la siguiente generacion; el Gantt conserva el borrador programado"
-      : "Inicio del horizonte actualizado");
+    if (state.planStart) state.reportWeekStart = normalizeWeekStartValue(state.planStart);
+    saveAndRender("Inicio del horizonte actualizado");
+  });
+  bindWeekStepper(els.loadWeekStartInput, els.loadWeekPrevBtn, els.loadWeekNextBtn, (iso) => {
+    state.loadWeekStart = normalizeWeekStartValue(iso);
+    renderLoads();
+    renderSaturation();
+  });
+  bindWeekStepper(els.reportWeekStartInput, els.reportWeekPrevBtn, els.reportWeekNextBtn, (iso) => {
+    state.reportWeekStart = normalizeWeekStartValue(iso);
+    renderReports();
   });
   els.horizonSelect.addEventListener("change", () => {
     checkpointState();
@@ -652,46 +1343,133 @@ function bindEvents() {
     els.weeklyReleaseTargetInput.value = state.settings.weeklyReleaseTarget.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     saveAndRender("Objetivo semanal actualizado", "catalogs");
   });
+  els.flowBalancedEnabledInput.addEventListener("change", () => {
+    checkpointState();
+    state.settings.flowBalancedEnabled = els.flowBalancedEnabledInput.checked;
+    renderFlowBalanceConfiguration();
+    saveState("catalogs");
+    showToast(`Balance de flujo ${state.settings.flowBalancedEnabled ? "activado" : "desactivado"}`);
+  });
+  els.flowWipTargetInput.addEventListener("change", () => {
+    checkpointState();
+    const raw = Number(els.flowWipTargetInput.value);
+    state.settings.flowWipTarget = Number.isFinite(raw) ? Math.min(50, Math.max(1, Math.round(raw))) : 10;
+    renderFlowBalanceConfiguration();
+    saveState("catalogs");
+    showToast("WIP objetivo actualizado");
+  });
   els.closeDetailPanelBtn.addEventListener("click", () => {
-    state.selectedOperationId = "";
-    saveState();
-    render();
+    closeSelectedJobDetail();
+  });
+  els.returnToBacklogBtn.addEventListener("click", () => {
+    const ot = getSelectedPriorityJob()?.ot;
+    closeDetailPanel();
+    if (ot) selectJob(ot, false);
   });
   els.loadNsExerciseBtn.addEventListener("click", loadNetSuiteExercise);
   els.saveAppSheetBtn.addEventListener("click", () => saveAppSheet(true));
   els.exportCsvBtn.addEventListener("click", exportCsv);
+  els.exportBacklogXlsxBtn.addEventListener("click", exportBacklogXlsx);
+  els.exportQueueXlsxBtn.addEventListener("click", exportQueueXlsx);
+  els.exportReleaseXlsxBtn?.addEventListener("click", exportReleaseXlsx);
+  // RULE-SUP-078: el reporte "Liberacion real". Exportar e imprimir; el render se dispara al
+  // abrir la pestana (showTab) y con el boton de exportar si aun no hay datos.
+  els.exportReleaseRealXlsxBtn?.addEventListener("click", () => exportReleaseRealXlsx());
+  els.printReleaseRealBtn?.addEventListener("click", async () => {
+    await renderReleaseRealReport();
+    prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
+  });
+  // RULE-SUP-078: al pulsar "Sincronizar datos" dispara la ingesta SOLO con accion: ensambles
+  document.getElementById("syncReleaseRealBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("syncReleaseRealBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
+    try {
+      const bridge = typeof PPAppsScriptBridge !== "undefined" ? PPAppsScriptBridge : null;
+      if (bridge && typeof bridge.call === "function") {
+        try {
+          await bridge.call("dispararIngestaSupabase", { accion: "ensambles" }, { timeout: 90000 });
+        } catch (e) {
+          console.warn("No se pudo disparar ingesta ensambles via puente:", e);
+        }
+      } else if (typeof google !== "undefined" && google.script && google.script.run) {
+        try {
+          await new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .dispararIngestaSupabase({ accion: "ensambles" });
+          });
+        } catch (e) {
+          console.warn("No se pudo disparar ingesta ensambles via google.script.run:", e);
+        }
+      }
+      await new Promise(r => setTimeout(r, 4000));
+    } catch (e) {
+      console.warn("Error al forzar ingesta de ensambles:", e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Sincronizar datos"; }
+    }
+    await renderReleaseRealReport(true);
+    if (releaseRealCache.error) {
+      alert("No se pudieron cargar los ensambles: " + releaseRealCache.error +
+        "\n\nPosibles causas:\n1. El DDL docs/schema-supabase-ensambles-ot.sql no ha sido aplicado en Supabase.\n2. El RESTlet 2246 no ha sido redeployado con la acción `ensambles`.\n3. La ingesta con `accion: 'ensambles'` no ha escrito en `ensambles_ot`.\n4. No hay ensambles WOCompl en los últimos 60 días para la planta MM del Llano.");
+    } else if (releaseRealCache.rows.length === 0) {
+      alert("La tabla ensambles_ot sigue vacía tras sincronizar.\n" +
+        "Revisa en Supabase: SELECT count(*) FROM ensambles_ot;\n" +
+        "Si sigue en 0, comprueba el log de la ingesta (debe llamar al RESTlet 2246 con accion 'ensambles').");
+    } else {
+      alert("Datos cargados: " + releaseRealCache.rows.length + " ensambles encontrados.");
+    }
+  });
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
-  els.balanceBtn.addEventListener("click", balanceOperators);
-  els.loadWeekInput.addEventListener("change", () => {
-    state.loadWeekStart = normalizeWeekStartValue(els.loadWeekInput.value);
-    saveAndRender("Semana de cargas actualizada");
+  els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
+  els.loadModeSelect.addEventListener("change", () => {
+    loadMode = els.loadModeSelect.value;
+    renderLoads();
   });
-  els.printWeekBtn.addEventListener("click", () => window.print());
-  els.weekReportStartInput.addEventListener("change", () => {
-    state.reportWeekStart = normalizeWeekStartValue(els.weekReportStartInput.value);
-    syncReportFilterDates(state.reportWeekStart);
-    saveAndRender("Semana del reporte actualizada");
+  els.bottleneckPlanSelect.addEventListener("change", () => loadSelectedBottleneckPlan(els.bottleneckPlanSelect.value));
+  els.bottleneckModeSelect.addEventListener("change", () => {
+    loadMode = els.bottleneckModeSelect.value;
+    renderSaturation();
   });
+  els.printWeekBtn.addEventListener("click", () => prepareIndividualPrint(els.weekReport.closest(".tab-panel")));
   els.operatorReportStartInput.addEventListener("change", () => {
     updateReportFilter("operator", { date: els.operatorReportStartInput.value });
   });
-  els.operatorReportShowAll.addEventListener("change", () => updateReportFilter("operator", { showAll: els.operatorReportShowAll.checked }));
+  els.operatorReportFutureDays.addEventListener("change", () => updateReportFilter("operator", { futureDays: Number(els.operatorReportFutureDays.value) }));
   els.operatorReportStatus.addEventListener("change", () => updateReportFilter("operator", { status: els.operatorReportStatus.value }));
   els.adjusterReportStartInput.addEventListener("change", () => {
     updateReportFilter("adjuster", { date: els.adjusterReportStartInput.value });
   });
-  els.adjusterReportShowAll.addEventListener("change", () => updateReportFilter("adjuster", { showAll: els.adjusterReportShowAll.checked }));
+  els.adjusterReportFutureDays.addEventListener("change", () => updateReportFilter("adjuster", { futureDays: Number(els.adjusterReportFutureDays.value) }));
   els.adjusterReportStatus.addEventListener("change", () => updateReportFilter("adjuster", { status: els.adjusterReportStatus.value }));
   els.subcontractReportStartInput.addEventListener("change", () => {
     updateReportFilter("subcontract", { date: els.subcontractReportStartInput.value });
   });
-  els.subcontractReportShowAll.addEventListener("change", () => updateReportFilter("subcontract", { showAll: els.subcontractReportShowAll.checked }));
+  els.subcontractReportFutureDays.addEventListener("change", () => updateReportFilter("subcontract", { futureDays: Number(els.subcontractReportFutureDays.value) }));
+  els.subcontractReportStatus.addEventListener("change", () => updateReportFilter("subcontract", { status: els.subcontractReportStatus.value }));
+  els.weekReport.addEventListener("click", (event) => {
+    const button = event.target.closest(".weekly-ot-link");
+    if (!button) return;
+    event.preventDefault();
+    openOtDrawing(button.dataset.ot, button.dataset.part);
+  });
+  els.printSubcontractBtn.addEventListener("click", () => { renderSubcontractReport(); prepareIndividualPrint(els.subcontractReport.closest(".tab-panel"), "landscape"); });
   els.operatorReportSelect.addEventListener("change", renderOperatorReport);
-  els.planSnapshotSelect.addEventListener("change", loadSelectedPlanSnapshot);
+  els.planSnapshotSelect.addEventListener("change", () => loadSelectedPlanSnapshot(els.planSnapshotSelect.value));
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => {
+    select.addEventListener("change", () => loadSelectedPlanSnapshot(select.value));
+  });
   els.refreshSnapshotsBtn.addEventListener("click", () => loadPlanSnapshots(true));
-  els.printOperatorBtn.addEventListener("click", () => window.print());
-  els.printAdjusterBtn.addEventListener("click", () => window.print());
+  els.printOperatorBtn.addEventListener("click", () => {
+    renderOperatorReport();
+    prepareIndividualPrint(els.operatorReport.closest(".tab-panel"), "landscape");
+  });
+  els.printAdjusterBtn.addEventListener("click", () => {
+    renderAdjusterReport();
+    prepareIndividualPrint(els.adjusterReport.closest(".tab-panel"), "landscape");
+  });
   els.addToolBtn.addEventListener("click", addToolCatalogItem);
   els.toolHerrInput.addEventListener("change", () => updateCatalogCustomInput(els.toolHerrInput, els.toolHerrNewInput));
   els.toolKitInput.addEventListener("change", () => updateCatalogCustomInput(els.toolKitInput, els.toolKitNewInput));
@@ -708,18 +1486,41 @@ function bindEvents() {
   els.addOtTypeBtn.addEventListener("click", addOtType);
   els.articleConfigPartInput.addEventListener("change", updateArticleConfigForm);
   els.saveArticleConfigBtn.addEventListener("click", saveArticleConfiguration);
+  els.inspectionRouteCatalogSearch.addEventListener("input", renderInspectionRouteCatalog);
+  els.refreshInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
+  els.retryInspectionRouteCatalogBtn.addEventListener("click", () => loadInspectionRouteCatalog(true));
   els.lockAllBtn.addEventListener("click", () => toggleAllJobs(true));
   els.unlockAllBtn.addEventListener("click", () => toggleAllJobs(false));
+  els.returnUnlockedToBacklogBtn.addEventListener("click", returnUnlockedJobsToBacklog);
   els.planningDialogClose.addEventListener("click", () => closePlanningDialog(null));
   els.planningDialogCancel.addEventListener("click", () => closePlanningDialog(null));
   els.planningDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     closePlanningDialog(null);
   });
-  els.planningDialogForm.addEventListener("submit", (event) => {
+  els.planningDialogForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!els.planningDialogForm.reportValidity()) return;
-    closePlanningDialog(Object.fromEntries(new FormData(els.planningDialogForm).entries()));
+    if (!confirmZeroManualPrice(els.planningDialogForm)) return;
+    const values = Object.fromEntries(new FormData(els.planningDialogForm).entries());
+    const submit = planningDialogSubmit;
+    if (!submit) {
+      closePlanningDialog(values);
+      return;
+    }
+    els.planningDialogConfirm.disabled = true;
+    els.planningDialogForm.setAttribute("aria-busy", "true");
+    try {
+      const result = await submit(values);
+      if (result !== false && planningDialogSubmit === submit) closePlanningDialog(result);
+    } catch (error) {
+      if (planningDialogSubmit === submit) showToast(error.message || String(error), 9000);
+    } finally {
+      if (planningDialogSubmit === submit) {
+        els.planningDialogConfirm.disabled = false;
+        els.planningDialogForm.removeAttribute("aria-busy");
+      }
+    }
   });
 
   document.addEventListener("mousemove", (event) => updateQueueDrag(event.clientX, event.clientY));
@@ -730,17 +1531,6 @@ function bindEvents() {
     if (event.key === "Escape" && els.gantt.classList.contains("gantt-fullscreen")) toggleGanttFullscreen(false);
   });
 
-  document.querySelectorAll(".segmented button").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.ganttView = button.dataset.view;
-      invalidateGanttGroupsCache();
-      renderGantt();
-      renderGanttDisplayControls();
-      saveState("ui");
-      showToast(ganttViewMessage(state.ganttView));
-    });
-  });
-
   document.querySelectorAll(".tabs button").forEach((button) => {
     button.addEventListener("click", () => showTab(button.dataset.tab));
   });
@@ -749,25 +1539,25 @@ function bindEvents() {
     item.addEventListener("click", (event) => {
       event.preventDefault();
       const targetHash = item.getAttribute("href") || "#plan-semanal";
-      if (window.location.hash === targetHash) applyInitialWorkspaceView();
+      if (window.location.hash === targetHash) applyInitialWorkspaceView({ scrollToTop: true });
       else window.location.hash = targetHash;
     });
   });
-  window.addEventListener("hashchange", applyInitialWorkspaceView);
+  window.addEventListener("hashchange", () => applyInitialWorkspaceView({ scrollToTop: true }));
 }
 
-function applyInitialWorkspaceView() {
+function applyInitialWorkspaceView({ scrollToTop = false } = {}) {
   const hash = window.location.hash || "#plan-semanal";
   const items = [...document.querySelectorAll(".nav-item")];
   const item = items.find((candidate) => candidate.getAttribute("href") === hash) || items.find((candidate) => candidate.getAttribute("href") === "#plan-semanal");
   if (!item) return;
-  showWorkspaceView(item.dataset.section, item.dataset.tab || "");
+  showWorkspaceView(item.dataset.section, item.dataset.tab || "", { scrollToTop });
 }
 
-function showWorkspaceView(section, tab = "") {
+function showWorkspaceView(section, tab = "", { scrollToTop = false } = {}) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
-  const view = section === "cargas" ? "loads" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config"));
+  const view = section === "hoja-inspeccion" ? "inspection" : (section === "cargas" ? "loads" : (section === "cuello-botella" ? "saturation" : (section === "reportes" ? "reports" : (section === "plan-semanal" ? "plan" : "config"))));
   workspace.dataset.view = view;
   workspace.dataset.section = section;
   document.querySelectorAll(".nav-item").forEach((item) => {
@@ -778,33 +1568,43 @@ function showWorkspaceView(section, tab = "") {
   });
   if (els.workspaceTitle) els.workspaceTitle.textContent = WORKSPACE_TITLES[section] || "Planeacion de Produccion";
   if (tab) showTab(tab);
+  if (view === "plan") {
+    renderTop();
+    renderPlanAlerts();
+    renderDraftExecutiveSummary();
+    renderGantt();
+  }
   if (view === "loads") renderLoads();
+  if (view === "saturation") renderSaturation();
   if (view === "reports") renderReports();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (section === "herramentales") {
+    renderConfiguration();
+    loadInspectionRouteCatalog();
+  }
+  if (scrollToTop) window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return deepClone(sampleState);
-    return { ...deepClone(sampleState), ...JSON.parse(raw) };
-  } catch {
-    return deepClone(sampleState);
-  }
+  return deepClone(sampleState);
 }
 
 function normalizeState() {
   state.schemaVersion = APP_SCHEMA_VERSION;
   state.revision = Number(state.revision || 0);
-  if (!GANTT_VIEWS.includes(state.ganttView)) state.ganttView = "job";
+  state.selectedDetailOt = String(state.selectedDetailOt || "").trim();
+  state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(state.ganttView);
   state.ganttDayWidth = nearestGanttDayWidth(state.ganttDayWidth);
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   state.horizonDays = Math.max(1, Math.min(45, Number(state.horizonDays || DEFAULT_HORIZON_DAYS)));
   state.loadWeekStart = normalizeWeekStartValue(state.loadWeekStart || state.planStart);
-  state.reportWeekStart = normalizeWeekStartValue(state.reportWeekStart || state.planStart);
+  if (!state.reportWeekStart) state.reportWeekStart = normalizeWeekStartValue(state.planStart);
   state.draftVersionId = String(state.draftVersionId || "");
   state.activePublishedVersionId = String(state.activePublishedVersionId || "");
   state.publishedVersions = Array.isArray(state.publishedVersions) ? state.publishedVersions : [];
+  state.operationsSyncedAt = state.operationsSyncedAt && typeof state.operationsSyncedAt === "object"
+    ? state.operationsSyncedAt
+    : {};
+  state.preparedPlanningByOt = state.preparedPlanningByOt && typeof state.preparedPlanningByOt === "object" ? state.preparedPlanningByOt : {};
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
   state.workSchedule = { ...deepClone(DEFAULT_WORK_SCHEDULE), ...(state.workSchedule || {}) };
   state.dailyBreaks = Object.keys(DEFAULT_DAILY_BREAKS).reduce((out, key) => {
@@ -822,17 +1622,38 @@ function normalizeState() {
     toolChangeMinutes: 120,
     toolChangeOperator: "AJUSTADOR",
     weeklyReleaseTarget: DEFAULT_WEEKLY_RELEASE_TARGET,
+    flowBalancedEnabled: true,
+    flowWipTarget: 10,
     ...(state.settings && typeof state.settings === "object" ? state.settings : {}),
   };
   state.settings.weeklyReleaseTarget = Math.max(0, Number(state.settings.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
+  state.settings.flowBalancedEnabled = state.settings.flowBalancedEnabled !== false;
+  const flowWipTarget = Number(state.settings.flowWipTarget);
+  state.settings.flowWipTarget = Number.isFinite(flowWipTarget)
+    ? Math.min(50, Math.max(1, Math.round(flowWipTarget)))
+    : 10;
   state.customCapabilities = Array.isArray(state.customCapabilities) ? state.customCapabilities : [];
   const hadConfiguredCapabilities = Array.isArray(state.configuredCapabilities);
   state.configuredCapabilities = hadConfiguredCapabilities ? state.configuredCapabilities : [];
   state.operationCatalog = Array.isArray(state.operationCatalog) ? state.operationCatalog : [];
+  state.operationCatalogWarning = String(state.operationCatalogWarning || "");
   state.hiddenCapabilities = Array.isArray(state.hiddenCapabilities) ? state.hiddenCapabilities : [];
+  state.excludedCapabilities = normalizeCapabilityKeys(state.excludedCapabilities);
+  state.matrixSearch = String(state.matrixSearch || "");
   state.operationRules = state.operationRules && typeof state.operationRules === "object" ? state.operationRules : {};
   state.machines = (Array.isArray(state.machines) ? state.machines : [])
-    .map((machine) => ({ id: String(machine.id || machine.machine || machine.maquina || "").trim().toUpperCase(), active: machine.active !== false }))
+    .map((machine) => {
+      // `active` es la bandera EFECTIVA de "esta maquina se puede agendar": lo que diga
+      // NetSuite (o la hoja) menos lo que la planificacion decidio apartar. Se calcula aqui
+      // una sola vez para que los ~6 filtros `.filter(m => m.active !== false)` de la pagina
+      // no tengan que conocer el detalle (RULE-SUP-017).
+      const excluded = machine.excluded === true;
+      return {
+        id: String(machine.id || machine.machine || machine.maquina || "").trim().toUpperCase(),
+        excluded: excluded,
+        active: machine.active !== false && !excluded,
+      };
+    })
     .filter((machine) => machine.id);
   state.toolCatalog = (Array.isArray(state.toolCatalog) ? state.toolCatalog : []).map((item, index) => ({
     id: String(item.id || `tool-${index + 1}`),
@@ -864,13 +1685,14 @@ function normalizeState() {
   state.materials = normalizeMaterials(state.materials);
   state.calendarExceptions = (Array.isArray(state.calendarExceptions) ? state.calendarExceptions : []).map((item, index) => {
     const rawConcept = normalizeStatus(item.concept || item.concepto || item.resourceType || item.tipoRecurso || "GENERAL");
-    const concept = ["GENERAL", "MAQUINA", "ASUETO", "VACACIONES"].includes(rawConcept) ? rawConcept : "GENERAL";
+    const concept = ["GENERAL", "MAQUINA", "OPERADOR", "ASUETO", "VACACIONES"].includes(rawConcept) ? rawConcept : "GENERAL";
     const startDate = normalizeOtDate(item.startDate || item.fechaInicio || item.date || item.fecha);
     const endDate = normalizeOtDate(item.endDate || item.fechaFin || item.date || item.fecha || startDate);
     return {
       id: String(item.id || `cal-${index + 1}`),
       concept,
       machine: concept === "MAQUINA" ? String(item.machine || item.maquina || item.resource || item.recurso || "").trim().toUpperCase() : "",
+      resource: concept === "OPERADOR" ? String(item.resource || item.recurso || item.machine || item.maquina || "").trim().toUpperCase() : "",
       startDate,
       endDate: endDate || startDate,
       start: String(item.start || item.horaInicio || "00:00"),
@@ -894,6 +1716,8 @@ function normalizeState() {
     }))
     .filter((item) => item.name);
   state.operationPlanStatuses = normalizeOperationPlanStatuses(state.operationPlanStatuses);
+  state.publishedPlanStatuses = normalizePublishedPlanStatuses(state.publishedPlanStatuses);
+  draftViewStatusesCache = null;
   state.netSuiteChangeAlerts = normalizeNetSuiteChangeAlerts(state.netSuiteChangeAlerts);
   state.netSuiteSyncAlert = normalizeNetSuiteSyncAlert(state.netSuiteSyncAlert);
   state.capacityModes = state.capacityModes && typeof state.capacityModes === "object" ? state.capacityModes : {};
@@ -903,10 +1727,66 @@ function normalizeState() {
   state.operatorPerformance = normalizeOperatorPerformance(state.operatorPerformance, state.operators);
   state.cts = Array.isArray(state.cts) ? state.cts : [];
   ensureToolChangeCapability();
-  state.operations = (Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index));
+  state.operations = dedupeOperationsById((Array.isArray(state.operations) ? state.operations : []).map((op, index) => normalizeOperation(op, index)));
+  invalidateCurrentPlanOperationsCache();
+  if (window.PlanningWorkflowCore?.reconcileOperationPlanStatuses) {
+    state.operationPlanStatuses = window.PlanningWorkflowCore.reconcileOperationPlanStatuses(state);
+    draftViewStatusesCache = null;
+  }
+  // EL ESTADO DE COMPLETADO NO SE SOBRESCRIBE SI NO HAY FECHA EN EL MAPA.
+  // Antes: op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
+  // O sea que si la clave no estaba en el mapa, la operación volvía a PENDIENTE, sin importar
+  // lo que tuviera. Y la clave es `OP|{ot}|{secuencia}|{ct}`, que depende de la secuencia y del
+  // CT. Si el planeador regenera y cambia cualquiera de los dos, la clave cambia, el lookup
+  // falla, y la operacion pierde su "completada". Medido el 2026-09-27 con las funciones reales:
+  //   completada con secuencia 5 -> guardada en OP|3143|5|5459
+  //   el planeador la pasa a secuencia 3 -> se busca en OP|3143|3|5459
+  //   no está ahí -> PENDIENTE. La operacion sigue ahi, con sus datos, pero sin el completado.
+  // El usuario lo reporto en produccion: completo operaciones, movio de backlog a plan, y los
+  // completados desaparecieron.
+  //
+  // EL ARREGLO: si el mapa NO tiene estado para la clave actual, no toco el planStatus que la
+  // operacion ya trae. Solo escribo cuando el mapa dice algo explicito. Asi:
+  //   - mapa dice COMPLETADA_PLAN -> se escribe COMPLETADA_PLAN
+  //   - mapa dice PENDIENTE -> se escribe PENDIENTE
+  //   - mapa no tiene estado -> se conserva lo que la operacion trae (que puede ser
+  //     COMPLETADA_PLAN si la clave cambio, que es exactamente el bug que estamos arreglando)
+  //
+  // Es seguro porque el planStatus de la operacion siempre esta sincronizado con el mapa: se
+  // escriben juntos en writePlanStatusByOrigin (app.js:1886 y 8811). La unica forma de que
+  // se desincronicen es el cambio de clave, que es este bug. Y cuando el mapa dice PENDIENTE
+  // explicitamente, se sobrescribe a PENDIENTE, que es el caso de descompletar.
+  // EL FALLBACK DE operationPlanStatusEntry, CABLEADO AL CAMINO QUE FALLABA.
+  // Antes: draftViewStatuses()[operationCompletionKey(op)] — busqueda directa, sin fallback.
+  // Si la clave cambiaba (secuencia o CT), el lookup fallaba y la operacion perdia su
+  // "completada". Ahora se usa operationPlanStatusEntry, que tiene tres niveles:
+  //   1. clave directa
+  //   2. por operationId (el id de NetSuite, que no cambia)
+  //   3. por ot+secuencia+ct (por contenido, si el id tampoco coincide)
+  // Con eso se recuperan los completados aunque la clave haya cambiado.
+  //
+  // LA GUARDA DE REAPERTURA. Si la entrada tiene reopenedAt, la operacion fue reabierta y NO
+  // debe marcarse como COMPLETADA_PLAN, aunque el estatus diga eso. Sin esta guarda, el
+  // fallback por contenido podria recuperar un COMPLETADA_PLAN viejo y no respetar la reapertura.
+  // Es un conflicto real: la hoja tiene entradas con FECHA_REAPERTURA (ej. OP|3385|1|5458).
+  // EL FALLBACK DE operationPlanStatusEntry, CABLEADO AL CAMINO QUE FALLABA.
+  // Antes: draftViewStatuses()[operationCompletionKey(op)] — busqueda directa, sin fallback.
+  // Si la clave cambiaba (secuencia o CT), el lookup fallaba y la operacion perdia su
+  // "completada". Ahora se usa operationPlanStatusEntry, que tiene tres niveles:
+  //   1. clave directa
+  //   2. por operationId (el id de NetSuite, que no cambia)
+  //   3. por ot+secuencia+ct (por contenido, si el id tampoco coincide)
+  // Con eso se recuperan los completados aunque la clave haya cambiado.
+  //
+  // LA GUARDA DE REAPERTURA. Si la entrada tiene reopenedAt, la operacion fue reabierta y NO
+  // debe marcarse como COMPLETADA_PLAN, aunque el estatus diga eso. Sin esta guarda, el
+  // fallback por contenido podria recuperar un COMPLETADA_PLAN viejo y no respetar la reapertura.
+  // Es un conflicto real: la hoja tiene entradas con FECHA_REAPERTURA (ej. OP|3385|1|5458).
   for (const op of state.operations) {
-    const status = state.operationPlanStatuses[operationCompletionKey(op)];
-    op.planStatus = status?.status === "COMPLETADA_PLAN" ? "COMPLETADA_PLAN" : "PENDIENTE";
+    const status = window.PlanningWorkflowCore?.operationPlanStatusEntry?.(state, op, draftViewStatuses());
+    if (status?.status === "COMPLETADA_PLAN" && !status.reopenedAt) op.planStatus = "COMPLETADA_PLAN";
+    else if (status?.status === "PENDIENTE") op.planStatus = "PENDIENTE";
+    // Si no hay estado, no se toca. El planStatus que la operacion trae se conserva.
   }
   applyWorkOrderDueDates();
   const operationCapabilities = state.operations
@@ -933,10 +1813,22 @@ function normalizeState() {
   const operationOts = state.operations.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL").map((op) => op.ot);
   const workOrderOts = state.workOrders.map((workOrder) => workOrder.ot);
   const jobOts = uniq([...operationOts, ...workOrderOts].filter(Boolean));
-  const visibleOts = new Set(jobOts.filter((ot) => !isClosedJobStatus(jobStatusForOt(ot))));
-  const movableOts = new Set(jobOts.filter((ot) => isMovablePlanningStatus(jobStatusForOt(ot))));
+  const visibleOts = new Set(jobOts.filter((ot) => !isClosedJobStatus(jobStatusParaTarjeta(ot))));
+  const movableOts = new Set(jobOts.filter((ot) => isMovablePlanningStatus(jobStatusParaTarjeta(ot))));
+  // Una OT que esta POR CONFIRMAR no vino en el ultimo payload pero tampoco hay evidencia de
+  // que este cerrada (RULE-OT-049). Antes se caia de la cola aqui, en cada normalize, porque
+  // visibleOts se armaba solo con operaciones y workOrders: si su ficha faltaba, la OT
+  // desaparecia. Ahora una OT por confirmar no se poda por falta de datos; solo se poda si su
+  // estatus dice cerrada, que es lo unico que sí es evidencia.
+  const porConfirmar = new Set(Object.keys(state.unconfirmedWorkOrders || {}).map(materialOtKey).filter(Boolean));
+  const sigueViva = (ot) => {
+    if (visibleOts.has(ot) && movableOts.has(ot)) return true;
+    if (!porConfirmar.has(materialOtKey(ot))) return false;
+    return !isClosedJobStatus(jobStatusParaTarjeta(ot));
+  };
   const configuredSelectedOts = Array.isArray(state.selectedOts)
     ? state.selectedOts.filter((ot) => visibleOts.has(ot) && movableOts.has(ot))
+      .concat((state.selectedOts || []).filter((ot) => !visibleOts.has(ot) && sigueViva(ot)))
     : [];
   state.selectedOts = uniq(configuredSelectedOts);
   if (state.lastSchedule && typeof state.lastSchedule === "object") {
@@ -946,7 +1838,7 @@ function normalizeState() {
       scheduledOts: uniq(scheduledOts).filter((ot) => visibleOts.has(ot)),
     };
   }
-  const derivedLockedOts = uniq(state.operations.filter((op) => op.locked === true).map((op) => op.ot));
+  const derivedLockedOts = uniq(currentPlanOperations().filter((op) => op.locked === true).map((op) => op.ot));
   const configuredLockedOts = Array.isArray(state.lockedOts) && state.lockedOts.length ? state.lockedOts : derivedLockedOts;
   state.lockedOts = uniq(configuredLockedOts)
     .filter((ot) => state.selectedOts.includes(ot));
@@ -960,17 +1852,6 @@ function normalizeState() {
     : (activeSelectedOperationOt ? [activeSelectedOperationOt] : []);
   state.expandedCts = Array.isArray(state.expandedCts) ? state.expandedCts : [];
   for (const op of state.operations) op.locked = state.lockedOts.includes(op.ot);
-  const priorityByOt = new Map();
-  for (const op of state.operations) {
-    const current = priorityByOt.get(op.ot);
-    priorityByOt.set(op.ot, current == null ? op.prioridad : Math.min(current, op.prioridad));
-  }
-  for (const op of state.operations) op.prioridad = priorityByOt.get(op.ot) || 999;
-  const selectedOrderIndex = new Map(state.selectedOts.map((ot, index) => [ot, index]));
-  state.selectedOts.sort((a, b) =>
-    (priorityByOt.get(a) || 999) - (priorityByOt.get(b) || 999) ||
-    (selectedOrderIndex.get(a) || 0) - (selectedOrderIndex.get(b) || 0)
-  );
   let movablePriority = 1;
   state.selectedOts.forEach((ot) => {
     state.operations.filter((op) => op.ot === ot).forEach((op) => { op.prioridad = movablePriority; });
@@ -1017,8 +1898,32 @@ function ensureToolChangeCapability() {
   if (!CAPACITY_MODES.includes(state.capacityModes[key])) state.capacityModes[key] = "FINITA";
 }
 
+function dedupeOperationsById(operations) {
+  const byId = new Map();
+  for (const op of operations || []) {
+    const id = String(op.id || "");
+    if (!id) continue;
+    const existing = byId.get(id);
+    if (!existing) { byId.set(id, op); continue; }
+    const score = (candidate) => {
+      let s = 0;
+      if (String(candidate.estatus || "").toUpperCase() === "PLAN") s += 2;
+      if (candidate.fechaInicio && candidate.horaInicio) s += 1;
+      if (candidate.herramental) s += 1;
+      if (candidate.maquina) s += 1;
+      return s;
+    };
+    if (score(op) > score(existing)) byId.set(id, op);
+  }
+  return (operations || []).filter((op) => {
+    const id = String(op.id || "");
+    return !id || byId.get(id) === op;
+  });
+}
+
 function normalizeOperation(op, index) {
   const next = { ...op };
+  next.log = compactOperationLog(next.log);
   next.id = next.id || `op-${Date.now()}-${index}`;
   next.num = Number(next.num || index + 1);
   next.ot = String(next.ot || "").trim() || `OT-${index + 1}`;
@@ -1028,19 +1933,24 @@ function normalizeOperation(op, index) {
   next.operador = String(next.operador || "").trim() || "SIN_OPERADOR";
   next.maquina = String(next.maquina || "").trim();
   next.herramental = cleanToolValue(next.herramental);
+  next.additionalHerramentales = additionalToolListValue(next.additionalHerramentales || next.herramentalesExtra);
   next.kitHerramental = cleanToolValue(next.kitHerramental);
   const toolFields = normalizeToolFields(next.maquina, next.herramental, next.kitHerramental);
   next.maquina = toolFields.maquina;
   next.herramental = toolFields.herramental;
   next.kitHerramental = toolFields.kitHerramental;
   next.tipoInsercion = String(next.tipoInsercion || "OPERACION").trim().toUpperCase();
-  if (!isBendingAppOperation(next) && next.tipoInsercion !== "CAMBIO_HERRAMENTAL") next.maquina = "";
+  if (!isBendingAppOperation(next) && next.tipoInsercion !== "CAMBIO_HERRAMENTAL") {
+    next.maquina = "";
+    next.additionalHerramentales = [];
+  }
   if (isBendingAppOperation(next) && normalizeStatus(next.maquina) === "SIN_MAQUINA") next.maquina = "";
   if (String(next.ct) === "5459" && next.maquina === "1") next.maquina = "";
   next.estatus = String(next.estatus || "PLAN").trim();
   next.locked = next.locked === true || String(next.locked || "").trim().toUpperCase() === "TRUE";
-  next.tiempoSetup = Number(next.tiempoSetup || 0);
-  next.tiempoProd = Number(next.tiempoProd || 0);
+  next.tiempoCiclo = Number(next.tiempoCiclo ?? next.cycleTime ?? 0);
+  next.tiempoSetup = Number(next.tiempoSetup ?? next.setupTime ?? 0);
+  next.tiempoProd = Number(next.tiempoProd ?? next.productionTime ?? 0);
   next.subcontractType = String(next.subcontractType || "").trim().toUpperCase();
   next.subcontractDays = Number(next.subcontractDays || 0);
   if (isSubcontractAppOperation(next)) {
@@ -1086,6 +1996,13 @@ function normalizeMaterials(materials) {
       required: Number(materialValue(item, ["required", "Requerido"]) || 0),
       issued: Number(materialValue(item, ["issued", "Emitido"]) || 0),
       pending: Number(materialValue(item, ["pending", "Pendiente"]) || 0),
+      // MEDIDO 2026-10-04: `lineId` viaja porque esta funcion RECONSTRUYE el material con
+      // una lista fija de campos, y `filasMaterials` (supabase-writer.js) lo necesita para
+      // escribir `line_id` con el id de renglon de NetSuite en vez de con el UUID de la fila.
+      // Sin el, cada guardado inseria una copia del material y la hoja de inspeccion
+      // acababa con cada MP dos veces. No se deduce nada de `id`: son claves distintas y
+      // solo `line_id` es la natural.
+      lineId: String(materialValue(item, ["lineId", "line_id", "LINE_ID"]) || "").trim(),
     };
   }).filter((item) => {
     if (!item.ot || !item.component) return false;
@@ -1115,6 +2032,7 @@ function normalizeWorkOrders(workOrders) {
     averageSalePrice: Math.max(0, Number(item.averageSalePrice ?? item.precioPromedioVenta ?? 0)),
     averageSalePriceFrom: normalizeOtDate(item.averageSalePriceFrom || item.precioDesde),
     averageSalePriceTo: normalizeOtDate(item.averageSalePriceTo || item.precioHasta),
+    lastSalePrice: Math.max(0, Number(item.lastSalePrice ?? item.precioUltimaVenta ?? 0)),
     status: String(item.status || item.estatus || "").trim(),
     customer: String(item.customer || item.cliente || "").trim(),
   })).filter((item) => {
@@ -1141,6 +2059,16 @@ function normalizeOperationPlanStatuses(source) {
       operationId: String(item.operationId || item.idOperacion || "").trim(),
       completedAt: String(item.completedAt || item.fechaCompletado || "").trim(),
     };
+    return out;
+  }, {});
+}
+
+function normalizePublishedPlanStatuses(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.keys(source).reduce((out, origin) => {
+    const originKey = String(origin || "").trim();
+    if (!originKey || originKey === "draft") return out;
+    out[originKey] = normalizeOperationPlanStatuses(source[originKey]);
     return out;
   }, {});
 }
@@ -1318,13 +2246,152 @@ function operationCompletionKey(op) {
   if (normalizeStatus(op?.tipoInsercion) === "CAMBIO_HERRAMENTAL") {
     return `TOOL_CHANGE|${normalizeStatus(op?.id || `${op?.ot}-${op?.secuencia}`)}|${normalizeStatus(op?.maquina)}|${normalizeStatus(op?.herramental)}|${normalizeStatus(op?.kitHerramental)}`;
   }
-  return op?.id ? `OP|${normalizeStatus(op.id)}` : `OP|${normalizeStatus(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeStatus(op?.ct)}`;
+  return `OP|${normalizeStatus(op?.ot)}|${Number(op?.secuencia || 0)}|${normalizeStatus(op?.ct || "SIN_CT")}`;
 }
 
-function isPlanCompletedOperation(op) {
+let draftViewStatusesCache = null;
+
+function invalidateDraftViewStatuses() {
+  draftViewStatusesCache = null;
+}
+
+function latestPublishedOriginId() {
+  return activePublishedSnapshotId();
+}
+
+function statusesForPlanOrigin(origin) {
+  if (!origin || origin === "draft") return state.operationPlanStatuses || {};
+  return state.publishedPlanStatuses?.[origin] || {};
+}
+
+function draftViewStatuses() {
+  if (draftViewStatusesCache) return draftViewStatusesCache;
+  const latest = latestPublishedOriginId();
+  const folded = latest ? { ...(state.publishedPlanStatuses?.[latest] || {}) } : {};
+  Object.assign(folded, state.operationPlanStatuses || {});
+  draftViewStatusesCache = folded;
+  return folded;
+}
+
+function planStatusOriginForSource() {
+  const snapshotId = reportSnapshot?.snapshotId || "draft";
+  return snapshotId === "draft" ? "draft" : String(snapshotId).trim();
+}
+
+function activePlanReportStatuses() {
+  if (planStatusOriginForSource() === "draft") return draftViewStatuses();
+  return statusesForPlanOrigin(planStatusOriginForSource());
+}
+
+function shouldMutateDraftFromSource() {
+  const origin = planStatusOriginForSource();
+  return origin === "draft" || origin === latestPublishedOriginId();
+}
+
+const pendingPlanStatusSaveKeys = new Set();
+
+function writePlanStatusByOrigin(key, status) {
+  const origin = planStatusOriginForSource();
+  const row = { ...(status || {}), key, origin };
+  pendingPlanStatusSaveKeys.add(origin + "\u0000" + key);
+  if (origin === "draft") {
+    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
+    state.operationPlanStatuses[key] = row;
+    invalidateDraftViewStatuses();
+    return row;
+  }
+  if (!state.publishedPlanStatuses) state.publishedPlanStatuses = {};
+  if (!state.publishedPlanStatuses[origin]) state.publishedPlanStatuses[origin] = {};
+  state.publishedPlanStatuses[origin][key] = row;
+  if (origin === latestPublishedOriginId()) {
+    if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
+    state.operationPlanStatuses[key] = { ...row, origin: "draft" };
+    pendingPlanStatusSaveKeys.add("draft\u0000" + key);
+    invalidateDraftViewStatuses();
+  }
+  return row;
+}
+
+function clearPendingPlanStatusSaveKeys(key) {
+  for (const entry of [...pendingPlanStatusSaveKeys]) {
+    if (entry.slice(entry.indexOf("\u0000") + 1) === String(key || "")) pendingPlanStatusSaveKeys.delete(entry);
+  }
+}
+
+function mergeImportedPlanStatuses(local, remote) {
+  const result = { ...(remote || {}) };
+  if (!local || !pendingPlanStatusSaveKeys.size) return result;
+  for (const entry of pendingPlanStatusSaveKeys) {
+    const sep = entry.indexOf("\u0000");
+    if (sep < 0 || entry.slice(0, sep) !== "draft") continue;
+    const key = entry.slice(sep + 1);
+    const localRow = local[key];
+    if (localRow && !result[key]) result[key] = localRow;
+  }
+  return result;
+}
+
+function mergeImportedPublishedPlanStatuses(local, remote) {
+  const result = {};
+  Object.keys(remote || {}).forEach((origin) => { result[origin] = { ...(remote[origin] || {}) }; });
+  if (!local || !pendingPlanStatusSaveKeys.size) return result;
+  for (const entry of pendingPlanStatusSaveKeys) {
+    const sep = entry.indexOf("\u0000");
+    if (sep < 0) continue;
+    const origin = entry.slice(0, sep);
+    if (origin === "draft") continue;
+    const key = entry.slice(sep + 1);
+    const localRow = local[origin] && local[origin][key];
+    if (localRow && !(result[origin] && result[origin][key])) {
+      if (!result[origin]) result[origin] = {};
+      result[origin][key] = localRow;
+    }
+  }
+  return result;
+}
+
+function deletePlanStatusByOrigin(key) {
+  const origin = planStatusOriginForSource();
+  if (origin === "draft") {
+    if (state.operationPlanStatuses) delete state.operationPlanStatuses[key];
+    invalidateDraftViewStatuses();
+    return;
+  }
+  if (state.publishedPlanStatuses?.[origin]) delete state.publishedPlanStatuses[origin][key];
+  if (origin === latestPublishedOriginId()) {
+    if (state.operationPlanStatuses) delete state.operationPlanStatuses[key];
+    invalidateDraftViewStatuses();
+  }
+}
+
+function rollbackPlanStatusByOrigin(key, previousStatus) {
+  const origin = planStatusOriginForSource();
+  if (!previousStatus) {
+    deletePlanStatusByOrigin(key);
+    return;
+  }
+  if (origin === "draft") {
+    const belongsToDraft = !previousStatus.origin || previousStatus.origin === "draft";
+    if (belongsToDraft) writePlanStatusByOrigin(key, { ...previousStatus, origin: "draft" });
+    else deletePlanStatusByOrigin(key);
+    return;
+  }
+  if (origin === latestPublishedOriginId()) {
+    writePlanStatusByOrigin(key, previousStatus);
+    if (state.operationPlanStatuses) {
+      state.operationPlanStatuses[key] = { ...previousStatus, origin: "draft" };
+    }
+    invalidateDraftViewStatuses();
+    return;
+  }
+  writePlanStatusByOrigin(key, previousStatus);
+}
+
+function isPlanCompletedOperation(op, statusesOverride) {
   if (!op) return false;
-  if (normalizeStatus(op.planStatus) === "COMPLETADA_PLAN") return true;
-  return state.operationPlanStatuses?.[operationCompletionKey(op)]?.status === "COMPLETADA_PLAN";
+  const stored = (statusesOverride || draftViewStatuses())[operationCompletionKey(op)];
+  if (stored?.status) return stored.status === "COMPLETADA_PLAN";
+  return normalizeStatus(op.planStatus) === "COMPLETADA_PLAN";
 }
 
 function normalizeOtDate(value) {
@@ -1333,9 +2400,75 @@ function normalizeOtDate(value) {
   return `${parsed.year}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
 }
 
+// ORIGEN DE LA FOTO, DOCUMENTADO. MEDIDO 2026-10-01 con grep sobre el repo: la foto_url que
+// acaba en work_orders sale de DOS fuentes y el orden lo decide el servidor.
+//
+//   1. GOOGLE DRIVE, que es la que se usa. src/server/09-photos.js:35 arma la URL como
+//      'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w400' y la busca por el
+//      nombre del ARTICULO (PP_photoLookupKeys_) dentro de la carpeta PHOTO_FOLDER_ID. Esa URL
+//      SI es una imagen y SI la pinta un <img>.
+//   2. NetSuite, el campo 'Foto URL' (08-netsuite.js:989), que solo se usa si Drive no dio nada.
+//
+// POR QUE ESTA FUNCION ES DISTINTA DE normalizeDrawingUrl. normalizeDrawingUrl (mas abajo en este
+// mismo archivo) resuelve DIBUJOS: PDFs en la red de Produccion2 que se abren con el protocolo
+// maldonado://, y por eso devuelve cosas que un <img> jamas puede pintar (maldonado://, file://,
+// UNC). Para una foto solo valen las cuatro formas de abajo, y las demas se rechazan en vez de
+// dejarse pintar un roto:
+//
+//   - la URL de thumbnail que arma el servidor, tal cual (es la forma que produce el 09-photos.js);
+//   - un https que venga de donde venga (la foto de NetSuite, o un link pegado a mano);
+//   - un id suelto de Drive o un /file/d/<id>/...: se traducen a THUMBNAIL, no a /view, porque
+//     /view es la pagina HTML del visor y un <img> que la pide da error. O sea que el error
+//     "llega la URL pero no carga" viene justo de ahi, y por eso la traduccion es a /thumbnail;
+//   - un data:image/, que es como viaja una foto pegada dentro de la propia base.
+//
+// Se rechaza http:// a proposito: la pagina se sirve por https y un <img> en http es contenido
+// mixto que el navegador bloquea. Y se rechaza javascript:, que es la inyeccion de la que esta
+// funcion existe.
+const DRIVE_THUMBNAIL = "https://drive.google.com/thumbnail?id=";
+const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{20,}$/;
+
 function safePhotoUrl(value) {
   const text = String(value || "").trim();
-  return /^(https:\/\/|data:image\/)/i.test(text) ? text : "";
+  if (!text) return "";
+  if (/^data:image\//i.test(text)) return text;
+  if (/^https:\/\//i.test(text)) {
+    // Un /file/d/<id>/view o /preview pegado como foto se traduce a thumbnail: /view y /preview
+    // son paginas HTML del visor, no imagenes, y por eso el <img> fallaba y la tarjeta caia al
+    // "Sin foto" con el dato presente. El id se saca de la misma forma que en la linea 35.
+    const drive = text.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+    if (drive) return DRIVE_THUMBNAIL + encodeURIComponent(drive[1]) + "&sz=w400";
+    return text;
+  }
+  // Id suelto de Drive: mismo criterio que usa normalizeDrawingUrl mas abajo,
+  // /^[A-Za-z0-9_-]{20,}$/, pero traducido al endpoint de IMAGEN y no al del visor.
+  if (DRIVE_FILE_ID.test(text)) return DRIVE_THUMBNAIL + encodeURIComponent(text) + "&sz=w400";
+  return "";
+}
+
+// POR QUE "Sin foto" NO BASTABA. MEDIDO 2026-10-01: las 175 tarjetas del Backlog mostraban el
+// mismo "Sin foto" para dos cosas opuestas, y no se podia saber cual era:
+//
+//   - la OT no tiene foto en la carpeta de Drive, o la que trae NetSuite no es una imagen; y
+//   - SI hay foto, la URL esta, y el <img> no la cargo (Drive denies, la red, contenido mixto).
+//
+// La segunda es un dato roto y la primera es un dato ausente, y se confondian en el mismo texto.
+// El <span> del recuadro distingue las dos: "Sin foto" cuando no hay URL, y "Foto no cargó" cuando
+// la URL existia y el navegador la rechazo. Los tres render (backlog, cola, detalle) pasan por
+// esta misma funcion para que no vuelvan a separarse.
+function bindPhotoFallback(root) {
+  root.querySelectorAll("[data-backlog-photo], [data-queue-photo], [data-detail-photo]").forEach((photo) => {
+    photo.addEventListener("error", () => {
+      const box = photo.parentElement;
+      if (!box) return;
+      box.classList.remove("has-photo");
+      // La clase va SIN tilde a proposito: es un selector CSS y no un texto para el usuario. El
+      // texto que el usuario lee va en el <span>, y ese si lleva la tilde.
+      box.classList.add("photo-broken");
+      const label = box.querySelector("span");
+      if (label) label.textContent = "Foto no cargó";
+    });
+  });
 }
 
 function materialValue(item, names) {
@@ -1346,6 +2479,7 @@ function materialValue(item, names) {
 }
 
 function render(options = {}) {
+  const perfMark = planningPerfMark("render");
   const parts = options.parts || {};
   const all = parts === true || typeof parts !== "object" || !Object.keys(parts).length;
   if (all || parts.normalize) normalizeState();
@@ -1356,19 +2490,140 @@ function render(options = {}) {
   if (all || parts.queue) renderPriorityQueue();
   if (all || parts.gantt) renderGantt();
   if (all || parts.loads) renderLoads();
+  if (all || parts.saturation) renderSaturation();
   if (all || parts.matrix) renderMatrix();
   if (all || parts.catalogs) renderConfiguration();
   if (all || parts.reports) renderReports();
-  saveState(options.saveScope || "plan");
+  if (options.save !== false) saveState(options.saveScope || "plan");
+  planningPerfMeasure("render", perfMark);
+}
+
+function invalidateCurrentPlanOperationsCache() {
+  currentPlanOperationsCache = null;
+  currentPlanOperations.cache = null;
+  priorityJobsCache = null;
+  planAlertItemsCache = null;
+  operatorLoadsCache = null;
+  if (typeof operatorLoadsRenderMemo !== "undefined") operatorLoadsRenderMemo = null;
+}
+
+function invalidatePriorityJobsCache() {
+  priorityJobsCache = null;
+  planAlertItemsCache = null;
+  operatorLoadsCache = null;
+  if (typeof operatorLoadsRenderMemo !== "undefined") operatorLoadsRenderMemo = null;
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
+}
+
+function planningStateIndexes() {
+  const operations = Array.isArray(state.operations) ? state.operations : [];
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const materials = Array.isArray(state.materials) ? state.materials : [];
+  const cache = typeof planningStateIndexesCache === "undefined" ? planningStateIndexes.cache : planningStateIndexesCache;
+  if (cache
+      && cache.operations === operations
+      && cache.workOrders === workOrders
+      && cache.materials === materials) {
+    return cache;
+  }
+  const next = {
+    operations,
+    workOrders,
+    materials,
+    operationsByOt: new Map(),
+    workOrdersByOt: new Map(),
+    materialsByOt: new Map(),
+  };
+  for (const op of operations) {
+    const key = materialOtKey(op?.ot);
+    if (!key) continue;
+    if (!next.operationsByOt.has(key)) next.operationsByOt.set(key, []);
+    next.operationsByOt.get(key).push(op);
+  }
+  for (const workOrder of workOrders) {
+    const key = materialOtKey(workOrder?.ot);
+    if (key && !next.workOrdersByOt.has(key)) next.workOrdersByOt.set(key, workOrder);
+  }
+  for (const material of materials) {
+    const key = materialOtKey(material?.ot);
+    if (!key) continue;
+    if (!next.materialsByOt.has(key)) next.materialsByOt.set(key, []);
+    next.materialsByOt.get(key).push(material);
+  }
+  if (typeof planningStateIndexesCache === "undefined") planningStateIndexes.cache = next;
+  else planningStateIndexesCache = next;
+  return next;
+}
+
+function planningPerfEnabled() {
+  if (typeof window !== "undefined" && window.PLAN_APP_PERFORMANCE_DEBUG === true) return true;
+  if (state?.settings?.performanceDebug === true) return true;
+  try { return localStorage.getItem("planPlanningPerfDebug") === "1"; } catch (_) { return false; }
+}
+
+function planningPerfMark(name) {
+  if (!planningPerfEnabled() || typeof performance === "undefined" || typeof performance.mark !== "function") return "";
+  const mark = `planning:${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  performance.mark(mark);
+  return mark;
+}
+
+function planningPerfMeasure(name, startMark) {
+  if (!startMark || !planningPerfEnabled() || typeof performance === "undefined" || typeof performance.measure !== "function") return;
+  const endMark = `${startMark}:end`;
+  try {
+    performance.mark(endMark);
+    const measure = performance.measure(`planning:${name}`, startMark, endMark);
+    if (typeof console !== "undefined" && typeof console.debug === "function") console.debug(`[planning perf] ${name}: ${Math.round(measure.duration)}ms`);
+    performance.clearMarks?.(startMark);
+    performance.clearMarks?.(endMark);
+    performance.clearMeasures?.(`planning:${name}`);
+  } catch (_) {
+    // Performance APIs vary by runtime; metrics must never affect planning.
+  }
+}
+
+function currentPlanOperations(operations = state.operations) {
+  if (operations !== state.operations) {
+    return window.PlannerCore.filterExcludedOperations(state, operations);
+  }
+  const excludedSignature = JSON.stringify(typeof normalizeCapabilityKeys === "function"
+    ? normalizeCapabilityKeys(state.excludedCapabilities)
+    : (Array.isArray(state.excludedCapabilities) ? state.excludedCapabilities : [])
+  );
+  const cache = typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache;
+  if (!cache
+      || cache.operations !== operations
+      || cache.excludedSignature !== excludedSignature) {
+    const nextCache = {
+      operations,
+      excludedSignature,
+      result: window.PlannerCore.filterExcludedOperations(state, operations),
+    };
+    if (typeof currentPlanOperationsCache === "undefined") currentPlanOperations.cache = nextCache;
+    else currentPlanOperationsCache = nextCache;
+  }
+  return (typeof currentPlanOperationsCache === "undefined"
+    ? currentPlanOperations.cache
+    : currentPlanOperationsCache).result;
+}
+
+function currentDraftScheduledOperations() {
+  return window.PlanningWorkflowCore.draftScheduledOperations({
+    ...state,
+    operations: currentPlanOperations(),
+  });
 }
 
 function renderDraftExecutiveSummary() {
   if (!els.draftExecutiveBody) return;
-  const draftOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const draftOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   const summary = weeklyExecutiveSummary(
     weeklyJobSummary(state.planStart, { operations: draftOperations }),
     state.planStart,
-    { operations: draftOperations }
+    { operations: draftOperations, sourceState: state }
   );
   els.draftExecutiveBody.innerHTML = renderWeeklyExecutiveSummary(summary, {
     title: "Resumen",
@@ -1377,7 +2632,7 @@ function renderDraftExecutiveSummary() {
 }
 
 function renderTop() {
-  const scheduledOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  const scheduledOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   const total = scheduledOperations.length;
   const planned = scheduledOperations.filter((op) => op.estatus.toUpperCase() !== "COMPLETE").length;
   const dueCount = getPriorityJobs().filter((job) => isJobSelected(job.ot) && Boolean(job.dueDate)).length;
@@ -1397,17 +2652,15 @@ function renderTop() {
   els.kpiAlerts.textContent = String(planAlertItems().length);
   const plantName = state.plant?.name ? `${state.plant.name} - ` : "";
   els.planWindow.textContent = `${plantName}${formatShortDate(window.start)} a ${formatShortDate(window.end)}`;
-  els.planStartInput.value = formatDate(window.start);
+  els.planStartInput.value = state.planStart ? String(state.planStart) : formatDate(window.start);
   els.horizonSelect.value = String(state.horizonDays);
   renderGanttDisplayControls();
   els.undoBtn.disabled = stateHistory.length === 0;
-
-  document.querySelectorAll(".segmented button").forEach((button) => {
-    button.classList.toggle("segmented-active", button.dataset.view === state.ganttView);
-  });
+  renderGanttViewSelection();
 }
 
 function renderPlanAlerts() {
+  const perfMark = planningPerfMark("alerts-render");
   if (!els.planAlerts) return;
   const alerts = planAlertItems();
   els.planAlerts.hidden = alerts.length === 0;
@@ -1422,20 +2675,64 @@ function renderPlanAlerts() {
       const ot = button.dataset.alertOt;
       const job = getPriorityJobs().find((item) => item.ot === ot);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
+      openSelectedJobDetail(ot);
       saveState();
       render();
     });
   });
+  planningPerfMeasure("alerts-render", perfMark);
 }
 
 function planAlertItems() {
+  const operations = typeof currentPlanOperations === "function" ? currentPlanOperations() : [];
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    operationsRef: operations === state.operations ? "state" : "filtered",
+    selectedOts: state.selectedOts || [],
+    lockedOts: state.lockedOts || [],
+    lastSchedule: state.lastSchedule?.scheduledOts || [],
+    planStart: state.planStart,
+    weeklyReleaseTarget: state.settings?.weeklyReleaseTarget,
+    operationCatalogWarning: state.operationCatalogWarning || "",
+    netSuiteSyncAlert: state.netSuiteSyncAlert?.message || "",
+    netSuiteChangeAlerts: (state.netSuiteChangeAlerts || []).map((alert) => [alert.ot, alert.severity, alert.summary]),
+    syncWarnings: (state.syncWarnings || []).join("|"),
+  });
+  const cache = typeof planAlertItemsCache === "undefined" ? planAlertItems.cache : planAlertItemsCache;
+  if (cache?.signature === signature) return cache.result;
   const alerts = [];
+  if (state.operationCatalogWarning) {
+    alerts.push({
+      level: "warning",
+      title: "Catalogo de operaciones NetSuite",
+      message: state.operationCatalogWarning,
+    });
+  }
+  for (const warning of state.syncWarnings || []) {
+    alerts.push({
+      level: "warning",
+      title: "Sincronizacion NetSuite",
+      message: warning,
+    });
+  }
   if (state.netSuiteSyncAlert) {
     alerts.push({
       level: "critical",
       title: "Sincronizacion NetSuite",
       message: state.netSuiteSyncAlert.message || "No se pudo sincronizar NetSuite",
+    });
+  }
+  // AVISO PERMANENTE DE PANTALLA POSIBLEMENTE ATRASADA. Si el arranque no consiguio el estado del
+  // servidor, la pantalla se hidrata con la cache local (hydrateStateFromLocalCache,
+  // performance-client.js) y esto se queda visible hasta que el servidor responde. Un toast no
+  // sirve: se borra en 12 s y una pantalla que puede estar un guardado atras no puede depender de
+  // que la persona lo haya leido. Mientras este aviso este en pantalla, NO hay que fiarse del plan.
+  if (state.fromLocalCache) {
+    alerts.push({
+      level: "critical",
+      title: "Sin conexion con el plan",
+      message: "Mostrando lo guardado en este navegador, que puede estar atrasado. "
+        + "No generes ni publiques el plan hasta que este aviso desaparezca.",
     });
   }
   for (const alert of state.netSuiteChangeAlerts || []) {
@@ -1454,7 +2751,12 @@ function planAlertItems() {
       alerts.push({ level: "warning", ot: job.ot, title: `Faltante OT ${job.ot}`, message: risk.label });
     }
   }
-  const target = weeklyExecutiveSummary(weeklyJobSummary(state.planStart), state.planStart);
+  const targetOperations = currentDraftScheduledOperations();
+  const target = weeklyExecutiveSummary(
+    weeklyJobSummary(state.planStart, { operations: targetOperations }),
+    state.planStart,
+    { operations: targetOperations, sourceState: state },
+  );
   if (!target.targetMet) {
     alerts.push({
       level: "warning",
@@ -1462,10 +2764,14 @@ function planAlertItems() {
       message: `Meta semanal no alcanzada: ${formatCurrency(target.releaseAmount)} / ${formatCurrency(target.releaseTarget)}. Faltan ${formatCurrency(target.releaseGap)}`,
     });
   }
+  const next = { signature, result: alerts };
+  if (typeof planAlertItemsCache === "undefined") planAlertItems.cache = next;
+  else planAlertItemsCache = next;
   return alerts;
 }
 
 function renderPriorityList() {
+  const focusedDueOt = document.activeElement?.dataset?.dueOt || "";
   const query = els.searchInput.value.trim().toLowerCase();
   const statusFilter = els.statusFilter.value;
   renderSelectedJobPanel();
@@ -1473,18 +2779,28 @@ function renderPriorityList() {
     .filter((job) => {
       return !job.closed && !isJobSelected(job.ot) && jobMatchesSearch(job, query) && matchesStatusFilter(job, statusFilter);
     });
+  const visibleJobs = jobs.slice(0, backlogVisibleLimit);
 
-  els.priorityCount.textContent = `${jobs.length} trabajos en espera`;
+  els.priorityCount.textContent = `${visibleJobs.length} de ${jobs.length} trabajos en espera`;
+  els.priorityLoadMore.hidden = visibleJobs.length >= jobs.length;
   els.priorityList.innerHTML = "";
 
-  for (const job of jobs) {
+  for (const job of visibleJobs) {
     const workOrder = workOrderForOt(job.ot);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
-    const article = job.parte || "SIN ARTICULO";
-    const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-    const quantityLabel = quantity ? `${formatMaterialQuantity(quantity)} pzas` : "Sin dato";
-    const photoMarkup = job.photoUrl
-      ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
+    const article = job.sinFicha ? "SIN FICHA" : job.parte || "SIN ARTICULO";
+    const noProgramablePor = jobNoProgramablePor_(job);
+    const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+    const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
+    const toolMini = jobToolMiniHtml(job);
+    const actionStatus = individualPlanningActionStatus(job.ot);
+    const actionFeedbackMessage = individualPlanningActionMessage(job.ot);
+    const actionStatusLabel = individualPlanningActionStatusLabel(actionStatus, actionFeedbackMessage || individualPlanningUnavailableReason(job.ot));
+    // Foto: sale de Google Drive (src/server/09-photos.js:35) o del campo Foto URL de NetSuite.
+    // safePhotoUrl es la unica puerta: deja pasar lo que un <img> puede pintar y rechaza lo demas.
+    const fotoUrl = safePhotoUrl(job.photoUrl);
+    const photoMarkup = fotoUrl
+      ? `<img loading="lazy" src="${escapeHtml(fotoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-backlog-photo />`
       : "";
     const card = document.createElement("article");
     card.className = `priority-card ${jobRiskCardClass(job)}${job.ot === selectedJobOt() ? " focused" : ""}${job.movable ? "" : " ineligible"}`;
@@ -1493,14 +2809,16 @@ function renderPriorityList() {
     card.title = `${job.ot} - ${job.ops.length} operaciones - ${formatMinutes(job.minutes)}`;
     card.innerHTML = `
       <div class="priority-card-main">
-        <button class="job-add" type="button"${job.movable ? "" : " disabled"} aria-label="Agregar OT ${escapeHtml(job.ot)} al plan" title="${job.movable ? "Agregar al plan" : `No disponible por estatus ${escapeHtml(job.status)}`}">+</button>
+        <button class="job-add" type="button"${job.movable ? "" : " disabled"} aria-label="Agregar OT ${escapeHtml(job.ot)} al plan" title="${job.movable ? "Agregar al plan" : `No se puede agregar: ${escapeHtml(noProgramablePor)}`}">+</button>
         <span class="drag-handle" aria-hidden="true">&#8942;&#8942;</span>
-        <div class="priority-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
+        <div class="priority-photo${fotoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="priority-card-copy">
           <div class="job-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
+          <span class="job-action-status" aria-live="polite">${actionStatusLabel}</span>
           <span class="priority-article">${escapeHtml(article)}</span>
           <span class="priority-description">${escapeHtml(job.descripcion || job.materialBase || "Sin descripcion")}</span>
-          ${jobTypeTagHtml(job)}
+          ${toolMini}
+          ${jobTypeTagHtml(job)}${workOrderSyncWarningHtml(job.ot)}
         </div>
       </div>
       <div class="priority-program">
@@ -1508,20 +2826,18 @@ function renderPriorityList() {
         <strong>${formatHours(job.minutes)}</strong>
         <small>${job.ops.length} ops</small>
       </div>
-      <div class="priority-quantity"><span>Cantidad</span><strong>${escapeHtml(quantityLabel)}</strong></div>
+      <div class="priority-quantity"><strong>${escapeHtml(quantityLabel)}</strong></div>
       <label class="priority-due-date"><span>Entrega</span><input class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" data-due-ot="${escapeHtml(job.ot)}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(workOrder?.dueDate))}"></label>
     `;
 
     card.addEventListener("click", () => {
       if (suppressBacklogClick) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderGantt();
       saveState();
     });
     card.addEventListener("pointerdown", (event) => {
-      if (!job.movable || event.button !== 0 || event.target.closest("button, input, select")) return;
+      if (!canStartBacklogDrag(card, job, event)) return;
       backlogPointerDrag = {
         pointerId: event.pointerId,
         sourceOt: job.ot,
@@ -1547,8 +2863,7 @@ function renderPriorityList() {
     });
     const dueDateInput = card.querySelector("[data-due-ot]");
     const addButton = card.querySelector(".job-add");
-    const photo = card.querySelector("[data-backlog-photo]");
-    if (photo) photo.addEventListener("error", () => photo.parentElement.classList.remove("has-photo"));
+    bindPhotoFallback(card);
     addButton.addEventListener("click", (event) => {
       event.stopPropagation();
       selectJob(job.ot, true);
@@ -1561,36 +2876,84 @@ function renderPriorityList() {
 
     els.priorityList.appendChild(card);
   }
+  const focusedDueDateInput = Array.from(els.priorityList.querySelectorAll("[data-due-ot]"))
+    .find((input) => input.dataset.dueOt === focusedDueOt);
+  focusedDueDateInput?.focus();
+}
+
+function queueItemSignature(job) {
+  const workOrder = workOrderForOt(job.ot);
+  const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+  return [
+    job.parte || "",
+    job.descripcion || "",
+    job.status || "",
+    job.movable ? "1" : "0",
+    `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`,
+    job.dueDate || "",
+    formatOtDateValue(workOrder?.dueDate),
+    workOrder?.dueDateOverride ? "1" : "0",
+    job.photoUrl || "",
+    Number(job.minutes || 0),
+    jobRiskCardClass(job),
+    jobRiskIndicatorHtml(job),
+    netSuiteChangeBadgeHtml(job.ot),
+    workOrderSyncWarningHtml(job.ot),
+    jobTypeTagHtml(job),
+    jobToolMiniHtml(job),
+  ].join("|");
 }
 
 function renderPriorityQueue() {
   const query = els.queueSearchInput.value.trim().toLowerCase();
   const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
-  const ordered = state.selectedOts.map((ot) => jobsByOt.get(ot)).filter(Boolean);
-  state.selectedOts = ordered.map((job) => job.ot);
+  // ANTES: state.selectedOts = ordered.map((job) => job.ot), o sea el RENDER reescribia el
+  // estado y toda OT que no estuviera en jobsByOt se caia de la cola en cada repintado, sin
+  // aviso y sin que nadie hubiera pedido nada (RULE-OT-049). Un render no puede borrar datos.
+  // Ahora solo se ORDENA, y las OTs sin job se conservan en la cola y se avisa de ellas, para
+  // que se vean en vez de desaparecer.
+  const unconfirmed = state.unconfirmedWorkOrders || {};
+  const ordered = [];
+  const sinJob = [];
+  for (const ot of state.selectedOts) {
+    const job = jobsByOt.get(ot);
+    if (job) ordered.push(job);
+    else sinJob.push(ot);
+  }
+  const ordenadas = [...ordered, ...sinJob.map((ot) => String(ot))];
+  if (state.queueMoveOt && !state.selectedOts.includes(state.queueMoveOt)) state.queueMoveOt = "";
+  const activeMoveOt = state.queueMoveOt || "";
   const visibleJobs = ordered.filter((job) => jobMatchesSearch(job, query));
   const fixedCount = ordered.filter((job) => job.programmed || job.locked).length;
   const pendingCount = ordered.filter((job) => !isJobScheduled(job.ot)).length;
   els.lockAllBtn.disabled = !ordered.some((job) => !job.programmed && !job.locked);
   els.unlockAllBtn.disabled = !ordered.some((job) => !job.programmed && job.locked);
+  els.returnUnlockedToBacklogBtn.disabled = !ordered.some((job) => !job.programmed && window.PlanningWorkflowCore.canRemoveSelectedOt(state, job.ot).allowed);
   els.selectedJobCount.textContent = `${ordered.length} en el plan${pendingCount ? ` / ${pendingCount} por programar` : ""}${fixedCount ? ` / ${fixedCount} fijas` : ""}`;
+  renderQueueMoveStatus(activeMoveOt);
   if (!ordered.length) {
     els.priorityQueue.innerHTML = `<div class="queue-empty">Arrastra aqui los trabajos que deseas programar</div>`;
+    els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
     return;
   }
   if (!visibleJobs.length) {
     els.priorityQueue.innerHTML = `<div class="queue-empty">No hay trabajos planeados que coincidan con la busqueda</div>`;
+    els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
     return;
   }
 
   const existingItems = els.priorityQueue.querySelectorAll("[data-queue-ot]");
   const existingOts = new Set();
   existingItems.forEach((el) => existingOts.add(el.dataset.queueOt));
-  const sameSet = existingItems.length === visibleJobs.length && visibleJobs.every((job) => existingOts.has(job.ot));
+  const sameMoveMode = (els.priorityQueue.dataset.queueMoveOt || "") === activeMoveOt;
+  const sameSet = sameMoveMode && existingItems.length === visibleJobs.length && visibleJobs.every((job) => existingOts.has(job.ot));
+  const otToElement = new Map();
+  existingItems.forEach((el) => otToElement.set(el.dataset.queueOt, el));
 
-  if (sameSet) {
-    const otToElement = new Map();
-    existingItems.forEach((el) => otToElement.set(el.dataset.queueOt, el));
+  if (sameSet && visibleJobs.every((job) => {
+    const el = otToElement.get(job.ot);
+    return el && el.dataset.queueSig === queueItemSignature(job);
+  })) {
     const parent = els.priorityQueue;
     const queueEmpty = parent.querySelector(".queue-empty");
     if (queueEmpty) queueEmpty.remove();
@@ -1602,6 +2965,16 @@ function renderPriorityQueue() {
       el.classList.toggle("pending-schedule", !scheduled);
       el.classList.toggle("pinned", Boolean(job.programmed));
       el.classList.toggle("locked", !job.programmed && job.locked);
+      const cannotMove = job.programmed || job.locked;
+      const startMoveButton = el.querySelector("[data-start-queue-move]");
+if (startMoveButton) startMoveButton.disabled = cannotMove || state.queueMoveOt === job.ot;
+      const lockButton = el.querySelector("[data-lock-ot]");
+      if (lockButton) {
+        lockButton.classList.toggle("locked", !job.programmed && job.locked);
+        lockButton.disabled = Boolean(job.programmed);
+        lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+        lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+      }
       if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
     });
     return;
@@ -1609,39 +2982,49 @@ function renderPriorityQueue() {
 
   els.priorityQueue.innerHTML = visibleJobs.map((job) => {
     const pendingSchedule = !isJobScheduled(job.ot);
-    const article = job.parte || "SIN ARTICULO";
-    const quantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-    const quantityLabel = quantity ? formatMaterialQuantity(quantity) : "Sin dato";
+    const cannotMove = job.programmed || job.locked;
+    const isMoveSource = activeMoveOt === job.ot;
+    const canPlaceHere = activeMoveOt && activeMoveOt !== job.ot && canReorderSelectedJobs(activeMoveOt, job.ot, { silent: true });
+    const article = job.sinFicha ? "SIN FICHA" : job.parte || "SIN ARTICULO";
     const workOrder = workOrderForOt(job.ot);
+    const quantity = Number.isFinite(Number(job.quantity)) && workOrder ? Number(job.quantity) : Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal ?? job.quantity ?? 0);
+    const quantityLabel = `qty:${formatMaterialQuantity(Number.isFinite(quantity) ? quantity : 0)}`;
+    const toolMini = jobToolMiniHtml(job);
     const dueDateOverridden = Boolean(workOrder?.dueDateOverride);
-    const photoMarkup = job.photoUrl
-      ? `<img src="${escapeHtml(job.photoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
+    // Foto: sale de Google Drive (src/server/09-photos.js:35) o del campo Foto URL de NetSuite.
+    // safePhotoUrl es la unica puerta: deja pasar lo que un <img> puede pintar y rechaza lo demas.
+    const fotoUrl = safePhotoUrl(job.photoUrl);
+    const photoMarkup = fotoUrl
+      ? `<img loading="lazy" src="${escapeHtml(fotoUrl)}" alt="Foto del articulo ${escapeHtml(article)}" data-queue-photo />`
       : "";
     const positionLabel = job.programmed
       ? "Trabajo programado fijo"
       : (job.locked ? "Trabajo bloqueado" : "Trabajo planeado");
     return `
-      <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
-        <div class="queue-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
+      <article class="queue-item ${jobRiskCardClass(job)}${pendingSchedule ? " pending-schedule" : ""}${job.ot === selectedJobOt() ? " focused" : ""}${job.programmed ? " pinned" : ""}${job.locked && !job.programmed ? " locked" : ""}" data-queue-ot="${escapeHtml(job.ot)}" data-queue-sig="${escapeHtml(queueItemSignature(job))}" tabindex="0" aria-label="${positionLabel}${pendingSchedule ? ", pendiente de programar" : ", programada"}, OT ${escapeHtml(job.ot)}, articulo ${escapeHtml(article)}, cantidad ${escapeHtml(quantityLabel)}">
+        <div class="queue-photo${fotoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
         <div class="queue-main">
-          <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>
+          <div class="queue-title-line"><strong>OT ${escapeHtml(job.ot)}</strong><span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>${jobRiskIndicatorHtml(job)}${netSuiteChangeBadgeHtml(job.ot)}</div>${workOrderSyncWarningHtml(job.ot)}
           <div class="queue-article" title="Articulo ${escapeHtml(article)}"><span>Articulo</span><strong>${escapeHtml(article)}</strong></div>
           <div class="queue-description">${escapeHtml(job.descripcion || "Sin descripcion")}</div>
+          ${toolMini}
           ${jobTypeTagHtml(job)}
           <label class="queue-delivery"><span>Entrega</span><input class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" data-queue-due-date="${escapeHtml(job.ot)}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(workOrder?.dueDate))}"></label>
-          <div class="queue-meta"><span>Cantidad <strong>${escapeHtml(quantityLabel)}</strong></span><span>${formatHours(job.minutes)}</span></div>
+          <div class="queue-meta"><strong class="queue-qty">${escapeHtml(quantityLabel)}</strong><span>${formatHours(job.minutes)}</span></div>
         </div>
         <button class="queue-lock${job.locked ? " locked" : ""}" type="button" data-lock-ot="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
           <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
         </button>
+        <div class="queue-move-actions">
+          ${canPlaceHere ? `<button type="button" data-place-queue-ot="${escapeHtml(job.ot)}" aria-label="Poner OT ${escapeHtml(activeMoveOt)} aqui antes de OT ${escapeHtml(job.ot)}">Poner aqui</button>` : `<button type="button" data-start-queue-move="${escapeHtml(job.ot)}" aria-label="Mover OT ${escapeHtml(job.ot)}"${cannotMove || isMoveSource ? " disabled" : ""}>${isMoveSource ? "Moviendo" : "Mover"}</button>`}
+        </div>
         <span class="drag-handle" aria-hidden="true">&#8942;&#8942;</span>
       </article>
     `;
   }).join("");
+  els.priorityQueue.dataset.queueMoveOt = activeMoveOt;
 
-  els.priorityQueue.querySelectorAll("[data-queue-photo]").forEach((photo) => {
-    photo.addEventListener("error", () => photo.parentElement.classList.remove("has-photo"));
-  });
+  bindPhotoFallback(els.priorityQueue);
 
   els.priorityQueue.querySelectorAll("[data-queue-due-date]").forEach((input) => {
     input.addEventListener("click", (event) => event.stopPropagation());
@@ -1656,9 +3039,7 @@ function renderPriorityQueue() {
       if (suppressQueueClick) return;
       const job = jobsByOt.get(item.dataset.queueOt);
       if (!job) return;
-      state.selectedOperationId = job.firstOp.id;
-      state.expandedOts = uniq([...state.expandedOts, job.ot]);
-      renderPriorityList();
+      openSelectedJobDetail(job.ot);
       renderPriorityQueue();
       saveState();
       requestAnimationFrame(renderGantt);
@@ -1676,7 +3057,12 @@ function renderPriorityQueue() {
     });
     item.addEventListener("pointerdown", (event) => {
       const job = jobsByOt.get(item.dataset.queueOt);
-      if (job?.programmed || job?.locked) return;
+      // RULE-UI-014: una OT programada ahora puede arrastrarse para llevarla a
+      // backlog (performSelectJob pide la confirmacion del aviso al soltar).
+      // El candado manual sigue impidiendo iniciar el arrastre, y el
+      // reordenamiento interno de una programada sigue bloqueado por
+      // canReorderSelectedJobs y por el teclado (keydown de arriba).
+      if (job?.locked) return;
       if (event.button !== 0 || event.target.closest("button, input, select")) return;
       queuePointerDrag = {
         pointerId: event.pointerId,
@@ -1703,6 +3089,37 @@ function renderPriorityQueue() {
       event.stopPropagation();
       toggleJobLock(event.currentTarget.dataset.lockOt);
     });
+    item.querySelectorAll("[data-start-queue-move]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        startQueueMove(button.dataset.startQueueMove);
+      });
+    });
+    item.querySelectorAll("[data-place-queue-ot]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        reorderSelectedJobs(state.queueMoveOt, button.dataset.placeQueueOt);
+      });
+    });
+  });
+}
+
+function renderQueueMoveStatus(activeMoveOt) {
+  if (!els.queueMoveStatus) return;
+  if (!activeMoveOt) {
+    els.queueMoveStatus.hidden = true;
+    els.queueMoveStatus.innerHTML = "";
+    return;
+  }
+  els.queueMoveStatus.hidden = false;
+  els.queueMoveStatus.innerHTML = `<span>Moviendo OT <strong>${escapeHtml(activeMoveOt)}</strong></span><button type="button" data-cancel-queue-move>Cancelar</button>`;
+  els.queueMoveStatus.querySelector("[data-cancel-queue-move]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.queueMoveOt = "";
+    renderPriorityQueue();
   });
 }
 
@@ -1747,6 +3164,33 @@ function updateBacklogDrag(clientX, clientY) {
   els.priorityQueue.classList.toggle("drag-target", backlogPointerDrag.toPlanned);
 }
 
+function openSelectedJobDetail(ot) {
+  const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
+  if (!job) return;
+  state.selectedDetailOt = job.ot;
+  state.selectedOperationId = job.firstOp.id;
+  state.expandedOts = uniq([...state.expandedOts, job.ot]);
+  renderSelectedJobPanel();
+  void loadSelectedJobDetailOperations(ot);
+}
+
+function closeSelectedJobDetail() {
+  state.selectedDetailOt = "";
+  state.selectedOperationId = "";
+  const panel = typeof document !== "undefined" ? document.querySelector(".detail-panel") : null;
+  if (panel) {
+    panel.hidden = true;
+    if (document.body) document.body.classList.remove("detail-panel-open");
+  }
+  if (typeof els !== "undefined" && els.selectedJobPanel) els.selectedJobPanel.innerHTML = "";
+  if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+    document.querySelectorAll(".priority-card.focused").forEach((item) => item.classList.remove("focused"));
+    document.querySelectorAll(".queue-item.focused").forEach((item) => item.classList.remove("focused"));
+  }
+  if (typeof applyGanttSelection === "function") applyGanttSelection("");
+  saveState();
+}
+
 function finishBacklogDrag(commit, pointerId = null) {
   if (!backlogPointerDrag || (pointerId !== null && backlogPointerDrag.pointerId !== pointerId)) return;
   const { moved, sourceOt, toPlanned, item } = backlogPointerDrag;
@@ -1760,107 +3204,520 @@ function finishBacklogDrag(commit, pointerId = null) {
   if (commit && toPlanned) selectJob(sourceOt, true);
 }
 
-async function selectJob(ot, selected) {
-  if (!ot) return;
-  const job = getPriorityJobs().find((item) => item.ot === ot);
+function jobPlanningOperations(job) {
+  return currentPlanOperations(job?.ops || [])
+    .filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+}
+
+function canStartBacklogDrag(card, job, event) {
+  return card?.getAttribute("aria-busy") !== "true"
+    && Boolean(job?.movable)
+    && event.button === 0
+    && !event.target.closest("button, input, select");
+}
+
+function setIndividualPlanningActionStatus(ot, status, message = "") {
+  const key = materialOtKey(ot);
+  if (!key) return;
+  if (status) {
+    individualPlanningActionFeedback.set(key, {
+      status,
+      message,
+      expiresAt: ["saved", "error"].includes(status) ? Date.now() + INDIVIDUAL_PLANNING_FEEDBACK_MS : Infinity,
+    });
+  } else {
+    individualPlanningActionFeedback.delete(key);
+  }
+  const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
+    .find((item) => materialOtKey(item.dataset.ot) === key);
+  if (!card) return;
+  const statusNode = card.querySelector(".job-action-status");
+  const statusLabel = individualPlanningActionStatusLabel(status, message);
+  if (statusNode) statusNode.textContent = statusLabel;
+  if (statusLabel) card.dataset.individualPlanningStatus = status;
+  else delete card.dataset.individualPlanningStatus;
+}
+
+function individualPlanningActionStatus(ot) {
+  const key = materialOtKey(ot);
+  const feedback = individualPlanningActionFeedback.get(key);
+  if (!feedback) return "";
+  if (feedback.expiresAt <= Date.now()) {
+    individualPlanningActionFeedback.delete(key);
+    return "";
+  }
+  return feedback.status;
+}
+
+function individualPlanningActionMessage(ot) {
+  const key = materialOtKey(ot);
+  const feedback = individualPlanningActionFeedback.get(key);
+  if (!feedback) return "";
+  if (feedback.expiresAt <= Date.now()) {
+    individualPlanningActionFeedback.delete(key);
+    return "";
+  }
+  return feedback.message || "";
+}
+
+function individualPlanningActionStatusLabel(status, message = "") {
+  if (status === "error" && /completada|no apta para programarse/i.test(message)) {
+    return "OT completada";
+  }
+  return {
+    loading: "Cargando",
+    saving: "Guardando",
+    saved: "Guardado",
+    error: "Error",
+  }[status] || "";
+}
+
+function individualPlanningUnavailableReason(ot) {
+  const key = materialOtKey(ot);
+  const message = individualPlanningUnavailableReasons.get(key) || "";
+  return /completada|no apta para programarse/i.test(message) ? message : "";
+}
+
+/**
+ * POR QUE UNA TARJETA DEL BACKLOG NO SE PUEDE AGREGAR AL PLAN, EN SU PALABRAS.
+ *
+ * MEDIDO 2026-10-05: el `title` del boton `+` de una OT sin ficha decia "No disponible por
+ * estatus En curso". El estatus era CORRECTO y la razon estaba COMPLETAMENTE FUERA: la OT no
+ * estaba bloqueada por su estatus, estaba porque no tiene fila en `work_orders`, o sea que no
+ * tiene articulo, ni descripcion, ni fecha, ni cantidad. Un aviso que nombra una causa que no
+ * es la manda a buscar un problema de estatus que no existe.
+ *
+ * Y no es solo el `title`: el camino que ejecuta la accion (performSelectJob) decia
+ * "no puede agregarse al plan por estatus En curso" y despues la sacaba del plan. Tres textos
+ * para un hecho, y ninguno era el hecho.
+ *
+ * Por eso la razon vive en UNA funcion. Los tres lugares la llaman y no pueden divergir.
+ */
+function jobNoProgramablePor_(job) {
+  if (!job || job.movable) return "";
+  if (job.sinFicha) {
+    return "no tiene ficha de la OT en NetSuite (esta en el plan por sus operaciones, pero no "
+      + "llego en `work_orders`), asi que no hay articulo, fecha ni cantidad con que programarla";
+  }
+  return "por estatus " + (job.status || "desconocido");
+}
+
+function setIndividualPlanningBusy(ot, busy, status = busy ? "loading" : null) {
+  const card = Array.from(els.priorityList.querySelectorAll(".priority-card"))
+    .find((item) => item.dataset.ot === ot);
+  if (!card) return;
+  const addButton = card.querySelector(".job-add");
+  if (status !== null) setIndividualPlanningActionStatus(ot, status);
+  if (busy) {
+    card.setAttribute("aria-busy", "true");
+    if (addButton) addButton.disabled = true;
+  } else {
+    card.removeAttribute("aria-busy");
+    if (addButton) addButton.disabled = false;
+  }
+}
+
+const individualPlanningActions = new Map();
+const individualPlanningActionFeedback = new Map();
+const INDIVIDUAL_PLANNING_FEEDBACK_MS = 3000;
+
+function selectJob(ot, selected) {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark(selected ? "selection-add" : "selection-remove") : "";
+  const key = materialOtKey(ot);
+  if (!selected || !key) {
+    const result = performSelectJob(ot, selected);
+    Promise.resolve(result).finally(() => {
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure(selected ? "selection-add" : "selection-remove", perfMark);
+    });
+    return result;
+  }
+  if (individualPlanningActions.has(key)) return individualPlanningActions.get(key);
+
+  setIndividualPlanningBusy(ot, true);
+  const action = (async () => {
+    let status = "error";
+    const outcome = { cancelled: false };
+    try {
+      const completed = await performSelectJob(ot, selected, outcome);
+      status = completed === true ? "saved" : (outcome.cancelled ? "" : "error");
+      return completed;
+    } catch (error) {
+      showToast(error?.message || `No se pudo procesar la OT ${ot}`, 9000);
+      return false;
+    } finally {
+      individualPlanningActions.delete(key);
+      setIndividualPlanningActionStatus(ot, status, outcome.errorMessage || "");
+      setIndividualPlanningBusy(ot, false);
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-add", perfMark);
+    }
+  })();
+  individualPlanningActions.set(key, action);
+  return action;
+}
+
+async function performSelectJob(ot, selected, outcome = {}) {
+  if (!ot) return false;
+  const otKey = materialOtKey(ot);
+  let job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
   if (selected && job && !job.movable && !job.programmed) {
-    showToast(`OT ${ot} no puede agregarse al plan por estatus ${job.status}`);
-    return;
+    showToast(`OT ${ot} no puede agregarse al plan: ${jobNoProgramablePor_(job)}`);
+    return false;
   }
-  if (!selected && job?.programmed) {
-    showToast(`OT ${ot} esta programada y debe permanecer en el plan`);
-    return;
-  }
-  if (!selected && isJobLocked(ot)) {
-    showToast(`Desbloquea la OT ${ot} antes de devolverla al backlog`);
-    return;
+  if (!selected) {
+    // RULE-UI-014: una OT programada o con operaciones completadas puede salir
+    // del plan, pero solo tras confirmar el aviso de lo que se pierde (la
+    // programacion de las pendientes y/o las completadas que quedan fuera del
+    // plan). El candado manual sigue frenando igual que antes.
+    const removal = window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot);
+    const completadas = window.PlanningWorkflowCore.hasCompletedPlanOperations(state, ot);
+    if (!removal.allowed && !completadas) {
+      showToast(removal.reason);
+      return false;
+    }
+    if (window.PlanningWorkflowCore.isOtLockedInState(state, ot)) {
+      showToast(removal.reason);
+      return false;
+    }
+    if (!confirmarRetiroManualDeOT(ot, job, completadas)) return false;
   }
   const alreadySelected = state.selectedOts.includes(ot);
   if (selected && !alreadySelected) {
+    const showLoadingDialog = !hasIndividualPlanningOperations(ot);
+    if (showLoadingDialog) showPlanningPreparationLoading(ot);
+    const loadPerfMark = typeof planningPerfMark === "function" ? planningPerfMark("selection-load") : "";
+    try {
+      const loaded = await ensureWorkOrderPlanningData(ot);
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-load", loadPerfMark);
+      if (showLoadingDialog && !els.planningDialog.open) {
+        outcome.cancelled = true;
+        return false;
+      }
+      job = getPriorityJobs().find((item) => materialOtKey(item.ot) === otKey);
+      if (!loaded?.ready) {
+        outcome.errorMessage = loaded?.error || "";
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
+        showToast(loaded?.error || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
+        return;
+      }
+      if (job && !job.movable && !job.programmed) {
+        outcome.errorMessage = "";
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
+        showToast(`OT ${ot} no puede agregarse al plan: ${jobNoProgramablePor_(job)}`);
+        return false;
+      }
+      if (!hasIndividualPlanningOperations(ot) || !jobPlanningOperations(job).length) {
+        outcome.errorMessage = loaded?.error || `La OT ${ot} no devolvio operaciones validas de NetSuite`;
+        if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
+        showToast(`La OT ${ot} no devolvio operaciones validas de NetSuite; no se agrego al plan`, 9000);
+        return;
+      }
+      if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
+    } catch (error) {
+      outcome.errorMessage = error?.message || "";
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("selection-load", loadPerfMark);
+      if (showLoadingDialog && els.planningDialog.open) closePlanningDialog(null);
+      showToast(error?.message || `No se pudieron cargar las operaciones de la OT ${ot}`, 9000);
+      return false;
+    }
+  }
+  if (selected && !alreadySelected) {
+    setIndividualPlanningActionStatus(ot, "saving");
     state._pendingAddOt = ot;
     state._pendingAddOtSnapshot = [...state.selectedOts];
-    const prepared = await prepareJobForPlanning(job);
+    const prepared = await prepareJobForPlanning(job, {
+      forceConfirm: true,
+      onCancel: () => { outcome.cancelled = true; },
+    });
     if (!prepared) {
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
-      return;
+      return false;
     }
     checkpointState();
   } else {
     checkpointState();
   }
-  if (selected && !alreadySelected) state.selectedOts.push(ot);
-  if (!selected && alreadySelected) {
-    state.selectedOts = state.selectedOts.filter((item) => item !== ot);
-    state.lockedOts = state.lockedOts.filter((item) => item !== ot);
-    if (Array.isArray(state.lastSchedule?.scheduledOts)) {
-      state.lastSchedule.scheduledOts = state.lastSchedule.scheduledOts.filter((item) => item !== ot);
-    }
-    state.expandedOts = state.expandedOts.filter((item) => item !== ot);
-    state.operations.filter((op) => op.ot === ot).forEach((op) => { op.locked = false; });
+  if (selected && !alreadySelected) {
+    const signature = String(state.preparedPlanningByOt?.[ot] || "");
+    Object.assign(state, window.PlanningWorkflowCore.commitPreparedOtSelection(state, ot, signature));
+    state._locallyAddedDraftOts = [...new Set([...(state._locallyAddedDraftOts || []), String(ot)])];
+    if (typeof forgetDraftRemovedOt === "function") forgetDraftRemovedOt(ot);
+    if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
+    delete state._pendingAddOt;
+    delete state._pendingAddOtSnapshot;
   }
+  if (!selected && alreadySelected) {
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+    if (typeof rememberDraftRemovedOts === "function") rememberDraftRemovedOts([ot]);
+  }
+  if (!selected && alreadySelected) invalidatePriorityJobsCache();
   applyQueuePriorities();
   if (!selected && alreadySelected) {
     renderPriorityList();
     renderPriorityQueue();
+    const saved = await flushPlanSave();
+    if (!saved) {
+      showToast(`OT ${ot} salio de la cola solo en esta sesion; el guardado se reintentara`, 7000);
+      return false;
+    }
     showToast(`OT ${ot} devuelta al backlog`);
-    saveState("plan");
-    return;
+    return true;
   }
   requestAnimationFrame(() => {
     renderPriorityQueue();
-    showToast(`OT ${ot} ${selected ? "agregada al plan" : "devuelta al backlog"}`);
     requestAnimationFrame(() => {
       renderTop();
       renderPlanAlerts();
       renderPriorityList();
     });
   });
-  saveState("plan");
+  const saved = await flushPlanSave();
+  if (!saved) {
+    outcome.errorMessage = `OT ${ot} quedo en el plan solo en esta sesion; el guardado se reintentara`;
+    showToast(outcome.errorMessage, 7000);
+    return false;
+  }
+  // Si selected es false y la OT no estaba en la cola, no hay nada que acusar:
+  // el guardado se lanza igual para no dejar el ambito sucio pendiente.
+  showToast(selected ? `OT ${ot} agregada al plan y guardada` : `OT ${ot} devuelta al backlog`);
+  return true;
 }
 
-async function prepareJobForPlanning(job) {
-  if (!job) return false;
-  const operations = job.ops.filter((op) => op.tipoInsercion !== "CAMBIO_HERRAMENTAL");
+async function prepareJobForPlanning(job, options = {}) {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("preparation") : "";
+  if (!job) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return false;
+  }
+  if (typeof normalizeOtResourceAssignments === "function") normalizeOtResourceAssignments();
+  const operations = jobPlanningOperations(job);
+  const planningJob = { ...job, ops: operations };
   const issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
   const blockers = issues.filter((issue) => ["MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR"].includes(issue.code));
   if (blockers.length) {
-    await showPlanningBlockers(job, blockers);
-    return false;
+    const resolved = await showPlanningBlockers(job, blockers);
+    if (!resolved) {
+      options.onCancel?.();
+      if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+      return false;
+    }
   }
 
-  const requirements = buildPlanningRequirements(issues, operations);
-  const commercial = commercialPlanningRequirement(job);
-  const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
-  const mustConfirmPlanning = (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
-  if (!mustConfirmPlanning) {
+  const refreshedIssues = window.PlannerCore?.planningConfigurationIssues
+    ? window.PlannerCore.planningConfigurationIssues(state, operations)
+    : [];
+  const requirements = buildPlanningRequirements(refreshedIssues, operations);
+  const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: options.forceConfirm === true });
+  const hasRequiredGaps = requirements.some((item) => ["MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]
+    .some((code) => item.codes.has(code))) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
+  if (options.reuseConfirmed === true && window.PlanningWorkflowCore.canReusePlanningPreparation(state, job.ot, hasRequiredGaps)) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
     return true;
   }
-  const values = await showPlanningRequirements(job, requirements, commercial);
-  if (!values) return false;
+  const signature = planningPreparationSignature(job, operations, commercial);
+  if (options.reuseConfirmed === true && !hasRequiredGaps) {
+    Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
+  if (!options.forceConfirm && !window.PlanningWorkflowCore.needsPlanningPreparation(state, job.ot, signature)) {
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
+  const onlyOptionalKit = requirements.length > 0 && requirements.every((item) => item.codes.size === 1 && item.codes.has("OPTIONAL_KIT"));
+  const hasPreparationOperation = operations.some((op) => isSubcontractAppOperation(op) || isBendingAppOperation(op));
+  const mustConfirmPlanning = hasPreparationOperation || (!onlyOptionalKit && requirements.length > 0) || commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice;
+  if (!mustConfirmPlanning) {
+    Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(state, job.ot, signature));
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return true;
+  }
+  // RULE-OT-056 — diagnostico temporal: con window.PLANNING_REASK_DIAG === true registra por OT
+  // re-pedida que gaps tiene y que componente de la firma difiere (deriva por datos comerciales
+  // compartidos vs perdida de captura). NO cambia el flujo.
+  if (typeof window !== "undefined" && window.PLANNING_REASK_DIAG === true) {
+    const gapCodes = [...new Set(requirements.flatMap((item) => [...(item.codes || [])]))];
+    const diag = {
+      ot: String(job?.ot || ""),
+      gapCodes,
+      commercial: {
+        needsType: commercial.needsType === true,
+        needsPlanningType: commercial.needsPlanningType === true,
+        needsManualPrice: commercial.needsManualPrice === true,
+      },
+      signatureDiff: planningSignatureDiff(state.preparedPlanningByOt?.[job?.ot], signature),
+    };
+    if (typeof console !== "undefined" && typeof console.log === "function") {
+      console.log("[PLANNING-REASK]", JSON.stringify(diag));
+    }
+    window.__planningReaskDiag = [...(window.__planningReaskDiag || []), diag];
+  }
+  const values = await showPlanningRequirements(planningJob, requirements, commercial);
+  if (!values) {
+    options.onCancel?.();
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
+    return false;
+  }
 
   applyPlanningRequirements(requirements, values, operations);
   applyCommercialPlanningRequirement(job, values, commercial);
   assignPlanningOperators(operations);
+  Object.assign(state, window.PlanningWorkflowCore.markPlanningPrepared(
+    state, job.ot, planningPreparationSignature(job, operations, commercialPlanningRequirement(job))
+  ));
+  if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
+  if (typeof planningPerfMeasure === "function") planningPerfMeasure("preparation", perfMark);
   return true;
 }
 
-function commercialPlanningRequirement(job) {
+function confirmarRetiroManualDeOT(ot, job, completadas) {
+  const advertencias = [];
+  if (job?.programmed) advertencias.push("operaciones programadas cuya programacion se perdera");
+  if (completadas) advertencias.push("operaciones completadas que quedaran fuera del plan");
+  if (!advertencias.length) return true;
+  const mensaje = `La OT ${ot} tiene ${advertencias.join(" y ")}. Aun asi, desea moverla a backlog?`;
+  if (!window.confirm(mensaje)) {
+    showToast(`La OT ${ot} no se movio a backlog`);
+    return false;
+  }
+  return true;
+}
+
+function showPlanningPreparationLoading(ot) {
+  openPlanningDialog({
+    title: planningPreparationTitle(typeof ot === "object" ? ot : { ot }),
+    summary: "Cargando operaciones y requisitos de NetSuite...",
+    body: `<div class="planning-loading" role="status" aria-live="polite">
+      <strong>Preparando la informacion de la OT.</strong>
+      <span>El formulario se abrira automaticamente en cuanto terminen las validaciones.</span>
+    </div>`,
+    confirmLabel: "Cargando",
+    cancelVisible: true,
+    setup: () => {
+      els.planningDialogConfirm.disabled = true;
+    },
+  });
+}
+
+function setGanttView(view) {
+  state.ganttView = window.PlanningWorkflowCore.normalizeGanttView(view);
+  invalidateGanttGroupsCache();
+  renderGantt();
+  renderGanttViewSelection();
+  renderGanttDisplayControls();
+  saveState("ui");
+  showToast(ganttViewMessage(state.ganttView));
+}
+
+function renderGanttViewSelection() {
+  document.querySelectorAll(".segmented button").forEach((button) => {
+    const active = window.PlanningWorkflowCore.isActiveGanttView(state.ganttView, button.dataset.view);
+    button.classList.toggle("segmented-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+}
+
+function planningPreparationSignature(job, operations, commercial) {
+  const productive = operations || [];
+  return window.PlanningWorkflowCore.planningPreparationSignature({
+    ot: job?.ot || "",
+    machine: productive.map((op) => op.maquina || "").join("|"),
+    tool: productive.map((op) => op.herramental || "").join("|"),
+    additionalTools: productive.flatMap((op) => additionalToolListValue(op.additionalHerramentales)),
+    kit: productive.map((op) => op.kitHerramental || "").join("|"),
+    kitPending: productive.some((op) => op.kitPending === true),
+    subcontractType: productive.map((op) => op.subcontractType || "").join("|"),
+    subcontractDays: Math.max(0, ...productive.map((op) => Number(op.subcontractDays || 0))),
+    commercialType: commercial?.currentType || "",
+    planningType: commercial?.currentPlanningType || "",
+    operationVersion: productive.map((op) => [op.id, op.secuencia, op.ct, op.tipoInsercion].join("|")).join(";")
+  });
+}
+
+// Diagnostico temporal RULE-OT-056: lista los componentes de la firma de preparacion que difieren
+// entre lo almacenado y lo vigente, para distinguir derivas por datos comerciales compartidos de
+// perdidas de captura. Solo se usa con window.PLANNING_REASK_DIAG === true.
+function planningSignatureDiff(stored, current) {
+  try {
+    const left = JSON.parse(String(stored || "{}"));
+    const right = JSON.parse(String(current || "{}"));
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    return [...keys].filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key]));
+  } catch (_error) {
+    return ["signature-unparseable"];
+  }
+}
+
+function maxOperationPriceSignalForOt(ot) {
+  const key = materialOtKey(ot);
+  let best = 0;
+  for (const op of state.operations || []) {
+    if (materialOtKey(op.ot) !== key) continue;
+    for (const value of [op.unitPrice, op.amount]) {
+      const number = Number(value);
+      if (Number.isFinite(number) && number > best) best = number;
+    }
+  }
+  return best;
+}
+
+// Un COMPONENTE es una pieza que se compra, no un articulo que la planta vende: no tiene
+// precio de venta y no debe valorarse. Antes el dialogo de "preparar trabajo" le exigia un
+// precio unitario de al menos $1.00 para poder continuar, y como no habia de donde sacarlo
+// se terminaba capturando 1.00 a mano, que es un numero inventado que despues entra al
+// maximo del reporte (RULE-REP-022).
+const COMPONENT_COMMERCIAL_TYPE = "COMPONENTE";
+
+function isComponentCommercialType(value) {
+  // No se usa normalizeStatus porque con un valor falso devuelve "PLAN", y comparar contra
+  // "PLAN" para decidir si algo es COMPONENTE es una trampa silenciosa.
+  const text = String(value === undefined || value === null ? "" : value)
+    .trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return text === COMPONENT_COMMERCIAL_TYPE;
+}
+
+function commercialPlanningRequirement(job, options = {}) {
   const configuration = articleConfigurationValue(job.parte);
+  // RULE-OT-056: lo que la persona confirmo en el dialogo de preparacion queda capturado POR OT
+  // (jobType/planningType/manualUnitPrice/commercialCapturedAt en otConfigurations[ot]) y manda
+  // sobre el config del articulo. El config del articulo es COMPARTIDO por todas las OTs del mismo
+  // PARTE y cualquier re-captura lo sobrescribe, lo que hacia "derivar" la firma de OTs capturadas
+  // antes y volvia a pedir en GENERAR detalles ya confirmados. El articulo sigue siendo la fuente
+  // del reporte/catalogo; la captura por OT es lo que la persona confirmo para ESA OT.
+  const otConfiguration = otCommercialConfigurationFor(job.ot);
+  const capturedCommercial = Boolean(otConfiguration?.commercialCapturedAt);
   const invoicePrice = invoiceUnitPriceForOt(job.ot);
-  const manualPrice = Math.max(0, Number(configuration.manualUnitPrice || 0));
-  const planningType = String(configuration.planningType || configuration.tipoTrabajo || "").trim().toUpperCase();
+  const manualPrice = Math.max(0, Number(
+    capturedCommercial ? (otConfiguration.manualUnitPrice ?? 0) : (configuration.manualUnitPrice || 0)
+  ));
+  const operationPrice = maxOperationPriceSignalForOt(job.ot);
+  const planningType = String(
+    (capturedCommercial ? otConfiguration.planningType : "") || configuration.planningType || configuration.tipoTrabajo || ""
+  ).trim().toUpperCase();
+  // El tipo comercial que manda es el guardado o el que el usuario acaba de elegir en este
+  // mismo dialogo (options.commercialType), para que elegir COMPONENTE esconda el precio de
+  // entrada y no despues de confirmar.
+  const commercialType = String(
+    options.commercialType || (capturedCommercial ? otConfiguration.jobType : "") || configuration.jobType || ""
+  ).trim().toUpperCase();
   return {
-    currentType: String(configuration.jobType || "").trim().toUpperCase(),
+    currentType: commercialType,
+    isComponent: isComponentCommercialType(commercialType),
     currentPlanningType: planningType,
     invoicePrice,
     manualPrice,
+    operationPrice,
     pendingPieces: pendingPiecesForWorkOrder(workOrderForOt(job.ot)),
-    needsType: !String(configuration.jobType || "").trim(),
-    needsPlanningType: !planningType,
-    needsManualPrice: !(invoicePrice > 0) && !(manualPrice > 0),
+    needsType: !commercialType,
+    needsPlanningType: options.alwaysPlanningType === true || !planningType,
+    // Un COMPONENTE nunca pide precio, tenga o no precio de venta: no se valora. Una OT que ya
+    // paso por el dialogo de preparacion (commercialCapturedAt) tiene el precio CONFIRMADO por la
+    // persona, incluido 0/vacio: no se vuelve a pedir en el mismo estado (RULE-OT-056).
+    needsManualPrice: !isComponentCommercialType(commercialType)
+      && !(invoicePrice > 0) && !(manualPrice > 0) && !(operationPrice >= 1)
+      && !capturedCommercial,
   };
 }
 
@@ -1870,11 +3727,32 @@ function applyCommercialPlanningRequirement(job, values, commercial) {
   const selectedPlanningType = String(values.ot_planning_type || commercial.currentPlanningType || configuration.planningType || suggestedPlanningTypeForJob(job) || "NORMAL").trim().toUpperCase();
   if (selectedType) configuration.jobType = selectedType;
   if (selectedPlanningType) configuration.planningType = selectedPlanningType;
-  if (!(commercial.invoicePrice > 0)) {
+  // Un COMPONENTE no se valora: no se escribe precio unitario, ni siquiera el que ya estaba
+  // (RULE-REP-022). No se borra el valor previo porque borrar datos es decision de la
+  // persona, no un efecto secundario de preparar una OT; lo que no debe pasar es que el
+  // dialogo lo vuelva a escribir. MEDIDO el 2026-09-26: de los 9 COMPONENTE con
+  // PRECIO_MANUAL, 4 eran el piso de $1.00 forzado y 5 coincidian EXACTAMENTE con
+  // max(ultima venta, promedio) del sync, o sea que tambien los habia dejado el ratchet
+  // viejo de RULE-REP-021. Ninguno lo escribio una persona. La lista, con el origen de cada
+  // numero, la da scripts/diagnosticos/LISTA_PRECIOS_COMPONENTE.gs; la limpieza es a mano.
+  if (!(commercial.invoicePrice > 0) && !isComponentCommercialType(selectedType)) {
     const manualPrice = Number(values.ot_manual_price || commercial.manualPrice || 0);
-    if (manualPrice > 0) configuration.manualUnitPrice = manualPrice;
+    if (manualPrice >= 0) configuration.manualUnitPrice = manualPrice;
   }
   configuration.updatedAt = new Date().toISOString();
+  // RULE-OT-056: captura comercial POR OT. El config del articulo es compartido y cualquier
+  // re-captura de otra OT del mismo PARTE sobrescribe valores que la firma de OTs anteriores
+  // embebe, volviendo a pedir sus datos en generar. Se guarda una copia por OT de lo que la
+  // persona confirmo (tipo, planeacion, precio y el instante de captura) y se anota la edicion
+  // local para que un conflicto de guardado la re-aplique igual que el resto de la config de la
+  // OT (RULE-GOV-013). commercialPlanningRequirement la lee primero.
+  const otConfiguration = otConfigurationFor(job?.ot);
+  otConfiguration.jobType = configuration.jobType || "";
+  otConfiguration.planningType = configuration.planningType || "";
+  otConfiguration.manualUnitPrice = Number(configuration.manualUnitPrice || 0);
+  otConfiguration.commercialCapturedAt = otConfiguration.commercialCapturedAt || new Date().toISOString();
+  otConfiguration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(job?.ot);
 }
 
 function buildPlanningRequirements(issues, operations) {
@@ -1894,36 +3772,327 @@ function buildPlanningRequirements(issues, operations) {
       if (!String(op.maquina || "").trim() || op.maquina === "SIN_MAQUINA") {
         requirement.codes.add("MISSING_MACHINE");
       }
-      if (!cleanToolValue(op.herramental)) {
-        const catalog = toolCatalogForAppOperation(op);
-        if (!cleanToolValue(catalog?.herramental)) requirement.codes.add("OT_TOOL");
-      }
+      requirement.codes.add("OT_TOOL");
       requirement.codes.add("OPTIONAL_KIT");
     }
-    if (isSubcontractAppOperation(op) && (!String(op.subcontractType || "").trim() || !(Number(op.subcontractDays) > 0))) {
-      requirement.codes.add("OT_SUBCONTRACT");
-    }
+    if (isSubcontractAppOperation(op)) requirement.codes.add("OT_SUBCONTRACT");
     if (requirement.codes.size) grouped.set(op.id, requirement);
   }
   return [...grouped.values()].map((item, index) => ({ ...item, index }));
 }
 
 async function showPlanningBlockers(job, blockers) {
-  const items = blockers.map((issue) => {
-    const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
-    if (issue.code === "MISSING_TOOL_CHANGE_CAPABILITY") return `<li>Falta agregar <strong>CAMBIO DE HERRAMENTAL</strong> a la matriz de habilidades.</li>`;
-    if (issue.code === "MISSING_TOOL_CHANGE_OPERATOR") return `<li>Falta habilitar al menos un operador para <strong>CAMBIO DE HERRAMENTAL</strong>.</li>`;
-    if (issue.code === "MISSING_CAPABILITY") return `<li>Falta agregar <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}) a la matriz de habilidades.</li>`;
-    return `<li>Falta habilitar al menos un operador para <strong>${escapeHtml(capability.label)}</strong> (CT ${escapeHtml(capability.ct)}).</li>`;
-  }).join("");
-  await openPlanningDialog({
-    title: `OT ${job.ot} no puede agregarse al plan`,
-    summary: "Completa la configuracion antes de programar este trabajo.",
-    body: `<div class="planning-error"><ul>${items}</ul></div>`,
-    confirmLabel: "Ir a matriz",
-    cancelVisible: false,
+  const requirements = capabilityOperatorRequirements(blockers);
+  const toolChange = blockers.some((issue) =>
+    issue.code === "MISSING_TOOL_CHANGE_CAPABILITY" || issue.code === "MISSING_TOOL_CHANGE_OPERATOR"
+  );
+  if (!requirements.length && !toolChange) return false;
+  const confirmed = await openPlanningDialog({
+    title: `Completar operadores para OT ${job.ot}`,
+    summary: "Selecciona al menos un operador por habilidad. Se guarda en la matriz de capacidad y no se volvera a pedir.",
+    body: planningOperatorSelectionMarkup(requirements, { toolChange }),
+    confirmLabel: "Guardar y continuar",
+    cancelVisible: true,
+    submit: () => {
+      const missing = buildOperatorMissing(requirements, toolChange, els.planningDialogForm);
+      if (missing.length) {
+        showToast(missing.join(" | "), 9000);
+        return false;
+      }
+      checkpointState();
+      applyPlanningOperatorSelectionsFromForm(els.planningDialogForm, requirements, { toolChange });
+      persistPlanningConfigurationChanges();
+      return true;
+    },
   });
-  showWorkspaceView("matriz");
+  return confirmed === true;
+}
+
+function capabilityOperatorRequirements(issues) {
+  const byKey = new Map();
+  for (const issue of issues || []) {
+    if (issue.code !== "MISSING_CAPABILITY" && issue.code !== "MISSING_OPERATOR") continue;
+    const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
+    if (!capability?.key || capability.key === TOOL_CHANGE_CAPABILITY.key) continue;
+    if (!byKey.has(capability.key)) {
+      byKey.set(capability.key, { key: capability.key, ct: String(capability.ct || "").trim(), label: String(capability.label || capability.name || "OPERACION").trim(), codes: new Set() });
+    }
+    byKey.get(capability.key).codes.add(issue.code);
+  }
+  return [...byKey.values()].map((item) => ({ ...item, codes: [...item.codes] }));
+}
+
+function operatorFieldFor(capabilityKey) {
+  return `g_op_${capabilityKey}`;
+}
+
+function newOperatorFieldFor(capabilityKey) {
+  return `g_new_op_${capabilityKey}`;
+}
+
+function selectedFormValues(form, name) {
+  const values = new FormData(form).getAll(name);
+  return Array.from(values).map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function planningOperatorSelectionMarkup(requirements, options = {}) {
+  const capabilities = (requirements || []).map((capability) => ({
+    key: capability.key,
+    ct: String(capability.ct || "").trim(),
+    label: String(capability.label || capability.name || "OPERACION").trim(),
+  }));
+  if (options.toolChange) {
+    capabilities.push({ key: TOOL_CHANGE_CAPABILITY.key, ct: TOOL_CHANGE_CAPABILITY.ct, label: TOOL_CHANGE_CAPABILITY.label });
+  }
+  return capabilities.map((capability) => {
+    const current = hasMatrixKey(capability.key) ? (state.matrix[capability.key] || []) : [];
+    const operatorOptions = [...(state.operators || [])]
+      .sort((a, b) => a.localeCompare(b, "es", { numeric: true }))
+      .map((operator) => `<label class="planning-operator-option"><input type="checkbox" name="${escapeHtml(operatorFieldFor(capability.key))}" value="${escapeHtml(operator)}"${current.includes(operator) ? " checked" : ""}> ${escapeHtml(operator)}</label>`)
+      .join("") || `<p class="planning-inline-warning">No hay operadores registrados; escribe uno en el campo de abajo.</p>`;
+    return `<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>${escapeHtml(capability.label)}</strong><span>CT ${escapeHtml(capability.ct || "-")}</span></div>
+      <div class="planning-requirement-fields">
+        <div class="planning-operator-grid">${operatorOptions}</div>
+        <label>Operador nuevo (opcional)<input type="text" name="${escapeHtml(newOperatorFieldFor(capability.key))}" placeholder="Nombre del operador" autocomplete="off"></label>
+      </div>
+    </section>`;
+  }).join("");
+}
+
+function buildOperatorMissing(requirements, toolChange, form) {
+  const capabilities = (requirements || []).map((capability) => ({
+    key: capability.key,
+    label: String(capability.label || capability.name || "OPERACION").trim(),
+  }));
+  if (toolChange) capabilities.push({ key: TOOL_CHANGE_CAPABILITY.key, label: TOOL_CHANGE_CAPABILITY.label });
+  const missing = [];
+  for (const capability of capabilities) {
+    const selected = selectedFormValues(form, operatorFieldFor(capability.key));
+    const newName = String(form.elements.namedItem(newOperatorFieldFor(capability.key))?.value || "").trim();
+    if (!selected.length && !newName) missing.push(`Selecciona al menos un operador para ${capability.label}`);
+  }
+  return missing;
+}
+
+function applyPlanningOperatorSelectionsFromForm(form, requirements, options = {}) {
+  const entries = (requirements || []).map((capability) => ({
+    capability,
+    operators: selectedFormValues(form, operatorFieldFor(capability.key)),
+  }));
+  if (options.toolChange) {
+    entries.push({
+      capability: TOOL_CHANGE_CAPABILITY,
+      operators: selectedFormValues(form, operatorFieldFor(TOOL_CHANGE_CAPABILITY.key)),
+    });
+  }
+  let addedOperators = 0;
+  for (const entry of entries) {
+    const newName = String(form.elements.namedItem(newOperatorFieldFor(entry.capability.key))?.value || "").trim();
+    const operators = [...(entry.operators || [])];
+    if (newName && !operators.includes(newName)) operators.push(newName);
+    const filtered = operators.filter((name) => normalizeStatus(name) !== "SIN_OPERADOR");
+    if (!filtered.length) continue;
+    for (const name of filtered) {
+      if (!state.operators.includes(name)) {
+        state.operators.push(name);
+        if (state.operatorPerformance) state.operatorPerformance[name] = 100;
+        addedOperators += 1;
+        rememberLocalCapabilityConfigEdit();
+      }
+    }
+    enableOperatorsForCapability(entry.capability, filtered);
+  }
+  if (addedOperators) showToast(`${addedOperators} operador(es) nuevo(s) agregado(s) a la matriz de habilidades`, 6000);
+}
+
+function enableOperatorsForCapability(capability, operators) {
+  const selected = uniq((operators || []).filter((name) => normalizeStatus(name) !== "SIN_OPERADOR"));
+  if (!selected.length || !capability?.key) return;
+  if (!Array.isArray(state.configuredCapabilities)) state.configuredCapabilities = [];
+  if (!state.configuredCapabilities.includes(capability.key)) state.configuredCapabilities.push(capability.key);
+  state.hiddenCapabilities = (state.hiddenCapabilities || []).filter((key) => key !== capability.key);
+  if (Array.isArray(state.cts) && capability.ct && !state.cts.includes(capability.ct)) state.cts.push(capability.ct);
+  if (!Array.isArray(state.matrix[capability.key])) state.matrix[capability.key] = [];
+  for (const name of selected) {
+    if (!state.matrix[capability.key].includes(name)) state.matrix[capability.key].push(name);
+  }
+rememberLocalCapabilityConfigEdit();
+  assignPlanningOperators(state.operations.filter((op) => capabilityFromOperation(op).key === capability.key));
+  if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
+}
+
+function persistPlanningConfigurationChanges() {
+  if (typeof invalidatePriorityJobsCache === "function") invalidatePriorityJobsCache();
+  saveState("catalogs");
+}
+
+function groupPlanConfigurationGaps(issues, operations) {
+  const machines = new Map();
+  const tools = new Map();
+  const subcontracts = new Map();
+  for (const issue of issues || []) {
+    const op = findOperation(issue.operationId);
+    if (!op) continue;
+    if (issue.code === "MISSING_MACHINE") {
+      const list = machines.get(op.ot) || [];
+      list.push(op);
+      machines.set(op.ot, list);
+    } else if (issue.code === "MISSING_TOOL") {
+      const list = tools.get(op.ot) || [];
+      list.push(op);
+      tools.set(op.ot, list);
+    } else if (issue.code === "MISSING_SUBCONTRACT_TYPE" || issue.code === "MISSING_SUBCONTRACT_DAYS") {
+      const list = subcontracts.get(op.ot) || [];
+      list.push(op);
+      subcontracts.set(op.ot, list);
+    }
+  }
+  return {
+    machines: [...machines.entries()].map(([ot, ops]) => ({ ot, ops })),
+    tools: [...tools.entries()].map(([ot, ops]) => ({ ot, ops })),
+    subcontracts: [...subcontracts.entries()].map(([ot, ops]) => ({ ot, ops })),
+    operators: capabilityOperatorRequirements(issues),
+    toolChange: (issues || []).some((issue) =>
+      issue.code === "MISSING_TOOL_CHANGE_CAPABILITY" || issue.code === "MISSING_TOOL_CHANGE_OPERATOR"
+    ),
+  };
+}
+
+function buildPlanConfigurationBody(gaps) {
+  const sections = [];
+  for (const { ot, ops } of gaps.machines) {
+    const compatible = compatibleMachineOptionsForOps(ops);
+    const configuration = otConfigurationFor(ot);
+    const toolRequired = gaps.tools.some((item) => item.ot === ot);
+    const currentTool = cleanToolValue(configuration.herramental) || cleanToolValue(ops[0]?.herramental) || cleanToolValue(toolCatalogForAppOperation(ops[0])?.herramental);
+    sections.push(`<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>OT ${escapeHtml(ot)} - doblez</strong></div>
+      <div class="planning-requirement-fields">
+        <label>Maquina de la OT
+          <select name="g_machine_${escapeHtml(ot)}" required>
+            <option value="">${compatible.length ? "Selecciona una maquina" : "No hay maquinas configuradas"}</option>
+            ${compatible.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}
+          </select>
+        </label>${compatible.length ? "" : `<p class="planning-inline-warning">Registra una maquina en Catalogos para poder programar esta OT.</p>`}
+        ${toolRequired ? `<label>Herramental requerido${planningCatalogSelectMarkup(`g_tool_${ot}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>` : ""}
+      </div>
+    </section>`);
+  }
+  for (const { ot, ops } of gaps.subcontracts) {
+    const op = ops[0];
+    const types = subcontractTypesForPart(op.parte);
+    const configuration = otConfigurationFor(ot);
+    const currentType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const currentDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || op.subcontractDays || 0);
+    const typeField = types.length
+      ? `<select name="g_subcontract_type_${escapeHtml(ot)}" data-subcontract-select="${escapeHtml(String(ot))}" data-part="${escapeHtml(op.parte)}" required>
+           <option value="">Selecciona un tipo</option>
+           ${types.map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(currentType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+         </select>`
+      : `<input name="g_subcontract_type_${escapeHtml(ot)}" type="text" value="${escapeHtml(currentType)}" placeholder="Tipo de subcontrato" required>`;
+    sections.push(`<section class="planning-requirement">
+      <div class="planning-requirement-title"><strong>OT ${escapeHtml(ot)} - subcontrato</strong></div>
+      <div class="planning-requirement-fields">
+        <label>Tipo de subcontrato${typeField}</label>
+        <label>Dias habiles<input name="g_subcontract_days_${escapeHtml(ot)}" data-subcontract-days="${escapeHtml(String(ot))}" type="number" min="1" max="90" step="1" value="${escapeHtml(currentDays || "")}" required></label>
+      </div>
+    </section>`);
+  }
+  sections.push(planningOperatorSelectionMarkup(gaps.operators, { toolChange: gaps.toolChange }));
+  const setup = () => {
+    els.planningDialogBody.querySelectorAll("[data-catalog-select]").forEach((select) => {
+      select.addEventListener("change", () => updatePlanningCatalogSelect(select));
+      updatePlanningCatalogSelect(select);
+    });
+    els.planningDialogBody.querySelectorAll("[data-subcontract-select]").forEach((select) => {
+      select.addEventListener("change", () => {
+        const input = els.planningDialogBody.querySelector(`[data-subcontract-days="${select.dataset.subcontractSelect}"]`);
+        const catalogItem = select.dataset.part ? subcontractCatalogForSelection(select.dataset.part, select.value) : null;
+        if (input && catalogItem) input.value = String(Math.max(1, Number(catalogItem.days) || 1));
+      });
+    });
+  };
+  return { body: sections.join(""), setup };
+}
+
+function buildPlanConfigurationMissing(gaps, form) {
+  return buildOperatorMissing(gaps.operators, gaps.toolChange, form);
+}
+
+function applyPlanConfigurationSelectionsFromForm(form, gaps) {
+  const fd = new FormData(form);
+  const read = (name) => String(fd.get(name) || "").trim();
+  const readCatalog = (name) => cleanToolValue(fd.get(name) === CUSTOM_CATALOG_VALUE ? fd.get(`${name}_custom`) : fd.get(name));
+  for (const { ot } of gaps.machines) {
+    const machine = read(`g_machine_${ot}`).toUpperCase();
+    if (machine) applyMachineToJob(ot, machine);
+  }
+  for (const { ot } of gaps.tools) {
+    const tool = readCatalog(`g_tool_${ot}`);
+    if (tool) applyToolToJob(ot, tool, []);
+  }
+  for (const { ot } of gaps.subcontracts) {
+    const type = read(`g_subcontract_type_${ot}`);
+    const days = Number(fd.get(`g_subcontract_days_${ot}`) || 0);
+    if (type && days > 0) applySubcontractToJob(ot, type, days);
+  }
+  applyPlanningOperatorSelectionsFromForm(form, gaps.operators, { toolChange: gaps.toolChange });
+}
+
+async function ensurePlanConfigurationCollected(ots) {
+  const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
+  const executionTime = new Date();
+  const operations = currentPlanOperations().filter((op) =>
+    isJobSelected(op.ot) &&
+    (!scopedOts.size || scopedOts.has(normalizeStatus(op.ot))) &&
+    !isPlanCompletedOperation(op) &&
+    !isJobLocked(op.ot) &&
+    !shouldAutoFreezeOperation(op, executionTime) &&
+    op.tipoInsercion !== "CAMBIO_HERRAMENTAL"
+  );
+  if (!operations.length) return true;
+  let issues = window.PlannerCore?.planningConfigurationIssues
+    ? window.PlannerCore.planningConfigurationIssues(state, operations)
+    : [];
+  for (const op of operations) {
+    if (!isSubcontractAppOperation(op)) continue;
+    const capability = capabilityFromOperation(op);
+    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
+    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDaysForAppOperation(op).days || op.subcontractDays || 0);
+    if (!effectiveSubcontractType) {
+      issues.push({ code: "MISSING_SUBCONTRACT_TYPE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+    if (effectiveSubcontractDays <= 0) {
+      issues.push({ code: "MISSING_SUBCONTRACT_DAYS", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+    }
+  }
+  if (!issues.length) return true;
+  const gaps = groupPlanConfigurationGaps(issues, operations);
+  if (!gaps.machines.length && !gaps.subcontracts.length && !gaps.operators.length && !gaps.toolChange) return true;
+  const { body, setup } = buildPlanConfigurationBody(gaps);
+  const confirmed = await openPlanningDialog({
+    title: "Completar configuracion del plan",
+    summary: "Faltan datos obligatorios para programar. Completa las secciones; se guardan y no se volveran a pedir.",
+    body,
+    confirmLabel: "Guardar y programar",
+    cancelVisible: true,
+    setup,
+    submit: () => {
+      const missing = buildPlanConfigurationMissing(gaps, els.planningDialogForm);
+      if (missing.length) {
+        showToast(missing.join(" | "), 9000);
+        return false;
+      }
+      checkpointState();
+      applyPlanConfigurationSelectionsFromForm(els.planningDialogForm, gaps);
+      persistPlanningConfigurationChanges();
+      return true;
+    },
+  });
+  return confirmed === true;
 }
 
 function planningCatalogSelectMarkup(name, field, currentValue, options = {}) {
@@ -1952,13 +4121,16 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const compatibleMachines = compatibleMachineOptionsForOps(bendingOps);
   const configuration = otConfigurationFor(job.ot);
-  const configuredMachine = normalizeMachineValue(configuration.machine);
-  const configuredMachineValid = Boolean(configuredMachine) && !(configuredMachine === "1" && bendingOps.some((op) => String(op.ct) === "5459"));
-  const operationMachine = bendingOps.map((op) => normalizeMachineValue(op.maquina, op))
-    .find((machine) => machine && !(machine === "1" && bendingOps.some((op) => String(op.ct) === "5459"))) || "";
-  const currentMachine = compatibleMachines.includes(configuredMachine) && configuredMachineValid
-    ? configuredMachine
-    : (compatibleMachines.includes(operationMachine) ? operationMachine : "");
+  const firstMaterial = materialsForOt(job.ot)[0];
+  const materialLabel = firstMaterial
+    ? [firstMaterial.component, firstMaterial.description].filter(Boolean).join(" - ")
+    : "Sin materia prima registrada";
+  const materialField = `<section class="planning-requirement planning-requirement-material">
+    <div class="planning-requirement-title"><strong>Materia prima base</strong></div>
+    <div class="planning-requirement-fields">
+      <label>Primer MP<input type="text" value="${escapeHtml(materialLabel)}" readonly></label>
+    </div>
+  </section>`;
   const needsOtKit = requirements.some((item) => item.codes.has("OPTIONAL_KIT"));
   const needsSubcontract = requirements.some((item) => item.codes.has("MISSING_SUBCONTRACT_TYPE") || item.codes.has("MISSING_SUBCONTRACT_DAYS") || item.codes.has("OT_SUBCONTRACT"));
   const registeredSubcontract = subcontractRegistrationForJob(job.ot, job.ops);
@@ -1966,7 +4138,7 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const subcontractCatalog = subcontractRequirement ? subcontractCatalogForAppOperation(subcontractRequirement.op) : null;
   const currentSubcontractType = configuration.subcontractType || registeredSubcontract?.name || subcontractCatalog?.name || "";
   const currentSubcontractDays = Number(configuration.subcontractDays || registeredSubcontract?.days || subcontractCatalog?.days || 0);
-  const currentKit = getOtKitValue(job.ops) || requirements.map((item) => cleanToolValue(toolCatalogForAppOperation(item.op)?.kitHerramental)).find(Boolean) || "";
+  const currentKit = cleanToolValue(configuration.kitHerramental) || getOtKitValue(job.ops) || requirements.map((item) => cleanToolValue(toolCatalogForAppOperation(item.op)?.kitHerramental)).find(Boolean) || "";
   const currentPlanningType = commercial.currentPlanningType || suggestedPlanningTypeForJob(job) || "NORMAL";
   const planningTypeOptions = DEFAULT_PLANNING_TYPES
     .map((type) => `<option value="${escapeHtml(type)}"${type === currentPlanningType ? " selected" : ""}>${escapeHtml(type)}</option>`)
@@ -1975,16 +4147,14 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
     .filter((item) => item.active !== false || normalizeStatus(item.name) === normalizeStatus(commercial.currentType))
     .map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(commercial.currentType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`)
     .join("");
-  const unitPrice = commercial.invoicePrice > 0 ? commercial.invoicePrice : commercial.manualPrice;
-  const priceSource = commercial.invoicePrice > 0 ? "Promedio facturado movil de seis meses" : "Precio temporal guardado por articulo";
   const planningTypeField = commercial.needsPlanningType
     ? `<label>Tipo de trabajo<select name="ot_planning_type" required><option value="">Selecciona normal, prototipo o expeditado</option>${planningTypeOptions}</select></label>`
     : `<label>Tipo de trabajo<input type="text" value="${escapeHtml(commercial.currentPlanningType || currentPlanningType || "")}" readonly></label>`;
   const jobTypeField = commercial.needsType
-    ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona OEM, especial o linea</option>${typeOptions}</select></label>`
+    ? `<label>Tipo comercial<select name="ot_job_type" required><option value="">Selecciona el tipo comercial</option>${typeOptions}</select></label>`
     : `<label>Tipo comercial<input type="text" value="${escapeHtml(commercial.currentType || "")}" readonly></label>`;
   const priceField = commercial.needsManualPrice
-    ? `<label>Precio unitario temporal<input name="ot_manual_price" type="number" min="0.01" step="0.01" value="${escapeHtml(commercial.manualPrice || "")}" required><small>Se usara solo mientras NetSuite no tenga facturacion</small></label>`
+    ? `<label class="planning-price-field">Precio unitario temporal<input name="ot_manual_price" type="number" min="0" step="0.01" value="${escapeHtml(commercial.manualPrice > 0 ? commercial.manualPrice : "")}"><small>Sin precio de venta registrado; captura uno temporal o dejalo en 0</small></label>`
     : "";
   const commercialFields = commercial.needsType || commercial.needsPlanningType || commercial.needsManualPrice ? `<section class="planning-requirement planning-requirement-commercial">
     <div class="planning-requirement-title"><strong>Clasificacion y valor del articulo</strong><span>Obligatorio antes de programar</span></div>
@@ -1992,14 +4162,12 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
       ${planningTypeField}
       ${jobTypeField}
       ${priceField}
-      <div class="planning-static-field"><span>Piezas pendientes</span><strong>${escapeHtml(formatMaterialQuantity(commercial.pendingPieces))}</strong></div>
-      <div class="planning-static-field"><span>Monto estimado</span><strong>${escapeHtml(formatCurrency(unitPrice * commercial.pendingPieces))}</strong><small>${escapeHtml(priceSource)}</small></div>
     </div>
   </section>` : "";
-  const machineField = bendingRequirements.length ? `<label>Maquina de la OT
+  const machineField = bendingOps.length ? `<label>Maquina de la OT
     <select name="ot_machine" required>
       <option value="">${compatibleMachines.length ? "Selecciona una maquina" : "No hay maquinas configuradas"}</option>
-      ${compatibleMachines.map((machine) => `<option value="${escapeHtml(machine)}"${machine === currentMachine ? " selected" : ""}>${escapeHtml(machine)}</option>`).join("")}
+      ${compatibleMachines.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}
     </select>
   </label>${compatibleMachines.length ? "" : `<p class="planning-inline-warning">Registra una maquina en Catalogos para poder guardar esta OT.</p>`}` : "";
   const subcontractTypes = subcontractTypesForPart(job.parte);
@@ -2009,8 +4177,8 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
          ${subcontractTypes.map((item) => `<option value="${escapeHtml(item.name)}"${normalizeStatus(item.name) === normalizeStatus(currentSubcontractType) ? " selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
        </select>`
     : `<input name="ot_subcontract_type" type="text" value="${escapeHtml(currentSubcontractType)}" placeholder="Tipo de subcontrato" required>`;
-  const commonFields = bendingRequirements.length || needsOtKit || needsSubcontract ? `<section class="planning-requirement planning-requirement-ot">
-    <div class="planning-requirement-title"><strong>Datos generales de la OT ${escapeHtml(job.ot)}</strong><span>Una asignacion para toda la orden</span></div>
+  const commonFields = bendingOps.length || needsOtKit || needsSubcontract ? `<section class="planning-requirement planning-requirement-ot">
+    <div class="planning-requirement-title"><strong>Datos generales de la OT ${escapeHtml(job.ot)}</strong></div>
     <div class="planning-requirement-fields">
       ${machineField}
       ${needsOtKit ? `<label>Kit de la OT (opcional)${planningCatalogSelectMarkup("ot_kit", "kitHerramental", currentKit, { emptyLabel: "Sin kit", customPlaceholder: "Nombre del nuevo kit", attributes: ` data-kit-input="ot"${currentKit ? "" : " disabled"}` })}</label>
@@ -2024,25 +4192,52 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
   const operationFields = requirements.map((requirement) => {
     const { op, codes, index } = requirement;
     const catalog = toolCatalogForAppOperation(op);
-    const currentTool = cleanToolValue(op.herramental) || cleanToolValue(catalog?.herramental);
+    const currentTool = cleanToolValue(configuration.herramental) || cleanToolValue(op.herramental) || cleanToolValue(catalog?.herramental);
+    const additionalTools = additionalToolListValue(configuration.additionalHerramentales || op.additionalHerramentales);
     const toolFields = codes.has("MISSING_TOOL") || codes.has("OT_TOOL")
-      ? `<label>Herramental requerido${planningCatalogSelectMarkup(`tool_${index}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>`
+      ? `<div class="planning-tool-list" data-planning-tool-list="${escapeHtml(index)}">
+        <label>Herramental requerido${planningCatalogSelectMarkup(`tool_${index}`, "herramental", currentTool, { required: true, emptyLabel: "Selecciona un herramental", customPlaceholder: "Nombre del nuevo herramental" })}</label>
+        <button class="icon-button planning-tool-add" type="button" data-add-planning-tool="${escapeHtml(index)}" aria-label="Agregar herramental a la operacion ${escapeHtml(op.secuencia)}">+</button>
+        <div class="planning-tool-extra-list" data-planning-tool-extra-list="${escapeHtml(index)}">
+          ${additionalTools.map((tool, extraIndex) => planningAdditionalToolMarkup(index, extraIndex, tool, compatibleMachines)).join("")}
+        </div>
+      </div>`
       : "";
     if (!toolFields) return "";
     return `<section class="planning-requirement">
-      <div class="planning-requirement-title"><strong>Sec. ${escapeHtml(op.secuencia)} - ${escapeHtml(op.descripcion)}</strong><span>CT ${escapeHtml(op.ct)}</span></div>
+      <div class="planning-requirement-title"><strong>Sec. ${escapeHtml(op.secuencia)} - ${escapeHtml(op.descripcion)}</strong></div>
       <div class="planning-requirement-fields">${toolFields}</div>
     </section>`;
   }).join("");
   return new Promise((resolve, reject) => {
     requestAnimationFrame(() => {
       openPlanningDialog({
-        title: `Preparar OT ${job.ot}`,
-        summary: "Los datos comerciales se guardan por articulo; maquina, kit y subcontrato se guardan para esta OT.",
-        body: `${commercialFields}${commonFields}${operationFields}`,
+        title: planningPreparationTitle(job),
+        summary: "",
+        body: `${materialField}${commercialFields}${commonFields}${operationFields}`,
         confirmLabel: "Agregar al plan",
         cancelVisible: true,
         setup: () => {
+          const typeSelect = els.planningDialogBody.querySelector('select[name="ot_job_type"]');
+          const priceLabel = els.planningDialogBody.querySelector(".planning-price-field");
+          if (typeSelect && priceLabel) {
+            // Elegir COMPONENTE esconde el precio en el acto, no despues de confirmar. Sin
+            // esto el campo sigue ahi, el required lo deja vacio y el formulario no envia.
+            // Volver a otro tipo lo vuelve a mostrar (RULE-REP-022).
+            const syncPriceField = () => {
+              const componente = isComponentCommercialType(typeSelect.value);
+              priceLabel.hidden = componente;
+              const input = priceLabel.querySelector('input[name="ot_manual_price"]');
+              if (input) {
+                // RULE-REP-025 (2026-10-07): el precio temporal nunca es obligatorio; puede
+                // quedar en 0 o vacio. Para COMPONENTE ademas el campo queda escondido.
+                input.required = false;
+                input.min = componente ? "" : "0";
+              }
+            };
+            typeSelect.addEventListener("change", syncPriceField);
+            syncPriceField();
+          }
           els.planningDialogBody.querySelectorAll("[data-catalog-select]").forEach((select) => {
             select.addEventListener("change", () => updatePlanningCatalogSelect(select));
             updatePlanningCatalogSelect(select);
@@ -2065,6 +4260,18 @@ async function showPlanningRequirements(job, requirements, commercial = commerci
               if (input && catalogItem) input.value = String(Math.max(1, Number(catalogItem.days) || 1));
             });
           });
+          els.planningDialogBody.querySelectorAll("[data-add-planning-tool]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const index = button.dataset.addPlanningTool;
+              const list = els.planningDialogBody.querySelector(`[data-planning-tool-extra-list="${index}"]`);
+              if (!list) return;
+              list.insertAdjacentHTML("beforeend", planningAdditionalToolMarkup(index, list.children.length, "", compatibleMachines));
+            });
+          });
+          els.planningDialogBody.onclick = (event) => {
+            const remove = event.target.closest("[data-remove-planning-tool]");
+            if (remove) remove.closest(".planning-tool-extra-row")?.remove();
+          };
         },
       }).then(resolve, reject);
     });
@@ -2079,7 +4286,7 @@ function applyPlanningRequirements(requirements, values, operations) {
     }
   }
 
-  if (requirements.some((item) => item.codes.has("MISSING_MACHINE"))) {
+  if (operations.some(isBendingAppOperation)) {
     const machine = String(values.ot_machine || "").trim().toUpperCase();
     applyMachineToJob(operations[0]?.ot, machine);
   }
@@ -2100,7 +4307,8 @@ function applyPlanningRequirements(requirements, values, operations) {
     if (codes.has("MISSING_TOOL") || codes.has("OT_TOOL")) {
       const currentCatalog = toolCatalogForAppOperation(op);
       const tool = planningCatalogValue(values, `tool_${index}`) || cleanToolValue(currentCatalog?.herramental);
-      op.herramental = tool;
+      const additionalTools = collectAdditionalPlanningTools(values, index);
+      applyToolToJob(op.ot, tool, additionalTools);
       if (tool && !state.toolCatalog.some((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(op.parte) && cleanToolValue(item.herramental) === tool && cleanToolValue(item.kitHerramental) === op.kitHerramental)) {
         state.toolCatalog.push({
           id: uid("tool"), part: op.parte,
@@ -2108,38 +4316,117 @@ function applyPlanningRequirements(requirements, values, operations) {
           toolSetupMinutes: Number(currentCatalog?.toolSetupMinutes || 0), kitSetupMinutes: Number(currentCatalog?.kitSetupMinutes || 0), active: true,
         });
       }
+      additionalTools.forEach((extraTool) => ensureToolCatalogEntry(op, extraTool, currentCatalog));
     }
   }
+}
+
+function planningPreparationTitle(job) {
+  const ot = String(job?.ot || "").trim();
+  const article = String(job?.parte || workOrderForOt(ot)?.item || "").trim();
+  const description = String(job?.descripcion || workOrderForOt(ot)?.description || "").trim();
+  const quantity = Number(job?.quantity || job?.ops?.find((op) => Number(op.cantTotal) > 0)?.cantTotal || workOrderForOt(ot)?.quantity || 0);
+  const detail = [article, description, quantity ? `${formatMaterialQuantity(quantity)} pzas` : ""].filter(Boolean).join(" - ");
+  return `Preparar OT ${ot}${detail ? ` - ${detail}` : ""}`;
+}
+
+function planningAdditionalToolMarkup(index, extraIndex, value, machines = []) {
+  const entry = additionalToolEntryValue(value);
+  const optionsId = `planningToolOptions_${index}_${extraIndex}`;
+  const options = toolCatalogValues("herramental").map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("");
+  const machineOptions = (machines || []).map((machine) => `<option value="${escapeHtml(machine)}"${machine === entry.machine ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("");
+  return `<div class="planning-tool-extra-row">
+    <input name="tool_${escapeHtml(index)}_extra_${escapeHtml(extraIndex)}" list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(entry.herramental)}" placeholder="Otro herramental" autocomplete="off">
+    <datalist id="${escapeHtml(optionsId)}">${options}</datalist>
+    <select name="tool_${escapeHtml(index)}_extra_machine_${escapeHtml(extraIndex)}" aria-label="Maquina del herramental adicional" required>
+      <option value="">Selecciona maquina</option>${machineOptions}
+    </select>
+    <button class="icon-button" type="button" data-remove-planning-tool aria-label="Eliminar herramental adicional">X</button>
+  </div>`;
+}
+
+function collectAdditionalPlanningTools(values, index) {
+  const prefix = `tool_${index}_extra_`;
+  const out = [];
+  Object.keys(values || {}).filter((key) => key.startsWith(prefix) && !key.startsWith(`${prefix}machine_`)).forEach((key) => {
+    const suffix = key.slice(prefix.length);
+    const herramental = cleanToolValue(values[key]);
+    if (!herramental) return;
+    out.push({ herramental, machine: normalizeMachineValue(values[`${prefix}machine_${suffix}`]) });
+  });
+  return additionalToolListValue(out);
+}
+
+function ensureToolCatalogEntry(op, tool, catalog) {
+  const normalized = additionalToolHerramental(tool);
+  const part = String(op?.parte || "").trim();
+  if (!normalized || !part) return;
+  const exists = state.toolCatalog.some((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === normalized && cleanToolValue(item.kitHerramental) === cleanToolValue(op.kitHerramental));
+  if (!exists) state.toolCatalog.push({
+    id: uid("tool"), part,
+    herramental: normalized, kitHerramental: op.kitHerramental,
+    toolSetupMinutes: Number(catalog?.toolSetupMinutes || 0), kitSetupMinutes: Number(catalog?.kitSetupMinutes || 0), active: true,
+  });
 }
 
 function assignPlanningOperators(operations) {
   for (const op of operations) {
     if (isSubcontractAppOperation(op)) {
+      const previous = op.operador;
       op.operador = "SUBCONTRATO";
       op.maquina = "";
+      if (previous && String(previous).trim() && previous !== "SUBCONTRATO") {
+        op.log = appendLog(op.log, `OPERADOR_REASSIGN_NO_MOVE ${previous} -> SUBCONTRATO`);
+      }
       continue;
     }
     const allowed = getAllowedOperatorsForOperation(op);
-    if (!allowed.includes(op.operador)) op.operador = allowed[0] || "SIN_OPERADOR";
+    if (!allowed.includes(op.operador)) {
+      const previous = op.operador;
+      op.operador = allowed[0] || "SIN_OPERADOR";
+      if (previous && String(previous).trim() && previous !== op.operador) {
+        op.log = appendLog(op.log, `OPERADOR_REASSIGN_NO_MOVE ${previous} -> ${op.operador}`);
+      }
+    }
   }
 }
 
-function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible, setup }) {
+function openPlanningDialog({ title, summary, body, confirmLabel, cancelVisible, setup, submit }) {
   if (planningDialogResolve) closePlanningDialog(null);
   els.planningDialogTitle.textContent = title;
   els.planningDialogSummary.textContent = summary || "";
   els.planningDialogBody.innerHTML = body || "";
+  els.planningDialogBody.onclick = null;
   els.planningDialogConfirm.textContent = confirmLabel || "Aceptar";
+  els.planningDialogConfirm.disabled = false;
+  els.planningDialogForm.removeAttribute("aria-busy");
   els.planningDialogCancel.hidden = cancelVisible === false;
+  planningDialogSubmit = typeof submit === "function" ? submit : null;
   const promise = new Promise((resolve) => { planningDialogResolve = resolve; });
   els.planningDialog.showModal();
   if (setup) setup();
   return promise;
 }
 
+function confirmZeroManualPrice(form) {
+  const input = form?.elements?.namedItem("ot_manual_price");
+  if (!input) return true;
+  // RULE-REP-025 (2026-10-07): el precio unitario temporal puede quedar en 0 o vacio; el
+  // reporte trata < $1 como "sin precio registrado" (RULE-REP-021/022), asi que un 0 y un
+  // vacio no inflan montos ni bloquean el avance. Solo se rechaza un numero negativo, que
+  // de todos modos reportValidity() ya frena por min="0"; este guard queda por robustez.
+  if (Number(input.value || 0) >= 0) return true;
+  showToast("El precio unitario no puede ser negativo", 9000);
+  input.focus();
+  return false;
+}
+
 function closePlanningDialog(result) {
   const resolve = planningDialogResolve;
   planningDialogResolve = null;
+  planningDialogSubmit = null;
+  els.planningDialogConfirm.disabled = false;
+  els.planningDialogForm.removeAttribute("aria-busy");
   if (els.planningDialog.open) els.planningDialog.close();
   if (resolve) resolve(result);
 }
@@ -2157,11 +4444,60 @@ function toggleJobLock(ot) {
   checkpointState();
   const locked = !isJobLocked(ot);
   state.lockedOts = locked ? uniq([...state.lockedOts, ot]) : state.lockedOts.filter((item) => item !== ot);
-  state.operations.filter((op) => op.ot === ot).forEach((op) => {
+  invalidatePriorityJobsCache();
+  const operationsByOt = (planningStateIndexes().operationsByOt.get(materialOtKey(ot)) || []);
+  for (const op of operationsByOt) {
     op.locked = locked;
     op.log = appendLog(op.log, locked ? "OT_BLOQUEADA_APP" : "OT_DESBLOQUEADA_APP");
+  }
+  renderPriorityQueue();
+  updateJobLockDetail(ot);
+  scheduleJobLockBackgroundWork();
+  showToast(`OT ${ot} ${locked ? "bloqueada" : "desbloqueada"}`);
+  saveState("plan");
+}
+
+function updateQueueLockCard(ot) {
+  if (!els.priorityQueue) return;
+  // MEDIDO 2026-10-03 (ReferenceError en produccion al alternar Completar/
+  // Reabrir): esta funcion usaba `activeMoveOt`, que solo existe como local de
+  // renderPriorityQueue. La fuente de verdad es state.queueMoveOt, la misma que
+  // renderPriorityQueue usa (y escribe en el dataset del contenedor).
+  const activeMoveOt = state.queueMoveOt || "";
+  els.priorityQueue.querySelectorAll("[data-queue-ot]").forEach((el) => {
+    if (materialOtKey(el.dataset.queueOt) !== materialOtKey(ot)) return;
+    const job = getPriorityJobs().find((item) => materialOtKey(item.ot) === materialOtKey(ot));
+    if (!job) return;
+    const cannotMove = job.programmed || job.locked;
+    const lockButton = el.querySelector("[data-lock-ot]");
+    if (lockButton) {
+      lockButton.classList.toggle("locked", !job.programmed && job.locked);
+      lockButton.disabled = Boolean(job.programmed);
+      lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+      lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+    }
+    el.classList.toggle("locked", !job.programmed && job.locked);
+    const startMoveButton = el.querySelector("[data-start-queue-move]");
+    if (startMoveButton) startMoveButton.disabled = cannotMove || activeMoveOt === job.ot;
   });
-  saveAndRender(`OT ${ot} ${locked ? "bloqueada" : "desbloqueada"}`);
+}
+
+function updateJobLockDetail(ot) {
+  if (!els.selectedJobPanel || selectedJobOt() !== ot) return;
+  const job = getPriorityJobs().find((item) => item.ot === ot);
+  if (!job) return;
+  const lockButton = els.selectedJobPanel.querySelector("[data-detail-lock]");
+  if (lockButton) {
+    lockButton.classList.toggle("locked", job.locked);
+    lockButton.disabled = Boolean(job.programmed);
+    lockButton.setAttribute("aria-label", job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`);
+    lockButton.setAttribute("title", job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion"));
+  }
+  const refreshButton = els.selectedJobPanel.querySelector("[data-detail-ot-refresh]");
+  if (refreshButton) {
+    refreshButton.disabled = Boolean(job.locked);
+    refreshButton.setAttribute("title", job.locked ? "OT bloqueada: no se actualizan tiempos porque esta fija" : "Actualizar OT desde NetSuite");
+  }
 }
 
 function toggleAllJobs(locked) {
@@ -2171,6 +4507,7 @@ function toggleAllJobs(locked) {
   state.lockedOts = locked
     ? uniq([...state.lockedOts, ...editableOts])
     : state.lockedOts.filter((ot) => !editableOts.includes(ot));
+  invalidatePriorityJobsCache();
   for (const op of state.operations) {
     if (!editableOts.includes(op.ot)) continue;
     op.locked = locked;
@@ -2179,29 +4516,63 @@ function toggleAllJobs(locked) {
   saveAndRenderQueueChange(locked ? "Todos los trabajos fueron bloqueados" : "Todos los trabajos fueron desbloqueados");
 }
 
+function returnUnlockedJobsToBacklog() {
+  const removableOts = state.selectedOts.filter((ot) => {
+    if (isProgrammedJobStatus(jobStatusForOt(ot))) return false;
+    return window.PlanningWorkflowCore.canRemoveSelectedOt(state, ot).allowed;
+  });
+  if (!removableOts.length) return showToast("No hay trabajos no bloqueados para enviar a backlog");
+  if (!window.confirm("esta seguro de enviar todos los trabajos no bloqueados a backlog?")) return;
+
+  checkpointState();
+  for (const ot of removableOts) {
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+  }
+  rememberDraftRemovedOts(removableOts);
+  invalidatePriorityJobsCache();
+  applyQueuePriorities();
+  renderPriorityList();
+  renderPriorityQueue();
+  renderGantt();
+  showToast(`${removableOts.length} trabajos devueltos al backlog`);
+  saveState("plan");
+}
+
 function reorderSelectedJobs(sourceOt, targetOt) {
   if (!sourceOt || !targetOt || sourceOt === targetOt) return;
+  if (!canReorderSelectedJobs(sourceOt, targetOt)) return;
+  checkpointState();
+  const order = [...state.selectedOts];
+  const sourceIndex = order.indexOf(sourceOt);
+  order.splice(sourceIndex, 1);
+  order.splice(order.indexOf(targetOt), 0, sourceOt);
+  state.selectedOts = order;
+  state.queueMoveOt = "";
+  invalidatePriorityJobsCache();
+  applyQueuePriorities();
+  saveAndRenderQueueChange("Orden del plan actualizado");
+}
+
+function startQueueMove(sourceOt) {
+  if (!sourceOt || !canReorderSelectedJobs(sourceOt, state.selectedOts.find((ot) => ot !== sourceOt) || "", { allowMissingTarget: true })) return;
+  state.queueMoveOt = sourceOt;
+  renderPriorityQueue();
+}
+
+function canReorderSelectedJobs(sourceOt, targetOt, options = {}) {
+  if (!sourceOt || sourceOt === targetOt) return false;
   const sourceJob = getPriorityJobs().find((item) => item.ot === sourceOt);
   if (sourceJob?.programmed || sourceJob?.locked) {
-    showToast(`OT ${sourceOt} esta bloqueada y no se puede mover`);
-    return;
+    if (!options.silent) showToast(`OT ${sourceOt} esta bloqueada y no se puede mover`);
+    return false;
   }
   const order = [...state.selectedOts];
   const sourceIndex = order.indexOf(sourceOt);
   const targetIndex = order.indexOf(targetOt);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-  const crossedFixed = order.slice(Math.min(sourceIndex, targetIndex), Math.max(sourceIndex, targetIndex) + 1)
-    .some((ot) => ot !== sourceOt && (isJobLocked(ot) || isProgrammedJobStatus(jobStatusForOt(ot))));
-  if (crossedFixed) {
-    showToast("No puedes mover una OT a traves de un trabajo fijo");
-    return;
-  }
-  checkpointState();
-  order.splice(sourceIndex, 1);
-  order.splice(order.indexOf(targetOt), 0, sourceOt);
-  state.selectedOts = order;
-  applyQueuePriorities();
-  saveAndRenderQueueChange("Orden del plan actualizado");
+  if (sourceIndex < 0) return false;
+  if (options.allowMissingTarget && targetIndex < 0) return true;
+  if (targetIndex < 0) return false;
+  return true;
 }
 
 function applyQueuePriorities() {
@@ -2242,9 +4613,22 @@ function renderSelectedJobPanel() {
   const selectedWorkOrder = workOrderForOt(job.ot);
   const dueDateOverridden = Boolean(selectedWorkOrder?.dueDateOverride);
 
-  const toolGroups = getJobToolGroups(job.ops);
   const bendingOps = job.ops.filter(isBendingAppOperation);
   const hasBendingOperations = bendingOps.length > 0;
+  const otConfiguration = otConfigurationFor(job.ot);
+  const configuredAdditionalTools = additionalToolListValue(otConfiguration.additionalHerramentales);
+  const detailOps = job.ops.map((op) => isBendingAppOperation(op)
+    ? {
+      ...op,
+      herramental: cleanToolValue(op.herramental) || cleanToolValue(otConfiguration.herramental),
+      additionalHerramentales: additionalToolListValue(op.additionalHerramentales).length ? additionalToolListValue(op.additionalHerramentales) : configuredAdditionalTools,
+    }
+    : op);
+  const loadingOperations = selectedJobDetailOperationLoads.has(materialOtKey(job.ot)) && !hasIndividualPlanningOperations(job.ot);
+  const unavailableReason = individualPlanningUnavailableReason(job.ot);
+  const completedOperationsNotice = !job.ops.length && unavailableReason
+    ? `<div class="job-op-empty">${escapeHtml(unavailableReason)}</div>` : "";
+  const toolGroups = getJobToolGroups(detailOps);
   const bulkMachineValue = getBulkMachineValue(job.ops);
   const machineOptions = getMachineOptions(job.ops);
   const otKit = getOtKitValue(job.ops);
@@ -2252,8 +4636,13 @@ function renderSelectedJobPanel() {
   const toolSummary = toolGroups.length
     ? toolGroups.map((tool) => `<span class="tool-chip">${escapeHtml(tool.label)}<small>${tool.count} ops</small></span>`).join("")
     : `<span class="tool-chip empty">SIN HERRAMENTAL<small>${job.ops.length} ops</small></span>`;
+  const bendingToolValues = uniq(detailOps.filter(isBendingAppOperation).map((op) => cleanToolValue(op.herramental)).filter(Boolean));
+  const currentBendingTool = bendingToolValues.length === 1 ? bendingToolValues[0] : "";
+  const currentAdditionalTools = configuredAdditionalTools.length ? configuredAdditionalTools : additionalToolListValue(detailOps.find((op) => isBendingAppOperation(op) && additionalToolListValue(op.additionalHerramentales).length)?.additionalHerramentales);
+  const articleToolOptions = uniq(state.toolCatalog
+    .filter((item) => item.active !== false)
+    .map((item) => cleanToolValue(item.herramental)).filter(Boolean));
   const subcontractOps = job.ops.filter(isSubcontractAppOperation);
-  const otConfiguration = otConfigurationFor(job.ot);
   const catalogSubcontract = subcontractOps.map(subcontractCatalogForAppOperation).find(Boolean);
   const currentSubcontractType = String(otConfiguration.subcontractType || catalogSubcontract?.name || "").trim().toUpperCase();
   const currentSubcontractDays = Number(otConfiguration.subcontractDays || catalogSubcontract?.days || 0);
@@ -2266,10 +4655,8 @@ function renderSelectedJobPanel() {
     <input id="jobSubcontractDays" type="number" min="1" max="90" step="1" value="${escapeHtml(currentSubcontractDays || "")}" placeholder="Dias" aria-label="Dias de subcontrato de OT ${escapeHtml(job.ot)}" />
   </div>` : "";
   const firstQuantity = Number(job.quantity || job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal || 0);
-  const photoMarkup = job.photoUrl
-    ? `<img src="${escapeHtml(job.photoUrl)}" alt="Articulo ${escapeHtml(job.parte || job.ot)}" data-job-photo />`
-    : "";
-  const materialRows = job.materials.map((material) => `
+  const visibleMaterials = job.materials.filter((material) => !String(material?.material || "").toLowerCase().startsWith("costo 0"));
+  const materialRows = visibleMaterials.map((material) => `
     <div class="job-material-row" title="${escapeHtml(material.description || material.component)}">
       <span><strong>${escapeHtml(material.component)}</strong><small>${escapeHtml(material.description || "SIN DESCRIPCION")}</small></span>
       <span>${escapeHtml(material.unit || "-")}</span>
@@ -2279,83 +4666,95 @@ function renderSelectedJobPanel() {
     </div>
   `).join("");
 
+  // La foto de la OT, con la MISMA puerta que las tarjetas (safePhotoUrl, que resuelve el origen
+  // de Drive documentado arriba). MEDIDO 2026-10-01: el detalle no tenia foto en ningun punto; las
+  // unicas dos que existian en toda la pagina eran la tarjeta del Backlog y la de la cola.
+  const detalleFoto = safePhotoUrl(job.photoUrl);
+  const detallePhotoMarkup = detalleFoto
+    ? `<img loading="lazy" src="${escapeHtml(detalleFoto)}" alt="Foto del articulo ${escapeHtml(job.parte || "SIN ARTICULO")}" data-detail-photo />`
+    : "";
+
   els.selectedJobPanel.innerHTML = `
     <article class="job-detail">
       <div class="job-detail-head">
         <div class="job-identity">
-          <div class="job-photo${job.photoUrl ? " has-photo" : ""}">${photoMarkup}<span>Sin foto</span></div>
           <div>
             <strong>OT ${escapeHtml(job.ot)}</strong>
-            <span title="${escapeHtml(job.descripcion || "SIN DESCRIPCION")}">${escapeHtml(job.descripcion || "SIN DESCRIPCION")}</span>
+            <span title="${escapeHtml(job.parte || "SIN ARTICULO")}">${escapeHtml(job.parte || "SIN ARTICULO")}</span>
           </div>
         </div>
+        <div class="detail-photo${detalleFoto ? " has-photo" : ""}">${detallePhotoMarkup}<span>Sin foto</span></div>
         <div class="job-detail-actions">
-          <span class="job-status${job.movable ? "" : " blocked"}">${escapeHtml(job.status)}</span>
-          ${jobTypeTagHtml(job)}
-          ${jobRiskIndicatorHtml(job)}
-          ${netSuiteChangeBadgeHtml(job.ot)}
           <span class="pill ${priorityClass(job.prioridad)}">${escapeHtml(priorityLabel(job.prioridad))}</span>
           <button class="icon-button detail-lock${job.locked ? " locked" : ""}" type="button" data-detail-lock="${escapeHtml(job.ot)}" aria-label="${job.programmed ? `OT ${escapeHtml(job.ot)} fija por estatus programado` : `${job.locked ? "Desbloquear" : "Bloquear"} OT ${escapeHtml(job.ot)}`}" title="${job.programmed ? "Fija por estatus programado" : (job.locked ? "Desbloquear programacion" : "Bloquear programacion")}"${job.programmed ? " disabled" : ""}>
             <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
           </button>
+          <button class="icon-button detail-ot-refresh" type="button" data-detail-ot-refresh="${escapeHtml(job.ot)}" aria-label="Actualizar OT ${escapeHtml(job.ot)} desde NetSuite" title="${job.locked ? "OT bloqueada: no se actualizan tiempos porque esta fija" : "Actualizar OT desde NetSuite"}"${job.locked ? " disabled" : ""}>
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
         </div>
       </div>
-      <div class="job-facts">
-        <div class="job-fact"><span>Articulo</span><strong>${escapeHtml(job.parte || "SIN ARTICULO")}</strong></div>
-        <div class="job-fact"><span>Inicio NetSuite</span><strong>${escapeHtml(formatOtDateValue(job.startDate))}</strong></div>
-        <div class="job-fact"><span>Fin NetSuite</span><strong>${escapeHtml(formatOtDateValue(job.endDate))}</strong></div>
+      <div class="job-facts job-detail-quick-facts">
         <div class="job-fact"><span>Cantidad</span><strong>${escapeHtml(firstQuantity)}</strong></div>
-        <label class="job-fact job-delivery-fact"><span>Fecha de entrega</span><input id="jobDueDateInput" class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(selectedWorkOrder?.dueDate))}"></label>
+        <label class="job-fact job-delivery-fact"><span>Entrega</span><input id="jobDueDateInput" class="job-due-date${dueDateOverridden ? " is-overridden" : ""}" type="date" value="${escapeHtml(job.dueDate)}" aria-label="Fecha de entrega OT ${escapeHtml(job.ot)}" title="NetSuite: ${escapeHtml(formatOtDateValue(selectedWorkOrder?.dueDate))}"></label>
       </div>
-      ${hasBendingOperations ? `<div class="job-section">
-        <span class="job-section-title">Maquina asignada a la OT</span>
+      ${hasBendingOperations ? `<details class="job-resource-section">
+        <summary><span>Maquina</span><strong>${escapeHtml(bulkMachineValue === "__MULTIPLE__" ? "VARIAS" : machineLabel(bulkMachineValue || "SIN MAQUINA"))}</strong></summary>
+        <div class="job-section">
         <div class="job-machine-row">
           <select id="jobMachineSelect" class="job-machine-select" aria-label="Maquina de la OT ${escapeHtml(job.ot)}">
             ${bulkMachineValue === "__MULTIPLE__" ? `<option value="__MULTIPLE__">VARIAS MAQUINAS</option>` : ""}
             ${machineOptions.map((machine) => `<option value="${escapeHtml(machine)}"${machine === bulkMachineValue ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("")}
           </select>
           <span class="assignment-scope">${bendingOps.length} ops de doblado</span>
-        </div>
-      </div>` : ""}
-      ${hasBendingOperations ? `<div class="job-section">
-        <span class="job-section-title">Kit asignado a la OT</span>
+        </div></div>
+      </details>` : ""}
+      ${hasBendingOperations ? `<details class="job-resource-section">
+        <summary><span>Kit</span><strong>${escapeHtml(otKit || (otKitPending ? "REGISTRAR DESPUES" : "SIN KIT"))}</strong></summary>
+        <div class="job-section">
         <div class="job-kit-row">
           <input id="jobKitInput" type="text" value="${escapeHtml(otKit)}" placeholder="Kit opcional" aria-label="Kit de la OT ${escapeHtml(job.ot)}"${otKitPending ? " disabled" : ""}>
           <label><input id="jobKitPending" type="checkbox"${otKitPending ? " checked" : ""}> Registrar despues</label>
+        </div></div>
+      </details>
+      <details class="job-resource-section">
+        <summary><span>Herramental</span><strong>${toolGroups.length} grupos</strong></summary>
+        <div class="job-section">
+          <div class="job-tool-editor" data-job-tool-editor>
+            <label><span>Herramental para doblado</span><input id="jobToolInput" list="jobToolOptions" type="text" value="${escapeHtml(currentBendingTool)}" placeholder="${bendingToolValues.length > 1 ? "VARIOS HERRAMENTALES" : "Selecciona o captura"}" autocomplete="off"><datalist id="jobToolOptions">${articleToolOptions.map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("")}</datalist></label>
+            <button class="icon-button job-tool-add" type="button" data-add-job-tool aria-label="Agregar herramental adicional">+</button>
+            <div class="job-tool-extra-list" data-job-tool-extra-list>${currentAdditionalTools.map((tool, index) => jobAdditionalToolMarkup(tool, index, articleToolOptions, machineOptions)).join("")}</div>
+          </div>
+          <div class="tool-chip-row">${toolSummary}</div>
         </div>
-      </div>
-      <div class="job-section">
-        <span class="job-section-title">Herramental requerido</span>
-        <div class="tool-chip-row">${toolSummary}</div>
-      </div>` : ""}
-      ${subcontractRows ? `<div class="job-section"><span class="job-section-title">Subcontrato de esta OT</span><div class="job-subcontract-list">${subcontractRows}</div></div>` : ""}
-      <details class="job-materials"${job.materials.length ? " open" : ""}>
-        <summary><span>Materiales <small>${job.materials.length} componentes</small></span><strong>${escapeHtml(job.materialBase ? `Base ${job.materialBase}` : "SIN MATERIAL")}</strong></summary>
-        ${job.materials.length ? `
+      </details>` : ""}
+      ${subcontractRows ? `<details class="job-resource-section"><summary><span>Subcontrato</span><strong>${escapeHtml(currentSubcontractType || "SIN TIPO")} · ${currentSubcontractDays || 0} dias</strong></summary><div class="job-section"><div class="job-subcontract-list">${subcontractRows}</div></div></details>` : ""}
+      <details class="job-materials job-resource-section">
+        <summary><span>Materiales <small>${visibleMaterials.length} componentes</small></span><strong>${escapeHtml(job.materialBase ? `Base ${job.materialBase}` : "SIN MATERIAL")}</strong></summary>
+        ${visibleMaterials.length ? `
           <div class="job-material-header"><span>Componente</span><span>UM</span><span>Req.</span><span>Emit.</span><span>Pend.</span></div>
           <div class="job-material-list">${materialRows}</div>
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
       </details>
-      <div class="job-operations-title"><span>Operaciones</span><span>${job.ops.length} filas - ${formatMinutes(job.minutes)}</span></div>
-      <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
-      <div class="job-op-list">
-        ${job.ops.map((op) => {
+      <div class="job-detail-operations-scroll">
+        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${job.ops.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
+        <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
+        <div class="job-op-list">
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || detailOps.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
-          const completed = isPlanCompletedOperation(op);
-          const key = operationCompletionKey(op);
+          const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : completed
-              ? "<span class=\"op-status completed-label\">Completada</span>"
-              : `<button class="plan-status-action complete" type="button" data-plan-status-key="${escapeHtml(key)}">Completar</button>`;
+            : `<span class="op-status${completed ? " completed-label" : ""}">${planStatusActionCell(op)}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
-            <span class="op-name">${escapeHtml(op.descripcion || op.tipoInsercion || "Operacion")}</span>
+            <span class="op-name">${escapeHtml(op.descripcion || op.tipoInsercion || "Operacion")}<small>CT ${escapeHtml(op.ct)}</small></span>
             <span>${escapeHtml(op.ct)}</span>
             <span class="op-time">${formatMinutes(operationDuration(op))}</span>
             <span class="op-status-cell">${statusCell}</span>
           </div>`;
         }).join("")}
+        </div>
       </div>
     </article>
   `;
@@ -2363,10 +4762,31 @@ function renderSelectedJobPanel() {
   els.selectedJobPanel.querySelector("[data-detail-lock]").addEventListener("click", (event) => {
     toggleJobLock(event.currentTarget.dataset.detailLock);
   });
-  const jobPhoto = els.selectedJobPanel.querySelector("[data-job-photo]");
-  if (jobPhoto) jobPhoto.addEventListener("error", () => jobPhoto.parentElement.classList.remove("has-photo"));
+  const otRefreshButton = els.selectedJobPanel.querySelector("[data-detail-ot-refresh]");
+  if (otRefreshButton) otRefreshButton.addEventListener("click", () => updateSelectedOtFromNetSuite(job.ot));
   const dueDateInput = els.selectedJobPanel.querySelector("#jobDueDateInput");
   if (dueDateInput) dueDateInput.addEventListener("change", () => updateWorkOrderDueDate(job.ot, dueDateInput.value));
+  const toolInput = els.selectedJobPanel.querySelector("#jobToolInput");
+  const saveToolEditor = () => {
+    if (!toolInput) return;
+    checkpointState();
+    applyToolToJob(job.ot, toolInput.value, currentJobAdditionalTools());
+    saveAndRender("Herramental de OT actualizado", "ot-config");
+  };
+  if (toolInput) toolInput.addEventListener("change", saveToolEditor);
+  const addToolButton = els.selectedJobPanel.querySelector("[data-add-job-tool]");
+  const extraList = els.selectedJobPanel.querySelector("[data-job-tool-extra-list]");
+  if (addToolButton && extraList) addToolButton.addEventListener("click", () => {
+    extraList.insertAdjacentHTML("beforeend", jobAdditionalToolMarkup("", extraList.children.length, articleToolOptions, machineOptions));
+    extraList.lastElementChild?.querySelector("input")?.focus();
+  });
+  if (extraList) extraList.addEventListener("change", saveToolEditor);
+  if (extraList) extraList.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove-job-tool]");
+    if (!remove) return;
+    remove.closest(".job-tool-extra-row")?.remove();
+    saveToolEditor();
+  });
   const bulkSelect = els.selectedJobPanel.querySelector("#jobMachineSelect");
   if (bulkSelect) {
     bulkSelect.addEventListener("change", (event) => {
@@ -2404,15 +4824,93 @@ function renderSelectedJobPanel() {
     subcontractDaysInput.addEventListener("change", saveSubcontract);
   }
   bindPlanStatusActions(els.selectedJobPanel);
+  bindPhotoFallback(els.selectedJobPanel);
+}
+
+function ganttDayColumnWidth(day) {
+  const pxPerMinute = state.ganttDayWidth / WORK_DAY_MINUTES;
+  const minutes = ganttDayWorkMinutes(day);
+  if (minutes <= 0) return 0;
+  return Math.max(2, Math.round(minutes * pxPerMinute));
+}
+
+function ganttDayColumnWidths(windowStart) {
+  const widths = [];
+  for (let i = 0; i < state.horizonDays; i++) widths.push(ganttDayColumnWidth(addDays(windowStart, i)));
+  return widths;
+}
+
+function ganttGroupsSignature(groups) {
+  const parts = [];
+  for (const group of groups || []) {
+    parts.push(`${group.type || ""}:${group.key || ""}:${group.expanded ? "e" : ""}${group.locked ? "l" : ""}:${(group.ops || []).length}`);
+    for (const op of group.ops || []) {
+      const startMs = opStart(op) ? opStart(op).getTime() : "";
+      const endMs = opEnd(op) ? opEnd(op).getTime() : "";
+      parts.push(`${op.id || ""}:${op.secuencia || ""}:${startMs}:${endMs}:${op.operador || ""}:${op.maquina || ""}:${op.parte || ""}:${op.ct || ""}:${op.descripcion || ""}`);
+    }
+  }
+  return parts.join("|");
 }
 
 function renderGantt() {
   const groups = getGanttGroups();
   const window = getPlanWindow();
-  const days = range(state.horizonDays).map((i) => addDays(window.start, i));
   const selectedOt = selectedJobOt();
+  const memo = typeof renderGanttStructureMemo !== "undefined" ? renderGanttStructureMemo : null;
+  let groupsSignature = null;
+  const structureUnchanged = memo
+    && (memo.groups === groups || (groupsSignature = ganttGroupsSignature(groups)) === memo.groupsSignature)
+    && memo.windowStart === window.start.getTime()
+    && memo.dayWidth === state.ganttDayWidth
+    && memo.horizonDays === state.horizonDays
+    && typeof els.ganttCanvas !== "undefined"
+    && Boolean(els.ganttCanvas.firstElementChild);
+  if (structureUnchanged) {
+    if (memo.selectedOt === selectedOt) return;
+    applyGanttSelection(selectedOt);
+    renderGanttStructureMemo = {
+      groups,
+      groupsSignature: groupsSignature !== null ? groupsSignature : memo.groupsSignature,
+      windowStart: window.start.getTime(),
+      dayWidth: state.ganttDayWidth,
+      horizonDays: state.horizonDays,
+      selectedOt,
+    };
+    return;
+  }
+  groupsSignature = ganttGroupsSignature(groups);
+  const structureCacheKey = `${state.ganttView}|${groupsSignature}|${window.start.getTime()}|${state.ganttDayWidth}|${state.horizonDays}`;
+  if (ganttStructureDomCache) {
+    const currentKey = memo && typeof memo.structureCacheKey === "string" ? memo.structureCacheKey : null;
+    if (currentKey && currentKey !== structureCacheKey) {
+      const currentInner = els.ganttCanvas.querySelector(".gantt-inner");
+      if (currentInner && !ganttStructureDomCache.has(currentKey)) {
+        ganttStructureDomCache.set(currentKey, currentInner);
+      }
+    }
+    const cachedInner = ganttStructureDomCache.get(structureCacheKey);
+    if (cachedInner && els.ganttCanvas.firstElementChild !== cachedInner) {
+      els.ganttCanvas.innerHTML = "";
+      els.ganttCanvas.appendChild(cachedInner);
+      applyGanttSelection(selectedOt);
+      renderGanttStructureMemo = {
+        groups,
+        groupsSignature,
+        windowStart: window.start.getTime(),
+        dayWidth: state.ganttDayWidth,
+        horizonDays: state.horizonDays,
+        structureCacheKey,
+        selectedOt,
+      };
+      return;
+    }
+  }
+  const days = range(state.horizonDays).map((i) => addDays(window.start, i));
   const zoomLevel = ganttZoomLevelForWidth(state.ganttDayWidth);
   const totalWindowMinutes = workWindowMinutes();
+  const dayWidths = ganttDayColumnWidths(window.start);
+  const totalWidth = globalThis.PlanningWorkflowCore.ganttTotalWidth(dayWidths, 190);
 
   els.ganttCanvas.innerHTML = "";
   const inner = document.createElement("div");
@@ -2421,21 +4919,20 @@ function renderGantt() {
   inner.style.setProperty("--gantt-day-width", `${state.ganttDayWidth}px`);
   inner.style.setProperty("--gantt-grid-minor-size", `${zoomLevel.minorMinutes / totalWindowMinutes * 100}%`);
   inner.style.setProperty("--gantt-grid-major-size", `${zoomLevel.majorMinutes / totalWindowMinutes * 100}%`);
-  inner.style.setProperty("--gantt-day-minor-size", `${zoomLevel.minorMinutes / WORK_DAY_MINUTES * 100}%`);
-  inner.style.setProperty("--gantt-day-major-size", `${zoomLevel.majorMinutes / WORK_DAY_MINUTES * 100}%`);
-  inner.style.minWidth = `${Math.max(980, 190 + state.horizonDays * state.ganttDayWidth)}px`;
+  inner.style.minWidth = `${Math.max(980, totalWidth)}px`;
 
   const header = document.createElement("div");
   header.className = "gantt-header";
   header.innerHTML = `<div>${escapeHtml(ganttHeaderLabel())}</div>${days
-    .map((day) => `<div class="gantt-day-heading ${isGeneralWorkingDay(day) ? "" : "non-working"}"><span class="gantt-day-title">${formatDayHeader(day)}</span>${ganttTimeScaleHtml(zoomLevel)}</div>`)
+    .map((day, i) => `<div class="gantt-day-heading ${isGeneralWorkingDay(day) ? "" : "non-working"}" style="flex:0 0 ${Math.max(dayWidths[i], 2)}px"><span class="gantt-day-title">${formatDayHeader(day)}</span>${ganttTimeScaleHtml(zoomLevel, day)}</div>`)
     .join("")}`;
   inner.appendChild(header);
 
   if (!groups.length) {
+    const generating = els.scheduleBtn?.classList.contains("is-running");
     const empty = document.createElement("div");
     empty.className = "gantt-empty";
-    empty.textContent = "Sin operaciones programadas";
+    empty.textContent = generating ? "Generando plan..." : "Sin operaciones programadas";
     inner.appendChild(empty);
     els.ganttCanvas.appendChild(inner);
     return;
@@ -2448,16 +4945,16 @@ function renderGantt() {
     row.innerHTML = `<div class="gantt-row-label">${ganttGroupLabelHtml(group)}</div><div class="gantt-lane"></div>`;
     const lane = row.querySelector(".gantt-lane");
     if (group.type === "job-summary") {
-      const summaryBar = createGanttSummaryBar(group, window);
+      const summaryBar = createGanttSummaryBar(group, window, totalWindowMinutes);
       if (summaryBar) lane.appendChild(summaryBar);
       row.querySelector("[data-expand-ot]").addEventListener("click", () => toggleExpandedJob(group.ot));
     } else if (group.type === "ct-summary") {
-      const summaryBar = createGanttSummaryBar(group, window);
+      const summaryBar = createGanttSummaryBar(group, window, totalWindowMinutes);
       if (summaryBar) lane.appendChild(summaryBar);
       row.querySelector("[data-expand-ct]").addEventListener("click", () => toggleExpandedCt(group.key));
     } else {
       for (const op of group.ops) {
-        const bar = createGanttBar(op, window);
+        const bar = createGanttBar(op, window, totalWindowMinutes);
         if (bar) lane.appendChild(bar);
       }
     }
@@ -2465,16 +4962,62 @@ function renderGantt() {
   }
 
   els.ganttCanvas.appendChild(inner);
+  if (ganttStructureDomCache) {
+    ganttStructureDomCache.set(structureCacheKey, inner);
+    while (ganttStructureDomCache.size > 4) {
+      ganttStructureDomCache.delete(ganttStructureDomCache.keys().next().value);
+    }
+  }
+  renderGanttStructureMemo = {
+    groups,
+    groupsSignature,
+    windowStart: window.start.getTime(),
+    dayWidth: state.ganttDayWidth,
+    horizonDays: state.horizonDays,
+    structureCacheKey,
+    selectedOt,
+  };
 }
 
-function ganttTimeScaleHtml(zoomLevel) {
+function applyGanttSelection(selectedOt) {
+  const canvas = els.ganttCanvas;
+  if (!canvas || !canvas.firstElementChild) return;
+  canvas.querySelectorAll(".gantt-row.selected-operation").forEach((row) => {
+    row.classList.remove("selected-operation");
+  });
+  if (selectedOt) {
+    const groupKey = `job:${String(selectedOt).replace(/["\\]/g, "")}`;
+    const row = canvas.querySelector(`.gantt-row[data-group="${groupKey}"]`);
+    if (row) row.classList.add("selected-operation");
+  }
+  const selectedOperationOt = typeof findOperation === "function" ? findOperation(state.selectedOperationId)?.ot : "";
+  const ids = selectedOperationOt
+    ? new Set(currentPlanOperations().filter((op) => op.ot === selectedOperationOt).map((op) => op.id))
+    : new Set();
+  canvas.querySelectorAll(".gantt-bar").forEach((bar) => {
+    bar.classList.toggle("in-sequence", ids.has(bar.dataset.id));
+  });
+}
+
+function ganttTimeScaleHtml(zoomLevel, day) {
+  const windows = ganttWindowsFor(day);
+  if (!windows.length) {
+    return `<div class="gantt-time-scale" aria-label="Dia no laborable"></div>`;
+  }
+  let daySpan = 0;
+  for (const w of windows) daySpan += Math.max(0, w.end - w.start);
+  if (daySpan <= 0) return `<div class="gantt-time-scale"></div>`;
   const ticks = [];
-  for (let minute = 0; minute < WORK_DAY_MINUTES; minute += zoomLevel.labelMinutes) {
-    const absoluteMinute = WORK_START_HOUR * 60 + minute;
-    const hour = String(Math.floor(absoluteMinute / 60)).padStart(2, "0");
-    const minuteText = String(absoluteMinute % 60).padStart(2, "0");
-    const edgeClass = minute === 0 ? " first" : "";
-    ticks.push(`<span class="gantt-time-tick${edgeClass}" style="left:${minute / WORK_DAY_MINUTES * 100}%">${hour}:${minuteText}</span>`);
+  let acc = 0;
+  for (const w of windows) {
+    const wm = Math.max(0, w.end - w.start);
+    for (let m = w.start; m < w.end; m += zoomLevel.labelMinutes) {
+      const hour = String(Math.floor(m / 60)).padStart(2, "0");
+      const minuteText = String(m % 60).padStart(2, "0");
+      const left = Math.max(0, Math.min(100, ((acc + Math.max(0, m - w.start)) / daySpan) * 100));
+      ticks.push(`<span class="gantt-time-tick" style="left:${left}%">${hour}:${minuteText}</span>`);
+    }
+    acc += wm;
   }
   return `<div class="gantt-time-scale" aria-label="Escala de tiempo cada ${escapeHtml(zoomLevel.label)}">${ticks.join("")}</div>`;
 }
@@ -2550,6 +5093,7 @@ function toggleExpandedJob(ot) {
   state.expandedOts = state.expandedOts.includes(ot)
     ? state.expandedOts.filter((item) => item !== ot)
     : uniq([...state.expandedOts, ot]);
+  invalidateGanttGroupsCache();
   renderGantt();
   saveState();
 }
@@ -2557,18 +5101,18 @@ function toggleExpandedCt(key) {
   state.expandedCts = state.expandedCts.includes(key)
     ? state.expandedCts.filter((item) => item !== key)
     : uniq([...state.expandedCts, key]);
+  invalidateGanttGroupsCache();
   renderGantt();
   saveState();
 }
 
-function createGanttSummaryBar(group, window) {
+function createGanttSummaryBar(group, window, windowMinutes) {
   const starts = group.ops.map(opStart).filter(Boolean);
   const ends = group.ops.map(opEnd).filter(Boolean);
   if (!starts.length || !ends.length) return null;
   const start = new Date(Math.min(...starts.map((date) => date.getTime())));
   const end = new Date(Math.max(...ends.map((date) => date.getTime())));
   const startMin = workMinuteOffset(start, window.start);
-  const windowMinutes = workWindowMinutes();
   const endMin = Math.max(startMin + MIN_OPERATION_MINUTES, workMinuteOffset(end, window.start, "end"));
   const bar = document.createElement("div");
   const job = getPriorityJobs().find((item) => item.ot === group.ot);
@@ -2584,13 +5128,12 @@ function createGanttSummaryBar(group, window) {
   return bar;
 }
 
-function createGanttBar(op, window) {
+function createGanttBar(op, window, windowMinutes) {
   const start = opStart(op);
   const end = opEnd(op);
   if (!start || !end) return null;
 
   const startMin = workMinuteOffset(start, window.start);
-  const windowMinutes = workWindowMinutes();
   const endMin = Math.max(startMin + MIN_OPERATION_MINUTES, workMinuteOffset(end, window.start, "end"));
   const widthMin = Math.max(MIN_OPERATION_MINUTES, Math.min(endMin - startMin, windowMinutes - startMin));
   const left = (startMin / windowMinutes) * 100;
@@ -2601,6 +5144,8 @@ function createGanttBar(op, window) {
   bar.dataset.id = op.id;
   bar.dataset.priorityBand = priorityClass(op.prioridad);
   bar.dataset.type = op.tipoInsercion;
+  const isToolChange = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL";
+  if (isToolChange) bar.classList.add("gantt-bar--tool-change");
   if (isJobLocked(op.ot)) bar.classList.add("locked");
   const job = getPriorityJobs().find((item) => item.ot === op.ot);
   if (job) {
@@ -2608,9 +5153,34 @@ function createGanttBar(op, window) {
   }
   if (op.ot === findOperation(state.selectedOperationId)?.ot) bar.classList.add("in-sequence");
   const materialBase = materialBaseForOt(op.ot);
-  const durationMinutes = Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
-  bar.title = `${op.ot} / Sec ${op.secuencia} - CT ${op.ct} - ${op.operador}${materialBase ? ` - Material ${materialBase}` : ""} - ${durationMinutes} min - ${formatDateTime(start)} a ${formatDateTime(end)}`;
-  bar.innerHTML = `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${durationMinutes} min</span>`;
+  const timing = globalThis.PlanningWorkflowCore.ganttOperationTiming(ganttProductiveMinutes(op, start, end), start, end);
+  const tooltip = isToolChange ? [
+    `Cambio de herramental - OT ${op.ot}`,
+    `Maquina: ${op.maquina || "SIN MAQUINA"}`,
+    `Origen: ${formatToolPair(op.toolChangeFromHerramental, op.toolChangeFromKit)}`,
+    `Destino: ${formatToolPair(op.toolChangeToHerramental || op.herramental, op.toolChangeToKit || op.kitHerramental)}`,
+    `Ajustador: ${op.operador || "SIN AJUSTADOR"}`,
+    `Inicio: ${formatDateTime(start)}`,
+    `Fin: ${formatDateTime(end)}`,
+    `Duracion: ${timing.elapsedMinutes} min`,
+  ] : [
+    `${op.ot} / Sec ${op.secuencia} - CT ${op.ct} - ${op.operador}${materialBase ? ` - Material ${materialBase}` : ""}`,
+    `Inicio: ${formatDateTime(start)}`,
+    `Fin: ${formatDateTime(end)}`,
+    `Minutos productivos: ${timing.productiveMinutes}`,
+    `Minutos no operativos: ${timing.nonOperatingMinutes}`,
+  ];
+  if (Number(op.esperaMinutos || 0) > 0 || op.causaEspera || op.recursoEspera || op.otBloqueadora || op.secuenciaBloqueadora !== "" && op.secuenciaBloqueadora != null) {
+    tooltip.push(`Espera: ${Math.max(0, Number(op.esperaMinutos) || 0)} min`);
+    if (op.causaEspera) tooltip.push(`Causa de espera: ${op.causaEspera}`);
+    if (op.recursoEspera) tooltip.push(`Recurso de espera: ${op.recursoEspera}`);
+    if (op.otBloqueadora) tooltip.push(`OT bloqueadora: ${op.otBloqueadora}`);
+    if (op.secuenciaBloqueadora !== "" && op.secuenciaBloqueadora != null) tooltip.push(`Secuencia bloqueadora: ${op.secuenciaBloqueadora}`);
+  }
+  bar.title = tooltip.join("\n");
+  bar.innerHTML = isToolChange
+    ? `<strong>Cambio de herramental</strong><span>OT ${escapeHtml(op.ot)} / ${timing.elapsedMinutes} min</span>`
+    : `<strong>Sec ${escapeHtml(op.secuencia)}</strong><span>${escapeHtml(op.ot)} / ${timing.productiveMinutes} min productivos</span>`;
   bar.style.setProperty("--job-color", jobBarColor(op.ot));
   bar.style.left = `${left}%`;
   bar.style.width = `${width}%`;
@@ -2629,6 +5199,10 @@ function startDrag(event) {
   if (!op) return;
   if (isJobLocked(op.ot)) {
     showToast(`OT ${op.ot} bloqueada; desbloqueala para moverla`);
+    return;
+  }
+  if (otHasCompletedOperation(op.ot)) {
+    showToast(`OT ${op.ot} tiene operaciones completadas; no se puede mover`);
     return;
   }
   checkpointState();
@@ -2706,7 +5280,7 @@ function applyDraggedSequence(newAnchorStart, targetGroup) {
   sequenceStartOffset = Math.max(0, Math.min(maxStartOffset, sequenceStartOffset));
   let cursor = sequenceStartOffset;
   const sequenceIds = new Set(drag.sequence.map((item) => item.id));
-  const occupied = state.operations
+  const occupied = currentPlanOperations()
     .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && !sequenceIds.has(op.id) && opStart(op) && opEnd(op))
     .map((op) => ({
       operator: op.operador,
@@ -2803,10 +5377,18 @@ function endDrag() {
 }
 
 function renderLoads() {
-  const loads = getOperatorLoads(state.loadWeekStart, 7);
-  els.loadWeekInput.value = state.loadWeekStart;
+  const perfMark = planningPerfMark("loads-render");
+  renderLoadSourceSelect();
+  const source = window.PlanningWorkflowCore.loadOperationsForMode(
+    loadSnapshot || { operations: currentDraftScheduledOperations() },
+    state.operations,
+    loadMode
+  );
+  const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
   const week = selectedWeekRange(state.loadWeekStart);
-  els.loadWeekRange.textContent = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  els.loadWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
+  if (els.loadWeekStartInput) els.loadWeekStartInput.value = state.loadWeekStart;
   let rowNumber = 0;
   const groups = RESOURCE_CATEGORIES.map((category) => {
     const categoryRows = loads.filter((item) => resourceCategoryFor(item.operator) === category).map((item) => {
@@ -2863,16 +5445,89 @@ function renderLoads() {
       updateResourceProfile(operator, { category });
     });
   });
+  planningPerfMeasure("loads-render", perfMark);
 }
 
 function clearResourceCategoryDropTargets() {
   els.loadList.querySelectorAll(".resource-category-group.drag-over").forEach((group) => group.classList.remove("drag-over"));
 }
 
+function renderBottleneckSourceSelect() {
+  if (!els.bottleneckPlanSelect) return;
+  syncPlanSourceSelect(els.bottleneckPlanSelect);
+  els.bottleneckModeSelect.value = loadMode;
+}
+
+async function loadSelectedBottleneckPlan(snapshotId) {
+  await loadSelectedPlanSnapshot(snapshotId);
+}
+
+function renderSaturation() {
+  if (document.querySelector(".workspace")?.dataset.view !== "saturation") return;
+  const perfMark = planningPerfMark("saturation-render");
+  renderBottleneckSourceSelect();
+  const source = window.PlanningWorkflowCore.loadOperationsForMode(
+    loadSnapshot || { operations: currentDraftScheduledOperations() },
+    state.operations,
+    loadMode
+  );
+  const week = selectedWeekRange(state.loadWeekStart);
+  const weekRangeText = `${formatShortDate(week.start)} - ${formatShortDate(addDays(week.end, -1))} ${week.start.getFullYear()}`;
+  els.bottleneckWeekRange.textContent = loadSnapshot ? weekRangeText : `Semana seleccionada: ${weekRangeText}`;
+
+  const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
+  const saturated = loads.filter((item) => item.percent > 100);
+  els.bottleneckOperators.innerHTML = `
+    <thead><tr><th>ID</th><th>Nombre</th><th>Recurso</th><th>Carga</th></tr></thead>
+    <tbody>${saturated.length ? saturated.map((item, rowNumber) => {
+      const profile = state.operatorProfiles[item.operator] || { name: item.operator, category: resourceCategoryFor(item.operator) };
+      return `<tr class="resource-row">
+        <td>${rowNumber + 1}</td>
+        <td>${escapeHtml(profile.name || item.operator)}</td>
+        <td><div class="resource-cell"><strong>${escapeHtml(item.operator)}</strong><span>${escapeHtml(formatResourceCategoryLabel(resourceCategoryFor(item.operator)))}</span></div></td>
+        <td class="load-percent danger"><strong>${Math.round(item.percent)}%</strong><span>${formatHours(item.minutes)} / ${formatHours(item.available)}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="4" class="bottleneck-empty">Sin operadores saturados en la semana</td></tr>`}</tbody>
+  `;
+
+  const weekOperations = operationsForWeekSource(source, "", state.loadWeekStart)
+    .filter((op) => !isToolChangeReportOperation(op) && !isSubcontractAppOperation(op) && op.operador !== "SUBCONTRATO");
+  const top = weekOperations
+    .map((op) => ({ op, minutes: operationDuration(op) }))
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, 10);
+  els.bottleneckOperations.innerHTML = `
+    <thead><tr><th>OT</th><th>Operacion</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
+    <tbody>${top.length ? top.map(({ op, minutes }) => {
+      const start = opStart(op);
+      const description = op.descripcion || `CT ${op.ct}`;
+      return `<tr>
+        <td>${escapeHtml(op.ot)}</td>
+        <td>${escapeHtml(description)}</td>
+        <td>${escapeHtml(op.operador || "")}</td>
+        <td>${escapeHtml(op.maquina || "")}</td>
+        <td>${start ? `${escapeHtml(formatShortDate(start))} ${escapeHtml(op.horaInicio || "")}` : "-"}</td>
+        <td class="load-percent danger"><strong>${formatHours(minutes)}</strong><span>${formatMinutes(minutes)}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
+  `;
+  planningPerfMeasure("saturation-render", perfMark);
+}
+
+function focusCapabilityPlanState(key) {
+  const control = [...els.matrixWrap.querySelectorAll("[data-capability-plan-state]")]
+    .find((item) => item.dataset.capabilityPlanState === key);
+  if (control) control.focus();
+}
+
 function renderMatrix() {
   renderOperationCatalogSelect();
   const operators = state.operators;
   const capabilities = getCapabilityRows();
+  const filteredCapabilities = window.PlannerCore.filterCapabilities(capabilities, state.matrixSearch);
+  els.matrixSearchInput.value = state.matrixSearch;
+  els.matrixSearchCount.textContent = `${filteredCapabilities.length} de ${capabilities.length} operaciones`;
+  els.clearMatrixSearchBtn.disabled = !state.matrixSearch;
   const header = `<thead><tr>
       <th>Operacion / CT</th>
       <th>Capacidad</th>
@@ -2890,13 +5545,31 @@ function renderMatrix() {
     </tr></thead>`;
   const rows = [];
 
-  for (const capability of capabilities) {
+  for (const capability of filteredCapabilities) {
     const capacityMode = capacityModeForCapability(capability);
     const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
-    rows.push(`<tr>
+    const mandatory = normalizeHeader(capability.key) === normalizeHeader(TOOL_CHANGE_CAPABILITY.key);
+    const excluded = !mandatory && state.excludedCapabilities.includes(capability.key);
+    const hasAssignedOperator = operators.some((operator) => isOperatorSkilledForCapability(capability, operator));
+    const rowClasses = [];
+    if (excluded) rowClasses.push("matrix-row-excluded");
+    if (!hasAssignedOperator) rowClasses.push("matrix-row-no-operator");
+    rows.push(`<tr${rowClasses.length ? ` class="${rowClasses.join(" ")}"` : ""}>
       <td>
         <div class="capability-heading">
-          <div><strong>${escapeHtml(capability.label)}</strong><span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span></div>
+          <div>
+            <strong>${escapeHtml(capability.label)}</strong>
+            <span class="matrix-sub">CT ${escapeHtml(capability.ct)} - ${capability.count} ops en el plan</span>
+            ${hasAssignedOperator ? "" : '<span class="matrix-sub" style="color:#a1332c;font-weight:700">Sin operador habilitado</span>'}
+            <div class="capability-plan-controls">
+              <select class="capability-plan-state" data-capability-plan-state="${escapeHtml(capability.key)}" aria-label="Uso de ${escapeHtml(capability.label)} en el plan"${mandatory ? ' disabled aria-disabled="true"' : ""}>
+                <option value="USE"${excluded ? "" : " selected"}>Usar en el plan</option>
+                ${mandatory ? "" : `<option value="EXCLUDE"${excluded ? " selected" : ""}>Excluir del plan</option>`}
+              </select>
+              ${excluded ? '<span class="matrix-excluded-badge">Excluida</span>' : ""}
+              ${hasAssignedOperator ? "" : '<span class="matrix-no-operator-badge">Sin operador</span>'}
+            </div>
+          </div>
           <button class="matrix-delete capability-delete" type="button" data-remove-capability="${escapeHtml(capability.key)}" aria-label="Eliminar operacion ${escapeHtml(capability.label)}" title="Eliminar de la matriz">
             <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
           </button>
@@ -2923,7 +5596,25 @@ function renderMatrix() {
       .join("")}</tr>`);
   }
 
+  if (!rows.length) {
+    els.matrixWrap.innerHTML = '<div class="matrix-empty" role="status">Sin operaciones que coincidan</div>';
+    return;
+  }
   els.matrixWrap.innerHTML = `<table class="matrix-table">${header}<tbody>${rows.join("")}</tbody></table>`;
+  els.matrixWrap.querySelectorAll("[data-capability-plan-state]").forEach((select) => {
+    select.addEventListener("change", () => {
+      checkpointState();
+      const key = select.dataset.capabilityPlanState;
+      const excluded = select.value === "EXCLUDE";
+      state.excludedCapabilities = excluded
+        ? uniq([...state.excludedCapabilities, key])
+        : state.excludedCapabilities.filter((item) => item !== key);
+      invalidateCurrentPlanOperationsCache();
+      rememberLocalCapabilityConfigEdit();
+      saveAndRender(excluded ? "Operacion excluida del plan" : "Operacion reactivada en el plan", "matrix");
+      focusCapabilityPlanState(key);
+    });
+  });
   els.matrixWrap.querySelectorAll(".matrix-operator-check").forEach((input) => {
     input.addEventListener("change", () => {
       checkpointState();
@@ -2952,6 +5643,7 @@ function renderMatrix() {
       checkpointState();
       const percent = Math.max(1, Math.min(300, Number(input.value) || 100));
       state.operatorPerformance[input.dataset.operator] = percent;
+      rememberLocalCapabilityConfigEdit();
       saveAndRender("Rendimiento del operador actualizado", "matrix");
     });
   });
@@ -2972,6 +5664,7 @@ function renderMatrix() {
     select.addEventListener("change", () => {
       checkpointState();
       state.capacityModes[select.dataset.capacityKey] = normalizeCapacityMode(select.value);
+      rememberLocalCapabilityConfigEdit();
       saveAndRender(`Capacidad ${select.value === "FINITA" ? "finita" : "no finita"} aplicada`, "matrix");
     });
   });
@@ -2990,7 +5683,9 @@ function renderMatrix() {
 function renderOperationCatalogSelect() {
   const configured = new Set(getCapabilityRows().map((item) => capabilityKey(item.ct, item.label)));
   const available = (state.operationCatalog || []).filter((item) => (
-    item.active !== false && !configured.has(capabilityKey(item.ct, item.label))
+    item.active !== false &&
+    !window.PlannerCore.isSpecialSubcontractCapability(item) &&
+    !configured.has(capabilityKey(item.ct, item.label))
   ));
   els.newCtInput.innerHTML = [
     `<option value="">${available.length ? "Selecciona una operacion de NetSuite" : "No hay operaciones pendientes"}</option>`,
@@ -3009,12 +5704,151 @@ function renderConfiguration() {
   renderSubcontracts();
   renderOtTypes();
   renderArticleConfigurations();
+  renderInspectionRouteCatalog();
   renderWeeklyReleaseTarget();
+  renderFlowBalanceConfiguration();
+}
+
+function inspectionRouteCatalogVisibleRows() {
+  return window.InspectionCore.filterInspectionRouteRows(
+    inspectionRouteCatalogRows,
+    els.inspectionRouteCatalogSearch.value,
+  );
+}
+
+function renderInspectionRouteCatalog() {
+  if (!els.inspectionRouteCatalogTable) return;
+  const visibleRows = inspectionRouteCatalogVisibleRows();
+  const hasLoadError = Boolean(inspectionRouteCatalogLoadError);
+  els.inspectionRouteCatalogError.hidden = !hasLoadError;
+  els.inspectionRouteCatalogErrorMessage.textContent = inspectionRouteCatalogLoadError;
+  els.refreshInspectionRouteCatalogBtn.disabled = inspectionRouteCatalogLoading;
+  els.retryInspectionRouteCatalogBtn.disabled = inspectionRouteCatalogLoading;
+  let body = visibleRows.map((row, index) => `<tr>
+    <td>${escapeHtml(row.article)}</td>
+    <td>${escapeHtml(row.material) || '<span class="planning-muted">(dibujo de la OT)</span>'}</td>
+    <td>${escapeHtml(row.route || "")}</td>
+    <td>${escapeHtml(row.updated || "")}</td>
+    <td><button class="button small" type="button" data-edit-inspection-route="${index}">Editar</button></td>
+  </tr>`).join("");
+  if (inspectionRouteCatalogLoading && !inspectionRouteCatalogRows.length) body = emptyTableRow(5, "Cargando tramos...");
+  else if (!body) {
+    const message = hasLoadError && !inspectionRouteCatalogRows.length
+      ? "No se pudieron cargar los tramos"
+      : (inspectionRouteCatalogRows.length ? "No hay tramos que coincidan con la búsqueda" : "No hay tramos registrados");
+    body = emptyTableRow(5, message);
+  }
+  els.inspectionRouteCatalogTable.innerHTML = `<thead><tr><th>Artículo</th><th>Material</th><th>Tramo</th><th>Última modificación</th><th></th></tr></thead><tbody>${body}</tbody>`;
+  els.inspectionRouteCatalogTable.querySelectorAll("[data-edit-inspection-route]").forEach((button) => {
+    button.addEventListener("click", () => editInspectionRouteCatalogRow(Number(button.dataset.editInspectionRoute)));
+  });
+}
+
+async function loadInspectionRouteCatalog(force = false) {
+  if (inspectionRouteCatalogLoading || (inspectionRouteCatalogReady && !force)) return;
+  inspectionRouteCatalogLoading = true;
+  renderInspectionRouteCatalog();
+  try {
+    const result = await PPSupabaseBridgeReplacement.getInspectionDrawingRoutes("");
+    if (!result?.ok) throw new Error(result?.error || "No se pudieron cargar los tramos");
+    inspectionRouteCatalogRows = window.InspectionCore.inspectionRouteRows(result.data || []);
+    inspectionRouteCatalogReady = true;
+    inspectionRouteCatalogLoadError = "";
+  } catch (error) {
+    inspectionRouteCatalogLoadError = `No se pudieron cargar los tramos: ${error.message || String(error)}`;
+    showToast(inspectionRouteCatalogLoadError, 9000);
+  } finally {
+    inspectionRouteCatalogLoading = false;
+    renderInspectionRouteCatalog();
+  }
+}
+
+async function editInspectionRouteCatalogRow(index) {
+  const row = inspectionRouteCatalogVisibleRows()[index];
+  if (!row) return;
+  await openPlanningDialog({
+    title: row.material ? "Editar tramo" : "Editar dibujo de la OT",
+    // MEDIDO 2026-10-01 (RULE-INS-001): la fila con material VACIO no es un tramo a
+    // medio llenar, es el dibujo a NIVEL DE ORDEN DE TRABAJO. Si el dialogo se titula
+    // "Editar tramo" sobre esa fila, el titulo dice una cosa y la fila es otra, y
+    // la primera vez que alguien lo ve piensa que la tabla esta mal.
+    summary: row.material ? `${row.article} · ${row.material}` : `${row.article} · dibujo de la OT (sin material)`,
+    // MEDIDO 2026-10-01 (RULE-INS-001): en la fila con material VACIO NO se ofrece
+    // un campo de Tramo, porque el tramo de esa fila no se consulta nunca: es el
+    // DIBUJO A NIVEL DE ORDEN DE TRABAJO, que se busca por la clave `articulo + '|'`
+    // (PP_Inspection_articleDrawingMatchV2_). Ofrecerlo seria pedir un dato que se
+    // guarda y no vuelve a usarse, y el que lo escribiera no tendria manera de saber
+    // que no sirvio para nada. El dibujo de esa fila se edita en la hoja de
+    // inspeccion, que si lo manda; aqui se dice eso en vez de mostrar un campo.
+    body: row.material
+      ? `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
+      <div class="planning-requirement-fields inspection-route-dialog-fields">
+        <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
+        <label>Material<input type="text" name="inspection_material" value="${escapeHtml(row.material)}" readonly></label>
+        <label>Tramo<input type="text" name="inspection_route" value="${escapeHtml(row.route)}" autofocus></label>
+      </div>`
+      : `<p id="inspectionRouteDialogError" class="planning-error" role="alert" hidden></p>
+      <div class="planning-requirement-fields inspection-route-dialog-fields">
+        <label>Artículo<input type="text" name="inspection_article" value="${escapeHtml(row.article)}" readonly></label>
+        <label>Material<input type="text" value="(dibujo de la OT, sin material)" readonly></label>
+        <label>Dibujo<input type="text" value="${escapeHtml(row.drawing)}" readonly></label>
+      </div>
+      <p class="planning-inline-warning">Esta fila es el DIBUJO DEL ARTÍCULO COMPLETO, no un tramo de material. Se usa cuando la hoja de inspección se imprime sin dibujo de conjunto. El dibujo se cambia en la hoja de inspección, no aquí.</p>`,
+    // Y el boton NO dice "Guardar" en la fila del dibujo, y el submit NO escribe.
+    // Escribir un tramo vacio en esa fila seria un PUT con un dato que no se consulta,
+    // y la tabla devolveria ok: true: el mas pequeno de los fallos silenciosos que
+    // existen, porque el unico rastro es una fila que cambio sin que nadie lo pidiera.
+    confirmLabel: row.material ? "Guardar tramo" : "Cerrar",
+    submit: async (values) => {
+      if (!row.material) return true;
+      const attemptedRoute = String(values.inspection_route || "");
+      const payload = window.InspectionCore.inspectionRouteSavePayload(row, attemptedRoute);
+      const errorElement = els.planningDialogBody.querySelector("#inspectionRouteDialogError");
+      errorElement.textContent = "";
+      errorElement.hidden = true;
+      try {
+        const result = await PPSupabaseBridgeReplacement.saveInspectionLink(payload);
+        if (!result?.ok) throw new Error(result?.error || "No se pudo guardar el tramo");
+        const saved = { ...payload, ...(result.data || {}) };
+        inspectionRouteCatalogRows = window.InspectionCore.applyInspectionRouteSave(inspectionRouteCatalogRows, row, saved);
+        renderInspectionRouteCatalog();
+        showToast("Tramo actualizado");
+        return saved;
+      } catch (error) {
+        const message = `No se pudo guardar el tramo: ${error.message || String(error)}`;
+        errorElement.textContent = message;
+        errorElement.hidden = false;
+        showToast(message, 9000);
+        return false;
+      }
+    },
+  });
 }
 
 function renderWeeklyReleaseTarget() {
   const target = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   els.weeklyReleaseTargetInput.value = target.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function renderFlowBalanceConfiguration() {
+  if (!els.flowBalancedEnabledInput) return;
+  const settings = state.settings || {};
+  els.flowBalancedEnabledInput.checked = settings.flowBalancedEnabled !== false;
+  els.flowWipTargetInput.value = String(Math.min(50, Math.max(1, Math.round(Number(settings.flowWipTarget) || 10))));
+  const optimization = state.lastSchedule?.optimization;
+  if (!optimization?.metrics) {
+    els.flowOptimizationDiagnostics.hidden = true;
+    els.flowOptimizationDiagnostics.textContent = "";
+    return;
+  }
+  const metrics = optimization.metrics;
+  const resourceUtilization = Object.values(metrics.resourceUtilization || {});
+  const utilization = resourceUtilization.length
+    ? Math.round(resourceUtilization.reduce((sum, value) => sum + Number(value || 0), 0) / resourceUtilization.length * 100)
+    : 0;
+  const strategy = String(optimization.selectedStrategy || "balanced").replace(/_/g, " ");
+  els.flowOptimizationDiagnostics.hidden = false;
+  els.flowOptimizationDiagnostics.textContent = `Estrategia: ${strategy} · Flujo promedio: ${Number(metrics.averageFlowMinutes || 0)} min · WIP maximo: ${Number(metrics.maxWip || 0)} · Huecos evitables: ${Number(metrics.avoidableIdleMinutes || 0)} min · Cambios de herramental: ${Number(metrics.toolChanges || 0)} · Utilizacion: ${utilization}%`;
 }
 
 function renderWorkSchedule() {
@@ -3130,6 +5964,10 @@ function renderToolCatalog() {
   els.toolCatalogTable.innerHTML = `<thead><tr><th>Parte</th><th>Herramental</th><th>Kit</th><th>Cambio herr.</th><th>Cambio kit</th><th></th></tr></thead><tbody>${rows || emptyTableRow(6, "Sin herramentales configurados")}</tbody>`;
   els.toolCatalogTable.querySelectorAll("[data-delete-tool]").forEach((button) => {
     button.addEventListener("click", () => {
+      // La intencion ANTES de quitarla del estado: registrarBorrado deriva la clave de la
+      // fila tal como esta hoy (RULE-SUP-061).
+      const quitado = state.toolCatalog.find((item) => item.id === button.dataset.deleteTool);
+      if (quitado) registrarBorradoDeCatalogo("tools", quitado);
       state.toolCatalog = state.toolCatalog.filter((item) => item.id !== button.dataset.deleteTool);
       saveAndRender("Herramental retirado del catalogo", "catalogs");
     });
@@ -3150,11 +5988,41 @@ function netSuiteAssemblyItems() {
 function renderMachines() {
   const rows = [...state.machines]
     .sort((a, b) => String(a.id || "").localeCompare(String(b.id || ""), "es", { numeric: true }))
-    .map((item) => `<tr><td>${escapeHtml(item.id)}</td><td>${item.active === false ? "Inactiva" : "Activa"}</td><td><button class="table-action" type="button" data-delete-machine="${escapeHtml(item.id)}" aria-label="Eliminar maquina">&times;</button></td></tr>`)
+    .map((item) => {
+      const estado = item.excluded === true
+        ? "Apartada de la planificacion"
+        : (item.active === false ? "Inactiva" : "Activa");
+      return `<tr><td>${escapeHtml(item.id)}</td><td>${estado}</td><td><button class="button small secondary" type="button" data-toggle-machine="${escapeHtml(item.id)}">${item.excluded === true ? "Reincluir" : "Apartar"}</button> <button class="table-action" type="button" data-delete-machine="${escapeHtml(item.id)}" aria-label="Eliminar maquina">&times;</button></td></tr>`;
+    })
     .join("");
   els.machineTable.innerHTML = `<thead><tr><th>Maquina</th><th>Estado</th><th></th></tr></thead><tbody>${rows || emptyTableRow(3, "Sin maquinas configuradas")}</tbody>`;
+  els.machineTable.querySelectorAll("[data-toggle-machine]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.machines.find((machine) => machine.id === button.dataset.toggleMachine);
+      if (!item) return;
+      // Apartar NO borra la maquina: la deja de agendar aunque NetSuite la de activa
+      // (RULE-SUP-017). Borrarla ya no serviria de nada, porque `machines` la reescribe
+      // el RESTlet 2246 cada 15 minutos.
+      // REINCLUIR si borra: la fila de machine_planning_overrides deja de existir en lo
+      // que la pagina mapea, y sin esta intencion se quedaria excluida = true para siempre
+      // (RULE-MAQ-005). Se registra ANTES de voltear la bandera, porque registrarBorrado
+      // solo produce la fila de overrides si la maquina sigue apartada.
+      const estabaApartada = item.excluded === true;
+      if (estabaApartada) registrarBorradoDeCatalogo("machine_planning_overrides", item);
+      item.excluded = item.excluded !== true;
+      item.active = item.excluded !== true;
+      saveAndRender(`Maquina ${item.id} ${item.excluded ? "apartada" : "reincluida"} de la planificacion`, "catalogs");
+    });
+  });
   els.machineTable.querySelectorAll("[data-delete-machine]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitada = state.machines.find((machine) => machine.id === button.dataset.deleteMachine);
+      if (quitada) {
+        registrarBorradoDeCatalogo("machine_catalog", quitada);
+        // Su fila de overrides solo existe si estaba apartada; si no, la intencion no
+        // produce clave y no se registra nada.
+        if (quitada.excluded === true) registrarBorradoDeCatalogo("machine_planning_overrides", quitada);
+      }
       state.machines = state.machines.filter((item) => item.id !== button.dataset.deleteMachine);
       saveAndRender("Maquina retirada del catalogo", "catalogs");
     });
@@ -3172,12 +6040,21 @@ function renderCalendarExceptions() {
     ? `<option value="">Selecciona una maquina</option>${machineIds.map((machine) => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join("")}`
     : `<option value="">Sin maquinas configuradas</option>`;
   if (machineIds.includes(selectedMachine)) els.calendarMachineInput.value = selectedMachine;
+  const selectedOperator = els.calendarOperatorInput.value;
+  const operatorIds = uniq((Array.isArray(state.operators) ? state.operators : [])
+    .map((operator) => String(operator || "").trim().toUpperCase())
+    .filter(Boolean))
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
+  els.calendarOperatorInput.innerHTML = operatorIds.length
+    ? `<option value="">Selecciona un operador</option>${operatorIds.map((operator) => `<option value="${escapeHtml(operator)}">${escapeHtml(operator)}</option>`).join("")}`
+    : `<option value="">Sin operadores configurados</option>`;
+  if (operatorIds.includes(selectedOperator)) els.calendarOperatorInput.value = selectedOperator;
   updateCalendarForm(false);
   const rows = [...state.calendarExceptions]
-    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")) || String(a.machine || "").localeCompare(String(b.machine || "")))
+    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")) || String(a.resource || a.machine || "").localeCompare(String(b.resource || b.machine || "")))
     .map((item) => `<tr>
       <td>${escapeHtml(calendarConceptLabel(item.concept))}</td>
-      <td>${escapeHtml(item.machine || "TODA LA PLANTA")}</td>
+      <td>${escapeHtml(item.resource || item.machine || "TODA LA PLANTA")}</td>
       <td>${escapeHtml(calendarPeriodLabel(item))}</td>
       <td>${escapeHtml(item.reason || "")}</td>
       <td><button class="table-action" type="button" data-delete-calendar="${escapeHtml(item.id)}" aria-label="Eliminar excepcion">&times;</button></td>
@@ -3185,6 +6062,8 @@ function renderCalendarExceptions() {
   els.calendarTable.innerHTML = `<thead><tr><th>Concepto</th><th>Recurso</th><th>Periodo no laborable</th><th>Motivo</th><th></th></tr></thead><tbody>${rows || emptyTableRow(5, "Sin periodos no laborales")}</tbody>`;
   els.calendarTable.querySelectorAll("[data-delete-calendar]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitada = state.calendarExceptions.find((item) => item.id === button.dataset.deleteCalendar);
+      if (quitada) registrarBorradoDeCatalogo("calendar_exceptions", quitada);
       state.calendarExceptions = state.calendarExceptions.filter((item) => item.id !== button.dataset.deleteCalendar);
       saveAndRender("Excepcion retirada del calendario", "catalogs");
     });
@@ -3194,10 +6073,14 @@ function renderCalendarExceptions() {
 function updateCalendarForm(resetTimes = false) {
   const concept = els.calendarConceptInput.value;
   const usesMachine = concept === "MAQUINA";
-  const usesPeriod = usesMachine || concept === "VACACIONES";
+  const usesOperator = concept === "OPERADOR";
+  const usesResource = usesMachine || usesOperator;
+  const usesPeriod = usesResource || concept === "VACACIONES";
   const requiresTimes = concept === "GENERAL" || concept === "VACACIONES";
   els.calendarMachineField.hidden = !usesMachine;
   els.calendarMachineInput.required = usesMachine;
+  els.calendarOperatorField.hidden = !usesOperator;
+  els.calendarOperatorInput.required = usesOperator;
   els.calendarEndDateField.hidden = !usesPeriod;
   els.calendarEndDateInput.required = usesPeriod;
   els.calendarStartInput.required = requiresTimes;
@@ -3213,6 +6096,7 @@ function updateCalendarForm(resetTimes = false) {
   const hints = {
     GENERAL: "Paro extraordinario de toda la planta en una fecha y horario definidos.",
     MAQUINA: "La maquina no estara disponible durante el intervalo; las horas son opcionales y, vacias, cubren los dias completos.",
+    OPERADOR: "El operador no estara disponible durante el intervalo; las horas son opcionales y, vacias, cubren los dias completos.",
     ASUETO: "Asueto de toda la planta; sin horas se considera el dia completo.",
     VACACIONES: "Periodo continuo que detiene operadores y maquinas desde la fecha y hora inicial hasta la final.",
   };
@@ -3220,7 +6104,7 @@ function updateCalendarForm(resetTimes = false) {
 }
 
 function calendarConceptLabel(concept) {
-  return ({ GENERAL: "General", MAQUINA: "Maquina", ASUETO: "Asueto", VACACIONES: "Periodo vacacional" })[concept] || concept;
+  return ({ GENERAL: "General", MAQUINA: "Maquina", OPERADOR: "Operador", ASUETO: "Asueto", VACACIONES: "Periodo vacacional" })[concept] || concept;
 }
 
 function calendarPeriodLabel(item) {
@@ -3235,6 +6119,8 @@ function renderSubcontracts() {
   els.subcontractTable.innerHTML = `<thead><tr><th>Parte</th><th>Tipo</th><th>Dias habiles</th><th></th></tr></thead><tbody>${rows || emptyTableRow(4, "Sin subcontratos configurados")}</tbody>`;
   els.subcontractTable.querySelectorAll("[data-delete-subcontract]").forEach((button) => {
     button.addEventListener("click", () => {
+      const quitado = state.subcontracts.find((item) => item.id === button.dataset.deleteSubcontract);
+      if (quitado) registrarBorradoDeCatalogo("subcontracts", quitado);
       state.subcontracts = state.subcontracts.filter((item) => item.id !== button.dataset.deleteSubcontract);
       saveAndRender("Regla de subcontrato eliminada", "catalogs");
     });
@@ -3282,10 +6168,28 @@ function renderArticleConfigurations() {
       <td><strong>${escapeHtml(item.article)}</strong></td>
       <td>${escapeHtml(item.jobType || "")}</td>
       <td>${escapeHtml(item.planningType || "")}</td>
-      <td>${escapeHtml(item.manualUnitPrice > 0 ? formatCurrency(item.manualUnitPrice) : "")}</td>
+      <td><input class="article-temporary-price-input" data-article-price="${escapeHtml(item.article)}" type="number" min="0" step="0.01" value="${item.manualUnitPrice > 0 ? escapeHtml(item.manualUnitPrice) : ""}" aria-label="Precio temporal ${escapeHtml(item.article)}"></td>
+      <td class="article-reference-price">${item.referenceSalePrice > 0 ? escapeHtml(formatCurrency(item.referenceSalePrice)) : '<span class="status-note">sin precio de venta</span>'}</td>
       <td>${escapeHtml(item.updatedAt ? formatDateTime(new Date(item.updatedAt)) : "")}</td>
     </tr>`).join("");
-  els.articleConfigTable.innerHTML = `<thead><tr><th>Articulo</th><th>Tipo comercial</th><th>Tipo trabajo</th><th>Precio temporal</th><th>Actualizado</th></tr></thead><tbody>${rows || emptyTableRow(5, "Sin configuracion de articulos")}</tbody>`;
+  els.articleConfigTable.innerHTML = `<thead><tr><th>Articulo</th><th>Tipo comercial</th><th>Tipo trabajo</th><th>Precio temporal (manual)</th><th>Ultimo precio de venta (sync)</th><th>Actualizado</th></tr></thead><tbody>${rows || emptyTableRow(6, "Sin configuracion de articulos")}</tbody>`;
+  els.articleConfigTable.querySelectorAll("[data-article-price]").forEach((input) => {
+    input.addEventListener("change", () => updateTemporaryArticlePrice(input.dataset.articlePrice, input.value));
+  });
+}
+
+function ganttProductiveMinutes(op, start, end) {
+  if (isSubcontractAppOperation(op)) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
+  const configured = Number(op.tiempoSetup || 0) + adjustedProductionMinutes(op);
+  return configured > 0 ? configured : Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
+}
+
+function updateTemporaryArticlePrice(article, value) {
+  const config = articleConfigurationFor(article);
+  const numeric = Number(value);
+  config.manualUnitPrice = Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+  config.updatedAt = new Date().toISOString();
+  saveAndRender(config.manualUnitPrice > 0 ? "Precio temporal actualizado" : "Precio temporal eliminado", "catalogs");
 }
 
 function renderArticleTypeOptions() {
@@ -3306,7 +6210,76 @@ function updateArticleConfigForm() {
   els.articleConfigPriceInput.value = config.manualUnitPrice > 0 ? String(config.manualUnitPrice) : "";
 }
 
+function planVersionIdentifierFor(monday) {
+  const weekStartIso = formatDate(monday);
+  const counterBase = readPlanVersionCounter(weekStartIso);
+  const versionBase = [
+    ...(state.publishedVersions || []),
+    ...(Array.isArray(planSnapshots) ? planSnapshots : []),
+    ...(counterBase ? [{ weekStart: weekStartIso, version: counterBase }] : []),
+  ].filter((item) => Number(item?.version || 0) > 0);
+  const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStartIso);
+  return window.PlanningWorkflowCore.weeklyPlanIdentifier(weekStartIso, version);
+}
+
+async function askGeneratingPlanWeek() {
+  const currentMonday = weekStart(new Date());
+  const nextMonday = addDays(currentMonday, 7);
+  const currentLabel = planVersionIdentifierFor(currentMonday);
+  const nextLabel = planVersionIdentifierFor(nextMonday);
+  const weekdayLabel = (date) => date.toLocaleDateString("es-MX", {
+    weekday: "long", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+  const answer = await openPlanningDialog({
+    title: "Generar plan",
+    summary: "Elige la semana a la que pertenecera el plan. Las cargas se asignaran desde la fecha de ejecucion siguiendo el calendario.",
+    body: [
+      `<label class="restore-draft-option"><input type="radio" name="plan_week" value="${formatDate(currentMonday)}" checked><span><strong>Semana actual</strong><small>${weekdayLabel(currentMonday)} — se publicaria como \"${currentLabel}\"</small></span></label>`,
+      `<label class="restore-draft-option"><input type="radio" name="plan_week" value="${formatDate(nextMonday)}"><span><strong>Semana proxima</strong><small>${weekdayLabel(nextMonday)} — se publicaria como \"${nextLabel}\"</small></span></label>`,
+    ].join(""),
+    confirmLabel: "Generar plan",
+    cancelVisible: true,
+  });
+  const iso = answer?.plan_week;
+  if (!iso) return null;
+  const mondayDate = weekStart(new Date(`${iso}T00:00:00`));
+  const mondayIso = formatDate(mondayDate);
+  checkpointState();
+  state.planStart = mondayIso;
+  state.loadWeekStart = normalizeWeekStartValue(mondayIso);
+  state.reportWeekStart = normalizeWeekStartValue(mondayIso);
+  return { planStartIso: mondayIso };
+}
+
 async function scheduleCurrentPlan() {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("schedule", true);
+  try {
+    return await scheduleCurrentPlanImpl();
+  } finally {
+setPlanningActionsBusy("schedule", false);
+    const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
+    if (label) label.textContent = "Generar plan";
+  }
+}
+
+async function scheduleCurrentPlanImpl() {
+  const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
+  const percentEl = els.scheduleBtn?.querySelector("[data-schedule-percent]");
+  const fillEl = els.scheduleBtn?.querySelector("[data-schedule-fill]");
+  const setScheduleStatus = (message, percent = null) => {
+    if (label) label.textContent = message;
+    if (percentEl) {
+      if (percent != null) {
+        percentEl.textContent = `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+        percentEl.hidden = false;
+      } else {
+        percentEl.textContent = "";
+        percentEl.hidden = true;
+      }
+    }
+    if (fillEl) fillEl.style.width = (percent != null ? Math.max(0, Math.min(100, percent)) : 0) + "%";
+  };
   if (!window.PlannerCore?.schedulePlan) {
     showToast("El motor de programacion no esta disponible");
     return;
@@ -3315,46 +6288,194 @@ async function scheduleCurrentPlan() {
     showToast("Agrega al menos una OT a la lista del plan");
     return;
   }
-  const replannableOts = state.selectedOts.filter((ot) =>
-    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot))
+  // 3.1 — EL RESPALDO SE ARMA ANTES DEL DIALOGO Y SE GUARDA DESPUES.
+  // Antes el respaldo se guardaba antes de preguntar la semana, y ese guardado es una ida y vuelta
+  // a Apps Script (2.4 MB de payload, medido 2026-09-26): la interfaz se quedaba congelada con el
+  // boton en "Generar plan" y sin dialogo visible durante ese tiempo, que se leia como que el
+  // boton no hacia nada.
+  //
+  // LO QUE NO SE CAMBIA EN EL CONTENIDO. El payload se arma igual y en el mismo momento de la
+  // carrera: con el state.planStart de ANTES de elegir semana, exactamente como antes. Mover solo
+  // el await no cambia ni un byte de lo que se guarda.
+  //
+  // LO QUE SI SE CAMBIA, Y ES UNA DIFERENCIA REAL: si la persona CANCELA el dialogo, hoy queda un
+  // snapshot de respaldo huérfano en PLANES_HISTORICOS (con UUID propio, no es el borrador) de un
+  // plan que no se llego a generar. Con este orden no se guarda nada, y esa es la razon por la que
+  // el respaldo existe: respaldar el borrador justo antes de regenerarlo.
+  const backupPayload = buildPlanAutoBackupPayload();
+  const chosenWeek = await askGeneratingPlanWeek();
+  if (!chosenWeek) return;
+  const backup = await persistPlanAutoBackup(backupPayload);
+  if (!backup?.ok) showToast("Aviso: no se pudo crear el respaldo del borrador antes de generar", 8000);
+  setScheduleStatus("Revisando plan...");
+  const scheduleFreshness = await ensureNetSuiteWorkOrdersFresh({ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "schedule" });
+  if (!scheduleFreshness.ok) return;
+  if (scheduleFreshness.removedOts.length) {
+    showToast(`OT(s) cerrada(s) en NetSuite retiradas del plan: ${scheduleFreshness.removedOts.join(", ")}`, 7000);
+  }
+  state.planStart = state.planStart || formatDate(weekStart(new Date()));
+  const affected = new Set(state.selectedOts.map(normalizeStatus));
+// Procesar todas las OTs en la lista de planeado/no planeado (incluye bloqueadas; el motor reprograma incompletas)
+const replannableOts = state.selectedOts.filter((ot) =>
+    affected.has(normalizeStatus(ot)) &&
+    isMovablePlanningStatus(jobStatusParaTarjeta(ot)) &&
+    !hasClosedWorkOrderSyncWarning(ot)
   );
+
   if (!replannableOts.length) {
-    showToast("No hay OTs desbloqueadas para programar");
+    showToast("No hay OTs para programar");
     return;
   }
-  if (!await ensurePlanningDataLoaded(true)) return;
+  setScheduleStatus("Actualizando OTs...");
+  const aptKeys = new Set(replannableOts.map(normalizeStatus).filter(Boolean));
+  const missingAptOts = (data) => (data?.missingOts || [])
+    .filter((ot) => aptKeys.has(normalizeStatus(ot)));
+  let planningData = await ensurePlanningDataLoaded(true, { force: false, ots: replannableOts });
+  let missingApt = missingAptOts(planningData);
+  if (!planningData.ready || missingApt.length) {
+    setScheduleStatus("Reintentando sincronizar OTs...");
+    planningData = await ensurePlanningDataLoaded(true, { force: true, ots: replannableOts });
+    if (!planningData.ready) return;
+    missingApt = missingAptOts(planningData);
+  }
+  if (missingApt.length) {
+    // MEDIDO 2026-09-30: esto decia "falta sincronizar operaciones de OT 3331. Reintenta."
+    // y para la OT 3331 el reintento NO PODIA funcionar: estaba en el plan pero no en
+    // work_orders ni en operations, o sea que ya no existia en NetSuite. Encima no salia en
+    // la lista de Planeado / No planeado, porque esa lista exige ficha, y el plan solo guarda
+    // el numero: el mensaje nominaba una OT que la persona no podia ver.
+    //
+    // Son dos cosas con dos acciones distintas, asi que se separan. Una OT sin ficha no se
+    // sincroniza: se quita del plan. Una OT con ficha pero sin operaciones, esa si se
+    // reintenta. En los dos casos se nombra la OT, que es lo que hace falta para actuar.
+    const conFicha = new Set((state.workOrders || []).map(function (wo) { return normalizeStatus(wo && wo.ot); }));
+    const noExisten = [];
+    const sinOperaciones = [];
+    missingApt.forEach(function (ot) {
+      const key = normalizeStatus(ot);
+      if (!key) return;
+      if (!conFicha.has(key)) noExisten.push(key);
+      else sinOperaciones.push(key);
+    });
+
+    // Quitar del plan las que el ERP ya no tiene. MEDIDO: 3331 estaba en selected_ots sin
+    // estar en work_orders, y era la unica de esas. Se quita de verdad porque mientras siga
+    // ahi el plan no se puede generar nunca, y no hay otra accion que lo desbloquee. El aviso
+    // lo dice, para que la persona sepa que se toco su plan.
+    if (noExisten.length) {
+      const siguen = (state.selectedOts || []).filter(function (ot) { return noExisten.indexOf(normalizeStatus(ot)) < 0; });
+      if (siguen.length !== (state.selectedOts || []).length) {
+        state.selectedOts = siguen;
+        queueAppSheetSave("plan");
+      }
+    }
+
+    const partes = [];
+    if (noExisten.length) {
+      partes.push("OT " + noExisten.join(", ") + " ya no esta en NetSuite y se quito del plan: no hay nada que sincronizar");
+    }
+    if (sinOperaciones.length) {
+      partes.push("falta sincronizar operaciones de OT " + sinOperaciones.join(", ") + " (reintenta)");
+    }
+    showToast("No se genero el plan: " + partes.join(". ") + ".", 9000);
+    return;
+  }
+  const availableKeys = new Set((planningData.readyOts || state.selectedOts || []).map(normalizeStatus).filter(Boolean));
   const readyOts = state.selectedOts.filter((ot) =>
-    !isJobLocked(ot) && isMovablePlanningStatus(jobStatusForOt(ot))
+    availableKeys.has(normalizeStatus(ot)) && affected.has(normalizeStatus(ot)) &&
+    isMovablePlanningStatus(jobStatusParaTarjeta(ot)) && !hasClosedWorkOrderSyncWarning(ot)
   );
+  // QUE CUENTA COMO "CERRADA" AQUI (RULE-OT-051). Antes usaba isMovablePlanningStatus(
+  // jobStatusForOt(ot)), y jobStatusForOt cae al estatus de las OPERACIONES cuando la ficha de
+  // la OT no dice nada. O sea que una sola operacion con estatus CERRADO quitaba la OT entera
+  // del plan, sin confirmacion y sin pasar por la sincronizacion. Es el mismo error de fondo
+  // que ya se corrigio en el sync: "no dice cerrada" no es "esta cerrada".
+  // Ahora solo se retira la OT si SU FICHA dice cerrada, o si ya estaba confirmada como cerrada
+  // por NetSuite. Si el cierre solo viene de una operacion, la OT se conserva y se avisa, para
+  // que se pueda revisar a mano en vez de perderla en silencio.
+  const closedOts = state.selectedOts.filter((ot) => isConfirmedClosedWorkOrder(ot));
+  const soloOperacionDiceCerrada = state.selectedOts.filter((ot) => (
+    !closedOts.includes(ot) && !isMovablePlanningStatus(jobStatusParaTarjeta(ot))
+  ));
+  if (closedOts.length) {
+    state = window.PlanningWorkflowCore.removeClosedWorkOrdersFromDraft(state, closedOts, new Date().toISOString());
+    invalidateCurrentPlanOperationsCache();
+    showToast(`OT(s) cerrada(s) eliminadas del plan: ${closedOts.join(", ")}`, 6000);
+  }
+  if (soloOperacionDiceCerrada.length) {
+    showToast(
+      `Se conserva(n) ${soloOperacionDiceCerrada.length} OT(s) porque solo una operacion dice cerrada, no la OT: ${soloOperacionDiceCerrada.slice(0, 8).join(", ")}`,
+      9000,
+    );
+  }
   if (!readyOts.length) {
-    showToast("No hay OTs desbloqueadas para programar");
+    showToast("No hay OTs listas para programar");
     return;
   }
+  setScheduleStatus("Validando OTs...");
   if (!await ensureSelectedJobsReadyForScheduling(readyOts)) return;
+  setScheduleStatus("Completando configuracion...");
+  if (!await ensurePlanConfigurationCollected(readyOts)) {
+    showToast("Programacion cancelada; completa la configuracion para continuar", 8000);
+    return;
+  }
   const executionTime = new Date();
-  const validation = validateScheduleConfiguration(executionTime);
+  const validation = validateScheduleConfiguration(executionTime, readyOts);
   if (validation) {
     if (validation.operationId) state.selectedOperationId = validation.operationId;
     showToast(validation.message);
     showTab(validation.tab || "matrix");
-    showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz");
+    showWorkspaceView(validation.tab === "tools" ? "herramentales" : "matriz", "", { scrollToTop: true });
     return;
   }
+  setScheduleStatus("Preparando OTs...");
+  const engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state, closedOts);
   checkpointState();
+  state = window.PlanningWorkflowCore.prepareDraftForReschedule(state, engineSelectedOts);
+  invalidateCurrentPlanOperationsCache();
   applyQueuePriorities();
   freezeElapsedOperations(executionTime);
-  const label = els.scheduleBtn.querySelector("[data-schedule-label]");
-  const originalLabel = label?.textContent || "Programar plan";
   els.scheduleBtn.disabled = true;
   els.scheduleBtn.classList.add("is-running");
-  if (label) label.textContent = "Optimizando...";
+  setScheduleStatus("Programando OTs...");
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const started = performance.now();
   try {
-    const result = window.PlannerCore.schedulePlan(state, {
+    const result = await window.PlannerCore.schedulePlan({ ...state, selectedOts: engineSelectedOts }, {
       planStart: state.planStart,
       horizonDays: state.horizonDays,
       executionTime: executionTime.toISOString(),
+      startFromExecutionTime: true,
+      affectedOts: readyOts,
+      fastQualityMode: true,
+      completeAll: true,
+      strategyPool: Array.isArray(state.settings?.strategyPool) && state.settings.strategyPool.length
+        ? state.settings.strategyPool
+        : ["balanced_goal"],
+      timeBudgetMs: planningPlanTimeBudgetMs(readyOts),
+      collectStats: true,
+      progressEveryMs: 300,
+      isDryRun: false,
+onProgress: (event) => {
+        if (!label && !fillEl) return;
+        const scheduled = Number(event?.scheduled || 0);
+        const total = Number(event?.total || 0);
+        const percent = total > 0 ? Math.min(100, Math.round((scheduled / total) * 100)) : null;
+        const phase = String(event?.phase || "");
+        const strategy = String(event?.strategy || "");
+        if (phase === "finalize:select-best") {
+          setScheduleStatus("Eligiendo mejor plan...", percent);
+        } else if (strategy) {
+          setScheduleStatus(total > 0
+            ? `Estrategia ${strategy}: ${scheduled} de ${total}${percent !== null ? ` (${percent}%)` : ""}`
+            : `Estrategia ${strategy}: revisando...`, percent);
+        } else if (total > 0) {
+          setScheduleStatus(percent !== null ? `Programando ${scheduled} de ${total} (${percent}%)` : `Programando ${scheduled} de ${total}`, percent);
+        } else {
+          setScheduleStatus("Programando OTs...", percent);
+        }
+      },
+      onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
     });
     const operatorConflicts = (result.lastSchedule?.diagnostics || [])
       .filter((item) => item.code === "OPERATOR_OVERLAP");
@@ -3362,33 +6483,623 @@ async function scheduleCurrentPlan() {
       const conflict = operatorConflicts[0];
       throw new Error(`el operador ${conflict.operator} tiene operaciones simultaneas en OT ${conflict.relatedOt} y OT ${conflict.ot}`);
     }
-    state = result;
+    const preservedQueueOrder = [...state.selectedOts];
+    state = { ...result, selectedOts: preservedQueueOrder };
+    invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
+    if (Number(summary.unscheduled || 0) > 0) {
+      const leftOut = (summary.diagnostics || [])
+        .filter((item) => item.code === "UNSCHEDULED")
+        .map((item) => `OT ${item.ot}${item.cause ? ` (${item.cause})` : ""}`);
+      const unique = [...new Set(leftOut)];
+      const preview = unique.slice(0, 8).join(", ") + (unique.length > 8 ? ` y ${unique.length - 8} mas` : "");
+      showToast(`No se pudieron programar ${unique.length} OT(s) sin hueco o configuracion: ${preview}`, 9000);
+    }
     const strategy = summary.optimization?.selectedStrategy || "balanced";
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    alignReportWeekStartToFirstScheduledOperation(currentDraftScheduledOperations(), executionTime);
+    reportSnapshot = currentDraftReportSnapshot();
+    loadSnapshot = null;
+    syncDraftLoadWeek();
+    renderReports();
+    renderLoads();
+    renderSaturation();
+    saveState("ui");
+    setScheduleStatus("Guardando borrador...");
     const snapshot = await persistPlanSnapshot();
-    if (snapshot?.snapshotId) state.draftVersionId = snapshot.snapshotId;
-    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; ${strategy} en ${seconds}s`);
+    if (!snapshot?.snapshotId) throw new Error("el plan se calculo, pero no se pudo guardar el borrador");
+    state.draftVersionId = snapshot.snapshotId;
+    // EL ESTADO DEL PLAN YA SUBIO: `persistPlanSnapshot` llama a `guardarPlanEnSupabase()`,
+    // que escribe TODAS las tablas con el `state` actual — el payload del RPC lleva app_state
+    // (armarPayload -> appStateRpc) y el DDL de `plan_guardar` lo actualiza al final de su
+    // transaccion, y el camino viejo hace `parchearAppState` — y despues archiva el borrador
+    // con su propio POST. Hasta 2026-10-07 habia AQUI un segundo guardado
+    // (`appSheetMarkDirtyScope("plan")` + `saveAppSheet(false)`) que volvia a escribir todo
+    // lo mismo y subia la revision dos veces por generacion. MEDIDO (usuario, en
+    // produccion): los fallos transitorios de ese segundo guardado (429, 5xx, red; error
+    // agravado por el camino viejo, sin transaccion) sacaban el toast "No se pudo guardar
+    // el plan..." con el plan YA guardado — "pero si se guardo" al recargar — y se sumaban
+    // a la cascada de avisos por tabla. El estado, la revision y las tablas de espejo siguen
+    // subiendo en UNA transaccion; lo unico aparte es el archivo del borrador, que no sube la
+    // revision; el proximo guardado normal reescribe con la revision nueva.
+    saveAndRender(`${summary.scheduled || 0} programadas; ${summary.unscheduled || 0} sin hueco; borrador guardado; ${strategy} en ${seconds}s`, "ui");
   } catch (error) {
     showToast(`No se pudo programar: ${error.message}`);
   } finally {
     els.scheduleBtn.disabled = false;
     els.scheduleBtn.classList.remove("is-running");
-    if (label) label.textContent = originalLabel;
+    const liveLabel = els.scheduleBtn?.querySelector("[data-schedule-label]") || label;
+    const livePercent = els.scheduleBtn?.querySelector("[data-schedule-percent]") || percentEl;
+    const liveFill = els.scheduleBtn?.querySelector("[data-schedule-fill]") || fillEl;
+    if (liveLabel) liveLabel.textContent = "Generar plan";
+    if (livePercent) { livePercent.textContent = ""; livePercent.hidden = true; }
+    if (liveFill) liveFill.style.width = "0%";
   }
+}
+
+async function dryRunCurrentPlanPerformance(options = {}) {
+  const dryRunOptions = options && typeof options === "object" ? options : {};
+  const configuredTimeoutMs = Number.isFinite(Number(dryRunOptions.timeoutMs)) && Number(dryRunOptions.timeoutMs) > 0
+    ? Number(dryRunOptions.timeoutMs)
+    : PLANNING_DRY_RUN_DEFAULT_TIMEOUT_MS;
+  const totalStarted = dryRunNowMs();
+  const startedAt = new Date().toISOString();
+  let lastPhase = "init";
+  const timings = {
+    totalMs: 0,
+    readinessMs: 0,
+    prepareDraftMs: 0,
+    schedulePlanMs: 0,
+    resultBuildMs: 0,
+  };
+  const selectedOts = Array.isArray(state.selectedOts) ? [...state.selectedOts] : [];
+  const metrics = {
+    selectedOtsCount: selectedOts.length,
+    engineSelectedOtsCount: 0,
+    affectedOtsCount: 0,
+    readyOtsCount: 0,
+    lockedOtsCount: selectedOts.filter((ot) => isJobLocked(ot)).length,
+    closedKeptCount: selectedOts.filter((ot) => hasClosedWorkOrderSyncWarning(ot)).length,
+    inputOperationsCount: Array.isArray(state.operations) ? state.operations.length : 0,
+    includedOperationsCount: 0,
+    scheduledOperationsCount: 0,
+    unscheduledOperationsCount: 0,
+    scheduledOtsCount: 0,
+    unscheduledOtsCount: 0,
+    diagnosticsCount: 0,
+    diagnosticsByCode: {},
+    selectedStrategy: "",
+    planStart: "",
+    horizonDays: Number(state.horizonDays || 0),
+    plannerElapsedMs: 0,
+    plannerLastPhase: "",
+    plannerStrategiesStarted: 0,
+    plannerMainLoopIterations: 0,
+    plannerAssignmentCandidateEvaluations: 0,
+    plannerSlotProbes: 0,
+    plannerSlotProbeSkips: 0,
+    plannerBusyConflictScans: 0,
+    plannerBusyConflictSorts: 0,
+    plannerBusySegmentSorts: 0,
+    plannerToolCatalogLookups: 0,
+    plannerToolCatalogScans: 0,
+    plannerOtConfigurationLookups: 0,
+    ...timings,
+  };
+  const result = {
+    ok: false,
+    dryRun: true,
+    aborted: false,
+    reason: "",
+    startedAt,
+    elapsedMs: 0,
+    lastPhase,
+    metrics,
+    blockers: [],
+    warnings: [],
+    missingDataOts: [],
+  };
+  if (!Number.isFinite(Number(dryRunOptions.timeoutMs)) && typeof console !== "undefined" && typeof console.info === "function") {
+    console.info("[planning dry-run] Sin timeoutMs explicito; usando presupuesto seguro de 60000ms. Para diagnostico rapido usa await window.runPlanningPerformanceDryRun({ timeoutMs: 30000, collectStats: true, progressEveryMs: 5000 })");
+  }
+  const markPhase = (phase, message) => {
+    lastPhase = phase;
+    result.lastPhase = phase;
+    if (typeof console !== "undefined" && typeof console.info === "function") console.info(`[planning dry-run] ${message || phase}`);
+    if (typeof showToast === "function") showToast(`Dry-run: ${message || phase}`, 4000);
+  };
+  const finish = () => {
+    timings.totalMs = Math.round(dryRunNowMs() - totalStarted);
+    result.elapsedMs = timings.totalMs;
+    result.lastPhase = lastPhase;
+    Object.assign(metrics, timings);
+    if (typeof console !== "undefined") {
+      if (typeof console.table === "function") console.table(metrics);
+      if (typeof console.info === "function") console.info("[planning dry-run]", result);
+    }
+    if (typeof showToast === "function") {
+      const text = result.ok
+        ? `Dry-run: ${metrics.scheduledOperationsCount} programadas; ${metrics.unscheduledOperationsCount} sin hueco; ${metrics.selectedStrategy || "sin estrategia"} en ${(metrics.totalMs / 1000).toFixed(1)}s`
+        : result.aborted
+          ? `Dry-run abortado por presupuesto en ${result.lastPhase}; ${(metrics.totalMs / 1000).toFixed(1)}s`
+        : `Dry-run bloqueado: ${result.blockers.length || result.missingDataOts.length} pendientes`;
+      showToast(text, result.ok ? 6000 : 9000);
+    }
+    return result;
+  };
+  const yieldToBrowser = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+
+  if (!window.PlannerCore?.schedulePlan) {
+    result.blockers.push({ code: "PLANNER_CORE_UNAVAILABLE", message: "El motor de programacion no esta disponible" });
+    return finish();
+  }
+  if (!selectedOts.length) {
+    result.blockers.push({ code: "NO_SELECTED_OTS", message: "Agrega al menos una OT a la lista del plan" });
+    return finish();
+  }
+
+  const planStart = formatDate(parseDateOnlyValue(state.planStart) || new Date());
+  metrics.planStart = planStart;
+  let readyOts = [];
+  let engineSelectedOts = [];
+  const originalState = state;
+  try {
+    let started = dryRunNowMs();
+    markPhase("readiness", "validando OTs listas");
+    await yieldToBrowser();
+    const hasLoadedData = window.PlanningWorkflowCore.hasPlanningData(state, selectedOts);
+    if (!hasLoadedData) {
+      const operationsByOt = planningStateIndexes().operationsByOt;
+      result.missingDataOts = selectedOts.filter((ot) => !(operationsByOt.get(materialOtKey(ot)) || []).length);
+      result.blockers.push({
+        code: "MISSING_LOADED_PLANNING_DATA",
+        message: "Faltan operaciones cargadas en memoria; el dry-run no sincroniza NetSuite ni modifica estado.",
+        ots: result.missingDataOts,
+      });
+      return finish();
+    }
+
+    started = dryRunNowMs();
+    const affected = new Set(selectedOts.map(normalizeStatus).filter(Boolean));
+    metrics.affectedOtsCount = affected.size;
+    const jobs = new Map(getPriorityJobs().map((job) => [materialOtKey(job.ot), job]));
+    readyOts = selectedOts.filter((ot) => affected.has(normalizeStatus(ot)) &&
+      isMovablePlanningStatus(jobStatusParaTarjeta(ot)) && !hasClosedWorkOrderSyncWarning(ot)
+    );
+     const dryRunMode = true;
+      const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
+     for (const ot of readyOts) {
+       const job = jobs.get(materialOtKey(ot));
+       const operations = jobPlanningOperations(job);
+       if (!job || !operations.length) {
+         result.blockers.push({ code: "OT_WITHOUT_OPERATIONS", ot, message: `No se encontraron operaciones cargadas para OT ${ot}` });
+         continue;
+       }
+       const issues = window.PlannerCore.planningConfigurationIssues
+         ? window.PlannerCore.planningConfigurationIssues(state, operations)
+         : [];
+       const blockers = issues.filter((issue) => [
+         "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_TOOL_CHANGE_CAPABILITY", "MISSING_TOOL_CHANGE_OPERATOR",
+         "MISSING_MACHINE", "MISSING_TOOL", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS",
+       ].includes(issue.code));
+       for (const issue of blockers) {
+         if (dryRunMode && autoFillableCodes.has(issue.code)) {
+           result.warnings.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Dato faltante; se autocompleta solo para dry-run (no afecta planeacion real)", autoFilled: true });
+           continue;
+         }
+         result.blockers.push({ code: issue.code, ot: issue.ot || ot, operationId: issue.operationId || "", message: "Falta completar la configuracion del plan" });
+       }
+       const commercial = commercialPlanningRequirement(job, { alwaysPlanningType: false });
+       if (commercial.needsType) {
+         if (dryRunMode) result.warnings.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}; se autocompleta solo para dry-run`, autoFilled: true });
+         else result.blockers.push({ code: "MISSING_COMMERCIAL_TYPE", ot, message: `Falta tipo comercial para OT ${ot}` });
+       }
+       if (commercial.needsPlanningType) {
+         if (dryRunMode) result.warnings.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}; se autocompleta solo para dry-run`, autoFilled: true });
+         else result.blockers.push({ code: "MISSING_PLANNING_TYPE", ot, message: `Falta tipo de trabajo para OT ${ot}` });
+       }
+     }
+    readyOts = readyOts.filter((ot) => !result.blockers.some((blocker) => normalizeStatus(blocker.ot) === normalizeStatus(ot)));
+    metrics.readyOtsCount = readyOts.length;
+    timings.readinessMs = Math.round(dryRunNowMs() - started);
+    if (!readyOts.length) {
+      if (!result.blockers.length) result.blockers.push({ code: "NO_READY_OTS", message: "No hay OTs listas para programar" });
+      return finish();
+    }
+
+    const validation = validateScheduleConfiguration(new Date(), readyOts, { ignoreAutoFillable: true });
+    if (validation) {
+      result.blockers.push({ code: "SCHEDULE_CONFIGURATION", operationId: validation.operationId || "", message: validation.message });
+      return finish();
+    }
+
+    started = dryRunNowMs();
+    markPhase("prepare-draft", "preparando borrador temporal");
+    await yieldToBrowser();
+    engineSelectedOts = window.PlanningWorkflowCore.schedulingSelectedOts(state);
+    metrics.engineSelectedOtsCount = engineSelectedOts.length;
+    let temporaryState = window.PlanningWorkflowCore.prepareDraftForReschedule(deepClone({ ...state, planStart }), engineSelectedOts);
+    state = temporaryState;
+    invalidateCurrentPlanOperationsCache();
+    applyQueuePriorities();
+    freezeElapsedOperations(new Date());
+    temporaryState = state;
+    metrics.includedOperationsCount = currentPlanOperations().length;
+    timings.prepareDraftMs = Math.round(dryRunNowMs() - started);
+
+    if (dryRunOptions.skipScheduler === true || dryRunOptions.profileOnly === true) {
+      result.ok = true;
+      result.reason = "SCHEDULER_SKIPPED";
+      result.skippedScheduler = true;
+      result.profileOnly = true;
+      if (typeof console !== "undefined" && typeof console.info === "function") console.info("[planning dry-run] scheduler omitido por skipScheduler/profileOnly", metrics);
+      return finish();
+    }
+
+    started = dryRunNowMs();
+    markPhase("scheduler-start", `iniciando scheduler; el navegador puede estar ocupado hasta ${Math.round(configuredTimeoutMs / 1000)}s`);
+    await yieldToBrowser();
+    const plannerOptions = {
+      planStart: temporaryState.planStart,
+      horizonDays: temporaryState.horizonDays,
+      executionTime: new Date().toISOString(),
+      startFromExecutionTime: true,
+      affectedOts: readyOts,
+      fastQualityMode: true,
+      strategyPool: Array.isArray(temporaryState.settings?.strategyPool) && temporaryState.settings.strategyPool.length
+        ? temporaryState.settings.strategyPool
+        : ["balanced_goal"],
+    };
+    plannerOptions.timeBudgetMs = configuredTimeoutMs;
+    if (dryRunOptions.collectStats !== false && (plannerOptions.timeBudgetMs || dryRunOptions.collectStats === true)) plannerOptions.collectStats = true;
+    if (Number.isFinite(Number(dryRunOptions.progressEveryMs)) && Number(dryRunOptions.progressEveryMs) > 0) plannerOptions.progressEveryMs = Number(dryRunOptions.progressEveryMs);
+    if (plannerOptions.collectStats || plannerOptions.progressEveryMs) {
+      plannerOptions.onProgress = (event) => {
+        metrics.plannerLastPhase = event?.phase || metrics.plannerLastPhase;
+        if (typeof console !== "undefined" && typeof console.info === "function") console.info("[planning dry-run] scheduler progress", event);
+      };
+    }
+    const scheduleResult = await window.PlannerCore.schedulePlan({ ...temporaryState, selectedOts: engineSelectedOts }, {
+      ...plannerOptions,
+      isDryRun: true,
+      onYield: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
+    });
+    timings.schedulePlanMs = Math.round(dryRunNowMs() - started);
+
+    started = dryRunNowMs();
+    const summary = scheduleResult.lastSchedule || {};
+    const plannerPerformance = summary.performance || {};
+    const plannerStats = plannerPerformance.stats || {};
+    metrics.plannerElapsedMs = Number(plannerPerformance.elapsedMs || 0);
+    metrics.plannerLastPhase = plannerPerformance.lastPhase || metrics.plannerLastPhase || "";
+    metrics.plannerStrategiesStarted = Number(plannerStats.strategiesStarted || 0);
+    metrics.plannerMainLoopIterations = Number(plannerStats.mainLoopIterations || 0);
+    metrics.plannerAssignmentCandidateEvaluations = Number(plannerStats.assignmentCandidateEvaluations || 0);
+    metrics.plannerSlotProbes = Number(plannerStats.slotProbes || 0);
+    metrics.plannerSlotProbeSkips = Number(plannerStats.slotProbeSkips || 0);
+    metrics.plannerBusyOverlapScans = Number(plannerStats.busyOverlapScans || 0);
+    metrics.plannerBusyConflictScans = Number(plannerStats.busyConflictScans || 0);
+    metrics.plannerBusyConflictSorts = Number(plannerStats.busyConflictSorts || 0);
+    metrics.plannerBusySegmentSorts = Number(plannerStats.busySegmentSorts || 0);
+    metrics.plannerToolCatalogLookups = Number(plannerStats.toolCatalogLookups || 0);
+    metrics.plannerToolCatalogScans = Number(plannerStats.toolCatalogScans || 0);
+    metrics.plannerOtConfigurationLookups = Number(plannerStats.otConfigurationLookups || 0);
+    metrics.plannerBudgetCheckCount = Number(plannerPerformance.budgetCheckCount || 0);
+    metrics.plannerBudgetCheckLimit = Number(plannerPerformance.budgetCheckLimit || 0);
+    metrics.plannerStartedAtWallMs = Number(plannerPerformance.startedAtWallMs || 0);
+    if (plannerPerformance.aborted) {
+      result.aborted = true;
+      result.reason = plannerPerformance.reason || "TIME_BUDGET_EXCEEDED";
+      lastPhase = plannerPerformance.lastPhase || "scheduler";
+      result.lastPhase = lastPhase;
+      result.blockers.push({ code: result.reason, message: "El scheduler excedio el presupuesto de tiempo del dry-run", phase: plannerPerformance.lastPhase || "scheduler" });
+    } else {
+      markPhase("scheduler-end", "scheduler finalizado");
+      await yieldToBrowser();
+    }
+    const diagnostics = Array.isArray(summary.diagnostics) ? summary.diagnostics : [];
+    metrics.scheduledOperationsCount = Number(summary.scheduled || 0);
+    metrics.unscheduledOperationsCount = Number(summary.unscheduled || 0);
+    metrics.scheduledOtsCount = Array.isArray(summary.scheduledOts) ? summary.scheduledOts.length : 0;
+    const scheduledOts = new Set((summary.scheduledOts || []).map(normalizeStatus));
+    metrics.unscheduledOtsCount = readyOts.filter((ot) => !scheduledOts.has(normalizeStatus(ot))).length;
+    metrics.diagnosticsCount = diagnostics.length;
+    metrics.diagnosticsByCode = diagnostics.reduce((counts, item) => {
+      const code = String(item?.code || "UNKNOWN").trim() || "UNKNOWN";
+      counts[code] = (counts[code] || 0) + 1;
+      return counts;
+    }, {});
+    if (window.PlannerCore?.analyzeUnscheduledOperations) {
+      metrics.unscheduledAnalysis = window.PlannerCore.analyzeUnscheduledOperations(temporaryState, summary);
+    }
+    if (!result.aborted && scheduleResult) {
+      try {
+        metrics.diagnosticLoads = buildDryRunDiagnosticLoads(scheduleResult, planStart);
+      } catch (error) {
+        metrics.diagnosticLoads = { error: String(error && error.message || error) };
+      }
+    }
+    metrics.selectedStrategy = summary.optimization?.selectedStrategy || "balanced";
+    metrics.horizonDays = Number(scheduleResult.horizonDays || temporaryState.horizonDays || metrics.horizonDays || 0);
+    result.ok = result.blockers.length === 0 && !result.aborted;
+    result.warnings = diagnostics.filter((item) => item?.level && String(item.level).toUpperCase() !== "ERROR");
+    timings.resultBuildMs = Math.round(dryRunNowMs() - started);
+    return finish();
+  } catch (error) {
+    result.blockers.push({ code: "DRY_RUN_ERROR", message: String(error?.message || error || "Error desconocido") });
+    return finish();
+  } finally {
+    state = originalState;
+    invalidateCurrentPlanOperationsCache();
+  }
+}
+
+function dryRunNowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
+function buildDryRunDiagnosticLoads(draftState, planStartValue) {
+  const weekStart = formatDate(parseDateOnlyValue(planStartValue) || new Date());
+  const ops = Array.isArray(draftState?.operations) ? draftState.operations : [];
+  const weekLoads = operatorLoadsForOperations(ops, weekStart, 7);
+  const horizonLoads = operatorLoadsForOperations(ops, weekStart, 15);
+  const weekRange = selectedWeekRange(weekStart);
+  const horizonDays = Math.min(45, Math.max(1, Number(draftState?.horizonDays) || 15));
+  const horizonEnd = new Date(weekRange.start.getTime() + horizonDays * 86400000);
+  const demandAt = (rangeStart, rangeEnd) => {
+    const byCt = {};
+    for (const op of ops) {
+      if (!op || !isFiniteCapacityOperation(op)) continue;
+      const capability = typeof window?.PlannerCore?.capabilityForOperation === "function"
+        ? window.PlannerCore.capabilityForOperation(op, draftState)
+        : null;
+      const rawLabel = String((capability && capability.label) || op.descripcion || op.tipoInsercion || "").replace(/\s+/g, " ").trim();
+      const rawCt = String((capability && capability.ct) || op.ct || "").trim();
+      const bucket = rawCt && rawCt !== "SIN_CT" ? `${rawCt} ${rawLabel}` : (rawLabel || "SIN_DESCRIPCION");
+      const min = operationMinutesInRange(op, rangeStart, rangeEnd);
+      if (!(min > 0)) continue;
+      if (!byCt[bucket]) byCt[bucket] = { minutes: 0, ops: 0 };
+      byCt[bucket].minutes += min;
+      byCt[bucket].ops += 1;
+    }
+    return byCt;
+  };
+  const matrix = draftState?.matrix && typeof draftState.matrix === "object" ? draftState.matrix : {};
+  const matrixCapabilities = getCapabilityRows()
+    .map((capability) => ({
+      key: capability.key,
+      label: capability.label,
+      ct: capability.ct,
+      opsInPlan: capability.count,
+      enabledOperators: uniq([...(Array.isArray(matrix[capability.key]) ? matrix[capability.key] : []), ...(Array.isArray(matrix[capability.ct]) ? matrix[capability.ct] : [])]),
+    }))
+    .sort((a, b) => b.opsInPlan - a.opsInPlan);
+  const operatorWeekOps = {};
+  const bestSeqByOt = {};
+  for (const op of ops) {
+    if (!op || !op.ot) continue;
+    const min = operationMinutesInRange(op, weekRange.start, weekRange.end);
+    if (min > 0 && op.operador) {
+      operatorWeekOps[op.operador] ||= { ops: 0, minutes: 0 };
+      operatorWeekOps[op.operador].ops += 1;
+      operatorWeekOps[op.operador].minutes += min;
+    }
+    const seq = Number(op.secuencia);
+    if (Number.isFinite(seq) && (bestSeqByOt[op.ot] === undefined || seq < bestSeqByOt[op.ot].seq)) {
+      bestSeqByOt[op.ot] = { seq, ct: String(op.ct || "").trim() || "SIN_CT" };
+    }
+  }
+  const firstOpByCt = {};
+  const firstOpsByOperator = {};
+  const firstOpAssigneeByOt = {};
+  for (const ot of Object.keys(bestSeqByOt)) {
+    const { ct } = bestSeqByOt[ot];
+    firstOpByCt[ct] = (firstOpByCt[ct] || 0) + 1;
+    for (const op of ops) {
+      if (op && op.ot === ot && Number(op.secuencia) === bestSeqByOt[ot].seq && op.operador) {
+        firstOpsByOperator[op.operador] = (firstOpsByOperator[op.operador] || 0) + 1;
+        firstOpAssigneeByOt[ot] = op.operador;
+      }
+    }
+  }
+  const otsByFirstOp = { cortadorInicial: [], otros: [] };
+  for (const ot of Object.keys(firstOpAssigneeByOt)) {
+    const target = /cortador\s*inicial/i.test(firstOpAssigneeByOt[ot]) ? otsByFirstOp.cortadorInicial : otsByFirstOp.otros;
+    target.push(ot);
+  }
+  const selectedSet = new Set((draftState?.selectedOts || []).map((v) => String(v)));
+  const lockedSet = new Set((draftState?.lockedOts || []).map((v) => String(v)));
+  const buildOtsDetail = (otList, max) => otList.slice(0, max).map((ot) => {
+    const otOps = ops
+      .filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)))
+      .sort((a, b) => Number(a.secuencia) - Number(b.secuencia));
+    const first = otOps[0] || null;
+    return {
+      ot,
+      firstOpAssignee: firstOpAssigneeByOt[ot] || "",
+      inSelectedOts: selectedSet.has(String(ot)),
+      inLockedOts: lockedSet.has(String(ot)),
+      firstOpStatus: first ? {
+        planStatus: String(first.planStatus || ""),
+        estatus: String(first.estatus || ""),
+        historical: !!first.historical,
+        autoFrozen: !!first.autoFrozen,
+        locked: !!first.locked,
+        fechaInicio: first.fechaInicio || "",
+        log: String(first.log || "").slice(-240),
+      } : null,
+      sequence: otOps.map((op) => ({
+        secuencia: Number(op.secuencia),
+        ct: String(op.ct || "").trim() || "SIN_CT",
+        descripcion: String(op.descripcion || "").trim(),
+        operador: String(op.operador || "").trim() || "(sin operador)",
+        minutos: Math.round(operationMinutesInRange(op, weekRange.start, weekRange.end) * 10) / 10,
+        fechaInicio: op.fechaInicio || "",
+        planStatus: String(op.planStatus || ""),
+      })),
+    };
+  });
+  const exampleOts = {
+    startsWithCortadorInicial: buildOtsDetail(otsByFirstOp.cortadorInicial, 2),
+    startsWithOther: buildOtsDetail(otsByFirstOp.otros, 2),
+    totals: { cortadorInicial: otsByFirstOp.cortadorInicial.length, otros: otsByFirstOp.otros.length },
+  };
+  const corteTuboPattern = /CORTE DE TUBO|\b3OTD\b/i;
+  const anyCortePattern = /\bCORTE\b/i;
+  const firstOpDescCounts = {};
+  const anyCorteByOperator = {};
+  const samplesWithoutCorteTubo = [];
+  let anyCorteOpCount = 0;
+  let anyCorteOtsCount = 0;
+  let firstOpTotal = 0;
+  let withoutCorteTuboCount = 0;
+  let withoutCorteTuboSelected = 0;
+  const otsWithoutCorteTuboSelected = [];
+  for (const [ot, info] of Object.entries(bestSeqByOt)) {
+    const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
+    const hasCorteTubo = otOps.some((op) => corteTuboPattern.test(String(op.descripcion || "")));
+    const minOp = otOps.find((op) => Number(op.secuencia) === info.seq);
+    const desc = minOp ? String(minOp.descripcion || "(vacio)").replace(/\s+/g, " ").trim().slice(0, 60) : "(sin op)";
+    firstOpDescCounts[desc] = (firstOpDescCounts[desc] || 0) + 1;
+    firstOpTotal += 1;
+    if (!hasCorteTubo) {
+      withoutCorteTuboCount += 1;
+      if (selectedSet.has(String(ot))) {
+        withoutCorteTuboSelected += 1;
+        if (otsWithoutCorteTuboSelected.length < 40) otsWithoutCorteTuboSelected.push(ot);
+      }
+    }
+    if (!hasCorteTubo && samplesWithoutCorteTubo.length < 5) {
+      const syncedKey = materialOtKey(ot);
+      samplesWithoutCorteTubo.push({
+        ot,
+        firstOpSeq: info.seq,
+        firstOpDesc: desc,
+        firstOpOperator: minOp ? (String(minOp.operador || "(vacio)").trim() || "(vacio)") : "?",
+        opsInRoute: otOps.length,
+        inSelectedOts: selectedSet.has(String(ot)),
+        inLockedOts: lockedSet.has(String(ot)),
+        operationsSyncedAt: (draftState?.operationsSyncedAt && draftState.operationsSyncedAt[syncedKey]) || "",
+        routeSample: otOps.map((op) => ({
+          secuencia: Number(op.secuencia),
+          ct: String(op.ct || "").trim() || "SIN_CT",
+          descripcion: String(op.descripcion || "").replace(/\s+/g, " ").trim().slice(0, 50),
+          operador: String(op.operador || "").trim() || "(vacio)",
+          planStatus: String(op.planStatus || ""),
+          estatus: String(op.estatus || ""),
+        })),
+      });
+    }
+    const cortes = otOps.filter((op) => anyCortePattern.test(String(op.descripcion || "")));
+    if (cortes.length) {
+      anyCorteOtsCount += 1;
+      anyCorteOpCount += cortes.length;
+      for (const cop of cortes) {
+        const copName = String(cop.operador || "(vacio)").trim() || "(vacio)";
+        anyCorteByOperator[copName] = (anyCorteByOperator[copName] || 0) + 1;
+      }
+    }
+  }
+  const corteTuboAnalysis = {
+    totalOts: Object.keys(bestSeqByOt).length,
+    otsWithCorteTubo: 0,
+    otsWhereCorteTuboIsMinSeq: 0,
+    corteTuboOpCount: 0,
+    corteTuboPendingCount: 0,
+    corteTuboMinutesWeek: 0,
+    corteTuboMinutesHorizon: 0,
+    operatorsOnCorteTuboMinSeq: {},
+    minSeqOperatorWhenOtsHasCorteTubo: {},
+    minSeqDescWhenOtsHasCorteTubo: {},
+    samplesAnomaly: [],
+  };
+  for (const [ot, info] of Object.entries(bestSeqByOt)) {
+    const otOps = ops.filter((op) => op && op.ot === ot && Number.isFinite(Number(op.secuencia)));
+    const corteOps = otOps.filter((op) => corteTuboPattern.test(String(op.descripcion || "")));
+    if (!corteOps.length) continue;
+    corteTuboAnalysis.otsWithCorteTubo += 1;
+    corteTuboAnalysis.corteTuboOpCount += corteOps.length;
+    for (const cop of corteOps) {
+      const pending = !/COMPLETAD|CERRAD|HISTORIC/i.test(String(cop.planStatus || "")) && !cop.historical;
+      if (pending) corteTuboAnalysis.corteTuboPendingCount += 1;
+      corteTuboAnalysis.corteTuboMinutesWeek += operationMinutesInRange(cop, weekRange.start, weekRange.end);
+      corteTuboAnalysis.corteTuboMinutesHorizon += operationMinutesInRange(cop, weekRange.start, horizonEnd);
+    }
+    const minCorteSeq = Math.min(...corteOps.map((op) => Number(op.secuencia)));
+    const isMinSeq = minCorteSeq === info.seq;
+    if (isMinSeq) corteTuboAnalysis.otsWhereCorteTuboIsMinSeq += 1;
+    const corteAtMin = corteOps.find((op) => Number(op.secuencia) === minCorteSeq);
+    const corteOpName = String((corteAtMin && corteAtMin.operador) || "(vacio)").trim() || "(vacio)";
+    if (isMinSeq) {
+      corteTuboAnalysis.operatorsOnCorteTuboMinSeq[corteOpName] = (corteTuboAnalysis.operatorsOnCorteTuboMinSeq[corteOpName] || 0) + 1;
+    }
+    const minOp = otOps.find((op) => Number(op.secuencia) === info.seq);
+    const minOpName = minOp ? (String(minOp.operador || "(vacio)").trim() || "(vacio)") : "?";
+    const minDesc = minOp ? String(minOp.descripcion || "").trim().slice(0, 50) : "?";
+    corteTuboAnalysis.minSeqOperatorWhenOtsHasCorteTubo[minOpName] = (corteTuboAnalysis.minSeqOperatorWhenOtsHasCorteTubo[minOpName] || 0) + 1;
+    corteTuboAnalysis.minSeqDescWhenOtsHasCorteTubo[minDesc] = (corteTuboAnalysis.minSeqDescWhenOtsHasCorteTubo[minDesc] || 0) + 1;
+    if (!isMinSeq && corteTuboAnalysis.samplesAnomaly.length < 8) {
+      corteTuboAnalysis.samplesAnomaly.push({
+        ot,
+        minSeq: info.seq,
+        minSeqDesc: minDesc,
+        minSeqOperator: minOpName,
+        corteTuboSeq: minCorteSeq,
+        corteTuboOperator: corteOpName,
+        corteTuboDesc: String((corteAtMin && corteAtMin.descripcion) || "").trim().slice(0, 50),
+      });
+    }
+  }
+  return {
+    weekMonday: weekStart,
+    horizonDays: draftState?.horizonDays || 15,
+    weekLoads,
+    horizonLoads,
+    weekDemandByCt: demandAt(weekRange.start, weekRange.end),
+    horizonDemandByCt: demandAt(weekRange.start, horizonEnd),
+    matrixCapabilities,
+    operatorWeekOps,
+    firstOpByCt,
+    firstOpsByOperator,
+    exampleOts,
+    corteTuboAnalysis: {
+      ...corteTuboAnalysis,
+      anyCorteOtsCount,
+      anyCorteOpCount,
+      anyCorteByOperator,
+      firstOpTotal,
+      firstOpDescCounts,
+      samplesWithoutCorteTubo,
+      withoutCorteTuboCount,
+      withoutCorteTuboSelected,
+      otsWithoutCorteTuboSelected,
+    },
+  };
+}
+
+function renderLoadSourceSelect() {
+  if (!els.loadPlanSelect) return;
+  syncPlanSourceSelect(els.loadPlanSelect);
+  els.loadModeSelect.value = loadMode;
+}
+
+async function loadSelectedLoadPlan(snapshotId) {
+  await loadSelectedPlanSnapshot(snapshotId);
 }
 
 async function ensureSelectedJobsReadyForScheduling(ots) {
   const jobs = new Map(getPriorityJobs().map((job) => [job.ot, job]));
   for (const ot of ots) {
+    if (!window.PlanningWorkflowCore.isOtEligibleForDraft(state, ot)) continue;
     const job = jobs.get(ot);
     if (!job) continue;
     if (!job.ops.length) {
       showToast(`No se encontraron operaciones NetSuite para OT ${ot}`);
       return false;
     }
-    const prepared = await prepareJobForPlanning(job);
+    const prepared = await prepareJobForPlanning(job, { reuseConfirmed: true });
     if (!prepared) return false;
+    if (!window.PlanningWorkflowCore.isOtEligibleForDraft(state, ot)) continue;
   }
   return true;
 }
@@ -3408,133 +7119,381 @@ async function ensureCommercialDataForPlan(ots) {
   return true;
 }
 
+// 1.2 / 3.1 — DESPUES DE GUARDAR, NO SE VUELVE A LEER LA LISTA COMPLETA.
+// MEDIDO 2026-09-26: PP_listPlanSnapshots_ tarda 31 s con las 138 714 filas de PLANES_HISTORICOS,
+// y despues de CADA guardado se pedia entera con loadPlanSnapshots(false,
+// {deferPublishedLoad:true}). Ese era el costo que se veia como pausa justo despues de "Guardando
+// borrador..." y despues de "Actualizando OTs...".
+//
+// QUE SE HACE EN LUGAR: el servidor YA devuelve el registro que acaba de guardar (ver el return de
+// PP_appendPlanSnapshot_: snapshotId, generatedAt, planStart, weekStart, operations, version,
+// publicationReason, changeSummary, publishedAt). Eso se incorpora a la lista que el cliente ya
+// tiene en memoria. Mismo resultado en la lista y en la cache local, sin el viaje de ida y vuelta.
+//
+// LO QUE NO SE HACE, Y POR QUE:
+//  - NO SE INVENTA NINGUN DATO. user y horizonDays no vienen en la respuesta del servidor, asi que
+//    se COPIAN del registro que ya estaba en la lista. Si no habia, quedan vacios/0, igual que
+//    antes. Este camino no estima nada.
+//  - NO SE TOCA reportSnapshot NI la semana. Con deferPublishedLoad:true, loadPlanSnapshots tampoco
+//    cambiaba de plan salvo que no hubiera borrador (ver loadPlanSnapshotsImpl, linea 7167), y el
+//    upsert tampoco. Lo unico que cambia es la lista y lo que se deriva de ella.
+//  - NO REEMPLAZA LA LECTURA COMPLETA. El siguiente arranque, o abrir el selector, siguen trayendo
+//    la lista del servidor. Esto quita una lectura redundante; no inventa una fuente de verdad.
+function upsertPlanSnapshotRecord(saved, kind) {
+  const snapshotId = String(saved?.snapshotId || "").trim();
+  if (!snapshotId) return null;
+  const previous = planSnapshots.find((item) => String(item?.snapshotId || "") === snapshotId) || {};
+  const record = {
+    ...previous,
+    snapshotId,
+    generatedAt: String(saved.generatedAt || previous.generatedAt || ""),
+    planStart: String(saved.planStart || previous.planStart || ""),
+    weekStart: String(saved.weekStart || saved.planStart || previous.weekStart || previous.planStart || ""),
+    operations: Number(saved.operations != null ? saved.operations : (previous.operations || 0)),
+    version: Number(saved.version != null ? saved.version : (previous.version || 0)),
+    publicationReason: String(saved.publicationReason || ""),
+    changeSummary: saved.changeSummary || null,
+    publishedAt: String(saved.publishedAt || ""),
+  };
+  if (kind) record.kind = kind;
+  planSnapshots = [
+    ...planSnapshots.filter((item) => String(item?.snapshotId || "") !== snapshotId),
+    record,
+  ].sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+  savePlanSnapshotsCache(planSnapshots);
+  renderPlanSnapshotSelect();
+  renderReports();
+  return record;
+}
+
+// El respaldo automatico se ARMA aqui, antes de preguntar la semana, y se GUARDA despues del
+// dialogo (ver scheduleCurrentPlanImpl). Armarlo y guardarlo son dos cosas distintas: armar es
+// trabajo de cliente y se mide en milisegundos; guardar es la ida y vuelta a Apps Script, que es lo
+// que congelaba la interfaz antes de que apareciera el dialogo.
+function buildPlanAutoBackupPayload() {
+  return window.PlanningWorkflowCore.buildDraftSnapshot({
+    ...createAppSheetPayload(),
+    operations: currentPlanOperations(),
+  }, new Date().toISOString());
+}
+
 async function persistPlanSnapshot() {
+  const payload = window.PlanningWorkflowCore.buildDraftSnapshot({
+    ...createAppSheetPayload(),
+    operations: currentPlanOperations(),
+  }, new Date().toISOString());
   try {
-    let saved;
-    if (isAppsScriptRuntime()) {
-      saved = await callAppsScript("savePlanSnapshot", createAppSheetPayload());
-    } else {
-      const response = await fetch(PLAN_SNAPSHOTS_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createAppSheetPayload()),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      saved = await response.json();
+    // EL ESTADO Y LA INSTANTANEA VAN EN DOS ESCRITURAS, NO EN UNA. MEDIDO 2026-10-10:
+    // con la instantanea embebida en el RPC, el cuerpo ronda los 4,4 MB al Generar plan,
+    // y con el enlace real (subida de ~21-26 KB/s, medido con 256 KB/10,4 s y 1 MB/48,7 s)
+    // no terminaba de subir: el POST no llegaba a la base y la pagina mostraba
+    // `signal is aborted without reason`, que es el abort del reloj de 30 s. La instantanea
+    // (1,95 MB de las operaciones programadas) viaja por su propio POST -el camino que ya
+    // usa el respaldo automatico, `persistPlanAutoBackup` -> `saveDraftSnapshot`- y el
+    // cuerpo del RPC baja a ~1,6 MB, que a esta velocidad tiene margen de sobra.
+    // `plan_guardar` escribe el estado, la revision y las tablas de espejo en una sola
+    // transaccion; lo unico que sale de ahi es el archivo del borrador, que es anexo y que
+    // la funcion nunca borra.
+    const guardado = await guardarPlanEnSupabase();
+    if (!guardado) throw new Error("No se pudo guardar el plan en Supabase");
+    const saved = payload;
+    // La instantanea va DESPUES del plan y, si falla, NO invalida el guardado. Antes el
+    // fallo de la instantanea se llevaba por delante la transaccion entera y el toast decia
+    // que no se habia guardado nada con el plan YA guardado al recargar (la alarma falsa que
+    // RULE-SUP-062 quito del segundo guardado); ahora es un aviso, no una perdida.
+    try {
+      await PPSupabaseBridgeReplacement.saveDraftSnapshot(saved);
+    } catch (errorInstantanea) {
+      // Un entorno sin `saveDraftSnapshot` no es un fallo que haya que gritar: el plan ya
+      // esta guardado y el borrador es un archivo. Se calla y se sigue (mismo criterio que
+      // el `isUnsupportedDraftSnapshotError` de abajo).
+      if (!window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(errorInstantanea)) {
+        console.error("[persistPlanSnapshot] El plan se guardo, pero no la instantanea:", errorInstantanea, errorInstantanea && errorInstantanea.stack);
+        showToast(`Plan guardado; no se pudo archivar la instantanea: ${errorInstantanea.message}`);
+      }
     }
-    await loadPlanSnapshots(false);
+    upsertPlanSnapshotRecord(saved, "BORRADOR");
     return saved;
   } catch (error) {
+    if (window.PlanningWorkflowCore.isUnsupportedDraftSnapshotError(error)) {
+      return payload;
+    }
+    console.error("[persistPlanSnapshot] No se pudo guardar la instantanea del plan:", error, error && error.stack);
     showToast(`Plan generado; no se pudo guardar la instantanea: ${error.message}`);
     return null;
   }
 }
 
+async function persistPlanAutoBackup(payload = null) {
+  try {
+    const saved = await PPSupabaseBridgeReplacement.savePlanSnapshot(payload || buildPlanAutoBackupPayload());
+    upsertPlanSnapshotRecord(saved, "RESPALDO");
+    return Object.assign({ ok: true, kind: "RESPALDO" }, saved || {});
+  } catch (error) {
+    console.error("[persistPlanAutoBackup] No se pudo crear el respaldo del borrador:", error, error && error.stack);
+    return { ok: false, reason: error && error.message || String(error), snapshotId: "" };
+  }
+}
+
 async function publishCurrentPlan() {
-  const scheduled = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+  purgeClosedWorkOrderRetention();
+  const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   if (!scheduled.length) {
     showToast("Genera el plan antes de publicarlo");
     return;
   }
+  const publishLabel = els.publishPlanBtn?.querySelector("[data-schedule-label]");
+  const publishPercent = els.publishPlanBtn?.querySelector("[data-schedule-percent]");
+  const publishFill = els.publishPlanBtn?.querySelector("[data-schedule-fill]");
+  const setPublishStatus = (message, percent = null) => {
+    if (publishLabel) publishLabel.textContent = message;
+    if (publishPercent) {
+      if (percent != null) {
+        publishPercent.textContent = `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+        publishPercent.hidden = false;
+      } else {
+        publishPercent.textContent = "";
+        publishPercent.hidden = true;
+      }
+    }
+    if (publishFill) publishFill.style.width = (percent != null ? Math.max(0, Math.min(100, percent)) : 0) + "%";
+  };
   els.publishPlanBtn.disabled = true;
+  els.publishPlanBtn.classList.add("is-running");
   try {
+    setPublishStatus("Verificando OTs en NetSuite...", 5);
+    const publishFreshness = await ensureNetSuiteWorkOrdersFresh({ maxAgeMs: NETSUITE_WORKORDER_FRESH_MS, context: "publish" });
+    if (!publishFreshness.ok) return;
+    if (publishFreshness.removedOts.length) {
+      showToast(`OT(s) cerrada(s) en NetSuite retiradas antes de publicar: ${publishFreshness.removedOts.join(", ")}`, 7000);
+    }
+    const scheduledAfterFreshness = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    if (!scheduledAfterFreshness.length) {
+      showToast("No se pudo publicar: el plan quedo vacio tras retirar OTs cerradas en NetSuite", 9000);
+      return;
+    }
+    const weekStart = window.PlanningWorkflowCore.mondayIso(state.planStart);
+    const counterBase = readPlanVersionCounter(weekStart);
+    const versionBase = [
+      ...(state.publishedVersions || []),
+      ...(Array.isArray(planSnapshots) ? planSnapshots : []),
+      ...(counterBase ? [{ weekStart, version: counterBase }] : []),
+    ].filter((item) => Number(item?.version || 0) > 0);
+    const version = window.PlanningWorkflowCore.nextWeeklyVersion(versionBase, weekStart);
+    const publicationReason = "";
+    const changeSummary = { addedOts: [], removedOts: [], changedOts: [] };
+    const persisted = persistableState();
+    delete persisted._locallyRemovedDraftOts;
+    delete persisted._pendingAddOt;
+    delete persisted._pendingAddOtSnapshot;
+    delete persisted.machineToolHistory;
     const payload = {
-      ...createAppSheetPayload(),
+      ...persisted,
+      operations: currentPlanOperations(),
       planStatus: "PUBLICADO",
       draftVersionId: state.draftVersionId || "",
+      weekStart,
+      version,
+      publicationReason,
+      changeSummary,
       publishedAt: new Date().toISOString(),
+      source: "plan-app-sheet",
+      savedAt: new Date().toISOString(),
     };
-    const result = isAppsScriptRuntime()
-      ? await callAppsScript("publishDraftPlan", payload)
-      : { ok: true, activeVersion: await persistPlanSnapshot() };
+    const publishFold = draftViewStatuses();
+    setPublishStatus("Publicando plan...", 40);
+    // MEDIDO 2026-10-04, Y POR QUE ESTA LLAMADA. Antes de este cambio lo que se guardaba al publicar
+    // era `persistPlanSnapshot()`, que vuelve a escribir la fila `draft` con status BORRADOR: el
+    // payload PUBLICADO que se arma mas arriba (planStatus, weekStart, version, publishedAt) se
+    // quedaba sin usar, `plan_snapshots` no tenia NINGUNA fila publicada, y por eso el desplegable de
+    // planes no tenia nunca la opcion "ultimo plan publicado" que el mismo codigo construye
+    // (planSourceOptionsMarkup -> operationalPlanOptions, que solo deja pasar las que son
+    // PUBLICADO). MEDIDO en produccion el mismo dia: el desplegable ofrecia 1 plan guardado y era el
+    // borrador.
+    // `publishDraftPlan` escribe la fila con SU PROPIO snapshot_id (`snap-<milis>`), con
+    // `status: "PUBLICADO"` dentro del payload --la columna `status` no existe en la tabla y por eso
+    // el estado va en el jsonb, MEDIDO 2026-10-02-- y con `published_at` en la columna. Con eso la fila
+    // existe, `listPlanSnapshots` la devuelve y el desplegable la ofrece sin tocar nada mas.
+    const result = await PPSupabaseBridgeReplacement.publishDraftPlan(payload);
     const active = result?.activeVersion || result;
     if (active?.snapshotId) {
+      setPublishStatus("Guardando version publicada...", 75);
+      writePlanVersionCounter(weekStart, Number(active.version || version || 1));
       state.activePublishedVersionId = active.snapshotId;
       state.publishedVersions = [
-        ...(state.publishedVersions || []).filter((item) => item.snapshotId !== active.snapshotId),
-        { ...active, status: "PUBLICADO" },
-      ];
+        (state.publishedVersions || []).find((item) => item.snapshotId === active.snapshotId),
+        { ...active, weekStart, version: Number(active.version || version || 1), publicationReason, changeSummary, status: "PUBLICADO" },
+      ].filter(Boolean);
       await loadPlanSnapshotById(active.snapshotId, { render: false, silent: true });
+      try { await loadPlanSnapshots(false); } catch (snapErr) { console.warn("No se pudieron recargar los historicos tras publicar", snapErr); }
+      state.publishedPlanStatuses = { ...(state.publishedPlanStatuses || {}) };
+      state.publishedPlanStatuses[active.snapshotId] = { ...(publishFold || {}) };
+      invalidateDraftViewStatuses();
     }
+    setPublishStatus("Finalizando publicacion...", 90);
     await saveAppSheet(false);
     saveAndRender("Plan publicado");
   } catch (error) {
     showToast(`No se pudo publicar: ${error.message}`);
   } finally {
     els.publishPlanBtn.disabled = false;
+    els.publishPlanBtn.classList.remove("is-running", "is-indeterminate");
+    const liveLabel = els.publishPlanBtn?.querySelector("[data-schedule-label]") || publishLabel;
+    const livePercent = els.publishPlanBtn?.querySelector("[data-schedule-percent]") || publishPercent;
+    const liveFill = els.publishPlanBtn?.querySelector("[data-schedule-fill]") || publishFill;
+    if (liveLabel) liveLabel.textContent = "Publicar plan";
+    if (livePercent) { livePercent.textContent = ""; livePercent.hidden = true; }
+    if (liveFill) liveFill.style.width = "0%";
   }
 }
 
-async function generatePlanPdf() {
-  const showLoadingToast = (message) => {
+// RULE-REP-026: fuentes del PDF del plan. Siempre se ofrece el borrador en edicion mas los
+// planes guardados/publicados; el dialogo lo abre generatePlanPdf al pulsar el boton.
+function pdfSourceOptions() {
+  const publishedIds = publishedSnapshotIds();
+  const saved = planSnapshots
+    .filter((snapshot) => snapshot.snapshotId && snapshot.snapshotId !== "draft")
+    .sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+  const options = [{ id: "draft", label: "Borrador (en edicion)" }];
+  for (const snapshot of saved) {
+    const type = publishedIds.has(snapshot.snapshotId) ? "PLAN PUBLICADO" : "PLAN GUARDADO";
+    const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
+    const start = snapshot.planStart || snapshot.weekStart || "sin inicio";
+    options.push({ id: snapshot.snapshotId, label: `${type} - ${generated} - ${start} - ${snapshot.operations || 0} ops` });
+  }
+  return options;
+}
+
+async function choosePdfSource() {
+  const options = pdfSourceOptions();
+  if (options.length <= 1) return "draft";
+  const current = reportSnapshot?.snapshotId || "draft";
+  const dialogOptions = options
+    .map((option) => `<option value="${escapeHtml(option.id)}"${option.id === current ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
+    .join("");
+  const result = await openPlanningDialog({
+    title: "Generar PDF del plan",
+    summary: "Elige la fuente del PDF: el borrador en edicion o un plan guardado.",
+    body: `<label>Fuente del PDF<select name="snapshot_id" required>${dialogOptions}</select></label>`,
+    confirmLabel: "Generar PDF",
+    cancelVisible: true,
+  });
+  if (!result) return null;
+  return String(result.snapshot_id || "");
+}
+
+async function generatePlanPdf(explicitSnapshotId = "") {
+  const originalLabel = els.pdfBtn.innerHTML;
+  els.pdfBtn.disabled = true;
+  els.pdfBtn.setAttribute("aria-busy", "true");
+  els.pdfBtn.textContent = "Generando...";
+  try {
+    const showLoadingToast = (message) => {
     showToast(message);
     document.querySelector("#toast")?.classList.add("toast-loading");
   };
-  const hideLoadingToast = () => {
+    const hideLoadingToast = () => {
     document.querySelector("#toast")?.classList.remove("toast-loading");
   };
-  let snapshotId = reportSnapshot?.snapshotId;
-  if (!snapshotId && planSnapshots.length > 0) {
-    const publishedIds = publishedSnapshotIds();
-    const draftSnapshots = planSnapshots.filter((s) => !publishedIds.has(s.snapshotId));
-    const publishedSnapshots = planSnapshots.filter((s) => publishedIds.has(s.snapshotId));
-    if (draftSnapshots.length === 1 && publishedSnapshots.length === 0) {
-      snapshotId = draftSnapshots[0].snapshotId;
-    } else if (publishedSnapshots.length === 1 && draftSnapshots.length === 0) {
-      snapshotId = publishedSnapshots[0].snapshotId;
-    } else if (draftSnapshots.length > 0 && publishedSnapshots.length > 0) {
-      const options = [...draftSnapshots, ...publishedSnapshots].map((s) => {
-        const type = publishedIds.has(s.snapshotId) ? "PUBLICADO" : "BORRADOR";
-        const gen = s.generatedAt ? formatDateTime(new Date(s.generatedAt)) : "Sin fecha";
-        return { snapshotId: s.snapshotId, label: `${type} - ${gen} - ${s.planStart || "sin inicio"} - ${s.operations || 0} ops` };
-      });
-      const dialogOptions = options.map((o) => `<option value="${escapeHtml(o.snapshotId)}">${escapeHtml(o.label)}</option>`).join("");
-      const result = await openPlanningDialog({
-        title: "Generar PDF del plan",
-        summary: "Hay varios planes guardados. Selecciona cual quieres usar para el PDF:",
-        body: `<label>Plan disponible<select name="snapshot_id" required>${dialogOptions}</select></label>`,
-        confirmLabel: "Generar PDF",
-        cancelVisible: true,
-      });
-      if (!result) return;
-      snapshotId = result.snapshot_id;
+    // La fuente la elige la persona en un dialogo (Borrador en edicion o un plan guardado);
+    // una llamada programatica puede traerla como id explicito.
+    let pdfSourceId = typeof explicitSnapshotId === "string" ? explicitSnapshotId.trim() : "";
+    if (!pdfSourceId) {
+      pdfSourceId = await choosePdfSource();
+      if (!pdfSourceId) return;
     }
+    const usingDraft = pdfSourceId === "draft";
+    const snapshotId = usingDraft ? "" : pdfSourceId;
+  if (usingDraft) {
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
+  } else {
+    await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
   }
-  if (!snapshotId) {
-    const scheduled = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
-    if (!scheduled.length) {
-      showToast("Genera el plan antes de crear el PDF");
+  if (!reportSnapshot?.operations?.length) {
+    if (!usingDraft) {
+      showToast("El plan seleccionado no tiene operaciones programadas");
       return;
     }
-    const snapshot = await persistPlanSnapshot();
-    if (snapshot?.snapshotId) snapshotId = snapshot.snapshotId;
-  }
-  if (snapshotId) await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
-  if (!reportSnapshot?.operations?.length) {
-    reportSnapshot = { operations: state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op, index) => ({ ...op, num: index + 1 })) };
+    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    reportSnapshot = { operations: scheduled.map((op, index) => ({ ...op, num: index + 1 })) };
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
-  showWorkspaceView("reportes", "week");
-  state.reportWeekStart = normalizeWeekStartValue(state.planStart || state.reportWeekStart);
-  syncReportFilterDates(state.reportWeekStart);
+  showWorkspaceView("reportes", "week", { scrollToTop: true });
+  const reportStart = usingDraft
+    ? (state.planStart || state.reportWeekStart)
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
   renderReports();
   document.body.dataset.printContext = "plan";
   showToast("Usa Guardar como PDF en la ventana de impresion");
-  window.setTimeout(() => window.print(), 50);
-}
+  await new Promise((resolve) => window.setTimeout(resolve, 50));
+  window.print();
+  } catch (error) {
+    showToast(`No se pudo generar el PDF: ${error.message}`);
+  } finally {
+    delete document.body.dataset.printContext;
+    els.pdfBtn.disabled = false;
+    els.pdfBtn.removeAttribute("aria-busy");
+    els.pdfBtn.innerHTML = originalLabel;
+  }
+} 
 
-function validateScheduleConfiguration(executionTime) {
-  const operations = state.operations.filter((op) =>
+function validateScheduleConfiguration(executionTime, ots = state.selectedOts, options = {}) {
+  const scopedOts = new Set((ots || []).map(normalizeStatus).filter(Boolean));
+  const operations = currentPlanOperations().filter((op) =>
     isJobSelected(op.ot) &&
+    (!scopedOts.size || scopedOts.has(normalizeStatus(op.ot))) &&
     !isPlanCompletedOperation(op) &&
     !isJobLocked(op.ot) &&
     !shouldAutoFreezeOperation(op, executionTime) &&
     op.tipoInsercion !== "CAMBIO_HERRAMENTAL"
   );
-  const issues = window.PlannerCore?.planningConfigurationIssues
+  let issues = window.PlannerCore?.planningConfigurationIssues
     ? window.PlannerCore.planningConfigurationIssues(state, operations)
     : [];
+  for (const op of operations) {
+    const capability = capabilityFromOperation(op);
+    const catalog = toolCatalogForAppOperation(op);
+    const subcontractDays = subcontractDaysForAppOperation(op);
+    const configuration = state.otConfigurations?.[String(op.ot || "").trim()] || {};
+    const effectiveSubcontractType = String(configuration.subcontractType || configuration.tipoSubcontrato || op.subcontractType || "").trim();
+    const effectiveSubcontractDays = Number(configuration.subcontractDays || configuration.diasSubcontrato || subcontractDays.days || op.subcontractDays || 0);
+    const isSubcontract = isSubcontractAppOperation(op);
+    if (isSubcontract && !effectiveSubcontractType) {
+      issues.push({ code: "MISSING_SUBCONTRACT_TYPE", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+    if (isSubcontract && effectiveSubcontractDays <= 0) {
+      issues.push({ code: "MISSING_SUBCONTRACT_DAYS", operationId: op.id, ot: op.ot, sequence: op.secuencia, capability });
+      continue;
+    }
+  }
+  if (options.ignoreAutoFillable) {
+    const autoFillableCodes = new Set(["MISSING_MACHINE", "MISSING_TOOL", "MISSING_COMMERCIAL_TYPE", "MISSING_PLANNING_TYPE", "MISSING_CAPABILITY", "MISSING_OPERATOR", "MISSING_SUBCONTRACT_TYPE", "MISSING_SUBCONTRACT_DAYS"]);
+    issues = issues.filter((issue) => !autoFillableCodes.has(issue.code));
+  }
   if (issues.length) {
+    const configCauses = new Set(["MISSING_OPERATOR", "MISSING_CAPABILITY"]);
+    const firstByKey = {};
+    const aggregate = issues.filter((issue) => configCauses.has(issue.code));
+    for (const issue of aggregate) {
+      const key = `${issue.code}::${issue.capability?.key || ""}`;
+      if (!firstByKey[key]) firstByKey[key] = issue;
+    }
+    if (aggregate.length) {
+      const lines = [];
+      for (const issue of Object.values(firstByKey)) {
+        const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
+        const label = capability.label || capability.name || "OPERACION";
+        lines.push(`• ${label} (CT ${capability.ct || "-"}) no tiene operador asignado o no existe en la matriz de capacidad`);
+      }
+      return {
+        operationId: aggregate[0].operationId,
+        tab: "matrix",
+        message: lines.join("\n"),
+      };
+    }
     const issue = issues[0];
     const capability = issue.capability || capabilityFromOperation(findOperation(issue.operationId) || {});
     const messages = {
@@ -3552,18 +7511,6 @@ function validateScheduleConfiguration(executionTime) {
       tab: ["MISSING_MACHINE", "MISSING_TOOL"].includes(issue.code) ? "tools" : "matrix",
       message: messages[issue.code] || "Falta completar la configuracion del plan",
     };
-  }
-  for (const op of operations) {
-    const capability = capabilityFromOperation(op);
-    const catalog = toolCatalogForAppOperation(op);
-    const subcontractDays = subcontractDaysForAppOperation(op);
-    const isSubcontract = isSubcontractAppOperation(op);
-    if (isSubcontract && !String(op.subcontractType || "").trim()) {
-      return { operationId: op.id, tab: "rules", message: `Define el tipo de subcontrato para ${capability.label}` };
-    }
-    if (isSubcontract && subcontractDays.days <= 0) {
-      return { operationId: op.id, tab: "rules", message: `Define los dias de subcontrato para ${capability.label}` };
-    }
   }
   return null;
 }
@@ -3689,6 +7636,8 @@ function undoLastChange() {
   const previous = stateHistory.pop();
   if (!previous) return;
   state = typeof previous === "string" ? JSON.parse(previous) : previous;
+  state.selectedDetailOt = "";
+  state.selectedOperationId = "";
   normalizeState();
   saveAndRender("Ultimo cambio deshecho");
 }
@@ -3737,12 +7686,14 @@ function addMachine() {
   saveAndRender("Maquina agregada", "catalogs");
 }
 
-function addCalendarException() {
+async function addCalendarException() {
+  if (els.addCalendarBtn.disabled) return;
   const concept = els.calendarConceptInput.value;
   const machine = concept === "MAQUINA" ? els.calendarMachineInput.value.trim().toUpperCase() : "";
+  const resource = concept === "OPERADOR" ? els.calendarOperatorInput.value.trim().toUpperCase() : "";
   const reason = els.calendarReasonInput.value.trim();
   const startDate = els.calendarStartDateInput.value;
-  const usesPeriod = concept === "MAQUINA" || concept === "VACACIONES";
+  const usesPeriod = concept === "MAQUINA" || concept === "OPERADOR" || concept === "VACACIONES";
   const endDate = usesPeriod ? els.calendarEndDateInput.value : startDate;
   const start = els.calendarStartInput.value || "00:00";
   const end = els.calendarEndInput.value || "24:00";
@@ -3751,19 +7702,44 @@ function addCalendarException() {
   if (usesPeriod && !endDate) return showToast("Selecciona la fecha final");
   if (endDate < startDate) return showToast("La fecha final no puede ser anterior a la inicial");
   if (concept === "MAQUINA" && !machine) return showToast("Selecciona una maquina del catalogo");
+  if (concept === "OPERADOR" && !resource) return showToast("Selecciona un operador del catalogo");
   if ((concept === "GENERAL" || concept === "VACACIONES") && (!els.calendarStartInput.value || !els.calendarEndInput.value)) {
     return showToast("Captura la hora inicial y final");
   }
   if (startDate === endDate && end <= start) return showToast("La hora final debe ser posterior a la inicial");
-  checkpointState();
-  state.calendarExceptions.push({
-    id: uid("cal"), concept, machine, startDate, endDate, start, end, reason, active: true,
-  });
-  els.calendarReasonInput.value = "";
-  els.calendarStartDateInput.value = "";
-  els.calendarEndDateInput.value = "";
-  updateCalendarForm(true);
-  saveAndRender("Periodo no laborable agregado", "catalogs");
+  const buttonLabel = els.addCalendarBtn.textContent;
+  els.addCalendarBtn.disabled = true;
+  els.addCalendarBtn.textContent = "Guardando periodo...";
+  els.addCalendarBtn.setAttribute("aria-busy", "true");
+  try {
+    while (appSheetSaveInFlight) await appSheetWaitForIdle();
+    const entry = { concept, machine, resource, startDate, endDate, start, end, reason, active: true };
+    // Un reintento del mismo formulario no debe duplicar el periodo pendiente.
+    const existing = state.calendarExceptions.find((item) =>
+      Object.entries(entry).every(([key, value]) => (item[key] ?? "") === value));
+    if (!existing) {
+      checkpointState();
+      state.calendarExceptions = [...state.calendarExceptions, { id: uid("cal"), ...entry }];
+    }
+    appSheetMarkDirtyScope("catalogs");
+    const saved = await saveAppSheet(true);
+    if (!saved) {
+      showToast("Periodo sin confirmar en la hoja. Conservamos el formulario; vuelve a pulsar Agregar periodo y espera la confirmacion antes de recargar.", 6500);
+      return;
+    }
+    els.calendarReasonInput.value = "";
+    els.calendarStartDateInput.value = "";
+    els.calendarEndDateInput.value = "";
+    updateCalendarForm(true);
+    showToast("Periodo no laborable guardado en la hoja", 4200);
+  } catch (error) {
+    showToast(`No se pudo guardar el periodo: ${error.message}. Conservamos el formulario para reintentar.`, 6500);
+  } finally {
+    renderCalendarExceptions();
+    els.addCalendarBtn.disabled = false;
+    els.addCalendarBtn.textContent = buttonLabel;
+    els.addCalendarBtn.removeAttribute("aria-busy");
+  }
 }
 
 function addSubcontract() {
@@ -3818,28 +7794,218 @@ function emptyTableRow(columns, message) {
   return `<tr><td colspan="${columns}" class="status-note">${escapeHtml(message)}</td></tr>`;
 }
 
-async function loadPlanSnapshots(showMessage) {
+const PLAN_RESTORE_RECENT_BACKUP_WINDOW_MS = 8 * 86400000;
+
+function restoreDraftCandidateSnapshots() {
+  const publishedIds = publishedSnapshotIds();
+  const cutoff = Date.now() - PLAN_RESTORE_RECENT_BACKUP_WINDOW_MS;
+  return planSnapshots
+    .filter((snapshot) => {
+      if (snapshot.snapshotId === "draft") return false;
+      if (publishedIds.has(snapshot.snapshotId)) return true;
+      const stamp = String(snapshot.publishedAt || snapshot.generatedAt || "").trim();
+      return Boolean(stamp) && new Date(stamp).getTime() >= cutoff;
+    })
+    .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+}
+
+async function openRestoreDraftDialog() {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("restore", true);
   try {
-    const snapshots = isAppsScriptRuntime()
-      ? await callAppsScript("listPlanSnapshots")
-      : await fetchJson(PLAN_SNAPSHOTS_API);
-    planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
-      .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
-    if (!reportSnapshot) {
-      const activeId = activePublishedSnapshotId();
-      if (activeId) await loadPlanSnapshotById(activeId, { render: false, silent: true });
+    const loaded = await loadSnapshotsOnce(false);
+    if (!loaded?.ok) {
+      showToast(`No se pudieron leer los planes publicados: ${loaded?.error || "Error desconocido"}`);
+      return;
     }
-    renderPlanSnapshotSelect();
-    if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
+  } finally {
+    setPlanningActionsBusy("restore", false);
+  }
+  const publishedIds = publishedSnapshotIds();
+  const candidates = restoreDraftCandidateSnapshots();
+  if (!candidates.length) return showToast("No hay planes publicados ni respaldos recientes para restaurar");
+  const options = candidates.map((snapshot, index) => {
+    const when = snapshot.publishedAt || snapshot.generatedAt;
+    const user = snapshot.publishedBy || snapshot.createdBy || snapshot.user || "usuario";
+    const operations = Array.isArray(snapshot.operations) ? snapshot.operations.length : Number(snapshot.operations || 0);
+    const kind = publishedIds.has(snapshot.snapshotId) ? "" : " · Respaldo automatico";
+    return `<label class="restore-draft-option"><input type="radio" name="snapshot_id" value="${escapeHtml(snapshot.snapshotId)}" ${index === 0 ? "checked" : ""} required><span><strong>${escapeHtml(when ? formatDateTime(new Date(when)) : "Sin fecha")}</strong><small>${escapeHtml(user)}${kind} · Inicio ${escapeHtml(snapshot.planStart || "sin fecha")} · ${operations} operaciones</small></span></label>`;
+  }).join("");
+  const synced = state.syncedAt ? formatDateTime(new Date(state.syncedAt)) : "Sin sincronizacion registrada";
+  const choice = await openPlanningDialog({
+    title: "Restaurar borrador",
+    summary: `Ultima sincronizacion: ${synced}`,
+    body: `<div class="restore-draft-list">${options}</div><fieldset><legend>Datos de NetSuite</legend><label><input type="radio" name="sync_choice" value="sync" checked> Sincronizar antes de restaurar</label><label><input type="radio" name="sync_choice" value="loaded"> Continuar con datos cargados</label></fieldset>`,
+    confirmLabel: "Ver vista previa",
+  });
+  if (!choice) return;
+  await previewDraftRestore(choice.snapshot_id, choice.sync_choice === "sync");
+}
+
+async function refreshRestorePreviewData() {
+  try {
+    const payload = await window.PlanningWorkflowCore.withTimeout(
+      PPSupabaseBridgeReplacement.fetchNetSuiteWorkOrdersLite(),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    validateNetSuiteImportedData(payload, "workOrders");
+    return {
+      status: payload.previewComplete === true ? "complete" : "partial",
+      message: "OTs actualizadas para la vista previa; se conservaran las operaciones cargadas",
+      payload,
+    };
   } catch (error) {
-    planSnapshots = [];
-    renderPlanSnapshotSelect();
-    if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
+    return { status: "failed", message: error.message, payload: null };
   }
 }
 
-async function loadSelectedPlanSnapshot() {
-  const snapshotId = els.planSnapshotSelect.value;
+async function previewDraftRestore(snapshotId, syncBeforeRestore) {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("restore", true);
+  try {
+    let previewState = createAppSheetPayload();
+    if (syncBeforeRestore) {
+      const outcome = await refreshRestorePreviewData();
+      if (outcome?.status !== "complete") {
+        const continueWithLoaded = await openPlanningDialog({
+          title: outcome?.status === "failed" ? "No se pudo actualizar NetSuite" : "Sincronizacion parcial",
+          summary: outcome?.message || "Se usaran los datos actualmente cargados",
+          body: "<p>La restauracion puede continuar con las operaciones y configuraciones ya cargadas. Revisa la vista previa antes de confirmar.</p>",
+          confirmLabel: "Continuar con datos cargados",
+          cancelVisible: true,
+        });
+        if (!continueWithLoaded) return;
+      }
+      if (outcome?.payload) {
+        const localByOt = new Map((previewState.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
+        previewState = {
+          ...previewState,
+          workOrders: (outcome.payload.workOrders || []).map((item) =>
+            mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item)),
+          invoicePriceWindow: outcome.payload.invoicePriceWindow || previewState.invoicePriceWindow,
+          plant: outcome.payload.plant || previewState.plant,
+          syncedAt: outcome.payload.syncedAt || previewState.syncedAt,
+        };
+      }
+    }
+    const snapshot = await PPSupabaseBridgeReplacement.getPlanSnapshot(snapshotId);
+    const preview = window.PlanningWorkflowCore.reconcilePublishedPlan(snapshot, previewState);
+    const summary = preview.summary;
+    const confirmed = await openPlanningDialog({
+      title: "Vista previa de restauracion",
+      summary: "Confirma el reemplazo del borrador editable",
+      body: `<div class="restore-preview-grid"><div>OTs restauradas<strong>${summary.restoredOts}</strong></div><div>OTs cerradas omitidas<strong>${summary.closedOts}</strong></div><div>Operaciones completadas<strong>${summary.completedOperations}</strong></div><div>Operaciones retiradas<strong>${summary.removedOperations}</strong></div><div>Operaciones nuevas<strong>${summary.newOperations}</strong></div><div>Configuraciones conservadas<strong>${summary.preservedConfigurations}</strong></div></div><p><strong>Confirmacion explicita:</strong> esta accion reemplaza el borrador actual, conserva un respaldo tecnico y el plan publicado permanece intacto. No programa ni publica automaticamente.</p>`,
+      confirmLabel: "Restaurar borrador",
+    });
+    if (confirmed) await confirmDraftRestore(snapshotId, previewState);
+  } catch (error) {
+    showToast(`No se pudo preparar la restauracion: ${error.message}`, 9000);
+  } finally {
+    setPlanningActionsBusy("restore", false);
+  }
+}
+
+async function confirmDraftRestore(snapshotId, previewState) {
+  if (netSuiteSyncInFlight || netSuitePlanningSyncInFlight) return showToast("La sincronizacion de NetSuite ya esta en curso");
+  const result = await PPSupabaseBridgeReplacement.restorePublishedPlanAsDraft(snapshotId, previewState);
+  if (!result?.state) throw new Error("El servidor no devolvio el borrador restaurado");
+  state = result.state;
+  normalizeState();
+  await loadPlanSnapshots(false);
+  reportSnapshot = null;
+  loadSnapshot = null;
+  showWorkspaceView("plan-semanal", "", { scrollToTop: true });
+  saveAndRender("Borrador restaurado; revisa y genera nuevamente el plan");
+}
+
+async function loadPlanSnapshots(showMessage, options = {}) {
+  if (planSnapshotsRequest) return planSnapshotsRequest;
+  planSnapshotsRequest = loadPlanSnapshotsImpl(showMessage, options).finally(() => { planSnapshotsRequest = null; });
+  return planSnapshotsRequest;
+}
+
+async function loadPlanSnapshotsImpl(showMessage, options = {}) {
+  if (!planSnapshots.length) {
+    const cached = loadPlanSnapshotsCache();
+    if (cached.length) {
+      planSnapshots = cached.sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+      renderPlanSnapshotSelect();
+    }
+  }
+  planSnapshotsLoading = true;
+  renderPlanSnapshotSelect();
+  try {
+    const snapshots = await PPSupabaseBridgeReplacement.listPlanSnapshots();
+    planSnapshots = (Array.isArray(snapshots) ? snapshots : [])
+      .sort((a, b) => String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
+    savePlanSnapshotsCache(planSnapshots);
+    const draftReport = currentDraftReportSnapshot();
+    const hasDraftReport = draftReport.operations.length > 0;
+    const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
+      (!reportSnapshot || (reportSnapshot.snapshotId === "draft" && !hasDraftReport));
+    if (preferPublished) {
+      const bootSourceVersion = planSourceLoadVersion;
+      for (const snapshot of publishedPlanSnapshots()) {
+        if (planSourceLoadVersion !== bootSourceVersion) break;
+        const loaded = await loadPlanSnapshotById(snapshot.snapshotId, { render: false, silent: true });
+        if (loaded) break;
+      }
+    }
+    if (!reportSnapshot) {
+      syncDraftReportWeek();
+      reportSnapshot = draftReport;
+    }
+    planSnapshotsLoading = false;
+    renderReports();
+    if (showMessage) showToast(`${planSnapshots.length} planes guardados disponibles`);
+    return { ok: true, count: planSnapshots.length };
+  } catch (error) {
+    planSnapshots = [];
+    planSnapshotsLoading = false;
+    renderPlanSnapshotSelect();
+    if (showMessage) showToast(`No se pudieron cargar los planes guardados: ${error.message}`);
+    return { ok: false, count: 0, error: error.message };
+  }
+}
+
+function loadSnapshotsOnce(showMessage) {
+  if (planSnapshots.length && showMessage !== true) return Promise.resolve({ ok: true, count: planSnapshots.length });
+  return loadPlanSnapshots(showMessage);
+}
+
+function maybeLoadDefaultPublishedReportSnapshot() {
+  if (reportSnapshot && reportSnapshot.snapshotId !== "draft") return null;
+  const activeId = activePublishedSnapshotId();
+  return activeId ? loadPlanSnapshotById(activeId, { silent: true }) : null;
+}
+
+async function loadSelectedPlanSnapshot(selectedSnapshotId) {
+  const snapshotId = String(selectedSnapshotId ?? els.planSnapshotSelect.value);
+  planSourceLoadVersion += 1;
+  if (snapshotId === "draft") {
+    syncDraftReportWeek();
+    const liveDraft = currentDraftReportSnapshot();
+    if (liveDraft.operations.length) {
+      reportSnapshot = liveDraft;
+    } else {
+      const week = state.planStart || state.reportWeekStart;
+      const saved = planSnapshots.find((s) => s.snapshotId === "draft" && s.operations > 0 &&
+        (s.weekStart || s.planStart) === week);
+      if (saved) {
+        reportSnapshot = await loadPlanSnapshotById(saved.snapshotId, { render: false, silent: true });
+      } else {
+        reportSnapshot = liveDraft;
+      }
+    }
+    loadSnapshot = null;
+    syncDraftLoadWeek();
+    renderReports();
+    renderLoads();
+    renderSaturation();
+    return;
+  }
   if (!snapshotId) {
     const activeId = activePublishedSnapshotId();
     if (activeId) {
@@ -3847,7 +8013,10 @@ async function loadSelectedPlanSnapshot() {
       return;
     }
     reportSnapshot = null;
+    loadSnapshot = null;
     renderReports();
+    renderLoads();
+    renderSaturation();
     return;
   }
   await loadPlanSnapshotById(snapshotId);
@@ -3855,11 +8024,11 @@ async function loadSelectedPlanSnapshot() {
 
 async function loadPlanSnapshotById(snapshotId, options = {}) {
   if (!snapshotId) return;
-  els.planSnapshotSelect.disabled = true;
+  const requestVersion = ++planSourceLoadVersion;
+  setPlanSourceControlsDisabled(true);
   try {
-    const snapshot = isAppsScriptRuntime()
-      ? await callAppsScript("getPlanSnapshot", snapshotId)
-      : await fetchJson(`${PLAN_SNAPSHOTS_API}/${encodeURIComponent(snapshotId)}`);
+    const snapshot = await fetchPlanSnapshot(snapshotId);
+    if (requestVersion !== planSourceLoadVersion) return null;
     reportSnapshot = {
       ...snapshot,
       snapshotId,
@@ -3868,20 +8037,36 @@ async function loadPlanSnapshotById(snapshotId, options = {}) {
         id: op.id || `snapshot-${snapshotId}-${index + 1}`,
       }, index)),
     };
+    loadSnapshot = reportSnapshot;
     const firstStart = reportSnapshot.operations.map(opStart).filter(Boolean).sort((a, b) => a - b)[0];
-    const reportStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
-    if (reportStart) {
-      state.reportWeekStart = normalizeWeekStartValue(reportStart);
-      syncReportFilterDates(reportStart);
+    const planStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
+    if (planStart) {
+      state.planStart = planStart;
     }
-    if (options.render !== false) renderReports();
+    const reportStart = reportSnapshot.planStart || (firstStart ? formatDate(firstStart) : "");
+if (reportStart) {
+      state.reportWeekStart = normalizeWeekStartValue(reportStart);
+    }
+    syncLoadWeekFromPlanSource(reportSnapshot);
+    if (options.render !== false) {
+      renderReports();
+      renderLoads();
+      renderSaturation();
+    }
+    return reportSnapshot;
   } catch (error) {
     reportSnapshot = null;
-    els.planSnapshotSelect.value = "";
+    loadSnapshot = null;
+    setPlanSourceSelectsValue("draft");
     if (!options.silent) showToast(`No se pudo abrir el plan guardado: ${error.message}`);
-    if (options.render !== false) renderReports();
+    if (options.render !== false) {
+      renderReports();
+      renderLoads();
+      renderSaturation();
+    }
+    return null;
   } finally {
-    els.planSnapshotSelect.disabled = false;
+    setPlanSourceControlsDisabled(false);
   }
 }
 
@@ -3891,17 +8076,77 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function renderPlanSnapshotSelect() {
-  if (!els.planSnapshotSelect) return;
-  const selectedId = reportSnapshot?.snapshotId || "";
+async function fetchPlanSnapshot(snapshotId) {
+  return PPSupabaseBridgeReplacement.getPlanSnapshotLight(snapshotId);
+}
+
+function selectedPlanSourceId() {
+  return reportSnapshot?.snapshotId || "draft";
+}
+
+function planSourceOptionsMarkup() {
   const publishedIds = publishedSnapshotIds();
-  const options = planSnapshots.filter((snapshot) => publishedIds.has(snapshot.snapshotId)).map((snapshot) => {
-    const generated = snapshot.generatedAt ? formatDateTime(new Date(snapshot.generatedAt)) : "Sin fecha";
-    const label = `${generated} - ${snapshot.planStart || "sin inicio"} - ${snapshot.operations || 0} ops`;
+  const allOptions = window.PlanningWorkflowCore.operationalPlanOptions(planSnapshots.map((snapshot) => ({
+    ...snapshot,
+    id: snapshot.snapshotId,
+    status: isPublishedSnapshotOption(snapshot, publishedIds) ? "PUBLICADO" : (snapshot.status || snapshot.planStatus || "GUARDADO"),
+  }))).filter((item) => item.id !== "draft");
+  const ordered = [...allOptions].sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+  const latestPublished = ordered[0] || null;
+  const allowedSnapshots = latestPublished ? [latestPublished] : [];
+  const options = allowedSnapshots.map((snapshot) => {
+    const week = snapshot.weekStart || snapshot.planStart;
+    const version = Number(snapshot.version || 1);
+    const label = window.PlanningWorkflowCore.weeklyPlanIdentifier(week, version);
     return `<option value="${escapeHtml(snapshot.snapshotId)}">${escapeHtml(label)}</option>`;
   }).join("");
-  els.planSnapshotSelect.innerHTML = `<option value="">Ultima publicada</option>${options}`;
-  els.planSnapshotSelect.value = planSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "";
+  return { allowedSnapshots, options };
+}
+
+function syncPlanSourceSelect(select, allowedSnapshots = null, options = null) {
+  if (!select) return;
+  const source = allowedSnapshots && options !== null ? { allowedSnapshots, options } : planSourceOptionsMarkup();
+  const selectedId = selectedPlanSourceId();
+  const loadingOption = planSnapshotsLoading ? `<option value="" disabled>Cargando planes...</option>` : "";
+  select.innerHTML = `<option value="draft">Borrador</option>${loadingOption}${source.options}`;
+  select.value = selectedId !== "draft" && source.allowedSnapshots.some((item) => item.snapshotId === selectedId) ? selectedId : "draft";
+}
+
+function setPlanSourceSelectsValue(value) {
+  [els.planSnapshotSelect, els.loadPlanSelect, els.bottleneckPlanSelect, els.exportSnapshotSelect]
+    .filter(Boolean)
+    .forEach((select) => { select.value = value; });
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => { select.value = value; });
+}
+
+function setPlanSourceControlsDisabled(disabled) {
+  [els.planSnapshotSelect, els.loadPlanSelect, els.bottleneckPlanSelect]
+    .filter(Boolean)
+    .forEach((select) => { select.disabled = disabled; });
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => { select.disabled = disabled; });
+}
+
+function syncDraftLoadWeek() {
+  state.loadWeekStart = normalizeWeekStartValue(state.planStart);
+}
+
+function syncLoadWeekFromPlanSource(source) {
+  const planSource = source?.fullState || source;
+  if (planSource?.weekStart || planSource?.planStart) state.loadWeekStart = normalizeWeekStartValue(planSource.weekStart || planSource.planStart);
+}
+
+function renderPlanSnapshotSelect() {
+  if (!els.planSnapshotSelect) return;
+  const { allowedSnapshots, options } = planSourceOptionsMarkup();
+  syncPlanSourceSelect(els.planSnapshotSelect, allowedSnapshots, options);
+  document.querySelectorAll("[data-report-source-select]").forEach((select) => {
+    syncPlanSourceSelect(select, allowedSnapshots, options);
+  });
+  syncPlanSourceSelect(els.loadPlanSelect, allowedSnapshots, options);
+  syncPlanSourceSelect(els.bottleneckPlanSelect, allowedSnapshots, options);
+  if (els.exportSnapshotSelect) {
+    syncPlanSourceSelect(els.exportSnapshotSelect, allowedSnapshots, options);
+  }
 }
 
 function publishedSnapshotIds() {
@@ -3911,22 +8156,71 @@ function publishedSnapshotIds() {
   ].filter(Boolean));
 }
 
-function activePublishedSnapshotId() {
+function isPublishedSnapshotOption(snapshot, publishedIds = publishedSnapshotIds()) {
+  const snapshotId = String(snapshot?.snapshotId || snapshot?.id || "");
+  if (snapshotId && publishedIds.has(snapshotId)) return true;
+  if (window.PlanningWorkflowCore?.isPublishedPlanSnapshot) return window.PlanningWorkflowCore.isPublishedPlanSnapshot(snapshot);
+  return normalizeStatus(snapshot?.status || snapshot?.planStatus) === "PUBLICADO" || Boolean(String(snapshot?.publishedAt || "").trim());
+}
+
+function publishedPlanSnapshots() {
   const publishedIds = publishedSnapshotIds();
-  if (state.activePublishedVersionId && planSnapshots.some((item) => item.snapshotId === state.activePublishedVersionId)) {
-    return state.activePublishedVersionId;
-  }
-  return planSnapshots.find((item) => publishedIds.has(item.snapshotId))?.snapshotId || "";
+  return planSnapshots
+    .filter((snapshot) => snapshot.snapshotId !== "draft" && isPublishedSnapshotOption(snapshot, publishedIds))
+    .sort((left, right) => String(right.publishedAt || right.generatedAt || "").localeCompare(String(left.publishedAt || left.generatedAt || "")));
+}
+
+function activePublishedSnapshotId() {
+  const published = publishedPlanSnapshots();
+  return published[0]?.snapshotId || "";
+}
+
+function reportSourceAllowsOperationTracking() {
+  return true;
+}
+
+function currentDraftReportSnapshot() {
+  return {
+    snapshotId: "draft",
+    status: "BORRADOR",
+    generatedAt: "",
+    planStart: state.planStart,
+    weekStart: window.PlanningWorkflowCore.mondayIso(state.planStart),
+    operations: currentDraftScheduledOperations().map((op) => ({ ...op })),
+  };
+}
+
+function syncDraftReportWeek() {
+  const reportStart = state.planStart || state.reportWeekStart;
+  if (!reportStart) return;
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
+}
+
+function firstScheduledOperationStart(operations, executionTime) {
+  const executionDay = formatDate(new Date(executionTime));
+  const starts = (Array.isArray(operations) ? operations : [])
+    .map((op) => opStart(op))
+    .filter(Boolean)
+    .map(formatDate)
+    .filter((value) => value >= executionDay);
+  if (!starts.length) return "";
+  return starts.sort()[0];
+}
+
+function alignReportWeekStartToFirstScheduledOperation(operations, executionTime) {
+  const firstStart = firstScheduledOperationStart(operations, executionTime);
+  state.reportWeekStart = normalizeWeekStartValue(firstStart || state.planStart || state.reportWeekStart || formatDate(new Date()));
 }
 
 function reportOperationsSource() {
+  if (!reportSnapshot || reportSnapshot.snapshotId === "draft") return currentDraftReportSnapshot().operations;
   return reportSnapshot?.operations || [];
 }
 
 function reportSourceLabel() {
-  if (!reportSnapshot) return "Sin plan publicado";
-  const generated = reportSnapshot.generatedAt ? formatDateTime(new Date(reportSnapshot.generatedAt)) : "Sin fecha";
-  return `Plan guardado ${generated}`;
+  if (!reportSnapshot || reportSnapshot.snapshotId === "draft") return "Borrador actual";
+  const week = reportSnapshot.weekStart || reportSnapshot.planStart;
+  return `Plan ${window.PlanningWorkflowCore.weeklyPlanIdentifier(week, reportSnapshot.version)}`;
 }
 
 function reportWeekLabel() {
@@ -3941,45 +8235,519 @@ function renderReports() {
   renderOperatorReport();
   renderAdjusterReport();
   renderSubcontractReport();
+  renderReleaseReport();
+  const coverageIssues = window.PlanningWorkflowCore.reportCoverageDiagnostics(reportOperationsSource());
+  els.reportSnapshotMeta.title = coverageIssues.map((issue) => issue.text).join("\n");
+  if (coverageIssues.length) els.reportSnapshotMeta.textContent = `${reportSourceLabel()} · ${coverageIssues.length} diagnostico(s) de cobertura`;
 }
 
 function renderWeekReport() {
-  els.weekReportStartInput.value = state.reportWeekStart;
   els.reportSnapshotMeta.textContent = reportSourceLabel();
-  els.weekPrintContext.textContent = `Plan de la semana | ${reportWeekLabel()} | ${reportSourceLabel()}`;
+  els.weekPrintContext.textContent = formatReportDateTime(new Date());
+  if (els.reportWeekStartInput) els.reportWeekStartInput.value = state.reportWeekStart;
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
+  backfillClosedPendingPiecesFromHistory([...summary.starts, ...summary.finishes]);
+  ensureInspectionWorkOrders([...summary.starts, ...summary.finishes].map((row) => row.ot));
   els.weekExecutiveSummary.innerHTML = reportOps.length
-    ? renderWeeklyExecutiveSummary(weeklyExecutiveSummary(summary, state.reportWeekStart, { operations: reportOps }))
+    ? renderWeeklyExecutiveSummary(weeklyExecutiveSummary(summary, state.reportWeekStart, {
+      operations: reportOps,
+      sourceState: reportSnapshot?.snapshotId === "draft" ? state : (reportSnapshot || state),
+    }))
     : `<div class="report-empty-state">No hay un plan publicado cargado para reportes.</div>`;
   els.weekReport.innerHTML = `
+    <section class="weekly-job-panel loads">
+      <header><h3>Cargas de operadores</h3><span>${escapeHtml(reportSourceLabel())}</span></header>
+      ${renderReportOperatorLoads(reportOps, state.reportWeekStart)}
+    </section>
     <section class="weekly-job-panel"><header><h3>OT que inician</h3><span>Fecha de la primera operacion</span></header>${renderWeeklyJobDays(summary.starts, false)}</section>
-    <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
+    <section class="weekly-job-panel finish"><header><h3>Acabado / OT que terminan</h3><span>Fecha de la ultima operacion de liberacion final (39OTD/16OC)</span></header>${renderWeeklyJobDays(summary.finishes, true)}</section>
   `;
+}
+
+function closedSummaryPieces(summary) {
+  if (!summary || typeof summary !== "object") return 0;
+  for (const value of [summary.pendingQuantity, summary.pendingPieces]) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  const quantity = Number(summary.quantity);
+  if (Number.isFinite(quantity) && quantity > 0) {
+    const built = Number(summary.builtQuantity);
+    return Number.isFinite(built) ? Math.max(0, quantity - built) : quantity;
+  }
+  return 0;
+}
+
+function closedSummaryKeyForOt(ot, summaries = state.closedWorkOrderSummaries) {
+  const key = materialOtKey(ot);
+  if (!key) return "";
+  return Object.keys(summaries || {}).find((candidate) => materialOtKey(candidate) === key) || "";
+}
+
+function closedPendingPiecesForOt(ot) {
+  const key = closedSummaryKeyForOt(ot);
+  if (!key) return 0;
+  const pieces = closedSummaryPieces((state.closedWorkOrderSummaries || {})[key]);
+  return Number.isFinite(pieces) ? Math.max(0, pieces) : 0;
+}
+
+// RESUMEN COMPACTO DE UNA OT CERRADA (RULE-OT-049). `removeClosedWorkOrdersFromDraft` retira la
+// OT del borrador y guarda este resumen (item, cantidad, ensamblado, pendiente, inicio y fin
+// programados) en `state.closedWorkOrderSummaries`. El reporte lo usa para que una OT que se
+// cerró NO desaparezca del plan semanal (decisión 2026-10-22) y para que en Liberación el
+// artículo y la cantidad ensamblada no queden en blanco cuando la OT ya no está en
+// `state.workOrders`.
+function closedWorkOrderSummaryForOt(ot) {
+  const key = closedSummaryKeyForOt(ot);
+  if (!key) return null;
+  return (state.closedWorkOrderSummaries || {})[key] || null;
+}
+
+// Convierte un timestamp ISO (`2026-10-19T08:00:00Z`) del resumen de una OT cerrada en los
+// campos fecha/hora que el resto del reporte espera (fechaInicio/horaInicio, fechaFin/horaFin).
+function closedSummarySchedule(timestamp) {
+  const text = String(timestamp || "").trim();
+  if (!text) return null;
+  const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const time = `${match[4]}:${match[5]}`;
+  const value = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), 0, 0);
+  return { fecha: date, hora: time, value };
+}
+
+// OPERACION SINTETICA PARA UNA OT CERRADA. Cuando la OT se cierra, el borrador retira sus
+// operaciones (RULE-OT-049) y el reporte semanal las perdería. Se reconstruye UNA operación a
+// partir del resumen compacto (item, pendiente, inicio y fin programados) para que la OT siga
+// apareciendo con sus piezas y su costo, y por el MISMO camino de precio/cantidad que las
+// demás. Devuelve null si no hay resumen o no hay con qué ubicarla en la semana.
+function closedWorkOrderOperation(summary) {
+  if (!summary || typeof summary !== "object") return null;
+  const ot = String(summary.ot || "").trim();
+  if (!ot) return null;
+  const start = closedSummarySchedule(summary.scheduledStart);
+  const end = closedSummarySchedule(summary.scheduledEnd);
+  if (!start && !end) return null;
+  const pending = Number(summary.pendingQuantity);
+  const pieces = Number.isFinite(pending) && pending > 0 ? pending : Number(summary.quantity) || 0;
+  return {
+    ot,
+    parte: String(summary.item || "").trim(),
+    descripcion: "",
+    ct: "",
+    secuencia: 0,
+    fechaInicio: start ? start.fecha : "",
+    horaInicio: start ? start.hora : "",
+    fechaFin: end ? end.fecha : (start ? start.fecha : ""),
+    horaFin: end ? end.hora : (start ? start.hora : ""),
+    cantPendiente: pieces,
+    pendingPieces: pieces,
+    cantTotal: Number(summary.quantity) || 0,
+    tipoInsercion: "",
+    jobType: "",
+    planningType: "",
+    unitPrice: null,
+    amount: null,
+    _closedSummary: true,
+  };
+}
+
+const inspectionWorkOrderCache = new Map();
+const inspectionWorkOrderFillAttempted = new Set();
+// Reintentos por OT de la precarga de inspeccion. MEDIDO 2026-10-24 (reporte Liberacion): sin
+// reintento, una OT que fallaba en el primer intento (limite de NetSuite, timeout, hold del sync)
+// quedaba marcada en `inspectionWorkOrderFillAttempted` y el Ensamblado salia en 0 para siempre en
+// esa sesion, aunque la OT SÍ tuviera datos en work_orders (el Detalle OT los mostraba). Se permite
+// un tope de reintentos para no saturar el limite de NetSuite (400 SSS_REQUEST_LIMIT_EXCEEDED).
+const inspectionWorkOrderAttemptCount = new Map();
+const INSPECTION_MAX_ATTEMPTS = 3;
+// Fallos de lectura de inspeccion. El puente resuelve con { ok: false, error } sin
+// rechazar, asi que sin este registro una OT sin dato de NetSuite (por ejemplo un
+// 400 del RESTlet) dejaba el reporte sin PZAS y sin ninguna huella visible.
+const inspectionWorkOrderFailures = new Map();
+let inspectionReRenderTimer = null;
+
+function recordInspectionWorkOrderFailure(ot, method, error) {
+  const folio = String(ot || "").trim();
+  const detail = String((error && error.message) || error || "respuesta invalida").trim();
+  if (!folio) return;
+  inspectionWorkOrderFailures.set(folio, { ot: folio, method, error: detail, at: new Date().toISOString() });
+  if (typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(`[inspeccion] ${method} fallo para la OT ${folio}: ${detail}`);
+  }
+}
+
+function inspectionWorkOrderFailureLines() {
+  return Array.from(inspectionWorkOrderFailures.values())
+    .sort((a, b) => String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }))
+    .map((failure) => `${failure.method} fallo para la OT ${failure.ot}: ${failure.error}`)
+    .join("; ");
+}
+
+function inspectionWorkOrderEntry(ot) {
+  return inspectionWorkOrderCache.get(materialOtKey(ot)) || null;
+}
+
+function inspectionPendingPiecesForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const quantity = Number(entry.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  const built = Number(entry.builtQuantity);
+  return Math.max(0, quantity - (Number.isFinite(built) ? built : 0));
+}
+
+function inspectionBuiltPiecesForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const built = Number(entry.builtQuantity);
+  return Number.isFinite(built) ? Math.max(0, built) : null;
+}
+
+function inspectionQuantityForOt(ot) {
+  const entry = inspectionWorkOrderEntry(ot);
+  if (!entry) return null;
+  const quantity = Number(entry.quantity);
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
+}
+
+function scheduleInspectionReRender() {
+  if (inspectionReRenderTimer) return;
+  inspectionReRenderTimer = window.setTimeout(() => {
+    inspectionReRenderTimer = null;
+    renderReports();
+  }, 300);
+}
+
+function inspectionFillOnHold() {
+  // Mientras corre una sincronizacion de OTs la recarga de inspeccion cede el paso para
+  // no saturar el limite de solicitudes de NetSuite (400 SSS_REQUEST_LIMIT_EXCEEDED).
+  return backlogSyncInFlight || netSuiteSyncInFlight;
+}
+
+async function ensureInspectionWorkOrders(ots) {
+  // MEDIDO 2026-09-30: el `if (!isAppsScriptRuntime()) return;` de aqui hacia que la
+  // precarga de inspeccion no ocurriera nunca en el sitio estatico, porque da false desde que
+  // el puente quedo deshabilitado (RULE-SUP-030). La recarga de inspeccion va a Supabase, que
+  // esta en los dos runtimes, asi que la compuerta no tiene a que proteger nada. Lo que SI
+  // protege de verdad es inspectionFillOnHold, una linea mas abajo, y esa se queda.
+  if (inspectionFillOnHold()) return;
+  const candidates = (Array.isArray(ots) ? ots : [])
+    .map((ot) => ({ ot: String(ot || "").trim(), key: materialOtKey(ot) }))
+    .filter((item) => item.ot && item.key && !inspectionWorkOrderCache.has(item.key) && !inspectionWorkOrderFillAttempted.has(item.key));
+  if (!candidates.length) return;
+  candidates.forEach((item) => inspectionWorkOrderFillAttempted.add(item.key));
+  const queue = [...candidates];
+  let filled = 0;
+  let failed = 0;
+  let retryPending = 0;
+  // FIX 2026-10-24 (bug usuario, reporte Liberacion): un fallo de precarga no debe dejar la
+  // OT con Ensamblado 0 para siempre. Se permite reintentarla en el siguiente render (tope
+  // INSPECTION_MAX_ATTEMPTS) y se avisa.
+  const marcarFallo = (item) => {
+    failed += 1;
+    const intentos = Number(inspectionWorkOrderAttemptCount.get(item.key) || 0) + 1;
+    inspectionWorkOrderAttemptCount.set(item.key, intentos);
+    if (intentos < INSPECTION_MAX_ATTEMPTS) {
+      inspectionWorkOrderFillAttempted.delete(item.key);
+      retryPending += 1;
+    }
+  };
+  const worker = async () => {
+    while (queue.length) {
+      if (inspectionFillOnHold()) {
+        // Cede el paso a la sincronizacion de OTs: las que queden en cola vuelven a
+        // estar disponibles para el siguiente render.
+        queue.forEach((pending) => {
+          inspectionWorkOrderFillAttempted.delete(pending.key);
+          retryPending += 1;
+        });
+        queue.length = 0;
+        break;
+      }
+      const item = queue.shift();
+      if (!item) continue;
+      try {
+        const result = await withTimeout(PPSupabaseBridgeReplacement.getInspectionWorkOrder(item.ot), 60000);
+        if (!result?.ok) {
+          recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", result?.error || "respuesta invalida");
+          marcarFallo(item);
+          continue;
+        }
+        const workOrder = result?.data?.workOrder;
+        if (!workOrder) {
+          recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", "la OT no devolvio datos de inspeccion");
+          marcarFallo(item);
+          continue;
+        }
+        const quantity = Number(workOrder.quantity);
+        if (!Number.isFinite(quantity) || quantity <= 0) continue;
+        inspectionWorkOrderCache.set(item.key, {
+          quantity,
+          builtQuantity: Math.max(0, Number(workOrder.builtQuantity) || 0),
+          pendingQuantity: Math.max(0, Number(workOrder.pendingQuantity) || 0),
+          status: String(workOrder.status || ""),
+        });
+        filled += 1;
+      } catch (error) {
+        recordInspectionWorkOrderFailure(item.ot, "getInspectionWorkOrder", error);
+        marcarFallo(item);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 2 }, worker));
+  // Se re-renderiza si se lleno algo O si quedaron reintentos pendientes: sin esto, las OTs que
+  // fallaron en el primer intento (limite NetSuite, timeout, hold del sync) quedaban en
+  // Ensamblado 0 para siempre (bug usuario 2026-10-24).
+  if (filled || retryPending) scheduleInspectionReRender();
+  if (failed && typeof showToast === "function") {
+    showToast(`Inspeccion: ${failed} OT(s) sin dato de NetSuite (${inspectionWorkOrderFailureLines().slice(0, 160)})`, 7000);
+  }
+}
+
+function mergeClosedWorkOrderSummaries(local, remote) {
+  const merged = { ...(local && typeof local === "object" ? local : {}) };
+  for (const [key, value] of Object.entries(remote && typeof remote === "object" ? remote : {})) {
+    if (!value || typeof value !== "object") continue;
+    const existingKey = closedSummaryKeyForOt(key, merged) || key;
+    const existing = merged[existingKey];
+    if (!existing) {
+      merged[existingKey] = { ...value };
+      continue;
+    }
+    if (closedSummaryPieces(value) > closedSummaryPieces(existing)) {
+      merged[existingKey] = { ...existing, ...value };
+      continue;
+    }
+    merged[existingKey] = { ...existing };
+    if (value.closedDetectedAt) merged[existingKey].closedDetectedAt = value.closedDetectedAt;
+    if (value.item && !existing.item) merged[existingKey].item = value.item;
+    if (value.quantity && !Number(existing.quantity)) merged[existingKey].quantity = value.quantity;
+  }
+  return merged;
+}
+
+// Union de las marcas de "por confirmar" (RULE-OT-051 capa 2) entre la sesion local y la que
+// viene de la hoja. Se llama desde applyImported, o sea en cada recarga, y por eso es el punto
+// donde antes se perdia la red de seguridad.
+//
+// QUE GANA SI UNA OT ESTA MARCADA EN LOS DOS LADOS: la marca con MAS misses, y a igualdad de
+// misses la MAS VIEJA (firstSeenAt menor). El razonamiento: misses es el numero de
+// sincronizaciones en las que la OT no vino, o sea cuantos intentos lleva el sistema de
+// confirmar que no es un fallo de lectura. Perder la marca con mas misses hace que el proximo
+// sync empiece de cero y tarde MAS sincronizaciones en resolver, o que directamente la pierda si
+// el siguiente payload vuelve a traer solo las abiertas. firstSeenAt es la mas antigua de las
+// dos porque es el primer momento en que se vio la ausencia; conservarla mantiene el reloj.
+//
+// Lo que NO hace esta funcion, a proposito: no borra marcas, no decide cierres y no inventa
+// ninguna. La ausencia de evidencia sigue sin ser evidencia (RULE-OT-051). Resolver la marca es
+// trabajo del reconciliador del proximo sync, que ya tiene las tres capas de evidencia.
+function isValidDate(value) {
+  if (!value) return false;
+  const d = new Date(value);
+  return !isNaN(d.getTime());
+}
+
+function mergeUnconfirmedWorkOrderMarks(local, remote) {
+  const merged = {};
+  const add = (key, value) => {
+    if (!value || typeof value !== "object") return;
+    const ot = materialOtKey(value.ot || key);
+    if (!ot) return;
+    const incoming = {
+      ot: String(value.ot || key).trim(),
+      firstSeenAt: isValidDate(value.firstSeenAt) ? String(value.firstSeenAt) : "",
+      lastSeenAt: isValidDate(value.lastSeenAt) ? String(value.lastSeenAt) : "",
+      misses: Number(value.misses) > 0 ? Number(value.misses) : 1,
+    };
+    const existing = merged[ot];
+    if (!existing) {
+      merged[ot] = incoming;
+      return;
+    }
+    const incomingMasVieja = incoming.firstSeenAt && existing.firstSeenAt
+      ? incoming.firstSeenAt < existing.firstSeenAt
+      : Boolean(incoming.firstSeenAt) && !existing.firstSeenAt;
+    if (incoming.misses > existing.misses || (incoming.misses === existing.misses && incomingMasVieja)) {
+      // Gana la marca mas probada, pero se le queda la primera vez que se vio la ausencia:
+      // el reloj de la OT no se reinicia porque el estado venga de la hoja.
+      merged[ot] = {
+        ...existing,
+        ...incoming,
+        firstSeenAt: existing.firstSeenAt && incoming.firstSeenAt
+          ? (existing.firstSeenAt < incoming.firstSeenAt ? existing.firstSeenAt : incoming.firstSeenAt)
+          : (existing.firstSeenAt || incoming.firstSeenAt),
+        lastSeenAt: existing.lastSeenAt > incoming.lastSeenAt ? existing.lastSeenAt : incoming.lastSeenAt,
+      };
+      return;
+    }
+    if (incoming.lastSeenAt > existing.lastSeenAt) {
+      merged[ot] = { ...incoming, misses: existing.misses, firstSeenAt: existing.firstSeenAt || incoming.firstSeenAt };
+    }
+  };
+  Object.entries(local && typeof local === "object" ? local : {}).forEach(([key, value]) => add(key, value));
+  Object.entries(remote && typeof remote === "object" ? remote : {}).forEach(([key, value]) => add(key, value));
+  return merged;
+}
+
+function rememberClosedPendingPieces(ot, pieces, source) {
+  const key = String(ot || "").trim();
+  const amount = Number(pieces);
+  if (!key || !Number.isFinite(amount) || amount <= 0) return false;
+  const summaries = state.closedWorkOrderSummaries || {};
+  const existingKey = closedSummaryKeyForOt(key, summaries) || key;
+  const existing = summaries[existingKey] || {};
+  if (closedSummaryPieces(existing) > 0) return false;
+  summaries[existingKey] = {
+    ...existing,
+    ot: key,
+    quantity: Number(existing.quantity) > 0 ? Number(existing.quantity) : amount,
+    pendingQuantity: amount,
+    pendingPiecesSource: source,
+    finalStatus: existing.finalStatus || "CERRADA",
+    weekStart: existing.weekStart || state.reportWeekStart || "",
+    closedDetectedAt: existing.closedDetectedAt || new Date().toISOString(),
+  };
+  state.closedWorkOrderSummaries = summaries;
+  return true;
+}
+
+function sortSnapshotsForClosedPiecesBackfill(snapshots, week) {
+  const weekKey = String(week || "");
+  const stampOf = (item) => String(item?.publishedAt || item?.generatedAt || "");
+  return [...(Array.isArray(snapshots) ? snapshots : [])]
+    .filter((item) => item?.snapshotId && item.snapshotId !== "draft")
+    .sort((a, b) => {
+      const aWeek = String(a?.weekStart || a?.planStart || "") === weekKey ? 1 : 0;
+      const bWeek = String(b?.weekStart || b?.planStart || "") === weekKey ? 1 : 0;
+      if (aWeek !== bWeek) return bWeek - aWeek;
+      const aStamp = stampOf(a);
+      const bStamp = stampOf(b);
+      if (aStamp !== bStamp) return bStamp.localeCompare(aStamp);
+      return String(a?.snapshotId || "").localeCompare(String(b?.snapshotId || ""));
+    });
+}
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+const closedPiecesBackfillAttempted = new Set();
+let closedPiecesBackfillRunning = false;
+
+async function backfillClosedPendingPiecesFromHistory(rows) {
+  // MEDIDO 2026-09-30: aqui `!isAppsScriptRuntime()` hacia de guarda a guarda, y la segunda
+  // compuerta (que es la que evita el reentrada: closedPiecesBackfillRunning) impedia que la
+  // primera se notara. Da false desde que el puente quedo deshabilitado (RULE-SUP-030), o sea
+  // que el relleno de piezas pendientes de OTs cerradas no ocurria nunca en el sitio
+  // estatico. El historico se lee de Supabase, que esta en los dos runtimes. Se queda solo la
+  // guarda de reentrada, que es la que hace falta.
+  if (closedPiecesBackfillRunning) return;
+  const openOts = new Set((state.workOrders || []).map((workOrder) => materialOtKey(workOrder?.ot)));
+  const candidatesByKey = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const ot = String(row?.ot || "").trim();
+    const key = materialOtKey(ot);
+    if (!ot || !key || closedPiecesBackfillAttempted.has(key) || openOts.has(key)) continue;
+    if (Number(row?.pendingPieces) > 0) continue;
+    if (!(Number(row?.unitPrice) >= 1) || closedPendingPiecesForOt(ot) > 0) {
+      closedPiecesBackfillAttempted.add(key);
+      continue;
+    }
+    if (!candidatesByKey.has(key)) candidatesByKey.set(key, { ot, key });
+  }
+  const candidates = [...candidatesByKey.values()];
+  if (!candidates.length) return;
+  const source = planSnapshots.length ? planSnapshots : loadPlanSnapshotsCache();
+  if (!Array.isArray(source) || !source.length) return;
+  candidates.forEach((candidate) => closedPiecesBackfillAttempted.add(candidate.key));
+  closedPiecesBackfillRunning = true;
+  try {
+    const snapshots = sortSnapshotsForClosedPiecesBackfill(source, state.reportWeekStart).slice(0, 3);
+    for (const meta of snapshots) {
+      const remaining = candidates.filter((candidate) => !(closedPendingPiecesForOt(candidate.ot) > 0));
+      if (!remaining.length) break;
+      let snapshot = null;
+      try {
+        snapshot = await withTimeout(fetchPlanSnapshot(meta.snapshotId), 90000);
+      } catch {
+        continue;
+      }
+      const piecesByOt = new Map();
+      for (const operation of snapshot?.operations || []) {
+        const key = materialOtKey(operation?.ot);
+        if (!remaining.some((item) => item.key === key) || piecesByOt.has(key)) continue;
+        const pieces = Math.max(0, Number(operation?.pendingPieces ?? operation?.cantPendiente ?? 0));
+        if (pieces > 0) piecesByOt.set(key, pieces);
+      }
+      let snapshotUpdated = 0;
+      for (const candidate of remaining) {
+        const pieces = piecesByOt.get(candidate.key);
+        if (pieces > 0 && rememberClosedPendingPieces(candidate.ot, pieces, `plan:${meta.snapshotId}`)) snapshotUpdated += 1;
+      }
+      if (snapshotUpdated) renderReports();
+    }
+  } catch {
+    return;
+  } finally {
+    closedPiecesBackfillRunning = false;
+  }
+}
+
+function renderReportOperatorLoads(reportOps, weekDate = state.reportWeekStart) {
+  const loads = reportOperatorLoadsSourceMemoized(reportOps, weekDate)
+    .filter((item) => Number(item.minutes || 0) > 0 && resourceIsInPlan(item.operator));
+  if (!loads.length) return `<div class="report-empty-state">No hay cargas programadas en la semana.</div>`;
+  const rows = loads.map((item, index) => {
+    const severity = item.percent > 100 ? "danger" : item.percent < 85 ? "warn" : "";
+    const profile = state.operatorProfiles[item.operator] || { name: item.operator };
+    return `<tr class="${severity ? `load-${severity}` : ""}">
+      <td>${index + 1}</td>
+      <td>${escapeHtml(profile.name || item.operator)}</td>
+      <td>${escapeHtml(item.operator)}</td>
+      <td><strong>${Math.round(item.percent)}%</strong></td>
+      <td>${formatHours(item.minutes)} / ${formatHours(item.available)}</td>
+      <td>${escapeHtml(severity === "danger" ? "Saturado" : severity === "warn" ? "Baja carga" : "Normal")}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="weekly-day-table loads-table"><table>
+    <thead><tr><th>#</th><th>Nombre</th><th>Recurso</th><th>Carga</th><th>Horas / Capacidad</th><th>Estado</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
 }
 
 function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.reportWeekStart, options = {}) {
   const range = selectedWeekRange(weekDate);
   const sourceOperations = Array.isArray(options.operations) ? options.operations : reportOperationsSource();
   const allWeekOperations = operationsForWeekSource(sourceOperations, "", weekDate);
-  const operations = allWeekOperations.filter((op) => !isToolChangeReportOperation(op));
+  const operations = allWeekOperations.filter((op) => !isToolChangeReportOperation(op) && !isSubcontractAppOperation(op));
   const toolChangeOps = allWeekOperations.filter(isToolChangeReportOperation);
   const finishingRows = summary.finishes || [];
-  const startingRows = summary.starts || [];
-  const finishingPieces = finishingRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-  const startingPieces = startingRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-  const releaseAmount = finishingRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const finishingCost = window.PlanningWorkflowCore.weeklyFinishingCost(finishingRows);
+  const finishingPieces = finishingCost.finishingPieces;
+  const startingPieces = (summary.starts || []).reduce(
+    (sum, row) => sum + Math.max(0, Number(row.pendingPieces ?? 0)),
+    0,
+  );
+  const releaseAmount = finishingCost.totalCost;
   const releaseTarget = Math.max(0, Number(state.settings?.weeklyReleaseTarget) || DEFAULT_WEEKLY_RELEASE_TARGET);
   const releaseGap = Math.max(0, releaseTarget - releaseAmount);
   const laborDays = workingDaysInRange(range.start, range.end);
-  const inPlanOperators = operatorLoadsForOperations(sourceOperations, weekDate)
+  const inPlanOperators = reportOperatorLoadsSourceMemoized(sourceOperations, weekDate)
     .filter((item) => Number(item.minutes || 0) > 0 && resourceIsInPlan(item.operator));
   const topOperator = inPlanOperators[0] || null;
   const topOperation = operations
     .map((op) => ({ op, minutes: operationDuration(op) }))
     .sort((a, b) => b.minutes - a.minutes)[0] || null;
   const finishingByType = groupFinishingRowsByType(finishingRows);
-  const stale = stalePublishedPieces(range.start);
+  const stale = stalePublishedPieces(range.start, sourceOperations, options.sourceState);
   const toolChangeMinutes = toolChangeOps.reduce((sum, op) => sum + operationDuration(op), 0);
   const targetFactors = releaseTargetFactors({
     releaseAmount,
@@ -3997,7 +8765,7 @@ function weeklyExecutiveSummary(summary = weeklyJobSummary(), weekDate = state.r
     releaseGap,
     targetMet: releaseGap <= 0,
     targetFactors,
-    costPerPiece: finishingPieces ? releaseAmount / finishingPieces : 0,
+    costPerPiece: finishingCost.costPerPiece,
     peopleWithLoad: inPlanOperators.length,
     releasePerPerson: inPlanOperators.length ? releaseAmount / inPlanOperators.length : 0,
     startingPieces,
@@ -4100,17 +8868,7 @@ function scheduledMaterialShortageCount() {
 }
 
 function groupFinishingRowsByType(rows) {
-  const grouped = new Map();
-  for (const row of rows) {
-    const type = String(row.jobType || "SIN TIPO").trim().toUpperCase() || "SIN TIPO";
-    const current = grouped.get(type) || { type, pieces: 0, amount: 0 };
-    current.pieces += Number(row.pendingPieces || 0);
-    current.amount += Number(row.amount || 0);
-    grouped.set(type, current);
-  }
-  return [...grouped.values()]
-    .map((row) => ({ ...row, costPerPiece: row.pieces ? row.amount / row.pieces : 0 }))
-    .sort((a, b) => b.amount - a.amount || a.type.localeCompare(b.type, "es"));
+  return window.PlanningWorkflowCore.weeklyFinishingRowsByType(rows);
 }
 
 function workingDaysInRange(start, end) {
@@ -4121,22 +8879,30 @@ function workingDaysInRange(start, end) {
   return Math.max(1, days);
 }
 
-function stalePublishedPieces(currentWeekStart) {
+function stalePublishedPieces(
+  currentWeekStart,
+  sourceOperations = reportOperationsSource(),
+  sourceState = reportSnapshot?.snapshotId === "draft" ? state : (reportSnapshot || state),
+) {
   const result = { initialCut: 0, finishing: 0 };
-  const source = reportSnapshot?.operations || state.operations;
+  const source = sourceOperations;
+  const workOrders = Array.isArray(sourceState?.workOrders) ? sourceState.workOrders : [];
   const seenInitial = new Set();
   const seenFinish = new Set();
   for (const op of source) {
-    if (!isJobScheduled(op.ot) || isPlanCompletedOperation(op) || isClosedJobStatus(jobStatusForOt(op.ot))) continue;
     const start = opStart(op);
     const end = opEnd(op);
+    if (!start || !end) continue;
+    if (window.PlannerCore.isPlanCompletedOperation(sourceState || {}, op)) continue;
+    if (isClosedJobStatus(jobStatusFromOperations(op.ot, source, workOrders))) continue;
     if (!start || start >= currentWeekStart) continue;
-    const sequenced = state.operations
+    const sequenced = source
       .filter((item) => item.ot === op.ot && item.tipoInsercion !== "CAMBIO_HERRAMENTAL")
       .sort((a, b) => sequenceSort(a, b));
     const first = sequenced[0];
     const last = sequenced[sequenced.length - 1];
-    const pieces = Number(op.pendingPieces ?? op.cantPendiente ?? pendingPiecesForWorkOrder(workOrderForOt(op.ot)));
+    const workOrder = workOrders.find((item) => materialOtKey(item.ot) === materialOtKey(op.ot));
+    const pieces = Number(op.pendingPieces ?? op.cantPendiente ?? pendingPiecesForWorkOrder(workOrder));
     if (first && op.id === first.id && !seenInitial.has(op.ot)) {
       result.initialCut += Math.max(0, pieces);
       seenInitial.add(op.ot);
@@ -4158,25 +8924,89 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     if (!grouped.has(op.ot)) grouped.set(op.ot, []);
     grouped.get(op.ot).push(op);
   }
+  // OTs CERRADAS QUE EL BORRADOR YA NO TRAE (RULE-OT-049). `removeClosedWorkOrdersFromDraft`
+  // retira las operaciones de una OT cerrada de `state.operations` y guarda un resumen
+  // compacto. Sin esto, la OT desaparecería del reporte semanal apenas se cierre en NetSuite.
+  // Decisión 2026-10-22: una OT del plan debe quedarse visible con sus piezas y su costo, no
+  // esfumarse. Se reconstruye una operación sintética (mismo camino de precio/cantidad) y solo
+  // si la OT no está ya en el reporte.
+  //
+  // SOLO CON EL BORRADOR. Un plan PUBLICADO/guardado ya es una instantánea inmutable con sus
+  // propias operaciones: mezclarle las OTs cerradas de HOY sería reescribir el pasado. Se
+  // excluye cuando la fuente es un snapshot guardado.
+  const reportIsDraft = typeof reportSnapshot === "undefined"
+    || !reportSnapshot
+    || reportSnapshot.snapshotId === "draft";
+  if (reportIsDraft) {
+    for (const summary of Object.values(state.closedWorkOrderSummaries || {})) {
+      const ot = String(summary?.ot || "").trim();
+      if (!ot || grouped.has(ot)) continue;
+      const synthetic = closedWorkOrderOperation(summary);
+      if (synthetic) grouped.set(ot, [synthetic]);
+    }
+  }
   const starts = [];
   const finishes = [];
   for (const [ot, operations] of grouped.entries()) {
     const sequenced = operations.sort((a, b) => sequenceSort(a, b));
     const first = sequenced[0];
     const last = sequenced[sequenced.length - 1];
+    const release = sequenced.find(isFinalReleaseOperation) || last;
     const start = opStart(first);
-    const finish = opEnd(last);
+    const finish = opEnd(release);
     const workOrder = workOrderForOt(ot);
-    const configuration = reportSnapshot ? {} : articleConfigurationValue(first.parte || workOrder?.item || "");
-    const pendingPieces = Number(first.pendingPieces ?? last.pendingPieces ?? pendingPiecesForWorkOrder(workOrder));
-    const unitPrice = Number(first.unitPrice ?? last.unitPrice ?? effectiveUnitPriceForOt(ot));
+    const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
+    const opPieces = [first.pendingPieces, first.cantPendiente, last.pendingPieces, last.cantPendiente]
+      .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
+    const workOrderPieces = Number(pendingPiecesForWorkOrder(workOrder));
+    const closedPieces = Number(closedPendingPiecesForOt(ot));
+    const inspectionPieces = inspectionPendingPiecesForOt(ot);
+    const pendingPiecesValue = Number([
+      inspectionPieces !== null && inspectionPieces !== undefined ? inspectionPieces : null,
+      opPieces,
+      Number.isFinite(workOrderPieces) && workOrderPieces > 0 ? workOrderPieces : null,
+      Number.isFinite(closedPieces) && closedPieces > 0 ? closedPieces : null,
+    ].find((value) => value !== null && value !== undefined) ?? pendingPiecesForWorkOrder(workOrder));
+    const pendingPieces = Number.isFinite(pendingPiecesValue) ? Math.max(0, pendingPiecesValue) : 0;
+    const positiveNumber = (value) => {
+      if (value === null || value === undefined || String(value).trim() === "") return false;
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 1;
+    };
+    const positiveValues = (values) => values.filter(positiveNumber).map(Number);
+    // El max se mantiene (decisión de negocio: para valorar una liberación manda el precio más
+    // alto que se conoce), pero las fuentes son de TRES tipos distintos y cada una significa
+    // algo (RULE-REP-021):
+    //   - first/last.unitPrice: precio guardado en la fila del snapshot (PRECIO_UNITARIO).
+    //     Solo existe en operaciones que vienen de un snapshot; en el borrador vivo va vacío.
+    //   - invoiceUnitPriceForOt: precio de venta VIVO del 1766 (última venta y promedio).
+    //   - configuration.referenceSalePrice: el último precio de venta que dejó el sync. Es un
+    //     precio real, pero de un sync anterior, así que solo se usa si no hay uno vivo.
+    //   - configuration.manualUnitPrice: precio escrito por una persona, que manda sobre todo.
+    // Lo que NO entra aquí es un máximo histórico acumulado: antes el sync escribía el precio
+    // de venta en manualUnitPrice con un max que solo subía, así que un precio inflado quedó
+    // pegado en CONFIG y se reportaba para siempre.
+    const livePrice = invoiceUnitPriceForOt(ot) || null;
+    const unitPrices = positiveValues([
+      first.unitPrice,
+      last.unitPrice,
+      livePrice,
+      livePrice ? null : configuration.referenceSalePrice,
+      configuration.manualUnitPrice,
+    ]);
+    const unitPrice = unitPrices.length ? Math.max(...unitPrices) : null;
+    const opAmounts = pendingPieces > 0 ? positiveValues([first.amount, last.amount]) : [];
+    const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
+    const amounts = derivedAmount != null && derivedAmount > 0 ? [...opAmounts, derivedAmount] : opAmounts;
+    const amount = amounts.length ? Math.max(...amounts) : null;
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",
-      pendingPieces: Math.max(0, pendingPieces),
+      pendingPieces,
       jobType: String(first.jobType || last.jobType || configuration.jobType || "").trim().toUpperCase(),
-      unitPrice: Math.max(0, unitPrice),
-      amount: Math.max(0, Number(first.amount ?? last.amount ?? unitPrice * pendingPieces)),
+      planningType: String(first.planningType || last.planningType || configuration.planningType || "").trim().toUpperCase(),
+      unitPrice,
+      amount,
     };
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
@@ -4198,83 +9028,203 @@ function renderWeeklyJobDays(rows, finishing) {
     const columns = finishing
       ? ["No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"]
       : ["No.", "ORD", "PARTE", "PZAS"];
-    const body = dayRows.map((row, index) => `<tr>
-      <td>${index + 1}</td><td>${escapeHtml(row.ot)}</td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
-      ${finishing ? `<td>${escapeHtml(formatCurrency(row.amount))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
+    const body = dayRows.map((row, index) => `<tr class="${window.PlanningWorkflowCore.weeklyPlanningTypeClass(row.planningType)}">
+      <td>${index + 1}</td><td class="weekly-ot-cell"><button type="button" class="weekly-ot-link" data-ot="${escapeHtml(row.ot)}" data-part="${escapeHtml(row.part)}" title="Abrir dibujo de ${escapeHtml(row.part)}">${escapeHtml(row.ot)}</button></td><td>${escapeHtml(row.part)}</td><td>${escapeHtml(formatMaterialQuantity(row.pendingPieces))}</td>
+      ${finishing ? `<td>${escapeHtml(formatCurrency(window.PlanningWorkflowCore.effectiveFinishingAmount(row)))}</td><td>${escapeHtml(row.jobType)}</td>` : ""}
     </tr>`).join("");
     const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
-    const amount = dayRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const amount = window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost;
     return `<article class="weekly-day-block day-${date.getDay()}">
-      <div class="weekly-day-ribbon"><strong>${escapeHtml(formatDate(date))}</strong><span>${escapeHtml(date.toLocaleDateString("es-MX", { weekday: "long" }))}</span></div>
+      <div class="weekly-day-ribbon"><strong>${escapeHtml(formatReportDate(date))}</strong><span>${escapeHtml(date.toLocaleDateString("es-MX", { weekday: "long" }))}</span></div>
       <div class="weekly-day-table"><table><thead><tr>${columns.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="2">Total ${dayRows.length}</td><td></td><td>${escapeHtml(formatMaterialQuantity(pieces))}</td>${finishing ? `<td>${escapeHtml(formatCurrency(amount))}</td><td></td>` : ""}</tr></tfoot></table></div>
     </article>`;
   }).join("");
 }
 
+function cleanDrawingInput(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const hyperlink = text.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
+  let raw = String(hyperlink ? hyperlink[1] : text).trim();
+  raw = raw.replace(/^['"]+|['"]+$/g, "").trim();
+  return raw;
+}
+
+function normalizeDrawingUrl(value) {
+  const raw = cleanDrawingInput(value);
+  if (!raw) return "";
+  if (/^maldonado:\/\/abrir\?archivo=/i.test(raw)) return raw;
+  const withoutFilePrefix = raw.replace(/^file:\/*/i, "");
+  let networkPath = withoutFilePrefix.replace(/\//g, "\\").trim();
+  if (/^(SERVER2008|192\.168\.1\.101)\\Produccion2\\/i.test(networkPath)) networkPath = `\\\\${networkPath}`;
+  networkPath = networkPath.replace(/^\\\\SERVER2008\\Produccion2\\/i, "\\\\192.168.1.101\\Produccion2\\");
+  // Sin plantillas con "://" seguido de interpolacion: el HTML service de Apps Script
+  // mutila esas lineas al entregar la pagina y el bundle deja de parsear (RULE-WEB-002).
+  if (/^\\\\192\.168\.1\.101\\Produccion2\\/i.test(networkPath) && /\.pdf$/i.test(networkPath)) return "maldonado://abrir?archivo=" + encodeURIComponent(networkPath);
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^(www\.|drive\.google\.com|docs\.google\.com)/i.test(raw)) return "https://" + raw;
+  if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return "https://drive.google.com/file/d/" + encodeURIComponent(raw) + "/view";
+  if (/^[A-Za-z]:\\|^\//.test(raw)) return "file://" + raw.replace(/\\/g, "/");
+  return "";
+}
+
+function openDrawingUrl(url) {
+  const drawing = normalizeDrawingUrl(url);
+  if (!drawing) return false;
+  if (/^maldonado:\/\//i.test(drawing)) {
+    const link = document.createElement("a");
+    link.href = drawing;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return true;
+  }
+  const opened = window.open(drawing, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    const link = document.createElement("a");
+    link.href = drawing;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  return true;
+}
+
+function drawingFromBundle(bundle) {
+  const detail = bundle?.detail || {};
+  return String(detail.workOrder?.drawing || detail.materials?.find((material) => material?.drawing)?.drawing || "").trim();
+}
+
+function drawingFromRouteRows(rows, part) {
+  const articleKey = String(part || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const list = Array.isArray(rows) ? rows : [];
+  const preferred = list.find((row) => String(row?.MATERIAL || row?.material || "").trim() === "" && String(row?.DIBUJO || row?.drawing || "").trim());
+  const byArticle = list.find((row) => String(row?.ARTICULO || row?.article || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === articleKey && String(row?.DIBUJO || row?.drawing || "").trim());
+  const withDrawing = list.find((row) => String(row?.DIBUJO || row?.drawing || "").trim());
+  return String(preferred?.DIBUJO || preferred?.drawing || byArticle?.DIBUJO || byArticle?.drawing || withDrawing?.DIBUJO || withDrawing?.drawing || "").trim();
+}
+
+async function openOtDrawing(ot, part) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+  const partLabel = String(part || "").trim();
+  const missingMessage = `No hay dibujo registrado para la OT ${key}${partLabel ? ` (parte ${partLabel})` : ""}`;
+
+  if (otDrawingCache[key] !== undefined) {
+    const drawing = otDrawingCache[key];
+    if (drawing) {
+      if (!openDrawingUrl(drawing)) showToast(`El dibujo de la OT ${key} no tiene una URL válida: ${drawing}`, 9000);
+    } else showToast(missingMessage, 9000);
+    return;
+  }
+
+  try {
+    const result = await PPSupabaseBridgeReplacement.getInspectionWorkOrderBundle(key);
+    if (!result?.ok) throw new Error(result?.error || "No se pudo cargar la OT");
+    let drawing = drawingFromBundle(result.data);
+    if (!drawing && partLabel) {
+      try {
+        const routes = await PPSupabaseBridgeReplacement.getInspectionDrawingRoutes(partLabel);
+        if (routes?.ok) drawing = drawingFromRouteRows(routes.data, partLabel);
+      } catch (routeError) {
+        // El bundle sigue siendo la fuente principal; el fallback es opcional.
+      }
+    }
+    otDrawingCache[key] = drawing;
+    if (!drawing) {
+      showToast(missingMessage, 9000);
+      return;
+    }
+    if (!openDrawingUrl(drawing)) showToast(`El dibujo de la OT ${key} no tiene una URL válida: ${drawing}`, 9000);
+  } catch (error) {
+    showToast(`No se pudo obtener el dibujo de la OT ${key}: ${error.message || String(error)}`, 9000);
+  }
+}
+
 function renderOperatorSelect() {
-  const operators = uniq([...state.operators, ...reportOperationsSource().map((op) => op.operador)])
-    .filter(isLoadBearingOperator);
+  // RULE-BAL-006: el selector de operador solo lista operadores de la matriz (altas
+  // activas), no valores crudos de `op.operador` que no esten dados de alta.
+  const operators = uniq(state.operators || []).filter(isLoadBearingOperator);
   const current = els.operatorReportSelect.value || operators[0] || "";
   els.operatorReportSelect.innerHTML = operators.map((op) => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join("");
   els.operatorReportSelect.value = operators.includes(current) ? current : operators[0] || "";
 }
 
-function renderOperatorReport() {
+function operatorReportSelection() {
   const operator = els.operatorReportSelect.value || state.operators[0] || "";
   const filter = reportFilter("operator");
-  const selection = filteredReportRows(operationsForReportWeek(operator, filter.date), "operator", opStart);
+  return filteredReportRows(operationsForDayReport(operator), "operator", opStart);
+}
+
+function renderOperatorReport() {
+  const filter = reportFilter("operator");
+  const selection = operatorReportSelection();
   els.operatorReportStatus.value = filter.status;
-  renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportShowAll, els.operatorReportCount, selection);
-  els.operatorPrintContext.textContent = `Plan por operador | ${operator || "Sin operador"} | ${reportSelectionLabel(selection)} | ${reportSourceLabel()}`;
+  renderReportFilterStatus("operator", els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount, selection);
+  els.operatorPrintContext.textContent = formatReportDateTime(new Date());
   els.operatorReport.classList.toggle("report-show-all-table", selection.showAll);
-  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: !reportSnapshot });
+  els.operatorReport.innerHTML = renderProductionReportTable(selection.rows, { statusActions: reportSourceAllowsOperationTracking() });
   bindReportCommentInputs(els.operatorReport);
   bindPlanStatusActions(els.operatorReport);
 }
 
-function renderAdjusterReport() {
+function adjusterReportSelection() {
   const filter = reportFilter("adjuster");
-  const selection = filteredReportRows(
-    operationsForReportWeek("", filter.date).filter(isToolChangeReportOperation),
+  return filteredReportRows(
+    operationsForDayReport("").filter(isToolChangeReportOperation),
     "adjuster",
     opStart
   );
+}
+
+function renderAdjusterReportRow(op, index, options = {}) {
+  const start = opStart(op);
+  const end = opEnd(op);
+  const workOrder = workOrderForOt(op.ot);
+  const change = toolChangeReportData(op);
+  const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
+  const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
+  return `<tr data-plan-status-row-key="${escapeHtml(operationCompletionKey(op))}">
+    <td>${escapeHtml(op.ot)}</td>
+    <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
+    <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
+    <td>${escapeHtml(destinationHerramental)}</td>
+    <td>${escapeHtml(destinationKit)}</td>
+    <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
+    <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
+    <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
+    <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
+    <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
+    ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
+  </tr>`;
+}
+
+function renderAdjusterReport() {
+  const filter = reportFilter("adjuster");
+  const selection = adjusterReportSelection();
   els.adjusterReportStatus.value = filter.status;
-  renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportShowAll, els.adjusterReportCount, selection);
-  els.adjusterPrintContext.textContent = `Cambios de herramental | ${reportSelectionLabel(selection)} | ${reportSourceLabel()}`;
+  renderReportFilterStatus("adjuster", els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount, selection);
+  els.adjusterPrintContext.textContent = formatReportDateTime(new Date());
   els.adjusterReport.classList.toggle("report-show-all-table", selection.showAll);
-  const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios", "Estado"];
-  const body = selection.rows.map((op) => {
-    const start = opStart(op);
-    const end = opEnd(op);
-    const workOrder = workOrderForOt(op.ot);
-    const change = toolChangeReportData(op);
-    const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
-    const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-    return `<tr>
-      <td>${escapeHtml(op.ot)}</td>
-      <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
-      <td>${escapeHtml(cleanResourceValue(op.maquina))}</td>
-      <td>${escapeHtml(destinationHerramental)}</td>
-      <td>${escapeHtml(destinationKit)}</td>
-      <td>${escapeHtml(start ? formatDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
-      <td><span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span></td>
-      <td>${planStatusActionCell(op)}</td>
-    </tr>`;
-  }).join("");
-  els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
+  const headers = ["OT", "Articulo", "Maquina", "Herramental", "Kit", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
+  if (reportSourceAllowsOperationTracking()) headers.push("Estado");
+  const body = selection.rows.map((op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() })).join("");
+  els.adjusterReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin cambios de herramental para el filtro seleccionado")}</tbody>`;
   bindPlanStatusActions(els.adjusterReport);
 }
 
 function renderSubcontractReport() {
   const filter = reportFilter("subcontract");
   const selection = filteredReportRows(subcontractRowsForReportWeek(filter.date), "subcontract", (row) => row.start);
-  renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportShowAll, els.subcontractReportCount, selection);
+  els.subcontractReportStatus.value = filter.status;
+  renderReportFilterStatus("subcontract", els.subcontractReportStartInput, els.subcontractReportFutureDays, els.subcontractReportCount, selection);
+  els.subcontractPrintContext.textContent = formatReportDateTime(new Date());
   els.subcontractReport.classList.toggle("report-show-all-table", selection.showAll);
+  const statusActions = reportSourceAllowsOperationTracking();
   const headers = ["OT", "Articulo", "Tipo de subcontrato", "Dias", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Comentarios"];
+  if (statusActions) headers.push("Estado");
   const body = selection.rows.map((row) => {
     const missingType = !row.type;
     const missingDays = !(row.days > 0);
@@ -4283,31 +9233,40 @@ function renderSubcontractReport() {
       <td>${escapeHtml(row.article)}</td>
       <td class="${missingType ? "report-warning" : ""}">${escapeHtml(row.type || "FALTA CONFIGURAR")}</td>
       <td class="${missingDays ? "report-warning" : ""}">${missingDays ? "FALTA CONFIGURAR" : escapeHtml(row.days)}</td>
-      <td>${escapeHtml(formatDate(row.start))}</td>
-      <td>${escapeHtml(formatTime(row.start))}</td>
-      <td>${escapeHtml(formatDate(row.end))}</td>
-      <td>${escapeHtml(formatTime(row.end))}</td>
+      <td>${escapeHtml(formatReportDate(row.start))}</td>
+      <td>${escapeHtml(formatReportTime(row.start))}</td>
+      <td>${escapeHtml(formatReportDate(row.end))}</td>
+      <td>${escapeHtml(formatReportTime(row.end))}</td>
       <td>${reportCommentEditor(row.operationIds, row.comment)}</td>
+      ${statusActions ? `<td class="report-status-action-column">${subcontractPlanStatusCell(row)}</td>` : ""}
     </tr>`;
   }).join("");
-  els.subcontractReport.innerHTML = `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin subcontratos para el filtro seleccionado")}</tbody>`;
+  els.subcontractReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin subcontratos para el filtro seleccionado")}</tbody>`;
   bindReportCommentInputs(els.subcontractReport);
+  if (statusActions) bindPlanStatusActions(els.subcontractReport);
+}
+
+function subcontractPlanStatusCell(row) {
+  const key = row.statusOperation ? operationCompletionKey(row.statusOperation) : "";
+  if (!key) return "";
+  const completed = row.statusCompleted;
+  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
 }
 
 function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
-  const range = selectedWeekRange(weekDate);
   const grouped = new Map();
   for (const op of reportOperationsSource()) {
     if (!reportSnapshot && !isJobScheduled(op.ot)) continue;
     if (!isSubcontractAppOperation(op) && !op.subcontractType && !(Number(op.subcontractDays) > 0)) continue;
     const start = opStart(op);
     const end = opEnd(op);
-    if (!start || !end || start >= range.end || end <= range.start) continue;
-    const current = grouped.get(op.ot) || { ot: op.ot, starts: [], ends: [], operations: [], operationIds: [], comments: [], types: [], days: [] };
+    if (!start || !end) continue;
+    const current = grouped.get(op.ot) || { ot: op.ot, starts: [], ends: [], operations: [], operationIds: [], comments: [], types: [], days: [], statuses: [] };
     current.starts.push(start);
     current.ends.push(end);
     current.operations.push(op.descripcion || `CT ${op.ct}`);
     current.operationIds.push(op.id);
+    current.statuses.push(isPlanCompletedOperation(op, activePlanReportStatuses()));
     if (op.comentario) current.comments.push(op.comentario);
     if (op.subcontractType) current.types.push(op.subcontractType);
     if (Number(op.subcontractDays) > 0) current.days.push(Number(op.subcontractDays));
@@ -4316,6 +9275,9 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
   return [...grouped.values()].map((group) => {
     const configuration = reportSnapshot ? {} : (state.otConfigurations[group.ot] || {});
     const workOrder = workOrderForOt(group.ot);
+    const reportOps = reportOperationsSource();
+    const statusOperation = reportOps.find((op) => group.operationIds.includes(op.id));
+    const completed = group.statuses.every(Boolean);
     return {
       ot: group.ot,
       article: workOrder?.item || state.operations.find((op) => op.ot === group.ot)?.parte || "",
@@ -4326,8 +9288,373 @@ function subcontractRowsForReportWeek(weekDate = state.reportWeekStart) {
       operations: uniq(group.operations),
       operationIds: uniq(group.operationIds),
       comment: group.comments[0] || "",
+      planStatus: completed ? "COMPLETADA_PLAN" : "PENDIENTE",
+      statusOperation: statusOperation || null,
+      statusCompleted: completed,
     };
   }).sort((a, b) => a.start - b.start || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true }));
+}
+
+// La fuente del estado para un reporte: si se esta viendo un plan publicado (snapshot), los
+// datos del ARTICULO/cantidad/ensamblado de cada OT vienen de ESE snapshot, no del borrador
+// actual. Los otros reportes ya lo hacen (weeklyExecutiveSummary usa sourceState.workOrders,
+// app.js:8805-8809); el reporte de Liberacion leia del borrador y por eso las OTs cerradas
+// retiradas del borrador salian con el articulo en blanco (MEDIDO 2026-10-24, plan 19/10 v2).
+function sourceStateForReports() {
+  return reportSnapshot && reportSnapshot.snapshotId !== "draft" ? reportSnapshot : state;
+}
+
+function workOrderForSource(sourceState, ot) {
+  const key = materialOtKey(ot);
+  const list = Array.isArray(sourceState?.workOrders) ? sourceState.workOrders : [];
+  return list.find((item) => materialOtKey(item?.ot) === key) || null;
+}
+
+function closedSummaryForSource(sourceState, ot) {
+  const key = closedSummaryKeyForOt(ot, sourceState?.closedWorkOrderSummaries);
+  if (!key) return null;
+  return (sourceState?.closedWorkOrderSummaries || {})[key] || null;
+}
+
+function releaseReportRows() {
+  const grouped = new Map();
+  for (const op of reportOperationsSource()) {
+    if (!isFinalReleaseOperation(op)) continue;
+    if (!grouped.has(op.ot)) grouped.set(op.ot, []);
+    grouped.get(op.ot).push(op);
+  }
+  const sourceState = sourceStateForReports();
+  const rows = [];
+  for (const [ot, operations] of grouped.entries()) {
+    const sequenced = operations.slice().sort((a, b) => sequenceSort(a, b));
+    const release = sequenced[0];
+    const releaseMatch = finalReleaseOperationMatch(release);
+    const date = opStart(release) || opEnd(release);
+    // FIX 2026-10-24 (bug usuario, plan 19/10 v2): el articulo y la cantidad se resuelven desde
+    // la fuente del reporte (el snapshot seleccionado) y NO del borrador actual. Con la ficha
+    // fuera de `state.workOrders` (OT cerrada retirada del borrador), `workOrder` era null y el
+    // articulo salia en blanco porque la operacion de liberacion (16OC/39OTD) no lleva `parte`.
+    // Se toma de la PRIMERA operacion con `parte` del mismo OT, y como ultimo recurso del
+    // resumen compacto de la OT cerrada, ambos en la fuente del reporte.
+    const workOrder = workOrderForSource(sourceState, ot);
+    const closed = closedSummaryForSource(sourceState, ot);
+    const part = sequenced.find((operation) => String(operation.parte || "").trim())?.parte
+      || workOrder?.item || closed?.item || "";
+    const inspectionTotal = inspectionQuantityForOt(ot);
+    const workOrderTotal = Number(workOrder?.quantity);
+    const totalValue = inspectionTotal ?? (Number.isFinite(workOrderTotal) && workOrderTotal > 0 ? workOrderTotal : null);
+    // `pendingPiecesForWorkOrder` devuelve 0 cuando no hay ficha (OT cerrada retirada del
+    // borrador). Ese 0 no debe tapar el resumen compacto que sí se conserva, así que la
+    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha.
+    const closedPending = closed
+      ? (Number(closed.pendingQuantity) > 0 ? Number(closed.pendingQuantity)
+          : (Number(closed.quantity) > 0 ? Number(closed.quantity) : null))
+      : null;
+    const livePending = Number(pendingPiecesForWorkOrder(workOrder));
+    const quantityValue = totalValue
+      ?? release.pendingPieces ?? release.cantPendiente
+      ?? closedPending
+      ?? (Number.isFinite(livePending) && livePending > 0 ? livePending : null)
+      ?? 0;
+    const quantity = Number.isFinite(Number(quantityValue)) ? Math.max(0, Number(quantityValue)) : 0;
+    const inspectionBuilt = inspectionBuiltPiecesForOt(ot);
+    // La cantidad ensamblada de una OT cerrada ya no está en la ficha (retirada del borrador):
+    // se toma de la inspección viva y, si no llega, del resumen compacto que sí se conserva.
+    // FIX 2026-10-24 (bug usuario, reporte Liberación, plan 19/10 v2): el `workOrder?.builtQuantity`
+    // del snapshot (o del estado podado del borrador) está CONGELADO en 0 para una OT cerrada que se
+    // ensambló después de publicar/retirar; con `??` ese 0 bloqueaba el valor real del resumen.
+    // Se prioriza el resumen compacto (builtQuantity > 0) sobre la ficha congelada.
+    const built = Math.max(0, Number(
+      inspectionBuilt
+      ?? (closed && Number(closed.builtQuantity) > 0 ? Number(closed.builtQuantity) : null)
+      ?? workOrder?.builtQuantity
+      ?? 0
+    ));
+    rows.push({
+      ot,
+      article: part,
+      quantity,
+      built,
+      date,
+      ct: releaseMatch?.ct || "",
+      label: releaseMatch?.label || "16OC",
+      releaseOp: release,
+    });
+  }
+  return rows.sort((a, b) => {
+    const aTime = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+    return aTime - bTime || String(a.ot).localeCompare(String(b.ot), "es", { numeric: true });
+  });
+}
+
+function renderReleaseReport() {
+  if (!els.releaseReport) return;
+  const rows = releaseReportRows();
+  ensureInspectionWorkOrders(rows.map((row) => row.ot));
+  if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
+  const statusActions = reportSourceAllowsOperationTracking();
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  if (statusActions) headers.push("Completar");
+  const body = rows.map((row) => `<tr>
+    <td>${escapeHtml(row.ot)}</td>
+    <td>${escapeHtml(row.article)}</td>
+    <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td>${escapeHtml(formatMaterialQuantity(row.built))}</td>
+    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
+    ${statusActions ? `<td class="report-status-action-column">${planStatusActionCell(row.releaseOp)}</td>` : ""}
+  </tr>`).join("");
+  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+  if (statusActions) bindPlanStatusActions(els.releaseReport);
+}
+
+function exportReleaseXlsx() {
+  const statusActions = reportSourceAllowsOperationTracking();
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  if (statusActions) headers.push("Completar");
+  const rows = releaseReportRows().map((row) => {
+    const cells = [
+      row.ot,
+      row.article,
+      row.quantity,
+      row.built,
+      row.date ? formatReportDate(row.date) : "SIN FECHA",
+    ];
+    if (statusActions) {
+      cells.push(isPlanCompletedOperation(row.releaseOp, activePlanReportStatuses()) ? "Completada" : "Pendiente");
+    }
+    return cells;
+  });
+  const bytes = buildXlsxBytes(headers, rows, "Liberacion final");
+  downloadBlob(bytes, "liberacion-final-16oc-39otd.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+// =============================================================================
+// LIBERACION REAL (RULE-SUP-078)
+// -----------------------------------------------------------------------------
+// QUE ES. Lo que NetSuite YA ensamblo, una fila por EVENTO de ensamble (no por OT), de la
+// planta MM del Llano (ubicacion 1), de los ultimos 2 meses, y solo lo que viene de una
+// orden de trabajo. La fuente es la tabla `ensambles_ot`, que la ingesta reescribe desde
+// la accion `ensambles` del RESTlet 2246.
+//
+// EL MONTO NO SE GUARDA: SE CALCULA AQUI, CON EL PRECIO DEL PLAN. `effectiveUnitPriceForOt`
+// es la MISMA funcion que valora la OT en el borrador (precio manual de la OT -> ultima
+// venta de NetSuite -> precio de referencia del catalogo, el mas alto de los que existan, 0
+// si ninguno). Por eso el monto del reporte no puede separarse del que muestra el plan, y
+// por eso el precio no viaja en `ensambles_ot`: guardarlo lo congelaria en la ingesta.
+//
+// SE LEE SUELTA, NO DEL ESTADO. `ensambles_ot` no es estado del plan y no viaja en
+// readCatalogs; el reporte la pide al abrirse. La cache es de la sesion de la pagina: si
+// NetSuite ensambla algo nuevo, se ve al recargar, no en el siguiente render.
+// =============================================================================
+let releaseRealCache = { rows: [], error: "", loading: false, loaded: false, pending: null };
+
+/**
+ * Las filas del reporte, a partir de los eventos crudos de `ensambles_ot`.
+ *
+ * UNA FILA POR EVENTO, y por eso una OT puede aparecer varias veces (ensambles parciales
+ * en fechas distintas, confirmado por el usuario el 2026-10-25). El `eventIndex`/`eventCount`
+ * solo sirven para marcar en pantalla "2.º de 3" y que se vea que no es un duplicado.
+ *
+ * ORDEN: de lo mas nuevo a lo mas viejo. Un evento sin fecha va al final (no se inventa una
+ * fecha para ordenarlo). El desempate es por OT y luego por build_id, los dos descendentes,
+ * para que dos eventos del mismo dia tengan un orden estable.
+ */
+/**
+ * El precio unitario de UNA fila del reporte "Liberacion real".
+ *
+ * ORDEN (el que pidio el usuario el 2026-10-25, y el que ya usa el plan):
+ *   1. `effectiveUnitPriceForOt(ot)`: precio de venta vivo de NetSuite (ultima venta/promedio)
+ *      y, si no hay, el precio manual capturado para el articulo de la OT. Es la MISMA funcion
+ *      que valora la OT en el borrador (`amountForOt`), asi que mientras la OT este en el plan
+ *      el monto del reporte no puede separarse del que muestra el plan.
+ *   2. Si la OT ya no esta en el estado (una OT cerrada de hace dos meses), `articleForOt`
+ *      devuelve vacio y el paso 1 da 0. Entonces se usa el ARTICULO DEL PROPIO EVENTO (viene
+ *      de NetSuite) para buscar el precio manual del catalogo.
+ *   3. Si tampoco hay, el precio de referencia del catalogo (`referenceSalePrice`), que es el
+ *      ultimo precio de venta que dejo el sync.
+ *   4. Si no hay ninguno, 0. La fila se muestra en 0; no se inventa un precio.
+ */
+function releaseRealUnitPrice(ot, article) {
+  const planPrice = Math.max(0, Number(effectiveUnitPriceForOt(ot)) || 0);
+  if (planPrice >= 1) return planPrice;
+  const part = articleKeyForPart(articleForOt(ot) || article || "");
+  if (!part) return 0;
+  const configuration = articleConfigurationValue(part) || {};
+  const manualPrice = Math.max(0, Number(configuration.manualUnitPrice) || 0);
+  if (manualPrice >= 1) return manualPrice;
+  return Math.max(0, Number(configuration.referenceSalePrice) || 0);
+}
+
+/**
+ * La fecha de un evento de ensamble ("2026-10-24") como Date LOCAL.
+ *
+ * POR QUE NO `new Date(texto)`. Ese constructor lee "2026-10-24" como medianoche UTC, y en
+ * Mexico (UTC-6) cae el dia anterior: el reporte mostraria el ensamble un dia antes. Se parte
+ * y se arma con el constructor de tres numeros, que es hora local. Es la misma regla que ya
+ * usa el resto de la pagina para las fechas que llegan como texto.
+ */
+function parseEnsambleDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value == null ? "" : value));
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function releaseRealRows(events) {
+  const list = Array.isArray(events) ? events : [];
+  const rows = list.map((ev) => {
+    const ot = String((ev && ev.ot) || "");
+    const article = String((ev && ev.article) || "");
+    const quantity = Math.max(0, Number(ev && ev.quantity) || 0);
+    const unitPrice = releaseRealUnitPrice(ot, article);
+    return {
+      buildId: String((ev && ev.buildId) || ""),
+      date: parseEnsambleDate(ev && ev.date),
+      ot: ot,
+      article: article,
+      description: String((ev && ev.description) || ""),
+      quantity: quantity,
+      unitPrice: unitPrice,
+      amount: unitPrice * quantity,
+      eventIndex: 0,
+      eventCount: 1,
+    };
+  });
+  // LA NUMERACION ES CRONOLOGICA, no la del orden en que llegan. Si la OT 4057 se ensamblo
+  // el 23 y el 24, el 23 es "1.º de 2" y el 24 es "2.º de 2": numerar al reves (por el orden
+  // de la lectura, que viene de lo mas nuevo a lo mas viejo) haria que el reporte llamara
+  // "primero" al ultimo ensamble, que es justo lo contrario de lo que paso en el piso.
+  const porOt = new Map();
+  for (const row of rows) {
+    const key = materialOtKey(row.ot);
+    if (!porOt.has(key)) porOt.set(key, []);
+    porOt.get(key).push(row);
+  }
+  for (const grupo of porOt.values()) {
+    grupo.sort((a, b) => {
+      const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+      const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+      if (at !== bt) return at - bt;
+      return String(a.buildId).localeCompare(String(b.buildId), "es", { numeric: true });
+    });
+    grupo.forEach((row, index) => {
+      row.eventIndex = index + 1;
+      row.eventCount = grupo.length;
+    });
+  }
+  return rows.sort((a, b) => {
+    const at = a.date ? a.date.getTime() : Number.NEGATIVE_INFINITY;
+    const bt = b.date ? b.date.getTime() : Number.NEGATIVE_INFINITY;
+    if (at !== bt) return bt - at;
+    return String(b.ot).localeCompare(String(a.ot), "es", { numeric: true })
+      || String(b.buildId).localeCompare(String(a.buildId), "es", { numeric: true });
+  });
+}
+
+/**
+ * Lee `ensambles_ot` una vez por sesion (o de nuevo si `force`). Nunca deja la cache a medias.
+ * `pending` guarda la promesa en vuelo: dos llamadas seguidas (abrir la pestana y pulsar
+ * Exportar antes de que termine) esperan LA MISMA lectura en vez de disparar dos.
+ */
+function loadReleaseRealEvents(force) {
+  if (releaseRealCache.pending) return releaseRealCache.pending;
+  if (releaseRealCache.loaded && !force) return Promise.resolve();
+  releaseRealCache.loading = true;
+  releaseRealCache.pending = (async () => {
+    const bridge = typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement : null;
+    if (!bridge || typeof bridge.getEnsambleEvents !== "function") {
+      releaseRealCache = {
+        rows: [],
+        error: "Este build no trae el lector de ensambles (PPSupabaseBridgeReplacement.getEnsambleEvents).",
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+      return;
+    }
+    try {
+      const result = await bridge.getEnsambleEvents();
+      releaseRealCache = {
+        rows: releaseRealRows(result && result.data),
+        error: result && result.ok ? "" : String((result && result.error) || "No se pudo leer ensambles_ot"),
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+    } catch (error) {
+      releaseRealCache = {
+        rows: [],
+        error: `No se pudo leer ensambles_ot (${String((error && error.message) || error)})`,
+        loading: false,
+        loaded: true,
+        pending: null,
+      };
+    }
+  })();
+  return releaseRealCache.pending;
+}
+
+const RELEASE_REAL_HEADERS = ["Fecha", "OT", "Articulo", "Cantidad", "P. unitario", "Monto"];
+
+function releaseRealIsNumericColumn(header) {
+  return header === "Cantidad" || header === "P. unitario" || header === "Monto";
+}
+
+function releaseRealTotals(rows) {
+  return rows.reduce((acc, row) => {
+    acc.quantity += row.quantity;
+    acc.amount += row.amount;
+    return acc;
+  }, { quantity: 0, amount: 0 });
+}
+
+async function renderReleaseRealReport(force) {
+  if (!els.releaseRealReport) return;
+  if (!releaseRealCache.loaded || force) {
+    els.releaseRealReport.innerHTML = `<tbody>${emptyTableRow(RELEASE_REAL_HEADERS.length, "Leyendo ensambles...")}</tbody>`;
+    await loadReleaseRealEvents(force);
+  }
+  const rows = releaseRealCache.rows;
+  const totals = releaseRealTotals(rows);
+  if (els.releaseRealReportCount) {
+    els.releaseRealReportCount.textContent = `${rows.length} ensamble${rows.length === 1 ? "" : "s"} · ${formatMaterialQuantity(totals.quantity)} pzs`;
+  }
+  const head = `<thead><tr>${RELEASE_REAL_HEADERS.map((header) => `<th class="${releaseRealIsNumericColumn(header) ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead>`;
+  const body = rows.map((row) => {
+    const parcial = row.eventCount > 1
+      ? ` <span class="release-real-partial" title="Evento ${row.eventIndex} de ${row.eventCount} de esta OT">${row.eventIndex}.º</span>`
+      : "";
+    return `<tr>
+    <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
+    <td>${escapeHtml(row.ot)}${parcial}</td>
+    <td>${escapeHtml(row.article)}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td class="report-number">${escapeHtml(formatCurrency(row.unitPrice))}</td>
+    <td class="report-number">${escapeHtml(formatCurrency(row.amount))}</td>
+  </tr>`;
+  }).join("");
+  const foot = rows.length
+    ? `<tfoot><tr><td colspan="3">Total</td><td class="report-number">${escapeHtml(formatMaterialQuantity(totals.quantity))}</td><td></td><td class="report-number">${escapeHtml(formatCurrency(totals.amount))}</td></tr></tfoot>`
+    : "";
+  const vacio = releaseRealCache.error || "No hay ensambles en los ultimos 2 meses para la planta MM del Llano";
+  els.releaseRealReport.innerHTML = `${head}<tbody>${body || emptyTableRow(RELEASE_REAL_HEADERS.length, vacio)}</tbody>${foot}`;
+}
+
+function exportReleaseRealXlsx() {
+  if (!releaseRealCache.loaded) {
+    loadReleaseRealEvents(false).then(() => exportReleaseRealXlsx());
+    return;
+  }
+  const rows = releaseRealCache.rows.map((row) => [
+    row.date ? formatReportDate(row.date) : "SIN FECHA",
+    row.ot,
+    row.article,
+    Number(row.quantity.toFixed(2)),
+    Number(row.unitPrice.toFixed(2)),
+    Number(row.amount.toFixed(2)),
+  ]);
+  const bytes = buildXlsxBytes(RELEASE_REAL_HEADERS, rows, "Liberacion real");
+  downloadBlob(bytes, "liberacion-real.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 function toolChangeReportData(op) {
@@ -4338,9 +9665,20 @@ function toolChangeReportData(op) {
     toKit: reportToolValue(op.toolChangeToKit),
   };
   if (stored.fromHerramental || stored.fromKit || stored.toHerramental || stored.toKit) return stored;
-  const segment = String(op.log || "").split("|").map((item) => item.trim()).reverse().find((item) => item.includes("->")) || "";
+  const sources = [op.log, op.comentario].map((value) => String(value || ""));
+  for (const source of sources) {
+    const formatted = source.match(/Cambio de herramental de \((.+?) --> (.+)\)\s*$/);
+    if (formatted) {
+      const from = parseToolPair(formatted[1]);
+      const to = parseToolPair(formatted[2]);
+      if (from.herramental || from.kit || to.herramental || to.kit) {
+        return { fromHerramental: from.herramental, fromKit: from.kit, toHerramental: to.herramental, toKit: to.kit };
+      }
+    }
+  }
+  const segment = sources.map((item) => item.split("|").map((part) => part.trim())).flat().reverse().find((item) => item.includes("->")) || "";
   const parts = segment.split(/\s*->\s*/);
-  const from = parseToolPair(parts[0]?.replace(/^.*?PLANIFICADOR_HEURISTICO\s+/i, ""));
+  const from = parseToolPair(parts[0]?.replace(/^.*?(?:PLANIFICADOR_HEURISTICO|PLANNER_CORE_V\d*)\s+/i, ""));
   const to = parseToolPair(parts[1]);
   return { fromHerramental: from.herramental, fromKit: from.kit, toHerramental: to.herramental, toKit: to.kit };
 }
@@ -4353,7 +9691,7 @@ function parseToolPair(value) {
 function reportToolValue(value) {
   const text = cleanToolValue(value);
   const key = normalizeStatus(text);
-  return ["SIN_HERR", "SIN_KIT", "SIN_ANTECEDENTE"].includes(key) ? "" : text;
+  return ["SIN_HERR", "SIN_HERRAMENTAL", "SIN_KIT", "SIN_ANTECEDENTE"].includes(key) ? "" : text;
 }
 
 function formatToolPair(herramental, kit) {
@@ -4364,13 +9702,15 @@ function toolChangeReportComment(op) {
   const change = toolChangeReportData(op);
   const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
   const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
-  return `Cambio de herramental de (${formatToolPair(change.fromHerramental, change.fromKit)} --> ${formatToolPair(destinationHerramental, destinationKit)})`;
+  const fromText = formatToolPair(change.fromHerramental, change.fromKit);
+  const toText = formatToolPair(destinationHerramental, destinationKit);
+  if (/^Cambio de herramental de \(/i.test(fromText)) return fromText.replace(/\)+$/, "");
+  return `Cambio de herramental de (${fromText} --> ${toText})`;
 }
 
 function reportSelectionLabel(selection) {
-  return selection.showAll
-    ? `Semana ${reportWeekLabelForDate(selection.date)} | Ver todo`
-    : `Dia ${formatShortDate(parseDateOnlyValue(selection.date))}`;
+  const range = window.PlanningWorkflowCore.reportDateRange(selection.date, selection.futureDays);
+  return `Rango ${formatShortDate(parseDateOnlyValue(range.start))} - ${formatShortDate(parseDateOnlyValue(range.end))}`;
 }
 
 function reportWeekLabelForDate(value) {
@@ -4383,8 +9723,15 @@ function parseDateOnlyValue(value) {
   return parsed ? new Date(parsed.year, parsed.month - 1, parsed.day) : new Date();
 }
 
-function operationsForReportWeek(operator = "", weekDate = state.reportWeekStart) {
-  return operationsForWeekSource(reportOperationsSource(), operator, weekDate);
+function operationsForDayReport(operator = "") {
+  return (Array.isArray(reportOperationsSource()) ? reportOperationsSource() : [])
+    .filter((op) => {
+      if (operator && op.operador !== operator) return false;
+      const start = opStart(op);
+      const end = opEnd(op);
+      return Boolean(start && end);
+    })
+    .sort((a, b) => opStart(a) - opStart(b) || Number(a.secuencia) - Number(b.secuencia));
 }
 
 function operationsForWeekSource(source, operator = "", weekDate = state.reportWeekStart) {
@@ -4404,6 +9751,34 @@ function isToolChangeReportOperation(op) {
     /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
 }
 
+const FINAL_RELEASE_OPERATION_CTS = new Set(["5504", "5537"]);
+const FINAL_RELEASE_OPERATION_CODE_RE = /(?:^|[\s:/])(16OC|39OTD)(?=[\s:/]|$)/i;
+
+function finalReleaseOperationMatch(op) {
+  if (!op) return null;
+  const raw = String(op.ct ?? "").trim();
+  if (FINAL_RELEASE_OPERATION_CTS.has(raw)) {
+    return { ct: raw, label: raw === "5504" ? "39OTD" : "16OC" };
+  }
+  if (raw && raw !== "SIN_CT") return null;
+  const code = String(op.descripcion || "").match(FINAL_RELEASE_OPERATION_CODE_RE);
+  if (code) {
+    const label = code[1].toUpperCase();
+    return { ct: label === "39OTD" ? "5504" : "5537", label };
+  }
+  const resolved = window.PlannerCore?.capabilityForOperation
+    ? String(window.PlannerCore.capabilityForOperation(op, state)?.ct || "").trim()
+    : "";
+  if (FINAL_RELEASE_OPERATION_CTS.has(resolved)) {
+    return { ct: resolved, label: resolved === "5504" ? "39OTD" : "16OC" };
+  }
+  return null;
+}
+
+function isFinalReleaseOperation(op) {
+  return Boolean(finalReleaseOperationMatch(op));
+}
+
 function reportOperationCommentCell(op) {
   if (isToolChangeReportOperation(op)) {
     return `<span class="report-comment-fixed">${escapeHtml(toolChangeReportComment(op))}</span>`;
@@ -4413,7 +9788,7 @@ function reportOperationCommentCell(op) {
 
 function reportCommentEditor(operationIds, value) {
   const comment = String(value || "").trim();
-  if (reportSnapshot) return escapeHtml(comment);
+  if (!isReportSnapshotEditable()) return escapeHtml(comment);
   return `<input class="report-comment-input" type="text" maxlength="250" data-operation-ids="${escapeHtml((operationIds || []).join("|"))}" value="${escapeHtml(comment)}" placeholder="Comentario opcional" aria-label="Comentario opcional">`;
 }
 
@@ -4433,11 +9808,17 @@ function bindReportCommentInputs(container) {
   });
 }
 
+function isReportSnapshotEditable() {
+  return !reportSnapshot || reportSnapshot.snapshotId === "draft";
+}
+
+const operationPlanStatusActions = new Map();
+const detachedPlanStatusRows = new WeakMap();
+
 function planStatusActionCell(op) {
-  if (reportSnapshot) return escapeHtml(isPlanCompletedOperation(op) ? "Completada" : "Pendiente");
-  const completed = isPlanCompletedOperation(op);
+  const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
   const key = operationCompletionKey(op);
-  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}">${completed ? "Reabrir" : "Completar"}</button>`;
+  return `<button class="plan-status-action ${completed ? "reopen" : "complete"}" type="button" data-plan-status-key="${escapeHtml(key)}" aria-label="${completed ? "Cambiar a pendiente" : "Marcar completada"}" title="${completed ? "Reabrir operacion" : "Marcar completada"}"${operationPlanStatusActions.has(key) ? " disabled" : ""}>${completed ? "Reabrir" : "Completar"}</button>`;
 }
 
 function bindPlanStatusActions(container) {
@@ -4446,27 +9827,206 @@ function bindPlanStatusActions(container) {
   });
 }
 
+function planStatusButtons(key) {
+  return [els.operatorReport, els.adjusterReport, els.subcontractReport, els.releaseReport, els.selectedJobPanel].flatMap((container) =>
+    Array.from(container?.querySelectorAll("[data-plan-status-key]") || [])
+  ).filter((button) => button.dataset.planStatusKey === key);
+}
+
+function setPlanStatusButtonsDisabled(key, disabled) {
+  planStatusButtons(key).forEach((button) => { button.disabled = disabled; });
+}
+
+function findPlanStatusReportRow(container, key) {
+  return Array.from(container?.querySelectorAll("[data-plan-status-row-key]") || [])
+    .find((row) => row.dataset.planStatusRowKey === key) || null;
+}
+
+function detachedPlanStatusRow(container, key) {
+  if (!container) return null;
+  return detachedPlanStatusRows.get(container)?.get(key) || null;
+}
+
+function setDetachedPlanStatusRow(container, key, value) {
+  if (!container) return;
+  let rows = detachedPlanStatusRows.get(container);
+  if (!rows) {
+    rows = new Map();
+    detachedPlanStatusRows.set(container, rows);
+  }
+  if (value) rows.set(key, value);
+  else rows.delete(key);
+}
+
+function updatePlanStatusReportRow(container, key, selection, renderRow, rerenderReport, bindComments = false) {
+  let row = findPlanStatusReportRow(container, key);
+  const detached = detachedPlanStatusRow(container, key);
+  const index = selection.rows.findIndex((operation) => operationCompletionKey(operation) === key);
+  if (index < 0) {
+    if (row) {
+      setDetachedPlanStatusRow(container, key, { row, parent: row.parentNode, nextSibling: row.nextSibling });
+      row.remove();
+    }
+    return;
+  }
+  if (!row && detached?.parent) {
+    if (typeof container.contains !== "function" || !container.contains(detached.parent)) {
+      setDetachedPlanStatusRow(container, key, null);
+      rerenderReport();
+      return;
+    }
+    const nextSibling = detached.nextSibling?.parentNode === detached.parent ? detached.nextSibling : null;
+    detached.parent.insertBefore(detached.row, nextSibling);
+    row = detached.row;
+    setDetachedPlanStatusRow(container, key, null);
+  }
+  if (!row) return;
+  row.outerHTML = renderRow(selection.rows[index], index);
+  const replacement = findPlanStatusReportRow(container, key);
+  if (!replacement) return;
+  if (bindComments) bindReportCommentInputs(replacement);
+  bindPlanStatusActions(replacement);
+}
+
+function updatePlanStatusReport(container, key, selectionFactory, filterType, input, futureDays, count, renderRow, rerenderReport, bindComments = false) {
+  if (!findPlanStatusReportRow(container, key) && !detachedPlanStatusRow(container, key)) return;
+  const selection = selectionFactory();
+  renderReportFilterStatus(filterType, input, futureDays, count, selection);
+  updatePlanStatusReportRow(container, key, selection, renderRow, rerenderReport, bindComments);
+}
+
+function discardDetachedPlanStatusRows(key) {
+  [els.operatorReport, els.adjusterReport].forEach((container) => setDetachedPlanStatusRow(container, key, null));
+}
+
+function renderPlanStatusRow(key) {
+  const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
+const operation = stateOperation || reportOperation;
+  const sourceStatuses = activePlanReportStatuses();
+  const current = sourceStatuses[key];
+  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation, sourceStatuses);
+  planStatusButtons(key).forEach((button) => {
+    button.classList.toggle("complete", !completed);
+    button.classList.toggle("reopen", completed);
+    button.setAttribute("aria-label", completed ? "Cambiar a pendiente" : "Marcar completada");
+    button.setAttribute("title", completed ? "Reabrir operacion" : "Marcar completada");
+    button.textContent = completed ? "Reabrir" : "Completar";
+  });
+  updatePlanStatusReport(
+    els.operatorReport, key, operatorReportSelection, "operator",
+    els.operatorReportStartInput, els.operatorReportFutureDays, els.operatorReportCount,
+(op, index) => renderProductionReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }),
+    renderOperatorReport, true
+  );
+  updatePlanStatusReport(
+    els.adjusterReport, key, adjusterReportSelection, "adjuster",
+    els.adjusterReportStartInput, els.adjusterReportFutureDays, els.adjusterReportCount,
+    (op, index) => renderAdjusterReportRow(op, index, { statusActions: reportSourceAllowsOperationTracking() }), renderAdjusterReport
+  );
+  renderSubcontractReport();
+  renderReleaseReport();
+  if (operation && (state.selectedOperationId === operation.id || selectedJobOt() === operation.ot)) renderSelectedJobPanel();
+}
+
+function schedulePlanStatusBackgroundWork() {
+  const refresh = () => {
+    if (typeof planStatusBackgroundRefreshPending !== "undefined") planStatusBackgroundRefreshPending = false;
+    invalidateGanttCache();
+    renderTop();
+    renderPlanAlerts();
+    renderDraftExecutiveSummary();
+    const activeView = typeof document !== "undefined" ? document.querySelector(".workspace")?.dataset.view : "";
+    const view = activeView || "plan";
+    if (view === "plan") renderGantt();
+    if (view === "loads" || view === "saturation") renderLoads();
+  };
+  if (typeof planStatusBackgroundRefreshPending !== "undefined" && planStatusBackgroundRefreshPending) return;
+  if (typeof planStatusBackgroundRefreshPending !== "undefined") planStatusBackgroundRefreshPending = true;
+  if (typeof window.schedulePlanStatusBackgroundRefresh === "function") window.schedulePlanStatusBackgroundRefresh(refresh);
+  else window.setTimeout(refresh, 24);
+}
+
+function scheduleJobLockBackgroundWork() {
+  const refresh = () => {
+    if (typeof jobLockBackgroundRefreshPending !== "undefined") jobLockBackgroundRefreshPending = false;
+    invalidateGanttCache();
+    renderTop();
+    renderPlanAlerts();
+    const activeView = typeof document !== "undefined" ? document.querySelector(".workspace")?.dataset.view : "";
+    const view = activeView || "plan";
+    if (view === "plan") renderGantt();
+    if (view === "loads" || view === "saturation") renderLoads();
+  };
+  if (typeof jobLockBackgroundRefreshPending !== "undefined" && jobLockBackgroundRefreshPending) return;
+  if (typeof jobLockBackgroundRefreshPending !== "undefined") jobLockBackgroundRefreshPending = true;
+  if (typeof window.scheduleJobLockBackgroundRefresh === "function") window.scheduleJobLockBackgroundRefresh(refresh);
+  else window.setTimeout(refresh, 24);
+}
+
+const operationPlanStatusWatchdogTimeouts = new Map();
+
 function toggleOperationPlanStatus(key) {
-  const operation = state.operations.find((op) => operationCompletionKey(op) === key);
-  const current = state.operationPlanStatuses?.[key];
-  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation);
+  if (operationPlanStatusActions.has(key)) return operationPlanStatusActions.get(key);
+  operationPlanStatusActions.set(key, true);
+  setPlanStatusButtonsDisabled(key, true);
+  const action = performToggleOperationPlanStatus(key);
+  const tracked = action.finally(() => {
+    if (operationPlanStatusActions.get(key) !== tracked) return;
+    operationPlanStatusActions.delete(key);
+    setPlanStatusButtonsDisabled(key, false);
+  });
+  operationPlanStatusActions.set(key, tracked);
+  const watchdog = setTimeout(() => {
+    if (operationPlanStatusActions.get(key) !== tracked) return;
+    operationPlanStatusActions.delete(key);
+    setPlanStatusButtonsDisabled(key, false);
+    showToast("La persistencia de estado tardo demasiado; intenta de nuevo", 5000);
+  }, 20000);
+  const previous = operationPlanStatusWatchdogTimeouts.get(key);
+  if (previous) clearTimeout(previous);
+  operationPlanStatusWatchdogTimeouts.set(key, watchdog);
+  void tracked.finally(() => {
+    const current = operationPlanStatusWatchdogTimeouts.get(key);
+    if (current === watchdog) {
+      clearTimeout(watchdog);
+      operationPlanStatusWatchdogTimeouts.delete(key);
+    }
+  });
+  return tracked;
+}
+
+async function performToggleOperationPlanStatus(key) {
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
+  const stateOperation = state.operations.find((op) => operationCompletionKey(op) === key);
+  const reportOperation = reportOperationsSource().find((op) => operationCompletionKey(op) === key);
+  const operation = stateOperation || reportOperation;
+  const sourceStatuses = activePlanReportStatuses();
+  const current = sourceStatuses[key];
+  const completed = current?.status === "COMPLETADA_PLAN" || isPlanCompletedOperation(operation, sourceStatuses);
   if (!operation && !current) return showToast("No se encontro la operacion");
+  const previousStatus = current ? deepClone(current) : undefined;
+  const previousOperation = operation ? deepClone(operation) : undefined;
+  const previousLockedOts = Array.isArray(state.lockedOts) ? [...state.lockedOts] : [];
   checkpointState();
-  if (!state.operationPlanStatuses) state.operationPlanStatuses = {};
   if (completed) {
-    state.operationPlanStatuses[key] = { ...(current || {}), key, status: "PENDIENTE", reopenedAt: new Date().toISOString() };
+    writePlanStatusByOrigin(key, { ...(current || {}), status: "PENDIENTE", reopenedAt: new Date().toISOString() });
     if (operation) {
       operation.planStatus = "PENDIENTE";
-      operation.needsReschedule = true;
-      operation.autoFrozen = false;
-      operation.fechaInicio = "";
-      operation.horaInicio = "";
-      operation.fechaFin = "";
-      operation.horaFin = "";
+      if (stateOperation) {
+        operation.needsReschedule = true;
+        operation.autoFrozen = false;
+        operation.fechaInicio = "";
+        operation.horaInicio = "";
+        operation.fechaFin = "";
+        operation.horaFin = "";
+      }
       operation.log = appendLog(operation.log, "REABIERTA_PLAN_APP");
     }
-    saveAndRender("Operacion reabierta; se incluira en la siguiente reprogramacion");
-    return;
+    const reopenedOt = String(operation?.ot || current?.ot || "").trim();
+    if (reopenedOt) unblockOtAfterCompletion(reopenedOt);
+    return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts,
+      "Operacion reabierta; se incluira en la siguiente reprogramacion");
   }
 
   const type = isToolChangeReportOperation(operation) ? "TOOL_CHANGE" : "OPERATION";
@@ -4474,7 +10034,7 @@ function toggleOperationPlanStatus(key) {
   const toToolKey = window.PlannerCore?.operationToolKey
     ? window.PlannerCore.operationToolKey(operation)
     : "";
-  state.operationPlanStatuses[key] = {
+  writePlanStatusByOrigin(key, {
     key,
     type,
     status: "COMPLETADA_PLAN",
@@ -4496,43 +10056,197 @@ function toggleOperationPlanStatus(key) {
     toKit: operation?.toolChangeToKit || operation?.kitHerramental || "",
     toToolKey,
     completedAt: new Date().toISOString(),
-  };
+  });
   if (operation) {
     operation.planStatus = "COMPLETADA_PLAN";
     operation.needsReschedule = false;
     operation.log = appendLog(operation.log, "COMPLETADA_PLAN_APP");
   }
-  saveAndRender(type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada");
+  const cascadeChanges = completePriorSequenceOperations(operation?.ot || current?.ot || "", operation, key);
+  const completedOt = String(operation?.ot || current?.ot || "").trim();
+  if (completedOt) blockOtForCompletion(completedOt);
+  return persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts,
+    type === "TOOL_CHANGE" ? "Cambio de herramental completado" : "Operacion completada", cascadeChanges);
+}
+
+function completePriorSequenceOperations(ot, completedOperation, completedKey) {
+  const cascadeChanges = [];
+  if (!ot || !Array.isArray(state.operations)) return cascadeChanges;
+  const origin = planStatusOriginForSource();
+  const statuses = origin === "draft" ? draftViewStatuses() : statusesForPlanOrigin(origin);
+  const affectsDraft = origin === "draft" || origin === latestPublishedOriginId();
+  const sequence = state.operations
+    .filter((op) => String(op.ot) === String(ot))
+    .sort((a, b) => sequenceSort(a, b) || ((opStart(a)?.getTime() || 0) - (opStart(b)?.getTime() || 0)));
+  const targetIndex = sequence.findIndex((op) => op === completedOperation || operationCompletionKey(op) === completedKey);
+  if (targetIndex < 0) return cascadeChanges;
+  for (let i = 0; i < targetIndex; i++) {
+    const prior = sequence[i];
+    const priorKey = operationCompletionKey(prior);
+    if (!priorKey || statuses[priorKey]?.status === "COMPLETADA_PLAN") continue;
+    const previousStatus = statuses[priorKey] ? deepClone(statuses[priorKey]) : undefined;
+    const previousPlanStatus = prior.planStatus;
+    writePlanStatusByOrigin(priorKey, {
+      key: priorKey,
+      type: isToolChangeReportOperation(prior) ? "TOOL_CHANGE" : "OPERATION",
+      status: "COMPLETADA_PLAN",
+      operationId: prior.id || "",
+      ot: prior.ot || "",
+      sequence: Number(prior.secuencia || 0),
+      ct: prior.ct || "",
+      operator: prior.operador || "",
+      machine: prior.maquina || "",
+      article: prior.parte || "",
+      description: prior.descripcion || "",
+      completedAt: new Date().toISOString(),
+    });
+    if (affectsDraft && state.operations.includes(prior)) {
+      prior.planStatus = "COMPLETADA_PLAN";
+      prior.needsReschedule = false;
+      prior.log = appendLog(prior.log, "COMPLETADA_PLAN_APP");
+    }
+    cascadeChanges.push({ key: priorKey, ot: prior.ot || "", previousStatus, previousPlanStatus, prior });
+  }
+  return cascadeChanges;
+}
+
+function blockOtForCompletion(ot) {
+  if (!shouldMutateDraftFromSource()) return;
+  const key = String(ot || "").trim();
+  if (!key) return;
+  if (!Array.isArray(state.lockedOts)) state.lockedOts = [];
+  if (!state.lockedOts.includes(key)) state.lockedOts.push(key);
+  state.operations.filter((op) => String(op.ot) === key).forEach((op) => {
+    op.locked = true;
+  });
+  appSheetMarkDirtyScope("plan");
+}
+
+function unblockOtAfterCompletion(ot) {
+  if (!shouldMutateDraftFromSource()) return;
+  const key = String(ot || "").trim();
+  if (!key) return;
+  if (typeof otHasPendingOperation === "function" && !otHasPendingOperation(key)) return;
+  state.lockedOts = (Array.isArray(state.lockedOts) ? state.lockedOts : []).filter((item) => String(item) !== key);
+  state.operations.filter((op) => String(op.ot) === key).forEach((op) => {
+    op.locked = false;
+  });
+  appSheetMarkDirtyScope("plan");
+}
+
+async function persistOptimisticPlanStatus(key, operation, previousStatus, previousOperation, previousLockedOts, message, cascadeChanges = []) {
+  const affectedKeys = [key, ...cascadeChanges.map((item) => item.key).filter((itemKey) => itemKey && itemKey !== key)];
+  const affectedOts = [operation?.ot, ...cascadeChanges.map((item) => item.ot)].filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
+  const renderPlanStatusChange = () => {
+    affectedKeys.forEach((itemKey) => renderPlanStatusRow(itemKey));
+    if (typeof updateQueueLockCard === "function") affectedOts.forEach((ot) => updateQueueLockCard(ot));
+    schedulePlanStatusBackgroundWork();
+  };
+
+  renderPlanStatusChange();
+  showToast(message);
+  if (!appSheetDisponible()) {
+    affectedKeys.forEach(discardDetachedPlanStatusRows);
+    return true;
+  }
+  try {
+    window.clearTimeout(appSheetSaveTimer);
+    operationStatusSavesInFlight += 1;
+    try {
+      const origin = planStatusOriginForSource();
+      const bucket = origin === "draft" ? state.operationPlanStatuses : state.publishedPlanStatuses?.[origin] || {};
+      const savedStatuses = affectedKeys.map((itemKey) => bucket[itemKey]).filter(Boolean);
+      const saved = await PPSupabaseBridgeReplacement.saveOperationPlanStatus({
+        revision: Number(state.revision || 0),
+        status: savedStatuses[0] || {},
+        statuses: savedStatuses,
+      });
+      state.revision = Math.max(Number(state.revision || 0), Number(saved?.revision || 0));
+      state.savedAt = saved?.savedAt || state.savedAt;
+      affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+      affectedKeys.forEach(discardDetachedPlanStatusRows);
+      return true;
+    } finally {
+      operationStatusSavesInFlight -= 1;
+      if (!operationStatusSavesInFlight && appSheetDirtyScopes.size) queueAppSheetSave("plan");
+    }
+    affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+    affectedKeys.forEach(discardDetachedPlanStatusRows);
+    return true;
+  } catch (error) {
+    console.warn("No se pudo guardar el estado de la operacion:", error);
+    showToast("Error de guardado; intente recargar la pagina", 5000);
+  }
+  affectedKeys.forEach(clearPendingPlanStatusSaveKeys);
+  rollbackPlanStatusByOrigin(key, previousStatus);
+  if (operation && previousOperation) Object.assign(operation, previousOperation);
+  cascadeChanges.forEach((item) => {
+    rollbackPlanStatusByOrigin(item.key, item.previousStatus);
+    if (item.prior) item.prior.planStatus = item.previousPlanStatus;
+  });
+  if (Array.isArray(previousLockedOts)) {
+    state.lockedOts = [...previousLockedOts];
+    state.operations.forEach((op) => { op.locked = previousLockedOts.includes(String(op.ot)); });
+    appSheetMarkDirtyScope("plan");
+  }
+  if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
+  renderPlanStatusChange();
+  showToast("No se pudo guardar el estado; se restauro el valor anterior");
+  return false;
+}
+
+function renderProductionReportRow(op, index, options = {}) {
+  const start = opStart(op);
+  const end = opEnd(op);
+  const workOrder = workOrderForOt(op.ot);
+  const machineArea = cleanResourceValue(op.maquina);
+  const effectiveReportTool = isToolChangeReportOperation(op)
+    ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
+    : cleanToolValue(op.herramental)
+      || cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, { ot: op.ot, parte: op.parte || workOrder?.item || "", ops: [op] }, ["5459", "5527"]))
+      || (isBendingAppOperation(op)
+        ? cleanToolValue(toolCatalogForAppOperation(op)?.herramental)
+        : "");
+  const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
+  return `<tr data-plan-status-row-key="${escapeHtml(operationCompletionKey(op))}">
+    <td>${index + 1}</td>
+    <td>${escapeHtml(op.ot)}</td>
+    <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
+    <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
+    <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
+    <td>${escapeHtml(machineArea)}</td>
+    <td>${escapeHtml(effectiveReportTool)}</td>
+    <td>${formatReportDuration(operationCycleMinutesForReport(op))}</td>
+    <td>${formatReportDuration(operationSetupMinutesForReport(op))}</td>
+    <td>${formatReportDuration(scheduledProductionMinutesForExport(op))}</td>
+    <td>${escapeHtml(start ? formatReportDate(start) : "")}</td>
+    <td>${escapeHtml(start ? formatReportTime(start) : "")}</td>
+    <td>${escapeHtml(end ? formatReportDate(end) : "")}</td>
+    <td>${escapeHtml(end ? formatReportTime(end) : "")}</td>
+    <td>${reportOperationCommentCell(op)}</td>
+    ${options.statusActions ? `<td class="report-status-action-column">${planStatusActionCell(op)}</td>` : ""}
+  </tr>`;
+}
+
+function operationCycleMinutesForReport(op) {
+  const cycle = Number(op?.tiempoCiclo ?? op?.cycleTime ?? 0);
+  if (cycle > 0) return cycle;
+  const production = Number(op?.tiempoProd ?? op?.productionTime ?? 0);
+  const pieces = Number(op?.cantidadPendiente ?? op?.cantPendiente ?? op?.pendingPieces ?? 0);
+  if (production > 0 && pieces > 0) return Math.round((production / pieces) * 100) / 100;
+  return 0;
+}
+
+function operationSetupMinutesForReport(op) {
+  return Number(op?.tiempoSetup ?? op?.setupTime ?? 0);
 }
 
 function renderProductionReportTable(operations, options = {}) {
-  const headers = ["Num", "O.T.", "Parte", "OP", "Piezas", "Maq/Area", "TC (min)", "Tiempo setup", "Tiempo prod.", "F. inicio", "H. inicio", "F. fin", "H. fin", "Comentarios"];
+  const headers = ["Num", "O.T.", "Parte", "OP", "Piezas", "Maq/Area", "Herramental", "TC (min)", "Tiempo setup", "Tiempo prod.", "F. inicio", "H. inicio", "F. fin", "H. fin", "Comentarios"];
   if (options.statusActions) headers.push("Estado");
-  const body = operations.map((op, index) => {
-    const start = opStart(op);
-    const end = opEnd(op);
-    const workOrder = workOrderForOt(op.ot);
-    const machineArea = cleanResourceValue(op.maquina);
-    const pieces = Number(op.cantidadPendiente || workOrder?.pendingQuantity || 0);
-    return `<tr>
-      <td>${index + 1}</td>
-      <td>${escapeHtml(op.ot)}</td>
-      <td>${escapeHtml(op.parte || workOrder?.item || "")}</td>
-      <td>${escapeHtml(op.descripcion || op.tipoInsercion || "")}</td>
-      <td>${pieces > 0 ? formatReportNumber(pieces) : ""}</td>
-      <td>${escapeHtml(machineArea)}</td>
-      <td>${formatReportNumber(op.tiempoCiclo)}</td>
-      <td>${formatReportNumber(op.tiempoSetup)}</td>
-      <td>${formatReportNumber(scheduledProductionMinutesForExport(op))}</td>
-      <td>${escapeHtml(start ? formatDate(start) : "")}</td>
-      <td>${escapeHtml(start ? formatTime(start) : "")}</td>
-      <td>${escapeHtml(end ? formatDate(end) : "")}</td>
-      <td>${escapeHtml(end ? formatTime(end) : "")}</td>
-      <td>${reportOperationCommentCell(op)}</td>
-      ${options.statusActions ? `<td>${planStatusActionCell(op)}</td>` : ""}
-    </tr>`;
-  }).join("");
-  return `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin operaciones programadas en esta semana")}</tbody>`;
+  const body = operations.map((op, index) => renderProductionReportRow(op, index, options)).join("");
+  return `<thead><tr>${headers.map((header) => `<th class="${header === "Estado" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "Sin operaciones programadas en esta semana")}</tbody>`;
 }
 
 function formatReportNumber(value) {
@@ -4551,6 +10265,9 @@ function showTab(tab) {
   });
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
   document.getElementById(`${tab}Tab`).classList.add("active");
+  // RULE-SUP-078: "Liberacion real" lee `ensambles_ot` al abrirse (no viaja en el estado del
+  // plan). El render es idempotente y usa la cache de la sesion.
+  if (tab === "releaseReal") renderReleaseRealReport();
 }
 
 function addOperator() {
@@ -4571,6 +10288,7 @@ function addOperator() {
   state.operators.push(value);
   state.operatorProfiles[value] = { name: value, category: "FUERA_DE_PLAN" };
   state.operatorPerformance[value] = 100;
+  rememberLocalCapabilityConfigEdit();
   els.newOperatorInput.value = "";
   saveAndRender("Operador agregado", "matrix");
 }
@@ -4584,6 +10302,7 @@ function updateResourceProfile(resource, patch) {
   };
   state.operatorProfiles[resource].name = String(state.operatorProfiles[resource].name || resource).trim() || resource;
   state.operatorProfiles[resource].category = normalizeResourceCategory(state.operatorProfiles[resource].category);
+  rememberLocalCapabilityConfigEdit();
   saveAndRender("Recurso actualizado", "matrix");
 }
 
@@ -4609,6 +10328,7 @@ function addCt() {
   if (!state.matrix[capability.key]) state.matrix[capability.key] = [];
   if (!CAPACITY_MODES.includes(state.capacityModes[capability.key])) state.capacityModes[capability.key] = "FINITA";
   els.newCtInput.value = "";
+  rememberLocalCapabilityConfigEdit();
   saveAndRender("Operacion agregada", "matrix");
 }
 
@@ -4621,6 +10341,8 @@ function removeCapability(key) {
   if (!capability) return;
   state.customCapabilities = state.customCapabilities.filter((row) => row.key !== key);
   state.configuredCapabilities = state.configuredCapabilities.filter((configuredKey) => configuredKey !== key);
+  state.excludedCapabilities = state.excludedCapabilities.filter((excludedKey) => excludedKey !== key);
+  invalidateCurrentPlanOperationsCache();
   if (!state.hiddenCapabilities.includes(key)) state.hiddenCapabilities.push(key);
   delete state.matrix[key];
   delete state.capacityModes[key];
@@ -4631,6 +10353,7 @@ function removeCapability(key) {
     delete state.matrix[capability.ct];
     delete state.capacityModes[capability.ct];
   }
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operacion retirada de la matriz; ${capability.count} operaciones del plan se conservaron`, "matrix");
 }
 
@@ -4638,6 +10361,12 @@ function removeOperator(operator) {
   if (!state.operators.includes(operator)) return;
   if (typeof window !== "undefined" && !window.confirm(`Eliminar operador ${operator} de la matriz de habilidades?`)) return;
   checkpointState();
+  // Borrado a proposito de la fila en `operators` (RULE-SUP-061), y SI el ambito de
+  // catalogos: esta accion vive en la pestana de matriz, y saveAndRender por omision
+  // guarda solo el plan, con lo que guardarCatalogos no correria y la fila se quedaria
+  // en la base reapareciendo al refrescar.
+  registrarBorradoDeCatalogo("operators", operator);
+  appSheetMarkDirtyScope("catalogs");
   state.operators = state.operators.filter((name) => name !== operator);
   for (const key of Object.keys(state.matrix)) {
     state.matrix[key] = (state.matrix[key] || []).filter((name) => name !== operator);
@@ -4651,6 +10380,7 @@ function removeOperator(operator) {
     op.log = appendLog(op.log, `OPERADOR_ELIMINADO_APP ${operator}`);
     released++;
   }
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operador eliminado; ${released} operaciones quedaron sin asignar`);
 }
 
@@ -4680,6 +10410,10 @@ function renameOperator(operator, requestedName) {
   }
 
   checkpointState();
+  // Borrado a proposito del NOMBRE VIEJO en `operators` (el nuevo entra por el upsert
+  // normal) y ambito de catalogos, por el mismo motivo que removeOperator (RULE-SUP-061).
+  registrarBorradoDeCatalogo("operators", operator);
+  appSheetMarkDirtyScope("catalogs");
   state.operators = state.operators.map((name) => name === operator ? nextName : name);
   for (const key of Object.keys(state.matrix)) {
     state.matrix[key] = uniq((state.matrix[key] || []).map((name) => name === operator ? nextName : name));
@@ -4715,6 +10449,7 @@ function renameOperator(operator, requestedName) {
     state.settings.toolChangeOperator = nextName;
   }
 
+  rememberLocalCapabilityConfigEdit();
   saveAndRender(`Operador renombrado; ${reassigned} operaciones actualizadas`);
 }
 
@@ -4724,6 +10459,23 @@ function toggleMatrix(key, operator, checked, capability) {
   }
   if (checked && !state.matrix[key].includes(operator)) state.matrix[key].push(operator);
   if (!checked) state.matrix[key] = state.matrix[key].filter((name) => name !== operator);
+  // FIX 2026-10-24 (bug usuario, misma causa que skills.html): el escritor usa
+  // state.matrixFull como UNIVERSO (supabase-writer.js, matriz.mapear); si la pareja que
+  // se DESMARCA no esta en el universo, no se emite ninguna fila con habilitado:false y la
+  // base conserva el true. Se mantiene matrixFull sincronizado con cada toggle: marcar
+  // agrega la pareja (true) y desmarcar la escribe con false, para que el mapper siempre la
+  // tenga. Sin esto, desmarcar una casilla recien marcada en esta sesion no persistia.
+  if (!Array.isArray(state.matrixFull)) state.matrixFull = [];
+  const idx = state.matrixFull.findIndex((c) =>
+    c && c.capabilityKey === key && c.operator === operator);
+  if (idx >= 0) {
+    if (state.matrixFull[idx].habilitado !== Boolean(checked)) {
+      state.matrixFull[idx] = { ...state.matrixFull[idx], habilitado: Boolean(checked) };
+    }
+  } else {
+    state.matrixFull.push({ capabilityKey: key, operator: operator, habilitado: Boolean(checked) });
+  }
+  rememberLocalCapabilityConfigEdit();
 }
 
 function operatorPerformanceForOperator(operator) {
@@ -4731,43 +10483,812 @@ function operatorPerformanceForOperator(operator) {
   return Number.isFinite(performance) && performance > 0 ? performance : 100;
 }
 
-function balanceOperators() {
-  const loads = getOperatorLoads();
-  const byOperator = new Map(loads.map((item) => [item.operator, item.minutes]));
-  const movable = [...state.operations]
-    .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && !isJobLocked(op.ot) && op.tipoInsercion === "OPERACION")
-    .sort((a, b) => Number(a.prioridad) - Number(b.prioridad));
-
-  let moves = 0;
-  for (const op of movable) {
-    const allowed = getAllowedOperatorsForOperation(op);
-    if (allowed.length < 2) continue;
-    const currentLoad = byOperator.get(op.operador) || 0;
-    const best = allowed
-      .map((operator) => ({ operator, minutes: byOperator.get(operator) || 0 }))
-      .sort((a, b) => a.minutes - b.minutes)[0];
-    if (best && best.operator !== op.operador && currentLoad - best.minutes > operationDuration(op)) {
-      byOperator.set(op.operador, currentLoad - operationDuration(op));
-      byOperator.set(best.operator, best.minutes + operationDuration(op));
-      op.operador = best.operator;
-      op.log = appendLog(op.log, "BALANCE_APP");
-      moves++;
-    }
+async function loadNetSuiteExercise() {
+  if (planningActionsBusy) return showToast("La planificacion o sincronizacion ya esta en curso");
+  setPlanningActionsBusy("sync", true);
+  try {
+    return await loadNetSuiteExerciseImpl();
+  } finally {
+    setNetSuiteSyncPhaseLabel("");
+    setPlanningActionsBusy("sync", false);
   }
-  saveAndRender(moves ? `${moves} operaciones reasignadas` : "Sin cambios de balance");
 }
 
-async function loadNetSuiteExercise() {
-  await syncNetSuiteData(true, { mode: "full" });
+async function loadNetSuiteExerciseImpl() {
+  // Este es el boton "Sincronizar": el unico sitio del codigo que pide la ingesta antes de leer.
+  const outcome = await syncNetSuiteTwoPhase({ dispararIngesta: true });
+  showToast(outcome.message, outcome.status === "complete" ? 3500 : 9000);
+  return outcome;
+}
+
+function formatReportDuration(minutes) {
+  const totalSeconds = Math.max(0, Math.round(Number(minutes || 0) * 60));
+  const wholeMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (wholeMinutes && seconds) return `${wholeMinutes} min ${seconds} s`;
+  if (wholeMinutes) return `${wholeMinutes} min`;
+  return `${seconds} s`;
+}
+
+/**
+ * Dispara la ingesta y dice si se puede seguir leyendo de Supabase.
+ *
+ * QUE DEVUELVE Y POR QUE NO ES UN SIMPLE O SI. Un fallo de la ingesta NO siempre impide seguir:
+ * si la corrida llego a escribirse en parte, las tablas que si se escribieron estan mas
+ * nuevas que las que habia antes, y tirar la lectura entera dejaria a la persona con datos mas
+ * viejos de los que tenia. Lo que NO se puede es decir "sincronizado". Por eso se distinguen
+ * tres casos y el que se avisa es el que no toco nada o fallo entero:
+ *   - sin exito       -> no se sigue, y el aviso dice el motivo
+ *   - fallo a medias  -> se sigue leyendo (puede estar mas fresco) y el aviso nombra las tablas
+ *   - sin veredicto   -> error de canal, y dispararIngesta ya habria lanzado
+ *
+ * MEDIDO 2026-09-30: el caso de "fallo a medias" es real, no teorico. ingesta() recorre las
+ * siete tablas en un bucle con try/catch por tabla y sigue; o sea que un RESTlet que responde
+ * con cinco acciones bien y dos vacias escribe cinco tablas. Si eso se tratara como fallo total,
+ * la persona se queda viendo datos viejos que el espejo SI habia actualizado, y pensara que la
+ * ingesta no corrio. Si se tratara como exito, el toast diria que se sincronizo con dos tablas
+ * que no. Ninguna de las dos es cierta: hay que decirlo.
+ *
+ * MEDIDO 2026-10-04, Y QUE CAMBIO EN LO QUE SE DICE. Antes, una tabla que la corrida no
+ * reescribia conservaba los datos de la corrida anterior y el aviso la contaba como "sin tocar".
+ * Con RULE-SUP-048 ya no hay tabla que conserve lo anterior sin que se diga: la que NetSuite no
+ * devolvio se VACIA, y vacia es la verdad de "NetSuite no la devolvio". Los tres estados que se
+ * nombran abajo son distintos y se muestran aparte porque en pantalla se ven distinto: escritas
+ * (dato al dia), vacias (no hay dato) y con lo anterior (dato VIEJO). El tercero es el que hay
+ * que marcar aunque no se pueda arreglar desde aqui: son datos viejos que parecen frescos.
+ */
+async function correrIngestaPorBoton() {
+  const url = window.PPIngestaTrigger?.urlDeIngesta?.();
+  if (!url) {
+    showToast("Este build no trae la URL de Apps Script: no se puede pedir la ingesta");
+    return { seguir: false, resultado: null };
+  }
+  setNetSuiteSyncPhaseLabel("Actualizando desde NetSuite...");
+  let resultado;
+  try {
+    // Sin timeout propio: lo aplica PPIngestaTrigger con su AbortController, que es quien
+    // conoce el techo del web app de Apps Script (6 min) y por que el suyo va por debajo.
+    // MEDIDO 2026-09-30: aqui hubo un tiempo propio, y era el mismo numero en dos archivos:
+    // uno aqui, que no lo usaba mas que para pasarlo, y el otro en el modulo, que es el que
+    // lo aplica. Ademas rompia el arnes de pruebas, que corta las funciones de app.js y no
+    // tiene las constantes de arriba. Un solo numero, en el sitio que lo usa.
+    resultado = await window.PPIngestaTrigger.dispararIngesta();
+  } catch (error) {
+    // Un error de CANAL (sin URL, timeout, respuesta que no es JSON, despliegue viejo sin
+    // doPost). Aqui no hay ninguna escritura de la que presume, asi que no se sigue leyendo.
+    showToast(String(error.message || error), 9000);
+    return { seguir: false, resultado: null };
+  }
+  if (resultado.ok) return { seguir: true, resultado };
+  if (resultado.ejecutada) {
+    // MEDIDO 2026-09-30: este toast llevaba las siete tablas con sus conteos
+    // ("Ingesta a medias: work_orders 199, operations 2111, materials 328, items 328,
+    // machines 202, inventory 48137, sales_orders 1234. Las demas no se tocaron") y eso son 121
+    // caracteres: se cortaba a media palabra, por TERCERA vez en dos dias y con el mismo
+    // motivo. El toast lleva la cuenta; las tablas y el error de cada una van al panel de
+    // alertas (#planAlerts), que es donde cabe el detalle y donde el aviso se queda hasta que
+    // se va. Un aviso que se corta es peor que no tener aviso, porque la persona ve que fallo
+    // algo y no que.
+    const tocadas = resultado.filas || {};
+    const bien = Object.keys(tocadas).length;
+    const mal = resultado.errores.length;
+    // MEDIDO 2026-10-04, tres estados y no uno. La ingesta NO conserva valores previos de las
+    // tablas que no reescribio (RULE-SUP-048): una tabla que NetSuite no devolvio se vacia. Antes
+    // de esa regla el aviso decia "2 sin tocar" y las tablas seguian con los datos de la corrida
+    // anterior, que en la pantalla es indistinguible de un dato al dia. Ahora hay que distinguir
+    //   - escrituras: la tabla quedo al dia con lo que mando NetSuite;
+    //   - vaciadas:   la tabla quedo VACIA, y vacia es la verdad de "NetSuite no la devolvio";
+    //   - con lo anterior: la tabla conserva datos VIEJOS porque ni el vaciado se pudo hacer.
+    // El tercero es el unico peligroso: sin nombrarlo, quien mira ve numeros viejos
+    // producidos por una corrida que fallo y no puede distinguirlos de los de ahora. Se
+    // nombra en el toast y en el panel.
+    const vaciadas = resultado.vaciadas || [];
+    const sinVaciar = resultado.noSePudoVaciar || [];
+    const detalle = Object.keys(tocadas).map((tabla) => `${tabla}: ${tocadas[tabla]} filas`).join(" | ")
+      + (vaciadas.length ? " | VACIADAS (NetSuite no las devolvio): " + vaciadas.join(", ") : "")
+      + (sinVaciar.length ? " | CON LO ANTERIOR (no se pudo vaciar): "
+          + sinVaciar.map((x) => `${x.tabla} (${x.motivo})`).join(" | ") : "")
+      + (mal ? " | ERRORES: " + resultado.errores.join(" | ") : "");
+    setNetSuiteSyncAlert("Ingesta a medias: escribieron " + bien + " tablas, " + vaciadas.length
+      + " quedaron vacias y " + sinVaciar.length + " conservan lo anterior. " + detalle);
+    render({ saveScope: "ui" });
+    showToast(`Ingesta a medias: ${bien} al dia, ${vaciadas.length} vacias, ${sinVaciar.length} con lo anterior`, 9000);
+    return { seguir: true, resultado };
+  }
+  showToast(resultado.mensaje || "La ingesta no corrio", 9000);
+  return { seguir: false, resultado };
+}
+
+/**
+ * Sincronizar OTs. `dispararIngesta` es lo que separa el boton de la comprobacion automatica:
+ * el boton pide que NetSuite escriba en Supabase y despues relee; la comprobacion automatica
+ * solo relee.
+ *
+ * MEDIDO 2026-09-30: la comprobacion automatica (ensureNetSuiteWorkOrdersFresh, la que corre
+  * antes de generar o publicar el plan) llama a esta misma funcion.
+ *
+ * EL OMISION ES NO DISPARAR, Y ESO ES LO IMPORTANTE. Con el omision en true, cualquier llamador
+ * NUEVO de esta funcion gastaba una llamada al RESTlet y siete espejos a Supabase sin haberla
+ * pedido: con true, GENERAR EL PLAN las gastaba cada vez que las OTs tenian mas de 15 minutos
+ * (una sorpresa mayor que el dato viejo que evita, y que ocurre sin que nadie pulse nada), y
+ * las pruebas que la llamaban sin argumentos se colgaban esperando una ingesta que no hay que
+ * pedir. Aqui el fallo seguro es releer, que es lo que hacia esta funcion antes de que existiera
+ * la ingesta a mano. Gastar una llamada al RESTlet tiene que ser una decision NOMBRADA, y la
+ * unica que la nombra es el boton.
+ */
+async function syncBacklogWorkOrders(options = {}) {
+  const dispararIngesta = options.dispararIngesta === true;
+  if (backlogSyncInFlight) {
+    return showToast("La sincronizacion de OTs ya esta en curso");
+  }
+  setBacklogSyncInFlight(true);
+  let syncSaveGate = null;
+  try {
+    if (dispararIngesta) {
+      const ingesta = await correrIngestaPorBoton();
+      if (!ingesta.seguir) return { ok: false, error: ingesta.resultado || new Error("La ingesta no corrio"), ingesta: ingesta.resultado };
+    }
+    // MEDIDO 2026-09-30: esto reintentaba solo ante SSS_REQUEST_LIMIT_EXCEEDED, que es el
+    // 400 de limite de solicitudes de NETSUITE. Con el puente deshabilitado (RULE-SUP-030) la
+    // lectura va a Supabase, y ese codigo ya no puede llegar: el reintento estaba muerto y no
+    // cubria el limite que de verdad existe ahora, que es el de PostgREST (429, y el texto
+    // PGRST124 "Request rate limit reached"). Un reintento que solo mira el codigo del sistema
+    // que ya no esta es un reintento que no reintenta nada.
+    let payload = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        payload = await window.PlanningWorkflowCore.withTimeout(
+          PPSupabaseBridgeReplacement.fetchNetSuiteWorkOrdersLite(),
+          NETSUITE_BACKLOG_SYNC_TIMEOUT_MS,
+        );
+        break;
+      } catch (error) {
+        const texto = String(error?.message || error || "");
+        const rateLimited = texto.includes("SSS_REQUEST_LIMIT_EXCEEDED")
+          || texto.includes("PGRST124")
+          || texto.includes("rate limit")
+          || texto.includes("429");
+        if (!rateLimited || attempt === 2) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+      }
+    }
+    if (!payload) throw new Error("La lectura de work_orders en Supabase no devolvio nada tras el reintento");
+    validateNetSuiteImportedData(payload, "workOrders");
+    const planningCore = window.PlanningWorkflowCore;
+    const smartSync = planningCore?.classifySmartSyncChange
+      ? planningCore.classifySmartSyncChange(state, payload.workOrders)
+      : null;
+    if (appSheetSaveTimer != null || appSheetDirtyScopes.size) appSheetSavePending = true;
+    window.clearTimeout(appSheetSaveTimer);
+    appSheetSaveTimer = null;
+    syncSaveGate = await appSheetAcquireSaveGate();
+    const refreshResults = smartSync ? await refreshSmartSyncOtTimes(smartSync.updateCandidates) : {};
+    const nowIso = new Date().toISOString();
+    const nextState = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(
+      window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, payload.workOrders, nowIso),
+      nowIso,
+    );
+    nextState.syncedAt = payload.syncedAt || payload.savedAt || nowIso;
+    const smartSyncCounts = smartSync ? planningCore.finalizeSmartSyncSummary(smartSync, refreshResults) : null;
+    nextState.smartSyncSummary = smartSyncCounts || {};
+    nextState.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
+    // DECIDIDO 2026-09-30 (pregunta al usuario): este estado se sube a SUPABASE, y por el
+    // mismo escritor que usa el resto de la pagina. Antes era
+    // `callAppsScript("saveWorkOrderSyncState", syncPayload)`, que escribia las Hojas: al
+    // terminar un sync, la cola, los bloqueos, las marcas de OT y la retencion de OTs
+    // cerradas vivian en la hoja y el plan en Supabase, o sea dos verdades que se separan
+    // en cuanto una de las dos se guarda. El payload ya no se arma a mano porque
+    // PPSupabaseWriter mapea el estado entero y escribe `unconfirmed_work_orders` y
+    // `closed_work_order_summaries` como anexo (ver filasUnconfirmedWorkOrders y
+    // filasClosedWorkOrderSummaries en supabase-writer.js).
+    //
+    // LO QUE SE SIGUE PIDIENDO POR EL PUENTE ES SOLO LA LECTURA DE NETSUITE:
+    // `fetchNetSuiteWorkOrdersLite` de mas arriba, y `getPlanningWorkOrderDataBatch` /
+    // `getPlanningWorkOrderData` cuando toca refrescar tiempos. NetSuite no tiene otra
+    // puerta: la unica fuente de las OTs es el backend de Apps Script.
+    //
+    // POR QUE SE APLICA `nextState` ANTES DE GUARDAR Y NO DESPUES. El estado que se sube
+    // tiene que ser el RECONCILIADO con las OTs que acaban de venir de NetSuite, no el que
+    // habia antes del sync: al revés se guardaria el estado viejo y el efecto del sync
+    // tardaria un guardado mas en aparecer. nextState ya paso por
+    // `reconcileActiveWorkOrders`, asi que sus marcas de por-confirmar son las FRESCAS de
+    // este sync; sin esto la marca vivia solo en memoria y se perdia al recargar, y una OT
+    // sin ficha se caia de la cola en el siguiente normalizeState.
+    state = nextState;
+    const persistido = await guardarSyncDeOrdenesTrabajoEnSupabase();
+    state.smartSyncSummary = smartSyncCounts || {};
+    state.workOrderSyncWarnings = smartSync ? smartSyncReviewWarnings(state, smartSync) : (state.workOrderSyncWarnings || []);
+    invalidateCurrentPlanOperationsCache();
+    resetBacklogWindow();
+    render({ save: false });
+    // EL AVISO SE LIMPIA AQUI, Y NO SOLO EN LA RAMA DE APPS SCRIPT. clearNetSuiteSyncAlert() solo se
+    // llamaba en syncNetSuiteData cuando isAppsScriptRuntime() es true, y en GitHub Pages es false
+    // (la pagina se sirve desde Pages y el backend va por el puente, no por google.script.run). O sea
+    // que un sync fallido dejaba un aviso CRITICO pegado en la pantalla del plan para siempre, y un
+    // sync exitoso por el boton no lo quitaba tampoco. Medido el 2026-09-27: "Sincronizacion
+    // NetSuite: Error: Otro proceso esta actualizando el plan" en #planAlerts despues de un sync
+    // exitoso por el boton.
+    clearNetSuiteSyncAlert();
+    // CON EL GUARDADO FALLIDO NO SE DICE "OTs sincronizadas". Leerlas y no persistirlas es
+    // media sincronizacion: si el toast lo dijera, la persona recargaria y veria el estado
+    // viejo sin saber por que. El aviso de `guardarSyncDeOrdenesTrabajoEnSupabase` ya
+    // explico que las OTs se leyeron y que el estado no subio; `persistido` solo cambia lo
+    // que se devuelve para que el llamador pueda avisar (ensureNetSuiteWorkOrdersFresh).
+    if (persistido) {
+      showToast(smartSyncCounts ? planningCore.smartSyncSummaryMessage(smartSyncCounts) : `${state.workOrders.length} OTs activas sincronizadas`, smartSyncCounts ? 6000 : undefined);
+    }
+    return { ok: true, persistido: persistido };
+  } catch (error) {
+    showToast(`No se pudieron sincronizar las OTs: ${error.message}`, 9000);
+    return { ok: false, error };
+  } finally {
+    if (syncSaveGate && appSheetReleaseSaveGate(syncSaveGate)) {
+      if (appSheetSavePending) {
+        appSheetSavePending = false;
+        queueAppSheetSave();
+      }
+    }
+    setBacklogSyncInFlight(false);
+  }
+}
+
+async function ensureNetSuiteWorkOrdersFresh(options = {}) {
+  const maxAgeMs = Number(options.maxAgeMs);
+  const contextLabel = options.context === "publish" ? "publicar el plan" : "generar el plan";
+  const core = window.PlanningWorkflowCore;
+  const needs = typeof core?.needsWorkOrderSyncBeforeSchedule === "function"
+    ? core.needsWorkOrderSyncBeforeSchedule(state, new Date().toISOString(), maxAgeMs)
+    : false;
+  if (!needs) return { ok: true, refreshed: false, removedOts: [] };
+  if (backlogSyncInFlight || netSuiteSyncInFlight) {
+    showToast("Sincronizacion de NetSuite en curso; espera a que termine para continuar", 8000);
+    return { ok: false, refreshed: false, removedOts: [], reason: "busy" };
+  }
+  const selectedBefore = (state.selectedOts || []).map((ot) => ({ ot, key: materialOtKey(ot) }));
+  // MEDIDO 2026-09-30: se escribe dispararIngesta:false AUNQUE sea el valor por omision, y eso
+  // es a proposito. Esta es la COMPROBACION AUTOMATICA que corre antes de generar o publicar
+  // cuando las OTs tienen mas de NETSUITE_WORKORDER_FRESH_MS (15 min). Lo que tiene que hacer es
+  // RELER; disparar la ingesta aqui gastaria una llamada al RESTlet y siete espejos cada 15
+  // minutos, sin que nadie pulse nada, y tardaria minutos en arrancar. La razon de escribirlo
+  // aun siendo el omision es que este es el sitio donde alguien va a mirar cuando pregunte por
+  // que generar el plan no trae datos frescos, y la respuesta tiene que estar a la vista y no
+  // en la firma de una funcion que esta mas arriba.
+  const result = await syncBacklogWorkOrders({ dispararIngesta: false });
+  if (result?.ok !== true) {
+    const detail = result?.error
+      ? String(result.error.message || result.error)
+      : "datos de OTs sin sincronizar";
+    showToast(`No se pudo verificar NetSuite antes de ${contextLabel}: ${detail}. Pulsa Sincronizar OTs y vuelve a intentar`, 9000);
+    return { ok: false, refreshed: false, removedOts: [], reason: "sync-failed" };
+  }
+  // DECIDIDO 2026-09-30: leer sin guardar NO alcanza para generar o publicar. El sync se leyo
+  // bien de NetSuite pero el estado no subio, asi que lo que se va a generar sale de una cola
+  // que todavia no existe en la base: si la persona recarga, veria otro plan. Continuar
+  // ademas haria que "removedOts" fuera una lista de retiros que nadie mas puede ver.
+  if (result.persistido === false) {
+    showToast(
+      `Las OTs se leyeron pero el estado NO se guardo, asi que no se puede ${contextLabel} todavia. ` +
+      "Revisa la conexion y vuelve a intentar",
+      9000,
+    );
+    return { ok: false, refreshed: false, removedOts: [], reason: "sin-persistencia" };
+  }
+  const remaining = new Set((state.selectedOts || []).map((ot) => materialOtKey(ot)));
+  const removedOts = selectedBefore.filter((entry) => !remaining.has(entry.key)).map((entry) => entry.ot);
+  return { ok: true, refreshed: true, removedOts };
+}
+
+function smartSyncReviewWarnings(state, smartSync) {
+  const existing = (state?.workOrderSyncWarnings || []).map((warning) => ({ ...warning }));
+  const reasons = {
+    review_completed: "SMART_SYNC_COMPLETED_OPS",
+    review_changed: "SMART_SYNC_ROUTE_QUANTITY_CHANGED",
+    review_unstable: "SMART_SYNC_ROUTE_UNSTABLE",
+  };
+  for (const record of Object.values(smartSync?.byOt || {})) {
+    const reason = reasons[record?.decision];
+    if (!reason) continue;
+    if (existing.some((warning) => materialOtKey(warning.ot) === materialOtKey(record.ot) && warning.type === reason)) continue;
+    existing.push({
+      ot: String(record.ot || "").trim(),
+      type: reason,
+      createdAt: new Date().toISOString(),
+      current: record.current || null,
+      incoming: record.incoming || null,
+    });
+  }
+  return existing;
+}
+
+function otOperationsRouteTimesSignature(key) {
+  return (state.operations || [])
+    .filter((operation) => materialOtKey(operation?.ot) === key)
+    .map((operation) => [
+      normalizeStatus(operation.secuencia),
+      normalizeStatus(operation.ct),
+      normalizeStatus(operation.descripcion || operation.tipoInsercion),
+      Number(operation.cantPendiente ?? operation.cantTotal ?? 0),
+      Number(operation.tiempoCiclo || 0),
+      Number(operation.tiempoSetup || 0),
+      Number(operation.tiempoProd || 0),
+    ].join("|"))
+    .sort()
+    .join("\u001e");
+}
+
+function isOtPlannedInDraft(key) {
+  const selected = new Set((state.selectedOts || []).map(materialOtKey));
+  const scheduled = new Set((state.lastSchedule?.scheduledOts || []).map(materialOtKey));
+  if (selected.has(key) || scheduled.has(key)) return true;
+  return (state.operations || []).some((operation) =>
+    materialOtKey(operation?.ot) === key &&
+    Boolean(operation?.fechaInicio && operation?.horaInicio && operation?.fechaFin && operation?.horaFin)
+  );
+}
+
+async function refreshSmartSyncOtTimes(records) {
+  const results = {};
+  const candidates = (records || []).map((record) => ({ record, key: materialOtKey(record.ot) }));
+  candidates.forEach(({ key }, index) => {
+    if (index >= SMART_SYNC_TIME_REFRESH_LIMIT) results[key] = { changed: false, skipped: true };
+  });
+  const toRefresh = candidates.slice(0, SMART_SYNC_TIME_REFRESH_LIMIT);
+  if (!toRefresh.length) return results;
+
+  // MEDIDO 2026-09-30: esta rama se tomaba SIEMPRE, porque `isAppsScriptRuntime()` da false
+  // desde que el puente quedo deshabilitado (RULE-SUP-030). O sea que el refresco de tiempos
+  // tras una sincronizacion inteligente no ocurria nunca en el sitio estatico: cada OT se
+  // marcaba `skipped` y los tiempos se quedaban como estaban. La lectura de tiempos va a
+  // Supabase, que esta en los dos runtimes, asi que la rama se borra y el refresco ocurre.
+  // El limite SMART_SYNC_TIME_REFRESH_LIMIT de arriba sigue mandando: eso si es un presupuesto.
+
+  // Capturar firmas ANTES del batch merge
+  const beforeByKey = new Map();
+  toRefresh.forEach(({ key }) => beforeByKey.set(key, otOperationsRouteTimesSignature(key)));
+
+  // Una sola llamada batch para todas las OTs candidatas
+  const ots = toRefresh.map(({ record }) => record.ot);
+  const batchResult = await window.PlanningWorkflowCore.withTimeout(
+    PPSupabaseBridgeReplacement.getPlanningWorkOrderDataBatch(ots),
+    NETSUITE_PLANNING_TIMEOUT_MS
+  );
+
+  if (batchResult?.ok && Array.isArray(batchResult.data)) {
+    const okKeys = new Set();
+    for (const item of batchResult.data) {
+      if (item?.ok && item?.data) {
+        const key = materialOtKey(item.ot);
+        if (key && mergeIndividualPlanningData(item.data, key)) {
+          individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+          individualPlanningUnavailableReasons.delete(key);
+          okKeys.add(key);
+        }
+      }
+    }
+    for (const { key } of toRefresh) {
+      if (!okKeys.has(key)) { results[key] = { changed: false, skipped: true }; continue; }
+      const after = otOperationsRouteTimesSignature(key);
+      const changed = beforeByKey.get(key) !== after;
+      if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+      results[key] = { changed, skipped: false };
+    }
+  } else {
+    // Fallback: llamadas individuales solo si el batch falla
+    for (const { record, key } of toRefresh) {
+      const result = await ensureWorkOrderPlanningData(record.ot);
+      const after = otOperationsRouteTimesSignature(key);
+      const changed = result.ready && beforeByKey.get(key) !== after;
+      if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+      results[key] = { changed, skipped: !result.ready };
+    }
+  }
+  return results;
+}
+
+async function syncNetSuiteTwoPhase(options = {}) {
+  // La ingesta va PRIMERO y no entre las dos fases. MEDIDO 2026-09-30: este era el boton
+  // "Sincronizar" y lo que hacia era releer Supabase dos veces (OTs y despues operaciones) sin
+  // que NetSuite escribiera nada, o sea que el boton no sincronizaba: hacia un reread. Pedir la
+  // ingesta antes de la primera lectura es lo que hace que lo que se lee despues sea nuevo, y no
+  // lo que ya estaba.
+  //
+  // Y va antes de la fase de OTs y no entre las dos porque leer OTs y despues hacer que la
+  // ingesta escriba operaciones deja la pantalla con OTs viejas y operaciones nuevas, que es
+  // exactamente el estado que hace que un plan se vea al dia y no lo este. Si la ingesta no
+  // puede seguir, no se lee ninguna de las dos.
+  // Igual que en syncBacklogWorkOrders, el omision es NO disparar: la decision de gastar el
+  // RESTlet se nombra donde se toma, que es el boton, y no se hereda por haber llamado a esta
+  // funcion. Ver el comentario de alli, que es el mismo problema.
+  const ingesta = options.dispararIngesta === true ? await correrIngestaPorBoton() : null;
+  if (ingesta && !ingesta.seguir) {
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(
+      { ok: false, error: ingesta.resultado || new Error("La ingesta no corrio") },
+      null,
+    );
+  }
+
+  setNetSuiteSyncPhaseLabel("Sincronizando OTs...");
+  const workOrdersLoaded = await syncWorkOrdersOnce({ showMessage: false, manual: true });
+  if (!workOrdersLoaded) {
+    const error = state.netSuiteSyncAlert?.message || "No se pudieron sincronizar las OTs";
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome({ ok: false, error }, null);
+  }
+  const workOrdersResult = { ok: true };
+
+  setNetSuiteSyncPhaseLabel("Sincronizando operaciones...");
+  try {
+    const planningPayload = await window.PlanningWorkflowCore.withTimeout(
+      PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
+      NETSUITE_PLANNING_TIMEOUT_MS * 24
+    );
+    applyNetSuitePlanningPayload(planningPayload);
+    saveState("plan");
+    render();
+    if (options.persist !== false) {
+      const guardado = await guardarPlanEnSupabase();
+      if (!guardado) throw new Error("No se pudo guardar el estado");
+    }
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: true });
+  } catch (error) {
+    return window.PlanningWorkflowCore.netSuiteSyncOutcome(workOrdersResult, { ok: false, error: error.message });
+  } finally {
+    setNetSuiteSyncPhaseLabel("");
+  }
+}
+
+function applyNetSuitePlanningPayload(payload) {
+  const backlogDatasetChanged = Array.isArray(payload?.operations) || Array.isArray(payload?.materials);
+  const selected = new Set((state.selectedOts || []).map(normalizeKey));
+  const detailOt = normalizeKey(selectedJobOt());
+  if (detailOt) selected.add(detailOt);
+  const locked = new Set((state.lockedOts || []).map(normalizeKey));
+  const upper = (value) => String(value || "").trim().toUpperCase();
+  const isHistoricalOperation = (operation) =>
+    operation?.historical === true || operation?.isHistorical === true ||
+    ["PUBLICADO", "PUBLICADA", "GUARDADO", "GUARDADA", "HISTORICO", "HISTORICA"]
+      .includes(upper(operation?.planStatus || operation?.estatus));
+  const isCompletedOperation = (operation) =>
+    upper(operation?.planStatus || operation?.estatus) === "COMPLETADA_PLAN";
+  const isToolChangeOperation = (operation) => upper(operation?.tipoInsercion) === "CAMBIO_HERRAMENTAL";
+  const isPreservedOperation = (operation) =>
+    isHistoricalOperation(operation) || isCompletedOperation(operation) || isToolChangeOperation(operation);
+  const sequenceOf = (operation) => String(operation?.secuencia ?? "").trim();
+  const ctOf = (operation) => {
+    const ct = String(operation?.ct ?? "").trim().toUpperCase();
+    return ct && ct !== "SIN_CT" ? ct : "";
+  };
+  const descriptionOf = (operation) =>
+    upper(operation?.descripcion || operation?.tipoInsercion || "");
+  const routeFields = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tiempoFallback", "tipoInsercion",
+  ];
+  const mergeRoute = (remoteOperation, existingOperation) => {
+    if (!existingOperation) return remoteOperation;
+    const route = {};
+    routeFields.forEach((field) => {
+      if (remoteOperation && Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+    });
+    const merged = { ...existingOperation, ...route };
+    if (String(existingOperation?.id || "").trim()) merged.id = existingOperation.id;
+    if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+    return merged;
+  };
+  const mergeSelectedOt = (remoteOperations, localOperations) => {
+    const local = (localOperations || []).filter(Boolean);
+    const preserved = local.filter(isPreservedOperation);
+    const matchable = local.filter((operation) => !isPreservedOperation(operation));
+    const bySequence = new Map();
+    const byCt = new Map();
+    const byDescription = new Map();
+    matchable.forEach((operation) => {
+      const sequence = sequenceOf(operation);
+      if (sequence && !bySequence.has(sequence)) bySequence.set(sequence, operation);
+      const ct = ctOf(operation);
+      if (ct && !byCt.has(ct)) byCt.set(ct, operation);
+      const description = descriptionOf(operation);
+      if (description) {
+        if (!byDescription.has(description)) byDescription.set(description, []);
+        byDescription.get(description).push(operation);
+      }
+    });
+    const used = new Set();
+    const matchRemote = (remoteOperation) => {
+      const sequence = sequenceOf(remoteOperation);
+      if (sequence && bySequence.has(sequence) && !used.has(bySequence.get(sequence))) {
+        return bySequence.get(sequence);
+      }
+      const ct = ctOf(remoteOperation);
+      if (ct && byCt.has(ct) && !used.has(byCt.get(ct))) return byCt.get(ct);
+      const description = descriptionOf(remoteOperation);
+      const candidates = (byDescription.get(description) || []).filter((operation) => !used.has(operation));
+      if (candidates.length) return candidates[0];
+      return null;
+    };
+    const merged = (remoteOperations || []).map((remoteOperation) => {
+      const existing = matchRemote(remoteOperation);
+      if (existing) used.add(existing);
+      return mergeRoute(remoteOperation, existing);
+    });
+    return [...preserved, ...merged];
+  };
+  const refreshedOts = [];
+  if (Array.isArray(payload?.operations)) {
+    const localByOt = new Map();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key) continue;
+      if (!localByOt.has(key)) localByOt.set(key, []);
+      localByOt.get(key).push(operation);
+    }
+    const payloadByOt = new Map();
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key) continue;
+      if (!payloadByOt.has(key)) payloadByOt.set(key, []);
+      payloadByOt.get(key).push(operation);
+    }
+    const selectedMerged = new Map();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || selectedMerged.has(key)) continue;
+      const localOps = localByOt.get(key) || [];
+      const remoteOps = payloadByOt.get(key);
+      if (!remoteOps || locked.has(key)) {
+        selectedMerged.set(key, localOps);
+      } else {
+        selectedMerged.set(key, mergeSelectedOt(remoteOps, localOps));
+        refreshedOts.push(key);
+      }
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || selectedMerged.has(key)) continue;
+      if (!locked.has(key)) {
+        selectedMerged.set(key, payloadByOt.get(key) || []);
+        refreshedOts.push(key);
+      }
+    }
+    const nextOperations = [];
+    const emitted = new Set();
+    for (const operation of state.operations || []) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      const ops = selectedMerged.get(key);
+      if (ops) nextOperations.push(...ops);
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || !selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      const ops = selectedMerged.get(key);
+      if (ops) nextOperations.push(...ops);
+    }
+    for (const operation of payload.operations) {
+      const key = normalizeKey(operation?.ot);
+      if (!key || selected.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      nextOperations.push(...(payloadByOt.get(key) || []));
+      refreshedOts.push(key);
+    }
+    state.operations = nextOperations;
+  }
+  if (Array.isArray(payload?.materials)) state.materials = payload.materials;
+  if (Array.isArray(payload?.operationCatalog)) state.operationCatalog = payload.operationCatalog;
+  if (typeof payload?.operationCatalogWarning === "string") state.operationCatalogWarning = payload.operationCatalogWarning;
+  if (Array.isArray(payload?.syncWarnings)) state.syncWarnings = payload.syncWarnings;
+  if (payload?.syncedAt) state.syncedAt = payload.syncedAt;
+  if (typeof payload?.syncedAt === "string" && Array.isArray(payload?.operations)) {
+    state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}) };
+    for (const key of refreshedOts) {
+      if (key) state.operationsSyncedAt[key] = payload.syncedAt;
+    }
+  }
+  if (typeof invalidateCurrentPlanOperationsCache === "function") invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
+}
+
+function mergeWorkOrderLocalOverrides(local, item) {
+  if (!local) return item;
+  const merged = { ...item };
+  if (!merged.dueDateOverride && local.dueDateOverride) merged.dueDateOverride = local.dueDateOverride;
+  if (!merged.photoUrl && local.photoUrl) merged.photoUrl = local.photoUrl;
+  if (!(merged.lastSalePrice > 0) && Number(local.lastSalePrice) > 0) merged.lastSalePrice = Number(local.lastSalePrice);
+  if (!(merged.averageSalePrice > 0) && Number(local.averageSalePrice) > 0) merged.averageSalePrice = Number(local.averageSalePrice);
+  if (!merged.averageSalePriceFrom && local.averageSalePriceFrom) merged.averageSalePriceFrom = local.averageSalePriceFrom;
+  if (!merged.averageSalePriceTo && local.averageSalePriceTo) merged.averageSalePriceTo = local.averageSalePriceTo;
+  return merged;
+}
+
+function preserveImportedOperationPrices(localOperations, importedOperations) {
+  const byId = new Map();
+  const bySequence = new Map();
+  const byOt = new Map();
+  for (const operation of localOperations || []) {
+    const unitPrice = Number(operation?.unitPrice);
+    const amount = Number(operation?.amount);
+    if (!(unitPrice > 0) && !(amount > 0)) continue;
+    const record = { unitPrice, amount };
+    if (operation.id) byId.set(String(operation.id), record);
+    const sequenceKey = `${materialOtKey(operation.ot)}|${operation.secuencia}|${operation.ct}`;
+    if (!bySequence.has(sequenceKey)) bySequence.set(sequenceKey, record);
+    const otKey = materialOtKey(operation.ot);
+    if (otKey && !byOt.has(otKey)) byOt.set(otKey, record);
+  }
+  if (!byId.size && !bySequence.size && !byOt.size) return importedOperations || [];
+  return (importedOperations || []).map((operation) => {
+    const source = byId.get(String(operation?.id || ""))
+      || bySequence.get(`${materialOtKey(operation?.ot)}|${operation?.secuencia}|${operation?.ct}`)
+      || byOt.get(materialOtKey(operation?.ot));
+    if (!source) return operation;
+    const merged = { ...operation };
+    if (!(Number(merged.unitPrice) > 0) && source.unitPrice > 0) merged.unitPrice = source.unitPrice;
+    if (!(Number(merged.amount) > 0) && source.amount > 0) merged.amount = source.amount;
+    return merged;
+  });
+}
+
+function applyNetSuiteWorkOrdersPayload(payload) {
+  // Una sola marca de tiempo para el reconcile y para syncedAt: si se calcularan por
+  // separado, el closedDetectedAt del resumen de una OT cerrada no coincidiria con
+  // syncedAt de la misma carga.
+  const nowIso = payload?.syncedAt || payload?.savedAt || new Date().toISOString();
+  // Si hubo reconciliacion, la poda por ausencia NO se aplica: reconcileActiveWorkOrders ya
+  // resolvio que OTs se van, y solo con evidencia positiva. Ver el comentario de las dos lineas.
+  let huboReconciliacion = false;
+  if (Array.isArray(payload?.workOrders)) {
+    const core = window.PlanningWorkflowCore;
+    // reconcileActiveWorkOrders se corre ANTES de sustituir la lista porque necesita la
+    // anterior para saber que OTs cerro NetSuite. Podar solo la cola no basta: las
+    // operaciones de la OT cerrada sobreviven en el borrador, getPriorityJobs() sigue
+    // creando un trabajo para ella (app.js:11676-11683) y reaparece en "trabajos en
+    // espera" aunque ya no este en el plan. Es la misma rutina que usa la sync ligera.
+    if (typeof core?.reconcileActiveWorkOrders === "function") {
+      // Object.assign y no `state = ...`: el resto de la funcion muta el mismo objeto y
+      // quien lo llama debe ver el resultado sin cambiar de referencia.
+      Object.assign(state, core.reconcileActiveWorkOrders(state, payload.workOrders, nowIso));
+      huboReconciliacion = true;
+    }
+    const localByOt = new Map((state.workOrders || []).map((item) => [materialOtKey(item.ot), item]));
+    // LA BASE ES LA LISTA RECONCILIADA, NO EL PAYLOAD CRUDO. reconcileActiveWorkOrders deja en
+    // workOrders las OTs que solo faltan y NO tienen evidencia de cierre
+    // (planning-workflow-core.js:1075-1077), que es la proteccion de RULE-OT-051. Al sustituir
+    // esa lista por el payload crudo, la conservacion se perdia aqui mismo, y la poda de abajo
+    // se llevaba despues a esas OTs de la cola. Medido el 2026-09-27: 25 seleccionadas contra
+    // 222 fichas, 0 perdidas, o sea que la via estaba abierta y no habia descargado. Es el mismo
+    // estado roto que el backend evita a proposito (08-netsuite.js:330-333).
+    // mergeWorkOrderLocalOverrides es idempotente cuando local e item son el mismo objeto, asi
+    // que mapear sobre la lista reconciliada no cambia los overrides locales.
+    const base = huboReconciliacion ? state.workOrders : payload.workOrders;
+    state.workOrders = base.map((item) =>
+      mergeWorkOrderLocalOverrides(localByOt.get(materialOtKey(item.ot)), item));
+  }
+  // pruneDraftToOpenWorkOrders se queda UNICAMENTE como red cuando no hubo reconciliacion, que
+  // solo pasa si PlanningWorkflowCore no trae la routine. Poda por simple ausencia, sin las tres
+  // capas (evidencia positiva, marcas de por confirmar y guarda de caida masiva) que si tiene
+  // reconcileActiveWorkOrders, y con ella se cumplia el pedido del 2026-09-27: lo que la persona
+  // pone en Planeado no se mueve de ahi, y al recargar sigue como lo dejo.
+  if (!huboReconciliacion) {
+    Object.assign(state, window.PlanningWorkflowCore.pruneDraftToOpenWorkOrders(state, state.workOrders));
+  }
+  if (payload?.invoicePriceWindow) state.invoicePriceWindow = payload.invoicePriceWindow;
+  if (payload?.plant) state.plant = payload.plant;
+  state.syncedAt = nowIso;
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+}
+
+function persistReferencePricesFromSync() {
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  let changed = false;
+  const updatedAt = new Date().toISOString();
+  // El precio de venta de NetSuite va a SU PROPIO campo, referenceSalePrice, y no a
+  // manualUnitPrice. Antes se escribia en manualUnitPrice con un max que solo subia, de modo
+  // que un precio de venta equivocado (el de la conversion por tipo de cambio, RULE-REP-018)
+  // quedaba pegado en CONFIG para siempre, y el reporte lo tomaba como si fuera un precio
+  // escrito por una persona. Ahora este campo se actualiza en AMBOS sentidos: si el precio de
+  // venta baja, baja. manualUnitPrice queda solo para lo que escriba una persona.
+  // Se escribe solo cuando el valor cambia de verdad, para no guardar la hoja en cada sync.
+  const recordSalePrice = (part, price) => {
+    const article = articleKeyForPart(part);
+    if (!article) return;
+    const configuration = articleConfigurationFor(article);
+    const next = Math.max(0, Number(price) || 0);
+    const current = Math.max(0, Number(configuration.referenceSalePrice || 0));
+    if (!(next >= 1)) return;
+    if (Math.abs(current - next) < 0.005) return;
+    configuration.referenceSalePrice = next;
+    configuration.updatedAt = updatedAt;
+    changed = true;
+  };
+  for (const workOrder of workOrders) {
+    const price = Math.max(0, Number(workOrder?.lastSalePrice) || 0, Math.max(0, Number(workOrder?.averageSalePrice) || 0));
+    if (!(price >= 1)) continue;
+    recordSalePrice(workOrder.item, price);
+    const otArticle = articleForOt(workOrder?.ot);
+    if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) recordSalePrice(otArticle, price);
+  }
+  if (changed) queueAppSheetSave("catalogs");
+  return changed;
+}
+
+function setNetSuiteSyncPhaseLabel(message) {
+  const label = els.loadNsExerciseBtn?.querySelector("[data-sync-label]");
+  if (label) label.textContent = message || "Sincronizar";
+}
+
+function syncWorkOrdersOnce(options = {}) {
+  return syncNetSuiteData(options.showMessage === true, { mode: "workOrders", background: options.background === true }).then((loaded) => {
+    if (loaded && options.deferPresentation !== true) {
+      saveState("ui");
+      render();
+      applyInitialWorkspaceView({ scrollToTop: options.manual === true });
+    }
+    return loaded;
+  });
 }
 
 function syncNetSuiteInBackground(options = {}) {
-  syncNetSuiteData(options.showMessage === true, { mode: "workOrders" }).then((loaded) => {
-    if (!loaded) return;
-    saveState("ui");
-    render();
-    applyInitialWorkspaceView();
-  });
+  return syncWorkOrdersOnce(options);
+}
+
+// CONFIRMA CONTRA NETSUITE EL CIERRE DE LAS OTs QUE NO VINIERON EN EL LISTADO (RULE-OT-051).
+//
+// QUE RESUELVE. El catalogo de OTs llega con onlyOpen:true, o sea que una OT cerrada no
+// aparece: desaparece. Antes eso se leia como cierre y la OT se perdia de la cola; despues se
+// hizo que exigiera dos ausencias, que tampoco era confirmacion. La unica fuente que puede dar
+// una confirmacion POSITIVA es preguntar: el 2244 tiene un action 'detail' que ignora onlyOpen
+// y, desde la version que hay que subir, devuelve el estatus real de la OT.
+//
+// CUANDO SE PREGUNTA. Solo hay OTs por confirmar cuando el listado vino incompleto, que es lo
+// raro. Si no hay ninguna, no se gasta ni una llamada. El servidor ademas tiene un tope de 20
+// folios por pasada: si de pronto hay cientos, eso no es una confirmacion que valga la pena
+// gastar, es una senal de que algo anda mal, y la respuesta es conservarlas todas y avisar.
+//
+// QUE PASA CON CADA RESPUESTA. found:false (NetSuite no la conoce) NO es lo mismo que cerrada:
+// puede estar borrada o en otra planta, asi que se conserva. estatus con CERRAD/CLOSED/COMPLET/
+// CANCELAD es cierre confirmado y la OT sale. estatus vacio significa que el 2244 aun no trae
+// el campo, o sea que el archivo nuevo no se ha subido: se conservan TODAS y se avisa, que es
+// un estado degradado seguro. Nunca se poda de mas.
+async function confirmUnconfirmedWorkOrderClosures() {
+  const pendientes = Object.values(state.unconfirmedWorkOrders || {});
+  if (!pendientes.length) return { asked: 0 };
+  let respuesta = null;
+  try {
+    respuesta = await PPSupabaseBridgeReplacement.confirmWorkOrderClosures(pendientes.map((item) => item.ot || "").filter(Boolean));
+  } catch (error) {
+    // Un fallo al preguntar NUNCA cierra una OT. Se deja todo como esta.
+    state.lastWorkOrderClosureCheck = {
+      at: new Date().toISOString(),
+      asked: 0,
+      confirmedClosed: [],
+      error: String(error?.message || error).slice(0, 200),
+    };
+    return { asked: 0, error: state.lastWorkOrderClosureCheck.error };
+  }
+  const results = respuesta?.results || {};
+  const confirmed = new Set();
+  for (const [clave, item] of Object.entries(results)) {
+    if (item?.closed) confirmed.add(String(item.ot || clave).trim().toUpperCase());
+  }
+  state.lastWorkOrderClosureCheck = {
+    at: new Date().toISOString(),
+    asked: Number(respuesta?.asked || 0),
+    omitted: Number(respuesta?.omitted || 0),
+    truncated: Boolean(respuesta?.truncated),
+    confirmedClosed: [...confirmed],
+    // Lo que NetSuite sigue reportando abierto: la evidencia de que NO se podan.
+    stillOpen: Object.entries(results).filter(([, item]) => item?.found && !item?.closed).map(([, item]) => item.ot),
+    unknown: Object.entries(results).filter(([, item]) => !item?.found && !item?.error).map(([, item]) => item.ot),
+  };
+  if (confirmed.size) {
+    // Se re-reconcilia pasandole los folios que NetSuite confirmo como cerrados. Sin esto, el
+    // unico podador seria la segunda ausencia, que ya no existe.
+    state = window.PlanningWorkflowCore.reconcileActiveWorkOrders(state, state.workOrders, new Date().toISOString(), { confirmedBySource: confirmed });
+    queueAppSheetSave("plan");
+  }
+  return { asked: state.lastWorkOrderClosureCheck.asked, confirmed: confirmed.size };
 }
 
 async function syncNetSuiteData(showMessage, options = {}) {
@@ -4779,19 +11300,14 @@ async function syncNetSuiteData(showMessage, options = {}) {
   setNetSuiteSyncState(true);
   const mode = options.mode === "full" ? "full" : "workOrders";
   try {
-    if (isAppsScriptRuntime()) {
-      const imported = mode === "full"
-        ? await callAppsScript("syncNetSuitePlant")
-        : await callAppsScript("syncNetSuiteWorkOrders");
-      validateNetSuiteImportedData(imported, mode);
-      applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    } else {
-      const response = await fetchNetSuiteExercise();
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const imported = importJson(await response.text());
-      validateNetSuiteImportedData(imported, mode);
-      applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    }
+    const imported = mode === "full"
+      ? await PPSupabaseBridgeReplacement.syncNetSuitePlant()
+      : await PPSupabaseBridgeReplacement.syncNetSuiteWorkOrders();
+    validateNetSuiteImportedData(imported, mode);
+    await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+    if (mode === "workOrders") applyNetSuiteWorkOrdersPayload(imported);
+    await confirmUnconfirmedWorkOrderClosures();
+    persistReferencePricesFromSync();
     clearNetSuiteSyncAlert();
     if (showMessage) {
       const message = mode === "full"
@@ -4805,7 +11321,10 @@ async function syncNetSuiteData(showMessage, options = {}) {
   } catch (error) {
     setNetSuiteSyncAlert(error.message);
     render({ saveScope: "ui" });
-    if (showMessage) showToast(`No se pudo cargar NetSuite: ${error.message}`, 9000);
+    // La sincronizacion de carga deja los datos del servidor como estaban: sin este aviso
+    // una carga fallida se confondia con "NetSuite todavia lista la OT" y las OTs ya
+    // cerradas seguian apareciendo en Backlog y en Planeado/No planeado.
+    if (showMessage || options.background === true) showToast(`No se pudo cargar NetSuite: ${error.message}`, 9000);
     return false;
   } finally {
     netSuiteSyncInFlight = false;
@@ -4816,13 +11335,28 @@ async function syncNetSuiteData(showMessage, options = {}) {
 function validateNetSuiteImportedData(imported, mode) {
   const workOrders = Array.isArray(imported?.workOrders) ? imported.workOrders : [];
   if (!workOrders.length) {
-    throw new Error("NetSuite no devolvio OTs para Planta MM del Llano. Revisa credenciales, permisos del deployment y ejecuta runProductionReadinessCheck({liveNetSuite:true}).");
+    // MEDIDO 2026-09-30 en la pagina real: este mensaje decia "Revisa credenciales, permisos
+    // del deployment y ejecuta runProductionReadinessCheck({liveNetSuite:true})", y ya no
+    // senala al lugar del fallo. La app no habla con NetSuite (RULE-SUP-030): lee la tabla
+    // work_orders de Supabase. Un mensaje que manda a revisar el deployment de Apps Script
+    // cuando el problema es una tabla vacia o una politica de RLS hace perder el rato en el
+    // sistema equivocado, y por encima tapa el motivo real, que es el que se pedia en
+    // RULE-SUP-027: que tabla fallo y con que error.
+    throw new Error(
+      "La tabla work_orders de Supabase vino vacia. Puede ser que la ingesta de NetSuite no haya corrido, "
+      + "o que las politicas RLS no dejen leerla. Revisa el conteo de work_orders y la sesion; no hay nada que "
+      + "revisar en Apps Script, porque la app ya no lo consulta.",
+    );
   }
   if (mode === "full") {
     const operations = Array.isArray(imported?.operations) ? imported.operations : [];
     const catalog = Array.isArray(imported?.operationCatalog) ? imported.operationCatalog : [];
     if (!operations.length || !catalog.length) {
-      throw new Error("NetSuite devolvio OTs pero no devolvio operaciones/catalogo. Revisa RESTlet 1762 deploy 17 y permisos del token.");
+      throw new Error(
+        "Supabase devolvio OTs pero no devolvio operaciones/catalogo: la tabla "
+        + `${!operations.length ? "operations" : "operation_catalog"} de Supabase vino vacia. `
+        + "Revisa la ingesta y las politicas RLS de esa tabla.",
+      );
     }
   }
 }
@@ -4845,43 +11379,661 @@ function normalizeNetSuiteSyncAlert(alert) {
   return { message, updatedAt: String(alert.updatedAt || alert.fecha || "") };
 }
 
-async function ensurePlanningDataLoaded(showMessage) {
-  if (!isAppsScriptRuntime()) return true;
+const individualPlanningRequests = new Map();
+const individualPlanningLoadCompleted = new Map();
+const selectedJobDetailOperationLoads = new Map();
+const INDIVIDUAL_PLANNING_FALLBACK_MINUTES = 1 / 60;
+const INDIVIDUAL_PLANNING_PREFETCH_LIMIT = 5;
+const INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY = 2;
+const INDIVIDUAL_PLANNING_CACHE_TTL_MS = 10 * 60 * 1000;
+const INDIVIDUAL_PLANNING_TIMEOUT_MS = 30 * 1000;
+const SMART_SYNC_TIME_REFRESH_LIMIT = 10;
+const individualPlanningPrefetchTasks = new Map();
+const individualPlanningPrefetchQueue = [];
+let individualPlanningPrefetchActive = 0;
+const individualPlanningUnavailableReasons = new Map();
+
+function normalizeIndividualPlanningOperation(operation) {
+  if (Number(operation?.tiempoProd) > 0) return operation;
+  return { ...operation, tiempoProd: INDIVIDUAL_PLANNING_FALLBACK_MINUTES, tiempoFallback: true };
+}
+
+function individualPlanningOperationValid(operation) {
+  const workCenter = String(operation?.ct || "").trim().toUpperCase();
+  return Boolean(workCenter) && workCenter !== "SIN_CT";
+}
+
+function individualPlanningOperationsForOt(ot, operations = state.operations) {
+  const key = materialOtKey(ot);
+  return (operations || []).filter((operation) =>
+    materialOtKey(operation?.ot) === key
+      && String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+  );
+}
+
+function hasIndividualPlanningOperations(ot) {
+  const operations = individualPlanningOperationsForOt(ot);
+  return operations.length > 0 && operations.every(individualPlanningOperationValid);
+}
+
+function prefetchRecentPlanningWorkOrders(options = {}) {
+  const exactKey = materialOtKey(options.exactOt || els.searchInput?.value);
+  const recentOts = (state.workOrders || []).map((workOrder, index) => ({ workOrder, index }))
+    .sort((left, right) => String(right.workOrder?.startDate || "").localeCompare(String(left.workOrder?.startDate || "")) || left.index - right.index)
+    .map(({ workOrder }) => workOrder?.ot);
+  const exactOt = recentOts.find((ot) => materialOtKey(ot) === exactKey);
+  const candidates = [
+    exactOt,
+    ...recentOts,
+  ].filter((ot, index, values) => {
+    const key = materialOtKey(ot);
+    return key && values.findIndex((candidate) => materialOtKey(candidate) === key) === index;
+  }).slice(0, INDIVIDUAL_PLANNING_PREFETCH_LIMIT);
+  return Promise.all(candidates.map((ot) => queuePlanningWorkOrderPrefetch(ot, materialOtKey(ot) === exactKey)));
+}
+
+function queuePlanningWorkOrderPrefetch(ot, priority) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  const existing = individualPlanningPrefetchTasks.get(key);
+  if (existing) {
+    if (priority) {
+      const queuedIndex = individualPlanningPrefetchQueue.indexOf(existing);
+      if (queuedIndex >= 0) individualPlanningPrefetchQueue.unshift(individualPlanningPrefetchQueue.splice(queuedIndex, 1)[0]);
+    }
+    return existing.promise;
+  }
+  const task = { key, ot, resolve: null, promise: null };
+  task.promise = new Promise((resolve) => { task.resolve = resolve; });
+  individualPlanningPrefetchTasks.set(key, task);
+  if (priority) individualPlanningPrefetchQueue.unshift(task);
+  else individualPlanningPrefetchQueue.push(task);
+  flushPlanningWorkOrderPrefetchQueue();
+  return task.promise;
+}
+
+function flushPlanningWorkOrderPrefetchQueue() {
+  while (individualPlanningPrefetchActive < INDIVIDUAL_PLANNING_PREFETCH_CONCURRENCY && individualPlanningPrefetchQueue.length) {
+    const task = individualPlanningPrefetchQueue.shift();
+    individualPlanningPrefetchActive += 1;
+    Promise.resolve()
+      .then(() => ensureWorkOrderPlanningData(task.ot, { skipWhenLocal: true }))
+      .then(task.resolve, (error) => task.resolve({ ready: false, error: String(error?.message || error) }))
+      .finally(() => {
+        individualPlanningPrefetchActive -= 1;
+        individualPlanningPrefetchTasks.delete(task.key);
+        flushPlanningWorkOrderPrefetchQueue();
+      });
+  }
+}
+
+function individualPlanningOperationSequenceKey(operation) {
+  const sequence = String(operation?.secuencia ?? "").trim();
+  return sequence ? `${materialOtKey(operation?.ot)}|${sequence}` : "";
+}
+
+function individualPlanningOperationCtKey(operation) {
+  const ct = String(operation?.ct ?? "").trim().toUpperCase();
+  return ct ? `${materialOtKey(operation?.ot)}|${ct}` : "";
+}
+
+function individualPlanningRecordSignature(record) {
+  return Object.keys(record || {}).sort().map((field) => `${field}:${JSON.stringify(record[field])}`).join("\\u001f");
+}
+
+function individualPlanningOtSignature(ot) {
+  const key = materialOtKey(ot);
+  const workOrder = (state.workOrders || []).find((record) => materialOtKey(record?.ot) === key);
+  const operations = (state.operations || []).filter((record) => materialOtKey(record?.ot) === key);
+  const materials = (state.materials || []).filter((record) => materialOtKey(record?.ot) === key);
+  return [
+    `workOrder:${individualPlanningRecordSignature(workOrder)}`,
+    `operations:${operations.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+    `materials:${materials.map(individualPlanningRecordSignature).sort().join("\\u001e")}`,
+  ].join("\\u001d");
+}
+
+function mergeIndividualPlanningOperation(remoteOperation, existingOperation) {
+  if (!existingOperation) return remoteOperation;
+  const routeFields = [
+    "id", "num", "ot", "parte", "descripcion", "contenido", "fechaReq", "cantTotal", "secuencia", "ct",
+    "cantPendiente", "tiempoCiclo", "tiempoSetup", "tiempoProd", "tiempoFallback", "tipoInsercion",
+  ];
+  const route = {};
+  routeFields.forEach((field) => {
+    if (Object.hasOwn(remoteOperation, field)) route[field] = remoteOperation[field];
+  });
+  const merged = { ...existingOperation, ...route };
+  if (existingOperation && String(existingOperation?.id || "").trim()) {
+    merged.id = existingOperation.id;
+  }
+  if (remoteOperation?.tiempoFallback !== true) delete merged.tiempoFallback;
+  if (!(Number(merged.unitPrice) > 0) && Number(existingOperation.unitPrice) > 0) merged.unitPrice = Number(existingOperation.unitPrice);
+  if (!(Number(merged.amount) > 0) && Number(existingOperation.amount) > 0) merged.amount = Number(existingOperation.amount);
+  return merged;
+}
+
+function mergeIndividualPlanningOperationsPreserving(remoteOperations, existingOperations) {
+  const existing = (existingOperations || []).filter(Boolean);
+  const isCompleted = (operation) => String(operation?.planStatus || operation?.estatus || "").toUpperCase() === "COMPLETADA_PLAN";
+  const preserved = existing.filter((operation) =>
+    isCompleted(operation) ||
+    String(operation?.tipoInsercion || "").toUpperCase() === "CAMBIO_HERRAMENTAL"
+  );
+  const matchable = existing.filter((operation) =>
+    String(operation?.tipoInsercion || "").toUpperCase() !== "CAMBIO_HERRAMENTAL"
+  );
+  const existingBySequence = new Map();
+  const existingByCt = new Map();
+  matchable.forEach((operation) => {
+    const sequenceKey = individualPlanningOperationSequenceKey(operation);
+    const ctKey = individualPlanningOperationCtKey(operation);
+    if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+    if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+  });
+  const merged = (remoteOperations || []).map((operation) => {
+    const existing = existingBySequence.get(individualPlanningOperationSequenceKey(operation))
+      || existingByCt.get(individualPlanningOperationCtKey(operation));
+    return mergeIndividualPlanningOperation(operation, existing);
+  });
+  return { preserved, merged };
+}
+
+function mergeIndividualWorkOrder(remoteWorkOrder, existingWorkOrder, key) {
+  const normalizedFields = [
+    "id", "workOrderId", "ot", "item", "description", "photoUrl", "startDate", "endDate", "dueDate",
+    "quantity", "builtQuantity", "pendingQuantity", "status", "customer", "averageSalePrice",
+    "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
+  ];
+  const protectedLocalFields = new Set([
+    "dueDateOverride", "photoUrl",
+  ]);
+  const priceFields = new Set([
+    "averageSalePrice", "averageSalePriceFrom", "averageSalePriceTo", "lastSalePrice",
+  ]);
+  const merged = existingWorkOrder ? { ...existingWorkOrder } : { ot: remoteWorkOrder.ot };
+  for (const field of normalizedFields) {
+    const value = remoteWorkOrder?.[field];
+    const useful = typeof value === "number" ? Number.isFinite(value) : Boolean(String(value ?? "").trim());
+    if (!useful) continue;
+    if (existingWorkOrder && protectedLocalFields.has(field) && existingWorkOrder[field] != null) continue;
+    if (existingWorkOrder && priceFields.has(field)) {
+      const localValue = existingWorkOrder[field];
+      const localPositive = typeof localValue === "number" ? localValue > 0 : Boolean(String(localValue ?? "").trim());
+      const remotePositive = typeof value === "number" ? value > 0 : Boolean(String(value ?? "").trim());
+      if (localPositive && !remotePositive) continue;
+      if (!remotePositive && localValue != null) continue;
+    }
+    merged[field] = value;
+  }
+  merged.ot = remoteWorkOrder.ot || existingWorkOrder?.ot || key;
+  return merged;
+}
+
+function mergeIndividualPlanningOperationCatalog(operations) {
+  const catalog = new Map((state.operationCatalog || []).map((item) => [item.key, item]));
+  for (const operation of operations) {
+    const capability = capabilityFromOperation(operation);
+    if (!capability.key || window.PlannerCore.isSpecialSubcontractCapability(capability)) continue;
+    if (!catalog.has(capability.key)) {
+      catalog.set(capability.key, { ...capability, source: "NETSUITE", active: true });
+    }
+  }
+  state.operationCatalog = [...catalog.values()]
+    .sort((a, b) => a.ct.localeCompare(b.ct, "es", { numeric: true }) || a.label.localeCompare(b.label, "es"));
+}
+
+function mergeIndividualPlanningData(payload, ot) {
+  const key = materialOtKey(ot);
+  const data = payload?.data || payload;
+  const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
+  const remoteOperations = Array.isArray(data?.operations)
+    ? data.operations.map(normalizeIndividualPlanningOperation)
+    : [];
+  const operations = individualPlanningOperationsForOt(key, remoteOperations);
+  if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
+  const materials = Array.isArray(data?.materials)
+    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
+    : [];
+
+  const existingOperations = individualPlanningOperationsForOt(key);
+  const existingBySequence = new Map();
+  const existingByCt = new Map();
+  existingOperations.forEach((operation) => {
+    const sequenceKey = individualPlanningOperationSequenceKey(operation);
+    const ctKey = individualPlanningOperationCtKey(operation);
+    if (sequenceKey && !existingBySequence.has(sequenceKey)) existingBySequence.set(sequenceKey, operation);
+    if (ctKey && !existingByCt.has(ctKey)) existingByCt.set(ctKey, operation);
+  });
+  const mergedOperations = operations.map((operation) => {
+    const existing = existingBySequence.get(individualPlanningOperationSequenceKey(operation))
+      || existingByCt.get(individualPlanningOperationCtKey(operation));
+    return mergeIndividualPlanningOperation(operation, existing);
+  });
+  const mergedWithPrices = preserveImportedOperationPrices(existingOperations, mergedOperations);
+  state.operations = [
+    ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
+    ...mergedWithPrices,
+  ];
+  mergeIndividualPlanningOperationCatalog(mergedWithPrices);
+  state.materials = [
+    ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
+    ...materials,
+  ];
+  if (data?.workOrder && materialOtKey(data.workOrder.ot) === key) {
+    state.workOrders = [
+      ...(state.workOrders || []).filter((workOrder) => materialOtKey(workOrder?.ot) !== key),
+      mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
+    ];
+  }
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), [key]: new Date().toISOString() };
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+  return true;
+}
+
+function ensureWorkOrderPlanningData(ot, options = {}) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (options.skipWhenLocal && hasIndividualPlanningOperations(key)) {
+    return Promise.resolve({ ready: true, source: "cached" });
+  }
+  if (Number(individualPlanningLoadCompleted.get(key) || 0) > Date.now() && hasIndividualPlanningOperations(key)) {
+    return Promise.resolve({ ready: true, source: "cached" });
+  }
+  individualPlanningLoadCompleted.delete(key);
+  if (individualPlanningRequests.has(key)) return individualPlanningRequests.get(key);
+  const otSignature = individualPlanningOtSignature(key);
+
+  const request = (async () => {
+    try {
+      const payload = await window.PlanningWorkflowCore.withTimeout(
+        PPSupabaseBridgeReplacement.getPlanningWorkOrderData(ot),
+        INDIVIDUAL_PLANNING_TIMEOUT_MS,
+      );
+      if (!payload?.ok) return { ready: false, error: String(payload?.error || "No se pudieron cargar las operaciones") };
+      if (!(state.workOrders || []).some((workOrder) => materialOtKey(workOrder?.ot) === key)) {
+        return { ready: false, error: `La OT ${ot} ya no esta disponible` };
+      }
+      if (individualPlanningOtSignature(key) !== otSignature) {
+        return { ready: true, source: "cached" };
+      }
+      if (!mergeIndividualPlanningData(payload, key)) {
+        individualPlanningUnavailableReasons.set(key, "La OT no devolvio operaciones de planeacion");
+        return { ready: false, error: "La OT no devolvio operaciones de planeacion" };
+      }
+      individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+      individualPlanningUnavailableReasons.delete(key);
+      return { ready: true, source: "remote" };
+    } catch (error) {
+      const message = String(error?.message || error || "No se pudieron cargar las operaciones");
+      individualPlanningUnavailableReasons.set(key, message);
+      return { ready: false, error: message };
+    } finally {
+      individualPlanningRequests.delete(key);
+    }
+  })();
+  individualPlanningRequests.set(key, request);
+  return request;
+}
+
+function applyForcedOtPlanningData(payload, ot) {
+  const key = materialOtKey(ot);
+  const data = payload?.data || payload;
+  const existingWorkOrder = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  if (!key || (!existingWorkOrder && materialOtKey(data?.workOrder?.ot) !== key)) return false;
+  const remoteOperations = Array.isArray(data?.operations)
+    ? data.operations.map(normalizeIndividualPlanningOperation)
+    : [];
+  const operations = individualPlanningOperationsForOt(key, remoteOperations);
+  if (!operations.length || !operations.every(individualPlanningOperationValid)) return false;
+  const materials = Array.isArray(data?.materials)
+    ? data.materials.filter((material) => materialOtKey(material?.ot) === key)
+    : [];
+
+  const existingOperations = (state.operations || []).filter((operation) => materialOtKey(operation?.ot) === key);
+  const { preserved, merged: mergedOperations } = mergeIndividualPlanningOperationsPreserving(operations, existingOperations);
+  const mergedWithPrices = preserveImportedOperationPrices(existingOperations, mergedOperations);
+  state.operations = [
+    ...(state.operations || []).filter((operation) => materialOtKey(operation?.ot) !== key),
+    ...preserved,
+    ...mergedWithPrices,
+  ];
+  mergeIndividualPlanningOperationCatalog(mergedWithPrices);
+  state.materials = [
+    ...(state.materials || []).filter((material) => materialOtKey(material?.ot) !== key),
+    ...materials,
+  ];
+  if (data?.workOrder && materialOtKey(data.workOrder.ot) === key) {
+    state.workOrders = [
+      ...(state.workOrders || []).filter((workOrder) => materialOtKey(workOrder?.ot) !== key),
+      mergeIndividualWorkOrder(data.workOrder, existingWorkOrder, key),
+    ];
+  }
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), [key]: new Date().toISOString() };
+  individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+  invalidateCurrentPlanOperationsCache();
+  resetBacklogWindow();
+  return true;
+}
+
+async function updateSelectedOtFromNetSuite(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return { ok: false, error: "OT requerida" };
+  if (isJobLocked(key)) {
+    showToast("OT bloqueada: no se actualizan tiempos porque esta fija", 6000);
+    return { ok: false, error: "OT bloqueada" };
+  }
+  const button = document.querySelector(`[data-detail-ot-refresh="${CSS.escape(ot)}"]`);
+  const previousLabel = button?.getAttribute("aria-label") || "";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.setAttribute("aria-label", `Actualizando OT ${ot} desde NetSuite...`);
+  }
+  showToast(`Actualizando OT ${ot} desde NetSuite...`);
+  const before = otOperationsRouteTimesSignature(key);
+  try {
+    const payload = await window.PlanningWorkflowCore.withTimeout(
+      PPSupabaseBridgeReplacement.getPlanningWorkOrderData(ot),
+      INDIVIDUAL_PLANNING_TIMEOUT_MS,
+    );
+    if (!payload?.ok) {
+      const message = String(payload?.error || "No se pudieron cargar las operaciones");
+      showToast(`No se actualizo la OT ${ot}: ${message}`, 9000);
+      return { ok: false, error: message };
+    }
+    if (!applyForcedOtPlanningData(payload, key)) {
+      showToast(`La OT ${ot} no devolvio operaciones de planeacion`, 9000);
+      return { ok: false, error: "La OT no devolvio operaciones de planeacion" };
+    }
+    const after = otOperationsRouteTimesSignature(key);
+    const changed = before !== after;
+    if (changed && isOtPlannedInDraft(key)) state.draftNeedsReschedule = true;
+    render({ save: false });
+    showToast(changed ? `OT ${ot} actualizada` : `OT ${ot} sin cambios detectados`, 5000);
+    return { ok: true, changed };
+  } catch (error) {
+    const message = String(error?.message || error || "No se pudo actualizar la OT");
+    showToast(`No se actualizo la OT ${ot}: ${message}`, 9000);
+    return { ok: false, error: message };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.setAttribute("aria-label", previousLabel);
+    }
+  }
+}
+
+function loadSelectedJobDetailOperations(ot) {
+  const key = materialOtKey(ot);
+  if (!key) return Promise.resolve({ ready: false, error: "OT requerida" });
+  if (selectedJobDetailOperationLoads.has(key)) return selectedJobDetailOperationLoads.get(key);
+  const selectedOperationId = state.selectedOperationId;
+  const selectedDetailOt = materialOtKey(state.selectedDetailOt);
+  const selectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
+
+  const request = Promise.resolve().then(async () => {
+    renderSelectedJobPanel();
+    const result = await ensureWorkOrderPlanningData(ot, { skipWhenLocal: true });
+    const currentSelectedOt = materialOtKey(getSelectedPriorityJob()?.ot);
+    const selectionStillBelongsToOt = selectedDetailOt
+      ? materialOtKey(state.selectedDetailOt) === key
+      : currentSelectedOt === key
+      || (!currentSelectedOt && selectedOt === key && state.selectedOperationId === selectedOperationId);
+    if (!selectionStillBelongsToOt) return result;
+    if (result.ready) {
+      const operation = individualPlanningOperationsForOt(key)[0];
+      if (operation?.id) state.selectedOperationId = operation.id;
+    }
+    if (!result.ready) showToast(result.error || `No se cargaron operaciones de la OT ${ot}`, 9000);
+    return result;
+  }).finally(() => {
+    selectedJobDetailOperationLoads.delete(key);
+    if (materialOtKey(getSelectedPriorityJob()?.ot) === key) renderSelectedJobPanel();
+  });
+  selectedJobDetailOperationLoads.set(key, request);
+  return request;
+}
+
+async function ensurePlanningDataLoaded(showMessage, { force = false, ots = null } = {}) {
+  const selectedOts = Array.isArray(ots) && ots.length
+    ? [...ots]
+    : [...(Array.isArray(state.selectedOts) ? state.selectedOts : [])];
+  const availability = () => window.PlanningWorkflowCore.planningDataAvailability(state, selectedOts, NETSUITE_PLANNING_FRESH_MS);
+  const usableOts = (result) => {
+    const seen = new Set();
+    return [...(result?.availableOts || []), ...(result?.staleOts || [])].filter((ot) => {
+      const key = String(ot || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  // MEDIDO 2026-09-30 en la pagina real: esto era
+  //   if (!isAppsScriptRuntime()) { return { ready, source: "cached"|"none", missingOts } }
+  // y con el puente deshabilitado (RULE-SUP-030) `isAppsScriptRuntime()` da false, o sea
+  // que ESTA era la rama que se tomaba siempre. Y esa rama no sincroniza nada: solo mira
+  // lo que ya hay en state.operations y devuelve lo que falta. MEDIDO en produccion: el
+  // boton Generar plan daba
+  //   "No se genero el plan: falta sincronizar operaciones de OT 3331, 3385. Reintenta."
+  // con las OTs LEIDAS de Supabase y las operaciones nunca pedidas a Supabase. O sea: la
+  // pagina decia "reintenta" de algo que no se podia volver a intentar, porque el reintento
+  // es la misma rama.
+  //
+  // Antes esa compuerta si distinguia algo: dentro de HtmlService el estado ya venia de las
+  // Hojas y no habia nada que ir a buscar. Desde que la fuente es Supabase (esta disponible
+  // en los dos runtimes) la pregunta correcta no es "estoy en Apps Script" sino "lo que hay
+  // en memoria esta fresco", que es exactamente lo que responden availability() y
+  // refreshable mas abajo. Por eso la rama se borra y el resto de la funcion manda.
+  const current = availability();
+  const refreshable = [...(current.staleOts || []), ...(current.missingOts || [])]
+    .filter((ot, index, list) => String(ot || "") && list.indexOf(ot) === index);
+  if (!force && refreshable.length === 0) {
+    return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
+  }
+  if (force || refreshable.length === 0) {
+    return await syncPlanningDataForSelected(showMessage, selectedOts);
+  }
   if (netSuitePlanningSyncInFlight) {
     if (showMessage) showToast("La carga de operaciones ya esta en curso");
-    return false;
+    const readyOts = usableOts(current);
+    const hasSome = readyOts.length > 0;
+    const warning = hasSome
+      ? "Sincronizacion en curso; se programara con los datos ya cargados"
+      : "Sincronizacion en curso";
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: current.missingOts, warning };
   }
   netSuitePlanningSyncInFlight = true;
   setNetSuitePlanningSyncState(true);
+  const label = els.scheduleBtn?.querySelector("[data-schedule-label]");
+  const refreshOts = force ? selectedOts : refreshable;
   try {
-    if (showMessage) showToast("Cargando operaciones y materiales de NetSuite...");
-    const imported = await callAppsScript("syncNetSuitePlanningData");
-    applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
-    return true;
+    const updatedOts = [];
+    let failed = 0;
+    // BATCH: una sola llamada al servidor para todas las OTs (incluso 1)
+    if (label) label.textContent = `Actualizando ${refreshOts.length} OTs...`;
+    const batchResult = await window.PlanningWorkflowCore.withTimeout(
+      PPSupabaseBridgeReplacement.getPlanningWorkOrderDataBatch(refreshOts),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    if (batchResult?.ok && Array.isArray(batchResult.data)) {
+      for (let index = 0; index < batchResult.data.length; index += 1) {
+        const item = batchResult.data[index];
+        if (label) label.textContent = `Aplicando OT ${index + 1} de ${batchResult.data.length}...`;
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        if (item?.ok && item?.data) {
+          const key = materialOtKey(item.ot);
+          if (key && mergeIndividualPlanningData(item.data, key)) {
+            individualPlanningLoadCompleted.set(key, Date.now() + INDIVIDUAL_PLANNING_CACHE_TTL_MS);
+            individualPlanningUnavailableReasons.delete(key);
+            updatedOts.push(item.ot);
+          } else {
+            failed += 1;
+          }
+        } else {
+          failed += 1;
+        }
+      }
+    } else {
+      // Fallback a llamadas individuales si el batch falla
+      for (let index = 0; index < refreshOts.length; index += 1) {
+        const ot = refreshOts[index];
+        if (label) label.textContent = `Actualizando OT ${index + 1} de ${refreshOts.length}...`;
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        const outcome = await ensureWorkOrderPlanningData(ot);
+        if (outcome?.ready) updatedOts.push(ot);
+        else failed += 1;
+      }
+    }
+    let after = availability();
+    let missingOts = after.missingOts;
+    if (missingOts.length && failed > 0 && updatedOts.length === 0) {
+      if (showMessage) showToast("No se pudo actualizar OT por OT; sincronizando el plan completo...");
+      const imported = await window.PlanningWorkflowCore.withTimeout(
+        PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
+        NETSUITE_PLANNING_TIMEOUT_MS
+      );
+      await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+      after = availability();
+      missingOts = after.missingOts;
+    }
+    if (missingOts.length) {
+      const warning = `NetSuite respondio pero ${missingOts.length} OT(s) sin operaciones quedaron fuera`;
+      if (showMessage) showToast(warning, 9000);
+      return { ready: true, source: "fresh", readyOts: usableOts(after), missingOts, warning };
+    }
+    return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
   } catch (error) {
-    if (showMessage) showToast(`No se pudieron cargar operaciones: ${error.message}`);
-    return false;
+    const after = availability();
+    const readyOts = usableOts(after);
+    const hasSome = readyOts.length > 0;
+    const warning = hasSome
+      ? `NetSuite no respondio; se programara con los datos ya cargados (${readyOts.length} OT(s)), sin ${after.missingOts.length} OT(s)`
+      : `No se pudieron cargar operaciones: ${error.message}`;
+    if (showMessage) showToast(warning, 9000);
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: after.missingOts, warning };
   } finally {
     netSuitePlanningSyncInFlight = false;
     setNetSuitePlanningSyncState(false);
   }
 }
 
+function useCurrentSelectedOts(ots) {
+  return Array.isArray(ots) && ots.length ? [...ots] : [...(Array.isArray(state.selectedOts) ? state.selectedOts : [])];
+}
+
+async function syncPlanningDataForSelected(showMessage, ots) {
+  const selectedOts = useCurrentSelectedOts(ots);
+  const availability = () => window.PlanningWorkflowCore.planningDataAvailability(state, selectedOts, NETSUITE_PLANNING_FRESH_MS);
+  const usableOts = (result) => {
+    const seen = new Set();
+    return [...(result?.availableOts || []), ...(result?.staleOts || [])].filter((ot) => {
+      const key = String(ot || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  if (netSuitePlanningSyncInFlight) {
+    if (showMessage) showToast("La carga de operaciones ya esta en curso");
+    const current = availability();
+    const readyOts = usableOts(current);
+    const hasSome = readyOts.length > 0;
+    const warning = hasSome
+      ? "Sincronizacion en curso; se programara con los datos ya cargados"
+      : "Sincronizacion en curso";
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: current.missingOts, warning };
+  }
+  netSuitePlanningSyncInFlight = true;
+  setNetSuitePlanningSyncState(true);
+  try {
+    if (showMessage) showToast("Cargando operaciones y materiales de NetSuite...");
+    const imported = await window.PlanningWorkflowCore.withTimeout(
+      PPSupabaseBridgeReplacement.syncNetSuitePlanningData(),
+      NETSUITE_PLANNING_TIMEOUT_MS
+    );
+    await applyImported(imported, { detectNetSuiteChanges: true, preserveLocalPlanning: true });
+    const after = availability();
+    if (after.missingOts.length) {
+      const warning = `NetSuite respondio pero ${after.missingOts.length} OT(s) sin operaciones quedaron fuera`;
+      if (showMessage) showToast(warning, 9000);
+      return { ready: true, source: "fresh", readyOts: usableOts(after), missingOts: after.missingOts, warning };
+    }
+    return { ready: true, source: "fresh", readyOts: selectedOts, missingOts: [], warning: "" };
+  } catch (error) {
+    const after = availability();
+    const readyOts = usableOts(after);
+    const hasSome = readyOts.length > 0;
+    const warning = hasSome
+      ? `NetSuite no respondio; se programara con los datos ya cargados (${readyOts.length} OT(s)), sin ${after.missingOts.length} OT(s)`
+      : `No se pudieron cargar operaciones: ${error.message}`;
+    if (showMessage) showToast(warning, 9000);
+    return { ready: hasSome, source: hasSome ? "cached" : "none", readyOts, missingOts: after.missingOts, warning };
+  } finally {
+    netSuitePlanningSyncInFlight = false;
+    setNetSuitePlanningSyncState(false);
+  }
+}
+
+function setPlanningControlBusy(control, busy) {
+  if (!control) return;
+  control.disabled = busy;
+  if (busy) control.setAttribute("aria-busy", "true");
+  else control.removeAttribute("aria-busy");
+}
+
+function refreshPlanningActionControls() {
+  const busy = Boolean(planningActionsBusy || netSuiteSyncInFlight || netSuitePlanningSyncInFlight);
+  setPlanningControlBusy(els.scheduleBtn, busy);
+  setPlanningControlBusy(els.loadNsExerciseBtn, busy);
+  setPlanningControlBusy(els.syncBacklogOtsBtn, backlogSyncInFlight);
+  setPlanningControlBusy(els.restoreDraftBtn, busy);
+  // RULE-PERF-020: la etiqueta del boton Sincronizar se quedaba PEGADA con el texto de una fase
+  // cuando el flujo que la puso terminaba sin limpiarla. MEDIDO 2026-10-08: el boton "Sincronizar
+  // OTs" llama a correrIngestaPorBoton, cuyo setNetSuiteSyncPhaseLabel("Actualizando desde
+  // NetSuite...") pisa el etiqueta del boton PRINCIPAL; syncBacklogWorkOrders solo hace
+  // setBacklogSyncInFlight(false) en su finally y nunca restauraba. Se garantiza aqui la
+  // invariante: en reposo completo la etiqueta vuelve a "Sincronizar", con el MISMO criterio del
+  // boton mas el sync de OTs (backlogSyncInFlight), que es el flujo que exponia el hueco. Las
+  // fases ("Actualizando...", "Sincronizando OTs...", "Sincronizando operaciones...") solo se
+  // escriben con planningActionsBusy=="sync", asi que un reposo real nunca tiene un texto de fase
+  // legitimo que pisar; este restore es el mismo que ya hacia setPlanningActionsBusy en su rama
+  // !inProgress && !netSuiteSyncInFlight, ahora para cualquier camino de terminacion.
+  if (!busy && !backlogSyncInFlight) setNetSuiteSyncPhaseLabel("");
+}
+
+function setBacklogSyncInFlight(inProgress) {
+  backlogSyncInFlight = inProgress;
+  refreshPlanningActionControls();
+}
+
 function setNetSuiteSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.loadNsExerciseBtn) return;
-  els.loadNsExerciseBtn.disabled = inProgress;
-  if (inProgress) els.loadNsExerciseBtn.setAttribute("aria-busy", "true");
-  else els.loadNsExerciseBtn.removeAttribute("aria-busy");
   const label = els.loadNsExerciseBtn.querySelector("[data-sync-label]");
-  if (label) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
+  if (label && (inProgress || !planningActionsBusy)) label.textContent = inProgress ? "Sincronizando..." : "Sincronizar";
+}
+
+function setPlanningActionsBusy(action, inProgress) {
+  planningActionsBusy = inProgress ? action : "";
+  refreshPlanningActionControls();
+  if (!inProgress && !netSuiteSyncInFlight) setNetSuiteSyncPhaseLabel("");
 }
 
 function setNetSuitePlanningSyncState(inProgress) {
+  refreshPlanningActionControls();
   if (!els.scheduleBtn) return;
-  els.scheduleBtn.disabled = inProgress;
   els.scheduleBtn.classList.toggle("is-running", inProgress);
+  els.scheduleBtn.classList.toggle("is-indeterminate", inProgress);
   const label = els.scheduleBtn.querySelector("[data-schedule-label]");
+  const percentEl = els.scheduleBtn.querySelector("[data-schedule-percent]");
+  const fillEl = els.scheduleBtn.querySelector("[data-schedule-fill]");
   if (label) label.textContent = inProgress ? "Cargando operaciones..." : "Generar plan";
+  if (percentEl) { percentEl.textContent = ""; percentEl.hidden = true; }
+  if (fillEl) fillEl.style.width = inProgress ? "0%" : "0%";
 }
 
 async function fetchNetSuiteExercise() {
@@ -4896,11 +12048,17 @@ async function fetchNetSuiteExercise() {
 
 async function loadAppSheetIfAvailable(showMessage) {
   try {
-    const imported = isAppsScriptRuntime()
-      ? await callAppsScript("getAppState")
-      : importJson(await fetchAppSheetText());
-    applyImported(imported, { preserveLocalPlanning: true });
+    const imported = await PPSupabaseBridgeReplacement.getAppState();
+    await applyImported(imported, {
+      preserveLocalPlanning: true,
+      preferRemotePlanning: true,
+      confirmStaleLocalRefresh: confirmLatestModificationRefresh,
+    });
     appSheetAvailable = true;
+    // Lo que se cambio antes de que el puente estuviera listo se perdio (ver
+    // queueAppSheetSave). Aqui se recupera: se guardan los ambitos que quedaron
+    // marcados, no un "plan" por omision, para no perder el metodo correcto.
+    appSheetFlushPendingScopes();
     if (showMessage) showToast(`Hoja app cargada: ${state.operations.length} operaciones`);
     return true;
   } catch (error) {
@@ -4916,39 +12074,145 @@ async function fetchAppSheetText() {
   return response.text();
 }
 
-function applyImported(imported, options = {}) {
+function planningDraftContentKey(draft) {
+  const operationsKey = Array.isArray(draft?.operations)
+    ? draft.operations.map((op) => JSON.stringify([
+        String(op?.ot || "").trim().toUpperCase(),
+        Number(op?.secuencia || 0),
+        String(op?.ct || "").trim().toUpperCase(),
+        String(op?.operador || "").trim().toUpperCase(),
+        String(op?.maquina || "").trim().toUpperCase(),
+        String(op?.estatus || "").trim().toUpperCase(),
+        String(op?.planStatus || "").trim().toUpperCase(),
+        Boolean(op?.locked === true || String(op?.locked || "").toUpperCase() === "TRUE"),
+        String(op?.fechaInicio || ""),
+        String(op?.horaInicio || ""),
+        String(op?.fechaFin || ""),
+        String(op?.horaFin || ""),
+      ])).sort()
+    : [];
+  return JSON.stringify({
+    planStart: String(draft?.planStart || ""),
+    selectedOts: (draft?.selectedOts || []).map((ot) => String(ot || "").trim().toUpperCase()).sort(),
+    lockedOts: (draft?.lockedOts || []).map((ot) => String(ot || "").trim().toUpperCase()).sort(),
+    operationsKey,
+  });
+}
+
+function planningDraftDiffers(localDraft, remoteDraft) {
+  return planningDraftContentKey(localDraft) !== planningDraftContentKey(remoteDraft);
+}
+
+function hasPlanningContent(draft) {
+  return (Array.isArray(draft?.operations) && draft.operations.length > 0)
+    || (Array.isArray(draft?.selectedOts) && draft.selectedOts.length > 0);
+}
+
+async function confirmLatestModificationRefresh(localDraft, remoteDraft) {
+  if (!hasPlanningContent(localDraft) || !planningDraftDiffers(localDraft, remoteDraft)) return true;
+  const accepted = await openPlanningDialog({
+    title: "Actualizar a la ultima modificacion",
+    summary: "Esta no es la ultima modificacion guardada.",
+    body: "<p>La hoja App tiene una version mas reciente distinta a tu borrador local.</p><p>Quieres actualizar a la ultima modificacion y refrescar con lo ultimo guardado?</p>",
+    confirmLabel: "Si, actualizar",
+    cancelVisible: true,
+  });
+  if (Boolean(accepted)) {
+    showToast("Se refresco con la ultima modificacion guardada.");
+    return true;
+  }
+  showToast("Se conservo tu borrador local; guarda para publicarlo.");
+  return false;
+}
+
+async function applyImported(imported, options = {}) {
+  const locallyRemovedDraftOts = [...(state._locallyRemovedDraftOts || [])];
+  const backlogDatasetChanged = Array.isArray(imported.operations)
+    || Array.isArray(imported.materials)
+    || Array.isArray(imported.workOrders);
+  const currentScheduleAtMs = Date.parse((state.lastSchedule && state.lastSchedule.generatedAt) || "") || 0;
+  const importedScheduleAtMs = Date.parse((imported && imported.lastSchedule && imported.lastSchedule.generatedAt) || "") || 0;
+  // FIX 2026-10-05 (RULE-PLAN-015): el reloj de la IMPORTACION ya NO tiene que ser > 0.
+  // MEDIDO 2026-10-05 en produccion: el payload del arranque se pide mientras
+  // `app_state.last_schedule` es NULL, o sea `importedScheduleAtMs = 0`, y con la clausula de
+  // antes la comparacion daba FALSA POR FALTA DE DATO, no por antiguedad: la importacion de
+  // fondo se llevaba `operations`, `planStart`, `loadWeekStart`, `reportWeekStart`, `selectedOts`
+  // y `lockedOts` del espejo, y el plan que RULE-PLAN-015 acababa de restaurar se perdia.
+  // Un reloj en cero no es "mas viejo", es "el servidor no trae plan" (RULE-PLAN-012: un estado
+  // con `generatedAt` mas viejo no pisa uno mas nuevo; el que no tiene reloj, menos aun).
+  // LO QUE ESTO DEJA DE HACER, DICHO: mientras el servidor no traiga reloj, un plan en memoria
+  // mas nuevo bloquea el reemplazo de `state.operations` COMPLETO, no solo sus fechas, asi que
+  // en esa ventana tampoco entran por esta via los deltas de la ingesta. Dura lo que el NULL: en
+  // cuanto el rescate o un guardado escriben `app_state.last_schedule`, los dos relojes existen y
+  // esto vuelve a ser exactamente la comparacion de siempre.
+  const importedIsStaleSchedule = currentScheduleAtMs > 0 && currentScheduleAtMs > importedScheduleAtMs;
   const preserveLocalPlanning = options.preserveLocalPlanning === true;
   const preservedLocalPlanning = preserveLocalPlanning ? captureLocalPlanningState() : null;
+  const localCapabilityConfigEdited = state._locallyEditedCapabilityConfig === true;
+  const preservedLocalCapabilityConfig = localCapabilityConfigEdited ? captureLocalCapabilityConfig() : null;
+  const localOperationsBeforeImport = state.operations;
   const detectedNetSuiteAlerts = options.detectNetSuiteChanges
     ? detectNetSuiteOtChanges(state, imported, { detectedAt: new Date().toISOString() })
     : null;
-  if (Array.isArray(imported.operations)) state.operations = imported.operations;
+  if (Array.isArray(imported.operations) && !importedIsStaleSchedule) {
+    state.operations = preserveImportedOperationPrices(localOperationsBeforeImport, imported.operations);
+    compactOperationLogs(state.operations);
+  }
+  const importedSyncedMap = imported.operationsSyncedAt && typeof imported.operationsSyncedAt === "object" &&
+    Object.keys(imported.operationsSyncedAt).length ? imported.operationsSyncedAt : null;
+  state.operationsSyncedAt = { ...(state.operationsSyncedAt || {}), ...(importedSyncedMap || {}) };
+  if (Array.isArray(imported.operations) && imported.syncedAt && !importedSyncedMap) {
+    for (const operation of state.operations) {
+      const key = materialOtKey(operation?.ot);
+      if (key) state.operationsSyncedAt[key] = imported.syncedAt;
+    }
+  }
+  if (imported.operationPlanStatuses) {
+    state.operationPlanStatuses = mergeImportedPlanStatuses(state.operationPlanStatuses, normalizeOperationPlanStatuses(imported.operationPlanStatuses));
+    if (typeof planStateMutationVersion !== "undefined") planStateMutationVersion += 1;
+  }
+  if (imported.publishedPlanStatuses) {
+    state.publishedPlanStatuses = mergeImportedPublishedPlanStatuses(state.publishedPlanStatuses, normalizePublishedPlanStatuses(imported.publishedPlanStatuses));
+  }
   if (Number.isFinite(Number(imported.schemaVersion))) state.schemaVersion = Number(imported.schemaVersion);
   if (Number.isFinite(Number(imported.revision))) state.revision = Number(imported.revision);
   if (imported.operators) state.operators = imported.operators;
   if (imported.operatorProfiles) state.operatorProfiles = imported.operatorProfiles;
   if (imported.otConfigurations) state.otConfigurations = imported.otConfigurations;
   if (imported.articleConfigurations) state.articleConfigurations = imported.articleConfigurations;
+  if (imported.preparedPlanningByOt) state.preparedPlanningByOt = imported.preparedPlanningByOt;
   if (imported.cts) state.cts = imported.cts;
   if (imported.plant) state.plant = imported.plant;
   if (Array.isArray(imported.operationCatalog)) state.operationCatalog = imported.operationCatalog;
+  if (typeof imported.operationCatalogWarning === "string") state.operationCatalogWarning = imported.operationCatalogWarning;
+  if (Array.isArray(imported.syncWarnings)) state.syncWarnings = imported.syncWarnings;
   if (Array.isArray(imported.configuredCapabilities)) state.configuredCapabilities = imported.configuredCapabilities;
   if (imported.customCapabilities) state.customCapabilities = imported.customCapabilities;
   if (imported.hiddenCapabilities) state.hiddenCapabilities = imported.hiddenCapabilities;
+  if (Array.isArray(imported.excludedCapabilities)) state.excludedCapabilities = normalizeCapabilityKeys(imported.excludedCapabilities);
+  else if (!preserveLocalPlanning) state.excludedCapabilities = [];
   if (imported.capacityModes) state.capacityModes = imported.capacityModes;
   if (imported.matrix) state.matrix = imported.matrix;
+  // La rejilla COMPLETA (marcada y sin marcar), el UNIVERSO de parejas que el escritor
+  // necesita para poder mandar un false. MEDIDO 2026-10-06: el lector ya la traia
+  // (supabase-reader.js:1538) y clavesLeidas ya la usaba para calcular las claves, pero
+  // AQUI faltaba el mapeo: el escritor veia state.matrixFull undefined, mapeaba 0 filas
+  // y las claves leidas salian enteras como "filas que el navegador ya no tiene".
+  // `Array.isArray` y no un simple `if`: un puente que no trae la rejilla
+  // (PP_buildState_ no la incluye) tiene que dejar la que hay, no borrarla con undefined.
+  if (Array.isArray(imported.matrixFull)) state.matrixFull = imported.matrixFull;
   if (imported.operatorPerformance) state.operatorPerformance = imported.operatorPerformance;
   if (imported.ganttView) state.ganttView = imported.ganttView;
   if (Number.isFinite(Number(imported.ganttDayWidth))) state.ganttDayWidth = Number(imported.ganttDayWidth);
   if (imported.selectedOperationId) state.selectedOperationId = imported.selectedOperationId;
   if (Number.isFinite(imported.capacityMinutes)) state.capacityMinutes = imported.capacityMinutes;
-  if (imported.planStart) state.planStart = imported.planStart;
+  if (imported.planStart && !importedIsStaleSchedule) state.planStart = imported.planStart;
   if (Number.isFinite(Number(imported.horizonDays))) state.horizonDays = Number(imported.horizonDays);
-  if (imported.loadWeekStart) state.loadWeekStart = imported.loadWeekStart;
-  if (imported.reportWeekStart) state.reportWeekStart = imported.reportWeekStart;
-  if (Array.isArray(imported.selectedOts)) state.selectedOts = imported.selectedOts;
-  if (Array.isArray(imported.lockedOts)) state.lockedOts = imported.lockedOts;
-  if (Array.isArray(imported.expandedOts)) state.expandedOts = imported.expandedOts;
+  if (imported.loadWeekStart && !importedIsStaleSchedule) state.loadWeekStart = imported.loadWeekStart;
+  if (imported.reportWeekStart && !importedIsStaleSchedule) state.reportWeekStart = imported.reportWeekStart;
+  if (Array.isArray(imported.selectedOts) && !importedIsStaleSchedule) state.selectedOts = imported.selectedOts;
+  if (Array.isArray(imported.lockedOts) && !importedIsStaleSchedule) state.lockedOts = imported.lockedOts;
+  if (Array.isArray(imported.expandedOts) && !importedIsStaleSchedule) state.expandedOts = imported.expandedOts;
   if (imported.workSchedule) state.workSchedule = imported.workSchedule;
   if (imported.dailyBreaks) state.dailyBreaks = imported.dailyBreaks;
   if (imported.settings) state.settings = imported.settings;
@@ -4960,14 +12224,252 @@ function applyImported(imported, options = {}) {
   if (Array.isArray(imported.calendarExceptions)) state.calendarExceptions = imported.calendarExceptions;
   if (Array.isArray(imported.subcontracts)) state.subcontracts = imported.subcontracts;
   if (Array.isArray(imported.netSuiteChangeAlerts)) state.netSuiteChangeAlerts = imported.netSuiteChangeAlerts;
-  if (imported.lastSchedule) state.lastSchedule = imported.lastSchedule;
-  if (preservedLocalPlanning) restoreLocalPlanningState(preservedLocalPlanning);
+  if (imported.lastSchedule && !importedIsStaleSchedule) state.lastSchedule = imported.lastSchedule;
+  if (preservedLocalPlanning) {
+    const remotePlanning = captureLocalPlanningState();
+    const coherentLocal = window.PlanningWorkflowCore.isCoherentDraft(preservedLocalPlanning);
+    const coherentRemote = window.PlanningWorkflowCore.isCoherentDraft(remotePlanning);
+    const newest = window.PlanningWorkflowCore.selectNewestCoherentDraft(preservedLocalPlanning, remotePlanning);
+    const differs = planningDraftDiffers(preservedLocalPlanning, remotePlanning);
+    const remoteIsLastModification = coherentRemote && (newest === remotePlanning || !coherentLocal);
+    let chosen;
+    if (options.preferRemotePlanning) {
+      if (typeof options.confirmStaleLocalRefresh === "function"
+        && remoteIsLastModification
+        && differs
+        && hasPlanningContent(preservedLocalPlanning)) {
+        const refresh = await options.confirmStaleLocalRefresh({
+          local: preservedLocalPlanning,
+          remote: remotePlanning,
+        });
+        chosen = refresh ? remotePlanning : preservedLocalPlanning;
+      } else {
+        chosen = remoteIsLastModification || !coherentLocal ? remotePlanning : preservedLocalPlanning;
+      }
+    } else {
+      chosen = newest || preservedLocalPlanning;
+    }
+    restoreLocalPlanningState(chosen || preservedLocalPlanning);
+    state.operations = preserveImportedOperationPrices(preservedLocalPlanning.operations, state.operations);
+  }
+  // EL ORDEN IMPORTA, Y ES LO UNICO QUE CAMBIA RESPECTO AL ORDEN ANTERIOR. Las marcas se
+  // restauran ANTES de reemplazar la lista de OTs, porque el reemplazo necesita saber cuales
+  // estan marcadas para conservarles la ficha. Con el orden viejo (OTs primero, marcas despues)
+  // el efecto medido fue que la OT sobrevivia a la recarga SIN FICHA: selectedOts la
+  // conservaba por la marca, workOrders no, y una OT sin ficha no tiene cantidad, ni estatus, ni
+  // fecha.
+  if (imported.unconfirmedWorkOrders && typeof imported.unconfirmedWorkOrders === "object") {
+    // Union por folio, y si una OT esta en los dos lados gana la marca MAS VIEJA: la mas vieja
+    // es la que lleva mas sincronizaciones fallidas encima, y un misses mas alto significa que
+    // el proximo sync tiene mas pruebas de que esa OT no vino por casualidad. Ante empate de
+    // fecha gana la local, que es la de la sesion viva. La marca no se "descarta" nunca aqui:
+    // la resuelve el reconciliador del proximo sync, con evidencia de NetSuite, no con una
+    // carga de estado.
+    state.unconfirmedWorkOrders = mergeUnconfirmedWorkOrderMarks(
+      state.unconfirmedWorkOrders,
+      imported.unconfirmedWorkOrders,
+    );
+  }
+  if (imported.closedWorkOrderSummaries && typeof imported.closedWorkOrderSummaries === "object") {
+    state.closedWorkOrderSummaries = mergeClosedWorkOrderSummaries(state.closedWorkOrderSummaries, imported.closedWorkOrderSummaries);
+  }
+  if (Array.isArray(imported.workOrders)) {
+    const localWorkOrdersByOt = new Map(
+      (state.workOrders || []).map((item) => [materialOtKey(item?.ot), item]),
+    );
+    const importadas = normalizeWorkOrders(imported.workOrders).map((item) =>
+      mergeWorkOrderLocalOverrides(localWorkOrdersByOt.get(materialOtKey(item.ot)), item));
+    // LA FICHA DE UNA OT MARCADA TAMBIEN SE CONSERVA. Es el mismo estandar que la marca y con la
+    // misma justificacion: si la ausencia de la OT no tiene evidencia de cierre, no hay motivo
+    // para tirarle tambien la ficha. Medido el 2026-09-26 el efecto de no hacerlo: la OT
+    // sobrevivia a la recarga en la cola (por la marca) pero SIN FICHA, o sea sin cantidad, sin
+    // estatus y sin fecha; y jobStatusForOt sobre una OT sin ficha devuelve "PLAN", o sea
+    // ABIERTA por defecto. La app la presenta como abierta una OT de la que no sabe nada, que
+    // es peor que no tenerla: la persona la ve en la cola y no tiene forma de saber que le falta
+    // el dato. Y reconcileActiveWorkOrders no la puede recuperar despues, porque arma
+    // currentByOt desde state.workOrders, que ya no la tiene.
+    const porOt = new Set(importadas.map((item) => materialOtKey(item?.ot)));
+    const fichasDeMarcadas = [];
+    for (const [key, item] of localWorkOrdersByOt) {
+      if (!key || porOt.has(key)) continue;
+      if (!state.unconfirmedWorkOrders || !state.unconfirmedWorkOrders[key]) continue;
+      if (!item || !item.ot) continue;
+      fichasDeMarcadas.push({ ...item });
+    }
+    state.workOrders = importadas.concat(fichasDeMarcadas);
+  }
   invalidateGanttCache();
+  invalidateCurrentPlanOperationsCache();
+  if (backlogDatasetChanged) resetBacklogWindow();
   normalizeState();
+  applyLocalDraftRemovalTombstones(locallyRemovedDraftOts);
+  if (preservedLocalCapabilityConfig) restoreLocalCapabilityConfig(preservedLocalCapabilityConfig);
+}
+
+/**
+ * CAMPOS QUE applyImported NO SABE MAPEAR. Son los que el lector de Supabase si
+ * trae (supabase-reader.js, mapAppState y mapOtTypes) y que no estan en la lista
+ * de `if (imported.X) state.X = ...` de arriba. Se listan aqui, y no dentro de
+ * applyImported, porque no son parte de un "import" de la pagina: son metadatos de
+ * la fila unica de app_state y el catalogo de tipos de OT.
+ *
+ *   savedAt/syncedAt  la hora del ultimo guardado y de la ultima sincronizacion.
+ *                      Sin esto, la pagina no puede decir cuando se guardo.
+ *   reportFilters     el filtro con el que la persona abrio la ultima vez el
+ *                      informe (PERSONALIZAR). Sin esto, cada recarga lo pierde.
+ *   otTypes           el catalogo de tipos de OT. applyImported no lo mapea, y
+ *                      normalizeState (app.js:1411) lo rellena con los valores de
+ *                      muestra si llega vacio: o sea que sin ponerlo aqui, leer de
+ *                      Supabase devolveria la pagina a los tipos de ejemplo.
+ */
+/* PP-APPLY-DESDE-SUPABASE:INICIO */
+const CAMPOS_SIN_MAPEO = ["savedAt", "syncedAt", "reportFilters", "otTypes"];
+
+// RULE-SUP-068: LA SENAL DE "LA COLA SE LEYO BIEN". La puerta de arriba (abajo, la
+// funcion) la enciende cuando la entrada trae `selectedOts` como lista, que es
+// EXACTAMENTE lo que el lector solo produce cuando la lectura salio: si fallo,
+// siSePudoLeer devuelve undefined (supabase-reader.js:1457-1463, "UNA TABLA QUE NO
+// SE PUDO LEER NO ES UNA TABLA VACIA") y el apply ni siquiera pone la clave (test
+// "undefined NO se pasa" de tests/supabase-catalog-apply.test.mjs). La bandera
+// certifica "la cola se leyo sin fallo, vacia o con OTs"; que ademas este VACIA la
+// comprueba quien guarda. En `let` de modulo y no en `state`: es memoria de sesion
+// de ESTA pagina — no viaja a Supabase ni se persiste en localStorage. Consumidor:
+// guardarPlanEnSupabase, para no gritar el aviso del freno cuando el vacio esta
+// probado (cola en cero + esta senal, o los tombstones de RULE-SUP-066). El freno
+// en si no se toca: sin la senal, sigue frenando y sigue avisando.
+let colaLeidaSinFallo = false;
+
+// RULE-SUP-069: LA PUERTA DE LA PRIMERA LECTURA. NADIE GUARDA ESTADO QUE NO LEYO.
+//
+// MEDIDO 2026-10-08 (usuario, en produccion, con RULE-SUP-066/067/068 ya desplegadas): el
+// aviso residual del arranque seguia saliendo, y el diagnostico en vivo mostro por que. El
+// guardado que disparaba el arranque (el sync, las confirmaciones, los precios) corria
+// ANTES de que la lectura de Supabase terminara de aplicar, asi que subia el estado local
+// de la pagina (selected_ots viejo de localStorage) por encima de lo que la base tenia:
+// ademas del aviso falso, un guardado asi BORRA y REESCRIBE la cola con estado obsoleto y
+// puede resucitar OTs que ya se habian retirado. El freno (RULE-SUP-062) y el filtro del
+// aviso (RULE-SUP-068) tratan el sintoma; esto apaga la causa.
+//
+// COMO. Esta compuerta se abre cuando ha concluido el primer intento de lectura, sea
+// aplicando o fallando, y `guardarPlanEnSupabase` espera por ella antes de escribir: los
+// guardados que se disparan durante el arranque no se pierden ni fallan, se DIFIEREN —
+// esperan unos segundos y despues escriben con el estado YA LEIDO, o con el estado local
+// de siempre si la lectura fallo (ahi el freno conserva su aviso). No es memoria de sesion
+// como colaLeidaSinFallo: es una compuerta de una sola vez, y vive aqui porque es parte
+// del contrato de la puerta el estado que viene de Supabase.
+//
+// QUIEN LA ABRE. (1) aplicarEstadoDesdeSupabase, al terminar de aplicar: la senal fuerte.
+// (2) El `finally` del primer intento de lectura (supabase-catalog-apply.js), porque si la
+// lectura falla, no hay sesion o el modulo de boot no esta, la via (1) no corre y los
+// guardados esperarian para siempre. Sin app.js (pagina de skills) el modulo no encuentra
+// el abridor y no hace nada. Sin el modulo de aplicacion en el build, `esperar` no bloquea
+// (nadie va a leer) y el comportamiento es el de siempre, con el freno intacto.
+let primeraLecturaConcluida = false;
+let resolverPrimeraLectura = () => {};
+const primeraLecturaDeSupabase = new Promise((resolver) => { resolverPrimeraLectura = resolver; });
+
+function concluirPrimeraLecturaDeSupabase() {
+  if (primeraLecturaConcluida) return false;
+  primeraLecturaConcluida = true;
+  resolverPrimeraLectura();
+  return true;
+}
+
+function esperarPrimeraLecturaDeSupabase() {
+  if (primeraLecturaConcluida) return Promise.resolve();
+  if (typeof PPCatalogApply === "undefined") return Promise.resolve();
+  return primeraLecturaDeSupabase;
+}
+
+/**
+ * LA PUERTA DE ENTRADA DEL ESTADO QUE VIENE DE SUPABASE. Un solo lugar por donde
+ * el arranque de Supabase entra a la pagina, y lo mete por applyImported.
+ *
+ * POR QUE HACE FALTA UNA PUERTA Y NO ESCRIBIR `state` DESDE AFUERA. `state` es un
+ * `let` de primer nivel (app.js:504), o sea que vive en el entorno LEXICO global y
+ * NO es una propiedad de window: desde un modulo aparte, `window.state` es
+ * `undefined` y `window.state = ...` crearia un objeto que nadie mas mira. Se
+ * comprobo MEDIDO 2026-09-29 con este arranque: los catalogos se escribian en un
+ * objeto fantasma y la pagina seguia mostrando los valores de muestra.
+ *
+ * POR QUE ESTA Y NO UN `Object.assign` encima. applyImported es la funcion que ya
+ * sabe reconciliar (marcas de OT quitadas, ficha de las OT marcadas, precios,
+ * normalizacion). Por aqui se le pasa TODO lo leido, catalogs y plan juntos, y el
+ * orden queda en un sitio.
+ *
+ * `preserveLocalPlanning: false`, Y POR QUE. Con `true`, applyImported captura el
+ * borrador local (localStorage) y al final elige entre ese y el remoto con
+ * selectNewestCoherentDraft: con Supabase como fuente, el borrador de otra
+ * pestaña podria ganarle a la base y la pagina ensenaria un plan que la base no
+ * tiene. Con `false` lo que llega se aplica y punto. `preferRemotePlanning` se
+ * deja puesto por si alguien lo vuelve a activar: solo tiene efecto cuando
+ * preserveLocalPlanning es true.
+ *
+ * `excludedCapabilities` NO se inventa: el lector no la trae (no hay tabla), y
+ * applyImported, con preserveLocalPlanning en false, la pondria a `[]` (la linea
+ * que esta justo despues del bloque `hiddenCapabilities`). Se pasa la que hay para
+ * que la lectura de Supabase no borre una decision de la persona.
+ *
+ * Devuelve las claves que de verdad seapplied, para que quien llama lo diga.
+ */
+async function aplicarEstadoDesdeSupabase(imported) {
+  const entrada = imported && typeof imported === "object" ? Object.assign({}, imported) : {};
+  if (entrada.excludedCapabilities === undefined) entrada.excludedCapabilities = state.excludedCapabilities;
+  const aplicadas = Object.keys(entrada).filter((clave) => entrada[clave] !== undefined);
+  await applyImported(entrada, { preserveLocalPlanning: false, preferRemotePlanning: true });
+  // RULE-SUP-068: solo puede encenderse AQUI, dentro de la puerta y tras aplicar:
+  // la entrada trajo selectedOts como lista (lectura OK: el fallo llega como
+  // undefined y la clave ni se pone) y la reconciliacion no tiro. Si la lectura
+  // fallo, la bandera queda como estaba — apagada en el arranque — y ahi el freno
+  // del escritor conserva su aviso completo (RULE-SUP-021).
+  if (Array.isArray(entrada.selectedOts)) colaLeidaSinFallo = true;
+  for (const clave of CAMPOS_SIN_MAPEO) {
+    if (entrada[clave] !== undefined) state[clave] = entrada[clave];
+  }
+  render({ save: false });
+  // RULE-SUP-069: la lectura aplico — se abre la compuerta de los guardados de arranque
+  // para que de aqui en adelante escriban con ESTE estado y no con el local previo. Se
+  // abre DESPUES de aplicar y de los campos sin mapeo: un guardado que despierta con la
+  // compuerta tiene que ver el estado ya reconciliado, no a medias. Si applyImported
+  // tira, esta linea no corre y el `finally` del primer intento (supabase-catalog-apply.js)
+  // abre la compuerta igual.
+  concluirPrimeraLecturaDeSupabase();
+  return { aplicado: true, claves: aplicadas };
+}
+/* PP-APPLY-DESDE-SUPABASE:FIN */
+
+function applyLocalDraftRemovalTombstones(ots) {
+  const removed = [...new Set((ots || []).map(materialOtKey).filter(Boolean))];
+  if (!removed.length) return 0;
+  const before = new Set((state.selectedOts || []).map(materialOtKey).filter(Boolean));
+  for (const ot of removed) {
+    Object.assign(state, window.PlanningWorkflowCore.removeOtFromDraft(state, ot));
+  }
+  state._locallyRemovedDraftOts = removed;
+  invalidateCurrentPlanOperationsCache();
+  return removed.filter((ot) => before.has(ot)).length;
+}
+
+function rememberDraftRemovedOts(ots) {
+  state._locallyRemovedDraftOts = [...new Set([
+    ...(state._locallyRemovedDraftOts || []),
+    ...(ots || []),
+  ].map(materialOtKey).filter(Boolean))];
+}
+
+function forgetDraftRemovedOt(ot) {
+  const key = materialOtKey(ot);
+  if (!key || !Array.isArray(state._locallyRemovedDraftOts)) return;
+  state._locallyRemovedDraftOts = state._locallyRemovedDraftOts.filter((item) => materialOtKey(item) !== key);
+  if (!state._locallyRemovedDraftOts.length) delete state._locallyRemovedDraftOts;
 }
 
 function captureLocalPlanningState() {
   const keys = [
+    "revision",
+    "savedAt",
+    "operations",
+    "workOrders",
     "operators",
     "operatorProfiles",
     "operatorPerformance",
@@ -4976,6 +12478,7 @@ function captureLocalPlanningState() {
     "configuredCapabilities",
     "customCapabilities",
     "hiddenCapabilities",
+    "excludedCapabilities",
     "capacityModes",
     "matrix",
     "operationRules",
@@ -4985,13 +12488,14 @@ function captureLocalPlanningState() {
     "lockedOts",
     "expandedOts",
     "selectedOperationId",
-    "machines",
-    "toolCatalog",
+    "selectedDetailOt",
     "machineToolHistory",
     "calendarExceptions",
     "subcontracts",
     "otTypes",
     "operationPlanStatuses",
+    "publishedPlanStatuses",
+    "preparedPlanningByOt",
     "workSchedule",
     "dailyBreaks",
     "settings",
@@ -5009,7 +12513,10 @@ function captureLocalPlanningState() {
     "publishedVersions",
   ];
   return keys.reduce((out, key) => {
-    if (Object.prototype.hasOwnProperty.call(state, key)) out[key] = deepClone(state[key]);
+    // El guard es hasOwnProperty y NO solo valor: una clave puede existir como
+    // propiedad propia con valor undefined (ver el MEDIDO en deepClone), y en
+    // ese caso no hay nada que capturar ni restaurar.
+    if (Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined) out[key] = deepClone(state[key]);
     return out;
   }, {});
 }
@@ -5033,9 +12540,11 @@ function importJson(text) {
     cts: Array.isArray(parsed.cts) ? parsed.cts : null,
     plant: parsed.plant || null,
     operationCatalog: Array.isArray(parsed.operationCatalog) ? parsed.operationCatalog : null,
+    operationCatalogWarning: typeof parsed.operationCatalogWarning === "string" ? parsed.operationCatalogWarning : undefined,
     configuredCapabilities: Array.isArray(parsed.configuredCapabilities) ? parsed.configuredCapabilities : null,
     customCapabilities: Array.isArray(parsed.customCapabilities) ? parsed.customCapabilities : null,
     hiddenCapabilities: Array.isArray(parsed.hiddenCapabilities) ? parsed.hiddenCapabilities : null,
+    excludedCapabilities: Array.isArray(parsed.excludedCapabilities) ? normalizeCapabilityKeys(parsed.excludedCapabilities) : [],
     capacityModes: parsed.capacityModes,
     matrix: parsed.matrix,
     operatorPerformance: parsed.operatorPerformance,
@@ -5064,6 +12573,8 @@ function importJson(text) {
     calendarExceptions: Array.isArray(parsed.calendarExceptions) ? parsed.calendarExceptions : null,
     subcontracts: Array.isArray(parsed.subcontracts) ? parsed.subcontracts : null,
     netSuiteChangeAlerts: Array.isArray(parsed.netSuiteChangeAlerts) ? parsed.netSuiteChangeAlerts : null,
+    operationPlanStatuses: parsed.operationPlanStatuses,
+    publishedPlanStatuses: parsed.publishedPlanStatuses,
     lastSchedule: parsed.lastSchedule,
   };
 }
@@ -5083,28 +12594,314 @@ function importCsv(text) {
   return { operations };
 }
 
-function exportCsv() {
-  const rows = [PLAN_HEADERS, ...state.operations.map(operationToRow)];
+async function exportCsv() {
+  const sourceId = els.exportSnapshotSelect ? els.exportSnapshotSelect.value : "draft";
+  const operations = await exportSourceOperations(sourceId);
+  const generatedAt = lastScheduleGeneratedAt(sourceId);
+  const rows = [PLAN_HEADERS, ...operations.map((op) => operationToRow(op, generatedAt))];
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  downloadBlob(csv, "plan-produccion.csv", "text/csv;charset=utf-8");
+  // BOM UTF-8 (\\uFEFF): sin el, Excel en Windows abre el CSV con cp1252 y los
+  // acentos (INSPECCION, LIBERACION, EXPANSION) se ven como caracteres raros.
+  downloadBlob("\uFEFF" + csv, "plan-produccion.csv", "text/csv;charset=utf-8");
 }
 
-function operationToRow(op) {
+const XLSX_BACKLOG_HEADERS = ["OT", "Articulo", "Descripcion", "Cantidad", "Fecha entrega"];
+const XLSX_QUEUE_HEADERS = ["OT", "Articulo", "Descripcion", "Cantidad", "Fecha entrega", "Maquina", "Herramental", "Tipo"];
+
+function exportBacklogXlsx() {
+  const query = els.searchInput.value.trim().toLowerCase();
+  const statusFilter = els.statusFilter.value;
+  const jobs = getPriorityJobs()
+    .filter((job) => {
+      return !job.closed && !isJobSelected(job.ot) && jobMatchesSearch(job, query) && matchesStatusFilter(job, statusFilter);
+    });
+  const rows = jobs.map((job) => [
+    job.ot || "",
+    job.parte || "SIN ARTICULO",
+    job.descripcion || job.materialBase || "Sin descripcion",
+    jobExportCantidad(job),
+    normalizeOtDate(job.dueDate) || "",
+  ]);
+  const bytes = buildXlsxBytes(XLSX_BACKLOG_HEADERS, rows, "Backlog");
+  downloadBlob(bytes, "backlog.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+function exportQueueXlsx() {
+  const jobsByOt = new Map(getPriorityJobs().map((job) => [job.ot, job]));
+  const ordered = state.selectedOts.map((ot) => jobsByOt.get(ot)).filter(Boolean);
+  const rows = ordered.map((job) => [
+    job.ot || "",
+    job.parte || "SIN ARTICULO",
+    job.descripcion || job.materialBase || "Sin descripcion",
+    jobExportCantidad(job),
+    normalizeOtDate(job.dueDate) || "",
+    jobMaquinas(job),
+    jobHerramentales(job),
+    jobExportTipo(job),
+  ]);
+  const bytes = buildXlsxBytes(XLSX_QUEUE_HEADERS, rows, "Planeado / Por planear");
+  downloadBlob(bytes, "planeado-por-planear.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+function jobExportCantidad(job) {
+  const workOrder = workOrderForOt(job.ot);
+  if (Number.isFinite(Number(job.quantity)) && workOrder) return Number(job.quantity);
+  return Number(job.ops.find((op) => Number(op.cantPendiente) > 0)?.cantPendiente
+    ?? job.ops.find((op) => Number(op.cantTotal) > 0)?.cantTotal
+    ?? job.quantity
+    ?? 0);
+}
+
+function jobMaquinas(job) {
+  const bending = (job.ops || []).filter(isBendingAppOperation);
+  const machines = uniq((bending.length ? bending : job.ops || []).map((op) => String(op.maquina || "").trim()).filter(Boolean));
+  return machines.join(" | ");
+}
+
+function jobHerramentales(job) {
+  const tools = uniq((job.ops || []).map((op) => cleanToolValue(op.herramental)).filter(Boolean));
+  if (tools.length) return tools.join(" | ");
+  const tool = cleanToolValue(window.PlanningWorkflowCore?.effectiveJobTool?.(state, job, ["5459", "5527"]));
+  return tool || "";
+}
+
+function jobExportTipo(job) {
+  return jobDisplayType(job) || "";
+}
+
+// RULE-WEB-002: los espacios de nombres XML viven aqui y no dentro de una plantilla,
+// porque el HTML service de Apps Script recorta la linea en el "//" de una plantilla.
+const XLSX_NS_PACKAGE = "http://schemas.openxmlformats.org/package/2006/content-types";
+const XLSX_NS_PACKAGE_RELS = "http://schemas.openxmlformats.org/package/2006/relationships";
+const XLSX_NS_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const XLSX_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+function buildXlsxBytes(headers, rows, sheetName) {
+  const encoder = new TextEncoder();
+  const sheetXml = buildSheetXml(headers, rows);
+  const entries = [
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
+    ["xl/worksheets/sheet1.xml", sheetXml],
+  ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
+  return buildZipBytes(entries);
+}
+
+function buildSheetXml(headers, rows) {
+  const writeRow = (values, rowNumber) => values.map((value, colIndex) => {
+    const ref = `${xlsxColumnLetter(colIndex)}${rowNumber}`;
+    return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
+  }).join("");
+  const body = [headers, ...rows].map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    return `<row r="${rowNumber}">${writeRow(row, rowNumber)}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${XLSX_NS_MAIN}"><sheetData>${body}</sheetData></worksheet>`;
+}
+
+function xlsxColumnLetter(index) {
+  let col = "";
+  let value = index + 1;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    col = String.fromCharCode(65 + remainder) + col;
+    value = Math.floor((value - 1) / 26);
+  }
+  return col;
+}
+
+function xmlEscape(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function buildZipBytes(entries) {
+  const encoder = new TextEncoder();
+  const parts = [];
+  const centralDirectory = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(entry.name);
+    const dataBytes = entry.data;
+    const crc = crc32(dataBytes);
+    const local = new Uint8Array(entry.name.length + 30 + dataBytes.length);
+    const localView = new DataView(local.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, 0, true);
+    localView.setUint16(12, 0, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, dataBytes.length, true);
+    localView.setUint32(22, dataBytes.length, true);
+    localView.setUint16(26, entry.name.length, true);
+    localView.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    local.set(dataBytes, 30 + nameBytes.length);
+    parts.push(local);
+    const central = new Uint8Array(46 + entry.name.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, 0, true);
+    centralView.setUint16(14, 0, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, dataBytes.length, true);
+    centralView.setUint32(24, dataBytes.length, true);
+    centralView.setUint16(28, entry.name.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centralDirectory.push(central);
+    offset += local.length;
+  }
+  const centralStart = offset;
+  const centralSize = centralDirectory.reduce((sum, part) => sum + part.length, 0);
+  const endOfCentral = new Uint8Array(22);
+  const endView = new DataView(endOfCentral.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, entries.length, true);
+  endView.setUint16(10, entries.length, true);
+  endView.setUint32(12, centralSize, true);
+  endView.setUint32(16, centralStart, true);
+  endView.setUint16(20, 0, true);
+  centralDirectory.push(endOfCentral);
+  const totalLength = centralStart + centralDirectory.reduce((sum, part) => sum + part.length, 0);
+  const zip = new Uint8Array(totalLength);
+  let cursor = 0;
+  for (const part of parts) {
+    zip.set(part, cursor);
+    cursor += part.length;
+  }
+  for (const part of centralDirectory) {
+    zip.set(part, cursor);
+    cursor += part.length;
+  }
+  return zip;
+}
+
+function crc32(bytes) {
+  let crc = 0 ^ -1;
+  for (let index = 0; index < bytes.length; index += 1) {
+    crc ^= bytes[index];
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function lastScheduleGeneratedAt(sourceId) {
+  if (sourceId && sourceId !== "draft") return "";
+  const live = state.lastSchedule?.generatedAt || "";
+  const draftMeta = typeof planSnapshots !== "undefined" && Array.isArray(planSnapshots)
+    ? planSnapshots.find((item) => item.snapshotId === "draft")
+    : null;
+  const snapshotGeneratedAt = draftMeta?.generatedAt || "";
+  const liveMs = Date.parse(live) || 0;
+  const snapshotMs = Date.parse(snapshotGeneratedAt) || 0;
+  if (snapshotMs > liveMs) return snapshotGeneratedAt;
+  return live || snapshotGeneratedAt;
+}
+
+async function exportSourceOperations(sourceId) {
+  if (sourceId === "draft" || !sourceId) {
+    return window.PlanningWorkflowCore.draftExportOperations({
+      ...state,
+      operations: currentPlanOperations(),
+    });
+  }
+  try {
+    const snapshot = await fetchPlanSnapshot(sourceId);
+    return (snapshot.operations || []).map((op, index) => normalizeOperation({
+      ...op,
+      id: op.id || `snapshot-${sourceId}-${index + 1}`,
+    }, index));
+  } catch (error) {
+    showToast(`No se pudo exportar el plan guardado: ${error.message}`);
+    throw error;
+  }
+}
+
+function operationToRow(op, generatedAt) {
   return PLAN_HEADERS.map((header) => {
+    if (header === "GENERADO_EL") return generatedAt ?? "";
     if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
+    if (header === "LOG") return scheduledLogForExport(op);
+    if (header === "PRECIO") return Number(op.unitPrice) >= 1 ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
+    if (header === "MONTO") return Number(op.amount) >= 1 ? op.amount : amountForOt(op.ot);
     const field = FIELD_MAP[header];
-    return op[field] ?? "";
+    const value = op[field];
+    if (header === "PARTE") return String(op.parte || workOrderForOt(op.ot)?.item || "").trim();
+    if (header === "CT") return exportCtForOperation(op, value);
+    if (header === "CANT_PENDIENTE" || header === "CANT_TOTAL") return exportQuantityForOperation(op, value);
+    return value ?? "";
   });
 }
 
+function exportCtForOperation(op, value) {
+  const raw = String(value ?? "").trim();
+  if (raw && raw !== "SIN_CT") return value;
+  const resolved = window.PlannerCore?.capabilityForOperation ? window.PlannerCore.capabilityForOperation(op, state) : null;
+  return resolved?.ct && resolved.ct !== "SIN_CT" ? resolved.ct : raw || "SIN_CT";
+}
+
+function exportQuantityForOperation(op, value) {
+  if (Number(value) > 0) return value;
+  return pendingPiecesForWorkOrder(workOrderForOt(op?.ot || ""));
+}
+
+function scheduledLogForExport(op) {
+  let logText = op.log ?? "";
+  const endMs = exportScheduledEndMs(op);
+  const horizonMs = businessHorizonEndMs();
+  if (endMs && horizonMs && endMs > horizonMs) logText = appendLog(logText, "FUERA_DE_HORIZONTE_PLANEACION");
+  return logText;
+}
+
+function exportScheduledEndMs(op) {
+  const date = String(op.fechaFin || "").trim();
+  if (!date) return 0;
+  const time = normalizeExportScheduleTime(op.horaFin) || "00:00:00";
+  const ms = Date.parse(`${date}T${time}`);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function normalizeExportScheduleTime(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?/);
+  if (!match) return "";
+  const hour = String(Number(match[1])).padStart(2, "0");
+  const minute = String(Number(match[2])).padStart(2, "0");
+  const second = String(Number(match[3] || 0)).padStart(2, "0");
+  return `${hour}:${minute}:${second}`;
+}
+
+function businessHorizonEndMs() {
+  const start = Date.parse(`${String(state.planStart || "").trim()}T00:00:00`);
+  if (!Number.isFinite(start)) return 0;
+  const days = Math.max(1, Math.min(45, Number(state.horizonDays) || DEFAULT_HORIZON_DAYS));
+  return start + days * 86400000;
+}
+
 function scheduledProductionMinutesForExport(op) {
-  const start = opStart(op);
-  const end = opEnd(op);
-  if (start && end) {
-    const scheduledMinutes = Math.max(0, diffMinutes(start, end));
-    const setupMinutes = Math.max(0, Number(op.tiempoSetup || 0));
-    return Math.max(0, Math.round((scheduledMinutes - setupMinutes) * 100) / 100);
-  }
+  if (window.PlannerCore?.productionMinutes) return window.PlannerCore.productionMinutes(op);
   return adjustedProductionMinutes(op);
 }
 
@@ -5148,32 +12945,24 @@ function parseCsv(text) {
 }
 
 function getPlanWindow() {
-  const configured = parseDate(state.planStart);
-  const starts = state.operations.map(opStart).filter(Boolean);
-  const base = scheduledPlanWindowStart() || (configured
-    ? new Date(configured.year, configured.month - 1, configured.day)
-    : (starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : weekStart(new Date())));
-  const start = new Date(base);
-  start.setHours(0, 0, 0, 0);
-  return { start, end: addDays(start, state.horizonDays - 1) };
-}
-
-function scheduledPlanWindowStart() {
-  const starts = state.operations
-    .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op))
-    .map(opStart)
-    .filter(Boolean);
-  if (!starts.length) return null;
-  return new Date(Math.min(...starts.map((date) => date.getTime())));
+  const activeOperations = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && opStart(op));
+  return globalThis.PlanningWorkflowCore.ganttPlanWindow({
+    planStart: state.planStart,
+    horizonDays: state.horizonDays,
+    operations: activeOperations,
+    today: new Date(),
+  });
 }
 
 function getGanttGroups() {
-  const visibleOperations = state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
-  const cacheKey = `${visibleOperations.length}-${state.ganttView}-${GANTT_GROUPS_CACHE_VERSION}`;
+  const plan = currentPlanOperations();
+  const cacheKey = `${plan.length}-${state.ganttView}-${GANTT_GROUPS_CACHE_VERSION}-m${planStateMutationVersion}-s${(state.selectedOts || []).length}-l${(state.lastSchedule?.scheduledOts || []).length}`;
   
   if (GANTT_GROUPS_CACHE.has(cacheKey)) {
     return GANTT_GROUPS_CACHE.get(cacheKey);
   }
+  
+  const visibleOperations = plan.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
   
   let groups;
   
@@ -5282,7 +13071,7 @@ function getGanttGroups() {
 }
 
 function ganttOperationHasMachine(op) {
-  return isBendingAppOperation(op) && Boolean(normalizeMachineValue(op.maquina, op));
+  return globalThis.PlanningWorkflowCore.isMachineGanttOperation(op);
 }
 
 function ganttGroupField() {
@@ -5316,23 +13105,43 @@ function ganttGroupSubtitle(ops) {
 }
 
 function getOperatorLoads(weekStartValue = state.loadWeekStart, horizonDays = 7) {
-  return operatorLoadsForOperations(
-    state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
+  const operations = currentPlanOperations();
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    selectedOts: state.selectedOts || [],
+    scheduledOts: state.lastSchedule?.scheduledOts || [],
+    operatorCount: state.operators.length,
+    weekStartValue,
+    horizonDays,
+    capacityMinutes: state.capacityMinutes,
+    operatorPerformance: state.operatorPerformance || {},
+    operationRules: state.operationRules || {},
+  });
+  const cache = typeof operatorLoadsCache === "undefined" ? getOperatorLoads.cache : operatorLoadsCache;
+  if (cache?.operations === operations && cache.signature === signature) return cache.result;
+  const result = operatorLoadsForOperations(
+    operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)),
     weekStartValue,
     horizonDays
   );
+  const next = { operations, signature, result };
+  if (typeof operatorLoadsCache === "undefined") getOperatorLoads.cache = next;
+  else operatorLoadsCache = next;
+  return result;
 }
 
 function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loadWeekStart, horizonDays = 7) {
   const range = selectedWeekRange(weekStartValue);
   const scheduledOts = getScheduledOts();
   const loadState = { ...state, selectedOts: scheduledOts, planStart: formatDate(range.start), horizonDays };
-  const loadOperators = uniq([...state.operators, ...(sourceOperations || []).map((op) => op.operador)])
-    .filter(isLoadBearingOperator);
+  // RULE-BAL-006: Cargas solo considera operadores de la matriz (altas activas). No
+  // se agregan valores crudos de `op.operador` (p.ej. el "1" que viene de NetSuite
+  // laborresources), que no existen en la matriz de habilidades y ensuciaban la vista.
+  const loadOperators = uniq(state.operators || []).filter(isLoadBearingOperator);
   return loadOperators
     .map((operator) => {
       const minutes = (sourceOperations || [])
-        .filter((op) => op.operador === operator && isLoadBearingOperator(op.operador))
+        .filter((op) => op.operador === operator && isLoadBearingOperator(op.operador) && isFiniteCapacityOperation(op))
         .reduce((sum, op) => sum + operationMinutesInRange(op, range.start, range.end), 0);
       const available = window.PlannerCore?.availableMinutes
         ? window.PlannerCore.availableMinutes(state, operator, formatDate(range.start), horizonDays)
@@ -5351,6 +13160,117 @@ function operatorLoadsForOperations(sourceOperations, weekStartValue = state.loa
     .sort((a, b) => b.percent - a.percent);
 }
 
+function operatorLoadsSourceMemoized(sourceOperations, weekStartValue, horizonDays) {
+  const operations = sourceOperations || [];
+  const memo = operatorLoadsRenderMemo;
+  const changed = !memo
+    || memo.sourceLength !== operations.length
+    || memo.weekStartValue !== weekStartValue
+    || memo.horizonDays !== horizonDays
+    || memo.lastSchedule !== state.lastSchedule
+    || memo.operators !== state.operators
+    || memo.loadSnapshot !== loadSnapshot
+    || memo.loadMode !== loadMode
+    || memo.versions !== planStateMutationVersion;
+  if (!changed) return memo.result;
+  const result = operatorLoadsForOperations(operations, weekStartValue, horizonDays);
+  operatorLoadsRenderMemo = {
+    sourceLength: operations.length,
+    weekStartValue,
+    horizonDays,
+    lastSchedule: state.lastSchedule,
+    operators: state.operators,
+    loadSnapshot,
+    loadMode,
+    versions: planStateMutationVersion,
+    result,
+  };
+  return result;
+}
+
+function reportLoadsSignature(reportOperations) {
+  return (reportOperations || []).map((op, index) => {
+    const start = opStart(op);
+    const end = opEnd(op);
+    return `${op.id || op.ot || index}:${op.operador || ""}:${start ? start.getTime() : 0}:${end ? end.getTime() : 0}:${isFiniteCapacityOperation(op) ? 1 : 0}`;
+  }).join("|");
+}
+
+let reportOperatorLoadsWeekCache = null;
+
+function reportLoadsCacheInvalidated() {
+  const memo = reportOperatorLoadsRenderMemo;
+  return !memo
+    || memo.operations !== state.operations
+    || memo.operators !== state.operators
+    || memo.operatorProfiles !== state.operatorProfiles
+    || memo.lastSchedule !== state.lastSchedule
+    || memo.selectedOts !== state.selectedOts
+    || memo.capacityModes !== state.capacityModes
+    || memo.workSchedule !== state.workSchedule
+    || memo.dailyBreaks !== state.dailyBreaks
+    || memo.calendarExceptions !== state.calendarExceptions
+    || memo.reportSnapshot !== reportSnapshot
+    || memo.versions !== planStateMutationVersion;
+}
+
+function reportOperatorLoadsSourceMemoized(sourceOperations, weekStartValue) {
+  const reportOperations = sourceOperations || [];
+  if (reportOperatorLoadsWeekCache === null || reportLoadsCacheInvalidated()) {
+    reportOperatorLoadsWeekCache = new Map();
+    reportOperatorLoadsRenderMemo = null;
+  }
+  const weekMonday = selectedWeekRange(weekStartValue).start.getTime();
+  const memo = reportOperatorLoadsRenderMemo;
+  if (memo && memo.weekMonday === weekMonday && memo.reportOps === reportOperations) {
+    return memo.result;
+  }
+  const signature = reportLoadsSignature(reportOperations);
+  const hit = reportOperatorLoadsWeekCache.get(weekMonday);
+  if (hit && hit.sourceSignature === signature) {
+    reportOperatorLoadsRenderMemo = {
+      weekMonday,
+      reportOps: reportOperations,
+      operations: state.operations,
+      operators: state.operators,
+      operatorProfiles: state.operatorProfiles,
+      lastSchedule: state.lastSchedule,
+      selectedOts: state.selectedOts,
+      capacityModes: state.capacityModes,
+      workSchedule: state.workSchedule,
+      dailyBreaks: state.dailyBreaks,
+      calendarExceptions: state.calendarExceptions,
+      reportSnapshot,
+      versions: planStateMutationVersion,
+      result: hit.result,
+    };
+    return hit.result;
+  }
+  const result = operatorLoadsForOperations(reportOperations, weekStartValue, 7);
+  reportOperatorLoadsWeekCache.set(weekMonday, { sourceSignature: signature, result });
+  if (reportOperatorLoadsWeekCache.size > 4) {
+    const oldest = reportOperatorLoadsWeekCache.keys().next().value;
+    reportOperatorLoadsWeekCache.delete(oldest);
+  }
+  reportOperatorLoadsRenderMemo = {
+    weekMonday,
+    reportOps: reportOperations,
+    operations: state.operations,
+    operators: state.operators,
+    operatorProfiles: state.operatorProfiles,
+    lastSchedule: state.lastSchedule,
+    selectedOts: state.selectedOts,
+    capacityModes: state.capacityModes,
+    workSchedule: state.workSchedule,
+    dailyBreaks: state.dailyBreaks,
+    calendarExceptions: state.calendarExceptions,
+    reportSnapshot,
+    versions: planStateMutationVersion,
+    result,
+  };
+  return result;
+}
+
 function operationMinutesInRange(op, rangeStart, rangeEnd) {
   const start = opStart(op);
   const end = opEnd(op);
@@ -5363,13 +13283,14 @@ function operationMinutesInRange(op, rangeStart, rangeEnd) {
 }
 
 function getCtLoads() {
-  const selectedCts = uniq(state.operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op) => op.ct));
-  const maxMinutes = Math.max(1, ...selectedCts.map((ct) => state.operations
+  const operations = currentPlanOperations();
+  const selectedCts = uniq(operations.filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op)).map((op) => op.ct));
+  const maxMinutes = Math.max(1, ...selectedCts.map((ct) => operations
     .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && op.ct === ct && isFiniteCapacityOperation(op))
     .reduce((sum, op) => sum + operationDuration(op), 0)));
   return selectedCts
     .map((ct) => {
-      const minutes = state.operations
+      const minutes = operations
         .filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op) && op.ct === ct && isFiniteCapacityOperation(op))
         .reduce((sum, op) => sum + operationDuration(op), 0);
       return { ct, minutes, percent: (minutes / maxMinutes) * 100 };
@@ -5387,9 +13308,9 @@ function operationDuration(op) {
     if (days > 0) return Math.max(MIN_OPERATION_MINUTES, days * WORK_DAY_MINUTES);
     return MIN_OPERATION_MINUTES;
   }
-  if (start && end) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
   const explicit = Number(op.tiempoSetup || 0) + adjustedProductionMinutes(op);
   if (explicit > 0) return explicit;
+  if (start && end) return Math.max(MIN_OPERATION_MINUTES, diffMinutes(start, end));
   return MIN_OPERATION_MINUTES;
 }
 
@@ -5416,7 +13337,9 @@ function adjustedProductionMinutes(op) {
   const capability = capabilityFromOperation(op);
   const rule = state.operationRules[capability.key] || state.operationRules[capability.ct] || {};
   const efficiency = Math.max(1, Math.min(100, Number(rule.efficiency ?? rule.eficiencia) || 100));
-  return Math.ceil(Number(op.tiempoProd || 0) * (2 - efficiency / 100) * 100 / performance);
+  const production = window.PlannerCore?.productionMinutes?.(op) ?? Number(op.tiempoProd || 0);
+  if (op?.tiempoFallback === true) return production;
+  return Math.ceil(production * (2 - efficiency / 100) * 100 / performance);
 }
 
 function opStart(op) {
@@ -5480,10 +13403,12 @@ function normalizeReportFilters(filters, fallbackDate) {
   const source = filters && typeof filters === "object" ? filters : {};
   return ["operator", "adjuster", "subcontract"].reduce((out, type) => {
     const current = source[type] && typeof source[type] === "object" ? source[type] : {};
-    const parsed = parseDate(current.date || fallbackDate);
+    const today = parseDate(formatDate(new Date()));
+    const parsed = parseDate(current.date) || (fallbackDate ? parseDate(fallbackDate) : null) || today;
     out[type] = {
-      date: parsed ? formatDate(new Date(parsed.year, parsed.month - 1, parsed.day)) : fallbackDate,
+      date: parsed ? formatDate(new Date(parsed.year, parsed.month - 1, parsed.day)) : formatDate(new Date()),
       showAll: current.showAll === true,
+      futureDays: Math.max(1, Math.min(5, Number(current.futureDays) || 1)),
       status: ["PENDIENTES", "COMPLETADAS", "TODAS"].includes(String(current.status || "").toUpperCase())
         ? String(current.status).toUpperCase()
         : "PENDIENTES",
@@ -5504,40 +13429,44 @@ function updateReportFilter(type, patch) {
   saveState();
 }
 
-function syncReportFilterDates(date) {
+function resetDailyReportFiltersToToday() {
   state.reportFilters = normalizeReportFilters(state.reportFilters, state.reportWeekStart);
+  const today = formatDate(new Date());
   for (const type of ["operator", "adjuster", "subcontract"]) {
-    state.reportFilters[type].date = normalizeReportFilters({ [type]: { date } }, state.reportWeekStart)[type].date;
+    state.reportFilters[type].date = today;
   }
+}
+
+function syncReportFiltersToPlanWeekOrToday() {
+  const reportStart = state.planStart || state.reportWeekStart;
+  if (reportStart) state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  resetDailyReportFiltersToToday();
 }
 
 function filteredReportRows(rows, type, dateGetter) {
   const filter = reportFilter(type);
-  const statusRows = type === "subcontract" ? rows : rows.filter((row) => {
-    if (filter.status === "TODAS") return true;
-    const completed = isPlanCompletedOperation(row);
-    return filter.status === "COMPLETADAS" ? completed : !completed;
-  });
-  const dailyRows = statusRows.filter((row) => {
+  const statusRows = window.PlanningWorkflowCore.filterOperationsByPlanStatus(rows, filter.status);
+  const range = window.PlanningWorkflowCore.reportDateRange(filter.date, filter.futureDays);
+  const rangeRows = statusRows.filter((row) => {
     const date = dateGetter(row);
-    return date && formatDate(date) === filter.date;
+    const value = date && formatDate(date);
+    return value && value <= range.end;
   });
-  const source = filter.showAll ? statusRows : dailyRows;
+  const source = rangeRows.slice().sort((a, b) => Number(dateGetter(a)) - Number(dateGetter(b)));
   return {
-    rows: filter.showAll ? source : source.slice(0, REPORT_ROW_LIMIT),
+    rows: source.slice(0, REPORT_ROW_LIMIT),
     total: source.length,
-    showAll: filter.showAll,
+    showAll: false,
     date: filter.date,
+    futureDays: filter.futureDays,
   };
 }
 
-function renderReportFilterStatus(type, input, checkbox, output, selection) {
+function renderReportFilterStatus(type, input, futureDaysSelect, output, selection) {
   input.value = selection.date;
-  checkbox.checked = selection.showAll;
-  output.textContent = selection.showAll
-    ? `${selection.rows.length} filas`
-    : `${selection.rows.length} de ${selection.total} · max. ${REPORT_ROW_LIMIT}`;
-  output.title = selection.showAll ? "Lista completa de la semana" : `Limitado a ${REPORT_ROW_LIMIT} filas para impresion`;
+  futureDaysSelect.value = String(selection.futureDays);
+  output.textContent = `${selection.rows.length} de ${selection.total} · max. ${REPORT_ROW_LIMIT}`;
+  output.title = `Limitado a ${REPORT_ROW_LIMIT} filas para impresion`;
 }
 
 function selectedWeekRange(value) {
@@ -5569,33 +13498,87 @@ function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60000);
 }
 
+function ganttWindowsFor(date) {
+  if (window.PlannerCore && typeof window.PlannerCore.effectiveWindows === "function") {
+    const windows = window.PlannerCore.effectiveWindows(state, date, "", "");
+    if (Array.isArray(windows)) return windows;
+  }
+  return isGeneralWorkingDay(date)
+    ? [{ start: WORK_START_HOUR * 60, end: WORK_END_HOUR * 60 }]
+    : [];
+}
+
+function ganttDayWorkMinutes(date) {
+  return (ganttWindowsFor(date) || []).reduce((sum, w) => sum + Math.max(0, (w.end || 0) - (w.start || 0)), 0);
+}
+
+function ganttDayIndexFor(date, windowStart) {
+  return globalThis.PlanningWorkflowCore.ganttDayIndex(date, windowStart, state.horizonDays);
+}
+
+function ganttCumulativeWorkBefore(date, windowStart) {
+  return globalThis.PlanningWorkflowCore.ganttCumulativeWorkBefore(date, windowStart, state.horizonDays, (day) => ganttDayWorkMinutes(day));
+}
+
+function ganttWithinDayMinute(date, dayStart) {
+  const time = date.getTime();
+  let within = 0;
+  for (const w of ganttWindowsFor(dayStart)) {
+    const startMs = dayStart.getTime() + (w.start || 0) * 60000;
+    const endMs = dayStart.getTime() + (w.end || 0) * 60000;
+    if (time <= startMs) continue;
+    within += Math.max(0, Math.min(time, endMs) - startMs) / 60000;
+  }
+  return Math.max(0, within);
+}
+
 function workWindowMinutes() {
-  return state.horizonDays * WORK_DAY_MINUTES;
+  const windowStart = getPlanWindow().start;
+  let total = 0;
+  for (let i = 0; i < state.horizonDays; i++) total += ganttDayWorkMinutes(addDays(windowStart, i));
+  return total;
 }
 
 function workMinuteOffset(date, windowStart) {
-  const dayStart = new Date(windowStart);
+  const { dayIndex, total } = ganttCumulativeWorkBefore(date, windowStart);
+  const dayStart = new Date(date);
   dayStart.setHours(0, 0, 0, 0);
-  const current = new Date(date);
-  const dayIndex = Math.max(0, Math.min(state.horizonDays - 1, Math.floor((current - dayStart) / 86400000)));
-  const minuteOfDay = current.getHours() * 60 + current.getMinutes();
-  const workMinute = Math.max(0, Math.min(WORK_DAY_MINUTES, minuteOfDay - WORK_START_HOUR * 60));
-  return dayIndex * WORK_DAY_MINUTES + workMinute;
+  return total + ganttWithinDayMinute(date, dayStart);
 }
 
 function dateFromWorkOffset(windowStart, offset, boundaryMode = "start") {
-  const bounded = Math.max(0, Math.min(workWindowMinutes(), snap(offset, ganttSnapMinutes())));
-  let dayIndex = Math.floor(bounded / WORK_DAY_MINUTES);
-  let minuteInDay = bounded - dayIndex * WORK_DAY_MINUTES;
-  if (boundaryMode === "end" && bounded > 0 && minuteInDay === 0) {
-    dayIndex -= 1;
-    minuteInDay = WORK_DAY_MINUTES;
+  const totalMinutes = workWindowMinutes();
+  const bounded = Math.max(0, Math.min(totalMinutes, snap(offset, ganttSnapMinutes())));
+  let remaining = bounded;
+  let dayIndex = 0;
+  while (dayIndex < state.horizonDays) {
+    const dayMinutes = ganttDayWorkMinutes(addDays(windowStart, dayIndex));
+    if (remaining < dayMinutes) break;
+    if (remaining === dayMinutes && dayIndex < state.horizonDays - 1) { remaining = 0; dayIndex += 1; break; }
+    remaining -= dayMinutes;
+    dayIndex += 1;
   }
-  dayIndex = Math.min(state.horizonDays - 1, dayIndex);
-  minuteInDay = Math.min(WORK_DAY_MINUTES, minuteInDay);
-  const result = addDays(windowStart, dayIndex);
-  result.setHours(WORK_START_HOUR, 0, 0, 0);
-  return addMinutes(result, minuteInDay);
+  if (remaining === 0 && boundaryMode === "end" && bounded > 0) {
+    const prev = dateFromWorkOffset(windowStart, bounded - 1);
+    const prevDayStart = new Date(prev); prevDayStart.setHours(0, 0, 0, 0);
+    const windows = ganttWindowsFor(prevDayStart);
+    const lastEnd = windows.length ? (windows[windows.length - 1].end || WORK_END_HOUR * 60) : WORK_END_HOUR * 60;
+    return addMinutes(prevDayStart, lastEnd);
+  }
+  const dayStart = new Date(addDays(windowStart, dayIndex));
+  dayStart.setHours(0, 0, 0, 0);
+  const windows = ganttWindowsFor(dayStart);
+  let acc = 0;
+  for (const w of windows) {
+    const wm = Math.max(0, (w.end || 0) - (w.start || 0));
+    if (remaining <= acc + wm) {
+      const startMs = dayStart.getTime() + (w.start || 0) * 60000;
+      return new Date(startMs + (remaining - acc) * 60000);
+    }
+    acc += wm;
+  }
+  const lastEnd = windows.length ? (windows[windows.length - 1].end || WORK_END_HOUR * 60) : WORK_END_HOUR * 60;
+  return addMinutes(dayStart, lastEnd);
 }
 
 function addWorkMinutes(date, minutes, windowStart) {
@@ -5630,6 +13613,26 @@ function formatTime(date) {
 function formatDateTime(date) {
   if (!date) return "";
   return `${formatDate(date)} ${formatTime(date)}`;
+}
+
+function formatReportDate(date) {
+  if (!date) return "";
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${d}/${m}/${y}`;
+}
+
+function formatReportDateTime(date) {
+  if (!date) return "";
+  return `${formatReportDate(date)} ${formatReportTime(date)}`;
+}
+
+function formatReportTime(date) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("es-MX", {
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  }).format(date).replace(/\s+/g, " ").toUpperCase();
 }
 
 function formatMinutes(minutes) {
@@ -5673,14 +13676,40 @@ function sequenceSort(a, b) {
 }
 
 function getJobSequence(op) {
-  return state.operations
+  return currentPlanOperations()
     .filter((item) => item.ot === op.ot && !isPlanCompletedOperation(item))
     .sort((a, b) => sequenceSort(a, b) || opStart(a) - opStart(b));
 }
 
 function getPriorityJobs() {
+  const operations = currentPlanOperations();
+  const workOrders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const materials = Array.isArray(state.materials) ? state.materials : [];
+  const otKey = typeof materialOtKey === "function"
+    ? materialOtKey
+    : (value) => String(value || "").trim().toUpperCase();
+  const signature = JSON.stringify({
+    operationsLength: operations.length,
+    workOrdersLength: workOrders.length,
+    materialsLength: materials.length,
+    selectedOts: state.selectedOts || [],
+    lockedOts: state.lockedOts || [],
+    lastSchedule: state.lastSchedule?.scheduledOts || [],
+    dueOverrides: workOrders.map((workOrder) => [otKey(workOrder.ot), workOrder.dueDateOverride || workOrder.fechaEntregaAjustada || ""]),
+    operationCatalogWarning: state.operationCatalogWarning || "",
+    netSuiteChangeAlerts: (state.netSuiteChangeAlerts || []).map((alert) => [alert.ot, alert.severity, alert.summary]),
+  });
+  const cache = typeof priorityJobsCache === "undefined" ? getPriorityJobs.cache : priorityJobsCache;
+  if (cache
+      && cache.operations === operations
+      && cache.workOrders === workOrders
+      && cache.materials === materials
+      && cache.signature === signature) {
+    return cache.result;
+  }
+  const indexes = typeof planningStateIndexes === "function" ? planningStateIndexes() : null;
   const map = new Map();
-  for (const op of state.operations) {
+  for (const op of operations) {
     const job = map.get(op.ot) || {
       ot: op.ot,
       ops: [],
@@ -5688,7 +13717,7 @@ function getPriorityJobs() {
     job.ops.push(op);
     map.set(op.ot, job);
   }
-  for (const workOrder of state.workOrders) {
+  for (const workOrder of workOrders) {
     if (!workOrder.ot || map.has(workOrder.ot)) continue;
     map.set(workOrder.ot, {
       ot: workOrder.ot,
@@ -5697,11 +13726,12 @@ function getPriorityJobs() {
     });
   }
 
-  return [...map.values()]
+  const result = [...map.values()]
     .map((job) => {
       const ops = job.ops.sort((a, b) => sequenceSort(a, b) || opStart(a) - opStart(b));
-      const workOrder = workOrderForOt(job.ot);
+      const workOrder = indexes?.workOrdersByOt?.get(otKey(job.ot)) || workOrderForOt(job.ot);
       const firstOp = ops[0] || workOrderPlaceholderOperation(workOrder || { ot: job.ot });
+      const materials = indexes?.materialsByOt?.get(otKey(job.ot)) || materialsForOt(job.ot);
       return {
         ...job,
         ops,
@@ -5716,12 +13746,39 @@ function getPriorityJobs() {
         quantity: pendingPiecesForWorkOrder(workOrder),
         cts: uniq(ops.map((op) => op.ct).filter(Boolean)),
         operators: uniq(ops.map((op) => op.operador).filter(Boolean)),
-        materials: materialsForOt(job.ot),
-        materialBase: materialBaseForOt(job.ot),
-        status: jobStatusForOt(job.ot),
-        movable: isMovablePlanningStatus(jobStatusForOt(job.ot)),
+        materials,
+        materialBase: materials[0]?.component || "",
+        status: jobStatusParaTarjeta(job.ot),
+        // DECISION DEL USUARIO 2026-10-06: una OT SIN FICHA en `work_orders` no se programa, y
+        // la tarjeta lo dice. No es una preferencia de estilo, son tres hechos medidos.
+        //
+        // MEDIDO 2026-10-05 (sonda): la OT 3092 tiene operaciones en `operations` y NO tiene fila
+        // en `work_orders`, y salia en el backlog como "PLAN SIN ARTICULO" con el boton `+` ACTIVO.
+        // Al pulsarlo, el camino de "Generar plan" (app.js:6057-6077) la saca del plan y avisa
+        // "ya no esta en NetSuite": o sea que el boton ofrecia una accion que su propio resultado
+        // revoca. El boton.enabled era un dato falso.
+        //
+        // Y la ausencia de fila NO significa "cerrada". Significa una de dos cosas: cerrada, o el
+        // espejo la perdio. MEDIDO las dos: el 2026-10-05 con las 513 filas de RULE-SUP-051, y el
+        // vaciado de RULE-SUP-048, `work_orders` quedo en 0 y desaparecieron TODAS. Tratar la
+        // ausencia como cierre es la opcion (a) de la nota de RULES.md:257 y es la que borra el
+        // taller entero, asi que no se puede automatizar. Marcar y excluir es la unica salida que
+        // no inventa un dato.
+        //
+        // `sinFicha` sale de `workOrder`, que viene del MISMO `state.workOrders` que la pagina
+        // lee; no hay una segunda consulta ni un segundo predicado. Y NO se confunde con
+        // "cerrada": una OT cerrada con su fila (`cerrada: true`) sigue teniendo ficha, asi que
+        // su causa sale por `status`, que es lo que ya decia el boton.
+        sinFicha: !workOrder,
+        movable: Boolean(workOrder) && isMovablePlanningStatus(jobStatusParaTarjeta(job.ot)),
+        // `programmed` sigue siendo estado de las operaciones: una OT ya programada en el plan
+        // no se toca aunque la ficha diga "En curso" (los candados de edicion usan ese dato).
         programmed: isProgrammedJobStatus(jobStatusForOt(job.ot)),
-        closed: isClosedJobStatus(jobStatusForOt(job.ot)),
+        // RULE-OT-051: cerrada SOLO si la ficha lo dice o NetSuite lo confirmo. Antes caia al
+        // estatus de la primera operacion y una op "Completado" escondia la OT entera del
+        // backlog (3583). Los jobs HUERFANOS (operaciones sin ficha) conservan el criterio de
+        // antes via el fall-down, para no destapar OTs desaparecidas del espejo.
+        closed: isConfirmedClosedWorkOrder(job.ot) || (!workOrder && isClosedJobStatus(jobStatusParaTarjeta(job.ot))),
         locked: isJobLocked(job.ot),
         firstSequence: ops[0]?.secuencia ?? "",
         lastSequence: ops[ops.length - 1]?.secuencia ?? "",
@@ -5730,12 +13787,18 @@ function getPriorityJobs() {
       };
     })
     .sort(compareJobs);
+  const next = { operations, workOrders, materials, signature, result };
+  if (typeof priorityJobsCache === "undefined") getPriorityJobs.cache = next;
+  else priorityJobsCache = next;
+  return result;
 }
 
 function getSelectedPriorityJob() {
-  const selectedOp = findOperation(state.selectedOperationId);
   const jobs = getPriorityJobs();
   if (!jobs.length) return null;
+  const detailOt = materialOtKey(state.selectedDetailOt);
+  if (detailOt) return jobs.find((job) => materialOtKey(job.ot) === detailOt) || null;
+  const selectedOp = findOperation(state.selectedOperationId);
   if (selectedOp) return jobs.find((job) => job.ot === selectedOp.ot) || null;
   return jobs.find((job) => job.firstOp?.id === state.selectedOperationId)
     || null;
@@ -5794,15 +13857,100 @@ function getBulkMachineValue(ops) {
   return machines.length === 1 ? machines[0] : "__MULTIPLE__";
 }
 
+function rememberLocalOtConfigurationEdit(ot) {
+  const key = String(ot || "").trim();
+  if (!key) return;
+  state._locallyEditedOtConfigurations = [...new Set([...(state._locallyEditedOtConfigurations || []), key])];
+}
+
+const CAPABILITY_CONFIG_KEYS = [
+  "configuredCapabilities",
+  "customCapabilities",
+  "hiddenCapabilities",
+  "excludedCapabilities",
+  "capacityModes",
+  "matrix",
+  "operators",
+  "operatorProfiles",
+  "operatorPerformance",
+  "cts",
+];
+
+function rememberLocalCapabilityConfigEdit() {
+  state._locallyEditedCapabilityConfig = true;
+}
+
+function captureLocalCapabilityConfig() {
+  return CAPABILITY_CONFIG_KEYS.reduce((out, key) => {
+    if (Object.prototype.hasOwnProperty.call(state, key)) out[key] = deepClone(state[key]);
+    return out;
+  }, {});
+}
+
+function restoreLocalCapabilityConfig(snapshot) {
+  for (const [key, value] of Object.entries(snapshot || {})) state[key] = deepClone(value);
+}
+
 function applyMachineToJob(ot, machine) {
   const normalized = normalizeMachineValue(machine);
   const configuration = otConfigurationFor(ot);
   configuration.machine = normalized;
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   for (const op of state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item))) {
     op.maquina = normalizeMachineValue(normalized, op);
     op.log = appendLog(op.log, "MAQUINA_OT_APP");
   }
+}
+
+function applyToolToJob(ot, tool, additionalTools = []) {
+  const normalized = cleanToolValue(tool);
+  const extras = additionalToolListValue(additionalTools).filter((item) => normalizeStatus(additionalToolHerramental(item)) !== normalizeStatus(normalized));
+  const configuration = otConfigurationFor(ot);
+  configuration.herramental = normalized;
+  configuration.additionalHerramentales = extras;
+  configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
+  state.operations = window.PlanningWorkflowCore.applyDraftToolSelection(state.operations, ot, normalized, ["5459", "5527"], extras);
+  const bendingOps = state.operations.filter((item) => item.ot === ot && isBendingAppOperation(item));
+  const part = String(bendingOps[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
+  if (part && normalized) {
+    const existing = state.toolCatalog.find((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === normalized);
+    if (!existing) state.toolCatalog.push({
+      id: uid("tool"), part, herramental: normalized, kitHerramental: getOtKitValue(bendingOps),
+      toolSetupMinutes: 0, kitSetupMinutes: 0, active: true,
+    });
+  }
+  for (const extra of extras) {
+    const extraTool = additionalToolHerramental(extra);
+    if (!part || !extraTool) continue;
+    const existing = state.toolCatalog.find((item) => item.active !== false && normalizeStatus(item.part || item.parte) === normalizeStatus(part) && cleanToolValue(item.herramental) === extraTool);
+    if (!existing) state.toolCatalog.push({
+      id: uid("tool"), part, herramental: extraTool, kitHerramental: getOtKitValue(bendingOps),
+      toolSetupMinutes: 0, kitSetupMinutes: 0, active: true,
+    });
+  }
+  if (state.preparedPlanningByOt) delete state.preparedPlanningByOt[ot];
+  for (const op of bendingOps) op.log = appendLog(op.log, "HERRAMENTAL_OT_APP");
+}
+
+function jobAdditionalToolMarkup(value, index, options, machines = []) {
+  const entry = additionalToolEntryValue(value);
+  const optionsId = `jobToolOptionsExtra_${index}`;
+  const machineOptions = (machines || []).map((machine) => `<option value="${escapeHtml(machine)}"${machine === entry.machine ? " selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("");
+  return `<div class="job-tool-extra-row">
+    <input data-job-tool-extra list="${escapeHtml(optionsId)}" type="text" value="${escapeHtml(entry.herramental)}" placeholder="Otro herramental" autocomplete="off">
+    <datalist id="${escapeHtml(optionsId)}">${(options || []).map((tool) => `<option value="${escapeHtml(tool)}"></option>`).join("")}</datalist>
+    <select data-job-tool-extra-machine aria-label="Maquina del herramental adicional"><option value="">Misma maquina</option>${machineOptions}</select>
+    <button class="icon-button" type="button" data-remove-job-tool aria-label="Eliminar herramental adicional">X</button>
+  </div>`;
+}
+
+function currentJobAdditionalTools() {
+  return additionalToolListValue([...els.selectedJobPanel.querySelectorAll(".job-tool-extra-row")].map((row) => ({
+    herramental: row.querySelector("[data-job-tool-extra]")?.value,
+    machine: row.querySelector("[data-job-tool-extra-machine]")?.value,
+  })));
 }
 
 function getOtKitValue(ops) {
@@ -5815,6 +13963,7 @@ function applyKitToJob(ot, kit, pending = false) {
   configuration.kitHerramental = pending ? "" : normalized;
   configuration.kitPending = pending;
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   for (const op of state.operations.filter((item) => item.ot === ot && operationUsesOtKit(item))) {
     op.kitHerramental = pending ? "" : normalized;
     op.kitPending = pending;
@@ -5823,6 +13972,7 @@ function applyKitToJob(ot, kit, pending = false) {
 }
 
 function isBendingAppOperation(op) {
+  if (window.PlannerCore?.isBendingOperationResolved) return window.PlannerCore.isBendingOperationResolved(state, op);
   if (window.PlannerCore?.isBendingOperation) return window.PlannerCore.isBendingOperation(op);
   return ["5459", "5527"].includes(String(op.ct || ""));
 }
@@ -5841,6 +13991,8 @@ function otConfigurationFor(ot) {
     state.otConfigurations[key] = {
       ot: key,
       machine: "",
+      herramental: "",
+      additionalHerramentales: [],
       kitHerramental: "",
       kitPending: false,
       subcontractType: "",
@@ -5849,6 +14001,18 @@ function otConfigurationFor(ot) {
     };
   }
   return state.otConfigurations[key];
+}
+
+// Lectura NO mutante de la captura comercial POR OT (RULE-OT-056): intenta con la clave cruda
+// (como se escribe en applyCommercialPlanningRequirement y prepareJobForPlanning) y cae a la
+// normalizada por si el estado llego con otra forma de llave.
+function otCommercialConfigurationFor(ot) {
+  const raw = String(ot || "").trim();
+  const direct = state.otConfigurations?.[raw];
+  if (direct && typeof direct === "object") return direct;
+  const normalized = materialOtKey(ot);
+  if (normalized && normalized !== raw) return state.otConfigurations?.[normalized] || null;
+  return null;
 }
 
 function normalizeArticleConfigurations(source) {
@@ -5862,6 +14026,9 @@ function normalizeArticleConfigurations(source) {
       jobType: String(item.jobType || item.tipoOt || "").trim().toUpperCase(),
       planningType: String(item.planningType || item.tipoTrabajo || "").trim().toUpperCase(),
       manualUnitPrice: Math.max(0, Number(item.manualUnitPrice || item.precioManual || 0)),
+      // Precio de venta que dejo el ultimo sync. No es un precio escrito por una persona y
+      // se actualiza tambien cuando baja (RULE-REP-021).
+      referenceSalePrice: Math.max(0, Number(item.referenceSalePrice || item.precioRefVenta || 0)),
       updatedAt: String(item.updatedAt || item.actualizado || ""),
     };
   }
@@ -5925,6 +14092,7 @@ function applySubcontractToJob(ot, type, days) {
   configuration.subcontractType = String(type || "").trim().toUpperCase();
   configuration.subcontractDays = Math.max(0, Math.min(90, Math.round(Number(days) || 0)));
   configuration.updatedAt = new Date().toISOString();
+  rememberLocalOtConfigurationEdit(ot);
   const jobOperations = state.operations.filter((item) => item.ot === ot);
   const part = String(jobOperations[0]?.parte || workOrderForOt(ot)?.item || "").trim().toUpperCase();
   if (part && configuration.subcontractType && configuration.subcontractDays > 0) {
@@ -5985,6 +14153,8 @@ function normalizeOtResourceAssignments() {
     const configuration = {
       ot,
       machine: stored ? normalizeMachineValue(stored.machine || stored.maquina) : derivedMachine,
+      herramental: stored ? cleanToolValue(stored.herramental || stored.tool) : (bendingOps.map((op) => cleanToolValue(op.herramental)).find(Boolean) || ""),
+      additionalHerramentales: stored ? additionalToolListValue(stored.additionalHerramentales || stored.herramentalesExtra) : additionalToolListValue(bendingOps.find((op) => additionalToolListValue(op.additionalHerramentales).length)?.additionalHerramentales),
       kitHerramental: stored ? cleanToolValue(stored.kitHerramental || stored.kit) : derivedKit,
       kitPending: stored ? stored.kitPending === true : derivedPending,
       subcontractType: stored
@@ -5994,10 +14164,21 @@ function normalizeOtResourceAssignments() {
         ? Math.max(0, Math.round(Number(stored.subcontractDays || stored.diasSubcontrato) || 0))
         : Math.max(0, Math.round(Number(subcontractOps.find((op) => Number(op.subcontractDays) > 0)?.subcontractDays || 0))),
       updatedAt: String(stored?.updatedAt || stored?.actualizado || ""),
+      // RULE-OT-056: la captura comercial POR OT se conserva en el rebuild de otConfigurations;
+      // normalizar corre al inicio de cada preparacion y no debe borrar lo confirmado por OT.
+      jobType: stored ? String(stored.jobType || "").trim().toUpperCase() : "",
+      planningType: stored ? String(stored.planningType || "").trim().toUpperCase() : "",
+      manualUnitPrice: stored ? Math.max(0, Number(stored.manualUnitPrice || 0)) : 0,
+      commercialCapturedAt: stored ? String(stored.commercialCapturedAt || "") : "",
     };
     if (configuration.kitPending) configuration.kitHerramental = "";
     nextConfigurations[ot] = configuration;
     bendingOps.forEach((op) => { op.maquina = normalizeMachineValue(configuration.machine, op); });
+    bendingOps.forEach((op) => {
+      if (op.generatedAdditionalTool === true) return;
+      op.herramental = configuration.herramental;
+      op.additionalHerramentales = configuration.additionalHerramentales;
+    });
     kitOps.forEach((op) => {
       op.kitHerramental = configuration.kitHerramental;
       op.kitPending = configuration.kitPending;
@@ -6036,11 +14217,13 @@ function getJobToolGroups(ops) {
 
 function materialsForOt(ot) {
   const key = materialOtKey(ot);
+  if (typeof planningStateIndexes === "function") return planningStateIndexes().materialsByOt.get(key) || [];
   return state.materials.filter((material) => materialOtKey(material.ot) === key);
 }
 
 function workOrderForOt(ot) {
   const key = materialOtKey(ot);
+  if (typeof planningStateIndexes === "function") return planningStateIndexes().workOrdersByOt.get(key) || null;
   return state.workOrders.find((item) => materialOtKey(item.ot) === key) || null;
 }
 
@@ -6051,12 +14234,15 @@ function pendingPiecesForWorkOrder(workOrder) {
 }
 
 function invoiceUnitPriceForOt(ot) {
-  return Math.max(0, Number(workOrderForOt(ot)?.averageSalePrice || 0));
+  const workOrder = workOrderForOt(ot);
+  return Math.max(Math.max(0, Number(workOrder?.lastSalePrice || 0)), Math.max(0, Number(workOrder?.averageSalePrice || 0)));
 }
 
 function effectiveUnitPriceForOt(ot) {
   const invoicePrice = invoiceUnitPriceForOt(ot);
-  return invoicePrice > 0 ? invoicePrice : Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
+  if (invoicePrice >= 1) return invoicePrice;
+  const manualPrice = Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
+  return manualPrice >= 1 ? manualPrice : 0;
 }
 
 function amountForOt(ot) {
@@ -6113,6 +14299,13 @@ function materialOtKey(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+function normalizeKey(value) {
+  if (typeof window !== "undefined" && typeof window.PlannerCore?.normalizeKey === "function") {
+    return window.PlannerCore.normalizeKey(value);
+  }
+  return String(value || "").trim().toUpperCase();
+}
+
 function formatMaterialQuantity(value) {
   const numeric = Number(value || 0);
   return Number.isInteger(numeric) ? String(numeric) : numeric.toLocaleString("es-MX", { maximumFractionDigits: 3 });
@@ -6135,12 +14328,66 @@ function toolLabel(op) {
   return `${herr || "SIN_HERR"} / ${kit || (op.kitPending ? "KIT_PENDIENTE" : "SIN_KIT")}`;
 }
 
+function jobToolMiniHtml(job) {
+  const bendingOps = (job?.ops || []).filter(isBendingAppOperation);
+  if (!bendingOps.length) return "";
+  const tool = cleanToolValue(window.PlanningWorkflowCore.effectiveJobTool(state, job, ["5459", "5527"]));
+  if (!tool) return "";
+  return `<span class="queue-tool-mini" title="Herramental seleccionado: ${escapeHtml(tool)}">Herr. <strong>${escapeHtml(tool)}</strong></span>`;
+}
+
 function cleanToolValue(value) {
   const text = String(value || "").trim();
   if (!text) return "";
   const upper = text.toUpperCase();
   if (["NO", "N/A", "NA", "-", "VACIO", "VACÍO"].includes(upper)) return "";
   return text;
+}
+
+function additionalToolEntryValue(value) {
+  if (value && typeof value === "object") {
+    return {
+      herramental: cleanToolValue(value.herramental || value.tool),
+      machine: normalizeMachineValue(value.machine || value.maquina),
+    };
+  }
+  return { herramental: cleanToolValue(value), machine: "" };
+}
+
+function additionalToolHerramental(value) {
+  return additionalToolEntryValue(value).herramental;
+}
+
+function additionalToolListValue(value) {
+  let values = value;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  const out = [];
+  const seen = new Set();
+  for (const item of values) {
+    const entry = additionalToolEntryValue(item);
+    if (!entry.herramental) continue;
+    const key = `${normalizeStatus(entry.herramental)}|${normalizeStatus(entry.machine)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry.machine ? entry : entry.herramental);
+  }
+  return out;
+}
+
+function toolListValue(value) {
+  let values = value;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try { values = JSON.parse(text); } catch (_) { values = text.split(/[,+;|]/); }
+  }
+  if (!Array.isArray(values)) values = [];
+  return uniq(values.map(cleanToolValue).filter(Boolean));
 }
 
 function normalizeToolFields(maquina, herramental, kitHerramental) {
@@ -6179,11 +14426,11 @@ function jobPriority(ops) {
 }
 
 function jobPriorityForOperation(op) {
-  return jobPriority(state.operations.filter((item) => item.ot === op.ot));
+  return jobPriority(currentPlanOperations().filter((item) => item.ot === op.ot));
 }
 
 function jobPriorityForOt(ot) {
-  const operations = state.operations.filter((item) => item.ot === ot);
+  const operations = currentPlanOperations().filter((item) => item.ot === ot);
   return operations.length ? jobPriority(operations) : 999;
 }
 
@@ -6205,6 +14452,24 @@ function isJobScheduled(ot) {
 
 function isJobLocked(ot) {
   return state.lockedOts.includes(ot);
+}
+
+function otHasCompletedOperation(ot) {
+  if (Array.isArray(state.operations)) {
+    if (state.operations.some((op) => String(op.ot) === ot && isPlanCompletedOperation(op))) return true;
+  }
+  const statuses = state.operationPlanStatuses || {};
+  return Object.keys(statuses).some((statusKey) =>
+    String(statuses[statusKey]?.ot) === ot && statuses[statusKey]?.status === "COMPLETADA_PLAN");
+}
+
+function otHasPendingOperation(ot) {
+  if (Array.isArray(state.operations)) {
+    if (state.operations.some((op) => String(op.ot) === ot && !isPlanCompletedOperation(op))) return true;
+  }
+  const statuses = state.operationPlanStatuses || {};
+  return Object.keys(statuses).some((statusKey) =>
+    String(statuses[statusKey]?.ot) === ot && statuses[statusKey]?.status !== "COMPLETADA_PLAN");
 }
 
 function normalizeStatus(value) {
@@ -6274,13 +14539,47 @@ function isMovablePlanningStatus(status) {
   return PlannerCore.isMovablePlanningStatus(status);
 }
 
-function jobStatusForOt(ot) {
-  const workOrderStatus = String(workOrderForOt(ot)?.status || "").trim();
-  const statuses = [workOrderStatus, ...state.operations
+// UNA OT ESTA CERRADA SOLO SI SU FICHA LO DICE, O SI NETSUITE YA LO CONFIRMO (RULE-OT-051).
+// Se separa de isMovablePlanningStatus a proposito: aquella pregunta por el estatus de la
+// OT PERO CAE AL ESTATUS DE SUS OPERACIONES cuando la ficha no dice nada (jobStatusFromOperations
+// arma [workOrderStatus, ...estatus de operaciones] y se queda con el primero que parezca
+// cerrada). Para PROGRAMAR eso esta bien, porque una operacion completada de verdad implica
+// trabajo terminado. Para BORRAR LA OT de la cola no: una sola operacion mal puesta quitaba el
+// trabajo entero del plan sin confirmacion.
+// DECISION DEL USUARIO 2026-10-08 (OT 3583): cuando la ficha existe y esta abierta, su estatus
+// manda tambien para PROGRAMAR (ver jobStatusParaTarjeta); el fall-down queda solo para ficha
+// ausente o cerrada.
+function isConfirmedClosedWorkOrder(ot) {
+  const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+  if (ficha && isClosedJobStatus(ficha.status)) return true;
+  // Si NetSuite ya lo confirmo en una sincronizacion anterior, sigue siendo cierto.
+  if (String(state.closedWorkOrderSummaries?.[materialOtKey(ot)]?.ot || "").trim()) return true;
+  return false;
+}
+
+function jobStatusFromOperations(ot, operations, workOrders = []) {
+  const workOrderStatus = String((workOrders || []).find((item) => materialOtKey(item.ot) === materialOtKey(ot))?.status || "").trim();
+  const statuses = [workOrderStatus, ...(operations || [])
     .filter((op) => op.ot === ot && op.tipoInsercion !== "CAMBIO_HERRAMENTAL")
     .map((op) => String(op.estatus || "PLAN").trim())
     .filter(Boolean)].filter(Boolean);
   return statuses.find(isClosedJobStatus) || statuses.find(isProgrammedJobStatus) || statuses.find(isPlannedJobStatus) || statuses[0] || "PLAN";
+}
+
+function jobStatusForOt(ot) {
+  return jobStatusFromOperations(ot, currentPlanOperations(), state.workOrders);
+}
+
+// DECISION DEL USUARIO 2026-10-08 (OT 3583): para mostrar un trabajo y decidir si se puede
+// programar, manda el estatus de la FICHA cuando la ficha existe y esta abierta. El fall-down
+// a las operaciones (jobStatusFromOperations) solo aplica cuando la ficha no esta o dice
+// cerrada: una sola operacion "Completado" sobre una ficha "En curso" no es una OT cerrada
+// (RULE-OT-051; el mismo razonamiento esta en scheduleCurrentPlanImpl, 6172-6179).
+function jobStatusParaTarjeta(ot) {
+  const ficha = state.workOrders.find((item) => materialOtKey(item?.ot) === materialOtKey(ot));
+  const fichaStatus = String(ficha?.status || "").trim();
+  if (fichaStatus && !isClosedJobStatus(fichaStatus)) return fichaStatus;
+  return jobStatusForOt(ot);
 }
 
 function matchesStatusFilter(job, filter) {
@@ -6289,6 +14588,8 @@ function matchesStatusFilter(job, filter) {
 }
 
 function selectedJobOt() {
+  const detailOt = materialOtKey(state.selectedDetailOt);
+  if (detailOt) return getPriorityJobs().find((job) => materialOtKey(job.ot) === detailOt)?.ot || "";
   return findOperation(state.selectedOperationId)?.ot
     || getPriorityJobs().find((job) => job.firstOp?.id === state.selectedOperationId)?.ot
     || "";
@@ -6304,6 +14605,24 @@ function netSuiteChangeBadgeHtml(ot) {
   if (!alert) return "";
   const high = normalizeStatus(alert.severity) === "ALTA";
   return `<span class="netsuite-change-badge${high ? " high" : ""}" title="${escapeHtml(alert.summary)}">Cambio NS</span>`;
+}
+
+function workOrderSyncWarningForOt(ot) {
+  const key = materialOtKey(ot);
+  return (state.workOrderSyncWarnings || []).find((warning) => materialOtKey(warning.ot) === key) || null;
+}
+
+function hasClosedWorkOrderSyncWarning(ot) {
+  return workOrderSyncWarningForOt(ot)?.type === "CLOSED_KEPT";
+}
+
+function workOrderSyncWarningHtml(ot) {
+  const warning = workOrderSyncWarningForOt(ot);
+  if (!warning) return "";
+  const message = warning.type === "QUANTITY_REJECTED"
+    ? "Cantidad diferente en NetSuite"
+    : warning.type === "CLOSED_KEPT" ? "Cerrada o no encontrada en NetSuite" : "";
+  return message ? `<span class="work-order-sync-warning">${message}</span>` : "";
 }
 
 function suggestedPlanningTypeForJob(job) {
@@ -6340,7 +14659,7 @@ function jobTypeTagHtml(job) {
 }
 
 function jobScheduledFinish(job) {
-  const finishes = (job?.ops || [])
+  const finishes = currentPlanOperations(job?.ops || [])
     .map(opEnd)
     .filter(Boolean)
     .sort((a, b) => b - a);
@@ -6493,6 +14812,10 @@ function isCapabilityConfigured(capability) {
 function capabilityFromOperation(op) {
   const label = capabilityLabelForOperation(op);
   const ct = String(op.ct || "SIN_CT").trim();
+  const resolved = window.PlannerCore?.capabilityForOperation
+    ? window.PlannerCore.capabilityForOperation(op, state)
+    : null;
+  if (resolved) return resolved;
   return { key: capabilityKey(ct, label), ct, label };
 }
 
@@ -6502,6 +14825,19 @@ function capabilityLabelForOperation(op) {
 
 function capabilityKey(ct, label) {
   return `${String(ct || "SIN_CT").trim()}::${normalizeHeader(label || "OPERACION")}`;
+}
+
+function normalizeCapabilityKeys(values) {
+  return uniq((Array.isArray(values) ? values : []).map((value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const separator = text.indexOf("::");
+    if (separator < 0) return text;
+    const ct = text.slice(0, separator).trim();
+    const label = normalizeHeader(text.slice(separator + 2).replace(/_/g, " "));
+    return ct && label ? `${ct}::${label}` : "";
+  }).filter(Boolean))
+    .filter((key) => normalizeHeader(key) !== normalizeHeader(TOOL_CHANGE_CAPABILITY.key));
 }
 
 function parseManualCapability(value) {
@@ -6528,12 +14864,14 @@ function focusGanttBar(id) {
 }
 
 function saveAndRenderQueueChange(message, saveScope = "plan") {
+  invalidatePriorityJobsCache();
   renderPriorityQueue();
   if (message) showToast(message);
   saveState(saveScope);
 }
 
 function saveAndRender(message, saveScope = "plan") {
+  invalidatePriorityJobsCache();
   const scope = String(saveScope || "plan").trim().toLowerCase();
   const parts = {};
   if (scope === "catalogs") {
@@ -6557,61 +14895,513 @@ function saveAndRender(message, saveScope = "plan") {
 }
 
 function saveState(saveScope = "plan") {
-  scheduleLocalStorageFlush();
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-state") : "";
   queueAppSheetSave(saveScope);
-}
-
-let _flushTimer = null;
-function scheduleLocalStorageFlush() {
-  if (_flushTimer) return;
-  _flushTimer = setTimeout(() => {
-    _flushTimer = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, 0);
+  if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-state", perfMark);
 }
 
 function queueAppSheetSave(saveScope = "plan") {
   const scope = String(saveScope || "plan").trim().toLowerCase();
   if (scope === "local" || scope === "ui") return;
-  if (!appSheetAvailable) return;
+  // MEDIDO 2026-09-29: esto va ANTES de mirar appSheetAvailable, y antes no. Con
+  // el puente todavia no disponible la funcion se devolvia aqui, sin marcar el
+  // ambito como sucio: el cambio no se guardaba, no se avisaba y no quedaba en
+  // cola. Se perdia entero. Pasado: la pagina tardo en cargar, el usuario anadio
+  // una maquina con la pagina a medio arrancar, el guardado se evaporo sin dejar
+  // rastro, el espejo de catalogos nunca corrio y la revision del plan se quedo
+  // en 4142 con savedAt 15:30. Ahora el ambito se marca siempre y lo vuelca
+  // appSheetFlushPendingScopes() cuando el puente queda disponible.
   appSheetMarkDirtyScope(scope);
+  if (!appSheetDisponible()) return;
+  if (operationStatusSavesInFlight) return;
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     return;
   }
   window.clearTimeout(appSheetSaveTimer);
-  appSheetSaveTimer = window.setTimeout(() => saveAppSheet(false), 900);
+  appSheetSaveTimer = window.setTimeout(() => {
+    appSheetSaveTimer = null;
+    saveAppSheet(false);
+  }, 900);
+}
+
+/**
+ * El traslado Backlog -> Planeado / Por planear es la unica accion que fija la
+ * autoridad del borrador (state.selectedOts), asi que no puede depender del
+ * debounce en segundo plano: se persiste de inmediato y se espera el acuse.
+ * Si ya hay un guardado en curso se espera a que termine y se reintenta con el
+ * cambio incluido, de modo que el resultado booleano sea el estado real en el
+ * servidor y no una simple intencion de guardar.
+ */
+async function flushPlanSave(saveScope = "plan") {
+  const scope = String(saveScope || "plan").trim().toLowerCase();
+  if (scope === "local" || scope === "ui") return false;
+  appSheetMarkDirtyScope(scope);
+  if (!appSheetDisponible()) return false;
+  if (appSheetSaveInFlight) {
+    appSheetSavePending = true;
+    await appSheetWaitForIdle();
+  }
+  window.clearTimeout(appSheetSaveTimer);
+  appSheetSaveTimer = null;
+  // El reintento del guardado en curso pudo consumir el ambito sucio; se rearma.
+  if (!appSheetDirtyScopes.size) appSheetMarkDirtyScope(scope);
+  return saveAppSheet(false);
+}
+
+function appSheetTryAcquireSaveGate() {
+  if (appSheetSaveOwner) return null;
+  const owner = {};
+  appSheetSaveOwner = owner;
+  appSheetSaveInFlight = true;
+  appSheetSaveCompletion = new Promise((resolve) => { resolveAppSheetSaveCompletion = resolve; });
+  return owner;
+}
+
+async function appSheetAcquireSaveGate() {
+  let owner = appSheetTryAcquireSaveGate();
+  while (!owner) {
+    await appSheetWaitForIdle();
+    owner = appSheetTryAcquireSaveGate();
+  }
+  return owner;
+}
+
+function appSheetReleaseSaveGate(owner) {
+  if (!owner || owner !== appSheetSaveOwner) return false;
+  appSheetSaveOwner = null;
+  appSheetSaveInFlight = false;
+  const resolve = resolveAppSheetSaveCompletion;
+  resolveAppSheetSaveCompletion = null;
+  resolve?.();
+  return true;
+}
+
+async function appSheetWaitForIdle() {
+  if (appSheetSaveInFlight) await appSheetSaveCompletion;
+}
+
+/**
+ * POR QUE ESTA FUNCION Y NO `informe.motivo || "fallo desconocido"`.
+ *
+ * MEDIDO 2026-09-30 en el navegador: la pagina mostraba "No se pudo guardar el plan: fallo
+ * desconocido" mientras el escritor sabia EXACTAMENTE que pasa. Motivo medido: `cerrar()`
+ * (supabase-writer.js) deja `ok:false` cuando alguna tabla tiene `error`, y `motivo` solo se
+ * llena en `sinEscribir()`, o sea cuando no se hizo ninguna peticion. El camino viejo, que es
+ * el que tabla por tabla llena `informe.tablas[tabla].error`, NUNCA pone `motivo`. O sea que
+ * el mensaje que llegaba a la persona era el del camino que no tiene motivo, aplicado al
+ * camino que si lo tiene: "fallo desconocido" sobre un informe con
+ * `work_orders: HTTP 409 duplicate key ... work_orders_ot_key` dentro.
+ *
+ * Por eso se lee el error POR TABLA, que es donde el escritor lo deja, y se sube `motivo` si
+ * existe (el fallo de la llamada sigue siendo mas especifico que el de una tabla). El texto
+ * se acota porque va en un toast, pero no se inventa: sale del informe.
+ */
+function motivoDelInforme(informe) {
+  const motivo = informe && informe.motivo ? String(informe.motivo) : "";
+  if (motivo) return motivo.length > 220 ? motivo.slice(0, 217) + "..." : motivo;
+  const tablas = informe && informe.tablas && typeof informe.tablas === "object" ? informe.tablas : {};
+  // Las notas son de dos especies y se tratan distinto:
+  //   - nota de ACCION (por ejemplo la del 42P01 de escribirAnexo): dice que hacer
+  //     y manda sobre el error crudo, que exige saber de Postgres para leerse.
+  //   - nota del FREN (escribirEspejo, supabase-writer.js): "sin filas: no se borra la
+  //     tabla (vaciarSiEstaVacio lo hace explicito)". No es un fallo: es la tabla dejada
+  //     intacta A PROPOSITO. MEDIDO 2026-10-03 en el navegador: cuando era la unica nota
+  //     de un informe ok:false, el toast decia "No se pudo guardar el plan: sin filas: no
+  //     se borra la tabla..." o sea que presentaba el freno como fallo. No lo puede
+  //     tapar ni a un fallo de verdad: un 409 de otra tabla es lo que hay que arreglar.
+  const notas = Object.keys(tablas)
+    .filter((tabla) => tablas[tabla] && tablas[tabla].nota)
+    .map((tabla) => tablas[tabla].nota);
+  const notasDelFreno = notas.filter((nota) => /vaciarSiEstaVacio/i.test(nota));
+  const notasDeAccion = notas.filter((nota) => !/vaciarSiEstaVacio/i.test(nota));
+  const fallos = Object.keys(tablas)
+    .filter((tabla) => tablas[tabla] && tablas[tabla].error)
+    // MEDIDO 2026-09-30: se nombra el PASO, no solo la tabla. GuardarCatalogos hace dos
+    // escrituras por tabla (la subida de lo que hay y el borrado de lo que quitaste) y el
+    // toast decía la misma cosa para las dos. Con el paso enfrente, el error 42703
+    // "column ot_configurations.1905 does not exist" se lee como lo que es: un filtro de
+    // borrado mal armado, no un dato malo.
+    .map((tabla) => tabla + (tablas[tabla].paso ? " (" + tablas[tabla].paso + ")" : "") + ": " + tablas[tabla].error);
+  if (!fallos.length) {
+    // Sin fallo de verdad, la nota de accion sigue mandando; si solo hay frenos, se dice
+    // que no se escribio nada y porque, y si no hay nada, se dice que no hay motivo.
+    if (notasDeAccion.length) return notasDeAccion[0].length <= 220 ? notasDeAccion[0] : notasDeAccion[0].slice(0, 217) + "...";
+    if (notasDelFreno.length) {
+      return "no se escribio nada: el plan llego sin filas y sin vaciarSiEstaVacio, asi que la tabla se deja intacta. Avisa con vaciarSiEstaVacio si el vacio es de verdad";
+    }
+    return "el escritor no dio motivo: ok false sin `motivo` y sin error en ninguna tabla";
+  }
+
+  // MEDIDO 2026-09-30: cuando el fallo es "no unique or exclusion constraint matching the
+  // ON CONFLICT", el escritor deja una `nota` con lo que hay que hacer. Se sube la PRIMERA
+  // nota ANTES que el error crudo, porque el error dice que paso y la nota dice que hacer,
+  // y en un toast de 220 caracteres el "que hacer" es lo que se necesita. Sin esto se vio
+  // en produccion un 42P01 pelado, que exige saber de Postgres para saber por donde
+  // empezar. Solo la nota de accion: la del freno no tapa un fallo de otra tabla.
+  if (notasDeAccion.length) return notasDeAccion[0].length <= 220 ? notasDeAccion[0] : notasDeAccion[0].slice(0, 217) + "...";
+
+  const texto = fallos.join(" | ");
+  if (texto.length <= 220) return texto;
+  // Con muchas tablas que fallan, el nombre de la tabla es lo que hace falta para no perder:
+  // "work_orders: HTTP 409 ..." es accionable y "sin filas: no se borra la tabla" repetido
+  // cuatro veces no lo es. Se listan los nombres y se deja el detalle del primero.
+  return (
+    fallos.length + " tablas con error (" + fallos.map((f) => f.split(":")[0]).join(", ") +
+    "). El primero: " + (fallos[0].length > 190 ? fallos[0].slice(0, 187) + "..." : fallos[0])
+  );
+}
+
+/**
+ * Guarda el plan en Supabase con PPSupabaseWriter.guardar().
+ *
+ * Devuelve true si se escribio, false si no. En caso de conflicto de revision,
+ * muestra el aviso de recarga y devuelve false: reintentar sin recargar falla
+ * otra vez, porque la revision que manda esta pagina sigue siendo la vieja.
+ *
+ * `opciones` se pasa tal cual a guardar(): {snapshots} para guardar un
+ * snapshot de plan_snapshots, {vaciarSiEstaVacio} para el borrado explicito.
+ * Ademas se AÑADE vaciarSiEstaVacio cuando la cola quedo en cero por un retiro
+ * manual de esta pagina; el calculo vive aqui y no en el llamador para que las
+ * TRES puertas de guardado (flush, debounce e reintento tras conflicto) lo
+ * arrastren sin acordarse de el. Ver el cuerpo.
+ */
+async function guardarPlanEnSupabase(opciones = {}) {
+  // RULE-SUP-069: NADIE GUARDA ESTADO QUE NO LEYO. Esperar aqui, y no en cada uno de
+  // los que llaman, es lo que hace que la compuerta cubra TODOS los caminos con un solo
+  // punto: el temporizador de queueAppSheetSave, flushPlanSave (el drag), el boton
+  // guardar, el reintento de performance-client, el guardado directo del sync
+  // (guardarSyncDeOrdenesTrabajoEnSupabase), publicar y programar. Mientras el primer
+  // intento de lectura no concluya, estos guardados esperan y despues escriben con el
+  // estado ya aplicado; si la lectura falla o no hay sesion, se abren igual y escriben
+  // el estado local de siempre, con el freno (RULE-SUP-062) intacto.
+  await esperarPrimeraLecturaDeSupabase();
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.guardar !== "function") {
+    showToast("Supabase no esta disponible en este build: no se puede guardar el plan");
+    return false;
+  }
+  // LA COLA VACIA QUE SI HAY QUE ESCRIBIR. RULE-SUP-062 frena un estado vacio
+  // (frenoDelRpc antes de llamar a plan_guardar, y escribirEspejo con 0 filas en
+  // el camino viejo) porque una lectura fallida no puede vaciar el plan entero.
+  // Pero el retiro manual de la ULTIMA OT deja selected_ots vacio de verdad, y ahi
+  // el freno convertia un retiro legitimo en un guardado que no persistia:
+  // MEDIDO 2026-10-07 (usuario, en produccion, con la OT 2844): el informe salia
+  // ok:true, la app mostraba "OT devuelta al backlog" y al recargar la OT seguia
+  // en la cola. La senal de que el vacio vino de una accion de la persona y no de
+  // una lectura fallida son los tombstones del retiro de ESTA pagina
+  // (_locallyRemovedDraftOts: memoria, se borra al guardar y no sobrevive a
+  // recarga — app.js:7045, asi que un arranque con cola vacia nunca lo cumple), y
+  // el opt-in que se pasa es el que el propio freno documenta: "Si el vacio es de
+  // verdad, guardalo con vaciarSiEstaVacio". La revision del RPC sigue frenando a
+  // una pagina atrasada: vaciar aqui no vacia encima de otro escritor.
+  const colaVacia = (state.selectedOts || []).length === 0;
+  const colaVaciadaPorRetiro =
+    colaVacia &&
+    (state._locallyRemovedDraftOts || []).length > 0;
+  // RULE-SUP-068: VACIO PROBADO = la cola esta en cero Y ese cero vino de un origen
+  // que esta pagina puede certificar: un retiro manual de AQUI (tombstones,
+  // RULE-SUP-066) o una lectura de la cola que salio bien y se aplico
+  // (colaLeidaSinFallo, encendida por aplicarEstadoDesdeSupabase arriba). MEDIDO
+  // 2026-10-08 en produccion tras RULE-SUP-066: con el plan en cero de verdad,
+  // CADA recarga mostraba "Aviso: No se llamo a plan_guardar porque llego vacia...
+  // guardalo con vaciarSiEstaVacio" — el freno tenia razon en no llamar a
+  // plan_guardar (nadie pidio vaciar), pero no habia nada que proteger ni algo que
+  // la persona pueda pedir distinto, y el aviso quedo como alarma falsa de cada
+  // arranque. Aqui solo se CALCULA la probanza; el filtro del aviso esta mas abajo.
+  // Sin la senal (lectura fallida o guardado previo al arranque) vacioProbado es
+  // false y todo sigue como antes: el freno no se toca, solo su voz.
+  const vacioProbado = colaVaciadaPorRetiro || (colaVacia && colaLeidaSinFallo);
+  let informe;
+  try {
+    informe = await writer.guardar(
+      state,
+      colaVaciadaPorRetiro ? { ...opciones, vaciarSiEstaVacio: true } : opciones
+    );
+  } catch (error) {
+    showToast("No se pudo guardar el plan: " + (error && error.message ? error.message : error));
+    return false;
+  }
+  if (!informe) {
+    showToast("No se pudo guardar el plan: el escritor no devolvio informe");
+    return false;
+  }
+  // La revision se guarda en el estado para que el proximo guardado use la
+  // correcta. Si no se guarda, el siguiente guardado manda la revision vieja
+  // y choca contra su propio guardado anterior.
+  if (informe.revision != null) state.revision = Number(informe.revision);
+  if (informe.savedAt) state.savedAt = informe.savedAt;
+  if (informe.conflicto) {
+    // CONFLICT_REVISION: no se escribio nada. Hay que recargar antes de
+    // reintentar, no reintentar encima de otro guardado.
+    // DECIDIDO 2026-09-30: el conflicto se PUBLICA en `state._conflictoSupabase` para que
+    // el guardado de performance-client.js sepa que fallo por conflicto y no por red, y
+    // recargue el estado remoto desde Supabase (`reloadStateAfterConflict`, que antes
+    // preguntaba a las Hojas por `getAppState`). Antes eso se sabia por el texto del
+    // error de `callAppsScript`, que ya no existe en el camino de escritura.
+    state._conflictoSupabase = {
+      revisionActual: informe.conflicto.revision_actual ?? null,
+      revisionEsperada: informe.conflicto.revision_esperada ?? null,
+    };
+    showToast(
+      "El plan cambio desde la ultima carga. Recarga la pagina y vuelve a guardar. " +
+      "(revision " + (informe.conflicto.revision_actual || "?") + " en la base, " +
+      (informe.conflicto.revision_esperada || "?") + " en esta pagina)",
+      7000
+    );
+    return false;
+  }
+  delete state._conflictoSupabase;
+  if (!informe.ok) {
+    showToast("No se pudo guardar el plan: " + motivoDelInforme(informe), 9000);
+    return false;
+  }
+  // RULE-SUP-072: el marcador de retiro de la ultima OT se borra AQUI, y solo cuando ESTE
+  // guardado escribio de verdad el espejo de selected_ots. Antes lo borraba saveAppSheet por
+  // CUALQUIER guardado exitoso, incluido uno que ya estaba en vuelo cuando la persona retiro
+  // la OT y cuyo payload todavia la llevaba dentro: al terminar bien, ese guardado borraba la
+  // senal; el guardado del retiro que lo estaba esperando (flushPlanSave) se quedaba sin el
+  // opt-in vaciarSiEstaVacio, el freno del vacio (RULE-SUP-062) saltaba plan_guardar, la tabla
+  // selected_ots no se borraba y la OT volvia al recargar con el toast "devuelta al backlog".
+  // Con cola vacia, un informe ok + colaVaciadaPorRetiro significa que el vacio SI viajo con
+  // el opt-in (frenoDelRpc devuelve null cuando vaciarSiEstaVacio es true), asi que borrar el
+  // marcador aqui es correcto; si el freno hubiera saltado, no se borra y el siguiente
+  // guardado reintenta. Con cola NO vacia el retiro ya viaja en el espejo del guardado normal
+  // y lo borra saveAppSheet, como siempre.
+  const tablaSeleccion = informe.tablas && informe.tablas.selected_ots;
+  const seleccionEscrita =
+    informe.camino === "rpc" || Boolean(tablaSeleccion && !tablaSeleccion.nota);
+  if (colaVaciadaPorRetiro && seleccionEscrita) delete state._locallyRemovedDraftOts;
+  if (Array.isArray(informe.avisos) && informe.avisos.length) {
+    // MEDIDO 2026-10-07 (usuario, en produccion): antes esto ponia TODOS los avisos como
+    // toasts en cascada — showToast reemplaza el unico #toast, los avisos se pisaban unos a
+    // otros y nunca quedaba claro si lo que se vio era un error o la confirmacion. Los avisos
+    // de "que se escribio en la tabla X" (operations:/work_orders:/materials:, los que arma
+    // queSeEscribioDe en supabase-writer.js) no salen a pantalla: son ruido de confirmacion
+    // que la cascada tapaba con el toast real ("Plan guardado en Supabase", "borrador
+    // guardado"), y el de materials ademas describe una tabla que la pagina no controla. Solo
+    // los avisos de ACCION llegan al toast — freno del estado vacio, DDL ausente, eventos
+    // omitidos — y con el prefijo "Aviso: " para que no lean ni como error ni como
+    // confirmacion. Cuando `informe.ok` es falso, el toast de error unico de arriba ya dice
+    // que no se guardo y por que.
+    const avisosDeAccion = informe.avisos.filter((aviso) => {
+      const texto = String(aviso || "");
+      if (/^(operations|work_orders|materials):/.test(texto)) return false;
+      // RULE-SUP-068: el unico aviso que se silencia aqui es el del freno del vacio
+      // (avisoDeFreno, el unico empuje de ese texto en supabase-writer.js), y solo
+      // cuando el vacio de la cola esta PROBADO (vacioProbado, arriba): lectura de
+      // la cola sin fallo o retiro manual de esta pagina. Ese freno no tenia nada
+      // que proteger y su consejo ("guardalo con vaciarSiEstaVacio") no es accion
+      // que la persona pueda hacer desde la pagina. Con la probanza sin senal —
+      // lectura fallida o guardado previo al arranque — el aviso pasa igual: ahi
+      // sigue protegiendo la base y la advertencia es cierta. El DDL ausente y los
+      // eventos omitidos no se tocan.
+      if (vacioProbado && /^No se llamo a plan_guardar porque /.test(texto)) return false;
+      return true;
+    });
+    if (avisosDeAccion.length) showToast("Aviso: " + avisosDeAccion.join(" | "), 7000);
+  }
+  return true;
+}
+
+/**
+ * Sube a SUPABASE el estado que deja un sync de OTs, y avisa si no se pudo.
+ *
+ * DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura es UNO SOLO,
+ * Supabase, tambien dentro de HtmlService. Antes el sync escribia por
+ * `callAppsScript("saveWorkOrderSyncState")`, o sea las Hojas, y solo cuando se pulsaba
+ * Sincronizar OTs; la lectura de NetSuite sigue por el puente, que es la unica puerta que
+ * hay a NetSuite.
+ *
+ * POR QUE `guardarPlanEnSupabase` Y NO UNA ESCRITURA APARTE. `PPSupabaseWriter` mapea el
+ * estado entero y sube las siete tablas del plan mas `unconfirmed_work_orders` y
+ * `closed_work_order_summaries`, que son las dos que el sync necesita y que antes vivian
+ * solo en la hoja. Con esto, el sync y un guardado normal dejan el MISMO estado en el MISMO
+ * sitio: si el sync escribiera solo una rebanada, un guardado posterior se la pisaria.
+ *
+ * Devuelve `true` si se escribio. Si no se pudo, el toast y el aviso de conflicto ya los
+ * puso `guardarPlanEnSupabase`; aqui solo se dice que el sync queda sin persistir, porque
+ * el toast de "OTs sincronizadas" de abajo no debe salir cuando el estado no subio.
+ */
+async function guardarSyncDeOrdenesTrabajoEnSupabase() {
+  const guardado = await guardarPlanEnSupabase();
+  if (!guardado) {
+    showToast("Las OTs se leyeron, pero el estado NO se guardo: recarga y vuelve a sincronizar", 9000);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Guarda los CATALOGOS en Supabase: las nueve tablas de guardarCatalogos (las seis de la
+ * pestana Catalogos, mas operators y matrix de la Matriz y machine_catalog, unica de la pagina).
+ *
+ * POR QUE ESTE CAMINO Y NO EL DE LOS CATALOGOS DE ANTES. Antes, guardar un catalogo
+ * era `saveCatalogState()`, que escribe las hojas de Apps Script y dispara el
+ * espejo (16-supabase-catalogo.js). MEDIDO 2026-09-29 con la sesion de correo, RLS
+ * DEJA ESCRIBIR esas tablas (`for all to authenticated`), asi que el navegador
+ * puede escribirlas por su cuenta y no hace falta el puente para ningun catalogo.
+ *
+ * POR QUE SOLO CUANDO EL AMBITO LO PIDE. Se llama desde saveAppSheet, que recibe los
+ * ambitos sucios. Guardar los catalogos en cada guardado del plan seria subir cientos
+ * de filas que no cambiaron, en un plan que se guarda cada 900 ms. Solo se escriben
+ * si el ambito fue `catalogs` o `matrix`.
+ *
+ * `clavesLeidas` sale de PPCatalogApply.claves, que es lo que el arranque vio al
+ * leer. Sin eso el escritor sube lo que hay pero NO borra nada, y lo dice: borrar a
+ * ciegas se llevaria filas que la pagina todavia no conoce.
+ *
+ * Devuelve true si se escribio sin errores. Los avisos se muestran SIEMPRE, tambien
+ * en el camino bueno: el aviso de la pestana de Matriz no escrita es informacion que
+ * la persona necesita, no un fallo.
+ */
+/**
+ * La INTENCION de borrar una fila de catalogo, registrada por el handler que la quito.
+ *
+ * Es el unico camino de borrado (RULE-SUP-061): sin este registro, guardarCatalogos no
+ * manda ningun DELETE por mucho que la fila haya desaparecido del estado. La clave la
+ * deriva el escritor con el mismo mapeo de la subida, y el registro vive en
+ * state.__borradosPendientes (prefijo `__`: persistableState lo saca del payload, o sea
+ * que el registro es SOLO de la sesion y no puede resucitar de app_state) hasta que el
+ * DELETE tiene exito; si el guardado falla, la
+ * intencion queda pendiente para el siguiente.
+ *
+ * Si el escritor no esta disponible no se registra nada (la fila solo no se borra de la
+ * base, que es el comportamiento viejo conocido) y NUNCA se lanza: perder el click
+ * entero por no poder registrar la intencion seria peor que no borrar.
+ */
+function registrarBorradoDeCatalogo(tabla, item) {
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.registrarBorrado !== "function") return null;
+  try {
+    return writer.registrarBorrado(state, tabla, item);
+  } catch (error) {
+    console.warn(`No se pudo registrar el borrado en ${tabla}: ` + (error && error.message ? error.message : error));
+    return null;
+  }
+}
+
+async function guardarCatalogosEnSupabase(ambito) {
+  const writer = typeof PPSupabaseWriter !== "undefined" ? PPSupabaseWriter : null;
+  if (!writer || typeof writer.guardarCatalogos !== "function") {
+    showToast("Supabase no esta disponible en este build: los catalogos no se guardaron");
+    return false;
+  }
+  const apply = typeof PPCatalogApply !== "undefined" ? PPCatalogApply : null;
+  let informe;
+  try {
+    informe = await writer.guardarCatalogos(state, {
+      clavesLeidas: apply && apply.claves ? apply.claves : null,
+      ambito: ambito || "catalogs",
+    });
+  } catch (error) {
+    showToast("No se pudieron guardar los catalogos: " + (error && error.message ? error.message : error));
+    return false;
+  }
+  if (!informe) {
+    showToast("No se pudieron guardar los catalogos: el escritor no devolvio informe");
+    return false;
+  }
+  if (Array.isArray(informe.avisos) && informe.avisos.length) {
+    informe.avisos.forEach((aviso) => showToast(aviso, 6000));
+  }
+  if (!informe.ok) {
+    // El mismo criterio que el plan: `motivo` esta solo en el fallo de la llamada, y el error
+    // POR TABLA es donde queda el de una tabla que fallo. Ver `motivoDelInforme`.
+    showToast("No se pudieron guardar los catalogos: " + motivoDelInforme(informe), 9000);
+    return false;
+  }
+  return true;
+}
+
+/** Los ambitos de un guardado que son de CATALOGO (no del plan). */
+function ambitosDeCatalogo(scopes) {
+  const out = new Set();
+  (scopes || []).forEach((scope) => {
+    const s = String(scope || "").trim().toLowerCase();
+    if (s === "catalogs" || s === "matrix" || s === "ot-config" || s === "gantt") out.add(s);
+  });
+  return out;
 }
 
 async function saveAppSheet(showMessage) {
+  const perfMark = typeof planningPerfMark === "function" ? planningPerfMark("save-appsheet") : "";
   if (appSheetSaveInFlight) {
     appSheetSavePending = true;
     if (showMessage) showToast("Guardado en curso");
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return false;
   }
-  appSheetSaveInFlight = true;
+  const saveGate = appSheetTryAcquireSaveGate();
+  if (!saveGate) {
+    appSheetSavePending = true;
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
+    return false;
+  }
   const scopes = appSheetConsumeDirtyScopes();
   try {
-    if (isAppsScriptRuntime()) {
-      const method = appSheetSaveMethodForScopes(scopes);
-      const saved = await callAppsScript(method, createAppSheetPayload());
-      state.revision = Number(saved.revision || state.revision);
-      state.savedAt = saved.savedAt || state.savedAt;
-      if (saved.syncedAt) state.syncedAt = saved.syncedAt;
-      if (saved.plant) state.plant = saved.plant;
-      if (saved.invoicePriceWindow) state.invoicePriceWindow = saved.invoicePriceWindow;
-    } else {
-      const response = await fetch(APP_SHEET_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createAppSheetPayload()),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // MEDIDO 2026-09-29 en el sitio estatico: esta linea decia `isAppsScriptRuntime()`,
+    // que ahi da TRUE por el predicado mentiroso del puente (`bridgeAvailable`, en
+    // performance-client.js), y por eso caia en la rama de Apps Script: el plan se subia por
+    // `callAppsScript` a un iframe que nunca contesto y los CATALOGOS no se subian de ninguna
+    // manera.
+    //
+    // DECIDIDO 2026-09-30 (pregunta al usuario): el destino de la escritura del plan es
+    // UNO SOLO, Supabase, tambien DENTRO de HtmlService. Antes esta funcion bifurcaba por
+    // `enRuntimeAppsScript()` y la rama de HtmlScript se quedaba sin escribir los catalogos
+    // y sin tomar el `saved` que devuelve el escritor. Un destino unico quita esa
+    // diferencia por construccion: no hay rama que se pueda quedar a medias.
+    const guardado = await guardarPlanEnSupabase();
+    if (!guardado) throw new Error("No se pudo guardar en Supabase");
+    // Los CATALOGOS, en el mismo guardado y solo si el ambito lo pidio. Antes esto
+    // era `appSheetSaveMethodForScopes` -> saveCatalogState, que escribia las hojas
+    // de Apps Script; esa funcion se BORRO el 2026-09-30 (ver el comentario donde
+    // estaba): el ambito ya no elige un metodo del puente, elige si se suben catalogos.
+    // MEDIDO 2026-09-29, con la sesion de correo RLS deja escribir
+    // las tablas de catalogo, asi que van por Supabase y no por el puente.
+    // Se escriben DESPUES del plan y no antes: si el plan falla, no se suben
+    // catalogos de un guardado que no ocurrio.
+    const deCatalogo = ambitosDeCatalogo(scopes);
+    if (deCatalogo.size) {
+      // 'matrix' manda si aparece con 'catalogs': el aviso que da el escritor es el
+      // de la pestana de Matriz, que es lo que falta escribir.
+      const ambito = deCatalogo.has("matrix") ? "matrix" : [...deCatalogo][0];
+      // MEDIDO 2026-10-03: antes esto era `await guardarCatalogosEnSupabase(ambito)`
+      // sin mirar el retorno. Si el plan subia y un catalogo fallaba (una tabla entre
+      // muchas, un 400, un RLS), el guardado devolvia true y salia el toast "Plan guardado
+      // en Supabase", y los formularios de la pestana se borraban. El ambito de catalogo ya
+      // habia sido consumido por appSheetConsumeDirtyScopes (linea de arriba del try), asi
+      // que no habia reintento: la edicion se perdia hasta que la repitieran. Devolver false
+      // aqui deja el cambio VIVO: se re-marcan SOLO los ambitos de catalogo (no el de plan,
+      // que ya esta en la base y no hay que re-escribirlo) y el llamador reintenta. El toast
+      // de "No se pudieron guardar los catalogos" ya lo puso guardarCatalogosEnSupabase.
+      const catalogosOk = await guardarCatalogosEnSupabase(ambito);
+      if (!catalogosOk) {
+        deCatalogo.forEach((scope) => appSheetDirtyScopes.add(scope));
+        appSheetAvailable = true;
+        if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
+        return false;
+      }
     }
     appSheetAvailable = true;
     delete state._pendingAddOt;
     delete state._pendingAddOtSnapshot;
-    if (showMessage) showToast("Hoja app guardada");
+    // RULE-SUP-072: NO se borra el marcador de retiro cuando la cola quedo VACIA. Este
+    // guardado pudo armarse ANTES de que la persona retirara la ultima OT (su payload todavia
+    // la lleva) y su exito no prueba que el retiro se haya escrito: borrar la senal aqui dejaba
+    // al guardado del retiro (flushPlanSave) sin vaciarSiEstaVacio, el freno del vacio saltaba
+    // plan_guardar y la OT volvia al recargar con el toast de exito. Con la cola vacia lo borra
+    // guardarPlanEnSupabase, y SOLO si escribio el vacio de verdad (RULE-SUP-072). Con la cola
+    // NO vacia el retiro ya viaja en el espejo de selected_ots de ESTE guardado, asi que
+    // borrarlo aqui sigue siendo correcto.
+    if ((state.selectedOts || []).length > 0) delete state._locallyRemovedDraftOts;
+    delete state._locallyAddedDraftOts;
+    delete state._locallyEditedOtConfigurations;
+    delete state._locallyEditedCapabilityConfig;
+    // El texto del toast cambio con el destino, no por capricho: decir "hoja" cuando ya
+    // no se escribe ninguna hoja manda a la persona a buscar el cambio donde no esta.
+    if (showMessage) showToast("Plan guardado en Supabase");
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return true;
   } catch (error) {
     scopes.forEach((scope) => appSheetDirtyScopes.add(scope));
@@ -6621,6 +15411,8 @@ async function saveAppSheet(showMessage) {
       const snapshot = state._pendingAddOtSnapshot;
       delete state._pendingAddOt;
       delete state._pendingAddOtSnapshot;
+      delete state._locallyAddedDraftOts;
+      delete state._locallyEditedOtConfigurations;
       state.selectedOts = snapshot || state.selectedOts.filter((item) => item !== ot);
       state.operations.filter((op) => op.ot === ot).forEach((op) => { op.locked = false; op.prioridad = 999; });
       saveState("ui");
@@ -6629,12 +15421,30 @@ async function saveAppSheet(showMessage) {
     } else {
       if (showMessage) showToast(`No se pudo guardar hoja app: ${error.message}`);
     }
+    if (typeof planningPerfMeasure === "function") planningPerfMeasure("save-appsheet", perfMark);
     return false;
   } finally {
-    appSheetSaveInFlight = false;
+    appSheetReleaseSaveGate(saveGate);
     if (appSheetSavePending) {
       appSheetSavePending = false;
-      queueAppSheetSave();
+      // MEDIDO 2026-09-29: aqui se llamaba queueAppSheetSave() sin ambito, y su
+      // valor por omision es "plan", que se mete en appSheetDirtyScopes. Entonces el
+      // conjunto quedaba {catalogs, plan} y el metodo se elegia con
+      // appSheetSaveMethodForScopes, que caia en saveAppState en vez de
+      // saveCatalogState: saveAppState -> PP_writeState_ NO escribe las hojas de
+      // catalogo ni dispara el espejo, o sea que un cambio de catalogo reencolado
+      // por aqui se guardaba a medias sin avisar. Con los ambitos ya marcados, lo
+      // unico que hace falta es reprogramar el temporizador. (La eleccion de metodo
+      // ya no existe; hoy lo que sale de aqui son las filas de Supabase.)
+      if (appSheetDirtyScopes.size) {
+        window.clearTimeout(appSheetSaveTimer);
+        appSheetSaveTimer = window.setTimeout(() => {
+          appSheetSaveTimer = null;
+          saveAppSheet(false);
+        }, 900);
+      } else {
+        queueAppSheetSave();
+      }
     }
   }
 }
@@ -6645,41 +15455,73 @@ function appSheetMarkDirtyScope(saveScope) {
   appSheetDirtyScopes.add(scope || "plan");
 }
 
+/**
+ * Programa el guardado de los ambitos que quedaron marcados sucios mientras el
+ * puente no estaba disponible. No borra las marcas: las consume saveAppSheet con
+ * appSheetConsumeDirtyScopes, que es lo que decide el metodo (saveCatalogState,
+ * saveSkillState o saveAppState segun que ambitos sean).
+ *
+ * Devuelve si programo algo. Si no hay nada marcado NO programa: sin este if,
+ * cada carga de pagina escribiria el plan entero solo para subir la revision.
+ */
+function appSheetFlushPendingScopes() {
+  if (!appSheetDisponible()) return false;
+  if (!appSheetDirtyScopes.size) return false;
+  if (appSheetSaveInFlight || operationStatusSavesInFlight) return false;
+  window.clearTimeout(appSheetSaveTimer);
+  appSheetSaveTimer = window.setTimeout(() => {
+    appSheetSaveTimer = null;
+    saveAppSheet(false);
+  }, 900);
+  return true;
+}
+
 function appSheetConsumeDirtyScopes() {
   const scopes = appSheetDirtyScopes.size ? [...appSheetDirtyScopes] : ["plan"];
   appSheetDirtyScopes.clear();
   return scopes;
 }
 
-function appSheetSaveMethodForScopes(scopes) {
-  const values = new Set(scopes || []);
-  const onlyCatalogs = values.size > 0 && [...values].every((scope) => scope === "catalogs");
-  const onlyMatrix = values.size > 0 && [...values].every((scope) => scope === "matrix");
-  let method = "saveAppState";
-  if (onlyCatalogs) method = "saveCatalogState";
-  if (onlyMatrix) method = "saveSkillState";
-  return method;
+// SE BORRO appSheetSaveMethodForScopes, 2026-09-30. Devolvia el nombre del METODO DEL
+// PUENTE segun los ambitos sucios ("saveCatalogState" / "saveSkillState" / "saveAppState"),
+// que era lo unico que hacia: el destino de la escritura ya no se elige, se escribe siempre
+// por Supabase. Ahora el ambito decide SI se suben catalogos (`ambitosDeCatalogo`) y a que
+// escritor se lo pasan, no que metodo del puente se llama. Dejarla era dejar el vocabulario
+// del camino eliminado con una funcion viva al lado que devuelve sus nombres.
+
+function purgeClosedWorkOrderRetention() {
+  state = window.PlanningWorkflowCore.purgeClosedWorkOrderRetention(state, new Date().toISOString());
 }
 
-function createAppSheetPayload() {
+function persistableState(source = state) {
+  const { matrixSearch, selectedDetailOt, queueMoveOt, ...persisted } = source;
+  delete persisted.machineToolHistory;
+  for (const key of Object.keys(persisted)) {
+    if (key.indexOf("__") === 0) delete persisted[key];
+  }
+  return persisted;
+}
+
+function createAppSheetPayload(source = state) {
+  const payload = persistableState(source);
+  delete payload._locallyRemovedDraftOts;
+  delete payload._pendingAddOt;
+  delete payload._pendingAddOtSnapshot;
+  delete payload._locallyEditedCapabilityConfig;
+  delete payload.machineToolHistory;
   return {
-    ...deepClone(state),
+    ...payload,
     source: "plan-app-sheet",
     savedAt: new Date().toISOString(),
   };
 }
 
 function isAppsScriptRuntime() {
-  return typeof google !== "undefined" && Boolean(google.script?.run);
+  return false;
 }
 
 function callAppsScript(method, ...args) {
-  return new Promise((resolve, reject) => {
-    const runner = google.script.run
-      .withSuccessHandler(resolve)
-      .withFailureHandler((error) => reject(new Error(error?.message || String(error))));
-    runner[method](...args);
-  });
+  return Promise.reject(new Error(`El puente de Apps Script esta deshabilitado. Metodo: ${method}`));
 }
 
 function showToast(message, duration = 2200) {
@@ -6690,8 +15532,36 @@ function showToast(message, duration = 2200) {
   showToast.timer = window.setTimeout(() => els.toast.classList.remove("show"), duration);
 }
 
+const OP_LOG_SEPARATOR = " | ";
+
+function compactOperationLog(log) {
+  const text = String(log == null ? "" : log);
+  if (!text) return text;
+  const parts = text.split(OP_LOG_SEPARATOR);
+  if (parts.length < 2) return text;
+  const compacted = [];
+  for (const part of parts) {
+    if (compacted.length && compacted[compacted.length - 1] === part) continue;
+    compacted.push(part);
+  }
+  return compacted.length === parts.length ? text : compacted.join(OP_LOG_SEPARATOR);
+}
+
+function compactOperationLogs(operations) {
+  for (const op of operations || []) {
+    if (!op || typeof op !== "object") continue;
+    if (typeof op.log !== "string") continue;
+    op.log = compactOperationLog(op.log);
+  }
+}
+
 function appendLog(log, message) {
-  return [log, message].filter(Boolean).join(" | ");
+  const text = String(log == null ? "" : log);
+  const entry = String(message == null ? "" : message);
+  if (!entry) return text;
+  if (!text) return entry;
+  if (text.endsWith(OP_LOG_SEPARATOR + entry)) return text;
+  return text + OP_LOG_SEPARATOR + entry;
 }
 
 function normalizeHeader(header) {
@@ -6722,6 +15592,14 @@ function downloadBlob(content, filename, type) {
 }
 
 function deepClone(value) {
+  // MEDIDO 2026-10-03 (stack de produccion, syncNetSuiteData ->
+  // captureLocalPlanningState): varias funciones de planning-workflow-core
+  // devuelven `lastSchedule: state?.lastSchedule` y Object.assign(state, ...)
+  // deja la propiedad PROPIA con valor undefined. deepClone(undefined) hacia
+  // JSON.parse(JSON.stringify(undefined)) = JSON.parse(undefined) y lanzaba
+  // SyntaxError: "undefined" es JSON invalido, que mataba el applyImported del
+  // sync de NetSuite. undefined no se clona: no hay nada que clonar.
+  if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value));
 }
 

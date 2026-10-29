@@ -1,0 +1,259 @@
+{
+  "schema_version": "1.0",
+  "modules": [
+    {
+      "module_id": "MODULE-GITHUB",
+      "path": ".github",
+      "files_sample": [
+        ".github/pull_request_template.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy-appscript.yml",
+        ".github/workflows/deploy-pages.yml",
+        ".github/workflows/npm-publish-github-packages.yml"
+      ],
+      "purpose": "CI y despliegues: CI (test/build), deploy de Apps Script (clasp push a dist/) y GitHub Pages (site/). El PR template impone el checklist de gates.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-LOCAL_AI",
+      "path": ".local-ai",
+      "files_sample": [
+        ".local-ai/analysis_pool_state.json",
+        ".local-ai/executor_pool_state.json",
+        ".local-ai/repo_index.json"
+      ],
+      "purpose": "Estado local del pool de agentes de IA (análisis/ejecución) e índice local del repo; no es código de la aplicación.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-SUPERPOWERS",
+      "path": ".superpowers",
+      "files_sample": [
+        ".superpowers/sdd-restore/final-fix-report.md",
+        ".superpowers/sdd-restore/task-1-report.md",
+        ".superpowers/sdd-restore/task-2-report.md",
+        ".superpowers/sdd-restore/task-3-report.md",
+        ".superpowers/sdd-restore/task-4-report.md",
+        ".superpowers/sdd-restore/task-5-report.md",
+        ".superpowers/sdd-restore/task-6-report.md",
+        ".superpowers/sdd/task-2-report.md",
+        ".superpowers/sdd/task-3-report.md",
+        ".superpowers/sdd/task-4-report.md",
+        ".superpowers/sdd/task-5-report.md"
+      ],
+      "purpose": "Reportes y evidencia de TASKs de desarrollo (sdd/sdd-restore); fuente de evidencia citada por docs/REGLAS.md.",
+      "rules": [],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-LEGACY",
+      "path": "legacy",
+      "files_sample": [
+        "legacy/IndexPlanning.html"
+      ],
+      "purpose": "Frontend legacy de planeación (HTML único con lógica inline); citado como evidencia de reglas históricas (RULE-OT-009, MAQ-002/003, BAL-001).",
+      "rules": [
+        "RULE-OT-009",
+        "RULE-MAQ-002",
+        "RULE-MAQ-003",
+        "RULE-BAL-001"
+      ],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-SCRIPTS",
+      "path": "scripts",
+      "files_sample": [
+        "scripts/build-appscript.mjs",
+        "scripts/check-project.mjs",
+        "scripts/web-probe.mjs",
+        "scripts/appsscript-bridge-read-test.mjs",
+        "scripts/supabase-read-test.mjs",
+        "netsuite-restlet-supabase-sync.js",
+        "netsuite-suitelet-sync-tarea.js",
+        "netsuite-user-event-workorder.js",
+        "netsuite-user-event-operacion.js",
+        "netsuite-user-event-item.js",
+        "netsuite-user-event-workcenter.js",
+        "netsuite-user-event-salesorder.js",
+        "netsuite-scheduled-sincronizacion.js"
+      ],
+      "purpose": "Build a dist/ (Apps Script) y site/ (GitHub Pages); check-project valida sintaxis, marcadores de build y URL del backend. patchPlanningApp/patchPerformanceClient contienen los parches de produccion del arranque (demo neutralizado, hidratacion de cache, rescate rapido, flag de confirmacion); ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md. Sondas: web-probe.mjs (backend SIMULADO y aislamiento por origen, RULE-TST-001), appsscript-bridge-read-test.mjs (Playwright contra produccion por el puente postMessage real, lista blanca de 4 metodos de lectura, RULE-TST-002) y supabase-read-test.mjs (Data API/Auth/OpenAPI + Postgres opcional, credenciales solo por entorno, sin escribir; unico consumidor de INT-SUPABASE). INCLUYE LA INGESTA NETSUITE -> SUPABASE (8 archivos, 2026-09-28): 6 User Events (uno por tipo de registro: workorder, manufacturingoperationtask, item, workcenter, salesorder) encolan un Suitelet (netsuite-suitelet-sync-tarea.js) que despacha por URL interna al RESTlet netsuite-restlet-supabase-sync.js, unico writer de las 7 tablas (work_orders, operations, materials, items, machines, inventory, sales_orders) con upsert por clave natural y guarda de revision. Un septimo script, netsuite-scheduled-sincronizacion.js, es el barrido: cubre inventario (que NO tiene User Event posible porque aggregateitemlocation es un agregado) y reconcilia las otras seis, porque un User Event se puede perder. Reglas RULE-SUP-001 a RULE-SUP-010.",
+      "rules": [
+        "RULE-GOV-006",
+        "RULE-GOV-007",
+        "RULE-GOV-008",
+        "RULE-LOAD-001",
+        "RULE-LOAD-002",
+        "RULE-LOAD-003",
+        "RULE-LOAD-004",
+        "RULE-TST-001",
+        "RULE-TST-002",
+        "RULE-SUP-001",
+        "RULE-SUP-002",
+        "RULE-SUP-003",
+        "RULE-SUP-004",
+        "RULE-SUP-005",
+        "RULE-SUP-006",
+        "RULE-SUP-007",
+        "RULE-SUP-008",
+        "RULE-SUP-009",
+        "RULE-SUP-010"
+      ],
+      "data_sources": [
+        "SUPABASE-PLAN"
+      ],
+      "updated_at": "2026-09-28T00:00:00-06:00"
+    },
+    {
+      "module_id": "MODULE-SRC",
+      "path": "src",
+      "files_sample": [
+        "src/server/00-common.js",
+        "src/server/01-code.js",
+        "src/server/02-storage.js",
+        "src/server/03-storage-service.js",
+        "src/server/04-planning-service.js",
+        "src/server/05-publishing-service.js",
+        "src/server/06-completion-service.js",
+        "src/server/07-report-service.js",
+        "src/server/08-netsuite.js",
+        "src/server/09-photos.js",
+        "src/server/10-app-planning.js",
+        "src/server/11-app-operator.js",
+        "src/server/12-app-skills.js",
+        "src/server/13-configuration.js",
+        "src/server/14-pages-bridge.js",
+        "src/server/15-performance-service.js",
+        "src/server/16-inspection-service.js",
+        "src/server/17-inspection-drawing-service.js",
+        "src/server/18-planning-work-order-service.js",
+        "src/web/bridge/Bridge.html",
+        "docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
+        "src/server/19-appscript-ingesta-supabase.js",
+        "src/web/shared/apps-script-ingesta-trigger.js"
+      ],
+      "purpose": "Aplicación: backend Apps Script (20 módulos: despacho/estado/almacenamiento/planeación/publicación/completado/reportes/NetSuite/fotos/apps planning-operator-skills/configuración/bridge/rendimiento/inspección/rutas/datos OT) y frontend (planning, operator, skills, inspection, shared, bridge). Ver docs/project/module-map.md. El plan docs/superpowers/plans/2026-08-29-planner-generation-5min.md documenta una propuesta por fases para reducir schedulePlan a ~5 min sin degradar calidad, con baseline dry-run y validaciones. El arranque del frontend se controla desde shared/performance-client.js (boot real) + parches de scripts/build-appscript.mjs; ver docs/superpowers/plans/2026-09-01-arranque-con-datos-reales-sin-demo.md. 18-planning-work-order-service.js expone getPlanningWorkOrderDataBatch(ots[]): batch endpoint que resuelve IDs y operaciones de N OTs en 2 consultas SuiteQL + 1 fetchAll al restlet 2244, reduciendo N llamadas google.script.run a 1. Bridge.html lo registra en ALLOWED_METHODS. ensurePlanningDataLoaded (app.js) lo usa cuando refreshOts.length > 1 con fallback a llamadas individuales. LA INGESTA A MANO, MEDIDO 2026-09-30: 19-appscript-ingesta-supabase.js tiene doPost(e), que es la UNICA forma de pedir una corrida de ingesta desde la pagina; antes solo existia ingesta(), que es el activador programado y no se puede llamar por HTTP. doPost devuelve el veredicto en el JSON del cuerpo y NO en el status, porque un web app en /exec responde 200 SIEMPRE (RULE-SUP-034), y usa LockService para que dos clics no sean dos llamadas al RESTlet. Del lado del cliente, web/shared/apps-script-ingesta-trigger.js hace el POST: va como text/plain porque application/json dispara un preflight que Apps Script no contesta (RULE-SUP-035), y decide seguir o no segun tres desenlaces porque la ingesta puede escribir cinco de sus siete tablas y fallar en dos (RULE-SUP-036). Quien dispara la ingesta tiene que NOMBRARLO (RULE-SUP-033): la comprobacion automatica que corre antes de generar el plan relee Supabase y no gasta una llamada al RESTlet.",
+      "rules": [
+        "RULE-OT-006",
+        "RULE-OT-007",
+        "RULE-OT-008",
+        "RULE-OT-014",
+        "RULE-MAT-008",
+        "RULE-MAT-009",
+        "RULE-MAT-011",
+        "RULE-MAT-012",
+        "RULE-DOB-001",
+        "RULE-HER-001",
+        "RULE-MAQ-001",
+        "RULE-GOV-006",
+        "RULE-GOV-007",
+        "RULE-GOV-008",
+        "RULE-LOAD-001",
+        "RULE-LOAD-002",
+        "RULE-LOAD-003",
+        "RULE-LOAD-004",
+        "RULE-UI-001",
+        "RULE-UI-002",
+        "RULE-REP-001",
+        "RULE-REP-002",
+        "RULE-REP-003",
+        "RULE-BAL-010",
+        "RULE-BAL-011",
+        "RULE-BAL-012",
+        "RULE-BAL-013",
+        "RULE-BAL-014",
+        "RULE-PUB-001",
+        "RULE-REP-004",
+        "RULE-SUP-033",
+        "RULE-SUP-034",
+        "RULE-SUP-035",
+        "RULE-SUP-036",
+        "RULE-INS-001"
+      ],
+      "data_sources": [
+        "SHEET-CONFIG",
+        "SHEET-OPERACIONES",
+        "SHEET-OPERADORES",
+        "SHEET-CAPACIDADES",
+        "SHEET-CATALOGO_OPERACIONES",
+        "SHEET-ORDENES_TRABAJO",
+        "SHEET-CONFIGURACION_OT",
+        "SHEET-CONFIGURACION_ARTICULO",
+        "SHEET-MATRIZ",
+        "SHEET-MAQUINAS",
+        "SHEET-HERRAMENTALES",
+        "SHEET-MATERIALES",
+        "SHEET-CALENDARIO",
+        "SHEET-SUBCONTRATOS",
+        "SHEET-TIPOS_OT",
+        "SHEET-ESTADOS_OPERACION_PLAN",
+        "SHEET-PLANES_HISTORICOS",
+        "SHEET-BORRADOR_PLAN",
+        "SHEET-AUDITORIA",
+        "SHEET-INSPECCION_TRAMOS",
+        "SUPABASE-INSPECTION_ROUTES"
+      ],
+      "updated_at": "2026-09-30"
+    },
+    {
+      "module_id": "MODULE-TASKS",
+      "path": "tasks",
+      "files_sample": [
+        "tasks/TASK-20260809-110222-116A-DS1-DBE0.json",
+        "tasks/TASK-20260809-110222-116A.json",
+        "tasks/TASK-20260809-114212-1B33.json",
+        "tasks/TASK-20260809-125520-4FE9.json",
+        "tasks/TASK-20260809-143203-2350.json",
+        "tasks/TASK-20260809-144118-CFA9.json"
+      ],
+      "purpose": "Registros de TASKs (JSON) con evidencia; docs/changes/TASK-*.md es la versión legible. Fuente de evidencia de reglas.",
+      "rules": [
+        "RULE-GOV-003"
+      ],
+      "data_sources": []
+    },
+    {
+      "module_id": "MODULE-TESTS",
+      "path": "tests",
+      "files_sample": [
+        "docs/superpowers/plans/2026-08-29-planner-generation-5min.md",
+        "tests/build.test.mjs",
+        "tests/inspection-app-loading.test.mjs",
+        "tests/inspection-core.test.mjs",
+        "tests/inspection-service.test.mjs",
+        "tests/inspection-routes-supabase.test.mjs",
+        "tests/supabase-writer-inspection-routes.test.mjs",
+        "tests/ddl-inspection-routes.test.mjs",
+        "tests/inspection-history-supabase.test.mjs",
+        "tests/ddl-inspection-history.test.mjs",
+        "tests/matrix-integration-app.test.mjs",
+        "tests/netsuite-operation-catalog.test.mjs",
+        "tests/netsuite-sync-preserves-toolchanges.test.mjs",
+        "tests/performance-client-calls.test.mjs",
+        "tests/performance-client-conflict.test.mjs",
+        "tests/planner-core.test.mjs",
+        "tests/planning-work-order-service.test.mjs",
+        "tests/planning-workflow-core.test.mjs",
+        "tests/restlet-supabase-sync.test.mjs",
+        "tests/storage-state.test.mjs",
+        "tests/test-plan-maestro.gs"
+      ],
+      "purpose": "Suite de pruebas node --test (1417 pruebas al 2026-10-04, verde en local y base del gate de CI: deploy-pages.yml corre `npm test` antes de construir, y un solo test rojo deja el sitio sin desplegar) que cubre motor de planeación, workflow, storage, catálogo NetSuite, matrix, rendimiento, inspección y build. tests/rpc-ingesta-mirror.test.mjs (9, nuevo 2026-10-01; el guard de que exista UNA sola copia viva del RPC public.ingesta_mirror en docs/, que leeria la whitelist de public.ingesta_mirror_whitelist en vez de una lista en el cuerpo, y que conserve la rama del payload vacio, que es lo que distingue el espejo de una tabla que deja de reflejar cuando el origen se vacia; ver RULE-SUP-038) tests/inspection-routes-supabase.test.mjs (20, nuevo 2026-10-01) y tests/supabase-writer-inspection-routes.test.mjs (12, nuevo) y tests/ddl-inspection-routes.test.mjs (8, nuevo; amarra el DDL con el escritor y con el lector, que son tres archivos sin compararse entre si: columna `clave` real con índice UNIQUE completo, columnas del escritor y del lector presentes en el DDL, fila en la whitelist de ingesta_mirror, escritura solo para `authenticated`, disparador de `updated_at`, y que el escritor y el importador calculen la clave con la misma regla) cubren la migración del catálogo de tramos de la hoja `Tramos` a la tabla inspection_routes: lector, dedup por clave laxa en el importador, reparto con la hoja que dice `fuente`/`aviso`, y el contrato de la columna `dibujo` (que viaja si el payload la trae y se omite si no, para no borrarla en cada guardado de tramo). Ver RULE-INS-001. La optimización del motor a ~5 min debe agregar/regresar pruebas descritas en docs/superpowers/plans/2026-08-29-planner-generation-5min.md: keep-best-on-timeout, estrategias acotadas, caches, Top 2-3 con fallback, busy intervals y local search. tests/restlet-supabase-sync.test.mjs (30, nuevo) cubre la ingesta NetSuite -> Supabase con un harness AMD que inyecta N/query, N/https, N/runtime, N/log y N/record falsos: verifica QUE SE ESCRIBE (URL, metodo, cabeceras, Prefer, cuerpo) sin tocar la red. Mapeo de las 7 tablas, cadena de cant_ensamblada desde record:built (y que con el record disponible NO se consulten transaction.built y compañía, que en esta cuenta son un 400), dedupe, guarda de revision, choque reportado sin pisar, degradacion a upsert declarada, que ninguna columna interna viaje en el cuerpo, que la service_role no se imprima, que ninguna fecha salga en un formato que Postgres no acepte (dd/MM/aaaa real, incluido el caso dia<=12 que antes se guardaba corrida), que el SQL no lleve clausulas de paginacion, que NINGUN SQL lleve un '//' dentro del texto (SuiteQL responde 400 Failed to parse SQL), que el nombre del centro de operaciones salga de BUILTIN.DF(mot.manufacturingworkcenter) y NO de un JOIN a la tabla manufacturingworkcenter (que no existe en esta cuenta: 400 Tipo de busqueda no valida), que el CT sea el id interno del centro, que los cuatro estados reales de mot.status (NOTSTART, PROGRESS, COMPLETE, CLOSED) se traduzcan y ninguno se escriba crudo, y que todo SQL use alias que existen en su FROM/JOIN. Los fixtures usan el formato REAL de SuiteQL (fechas dd/MM/aaaa, centros '10OTD : DOBLEZ DE TUBERIA' con id 5459, estado PROGRESS), no el que se asumia. tests/inspection-history-supabase.test.mjs (30, nuevo 2026-10-01) y tests/ddl-inspection-history.test.mjs (8, nuevo; verificado por mutacion en 13 mutaciones) cubren el historial de impresiones: la tabla `inspection_history` reemplaza a la hoja HISTORIAL_IMPRESION_INSPEC, con las doce columnas de la hoja mas `printed_at` para ordenar (el texto `fecha_hora` se sigue mostrando tal cual, criterio de RULE-INS-001), INSERT siempre sin `on_conflict` ni indice UNIQUE porque dos impresiones de la misma OT en el mismo segundo son dos hechos, y FUERA de la whitelist de ingesta_mirror porque un espejo borra y un historial se acumula. Afirman tambien que 'no pude leer' y 'no hay ninguna' se ven distintos: MEDIDO 2026-10-01, sin sesion la Data API responde HTTP 200 con CERO filas, asi que un historial 'vacio' sin aviso es indistinguible de uno donde nadie ha impreso nunca. Y el harness usa el LECTOR REAL con el `fetch` falso, no un lector de mentira: con el de mentira el test pasaba con los materiales en blanco porque los nombres de columna de la maqueta no son los que lee inspection-core.js. Ver RULE-INS-002.",
+      "rules": [
+        "RULE-INS-001",
+        "RULE-INS-002"
+      ],
+      "data_sources": [
+        "SUPABASE-INSPECTION_ROUTES",
+        "SHEET-INSPECCION_TRAMOS",
+        "SUPABASE-INSPECTION_HISTORY",
+        "SHEET-HISTORIAL_IMPRESION_INSPEC"
+      ],
+      "updated_at": "2026-10-01"
+    }
+  ],
+  "updated_at": "2026-10-01T21:00:00-06:00"
+}
