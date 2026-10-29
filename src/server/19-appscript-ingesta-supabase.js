@@ -350,9 +350,9 @@ const COLUMNAS_NUMERICAS_ = {
   machines: [],
   inventory: ['disponible', 'fisico', 'comprometido', 'pickeado', 'en_transito', 'revision'],
   sales_orders: ['cliente_id', 'total', 'moneda', 'revision'],
-  // `cantidad` es `numeric(18,6)` (fraccionaria, RULE-SUP-078); `ubicacion` y `revision` son
-  // `integer` y el saneo las redondea.
-  ensambles_ot: ['cantidad', 'ubicacion', 'revision']
+  // `cantidad` es `numeric(18,6)` (fraccionaria, RULE-SUP-078); `ubicacion` es `integer` y el
+  // saneo la redondea. `revision` NO va aqui: ver el comentario de PP_COLUMNAS_NOT_NULL_DEFAULT_.
+  ensambles_ot: ['cantidad', 'ubicacion']
 };
 
 /**
@@ -380,8 +380,8 @@ const COLUMNAS_ENTERAS_ = {
   inventory: ['revision'],
   sales_orders: ['cliente_id', 'moneda', 'revision'],
   // `ensambles_ot.cantidad` es `numeric(18,6)`: fraccionaria a proposito, como materials.
-  // `ubicacion` si es entera. `revision` siempre entera.
-  ensambles_ot: ['ubicacion', 'revision']
+  // `ubicacion` si es entera.
+  ensambles_ot: ['ubicacion']
 };
 
 // CUANTOS VALORES DISTINTOS POR COLUMNA se nombran en el log antes de decir "y N mas". Un dato
@@ -475,12 +475,19 @@ const COLUMNAS_POR_OMISION_ = {
     moneda: 0, memo: '', lineas: [], revision: 0
   },
   // `ensambles_ot` (RULE-SUP-078). `build_id` es la clave natural (not null sin
-  // default): no esta, igual que `work_orders.ot` o `items.codigo`. El resto son las
-  // columnas `not null default` del DDL (docs/schema-supabase-ensambles-ot.sql):
-  // `ubicacion` tiene default 1, no 0, porque es la planta MM del Llano.
+  // default): no esta, igual que `work_orders.ot` o `items.codigo`. `ubicacion` tiene
+  // default 1, no 0, porque es la planta MM del Llano.
+  // MEDIDO 2026-10-29 22:43 en produccion: `ingesta_mirror` contesto 400
+  //   "ingesta_mirror: la tabla ensambles_ot no tiene las columnas build_tranid"
+  // y la tabla quedo en 0 filas: la forma real de la tabla es la de la copia canonica
+  // docs/rpc-ingesta-mirror.sql (build_tranid, sin `revision`), no la de
+  // docs/schema-supabase-ensambles-ot.sql. Ese DDL de ensambles nunca se aplico, y ademas
+  // NO trae el `delete` del espejo, asi que aunque se aplicara el espejo no vaciaria nunca.
+  // NO se agrega `revision` a proposito: el RESTlet no la manda y, si no existe la columna,
+  // PP_saneaTipos_ la rellenaria y el insert fallaria por columna desconocida.
   ensambles_ot: {
     ot: '', wo_internal_id: '', articulo: '', descripcion: '', cantidad: 0,
-    ubicacion: 1, revision: 0
+    ubicacion: 1
   }
 };
 

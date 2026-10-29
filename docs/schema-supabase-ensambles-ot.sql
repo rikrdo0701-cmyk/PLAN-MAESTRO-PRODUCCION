@@ -1,6 +1,24 @@
 -- =============================================================================
 -- 1. ENSAMBLES_OT — LO QUE REALMENTE SE ENSAMBLÓ, UN RENGLÓN POR EVENTO
 -- -----------------------------------------------------------------------------
+-- ESTADO: NO APLICADO. Esta copia es la version vieja del DDL y NO es la forma que
+-- tiene la tabla en el proyecto: MEDIDO 2026-10-29 22:43, `ingesta_mirror` contesto
+--
+--   ingesta_mirror: la tabla ensambles_ot no tiene las columnas build_tranid
+--
+-- o sea que la tabla en Supabase tiene `build_tranid` y no tiene `revision`, que es
+-- la forma que manda el RESTlet 2246 (`ensambles_`, netsuite-restlet-unificado-supabase.js:460-498,
+-- la que sigue la copia canonica docs/rpc-ingesta-mirror.sql). El codigo de la ingesta
+-- (19-appscript-ingesta-supabase.js) ya se alineo con la tabla REAL, no con este archivo:
+-- no rellena `revision` en ensambles_ot. Este archivo NO se debe aplicar mientras la
+-- copia canonica sea la otra: solo un ALTER de reconciliacion, decidido por el usuario,
+-- puede traer columnas de aqui alla.
+--
+-- ADEMAS, LE FALTA EL `delete` DEL ESPEJO. Un espejo vacia la tabla y reinserta dentro
+-- de la misma transaccion (RULE-SUP-048); con esta version la ingesta borraria 0 filas
+-- y la tabla acumularia eventos de todas las corridas.
+--
+-- -----------------------------------------------------------------------------
 -- Petición del usuario 2026-10-25: un reporte "Liberación real" con
 --   fecha | OT | artículo | cantidad | precio unitario | monto
 -- de lo que se ensambla, de la planta MM del Llano, de los últimos 2 meses, y
