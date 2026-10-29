@@ -10271,24 +10271,20 @@ function bindEvents() {
     const btn = document.getElementById("syncReleaseRealBtn");
     if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
     try {
-      const bridge = typeof PPAppsScriptBridge !== "undefined" ? PPAppsScriptBridge : null;
-      if (bridge && typeof bridge.call === "function") {
-        try {
-          await bridge.call("dispararIngestaSupabase", { accion: "ensambles" }, { timeout: 90000 });
-        } catch (e) {
-          console.warn("No se pudo disparar ingesta ensambles via puente:", e);
-        }
-      } else if (typeof google !== "undefined" && google.script && google.script.run) {
-        try {
-          await new Promise((resolve, reject) => {
-            google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .dispararIngestaSupabase({ accion: "ensambles" });
-          });
-        } catch (e) {
-          console.warn("No se pudo disparar ingesta ensambles via google.script.run:", e);
-        }
+      // Ingesta directa por Supabase: el puente Apps Script está deshabilitado (RULE-SUP-030)
+      // y `google.script.run` no funciona en GitHub Pages. La ingesta debe ser directa.
+      const supabaseUrl = window.__SUPABASE_URL || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getUrl?.() : null);
+      const supabaseKey = window.__SUPABASE_ANON_KEY || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getKey?.() : null);
+      if (supabaseUrl && supabaseKey) {
+        const resp = await fetch(supabaseUrl + "/rest/v1/rpc/plan_guardar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": supabaseKey },
+          body: JSON.stringify({ accion: "ensambles", sync_release_real: true })
+        });
+        if (resp.ok) console.log("Ingesta ensambles iniciada vía Supabase");
+        else console.warn("Ingesta ensambles falló:", resp.status);
+      } else {
+        console.warn("No se pudo disparar ingesta ensambles: faltan credenciales de Supabase");
       }
       await new Promise(r => setTimeout(r, 4000));
     } catch (e) {
