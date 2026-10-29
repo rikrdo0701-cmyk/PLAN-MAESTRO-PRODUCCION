@@ -7,6 +7,7 @@ on:
       - "src/web/**"
       - "tests/**"
       - "scripts/build-appscript.mjs"
+      - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
 concurrency:
