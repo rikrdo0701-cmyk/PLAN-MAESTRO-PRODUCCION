@@ -3068,7 +3068,7 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
   assert.equal(rowsWithoutTotal[0].quantity, 7);
 });
 
-test("liberacion final calcula precio unitario y precio total por la cantidad de la OT (DECISION 2026-10-30)", async () => {
+test("liberacion final calcula precio unitario y precio total sobre el ENSAMBLADO (DECISION 2026-10-30)", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const start = app.indexOf("function workOrderForSource(");
   const end = app.indexOf("function renderReleaseReport(", start);
@@ -3089,8 +3089,8 @@ test("liberacion final calcula precio unitario y precio total por la cantidad de
     () => new Date(2026, 9, 27),
     () => reportState,
     () => 0,
-    () => 10,
-    () => 10,
+    () => 28,
+    () => 40,
     () => null,
     () => null,
     () => String(0),
@@ -3098,13 +3098,16 @@ test("liberacion final calcula precio unitario y precio total por la cantidad de
     () => ({}),
     () => unitPrice,
   );
-  // Cantidad de la OT = 10, precio unitario = 133.75 -> total = 1,337.50.
+  // Cantidad de la OT = 40, ENSAMBLADO = 28, precio unitario = 133.75.
+  // DECIDIDO 2026-10-30: el P. total se calcula sobre el ENSAMBLADO (lo que de verdad se
+  // libero), no sobre la cantidad de la OT: 133.75 x 28 = 3,745.00.
   const rows = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, unitPrice: 133.75 })();
   assert.equal(rows.length, 1);
   assert.equal(rows[0].article, "CM 400 E");
-  assert.equal(rows[0].quantity, 10);
+  assert.equal(rows[0].quantity, 40);
+  assert.equal(rows[0].built, 28);
   assert.equal(rows[0].unitPrice, 133.75);
-  assert.equal(rows[0].amount, 1337.5, "precio total = unitario x cantidad de la OT");
+  assert.equal(rows[0].amount, 3745, "precio total = unitario x ENSAMBLADO");
   // Sin precio no se inventa un total.
   const sinPrecio = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, unitPrice: 0 })();
   assert.equal(sinPrecio[0].unitPrice, 0);

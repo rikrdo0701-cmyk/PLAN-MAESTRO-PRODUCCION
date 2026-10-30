@@ -9504,11 +9504,12 @@ function releaseReportRows() {
       ct: releaseMatch?.ct || "",
       label: releaseMatch?.label || "16OC",
       releaseOp: release,
-      // MEDIDO 2026-10-30 (pedido del usuario): el reporte muestra el PRECIO UNITARIO y el
-      // PRECIO TOTAL de la OT, despues de Ensamblado. El total es el unitario por la CANTIDAD
-      // de la OT (la misma cantidad que el usuario pidió que muestren los planes).
+      // MEDIDO 2026-10-30 (pedido del usuario): "Liberacion final" muestra PRECIO UNITARIO y
+      // PRECIO TOTAL despues de Ensamblado. DECIDIDO 2026-10-30: el total se calcula sobre el
+      // ENSAMBLADO (lo que de verdad se libero), no sobre la cantidad de la OT: el reporte se
+      // llama "Liberacion" y su columna de avance es Ensamblado.
       unitPrice,
-      amount: unitPrice > 0 ? unitPrice * quantity : null,
+      amount: unitPrice > 0 ? unitPrice * built : null,
     });
   }
   return rows.sort((a, b) => {
