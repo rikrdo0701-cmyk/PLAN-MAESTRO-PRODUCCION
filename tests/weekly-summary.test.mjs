@@ -346,3 +346,54 @@ test("weeklyJobSummary resta lo ensamblado de inspeccion cuando la OT esta a med
   assert.equal(partial.starts[0].pendingPieces, 288);
   assert.equal(partial.starts[0].amount, 288 * 4592);
 });
+
+test("weeklyJobSummary NO rescata una OT cerrada sin articulo ni piezas (la 4111, DECISION 2026-10-30)", () => {
+  // MEDIDO 2026-10-30: la OT 4111 (cerrada) aparecia en el Plan de la semana como fila
+  // fantasma: PARTE vacio, 0 pzs, $0.00. RULE-REP-027 rescata OTs cerradas para que
+  // conserven sus piezas y su costo, pero esta no tiene NI articulo NI piezas: era ruido.
+  const weeklyJobSummary = createWeeklyJobSummary({
+    closedSummaries: {
+      "4111": {
+        ot: "4111",
+        item: "",
+        quantity: 0,
+        builtQuantity: 0,
+        pendingQuantity: 0,
+        scheduledStart: "2026-10-26T08:00:00Z",
+        scheduledEnd: "2026-10-26T16:00:00Z",
+        weekStart: "2026-10-26",
+        finalStatus: "CERRADA",
+      },
+    },
+  });
+  const summary = weeklyJobSummary("2026-10-26", { operations: [] });
+  assert.equal(summary.starts.some((row) => row.ot === "4111"), false, "no aparece en inician");
+  assert.equal(summary.finishes.some((row) => row.ot === "4111"), false, "ni en terminan");
+});
+
+test("weeklyJobSummary SI rescata una OT cerrada sin articulo pero con piezas pendientes", () => {
+  // La regla nueva no se pasa de lista: si una OT cerrada tiene piezas pendientes, se
+  // rescata igual (RULE-REP-027), aunque el resumen no traiga el articulo.
+  const weeklyJobSummary = createWeeklyJobSummary({
+    configurations: { "": { manualUnitPrice: 10 } },
+    invoicePrices: { "4701": 10 },
+    closedPieces: { "4701": 3 },
+    closedSummaries: {
+      "4701": {
+        ot: "4701",
+        item: "",
+        quantity: 0,
+        builtQuantity: 0,
+        pendingQuantity: 3,
+        scheduledStart: "2026-07-22T08:00:00Z",
+        scheduledEnd: "2026-07-23T16:00:00Z",
+        weekStart: "2026-07-20",
+        finalStatus: "CERRADA",
+      },
+    },
+  });
+  const summary = weeklyJobSummary("2026-07-20", { operations: [] });
+  const finish = summary.finishes.find((row) => row.ot === "4701");
+  assert.ok(finish, "se rescata con piezas pendientes");
+  assert.equal(finish.pendingPieces, 3);
+});

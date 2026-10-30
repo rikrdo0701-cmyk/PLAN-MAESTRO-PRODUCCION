@@ -8320,6 +8320,13 @@ function closedWorkOrderOperation(summary) {
   if (!start && !end) return null;
   const pending = Number(summary.pendingQuantity);
   const pieces = Number.isFinite(pending) && pending > 0 ? pending : Number(summary.quantity) || 0;
+  // MEDIDO 2026-10-30, DECISION DEL USUARIO: una OT cerrada SIN articulo y SIN piezas
+  // pendientes NO se rescata al reporte semanal. RULE-REP-027 rescata las OTs cerradas
+  // para que conserven sus piezas y su costo; la 4111 (y otras) llegaban con `item` y
+  // cantidad en 0 y se mostraban como una fila fantasma: PARTE vacio, 0 pzs, $0.00,
+  // que era ruido sin dato que representar. Si tiene articulo O piezas pendientes,
+  // sigue rescatandose igual que antes.
+  if (!String(summary.item || "").trim() && pieces <= 0) return null;
   return {
     ot,
     parte: String(summary.item || "").trim(),
