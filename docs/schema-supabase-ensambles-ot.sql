@@ -1,22 +1,22 @@
 -- =============================================================================
 -- 1. ENSAMBLES_OT — LO QUE REALMENTE SE ENSAMBLÓ, UN RENGLÓN POR EVENTO
 -- -----------------------------------------------------------------------------
--- ESTADO: NO APLICADO. Esta copia es la version vieja del DDL y NO es la forma que
--- tiene la tabla en el proyecto: MEDIDO 2026-10-29 22:43, `ingesta_mirror` contesto
+-- ESTADO: APLICADO. Esta es la forma REAL de la tabla en el proyecto, MEDIDA
+-- 2026-10-29 contra la base: `id, build_id, fecha, ot, wo_internal_id, articulo,
+-- descripcion, cantidad, ubicacion, revision, created_at, updated_at` — con
+-- `revision` y SIN `build_tranid`.
+--
+-- OJO CON `build_tranid`: el RESTlet 2246 la manda (netsuite-restlet-unificado-
+-- supabase.js:460-498, la funcion `ensambles_`) y la tabla NO la tiene. `ingesta_mirror`
+-- valida las columnas del payload contra la tabla y rechaza las desconocidas, asi que
+-- esa columna hacia que la ingesta DE ENSAMBLES fallara con:
 --
 --   ingesta_mirror: la tabla ensambles_ot no tiene las columnas build_tranid
 --
--- o sea que la tabla en Supabase tiene `build_tranid` y no tiene `revision`, que es
--- la forma que manda el RESTlet 2246 (`ensambles_`, netsuite-restlet-unificado-supabase.js:460-498,
--- la que sigue la copia canonica docs/rpc-ingesta-mirror.sql). El codigo de la ingesta
--- (19-appscript-ingesta-supabase.js) ya se alineo con la tabla REAL, no con este archivo:
--- no rellena `revision` en ensambles_ot. Este archivo NO se debe aplicar mientras la
--- copia canonica sea la otra: solo un ALTER de reconciliacion, decidido por el usuario,
--- puede traer columnas de aqui alla.
---
--- ADEMAS, LE FALTA EL `delete` DEL ESPEJO. Un espejo vacia la tabla y reinserta dentro
--- de la misma transaccion (RULE-SUP-048); con esta version la ingesta borraria 0 filas
--- y la tabla acumularia eventos de todas las corridas.
+-- y la tabla quedaba en 0 filas. El codigo de la ingesta (19-appscript-ingesta-supabase.js)
+-- la QUITA del payload antes de escribir (busca `delete copia.build_tranid`), porque el
+-- reporte no la lee. Si algun dia se necesita, es un ALTER de reconciliacion decidido a
+-- proposito (docs/ensambles-ot-reconciliar-build-tranid.sql), no un desliz del RESTlet.
 --
 -- -----------------------------------------------------------------------------
 -- Petición del usuario 2026-10-25: un reporte "Liberación real" con

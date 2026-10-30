@@ -322,25 +322,42 @@ define(['N/query'], (query) => {
     // `cant_pendiente` = inputquantity - completedquantity; `tiempo_prod` usa la MISMA formula
     // del app: runrate x pendiente, o el trabajo restante, o el estimado; `tiempo_ciclo` =
     // tiempo_prod / cant_pendiente; `estatus` traduce mot.status al vocabulario del app.
+    //
+    // MEDIDO 2026-10-29: este SQL llego a ser el de ENSAMBLES (WOCompl) — una mala copia del
+    // commit cb99d81. Con ese SQL equivocado `operaciones` devolvia las filas de ensamble y cada
+    // una se mapeaba con operation_id='ns-' (todas iguales), asi que el mirror de `operations`
+    // moria en el segundo INSERT con 409 duplicate key "operations_operation_id_key" y la tabla
+    // conservaba lo anterior. Restaurado a la consulta real de manufacturingoperationtask.
     const sql = [
       'SELECT',
-      '  tr.id AS build_id,',
-      '  tr.tranid AS build_tranid,',
-      '  tr.trandate AS fecha,',
-      '  tl.createdfrom AS wo_internal_id,',
-      '  wo.tranid AS ot,',
-      '  i.itemid AS articulo,',
-      '  i.description AS descripcion,',
-      '  tl.quantity AS cantidad,',
-      '  tl.location AS ubicacion',
-      'FROM transaction tr',
-      'JOIN transactionline tl ON tl.transaction = tr.id AND tl.mainline = \'T\'',
-      'LEFT JOIN workorder wo ON wo.id = tl.createdfrom',
-      'LEFT JOIN item i ON i.id = tl.item',
-      "WHERE tr.type = 'WOCompl'",
-      '  AND tr.trandate >= (SYSDATE - 60)',
-      '  AND tl.location = 1',
-      'ORDER BY tr.trandate DESC, tr.id DESC'
+      '  mot.id AS workorder_id,',
+      '  wo.tranid AS workorder_tranid,',
+      '  mot.operationsequence AS sequence,',
+      '  mot.manufacturingworkcenter AS ct_id,',
+      '  BUILTIN.DF(mot.manufacturingworkcenter) AS ct_nombre,',
+      "  NVL(mot.title, '') AS titulo,",
+      '  mot.inputquantity AS cant_total,',
+      '  NVL(mot.completedquantity, 0) AS cant_realizada,',
+      '  mot.setuptime AS setup_min,',
+      '  NVL(mot.runrate, 0) AS runrate,',
+      '  NVL(mot.remainingwork, 0) AS restante,',
+      '  NVL(mot.estimatedwork, 0) AS estimado,',
+      '  mot.status AS status_op,',
+      "  NVL(mot.laborresources, '') AS operador,",
+      "  NVL(mot.machineresources, '') AS maquina,",
+      '  mot.startdatetime AS start_planned,',
+      '  mot.enddate AS end_planned',
+      'FROM manufacturingoperationtask mot',
+      'JOIN transaction wo ON wo.id = mot.workorder',
+      "WHERE wo.type = 'WorkOrd'",
+      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CERRAD%'",
+      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%CLOSED%'",
+      "  AND UPPER(BUILTIN.DF(wo.status)) NOT LIKE '%COMPLET%'",
+      // Mismo filtro de planta que workorders_: la OT es de la planta 1 si la linea
+      // mainline tiene location=1 (medido 2026-09-29: 72 OTs con operaciones son de la
+      // planta 2). EXISTS evita duplicar si hubiera mas de una mainline.
+      "  AND EXISTS (SELECT 1 FROM transactionline tl WHERE tl.transaction = wo.id AND tl.mainline = 'T' AND tl.location = 1)",
+      'ORDER BY wo.id, mot.operationsequence, mot.id'
     ].join('\n');
     const rows = runSuiteQL_(sql);
     return {

@@ -37,8 +37,8 @@ import { createContext, runInContext } from "node:vm";
 
 const raiz = new URL("../", import.meta.url);
 const fuente = await readFile(new URL("netsuite-restlet-unificado-supabase.js", raiz), "utf8");
-const ddl = await readFile(new URL("docs/schema-supabase.sql", raiz), "utf8");
-const ingesta = await readFile(new URL("src/server/19-appscript-ingesta-supabase.js", raiz), "utf8");
+const ddl = (await readFile(new URL("docs/schema-supabase.sql", raiz), "utf8")).replace(/\r/g, "");
+const ingesta = (await readFile(new URL("src/server/19-appscript-ingesta-supabase.js", raiz), "utf8")).replace(/\r/g, "");
 
 const TABLAS_DEL_ESPEJO = [
   "work_orders", "operations", "materials", "items", "machines", "inventory", "sales_orders", "ensambles_ot"
@@ -93,9 +93,9 @@ function columnasNumericasDDL(tabla) {
 
 const ddlPorArchivo = {
   "docs/schema-supabase.sql": ddl,
-  "docs/schema-supabase-sync-netsuite.sql": await readFile(new URL("docs/schema-supabase-sync-netsuite.sql", raiz), "utf8"),
+  "docs/schema-supabase-sync-netsuite.sql": (await readFile(new URL("docs/schema-supabase-sync-netsuite.sql", raiz), "utf8")).replace(/\r/g, ""),
   // RULE-SUP-078 (2026-10-25): la tabla de eventos de ensamblado vive en su propio DDL.
-  "docs/schema-supabase-ensambles-ot.sql": await readFile(new URL("docs/schema-supabase-ensambles-ot.sql", raiz), "utf8")
+  "docs/schema-supabase-ensambles-ot.sql": (await readFile(new URL("docs/schema-supabase-ensambles-ot.sql", raiz), "utf8")).replace(/\r/g, "")
 };
 
 /**

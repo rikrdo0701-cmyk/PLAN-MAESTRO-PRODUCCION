@@ -350,9 +350,9 @@ const COLUMNAS_NUMERICAS_ = {
   machines: [],
   inventory: ['disponible', 'fisico', 'comprometido', 'pickeado', 'en_transito', 'revision'],
   sales_orders: ['cliente_id', 'total', 'moneda', 'revision'],
-  // `cantidad` es `numeric(18,6)` (fraccionaria, RULE-SUP-078); `ubicacion` es `integer` y el
-  // saneo la redondea. `revision` NO va aqui: ver el comentario de PP_COLUMNAS_NOT_NULL_DEFAULT_.
-  ensambles_ot: ['cantidad', 'ubicacion']
+  // `cantidad` es `numeric(18,6)` (fraccionaria, RULE-SUP-078); `ubicacion` y `revision` son
+  // `integer` y el saneo las redondea.
+  ensambles_ot: ['cantidad', 'ubicacion', 'revision']
 };
 
 /**
@@ -380,8 +380,8 @@ const COLUMNAS_ENTERAS_ = {
   inventory: ['revision'],
   sales_orders: ['cliente_id', 'moneda', 'revision'],
   // `ensambles_ot.cantidad` es `numeric(18,6)`: fraccionaria a proposito, como materials.
-  // `ubicacion` si es entera.
-  ensambles_ot: ['ubicacion']
+  // `ubicacion` si es entera. `revision` siempre entera.
+  ensambles_ot: ['ubicacion', 'revision']
 };
 
 // CUANTOS VALORES DISTINTOS POR COLUMNA se nombran en el log antes de decir "y N mas". Un dato
@@ -475,19 +475,17 @@ const COLUMNAS_POR_OMISION_ = {
     moneda: 0, memo: '', lineas: [], revision: 0
   },
   // `ensambles_ot` (RULE-SUP-078). `build_id` es la clave natural (not null sin
-  // default): no esta, igual que `work_orders.ot` o `items.codigo`. `ubicacion` tiene
-  // default 1, no 0, porque es la planta MM del Llano.
-  // MEDIDO 2026-10-29 22:43 en produccion: `ingesta_mirror` contesto 400
-  //   "ingesta_mirror: la tabla ensambles_ot no tiene las columnas build_tranid"
-  // y la tabla quedo en 0 filas: la forma real de la tabla es la de la copia canonica
-  // docs/rpc-ingesta-mirror.sql (build_tranid, sin `revision`), no la de
-  // docs/schema-supabase-ensambles-ot.sql. Ese DDL de ensambles nunca se aplico, y ademas
-  // NO trae el `delete` del espejo, asi que aunque se aplicara el espejo no vaciaria nunca.
-  // NO se agrega `revision` a proposito: el RESTlet no la manda y, si no existe la columna,
-  // PP_saneaTipos_ la rellenaria y el insert fallaria por columna desconocida.
+  // default): no esta, igual que `work_orders.ot` o `items.codigo`. El resto son las
+  // columnas `not null default` del DDL (docs/schema-supabase-ensambles-ot.sql), la forma
+  // REAL de la tabla: MEDIDO 2026-10-29 en produccion. `ubicacion` tiene default 1, no 0,
+  // porque es la planta MM del Llano.
+  // OJO, MEDIDO 2026-10-29: `build_tranid` NO existe en la tabla y el RESTlet si la manda;
+  // el commit cb99d81 la agrego al SQL de `ensambles_` sin aplicarla a la tabla. Si la tabla
+  // llegara a tenerla, el RPC la aceptaria y la guardaria; hoy la saca el paso de abajo
+  // (ver `delete copia.build_tranid` en el bucle de escritura).
   ensambles_ot: {
     ot: '', wo_internal_id: '', articulo: '', descripcion: '', cantidad: 0,
-    ubicacion: 1
+    ubicacion: 1, revision: 0
   }
 };
 
@@ -976,6 +974,18 @@ function PP_ingesta_(forzado) {
       // Mirror atómico de NetSuite: el RPC borra la tabla completa y escribe lo
       // nuevo en una sola transacción, para que no queden filas de corridas
       // anteriores ni ventanas con la tabla vacía.
+      //
+      // MEDIDO 2026-10-29: la tabla ensambles_ot en Supabase NO tiene build_tranid,
+      // pero el RESTlet si la manda. ingesta_mirror valida columnas contra information_schema
+      // y rechaza si hay columnas desconocidas. Eliminarla antes de enviar.
+      if (def.tabla === 'ensambles_ot') {
+        filas = filas.map(function(f){
+          if (!f || typeof f !== 'object') return f;
+          const copia = Object.assign({}, f);
+          delete copia.build_tranid;
+          return copia;
+        });
+      }
       //
       // ANTES de escribir, y por lo que paso el 2026-10-05: una fila con `cantidad` en "" hizo
       // que Postgres tirara 22P02 y que la corrida se declarara NO buena (y, hasta el 2026-10-06,
