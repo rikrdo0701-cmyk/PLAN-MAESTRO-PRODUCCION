@@ -1839,6 +1839,60 @@ test("la sincronizacion persiste el precio de venta en referenceSalePrice, separ
   assert.deepEqual(saves, ["catalogs"]);
 });
 
+test("la sincronizacion persiste precios de venta de OTs CERRADAS en referenceSalePrice (DECISION 2026-10-30)", () => {
+  // MEDIDO 2026-10-30: 29 articulos tenian su precio en `work_orders` SOLO en OTs cerradas, y
+  // `state.workOrders` (solo abiertas) no los veia: el catalogo decia "sin precio de venta".
+  // El lector expone esos precios aparte en `state.workOrderSalePrices` (mapa article ->
+  // max(ultima, promedio) de todas las OTs, ver salePricesByArticle) y aqui se copian al
+  // catalogo con la MISMA regla que las abiertas.
+  const persistSource = appSource.slice(
+    appSource.indexOf("function persistReferencePricesFromSync("),
+    appSource.indexOf("function setNetSuiteSyncPhaseLabel("),
+  );
+  const saves = [];
+  const state = {
+    workOrders: [ // Solo abiertas: la cerrada 4111 NO esta aqui.
+      { ot: "3607", item: "TRA 500", lastSalePrice: 1935, averageSalePrice: 0 },
+    ],
+    workOrderSalePrices: { // Lo que el lector armo desde las cerradas (4111 no llega aqui).
+      "C 590 UAD R 5.5": 453.28,
+      "AM M66-2573": 1350,
+      "TRA 500": 1935,
+    },
+    operations: [],
+    articleConfigurations: {},
+  };
+  const articleKeyForPart = (part) => String(part || "").trim().toUpperCase();
+  const articleConfigurationFor = (part) => {
+    const article = articleKeyForPart(part);
+    if (!state.articleConfigurations[article]) {
+      state.articleConfigurations[article] = { article, jobType: "", planningType: "", manualUnitPrice: 0, referenceSalePrice: 0, updatedAt: "" };
+    }
+    return state.articleConfigurations[article];
+  };
+  const persistReferencePricesFromSync = Function(
+    "state", "articleKeyForPart", "articleConfigurationFor", "articleForOt", "queueAppSheetSave",
+    `${persistSource}; return persistReferencePricesFromSync;`,
+  )(
+    state,
+    articleKeyForPart,
+    articleConfigurationFor,
+    () => "",
+    (scope) => saves.push(scope),
+  );
+
+  assert.equal(persistReferencePricesFromSync(), true);
+  // El precio de la CERADA entra al catalogo igual que el de la abierta.
+  assert.equal(state.articleConfigurations["C 590 UAD R 5.5"].referenceSalePrice, 453.28);
+  assert.equal(state.articleConfigurations["AM M66-2573"].referenceSalePrice, 1350);
+  // Una clave que ya trae el mismo precio (abierta y cerrada del mismo articulo) no duplica el guardado.
+  assert.equal(state.articleConfigurations["TRA 500"].referenceSalePrice, 1935);
+  assert.deepEqual(saves, ["catalogs"]);
+  // Sin cambios no se vuelve a guardar.
+  assert.equal(persistReferencePricesFromSync(), false);
+  assert.deepEqual(saves, ["catalogs"]);
+});
+
 test("syncNetSuiteData persiste precios de referencia tras aplicar el payload de NetSuite", async () => {
   const syncSource = appSource.slice(
     appSource.indexOf("async function syncNetSuiteData("),

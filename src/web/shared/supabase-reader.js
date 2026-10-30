@@ -157,6 +157,25 @@
     return mapWorkOrders(rows).filter(function (wo) { return !wo.cerrada; });
   }
 
+  // PRECIOS DE VENTA POR ARTICULO, de TODAS las OTs (abiertas y cerradas). Devuelve
+  // `{ [articulo en mayusculas]: precio }` con el maximo entre ultima y promedio venta por
+  // articulo. Solo entra un precio >= 1: un 0 o residual (< 1) significa "no hay precio
+  // de venta conocido", no un dato. MEDIDO 2026-10-30: ver `workOrderSalePrices`.
+  function salePricesByArticle(rows) {
+    const precios = {};
+    (rows || []).forEach(function (row) {
+      const articulo = String(row && row.articulo || "").trim().toUpperCase();
+      if (!articulo) return;
+      const ultima = Number(row && row.precio_ultima_venta) || 0;
+      const promedio = Number(row && row.precio_promedio_venta) || 0;
+      const precio = Math.max(ultima, promedio);
+      if (!(precio >= 1)) return;
+      const actual = Number(precios[articulo]) || 0;
+      if (precio > actual) precios[articulo] = precio;
+    });
+    return precios;
+  }
+
   // HUECOS DE MAPEO Supabase -> shape del estado, MEDIDOS 2026-09-29 contra el esquema REAL
   // desplegado (.openchamber/esquema-supabase.json, el OpenAPI que sirve PostgREST), tabla por
   // tabla y columna por columna. No contra el DDL objetivo: si algo solo existe en un DDL sin
@@ -1676,6 +1695,10 @@
     otConfigurations: "ot_configurations",
     articleConfigurations: "article_configurations",
     machinePlanningOverrides: "machine_planning_overrides",
+    // MEDIDO 2026-10-30: el mapa de precios de venta por articulo sale de trabajo_orders, la
+    // misma tabla que alimenta workOrders (pero SIN el filtro solo-abiertas: conserva los
+    // precios de las cerradas, que el catalogo tambien necesita).
+    workOrderSalePrices: "work_orders",
   };
 
   async function readCatalogs(options) {
@@ -1786,6 +1809,16 @@
       // soloWorkOrdersAbiertas): el catalogo de OTs del arranque es el conjunto de las que se
       // pueden_planear, y una OT cerrada en esa lista se planaria.
       workOrders: soloWorkOrdersAbiertas(rows.work_orders),
+      // LOS PRECIOS DE VENTA DE TODAS LAS OTs (ABIERTAS Y CERRADAS), por articulo.
+      //
+      // MEDIDO 2026-10-30: el catalogo de articulos decia "sin precio de venta" para 109
+      // articulos, y 29 de ellos SI tenian precio en `work_orders` pero solo en OTs CERRADAS.
+      // `state.workOrders` es solo-open y `persistReferencePricesFromSync` no los veia, asi que
+      // esos precios morian ahi. La ingesta deja en `precio_ultima_venta`/`precio_promedio_venta`
+      // los precios del 1766 para las cerradas de la ventana (RULE-SUP-050); el espejo las trae
+      // y aqui se conservan en un mapa articulo -> max(lastSalePrice, averageSalePrice) para que
+      // el catálogo los copie igual que los de las abiertas.
+      workOrderSalePrices: siSePudoLeer(rows, "work_orders", salePricesByArticle(rows.work_orders)),
       materials: mapMaterials(rows.materials),
       operationalRaw: {
         operations: rows.operations || null,
@@ -1847,6 +1880,9 @@
     // distintas se contradecirian entre si. Ver PALABRAS_OT_CERRADA mas arriba.
     workOrderCerrada: workOrderCerrada,
     soloWorkOrdersAbiertas: soloWorkOrdersAbiertas,
+    // MEDIDO 2026-10-30: el mapa de precios de venta de TODAS las OTs (abiertas y cerradas) por
+    // articulo. Se publica para poder probarlo sobre filas sueltas sin red.
+    salePricesByArticle: salePricesByArticle,
     // MEDIDO 2026-10-01: esta NO estaba exportada y el reemplazo la pide. mapMaterials existia
     // (esta misma linea 851) y se usaba internamente en readCatalogs (linea ~1039), o sea que
     // estaba escrita, probada por dentro y solo faltaba publicarla. El efecto fue que

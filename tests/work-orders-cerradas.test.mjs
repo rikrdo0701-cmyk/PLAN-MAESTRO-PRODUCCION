@@ -167,6 +167,29 @@ test("D. `soloWorkOrdersAbiertas` deja fuera las cerradas y por el MOTIVO", () =
   assert.equal(abiertas.length, 2);
 });
 
+test("D2. `salePricesByArticle` conserva los precios de las OTs CERRADAS (DECISION 2026-10-30)", () => {
+  // MEDIDO 2026-10-30: 29 articulos tenian su precio de venta SOLO en OTs cerradas, y el
+  // catalogo de articulos decia "sin precio de venta". `soloWorkOrdersAbiertas` los deja
+  // fuera a proposito (son para planar); este mapa los conserva para el catalogo.
+  const conPrecio = [
+    { ...CERRADA_3302, articulo: "C 590 UAD R 5.5", precio_ultima_venta: 453.28, precio_promedio_venta: 400 },
+    { ...CERRADA_3492, articulo: "AM M66-2573", precio_ultima_venta: 1350, precio_promedio_venta: 952.02 },
+    // Sin precio en las dos columnas: no entra al mapa (es "sin precio de venta" de verdad).
+    { ...ABIERTA_EN_CURSO, articulo: "C 590 UADA", precio_ultima_venta: 0, precio_promedio_venta: 0 },
+  ];
+  const precios = reader.salePricesByArticle(conPrecio);
+  assert.deepEqual(plano(precios), {
+    "C 590 UAD R 5.5": 453.28,
+    "AM M66-2573": 1350,
+  });
+  // Un articulo en dos OTs (una abierta y una cerrada) queda con el MAYOR de los precios.
+  const promueve = reader.salePricesByArticle([
+    { ...CERRADA_3302, articulo: "A-100", precio_ultima_venta: 100, precio_promedio_venta: 90 },
+    { ...ABIERTA_LIBERADA, articulo: "A-100", precio_ultima_venta: 150, precio_promedio_venta: 0 },
+  ]);
+  assert.equal(promueve["A-100"], 150);
+});
+
 // =============================================================================
 // 2. LA CONFIRMACION DE CIERRES. Lo que antes no podia pasar: `closed: true`.
 // =============================================================================

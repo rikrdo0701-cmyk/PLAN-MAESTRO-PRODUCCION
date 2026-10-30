@@ -11331,6 +11331,18 @@ function persistReferencePricesFromSync() {
     const otArticle = articleForOt(workOrder?.ot);
     if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) recordSalePrice(otArticle, price);
   }
+  // MEDIDO 2026-10-30: los precios de las OTs CERRADAS. `state.workOrders` solo trae las
+  // abiertas (soloWorkOrdersAbiertas), asi que los precios que la ingesta dejo en las cerradas
+  // (work_orders.precio_* del 1766, dentro de la ventana RULE-SUP-050) nunca llegaban al
+  // catalogo. El lector los expone aparte en `state.workOrderSalePrices` (mapa articulo ->
+  // max(ultima, promedio)) y aqui se copian al catalogo con la MISMA regla que las abiertas
+  // (precio >= 1, solo si cambia, campo propio vs manual).
+  const preciosDeCerradas = state.workOrderSalePrices && typeof state.workOrderSalePrices === "object"
+    ? state.workOrderSalePrices
+    : {};
+  for (const [articulo, precio] of Object.entries(preciosDeCerradas)) {
+    recordSalePrice(articulo, Number(precio) || 0);
+  }
   if (changed) queueAppSheetSave("catalogs");
   return changed;
 }
@@ -12302,6 +12314,15 @@ async function applyImported(imported, options = {}) {
   if (imported.operatorProfiles) state.operatorProfiles = imported.operatorProfiles;
   if (imported.otConfigurations) state.otConfigurations = imported.otConfigurations;
   if (imported.articleConfigurations) state.articleConfigurations = imported.articleConfigurations;
+  // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs (abiertas y cerradas) por articulo.
+  // El lector los expone como `workOrderSalePrices` (supabase-reader.js, salePricesByArticle).
+  // `articleConfigurations` solo trae las filas del catalogo; este mapa trae ademas los precios
+  // de los articulos cuyas OTs ya se cerraron, para que persistReferencePricesFromSync los
+  // copie al catalogo y la columna "Ultimo precio de venta (sync)" no diga "sin precio"
+  // cuando el precio de verdad existe en work_orders.
+  if (imported.workOrderSalePrices && typeof imported.workOrderSalePrices === "object") {
+    state.workOrderSalePrices = imported.workOrderSalePrices;
+  }
   if (imported.preparedPlanningByOt) state.preparedPlanningByOt = imported.preparedPlanningByOt;
   if (imported.cts) state.cts = imported.cts;
   if (imported.plant) state.plant = imported.plant;

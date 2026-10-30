@@ -108,9 +108,16 @@
     const r = getReader();
     const rows = await r.readTable("work_orders", { order: "ot.asc" });
     const workOrders = r.soloWorkOrdersAbiertas(rows);
+    // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs por articulo (abiertas y
+    // cerradas). `soloWorkOrdersAbiertas` deja fuera las cerradas porque se planan, pero sus
+    // precios (del 1766, en la ventana de RULE-SUP-050) tienen que llegar al catalogo. Sin
+    // esto, un articulo cuyas OTs ya se cerraron quedaba "sin precio de venta" en el catalogo
+    // pese a que work_orders si lo tiene.
+    const workOrderSalePrices = r.salePricesByArticle(rows);
     const now = new Date().toISOString();
     return {
       workOrders,
+      workOrderSalePrices,
       syncedAt: now,
       savedAt: now,
       previewComplete: true,
