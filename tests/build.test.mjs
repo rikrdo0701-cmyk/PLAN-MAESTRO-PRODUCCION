@@ -2631,8 +2631,8 @@ test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPrice
     () => 0,
     () => 0,
     () => 0,
-    () => ({ manualUnitPrice: 99 }),
-    () => "ART",
+    (part) => (part === "ART-SIN-MANUAL" ? { manualUnitPrice: 0, referenceSalePrice: 133.75 } : { manualUnitPrice: 99 }),
+    (ot) => (ot === "900" ? "ART-SIN-MANUAL" : "ART"),
   );
 
   assert.equal(invoiceUnitPriceForOt("100"), 784.5);
@@ -2640,6 +2640,9 @@ test("invoiceUnitPriceForOt usa max(ultima venta, promedio) y effectiveUnitPrice
   assert.equal(invoiceUnitPriceForOt("300"), 0);
   assert.equal(effectiveUnitPriceForOt("100"), 784.5);
   assert.equal(effectiveUnitPriceForOt("300"), 99);
+  // MEDIDO 2026-10-30: sin precio vivo ni manual, cae al precio de referencia del catalogo
+  // (el que el sync llena desde las OTs cerradas). Es lo mismo que hace weeklyJobSummary.
+  assert.equal(effectiveUnitPriceForOt("900"), 133.75);
 });
 
 test("commercialPlanningRequirement no pide precio si la operacion ya tiene unitPrice/amount >= 1", async () => {

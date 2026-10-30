@@ -14385,7 +14385,12 @@ function effectiveUnitPriceForOt(ot) {
   const invoicePrice = invoiceUnitPriceForOt(ot);
   if (invoicePrice >= 1) return invoicePrice;
   const manualPrice = Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
-  return manualPrice >= 1 ? manualPrice : 0;
+  if (manualPrice >= 1) return manualPrice;
+  // MEDIDO 2026-10-30: las OTs cerradas no estan en state.workOrders, asi que invoicePrice
+  // da 0 aunque el 1766 tenga su precio, y la exportacion del plan quedaba en 0 aunque el
+  // catalogo ya traia el precio de venta (referenceSalePrice). Se cae ahi como ultima fuente,
+  // lo mismo que hace weeklyJobSummary (RULE-REP-021) y releaseRealUnitPrice.
+  return Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).referenceSalePrice || 0));
 }
 
 function amountForOt(ot) {
