@@ -408,7 +408,7 @@ const TABLAS_DE_LA_INGESTA = ["work_orders", "operations", "materials", "items",
  *                   vaciado se puede hacer.
  * - vaciarFalla   : tablas cuyo espejo revienta al vaciar.
  */
-function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla = [], saneaFalla = [] }) {
+function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla = [], saneaFalla = [], precio1766 = null }) {
   const base = {};
   for (const t of TABLAS_DE_LA_INGESTA) base[t] = previas[t] || 0;
   const escrituras = [];
@@ -446,6 +446,37 @@ function correrIngesta({ acciones, previas = {}, escribirFalla = [], vaciarFalla
   contexto.PP_restletUnificado_ = () => ({ ok: true, acciones });
   contexto.PP_enrichPhotoRows_ = (filas) => ({ filas, conFoto: 0, sinFoto: filas.length });
   contexto.PP_photoMotivoCero_ = () => "";
+  // Los precios del 1766 (RULE-REP-021): la ingesta los usa para llenar
+  // `precio_ultima_venta`/`precio_promedio_venta` de work_orders. Estas tres funciones viven en
+  // 08-netsuite.js en el mismo bundle de Apps Script; aqui se sustituyen como las otras
+  // fronteras (no se reimplementa el 1766, se finge lo que devolveria). `precios1766` nulo/molde
+  // = fallo del 1766: la ingesta sigue sin precio y lo anota en el log, como en produccion.
+  contexto.PP_invoiceAverageWindow_ = () => ({ from: "2026-04-01", to: "2026-10-01" });
+  contexto.PP_fetchSalesPricesRestletCached_ = () =>
+    precio1766 === null
+      ? { ok: false, prices: { warning: "cooldown" } }
+      : { ok: true, prices: precio1766 };
+  contexto.PP_applySalesPrices_ = (filas, prices) => {
+    // Replica EXACTA de 08-netsuite.js:793 (match por item.item/item.itemId, normalizado) para
+    // que el test valide el alias `fila.item = fila.articulo` que hace PP_preciosDeVenta_.
+    const key = (v) => String(v || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_");
+    return (filas || []).map(function (fila) {
+      const keys = [];
+      if (fila.itemId) keys.push(key(fila.itemId));
+      if (fila.item) keys.push(key(fila.item));
+      let last = 0;
+      let avg = 0;
+      keys.forEach(function (k) {
+        if (!last) last = Number((prices.lastByItem || {})[k] || 0);
+        if (!avg) avg = Number((prices.avgByItem || {})[k] || 0);
+      });
+      fila.lastSalePrice = last;
+      fila.averageSalePrice = avg;
+      fila.averageSalePriceFrom = prices.from || "";
+      fila.averageSalePriceTo = prices.to || "";
+      return fila;
+    });
+  };
   if (saneaFalla.length) {
     const sano = contexto.PP_saneaTipos_;
     contexto.PP_saneaTipos_ = (tabla, filas) => {
@@ -654,6 +685,57 @@ test("una corrida completa reescribe las OCHO tablas y no deja ninguna con lo an
   // El espejo BORRA antes de escribir: en las ocho escrituras el borrado es el conteo previo.
   assert.equal(escrituras.length, 8, "y se escribieron las ocho, una llamada cada una");
   for (const e of escrituras) assert.equal(e.borradas, 9, e.tabla + ": el espejo borro lo que habia");
+});
+
+test("los precios de venta del 1766 se escriben en work_orders y el plan los va a tomar", () => {
+  // RULE-REP-021 (MEDIDO 2026-10-29): el 2246 no emite precios, asi que work_orders quedaba en 0
+  // y el plan cotizaba con el manual. Este paso lee el 1766 cacheado y deja
+  // precio_ultima_venta/precio_promedio_venta en las filas antes del mirror.
+  const acciones = accionesCompletas();
+  acciones.workorders.rows = [
+    { ot: "2121", articulo: "C 490 UADE PN" },
+    { ot: "2122", articulo: "OTRO ARTICULO" },
+  ];
+  const precio1766 = {
+    from: "2026-04-01",
+    to: "2026-10-01",
+    lastByItem: { "C_490_UADE_PN": 725.19 },
+    avgByItem: { "C_490_UADE_PN": 710.5 },
+  };
+  const { r, escrituras } = correrIngesta({ acciones, precio1766 });
+  const filas = escrituras.find((e) => e.tabla === "work_orders").filas;
+  assert.equal(r.ok, true);
+  assert.equal(filas[0].precio_ultima_venta, 725.19, "la ultima venta llega en pesos, sin tipo de cambio");
+  assert.equal(filas[0].precio_promedio_venta, 710.5, "el promedio ponderado de 6m tambien en pesos");
+  assert.equal(filas[1].precio_ultima_venta, 0, "el que no se ha vendido queda en 0");
+  assert.equal(filas[1].precio_promedio_venta, 0);
+  // El renombrado de PP_applySalesPrices_ no deja basura en las filas del espejo.
+  for (const f of filas) {
+    assert.equal("lastSalePrice" in f, false, "la clave interna no viaja al mirror");
+    assert.equal("averageSalePriceFrom" in f, false, "ni las fechas del precio");
+  }
+  assert.ok(r.log.some((l) => /precios: 1 de 2 OTs/.test(l)),
+    "el log dice cuantas OTs quedaron con precio: " + JSON.stringify(r.log));
+});
+
+test("si el 1766 falla, work_orders va sin precio y la corrida NO se cae", () => {
+  // MEDIDO: el 1766 puede estar en cooldown o caido. Un fallo de precio no puede tumbar la
+  // ingesta de OTs: deja 0 (el estado previo) y lo anota en el log, como hacen las fotos.
+  const acciones = accionesCompletas();
+  const { r, escrituras, base } = correrIngesta({ acciones, previas: { work_orders: 213 }, precio1766: null });
+  assert.equal(r.ok, true, "la corrida es valida sin precios");
+  const escritura = escrituras.find((e) => e.tabla === "work_orders");
+  assert.equal(escritura.enviadas, 2, "las OTs se escribieron igual");
+  assert.equal(base.work_orders, 2);
+  for (const f of escritura.filas) {
+    // Cuando el 1766 falla, las filas van COMO VINIERON: sin clave de precio. En Supabase esa
+    // columna es `numeric not null default 0`, asi que la base la deja en 0 (el plan cae al
+    // manual), pero la ingesta no inventa un numero que el 1766 no entrego.
+    assert.equal("precio_ultima_venta" in f, false, "sin precio de NetSuite no se toca la fila");
+    assert.equal("precio_promedio_venta" in f, false);
+  }
+  assert.ok(r.log.some((l) => /precios: no se aplicaron/.test(l)),
+    "y el log dice POR QUE el precio falta: " + JSON.stringify(r.log));
 });
 
 test("una tabla que NetSuite NO devuelve se VACIA: no conserva lo anterior", () => {

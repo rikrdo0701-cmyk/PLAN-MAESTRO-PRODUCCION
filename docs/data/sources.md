@@ -146,6 +146,15 @@ PRECIO_ULTIMA_VENTA`.
 - Restricción: el payload ligero de `fetchNetSuiteWorkOrdersLite` no incluye tiempos de operación
   (solo cabecera de la OT); los tiempos reales de una OT se obtienen por consulta directa
   (`getPlanningWorkOrderData`) y se fusionan en `state.operations`/`OPERACIONES`.
+- Precio de venta (MEDIDO 2026-10-29): el RESTlet **2246 NO emite** `PRECIO_PROMEDIO_VENTA`/
+  `PRECIO_ULTIMA_VENTA` (`workorders_()` no las trae), así que el mirror las escribía en 0 y el
+  plan caía al precio manual aunque el artículo se hubiera vendido. La ingesta
+  (`19-appscript-ingesta-supabase.js`, `PP_preciosDeVenta_` → `PP_applySalesPrices_`) las rellena
+  ahora leyendo el **RESTlet 1766 REQ_FIFO** cacheado (6 h): última venta sin ventana y promedio
+  ponderado de 6 meses (`PP_invoiceAverageWindow_`), ambos en `PRECIO BASE MNX` **sin** TIPO CAMBIO
+  (RULE-REP-020: multiplicarlo daría ~17× el precio real). El match por artículo es por NOMBRE
+  (`fila.item = fila.articulo`, misma regla que usaba WO_LISTA). Si el 1766 falla, las filas van
+  SIN precio (0) y el plan sigue con el manual; el log lo dice.
 
 ## CONFIGURACION_OT
 

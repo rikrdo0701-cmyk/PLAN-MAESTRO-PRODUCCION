@@ -300,6 +300,95 @@ function deduplicar_(filas, claveFn) {
 }
 
 // =============================================================================
+// PRECIOS DE VENTA DEL 1766 (RULE-REP-021): EL DATO QUE EL PLAN NECESITA
+// =============================================================================
+
+/**
+ * MEDIDO 2026-10-29 en produccion, y de la manera que decide este paso: la pagina que valora
+ * el plan usa `effectiveUnitPriceForOt` (app.js:14230): primero el precio de venta VIVO de la
+ * OT (`precio_ultima_venta` y `precio_promedio_venta` que lee de `work_orders`) y solo si esos
+ * son 0 cae al precio manual de `article_configurations`. En Supabase las 472 `work_orders`
+ * tenian AMBOS precios en 0, porque el RESTlet 2246 que alimenta el espejo NO emite precios:
+ * ni `workorders_()` ni `ordenesVenta_()` los cargan. El resultado es que el plan cotizaba
+ * con el precio MANUAL aunque el articulo se hubiera vendido y NetSuite tuviera el precio.
+ *
+ * El precio de venta vive en el RESTlet 1766 REQ_FIFO (`PP_fetchSalesPricesRestlet_` de
+ * 08-netsuite.js, que ya pagina y lo cachea): filas de linea de orden de venta con
+ * `PRECIO BASE MNX` (que YA esta en pesos, ver RULE-REP-020: multiplicarlo por TIPO CAMBIO
+ * daria ~17x el precio real), tomado como la ULTIMA venta (la de `datecreated` mas reciente)
+ * y como el PROMEDIO ponderado de los ultimos 6 meses (`PP_invoiceAverageWindow_`).
+ *
+ * POR QUE SE ENRIQUECE AQUI Y NO EN EL 2246. La pagina hace tiempo que no habla con NetSuite
+ * (RULE-SUP-030): lee de Supabase. El unico que puede pedirle a NetSuite la lista de precios es
+ * este codigo, que corre en Apps Script con el OAuth de NS_* (PP_config_). El 1766 cuesta
+ * decenas de paginas, asi que hay que pedirlo cacheado: `PP_fetchSalesPricesRestletCached_`
+ * es exactamente eso (6 h de TTL + cooldown ante fallos, medido en
+ * tests/netsuite-operation-catalog.test.mjs).
+ *
+ * OJO CON LA CLAVE DEL MATCH (MEDIDO AHORA): `PP_applySalesPrices_` (08-netsuite.js:793)
+ * busca `item.itemId` y `item.item`, pero las filas del 2246 traen la clave `articulo` (el
+ * nombre del item, BUILTIN.DF(tl.item)) y NINGUN id. Por eso se fija `fila.item = fila.articulo`
+ * ANTES de llamarla: si no, matchearia una clave vacia y los precios quedarian en 0 sin error,
+ * que es justo el sintoma silencioso que se esta arreglando. El match por nombre es el MISMO que
+ * ya usaba el flujo anterior (WO_LISTA no trae Item Internal ID, docs/data/sources.md:523).
+ *
+ * QUE HACE SI FALLA, Y POR QUE NO TUMBA LA INGESTA. Un fallo del 1766 (red, cooldown, cache
+ * vacia) deja los precios en 0, que es el estado que YA tenia la corrida: no empeora nada, y
+ * un articulo sin precio de venta conocido sigue cayendo al precio manual como hoy. El aviso
+ * va al log para que el cero se pueda leer, no silenciarlo.
+ *
+ * ESTE PASO NO COMPONE EL PROMEDIO A MANO: reusa `PP_applySalesPrices_`, la funcion medida
+ * que ya usaba el flujo anterior (08-netsuite.js) y que tests/netsuite-operation-catalog
+ * comprueba contra filas REQ_FIFO reales. Aqui se le pasan las filas que la ingesta esta por
+ * escribir en `work_orders`; ella rellena `lastSalePrice`/`averageSalePrice` y este codigo
+ * las renombra a las columnas de Supabase (`precio_ultima_venta`/`precio_promedio_venta`).
+ */
+function PP_preciosDeVenta_(filas, config) {
+  const nsConfig = {
+    accountId: config.accountId,
+    consumerKey: config.consumerKey,
+    consumerSecret: config.consumerSecret,
+    token: config.token,
+    tokenSecret: config.tokenSecret,
+    locationId: Number(config.ubicacion) || 1
+  };
+  const window = PP_invoiceAverageWindow_(new Date());
+  const cached = PP_fetchSalesPricesRestletCached_(nsConfig, window);
+  if (!cached || !cached.ok) {
+    throw new Error('no se pudieron leer los precios del 1766 (' +
+      String(cached && cached.prices && cached.prices.warning || 'sin cache').slice(0, 120) + ')');
+  }
+  // PP_applySalesPrices_ matchea por `item.item`/`item.itemId`; las filas del 2246 solo traen
+  // `articulo`. Se aliasea y se REVIERTE al final: `item` no es columna de work_orders y no
+  // puede viajar al mirror (el RPC rechaza columnas desconocidas).
+  filas.forEach(function(fila) { if (fila && typeof fila === 'object') fila.item = fila.articulo; });
+  const conPrecio = PP_aplicaPreciosDeVenta_(filas, cached.prices);
+  filas.forEach(function(fila) { if (fila && typeof fila === 'object') delete fila.item; });
+  return { conPrecio: conPrecio, from: cached.prices.from, to: cached.prices.to };
+}
+
+/**
+ * `PP_applySalesPrices_` escribe `lastSalePrice`/`averageSalePrice`/`averageSalePriceFrom`/To
+ * sobre las filas; `work_orders` en Supabase llama a esas columnas
+ * `precio_ultima_venta`/`precio_promedio_venta` (reader: supabase-reader.js:1567-1568). Se
+ * renombran aqui y se cuentan cuantas OTs quedaron con algun precio, para el log.
+ */
+function PP_aplicaPreciosDeVenta_(filas, precios) {
+  PP_applySalesPrices_(filas, precios);
+  let conPrecio = 0;
+  filas.forEach(function(fila) {
+    fila.precio_ultima_venta = Number(fila.lastSalePrice) > 0 ? Math.round(Number(fila.lastSalePrice) * 100) / 100 : 0;
+    fila.precio_promedio_venta = Number(fila.averageSalePrice) > 0 ? Math.round(Number(fila.averageSalePrice) * 100) / 100 : 0;
+    delete fila.lastSalePrice;
+    delete fila.averageSalePrice;
+    delete fila.averageSalePriceFrom;
+    delete fila.averageSalePriceTo;
+    if (fila.precio_ultima_venta > 0 || fila.precio_promedio_venta > 0) conPrecio++;
+  });
+  return conPrecio;
+}
+
+// =============================================================================
 // QUE NUNCA LE LLEGA A POSTGRES UN VALOR QUE NO PUEDA TOMAR
 // =============================================================================
 
@@ -961,6 +1050,26 @@ function PP_ingesta_(forzado) {
         } catch (error) {
           log.push('fotos: no se pudieron pegar (' + String(error && error.message || error).slice(0, 120) + ')');
           console.log('fotos: ERROR ' + String(error && error.message || error));
+        }
+      }
+      // PRECIOS DE VENTA DEL 1766 (RULE-REP-021), y por que van AQUI y no en fotos.
+      //
+      // El RESTlet 2246 no emite `precio_ultima_venta`/`precio_promedio_venta` en workorders_
+      // (ni lineas en ordenesVenta_), asi que el mirror las escribe en 0 y el plan cae al
+      // precio manual. Este paso las rellena leyendo el 1766 REQ_FIFO cacheado (6 h) y las
+      // deja en las filas ANTES del mirror, igual de oportunista que las fotos: si falla, las
+      // filas van como vinieron (0, el estado previo) y la corrida no se cae.
+      if (nombre === 'workorders') {
+        try {
+          const precios = PP_preciosDeVenta_(filas, config);
+          log.push('precios: ' + precios.conPrecio + ' de ' + filas.length +
+            ' OTs con precio de venta del 1766 (ventana ' + precios.from + ' a ' + precios.to + ')');
+          console.log('precios: ' + precios.conPrecio + '/' + filas.length
+            + ' (de ' + precios.from + ' a ' + precios.to + ')');
+        } catch (error) {
+          log.push('precios: no se aplicaron (' + String(error && error.message || error).slice(0, 160)
+            + '): work_orders va SIN precio de venta, el plan seguira con el manual');
+          console.log('precios: ERROR ' + String(error && error.message || error));
         }
       }
       if (filas.length) {
