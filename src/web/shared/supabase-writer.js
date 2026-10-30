@@ -804,9 +804,17 @@
             tipo_ot: texto(item.jobType).toUpperCase(),
             tipo_trabajo: texto(item.planningType).toUpperCase(),
             precio_manual: numero(item.manualUnitPrice, 0),
-            // precio_ref_venta NO se escribe: lo baja el sync con el precio de venta de
-            // NetSuite (RULE-REP-021) y es distinto del PRECIO_MANUAL que escribe una
-            // persona. Mandarlo seria pisar el dato del ERP con el de la pagina.
+            // precio_ref_venta se escribe DESDE referenciaSalePrice, que es el precio de
+            // venta de NetSuite que persistReferencePricesFromSync (app.js:11171) llena
+            // desde work_orders.precio_* (que a su vez baja la ingesta del RESTlet 1766).
+            // MEDIDO 2026-10-30: el comentario anterior decia "NO se escribe: lo baja el
+            // sync", y era cierto cuando ese sync corria en el puente de Apps Script
+            // (hoja -> 16-supabase-catalogo.js:237). En el flujo actual la pagina escribe
+            // directo a Supabase y nada mas llena la columna, asi que quedaba en 0 y el
+            // catalogo decia "sin precio de venta" aunque el 1766 si lo bajaba.
+            // referenciaSalePrice != manualUnitPrice a proposito (RULE-REP-021): el sync
+            // no toca el precio que escribe una persona.
+            precio_ref_venta: numero(item.referenceSalePrice, 0),
             actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
           });
         });
