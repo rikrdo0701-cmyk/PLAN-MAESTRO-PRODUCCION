@@ -385,10 +385,12 @@ test("weeklyJobSummary rescata la OT 4111 cerrada CON su articulo y su cantidad 
   const finish = summary.finishes.find((row) => row.ot === "4111");
   assert.ok(finish, "la 4111 aparece en su lugar (no se oculta)");
   assert.equal(finish.part, "CM 400 E", "con el articulo real de la OT");
-  // 10 de cantidad y 10 ensambladas: no falta nada por terminar, igual que en las demas OTs
-  // cerradas que conserva RULE-REP-027.
-  assert.equal(finish.pendingPieces, 0);
+  // DECISION DEL USUARIO 2026-10-30: una OT cerrada se muestra con la CANTIDAD DE LA OT
+  // (10), no con las piezas pendientes (0), y el monto sale de esa cantidad.
+  assert.equal(finish.pendingPieces, 10, "la cantidad es la de la OT");
+  assert.equal(finish.piecesOfOt, true, "queda marcado que son piezas de la OT, no pendientes");
   assert.equal(finish.unitPrice, 133.75);
+  assert.equal(finish.amount, 1337.5, "10 x $133.75");
 });
 
 test("weeklyJobSummary completa la cantidad desde la ficha cuando el resumen no la trae", () => {
@@ -415,8 +417,10 @@ test("weeklyJobSummary completa la cantidad desde la ficha cuando el resumen no 
   const finish = summary.finishes.find((row) => row.ot === "4702");
   assert.ok(finish, "se rescata");
   assert.equal(finish.part, "PARTE-B");
-  assert.equal(finish.pendingPieces, 7, "12 - 5 ensambladas, la misma cuenta de compactClosedWorkOrder");
-  assert.equal(finish.amount, 70);
+  // DECISION DEL USUARIO 2026-10-30: la cantidad que muestra el reporte para una OT cerrada es
+  // la de la OT (12), aunque falten 5 por ensamblar; el monto sale de esa misma cantidad.
+  assert.equal(finish.pendingPieces, 12, "la cantidad de la OT");
+  assert.equal(finish.amount, 120);
 });
 
 test("weeklyJobSummary SI rescata una OT cerrada sin articulo pero con piezas pendientes", () => {

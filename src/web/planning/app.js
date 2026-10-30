@@ -8367,6 +8367,11 @@ function closedWorkOrderOperation(summary) {
     cantPendiente: pieces,
     pendingPieces: pieces,
     cantTotal: quantityValue,
+    // DECISION DEL USUARIO 2026-10-30: una OT cerrada se muestra con la CANTIDAD DE LA OT (10
+    // pzs en la 4111), no con las pendientes, que en una OT cerrada completa son 0. `cantidadOt`
+    // es la cantidad de la ficha (cantidad total de la OT); `pendingPieces` se queda como esta
+    // porque es la cuenta real de lo que falta por ensamblar y otras vistas la usan.
+    cantidadOt: quantityValue,
     tipoInsercion: "",
     jobType: "",
     planningType: "",
@@ -9079,6 +9084,20 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       unitPrice,
       amount,
     };
+    // DECISION DEL USUARIO 2026-10-30 (OT 4111): en el "Plan de la semana" una OT CERRADA se
+    // muestra con la CANTIDAD DE LA OT, no con las piezas pendientes. Una OT cerrada completa
+    // tiene pendientes 0, y el reporte la mostraba en 0 pzs y $0.00 como si no hubiera
+    // liberado nada. El monto se recalcula con esa cantidad y el MISMO precio (el mayor de las
+    // fuentes de RULE-REP-021): 10 pzs x $133.75 = $1,337.50. Las OTs abiertas no cambian.
+    const closedQuantity = Number(first.cantidadOt);
+    if (first._closedSummary === true && Number.isFinite(closedQuantity) && closedQuantity > 0) {
+      row.piecesOfOt = true;
+      row.pendingPieces = closedQuantity;
+      if (unitPrice != null) {
+        const closedAmount = unitPrice * closedQuantity;
+        row.amount = amounts.length ? Math.max(...amounts, closedAmount) : closedAmount;
+      }
+    }
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
   }
