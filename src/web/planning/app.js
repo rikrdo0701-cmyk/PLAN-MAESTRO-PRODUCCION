@@ -9509,12 +9509,18 @@ function releaseRealRows(events) {
       eventCount: 1,
     };
   });
+  // MEDIDO 2026-10-30, DECISION DEL USUARIO: se omiten los eventos con piezas en 0.
+  // En la tabla `ensambles_ot` hay filas con `cantidad = 0` (una OT que se "ensamblo"
+  // pero la linea quedo en cero), y el reporte las mostraba con monto $0.00: ruido que
+  // no representa una liberacion. El filtro va ANTES de la numeracion cronologica,
+  // para que los "1.º/2.º de N" se recalcule sobre los eventos que de verdad entran.
+  const visibles = rows.filter((row) => row.quantity > 0);
   // LA NUMERACION ES CRONOLOGICA, no la del orden en que llegan. Si la OT 4057 se ensamblo
   // el 23 y el 24, el 23 es "1.º de 2" y el 24 es "2.º de 2": numerar al reves (por el orden
   // de la lectura, que viene de lo mas nuevo a lo mas viejo) haria que el reporte llamara
   // "primero" al ultimo ensamble, que es justo lo contrario de lo que paso en el piso.
   const porOt = new Map();
-  for (const row of rows) {
+  for (const row of visibles) {
     const key = materialOtKey(row.ot);
     if (!porOt.has(key)) porOt.set(key, []);
     porOt.get(key).push(row);
@@ -9531,7 +9537,7 @@ function releaseRealRows(events) {
       row.eventCount = grupo.length;
     });
   }
-  return rows.sort((a, b) => {
+  return visibles.sort((a, b) => {
     const at = a.date ? a.date.getTime() : Number.NEGATIVE_INFINITY;
     const bt = b.date ? b.date.getTime() : Number.NEGATIVE_INFINITY;
     if (at !== bt) return bt - at;
