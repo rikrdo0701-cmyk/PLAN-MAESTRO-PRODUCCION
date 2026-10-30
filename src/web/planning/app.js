@@ -8387,6 +8387,27 @@ function closedWorkOrderOperation(summary) {
 // retira del borrador al cerrarse (RULE-OT-049) y puede ya no estar ahi.
 const closedWorkOrderFichaCache = new Map();
 
+// FICHA EFECTIVA DE UNA OT CERRADA, para los reportes que pintan fila por operacion. La OT ya
+// no esta en `state.workOrders` (se retiro al cerrarse, RULE-OT-049), asi que `workOrderForOt`
+// devuelve null y el "Plan por operador" mostraba la fila con Parte y Piezas vacios (MEDIDO
+// 2026-10-30, OT 4111). Se resuelve del resumen compacto y, si este vino sin articulo, de la
+// ficha del espejo (`closedSummaryFichaForOt`, que tambien pide el dato vivo una vez). El
+// shape es el minimo que necesita `renderProductionReportRow`: item y la cantidad para PZAS.
+function closedWorkOrderFichaForOt(ot) {
+  const summary = closedWorkOrderSummaryForOt(ot);
+  if (!summary) return null;
+  const ficha = closedSummaryFichaForOt(summary, ot);
+  const pending = Number(summary.pendingQuantity);
+  const quantity = Number(ficha.quantity) || Number(summary.quantity) || 0;
+  return {
+    item: String(ficha.item || summary.item || "").trim(),
+    quantity: quantity,
+    // Piezas para el reporte: las pendientes si el resumen las conoce; si no, la cantidad de
+    // la OT, que es la unica pieza real que queda asociada a una OT cerrada.
+    pendingQuantity: Number.isFinite(pending) && pending > 0 ? pending : quantity,
+  };
+}
+
 function closedSummaryFichaForOt(summary, ot) {
   const key = materialOtKey(ot);
   if (!key) return {};
@@ -9272,7 +9293,10 @@ function adjusterReportSelection() {
 function renderAdjusterReportRow(op, index, options = {}) {
   const start = opStart(op);
   const end = opEnd(op);
-  const workOrder = workOrderForOt(op.ot);
+  // Misma caida que el Plan por operador (MEDIDO 2026-10-30, OT 4111): una OT cerrada ya no
+  // esta en state.workOrders y el articulo salia en blanco. Se resuelve del resumen de la
+  // OT cerrada cuando no hay ficha viva.
+  const workOrder = workOrderForOt(op.ot) || closedWorkOrderFichaForOt(op.ot);
   const change = toolChangeReportData(op);
   const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
   const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
@@ -10321,7 +10345,11 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
 function renderProductionReportRow(op, index, options = {}) {
   const start = opStart(op);
   const end = opEnd(op);
-  const workOrder = workOrderForOt(op.ot);
+  // MEDIDO 2026-10-30 (OT 4111, "Plan por operador"): la OT cerrada ya no esta en
+  // `state.workOrders`, asi que `workOrderForOt` daba null y la fila salia con Parte y Piezas
+  // vacios. Se cae a la ficha efectiva de la OT cerrada (resumen compacto + espejo), que si
+  // conserva el articulo y la cantidad.
+  const workOrder = workOrderForOt(op.ot) || closedWorkOrderFichaForOt(op.ot);
   const machineArea = cleanResourceValue(op.maquina);
   const effectiveReportTool = isToolChangeReportOperation(op)
     ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
