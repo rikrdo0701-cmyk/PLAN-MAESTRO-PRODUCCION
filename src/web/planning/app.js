@@ -8319,17 +8319,26 @@ function closedWorkOrderOperation(summary) {
   const end = closedSummarySchedule(summary.scheduledEnd);
   if (!start && !end) return null;
   const pending = Number(summary.pendingQuantity);
-  const pieces = Number.isFinite(pending) && pending > 0 ? pending : Number(summary.quantity) || 0;
-  // MEDIDO 2026-10-30, DECISION DEL USUARIO: una OT cerrada SIN articulo y SIN piezas
-  // pendientes NO se rescata al reporte semanal. RULE-REP-027 rescata las OTs cerradas
-  // para que conserven sus piezas y su costo; la 4111 (y otras) llegaban con `item` y
-  // cantidad en 0 y se mostraban como una fila fantasma: PARTE vacio, 0 pzs, $0.00,
-  // que era ruido sin dato que representar. Si tiene articulo O piezas pendientes,
-  // sigue rescatandose igual que antes.
-  if (!String(summary.item || "").trim() && pieces <= 0) return null;
+  // MEDIDO 2026-10-30 (OT 4111, DECISION DEL USUARIO): una OT cerrada SE RESCATA SIEMPRE, con
+  // su articulo y su cantidad reales. Antes la 4111 salia como fila fantasma (PARTE vacio,
+  // 0 pzs, $0.00) porque su resumen compacto llego con `item` y cantidades en 0; ocultarla no
+  // era la respuesta: la OT se ensamblo en la semana y el dato existe en `work_orders`.
+  // Por eso, si el resumen viene incompleto, se completan articulo y piezas con el espejo
+  // (`work_orders`, que si trae las cerradas: ver confirmWorkOrderClosures) y, si tampoco
+  // esta ahi, con lo ultimo que se recuerda en `state.workOrders`.
+  const ficha = closedSummaryFichaForOt(summary, ot);
+  // PZAS del reporte semanal = piezas NO ensambladas (es lo que falta por terminar en la
+  // semana). Si el resumen no las trae, se calculan de la ficha con la MISMA formula de
+  // `compactClosedWorkOrder`: cantidad - ensamblada.
+  const pendingValue = Number(summary.pendingQuantity);
+  const quantityValue = Number(summary.quantity) || Number(ficha.quantity) || 0;
+  const builtValue = Number(summary.builtQuantity) || Number(ficha.builtQuantity) || 0;
+  const pieces = Number.isFinite(pendingValue) && pendingValue > 0
+    ? pendingValue
+    : (quantityValue > 0 ? Math.max(0, quantityValue - builtValue) : Number(summary.quantity) || 0);
   return {
     ot,
-    parte: String(summary.item || "").trim(),
+    parte: String(summary.item || "").trim() || String(ficha.item || "").trim(),
     descripcion: "",
     ct: "",
     secuencia: 0,
@@ -8339,7 +8348,7 @@ function closedWorkOrderOperation(summary) {
     horaFin: end ? end.hora : (start ? start.hora : ""),
     cantPendiente: pieces,
     pendingPieces: pieces,
-    cantTotal: Number(summary.quantity) || 0,
+    cantTotal: quantityValue,
     tipoInsercion: "",
     jobType: "",
     planningType: "",
@@ -8347,6 +8356,54 @@ function closedWorkOrderOperation(summary) {
     amount: null,
     _closedSummary: true,
   };
+}
+
+// La ficha (`work_orders`) de una OT cerrada, para completar un resumen compacto que vino
+// incompleto. El espejo de Supabase SI trae las OTs cerradas y es la fuente que confirma el
+// cierre (confirmWorkOrderClosures); `state.workOrders` es el ultimo recurso, porque la OT se
+// retira del borrador al cerrarse (RULE-OT-049) y puede ya no estar ahi.
+const closedWorkOrderFichaCache = new Map();
+
+function closedSummaryFichaForOt(summary, ot) {
+  const key = materialOtKey(ot);
+  if (!key) return {};
+  const cached = closedWorkOrderFichaCache.get(key);
+  if (cached) return cached;
+  const live = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  const local = {
+    item: String(live?.item || "").trim() || String(summary?.item || "").trim(),
+    quantity: Number(live?.quantity) || Number(summary?.quantity) || 0,
+    builtQuantity: Number(live?.builtQuantity) || Number(summary?.builtQuantity) || 0,
+  };
+  if (live?.item) {
+    closedWorkOrderFichaCache.set(key, local);
+    return local;
+  }
+  // Se pide UNA vez por OT y sesion; al llegar se re-renderiza solo (sin tocar el estado).
+  if (!closedWorkOrderFichaCache.has(key)) {
+    closedWorkOrderFichaCache.set(key, local);
+    refreshClosedWorkOrderFicha(key);
+  }
+  return local;
+}
+
+function refreshClosedWorkOrderFicha(key) {
+  const bridge = window.PPSupabaseBridgeReplacement;
+  if (!bridge || typeof bridge.getInspectionWorkOrder !== "function") return;
+  Promise.resolve(bridge.getInspectionWorkOrder(key))
+    .then((answer) => {
+      const data = answer && answer.ok ? (answer.data && answer.data.workOrder) || null : null;
+      const item = String(data?.item || data?.article || "").trim();
+      if (!item) return;
+      const previous = closedWorkOrderFichaCache.get(key) || {};
+      closedWorkOrderFichaCache.set(key, {
+        item: item,
+        quantity: Number(data.quantity) || Number(previous.quantity) || 0,
+        builtQuantity: Number(data.builtQuantity) || Number(previous.builtQuantity) || 0,
+      });
+      if (typeof renderReports === "function") renderReports();
+    })
+    .catch(() => {});
 }
 
 const inspectionWorkOrderCache = new Map();
@@ -9334,17 +9391,24 @@ function releaseReportRows() {
     // resumen compacto de la OT cerrada, ambos en la fuente del reporte.
     const workOrder = workOrderForSource(sourceState, ot);
     const closed = closedSummaryForSource(sourceState, ot);
+    // MEDIDO 2026-10-30 (OT 4111): el resumen compacto puede venir incompleto (item vacio).
+    // Mismo rescate que en el Plan de la semana: primero la ficha viva, despues el espejo.
+    const fichaCierre = closed ? closedSummaryFichaForOt(closed, ot) : {};
     const part = sequenced.find((operation) => String(operation.parte || "").trim())?.parte
-      || workOrder?.item || closed?.item || "";
+      || workOrder?.item || closed?.item || String(fichaCierre.item || "") || "";
     const inspectionTotal = inspectionQuantityForOt(ot);
     const workOrderTotal = Number(workOrder?.quantity);
     const totalValue = inspectionTotal ?? (Number.isFinite(workOrderTotal) && workOrderTotal > 0 ? workOrderTotal : null);
     // `pendingPiecesForWorkOrder` devuelve 0 cuando no hay ficha (OT cerrada retirada del
     // borrador). Ese 0 no debe tapar el resumen compacto que sí se conserva, así que la
-    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha.
+    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha. Si el resumen vino
+    // incompleto, sale de la ficha de cierre: pendientes si los hay, si no la cantidad total.
     const closedPending = closed
       ? (Number(closed.pendingQuantity) > 0 ? Number(closed.pendingQuantity)
-          : (Number(closed.quantity) > 0 ? Number(closed.quantity) : null))
+          : (Number(closed.quantity) > 0 ? Number(closed.quantity)
+            : (Number(fichaCierre.quantity) > 0
+              ? Math.max(0, Number(fichaCierre.quantity) - (Number(fichaCierre.builtQuantity) || 0))
+              : null)))
       : null;
     const livePending = Number(pendingPiecesForWorkOrder(workOrder));
     const quantityValue = totalValue

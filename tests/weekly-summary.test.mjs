@@ -26,14 +26,21 @@ function createWeeklyJobSummary({
   // recorte de `weeklyJobSummary`. Se inyectan reales, no un stub, para ejercitar el camino
   // completo.
   const closedOperationSource = sourceBetween("function closedSummarySchedule(", "function closedWorkOrderOperation(")
-    + sourceBetween("function closedWorkOrderOperation(", "const inspectionWorkOrderCache");
-  const realClosedWorkOrderOperation = Function(`${closedOperationSource}; return closedWorkOrderOperation;`)();
+    + sourceBetween("function closedWorkOrderOperation(", "// La ficha (`work_orders`) de una OT cerrada");
+  // `closedSummaryFichaForOt` (el rescate de articulo/cantidad desde la ficha cuando el
+  // resumen compacto viene incompleto) se dobla sobre el `workOrdersByOt` del arnes: es la
+  // misma ficha que `workOrderForOt` entrega aqui.
+  const realClosedWorkOrderOperation = Function("materialOtKey", "closedSummaryFichaForOt", `${closedOperationSource}; return closedWorkOrderOperation;`)(
+    (value) => String(value || "").trim().toUpperCase(),
+    (summary, ot) => workOrdersByOt.get(String(ot || "").trim().toUpperCase()) || {},
+    undefined,
+  );
   return Function(
     "state", "selectedWeekRange", "reportOperationsSource", "isToolChangeReportOperation",
     "sequenceSort", "isFinalReleaseOperation", "opStart", "opEnd", "workOrderForOt",
     "articleConfigurationValue", "pendingPiecesForWorkOrder", "invoiceUnitPriceForOt",
     "closedPendingPiecesForOt", "inspectionPendingPiecesForOt", "closedWorkOrderOperation",
-    "reportSnapshot",
+    "reportSnapshot", "workOrdersByOt", "closedSummaryFichaForOt",
     `${source}; return weeklyJobSummary;`,
   )(
     { reportWeekStart: "2026-07-20", closedWorkOrderSummaries: closedSummaries },
@@ -68,6 +75,8 @@ function createWeeklyJobSummary({
     },
     realClosedWorkOrderOperation,
     reportSnapshot,
+    workOrdersByOt,
+    (summary, ot) => workOrdersByOt.get(String(ot || "").trim().toUpperCase()) || {},
   );
 }
 
@@ -347,28 +356,67 @@ test("weeklyJobSummary resta lo ensamblado de inspeccion cuando la OT esta a med
   assert.equal(partial.starts[0].amount, 288 * 4592);
 });
 
-test("weeklyJobSummary NO rescata una OT cerrada sin articulo ni piezas (la 4111, DECISION 2026-10-30)", () => {
+test("weeklyJobSummary rescata la OT 4111 cerrada CON su articulo y su cantidad real (DECISION 2026-10-30)", () => {
   // MEDIDO 2026-10-30: la OT 4111 (cerrada) aparecia en el Plan de la semana como fila
-  // fantasma: PARTE vacio, 0 pzs, $0.00. RULE-REP-027 rescata OTs cerradas para que
-  // conserven sus piezas y su costo, pero esta no tiene NI articulo NI piezas: era ruido.
+  // fantasma: PARTE vacio, 0 pzs, $0.00, porque su resumen compacto llego con `item` y
+  // cantidades en 0. El usuario pidio que aparezca EN SU LUGAR, con el articulo y la
+  // cantidad de la OT. Datos reales: work_orders -> CM 400 E, cantidad 10, ensamblada 10.
   const weeklyJobSummary = createWeeklyJobSummary({
+    workOrdersByOt: new Map([
+      ["4111", { ot: "4111", item: "CM 400 E", quantity: 10, builtQuantity: 10, pendingQuantity: 0 }],
+    ]),
+    configurations: { "CM 400 E": { manualUnitPrice: 133.75 } },
     closedSummaries: {
+      // El resumen tal como lo dejo el cierre: vacio, pero con su horario.
       "4111": {
         ot: "4111",
         item: "",
         quantity: 0,
         builtQuantity: 0,
         pendingQuantity: 0,
-        scheduledStart: "2026-10-26T08:00:00Z",
-        scheduledEnd: "2026-10-26T16:00:00Z",
+        scheduledStart: "2026-10-27T08:00:00Z",
+        scheduledEnd: "2026-10-27T16:00:00Z",
         weekStart: "2026-10-26",
         finalStatus: "CERRADA",
       },
     },
   });
   const summary = weeklyJobSummary("2026-10-26", { operations: [] });
-  assert.equal(summary.starts.some((row) => row.ot === "4111"), false, "no aparece en inician");
-  assert.equal(summary.finishes.some((row) => row.ot === "4111"), false, "ni en terminan");
+  const finish = summary.finishes.find((row) => row.ot === "4111");
+  assert.ok(finish, "la 4111 aparece en su lugar (no se oculta)");
+  assert.equal(finish.part, "CM 400 E", "con el articulo real de la OT");
+  // 10 de cantidad y 10 ensambladas: no falta nada por terminar, igual que en las demas OTs
+  // cerradas que conserva RULE-REP-027.
+  assert.equal(finish.pendingPieces, 0);
+  assert.equal(finish.unitPrice, 133.75);
+});
+
+test("weeklyJobSummary completa la cantidad desde la ficha cuando el resumen no la trae", () => {
+  const weeklyJobSummary = createWeeklyJobSummary({
+    workOrdersByOt: new Map([
+      ["4702", { ot: "4702", item: "PARTE-B", quantity: 12, builtQuantity: 5, pendingQuantity: 7 }],
+    ]),
+    invoicePrices: { "4702": 10 },
+    closedSummaries: {
+      "4702": {
+        ot: "4702",
+        item: "",
+        quantity: 0,
+        builtQuantity: 0,
+        pendingQuantity: 0,
+        scheduledStart: "2026-07-21T08:00:00Z",
+        scheduledEnd: "2026-07-22T16:00:00Z",
+        weekStart: "2026-07-20",
+        finalStatus: "CERRADA",
+      },
+    },
+  });
+  const summary = weeklyJobSummary("2026-07-20", { operations: [] });
+  const finish = summary.finishes.find((row) => row.ot === "4702");
+  assert.ok(finish, "se rescata");
+  assert.equal(finish.part, "PARTE-B");
+  assert.equal(finish.pendingPieces, 7, "12 - 5 ensambladas, la misma cuenta de compactClosedWorkOrder");
+  assert.equal(finish.amount, 70);
 });
 
 test("weeklyJobSummary SI rescata una OT cerrada sin articulo pero con piezas pendientes", () => {

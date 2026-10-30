@@ -3012,6 +3012,7 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
     "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
     "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
+    "closedSummaryFichaForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
@@ -3028,6 +3029,7 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
     (ot) => String(ot),
     (ot, summaries) => String(ot),
+    () => ({}),
   );
 
   const rowsClosed = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: 1, total: 1 })();
@@ -3061,6 +3063,7 @@ test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la f
     "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
     "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
     "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
+    "closedSummaryFichaForOt",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "4701", parte: "", secuencia: 1, ct: "5537", fechaFin: "2026-07-23", pendingPieces }],
@@ -3077,6 +3080,7 @@ test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la f
     (s, ot) => (s?.closedWorkOrderSummaries || {})[String(ot)] || null,
     (ot) => String(ot),
     (ot, summaries) => String(ot),
+    (summary, ot) => (reportState?.workOrders || []).find((item) => String(item?.ot) === String(ot)) || {},
   );
 
   // OT cerrada retirada del borrador: el borrador actual NO la tiene (workOrders vacio), pero el
