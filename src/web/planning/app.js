@@ -9442,8 +9442,9 @@ let releaseRealCache = { rows: [], error: "", loading: false, loaded: false, pen
  * Las filas del reporte, a partir de los eventos crudos de `ensambles_ot`.
  *
  * UNA FILA POR EVENTO, y por eso una OT puede aparecer varias veces (ensambles parciales
- * en fechas distintas, confirmado por el usuario el 2026-10-25). El `eventIndex`/`eventCount`
- * solo sirven para marcar en pantalla "2.º de 3" y que se vea que no es un duplicado.
+ * en fechas distintas, confirmado por el usuario el 2026-10-25). Desde el 2026-10-30 la OT
+ * se muestra SOLA (sin "2.º de 3"): el usuario pidio que la numeracion parcial no aparezca,
+ * y las filas con 0 piezas se omiten (ver releaseRealRows).
  *
  * ORDEN: de lo mas nuevo a lo mas viejo. Un evento sin fecha va al final (no se inventa una
  * fecha para ordenarlo). El desempate es por OT y luego por build_id, los dos descendentes,
@@ -9505,38 +9506,13 @@ function releaseRealRows(events) {
       quantity: quantity,
       unitPrice: unitPrice,
       amount: unitPrice * quantity,
-      eventIndex: 0,
-      eventCount: 1,
     };
   });
   // MEDIDO 2026-10-30, DECISION DEL USUARIO: se omiten los eventos con piezas en 0.
   // En la tabla `ensambles_ot` hay filas con `cantidad = 0` (una OT que se "ensamblo"
   // pero la linea quedo en cero), y el reporte las mostraba con monto $0.00: ruido que
-  // no representa una liberacion. El filtro va ANTES de la numeracion cronologica,
-  // para que los "1.º/2.º de N" se recalcule sobre los eventos que de verdad entran.
+  // no representa una liberacion.
   const visibles = rows.filter((row) => row.quantity > 0);
-  // LA NUMERACION ES CRONOLOGICA, no la del orden en que llegan. Si la OT 4057 se ensamblo
-  // el 23 y el 24, el 23 es "1.º de 2" y el 24 es "2.º de 2": numerar al reves (por el orden
-  // de la lectura, que viene de lo mas nuevo a lo mas viejo) haria que el reporte llamara
-  // "primero" al ultimo ensamble, que es justo lo contrario de lo que paso en el piso.
-  const porOt = new Map();
-  for (const row of visibles) {
-    const key = materialOtKey(row.ot);
-    if (!porOt.has(key)) porOt.set(key, []);
-    porOt.get(key).push(row);
-  }
-  for (const grupo of porOt.values()) {
-    grupo.sort((a, b) => {
-      const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
-      const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
-      if (at !== bt) return at - bt;
-      return String(a.buildId).localeCompare(String(b.buildId), "es", { numeric: true });
-    });
-    grupo.forEach((row, index) => {
-      row.eventIndex = index + 1;
-      row.eventCount = grupo.length;
-    });
-  }
   return visibles.sort((a, b) => {
     const at = a.date ? a.date.getTime() : Number.NEGATIVE_INFINITY;
     const bt = b.date ? b.date.getTime() : Number.NEGATIVE_INFINITY;
@@ -9616,12 +9592,9 @@ async function renderReleaseRealReport(force) {
   }
   const head = `<thead><tr>${RELEASE_REAL_HEADERS.map((header) => `<th class="${releaseRealIsNumericColumn(header) ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead>`;
   const body = rows.map((row) => {
-    const parcial = row.eventCount > 1
-      ? ` <span class="release-real-partial" title="Evento ${row.eventIndex} de ${row.eventCount} de esta OT">${row.eventIndex}.º</span>`
-      : "";
     return `<tr>
     <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
-    <td>${escapeHtml(row.ot)}${parcial}</td>
+    <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
     <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
     <td class="report-number">${escapeHtml(formatCurrency(row.unitPrice))}</td>

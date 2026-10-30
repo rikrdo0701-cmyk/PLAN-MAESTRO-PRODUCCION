@@ -1,7 +1,8 @@
-// El reporte "Liberacion real" debe omitir los eventos de ensamble con 0 piezas
-// (decision del usuario 2026-10-30). Este test fija el filtro en `releaseRealRows`
-// (app.js) y que la numeracion cronologica "1.º/2.º de N" se recalcula sobre los que
-// entran, no sobre el total bruto.
+// El reporte "Liberacion real": decision del usuario 2026-10-30.
+//  1. Se omiten los eventos de ensamble con 0 piezas.
+//  2. Se quito la numeracion "1.º/2.º de N": el reporte muestra SOLO la OT.
+// Este test fija ambos en `releaseRealRows` (app.js): que las filas de 0 no entran,
+// y que las filas visibles NO llevan eventIndex/eventCount (que alimentaban el sufijo).
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -14,7 +15,6 @@ function lanzarReleaseRealRows(handlers = {}) {
   const hasta = app.indexOf("function loadReleaseRealEvents(", desde);
   assert.ok(desde >= 0 && hasta > desde, "el bloque releaseRealRows debe existir en app.js");
   const body = app.slice(desde, hasta);
-  const extra = handlers.extra || "";
   const ctx = {
     console,
     Math, Date, String, Number, Boolean, Array, Object, JSON, isNaN, parseInt, parseFloat,
@@ -26,7 +26,7 @@ function lanzarReleaseRealRows(handlers = {}) {
   };
   ctx.globalThis = ctx;
   createContext(ctx);
-  runInContext(body + "\n" + extra + "\nglobalThis.__r = releaseRealRows;", ctx, { filename: "app.js:releaseReal" });
+  runInContext(body + "\nglobalThis.__r = releaseRealRows;", ctx, { filename: "app.js:releaseReal" });
   return ctx.__r;
 }
 
@@ -41,13 +41,19 @@ test("releaseRealRows omite los eventos con 0 piezas y conserva los demas", () =
     { buildId: "F", date: "2026-10-20", ot: "4100", article: "OTRA", quantity: 8 },
   ]);
   assert.equal(filas.length, 3, "solo entran los de cantidad > 0");
-  const porOt4083 = filas.filter((f) => f.ot === "4083");
-  assert.equal(porOt4083.length, 2, "la OT 4083 queda con sus eventos de > 0");
-  // La numeracion se recalcula sobre los que quedan: los de 0 no participan del conteo.
-  assert.deepEqual(porOt4083.map((f) => f.quantity).sort((a, b) => a - b), [5, 10]);
-  const eventoViejo = porOt4083.find((f) => f.quantity === 5);
-  assert.equal(eventoViejo.eventIndex, 1, "el de 5 pzs (mas viejo) es 1.º");
-  assert.equal(eventoViejo.eventCount, 2, "y cuenta solo los 2 eventos visibles, no el de 0");
+  assert.deepEqual(filas.map((f) => f.quantity).sort((a, b) => a - b), [5, 8, 10]);
+});
+
+test("releaseRealRows ya no lleva la numeracion parcial (eventIndex/eventCount)", () => {
+  const releaseRealRows = lanzarReleaseRealRows();
+  const filas = releaseRealRows([
+    { buildId: "1", date: "2026-10-27", ot: "A", article: "P1", quantity: 2 },
+    { buildId: "2", date: "2026-10-26", ot: "A", article: "P1", quantity: 3 },
+  ]);
+  for (const f of filas) {
+    assert.equal("eventIndex" in f, false, "la fila no debe traer eventIndex (ya no se muestra 1.º/2.º)");
+    assert.equal("eventCount" in f, false, "ni eventCount: la OT se muestra sola");
+  }
 });
 
 test("releaseRealRows conserva el orden de lo mas nuevo a lo mas viejo tras el filtro", () => {
@@ -57,7 +63,8 @@ test("releaseRealRows conserva el orden de lo mas nuevo a lo mas viejo tras el f
     { buildId: "2", date: "2026-10-29", ot: "A", article: "P1", quantity: 0 },
     { buildId: "3", date: "2026-10-25", ot: "A", article: "P1", quantity: 3 },
   ]);
-  assert.deepEqual(filas.map((f) => [f.quantity, f.eventIndex, f.eventCount]), [[2, 2, 2], [3, 1, 2]]);
+  assert.equal(filas.length, 2);
+  assert.deepEqual(filas.map((f) => f.quantity), [2, 3]);
   const fechas = filas.map((f) => f.date.getTime());
   assert.ok(fechas[0] >= fechas[1], "la primera fila es la mas nueva");
 });

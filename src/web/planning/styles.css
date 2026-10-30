@@ -1675,7 +1675,6 @@ tr:last-child td { border-bottom: 0; }
 .release-real-table th.report-number,
 .release-real-table td.report-number { text-align: right; font-variant-numeric: tabular-nums; }
 .release-real-table tfoot td { font-weight: 700; background: #edf1f3; }
-.release-real-partial { color: var(--muted); font-size: .85em; font-weight: 650; }
 .report-plan-selector select { min-width: 250px; max-width: 320px; }
 .report-print-header {
   display: flex;
