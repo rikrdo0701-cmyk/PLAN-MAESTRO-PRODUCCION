@@ -1130,6 +1130,8 @@ function bindElements() {
     // RULE-SUP-078: el reporte "Liberacion real".
     "releaseRealReport",
     "releaseRealReportCount",
+    "releaseRealFilterCount",
+    "releaseRealSearchInput",
     "exportReleaseRealXlsxBtn",
     "printReleaseRealBtn",
     "releaseRealPrintContext",
@@ -1375,6 +1377,22 @@ function bindEvents() {
   // RULE-SUP-078: el reporte "Liberacion real". Exportar e imprimir; el render se dispara al
   // abrir la pestana (showTab) y con el boton de exportar si aun no hay datos.
   els.exportReleaseRealXlsxBtn?.addEventListener("click", () => exportReleaseRealXlsx());
+  // FILTRO EN VIVO (pedido del usuario 2026-10-30): no hay boton "Buscar"; cada tecla filtra.
+  // Se limita a re-pintar la tabla sobre lo ya leido: no vuelve a consultar Supabase. El nombre
+  // y el aria-label del campo ya anuncian que se pueden buscar OT y articulo; escribir una
+  // palabra que no aparezca en ninguna fila solo deja la tabla vacia con el aviso.
+  els.releaseRealSearchInput?.addEventListener("input", () => {
+    releaseRealFilter = els.releaseRealSearchInput.value;
+    if (releaseRealCache.loaded) renderReleaseRealReport();
+  });
+  els.releaseRealSearchInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && els.releaseRealSearchInput.value) {
+      event.preventDefault();
+      els.releaseRealSearchInput.value = "";
+      releaseRealFilter = "";
+      if (releaseRealCache.loaded) renderReleaseRealReport();
+    }
+  });
   els.printReleaseRealBtn?.addEventListener("click", async () => {
     await renderReleaseRealReport();
     prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
@@ -9508,6 +9526,41 @@ function exportReleaseXlsx() {
 // NetSuite ensambla algo nuevo, se ve al recargar, no en el siguiente render.
 // =============================================================================
 let releaseRealCache = { rows: [], error: "", loading: false, loaded: false, pending: null };
+// MEDIDO 2026-10-30 (pedido del usuario): filtro EN VIVO del reporte "Liberacion real" por OT
+// o articulo, mientras se escribe y sin pulsar nada. Vive en memoria de la pagina: es una vista
+// del listado ya leido, no cambia `releaseRealCache.rows` ni lo que se exporta.
+let releaseRealFilter = "";
+
+/**
+ * Normaliza un texto para comparar como lo espera quien escribe: sin acentos, sin distinguir
+ * mayusculas y sin espacios repetidos. "C 590 UADE" encuentra "c590uade" y "C  590".
+ */
+function releaseRealSearchKey(value) {
+  return String(value == null ? "" : value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+/**
+ * Las filas de `rows` que contienen TODAS las palabras del filtro en la OT o en el articulo.
+ * Cada palabra se busca suelta (asi "590 uad" encuentra "C 590 UADE"), y el comparador ignora
+ * acentos y espacios internos, que es como la gente teclea folios y partes.
+ */
+function filterReleaseRealRows(rows, text) {
+  const words = String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.toUpperCase());
+  if (!words.length) return Array.isArray(rows) ? rows.slice() : [];
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const haystack = releaseRealSearchKey(`${row.ot} ${row.article}`);
+    return words.every((word) => haystack.includes(word));
+  });
+}
 
 /**
  * Las filas del reporte, a partir de los eventos crudos de `ensambles_ot`.
@@ -9656,8 +9709,16 @@ async function renderReleaseRealReport(force) {
     els.releaseRealReport.innerHTML = `<tbody>${emptyTableRow(RELEASE_REAL_HEADERS.length, "Leyendo ensambles...")}</tbody>`;
     await loadReleaseRealEvents(force);
   }
-  const rows = releaseRealCache.rows;
+  const allRows = releaseRealCache.rows;
+  // El filtro en vivo se aplica sobre lo ya leido: PZAS, montos, el conteo y el pie se
+  // recalculan sobre lo que se ve, para que el total coincida con las filas de la pantalla.
+  const rows = filterReleaseRealRows(allRows, releaseRealFilter);
   const totals = releaseRealTotals(rows);
+  if (els.releaseRealFilterCount) {
+    els.releaseRealFilterCount.textContent = releaseRealFilter.trim()
+      ? `${rows.length} de ${allRows.length} ensambles`
+      : `${allRows.length} ensamble${allRows.length === 1 ? "" : "s"}`;
+  }
   if (els.releaseRealReportCount) {
     els.releaseRealReportCount.textContent = `${rows.length} ensamble${rows.length === 1 ? "" : "s"} · ${formatMaterialQuantity(totals.quantity)} pzs`;
   }
@@ -9675,7 +9736,10 @@ async function renderReleaseRealReport(force) {
   const foot = rows.length
     ? `<tfoot><tr><td colspan="3">Total</td><td class="report-number">${escapeHtml(formatMaterialQuantity(totals.quantity))}</td><td></td><td class="report-number">${escapeHtml(formatCurrency(totals.amount))}</td></tr></tfoot>`
     : "";
-  const vacio = releaseRealCache.error || "No hay ensambles en los ultimos 2 meses para la planta MM del Llano";
+  const vacio = releaseRealCache.error
+    || (releaseRealFilter.trim() && allRows.length
+      ? `Ningun ensamble coincide con "${releaseRealFilter.trim()}"`
+      : "No hay ensambles en los ultimos 2 meses para la planta MM del Llano");
   els.releaseRealReport.innerHTML = `${head}<tbody>${body || emptyTableRow(RELEASE_REAL_HEADERS.length, vacio)}</tbody>${foot}`;
 }
 

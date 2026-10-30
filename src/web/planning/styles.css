@@ -1640,6 +1640,18 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .report-show-all { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: #334149; font-size: 10px; font-weight: 650; }
 .report-show-all input { width: 15px; min-height: 15px; margin: 0; }
 .report-row-count { min-width: 82px; color: var(--muted); font-size: 9px; font-weight: 650; text-align: center; }
+/* Filtro EN VIVO del reporte "Liberacion real": busca mientras se escribe, sin boton. */
+.report-search input {
+  width: min(240px, 30vw);
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: #101820;
+  font-size: 11px;
+}
+.report-search input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .inline-form { display: flex; align-items: center; gap: 7px; }
 
 .matrix-wrap,

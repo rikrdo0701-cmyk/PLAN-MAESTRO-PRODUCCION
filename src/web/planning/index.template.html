@@ -501,6 +501,8 @@
             <div class="report-toolbar">
               <div><h2>Liberación real</h2><span>Lo que realmente se ensambló, por fecha de ensamble · planta MM del Llano · últimos 2 meses</span></div>
               <div class="report-actions">
+                <label class="report-search" role="search"><input id="releaseRealSearchInput" type="search" placeholder="Buscar OT o artículo…" aria-label="Buscar OT o artículo en liberación real" autocomplete="off" /></label>
+                <output id="releaseRealFilterCount" class="report-row-count" aria-live="polite"></output>
                 <output id="releaseRealReportCount" class="report-row-count"></output>
                 <button id="exportReleaseRealXlsxBtn" class="button small" type="button" title="Descargar lo ensamblado real en Excel (.xlsx)">Exportar</button>
                 <button id="printReleaseRealBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>

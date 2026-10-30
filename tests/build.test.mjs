@@ -1672,6 +1672,18 @@ test("el backlog renderiza una ventana inicial de 30 trabajos con controles prog
   assert.match(template, /id="priorityLoadMoreSentinel"/);
 });
 
+test("Liberacion real tiene busqueda en vivo por OT o articulo, sin boton de buscar", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const template = await readFile(path.join(process.cwd(), "src", "web", "planning", "index.template.html"), "utf8");
+  // El campo existe en la pestana y anuncia que busca las dos cosas.
+  assert.match(template, /id="releaseRealSearchInput"[^>]*type="search"/);
+  assert.match(template, /id="releaseRealSearchInput"[^>]*aria-label="[^"]*OT[^"]*art/i);
+  // Filtra al escribir (`input`), no al pulsar un boton.
+  assert.match(app, /releaseRealSearchInput\?\.addEventListener\("input"/);
+  // La tabla se pinta con las filas filtradas, no con el listado completo.
+  assert.match(app, /const rows = filterReleaseRealRows\(allRows, releaseRealFilter\);/);
+});
+
 test("la ventana del backlog avanza exactamente 30 y puede reiniciarse sin render adicional", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const progressiveStart = app.indexOf("const BACKLOG_PAGE_SIZE = 30;");
