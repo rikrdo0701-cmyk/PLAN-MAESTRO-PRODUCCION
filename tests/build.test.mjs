@@ -3022,12 +3022,12 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
   const end = app.indexOf("function renderReleaseReport(", start);
   assert.ok(start >= 0 && end > start, "el bloque del reporte de liberacion debe existir");
   const source = app.slice(start, end);
-  const buildRows = ({ reportState, workOrder, built, total = null, pendingPieces = 1 }) => Function(
+  const buildRows = ({ reportState, workOrder, built, total = null, pendingPieces = 1, unitPrice = 0 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
     "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
     "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
     "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
-    "closedSummaryFichaForOt",
+    "closedSummaryFichaForOt", "releaseRealUnitPrice",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "3483", parte: "EG40 MUFFLER", secuencia: 1, ct: "5537", fechaFin: "2026-09-24", pendingPieces }],
@@ -3045,12 +3045,14 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
     (ot) => String(ot),
     (ot, summaries) => String(ot),
     () => ({}),
+    () => unitPrice,
   );
 
   const rowsClosed = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, workOrder: null, built: 1, total: 1 })();
   assert.equal(rowsClosed.length, 1);
   assert.equal(rowsClosed[0].built, 1);
   assert.equal(rowsClosed[0].quantity, 1);
+  assert.equal(rowsClosed[0].amount, null, "sin precio de venta el total queda vacio, no inventa un monto");
 
   const rowsOpen = buildRows({ reportState: { workOrders: [{ ot: "3483", builtQuantity: 0, quantity: 15 }], closedWorkOrderSummaries: {} }, workOrder: { builtQuantity: 0, quantity: 15 }, built: 15, total: 15 })();
   assert.equal(rowsOpen[0].built, 15);
@@ -3064,6 +3066,49 @@ test("liberacion final toma Ensamblado del detalle de inspeccion cuando la OT no
   assert.equal(rowsWithoutTotal[0].quantity, 7);
 });
 
+test("liberacion final calcula precio unitario y precio total por la cantidad de la OT (DECISION 2026-10-30)", async () => {
+  const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
+  const start = app.indexOf("function workOrderForSource(");
+  const end = app.indexOf("function renderReleaseReport(", start);
+  const source = app.slice(start, end);
+  const buildRows = ({ reportState, unitPrice }) => Function(
+    "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
+    "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
+    "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
+    "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
+    "closedSummaryFichaForOt", "releaseRealUnitPrice",
+    `${source}; return releaseReportRows;`,
+  )(
+    () => [{ ot: "4111", parte: "CM 400 E", secuencia: 1, ct: "5537", fechaFin: "2026-10-27", pendingPieces: 10 }],
+    () => true,
+    (op) => ({ ct: op.ct, label: "16OC" }),
+    (a, b) => Number(a.secuencia || 0) - Number(b.secuencia || 0),
+    () => null,
+    () => new Date(2026, 9, 27),
+    () => reportState,
+    () => 0,
+    () => 10,
+    () => 10,
+    () => null,
+    () => null,
+    () => String(0),
+    (ot, summaries) => String(0),
+    () => ({}),
+    () => unitPrice,
+  );
+  // Cantidad de la OT = 10, precio unitario = 133.75 -> total = 1,337.50.
+  const rows = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, unitPrice: 133.75 })();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].article, "CM 400 E");
+  assert.equal(rows[0].quantity, 10);
+  assert.equal(rows[0].unitPrice, 133.75);
+  assert.equal(rows[0].amount, 1337.5, "precio total = unitario x cantidad de la OT");
+  // Sin precio no se inventa un total.
+  const sinPrecio = buildRows({ reportState: { workOrders: [], closedWorkOrderSummaries: {} }, unitPrice: 0 })();
+  assert.equal(sinPrecio[0].unitPrice, 0);
+  assert.equal(sinPrecio[0].amount, null);
+});
+
 test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la fuente del reporte (RULE-REP-028)", async () => {
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const start = app.indexOf("function workOrderForSource(");
@@ -3073,12 +3118,12 @@ test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la f
   // se inyecta como parametro para controlar la fuente (borrador vs snapshot publicado).
   const source = app.slice(start, end);
   const closedSummary = { item: "EG40 MUFFLER", quantity: 40, pendingQuantity: 12, builtQuantity: 28 };
-  const buildRows = ({ reportState, workOrder = null, built = null, total = null, pendingPieces = 1 }) => Function(
+  const buildRows = ({ reportState, workOrder = null, built = null, total = null, pendingPieces = 1, unitPrice = 0 }) => Function(
     "reportOperationsSource", "isFinalReleaseOperation", "finalReleaseOperationMatch",
     "sequenceSort", "opStart", "opEnd", "sourceStateForReports",
     "pendingPiecesForWorkOrder", "inspectionBuiltPiecesForOt", "inspectionQuantityForOt",
     "workOrderForSource", "closedSummaryForSource", "materialOtKey", "closedSummaryKeyForOt",
-    "closedSummaryFichaForOt",
+    "closedSummaryFichaForOt", "releaseRealUnitPrice",
     `${source}; return releaseReportRows;`,
   )(
     () => [{ ot: "4701", parte: "", secuencia: 1, ct: "5537", fechaFin: "2026-07-23", pendingPieces }],
@@ -3096,6 +3141,7 @@ test("liberacion final puebla articulo y ensamblado de una OT cerrada desde la f
     (ot) => String(ot),
     (ot, summaries) => String(ot),
     (summary, ot) => (reportState?.workOrders || []).find((item) => String(item?.ot) === String(ot)) || {},
+    () => unitPrice,
   );
 
   // OT cerrada retirada del borrador: el borrador actual NO la tiene (workOrders vacio), pero el

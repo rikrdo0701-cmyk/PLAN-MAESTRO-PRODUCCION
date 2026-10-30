@@ -9491,6 +9491,10 @@ function releaseReportRows() {
       ?? workOrder?.builtQuantity
       ?? 0
     ));
+    // El precio unitario es el MISMO con el que se valora la OT en el plan y en "Liberacion
+    // real" (RULE-REP-021): precio manual de la OT -> ultima venta -> promedio -> precio de
+    // referencia del catalogo.
+    const unitPrice = releaseRealUnitPrice(ot, part);
     rows.push({
       ot,
       article: part,
@@ -9500,6 +9504,11 @@ function releaseReportRows() {
       ct: releaseMatch?.ct || "",
       label: releaseMatch?.label || "16OC",
       releaseOp: release,
+      // MEDIDO 2026-10-30 (pedido del usuario): el reporte muestra el PRECIO UNITARIO y el
+      // PRECIO TOTAL de la OT, despues de Ensamblado. El total es el unitario por la CANTIDAD
+      // de la OT (la misma cantidad que el usuario pidió que muestren los planes).
+      unitPrice,
+      amount: unitPrice > 0 ? unitPrice * quantity : null,
     });
   }
   return rows.sort((a, b) => {
@@ -9515,23 +9524,25 @@ function renderReleaseReport() {
   ensureInspectionWorkOrders(rows.map((row) => row.ot));
   if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
   const statusActions = reportSourceAllowsOperationTracking();
-  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "P. unitario", "P. total", "Fecha"];
   if (statusActions) headers.push("Completar");
   const body = rows.map((row) => `<tr>
     <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
-    <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
-    <td>${escapeHtml(formatMaterialQuantity(row.built))}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.built))}</td>
+    <td class="report-number">${row.unitPrice > 0 ? escapeHtml(formatCurrency(row.unitPrice)) : ""}</td>
+    <td class="report-number">${row.amount > 0 ? escapeHtml(formatCurrency(row.amount)) : ""}</td>
     <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
     ${statusActions ? `<td class="report-status-action-column">${planStatusActionCell(row.releaseOp)}</td>` : ""}
   </tr>`).join("");
-  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : (header === "P. unitario" || header === "P. total" || header === "Cantidad" || header === "Ensamblado") ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
   if (statusActions) bindPlanStatusActions(els.releaseReport);
 }
 
 function exportReleaseXlsx() {
   const statusActions = reportSourceAllowsOperationTracking();
-  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "P. unitario", "P. total", "Fecha"];
   if (statusActions) headers.push("Completar");
   const rows = releaseReportRows().map((row) => {
     const cells = [
@@ -9539,6 +9550,8 @@ function exportReleaseXlsx() {
       row.article,
       row.quantity,
       row.built,
+      row.unitPrice > 0 ? Number(row.unitPrice.toFixed(2)) : "",
+      row.amount > 0 ? Number(row.amount.toFixed(2)) : "",
       row.date ? formatReportDate(row.date) : "SIN FECHA",
     ];
     if (statusActions) {
