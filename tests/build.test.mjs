@@ -514,7 +514,7 @@ test("el build genera Apps Script y GitHub Pages", async () => {
   assert.match(appScriptWorkflow, /JSON\.parse\(fs\.readFileSync/);
   const pagesIndex = await readFile(path.join(result.siteDir, "index.html"), "utf8");
   const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
-  assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[a-f0-9]{12}";/);
+  assert.match(serviceWorker, /const CACHE_NAME = "plan-maestro-[0-9a-f]{12}-sheets-ot-v2";/, "el CACHE_NAME lleva el hash de Pages y el sufijo de version que invalida la caché (added 6910f7e)");
   assert.doesNotMatch(serviceWorker, /plan-maestro-v2\.41\.4/);
   assert.match(pagesIndex, /script\.google\.com\/macros\/s\/AKfycbzom44gOrh7KQWkeroVHHtQfH6osAFdBUN-NHJ_T1g13cQlEKhCpMP8lcHDrH-PzOzB5Q\/exec/);
   assert.doesNotMatch(pagesIndex, /AKfycbzI4pxkYSVAulRhlQC6WbtaMTQodqVMjGtK1v4HREi7Yoxq4yaWdbtOivXj3uMv623Dvw/);
