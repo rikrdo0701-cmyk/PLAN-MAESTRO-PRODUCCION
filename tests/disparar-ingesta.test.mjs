@@ -100,7 +100,7 @@ test("el POST va como text/plain, porque application/json no llega", () => {
     "y sin credenciales, para que siga siendo peticion simple y no mande ninguna cookie de mas");
 
   // El cuerpo sigue siendo JSON, solo que como texto.
-  assert.match(gate, /JSON\.stringify\(\{ accion: "ingesta", forzado: opciones\.forzado !== false \}\)/,
+  assert.match(gate, /JSON\.stringify\(\{ accion: "ingesta", forzado: opciones\.forzado !== false(, solo: Array\.isArray\(opciones\.solo\) \? opciones\.solo : undefined)?\s*\}\)/,
     "el cuerpo es JSON serializado, que es lo que doPost parsea de postData.contents");
 });
 
@@ -112,7 +112,7 @@ test("`forzado` viaja en el cuerpo, o un boton a las 20:00 no sincroniza nada", 
   // parametro (PP_ingesta_(forzado)) y el cuerpo lo manda en true.
   assert.match(gate, /forzado: opciones\.forzado !== false/,
     "el cliente tiene que pedir la corrida forzada; sin eso el filtro de horario se la salta");
-  assert.match(server, /function PP_ingesta_\(forzado\)/,
+  assert.match(server, /function PP_ingesta_\(forzado(, solo)?\)/,
     "el filtro de horario tiene que ser un parametro del cuerpo, no un return que no se puede saltar");
   assert.match(server, /if \(!forzado && \(dia === 0 \|\| dia === 6 \|\| hora < 7 \|\| hora >= 17\)\)/,
     "el filtro se salta SOLO cuando forzado es true, y el activador sigue sin saltarselo");
