@@ -1435,7 +1435,9 @@ function bindEvents() {
     const btn = document.getElementById("syncFaltantesBtn");
     if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
     try {
-      const ingesta = await window.PPIngestaTrigger.dispararIngesta({ solo: FALTANTES_ACCIONES_PARCIAL });
+      const ingesta = await window.PPIngestaTrigger.dispararIngesta({
+        solo: ['workorders','materiales','items','inventario','ordenes_venta'],
+      });
       if (ingesta && ingesta.ok !== true) {
         showToast("Sincronizacion parcial: " + (ingesta.motivo || "ver resultado"), 6000);
       }
