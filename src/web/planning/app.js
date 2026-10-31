@@ -9988,8 +9988,8 @@ function faltantesRows() {
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
     var row = inv[i];
-    if (String(row.location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(row.available) > 0) {
-      existencia[String(row.item).trim().toUpperCase()] = (existencia[String(row.item).trim().toUpperCase()] || 0) + Number(row.available);
+    if (String(row.location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(row.physical) > 0) {
+      existencia[String(row.item).trim().toUpperCase()] = (existencia[String(row.item).trim().toUpperCase()] || 0) + Number(row.physical);
     }
   }
   var demandaOV = {};
@@ -10093,9 +10093,18 @@ function renderFaltantesReport() {
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
     var otsStr = g.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    for (var ovi = 0; ovi < Math.max(1, g.ovs.length); ovi++) {
+    var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+    for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
       var first = ovi === 0;
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + "><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + (g.ovs.length ? escapeHtml(g.ovs[ovi].folio) : "") + "</td><td>" + (g.ovs.length ? formatMaterialQuantity(g.ovs[ovi].cantidad) : "") + "</td><td>" + (g.ovs.length ? escapeHtml(g.ovs[ovi].fecha) : "") + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      var ovRow = "";
+      var ovCant = "";
+      var ovFec = "";
+      if (ovsOrdenados.length) {
+        ovRow = escapeHtml(ovsOrdenados[ovi].folio);
+        ovCant = formatMaterialQuantity(ovsOrdenados[ovi].cantidad);
+        ovFec = ovsOrdenados[ovi].fecha || "";
+      }
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + "><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
