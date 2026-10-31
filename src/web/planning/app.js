@@ -10080,7 +10080,7 @@ function faltantesRows() {
       var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
       if (faltaH <= 0) continue;
       if (!hijosPorArt[hKey]) {
-        hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] || {}).ots.slice(), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] || {}).ovs.slice() };
+        hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
       hijosPorArt[hKey].heredado += hInfo.he;
       hijosPorArt[hKey].faltante += faltaH;
