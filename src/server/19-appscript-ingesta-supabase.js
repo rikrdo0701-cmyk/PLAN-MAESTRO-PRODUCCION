@@ -134,6 +134,37 @@ function PP_verificaConfigIngesta_(config) {
 }
 
 // =============================================================================
+// RESTlet parcial: para PP_ingesta_ con solo=[...] (reporte Faltantes).
+// Pide cada accion por su cuenta y devuelve un shape {accion => {ok, ...}}
+// listo para el bucle de TABLAS. Las no pedidas NO se tocan: RULE-SUP-048
+// excepcion "tabla no pedida ≠ tabla que falló".
+// =============================================================================
+function PP_restletUnificadoParcial_(acciones, config) {
+  const url = config.supabaseUrl; // placeholder; se usa endpoint de la llamada normal
+  const endpoint = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
+  const query = { script: '2246', deploy: '1' };
+  const res = UrlFetchApp.fetch(endpoint + '?' + Object.keys(query).map(function(key) {
+    return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
+  }).join('&'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': PP_oauthHeader_('POST', endpoint, query, config),
+      'Prefer': 'transient'
+    },
+    payload: JSON.stringify({ acciones: acciones }),
+    muteHttpExceptions: true
+  });
+  const cuerpo = res.getContentText();
+  const json = JSON.parse(cuerpo);
+  if (res.getResponseCode() !== 200) {
+    throw new Error('RESTlet ' + res.getResponseCode() + ': ' + cuerpo.slice(0, 300));
+  }
+  if (json && typeof json === 'object') json.__http = res.getResponseCode();
+  return json;
+}
+
+// =============================================================================
 // Llamada al RESTlet unificado
 // =============================================================================
 
@@ -839,8 +870,8 @@ function ingesta() {
  * quedo con lo anterior se ve CON DATOS VIEJOS, y quien mira la pantalla tiene que poder
  * distinguir esos dos casos.
  */
-function PP_ingesta_(forzado) {
-  console.log('=== INGESTA START ===' + (forzado ? ' (FORZADA, desde la pagina)' : ''));
+function PP_ingesta_(forzado, solo) {
+  console.log('=== INGESTA START ===' + (forzado ? ' (FORZADA, desde la pagina)' : '') + (solo ? ' (SOLO ' + solo.join(',') + ')' : ''));
   const config = PP_config_();
   PP_verificaConfigIngesta_(config);
   console.log('Config OK. Account: ' + config.accountId);
@@ -855,9 +886,26 @@ function PP_ingesta_(forzado) {
       vaciadas: [], noSePudoVaciar: [] };
   }
 
+  // MEDIDO 2026-10-31 (HALLAZGO CRITICO 2, parcial): el cuerpo puede traer
+  // `solo` como lista de acciones. Es la forma de pedir SOLO las tablas que el
+  // reporte Faltantes necesita (work_orders, materials, items, inventory,
+  // sales_orders) SIN que la ingesta toque operations ni machines. Con `todas`
+  // se pide de una vez, como siempre. EXCEPCION EXPLICITA a RULE-SUP-048:
+  // "tabla no pedida ≠ tabla que falló", así que las no pedidas NO se vacían
+  // ni se tocan.
+  const soloSet = Array.isArray(solo)
+    ? solo.map(function (a) { return String(a || '').trim().toLowerCase(); }).filter(Boolean)
+    : [];
+  if (soloSet.length) {
+    console.log('Ingesta parcial: solo ' + soloSet.join(', ') +
+      ' (las demas tablas NO se vacian ni se tocan, RULE-SUP-048 excepcion)');
+  }
+
   // Una sola llamada al RESTlet unificado
   console.log('Llamando al RESTlet unificado (2246)...');
-  const respuesta = PP_restletUnificado_('todas', config);
+  const respuesta = soloSet.length
+    ? PP_restletUnificadoParcial_(soloSet, config)
+    : PP_restletUnificado_('todas', config);
   // MEDIDO 2026-10-06, escribiendo la prueba que faltaba: `!respuesta` va primero porque
   // `PP_restletUnificado_` puede devolver `null` si el 200 trae un cuerpo `null` literal, y
   // `null.ok` es un TypeError que no dice nada del cuerpo. Con `!respuesta` primero, ese caso
@@ -966,6 +1014,15 @@ function PP_ingesta_(forzado) {
 
   for (const nombre in TABLAS) {
     const def = TABLAS[nombre];
+    // MEDIDO 2026-10-31 (HALLAZGO CRITICO 2, parcial): si esta corrida pidió solo
+    // algunas tablas, las demas NO se vacian ni se tocan. RULE-SUP-048 tiene una
+    // EXCEPCION EXPLICITA: "tabla no pedida ≠ tabla que falló". Sin esto, pedir
+    // solo 5 tablas sin más vaciaria operations y machines (que el reporte
+    // Faltantes no necesita).
+    if (soloSet.length && soloSet.indexOf(nombre) < 0) {
+      console.log(nombre + ': omitida (solo pedido ' + soloSet.join(',') + '); NO tocada (RULE-SUP-048 excepcion)');
+      continue;
+    }
     // CUANTAS FILAS IBIAN A ESCRIBIRSE DE ESTA TABLA. Vive fuera del `try` porque el `catch` lo
     // necesita y `filas` NO sirve para eso: en la rama de "NetSuite no la devolvio" (que tambien
     // cae aqui si el vaciado falla) `filas` todavia es la del renglon ANTERIOR del bucle, o no
@@ -1273,7 +1330,7 @@ function doPost(e) {
       return PP_jsonIngesta_({ ok: false, ejecutada: false, motivo: 'accion_desconocida', accion: accion, mensaje: 'Accion no soportada: ' + accion });
     }
     const inicio = new Date().toISOString();
-    const resultado = PP_ingesta_(cuerpo.forzado === true) || {};
+    const resultado = PP_ingesta_(cuerpo.forzado === true, cuerpo.solo) || {};
     const salida = {};
     salida.ok = resultado.ok === true;
     salida.ejecutada = resultado.ejecutada === true;

@@ -1486,16 +1486,55 @@
         componentId: row.componente_id, component: row.componente, description: row.descripcion,
         unit: row.unidad, required: number(row.requerido), issued: number(row.emitido),
         pending: number(row.pendiente),
-        // MEDIDO 2026-10-04: `lineId` es la clave natural de la fila y la pagina la
-        // necesita para poder GUARDAR sin crear una fila nueva por cada guardado. `line_id`
-        // lo escribe la ingesta (RESTlet 2246) con el id de renglon de NetSuite (`comp.id`),
-        // y con el UNIQUE (ot, line_id) es la unica clave con la que un UPSERT actualiza la
-        // fila del ERP en vez de insertar una copia. Sin exponerla, `filasMaterials`
-        // (supabase-writer.js) no tiene mas que `id`, que es el UUID de la fila, y escribia
-        // ESO como `line_id`: medido 348 (ot, componente) con dos filas cada uno (697 filas
-        // para 348 materiales) y una MP saliendo dos veces en la hoja de inspeccion. Se
-        // escribe aqui, no en el escritor, porque el escritor no tiene la fila cruda.
         lineId: String(row.line_id == null ? "" : row.line_id).trim(),
+      };
+    });
+  }
+
+  // MEDIDO 2026-10-31 (pedido del usuario, reporte Faltantes): mapeo de items (catalogo de
+  // articulos), inventory (existencias por item+ubicacion) y sales_orders (ordenes de venta
+  // con lineas). La ingesta las escribe (TABLAS en 19-appscript-ingesta-supabase.js) y la
+  // pagina las recibe por readCatalogs pero hasta hoy solo quedaban en operationalRaw sin
+  // mapear al estado. El reporte Faltantes necesita estos datos limpios.
+  function mapItems(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, code: String(row.codigo || "").trim(),
+        description: String(row.descripcion || ""),
+        purchaseDescription: String(row.descripcion_compra || ""),
+        displayName: String(row.nombre_mostrado || ""),
+        type: String(row.tipo || "").trim().toUpperCase(),
+        typeClass: number(row.clase),
+        isAssembly: Boolean(row.es_ensamblaje),
+        inactive: Boolean(row.inactivo),
+        lastModified: String(row.ultima_modificacion || ""),
+      };
+    });
+  }
+
+  function mapInventory(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, item: String(row.item || "").trim(), location: String(row.ubicacion || ""),
+        available: number(row.disponible), physical: number(row.fisico),
+        committed: number(row.comprometido), picked: number(row.pickeado),
+        inTransit: number(row.en_transito),
+      };
+    });
+  }
+
+  function mapSalesOrders(rows) {
+    return (rows || []).map(function (row) {
+      var lineas = [];
+      if (row.lineas && Array.isArray(row.lineas)) lineas = row.lineas;
+      return {
+        id: row.id, folio: String(row.folio || "").trim(),
+        salesOrderId: String(row.sales_order_id || "").trim(),
+        customer: String(row.cliente || ""), customerId: number(row.cliente_id),
+        date: String(row.fecha || ""), status: String(row.estatus || ""),
+        approval: String(row.aprobacion || ""), total: number(row.total),
+        currency: number(row.moneda), memo: String(row.memo || ""),
+        lines: lineas,
       };
     });
   }
@@ -1699,6 +1738,11 @@
     // misma tabla que alimenta workOrders (pero SIN el filtro solo-abiertas: conserva los
     // precios de las cerradas, que el catalogo tambien necesita).
     workOrderSalePrices: "work_orders",
+    // MEDIDO 2026-10-31: items, inventory y sales_orders se leen en readCatalogs y entran al
+    // estado mapeados (mapItems, mapInventory, mapSalesOrders). El reporte Faltantes los consume.
+    items: "items",
+    inventory: "inventory",
+    salesOrders: "sales_orders",
   };
 
   async function readCatalogs(options) {
@@ -1819,6 +1863,11 @@
       // y aqui se conservan en un mapa articulo -> max(lastSalePrice, averageSalePrice) para que
       // el catálogo los copie igual que los de las abiertas.
       workOrderSalePrices: siSePudoLeer(rows, "work_orders", salePricesByArticle(rows.work_orders)),
+      // MEDIDO 2026-10-31 (reporte Faltantes): items, inventory y sales_orders se leen pero
+      // quedaban en operationalRaw sin mapear. El reporte los necesita estructurados.
+      items: siSePudoLeer(rows, "items", mapItems(rows.items)),
+      inventory: siSePudoLeer(rows, "inventory", mapInventory(rows.inventory)),
+      salesOrders: siSePudoLeer(rows, "sales_orders", mapSalesOrders(rows.sales_orders)),
       materials: mapMaterials(rows.materials),
       operationalRaw: {
         operations: rows.operations || null,
@@ -1919,6 +1968,11 @@
     // Los inversos de las dos tablas que se agregaron para el sync (DECIDIDO 2026-09-30).
     mapUnconfirmedWorkOrders: mapUnconfirmedWorkOrders,
     mapClosedWorkOrderSummaries: mapClosedWorkOrderSummaries,
+    // MEDIDO 2026-10-31 (reporte Faltantes): mapeos de las tablas de catalogo de articulos,
+    // existencias y ordenes de venta, que antes solo llegaban por operationalRaw.
+    mapItems: mapItems,
+    mapInventory: mapInventory,
+    mapSalesOrders: mapSalesOrders,
     // La regla de las fechas se exporta para que se pueda probar SOLA, sobre un valor, sin
     // montar una lectura: es la parte del lector que mas dano hace si se cambia por error.
     partirFechaTexto: partirFechaTexto,

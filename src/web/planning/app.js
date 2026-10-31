@@ -1429,6 +1429,23 @@ function bindEvents() {
       alert("Datos cargados: " + releaseRealCache.rows.length + " ensambles encontrados.");
     }
   });
+  // MEDIDO 2026-10-31 (reporte Faltantes): sincroniza solo las 5 tablas del reporte sin
+  // tocar operations ni machines (RULE-SUP-048 excepcion, parcial).
+  document.getElementById("syncFaltantesBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("syncFaltantesBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
+    try {
+      const ingesta = await window.PPIngestaTrigger.dispararIngesta({ solo: FALTANTES_ACCIONES_PARCIAL });
+      if (ingesta && ingesta.ok !== true) {
+        showToast("Sincronizacion parcial: " + (ingesta.motivo || "ver resultado"), 6000);
+      }
+    } catch (e) {
+      console.warn("Error en sincronizacion de faltantes:", e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Sincronizar"; }
+    }
+    renderFaltantesReport();
+  });
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
   els.loadPlanSelect.addEventListener("change", () => loadSelectedLoadPlan(els.loadPlanSelect.value));
@@ -9935,6 +9952,143 @@ function exportReleaseRealXlsx() {
   downloadBlob(bytes, "liberacion-real.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
+// =============================================================================
+// REPORTE FALTANTES (MEDIDO 2026-10-31, pedido del usuario)
+// Demanda: OV abiertas + OTs activas. Faltante = max(OV, pend_OTs) - existencia.
+// Solo artículos de planta MM del Llano con Faltante > 0.
+// Subensambles recursivos: padre solo su demanda, componente = fila plana.
+// Tabla: artículo una vez, una fila por OV debajo.
+// =============================================================================
+
+function faltantesRows() {
+  var wo = state.workOrders || [];
+  var mats = state.materials || [];
+  var inv = state.inventory || [];
+  var sos = state.salesOrders || [];
+  var existencia = {};
+  for (var i = 0; i < inv.length; i++) {
+    var row = inv[i];
+    if (String(row.location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(row.available) > 0) {
+      existencia[String(row.item).trim().toUpperCase()] = (existencia[String(row.item).trim().toUpperCase()] || 0) + Number(row.available);
+    }
+  }
+  var demandaOV = {};
+  for (var s = 0; s < sos.length; s++) {
+    var so = sos[s];
+    var est = String(so.status || "").toUpperCase();
+    if (est.indexOf("CERRAD") >= 0 || est.indexOf("CLOSED") >= 0 || est.indexOf("FACTURAD") >= 0) continue;
+    for (var l = 0; l < (so.lines || []).length; l++) {
+      var item = String(so.lines[l].item || "").trim().toUpperCase();
+      if (!item) continue;
+      if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
+      demandaOV[item].cat += Number(so.lines[l].cantidad) || 0;
+      demandaOV[item].ovs.push({ folio: so.folio, cantidad: Number(so.lines[l].cantidad) || 0, fecha: so.date });
+    }
+  }
+  var otPorArt = {};
+  for (var w = 0; w < wo.length; w++) {
+    var orow = wo[w];
+    if (orow.cerrada) continue;
+    var art = String(orow.item || "").trim().toUpperCase();
+    if (!art) continue;
+    var pend = Math.max(0, Number(orow.quantity || 0) - Number(orow.builtQuantity || 0));
+    if (!otPorArt[art]) { otPorArt[art] = { cat: 0, ots: [] }; }
+    otPorArt[art].cat += pend;
+    otPorArt[art].ots.push({ ot: orow.ot, cantidad: Number(orow.quantity || 0) });
+  }
+  var grafo = {};
+  for (var m = 0; m < mats.length; m++) {
+    var padre = String(mats[m].assembly || "").trim().toUpperCase();
+    var hijo = String(mats[m].component || "").trim().toUpperCase();
+    if (!padre || !hijo) continue;
+    if (!grafo[padre]) grafo[padre] = [];
+    grafo[padre].push({ c: hijo, req: Math.max(0, Number(mats[m].required) || 0) });
+  }
+  var demCache = {};
+  var visitando = new Set();
+  function demRec(art) {
+    if (demCache[art]) return demCache[art];
+    if (visitando.has(art)) return { ov: 0, ot: 0, he: 0, hi: [] };
+    visitando.add(art);
+    var propOv = (demandaOV[art] || {}).cat || 0;
+    var propOt = (otPorArt[art] || {}).cat || 0;
+    var res = { ov: propOv, ot: propOt, he: 0, hi: [] };
+    var falta = Math.max(propOv, propOt) - (existencia[art] || 0);
+    if (falta > 0 && grafo[art]) {
+      for (var i2 = 0; i2 < grafo[art].length; i2++) {
+        var h = grafo[art][i2];
+        if (visitando.has(h.c)) continue;
+        var hijo = demRec(h.c);
+        if (falta > 0) {
+          var heredado = falta * h.req;
+          res.hi.push({ c: h.c, he: heredado, hi: hijo });
+        }
+      }
+    }
+    demCache[art] = res;
+    visitando.delete(art);
+    return res;
+  }
+  var todasClaves = new Set(Object.keys(grafo));
+  Object.keys(demandaOV).forEach(function(k) { todasClaves.add(k); });
+  Object.keys(otPorArt).forEach(function(k) { todasClaves.add(k); });
+  todasClaves.forEach(function(k) { demRec(k); });
+  var grupos = [];
+  var hijos = [];
+  var proc = new Set();
+  var keys = Object.keys(demCache);
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    proc.add(key);
+    var d = demCache[key];
+    var dem = Math.max(d.ov, d.ot + d.he);
+    var falta = dem - (existencia[key] || 0);
+    if (falta <= 0 && !d.hi.length) continue;
+    if (falta > 0 || (otPorArt[key] || {}).cat > 0 || (demandaOV[key] || {}).cat > 0) {
+      grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: Math.max(0, falta), ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
+    }
+  }
+  // filas de hijos planas
+  for (var g = 0; g < grupos.length; g++) {
+    for (var h2 = 0; h2 < grupos[g].hijos.length; h2++) {
+      var hInfo = grupos[g].hijos[h2];
+      proc.add(hInfo.c);
+      var hd = hInfo.hi;
+      var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
+      var faltaH = demH - (existencia[hInfo.c] || 0);
+      if (faltaH <= 0) continue;
+      hijos.push({ articulo: hInfo.c, padre: grupos[g].articulo, existencia: Number(existencia[hInfo.c]) || 0, ots: (otPorArt[hInfo.c] || {}).ots || [], pendiente: (otPorArt[hInfo.c] || {}).cat || 0, heredado: hInfo.he, faltante: faltaH, ovs: (demandaOV[hInfo.c] || {}).ovs || [] });
+    }
+  }
+  grupos.sort(function(a,b) { return b.faltante - a.faltante || a.articulo.localeCompare(b.articulo, "es"); });
+  hijos.sort(function(a,b) { return b.faltante - a.faltante; });
+  return { grupos: grupos, hijos: hijos };
+}
+
+function renderFaltantesReport() {
+  var el = document.getElementById("faltantesReport");
+  if (!el) return;
+  var data = faltantesRows();
+  var rowsHtml = "";
+  for (var gi = 0; gi < data.grupos.length; gi++) {
+    var g = data.grupos[gi];
+    var otsStr = g.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    for (var ovi = 0; ovi < Math.max(1, g.ovs.length); ovi++) {
+      var first = ovi === 0;
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + "><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + (g.ovs.length ? escapeHtml(g.ovs[ovi].folio) : "") + "</td><td>" + (g.ovs.length ? formatMaterialQuantity(g.ovs[ovi].cantidad) : "") + "</td><td>" + (g.ovs.length ? escapeHtml(g.ovs[ovi].fecha) : "") + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+    }
+  }
+  for (var ci = 0; ci < data.hijos.length; ci++) {
+    var f = data.hijos[ci];
+    var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    rowsHtml += "<tr style=\"opacity:.7\"><td>" + escapeHtml(f.articulo) + "<br><span class=\"report-aux-note\">de " + escapeHtml(f.padre) + "</span></td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+  }
+  if (!rowsHtml) {
+    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.</td></tr>";
+  }
+  el.innerHTML = "<thead><tr><th>Articulo</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+}
+
 function toolChangeReportData(op) {
   const stored = {
     fromHerramental: reportToolValue(op.toolChangeFromHerramental),
@@ -10550,6 +10704,7 @@ function showTab(tab) {
   // RULE-SUP-078: "Liberacion real" lee `ensambles_ot` al abrirse (no viaja en el estado del
   // plan). El render es idempotente y usa la cache de la sesion.
   if (tab === "releaseReal") renderReleaseRealReport();
+  if (tab === "faltantes") renderFaltantesReport();
 }
 
 function addOperator() {
@@ -12474,6 +12629,11 @@ async function applyImported(imported, options = {}) {
   if (imported.operatorProfiles) state.operatorProfiles = imported.operatorProfiles;
   if (imported.otConfigurations) state.otConfigurations = imported.otConfigurations;
   if (imported.articleConfigurations) state.articleConfigurations = imported.articleConfigurations;
+  // MEDIDO 2026-10-31 (reporte Faltantes): items, inventory y salesOrders llegan mapeados
+  // desde readCatalogs. El reporte los necesita para el cálculo de faltantes.
+  if (Array.isArray(imported.items)) state.items = imported.items;
+  if (Array.isArray(imported.inventory)) state.inventory = imported.inventory;
+  if (Array.isArray(imported.salesOrders)) state.salesOrders = imported.salesOrders;
   // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs (abiertas y cerradas) por articulo.
   // El lector los expone como `workOrderSalePrices` (supabase-reader.js, salePricesByArticle).
   // `articleConfigurations` solo trae las filas del catalogo; este mapa trae ademas los precios

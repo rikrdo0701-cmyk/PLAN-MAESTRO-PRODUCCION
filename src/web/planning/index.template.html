@@ -412,6 +412,7 @@
             <button data-tab="subcontractReport" type="button">Subcontratos</button>
             <button data-tab="release" type="button">Liberación final</button>
             <button data-tab="releaseReal" type="button">Liberación real</button>
+            <button data-tab="faltantes" type="button">Faltantes</button>
           </div>
           <section id="weekTab" class="tab-panel">
 <div class="report-toolbar">
@@ -511,6 +512,16 @@
             </div>
             <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>LIBERACIÓN REAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="releaseRealPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="releaseRealReport" class="release-real-table report-page-table"></table></div>
+          </section>
+
+          <section id="faltantesTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Faltantes</h2><span>Artículos con faltante > 0 · planta MM del Llano</span></div>
+              <div class="report-actions">
+                <button id="syncFaltantesBtn" class="button small" type="button" title="Sincroniza solo las tablas que alimentan el reporte (inventario, OV, artículos, OTs, materiales)"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 18 15"/></svg></span>Sincronizar</button>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="faltantesReport" class="production-report-table report-page-table"></table></div>
           </section>
         </section>
 

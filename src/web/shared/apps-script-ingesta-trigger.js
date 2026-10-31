@@ -146,7 +146,7 @@
         // Ver el punto 1 de la cabecera. Este comentario es el unico sitio donde se puede
         // cambiar a application/json, y ese cambio es el que rompe la pagina.
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ accion: "ingesta", forzado: opciones.forzado !== false }),
+        body: JSON.stringify({ accion: "ingesta", forzado: opciones.forzado !== false, solo: Array.isArray(opciones.solo) ? opciones.solo : undefined }),
         cache: "no-store",
         credentials: "omit",
         signal: control.signal,
