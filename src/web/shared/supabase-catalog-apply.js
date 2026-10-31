@@ -182,6 +182,11 @@
     entrada.operations = informe.operations;
     entrada.workOrders = informe.workOrders;
     entrada.materials = informe.materials;
+    // MEDIDO 2026-10-31 (reporte Faltantes): inventory, items y salesOrders los
+    // necesita el reporte. El lector los mapea y el boot los pasa en el informe.
+    if (informe.inventory !== undefined) entrada.inventory = informe.inventory;
+    if (informe.items !== undefined) entrada.items = informe.items;
+    if (informe.salesOrders !== undefined) entrada.salesOrders = informe.salesOrders;
     for (const clave of CLAVES_PERSONA) {
       // SIN RESPALDO AL PUENTE. Si el lector no trajo la tabla, la clave NO se pone:
       // la pagina se muestra sin cola, sin bloqueos o sin historial, y el aviso del

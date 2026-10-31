@@ -501,6 +501,13 @@
     informe.operations = resultado.operations;
     informe.workOrders = resultado.workOrders;
     informe.materials = resultado.materials;
+    // MEDIDO 2026-10-31 (reporte Faltantes): inventory, items y salesOrders los
+    // necesita el reporte para calcular existencia y demanda de OVs. El lector ya los
+    // mapea (mapInventory, mapItems, mapSalesOrders). Se pasan para que apply los
+    // ponga en state y el reporte los vea desde el primer arranque.
+    informe.inventory = resultado.inventory;
+    informe.items = resultado.items;
+    informe.salesOrders = resultado.salesOrders;
     return informe;
   }
 
