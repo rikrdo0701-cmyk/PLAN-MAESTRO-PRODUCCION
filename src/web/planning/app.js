@@ -1311,9 +1311,10 @@ function bindEvents() {
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
   els.restoreDraftBtn.addEventListener("click", openRestoreDraftDialog);
-  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. generatePlanPdf
-  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado).
-  els.pdfBtn.addEventListener("click", () => generatePlanPdf());
+  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. handleExportPlan
+  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado) y luego el
+  // formato (PDF o Excel). MEDIDO 2026-10-31: el boton "Generar PDF" paso a llamarse "Exportar".
+  els.pdfBtn.addEventListener("click", () => handleExportPlan());
   els.undoBtn.addEventListener("click", undoLastChange);
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
@@ -7373,20 +7374,137 @@ function pdfSourceOptions() {
 
 async function choosePdfSource() {
   const options = pdfSourceOptions();
-  if (options.length <= 1) return "draft";
+  // MEDIDO 2026-10-31 (pedido del usuario): el flujo de Exportar SIEMPRE pregunta la fuente,
+  // aunque haya una sola opcion (Borrador). Antes este atajo devolvia "draft" sin dialogar.
   const current = reportSnapshot?.snapshotId || "draft";
   const dialogOptions = options
     .map((option) => `<option value="${escapeHtml(option.id)}"${option.id === current ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
     .join("");
   const result = await openPlanningDialog({
-    title: "Generar PDF del plan",
-    summary: "Elige la fuente del PDF: el borrador en edicion o un plan guardado.",
-    body: `<label>Fuente del PDF<select name="snapshot_id" required>${dialogOptions}</select></label>`,
-    confirmLabel: "Generar PDF",
+    title: "Exportar el plan",
+    summary: "Elige la fuente del reporte: el borrador en edicion o un plan guardado.",
+    body: `<label>Fuente<select name="snapshot_id" required>${dialogOptions}</select></label>`,
+    confirmLabel: "Continuar",
     cancelVisible: true,
   });
   if (!result) return null;
   return String(result.snapshot_id || "");
+}
+
+// MEDIDO 2026-10-31 (pedido del usuario): el boton "Generar PDF" paso a llamarse "Exportar" y
+// exporta el Plan de la semana en PDF o Excel. Paso 1 = fuente (choosePdfSource), paso 2 =
+// formato. PDF usa window.print() (sin libreria); Excel descarga directa con 3 hojas.
+async function handleExportPlan() {
+  const sourceId = await choosePdfSource();
+  if (!sourceId) return;
+  const result = await openPlanningDialog({
+    title: "Exportar el plan",
+    summary: "Elige el formato de salida del Plan de la semana.",
+    body: `
+      <label class="restore-draft-option"><input type="radio" name="export_format" value="pdf" checked><span><strong>PDF</strong><small>Se abrira el dialogo de impresion; elige "Guardar como PDF".</small></span></label>
+      <label class="restore-draft-option"><input type="radio" name="export_format" value="xlsx"><span><strong>Excel (.xlsx)</strong><small>Descarga directa con hojas: Resumen, OT que inician y OT que terminan.</small></span></label>`.trim(),
+    confirmLabel: "Exportar",
+    cancelVisible: true,
+  });
+  if (!result) return;
+  if (result.export_format === "xlsx") {
+    return exportPlanWeeklyXlsx(sourceId);
+  }
+  return generatePlanPdf(sourceId);
+}
+
+// MEDIDO 2026-10-31 (pedido del usuario): exportacion EXCEL del Plan de la semana. Resuelve la
+// misma fuente que el PDF (borrador o plan guardado), calcula el resumen semanal con las MISMA
+// funciones del reporte en pantalla y arma un .xlsx de 3 hojas:
+//   Resumen                indicadores (meta, monto, brecha, costos, promedios) + desglose por tipo
+//   OT que inician         agrupadas por dia, igual que renderWeeklyJobDays(..., false)
+//   OT que terminan        agrupadas por dia, igual que renderWeeklyJobDays(..., true)
+function weeklyDayRowsForXlsx(rows, finishing) {
+  const byDate = new Map();
+  for (const row of rows) {
+    const dateKey = formatDate(row.date);
+    if (!byDate.has(dateKey)) byDate.set(dateKey, []);
+    byDate.get(dateKey).push(row);
+  }
+  const out = [];
+  for (const [dateKey, dayRows] of byDate) {
+    const date = parseDateOnlyValue(dateKey);
+    out.push([formatReportDate(date)]);
+    dayRows.forEach((row, index) => {
+      const cells = [formatReportDate(date), String(index + 1), row.ot, row.part, formatMaterialQuantity(row.pendingPieces)];
+      if (finishing) {
+        cells.push(formatCurrency(window.PlanningWorkflowCore.effectiveFinishingAmount(row)), String(row.jobType || "").trim());
+      }
+      out.push(cells);
+    });
+    const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
+    const dayTotal = [`Total ${dayRows.length}`, "", "", "", formatMaterialQuantity(pieces)];
+    if (finishing) {
+      dayTotal.push(formatCurrency(window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost), "");
+    }
+    out.push(dayTotal);
+  }
+  return out;
+}
+
+function weeklyResumenRowsForXlsx(summary) {
+  const indicadores = [
+    ["Meta semanal", formatCurrency(summary.releaseTarget)],
+    ["Monto de liberacion", formatCurrency(summary.releaseAmount)],
+    ["Brecha", formatCurrency(summary.releaseGap)],
+    ["Costo p/p", formatCurrency(summary.costPerPiece)],
+    ["Personas con carga", String(summary.peopleWithLoad)],
+    ["Monto por persona", formatCurrency(summary.releasePerPerson)],
+    ["Prom diario corte inicial", formatMaterialQuantity(summary.dailyInitialCutPieces)],
+    ["Prom diario acabado", formatMaterialQuantity(summary.dailyFinishingPieces)],
+    ["Ineficiencia corte inicial", formatMaterialQuantity(summary.staleInitialCutPieces)],
+    ["Ineficiencia acabado", formatMaterialQuantity(summary.staleFinishingPieces)],
+  ];
+  return indicadores.concat(summary.finishingByType.map((row) => [
+    `Tipo ${row.type}: piezas`, formatMaterialQuantity(row.pieces),
+    `Tipo ${row.type}: monto`, formatCurrency(row.amount),
+    `Tipo ${row.type}: costo p/p`, formatCurrency(row.costPerPiece),
+  ]));
+}
+
+async function exportPlanWeeklyXlsx(sourceId) {
+  const usingDraft = sourceId === "draft";
+  const snapshotId = usingDraft ? "" : sourceId;
+  // Mismo camino que el PDF: se resuelve la fuente sobre `reportSnapshot` para que las
+  // funciones del reporte (reportOperationsSource, weeklyJobSummary) lean de ahi.
+  if (usingDraft) {
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
+  } else {
+    await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
+  }
+  if (!reportSnapshot?.operations?.length) {
+    if (!usingDraft) {
+      showToast("El plan seleccionado no tiene operaciones programadas");
+      return;
+    }
+    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    reportSnapshot = { operations: scheduled.map((op, index) => ({ ...op, num: index + 1 })) };
+    if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para exportar"); return; }
+  }
+  const reportStart = usingDraft
+    ? (state.planStart || state.reportWeekStart)
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  const reportOps = reportOperationsSource();
+  const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
+  const execSummary = weeklyExecutiveSummary(summary, state.reportWeekStart, {
+    operations: reportOps,
+    sourceState: usingDraft ? state : (reportSnapshot || state),
+  });
+  const sheets = [
+    { name: "Resumen", headers: ["Indicador", "Valor"], rows: weeklyResumenRowsForXlsx(execSummary) },
+    { name: "OT que inician", headers: ["Dia", "No.", "ORD", "PARTE", "PZAS"], rows: weeklyDayRowsForXlsx(summary.starts, false) },
+    { name: "OT que terminan", headers: ["Dia", "No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"], rows: weeklyDayRowsForXlsx(summary.finishes, true) },
+  ];
+  const bytes = buildMultiSheetXlsxBytes(sheets);
+  const weekLabel = `plan-semana-${reportStart || "sin-fecha"}`;
+  downloadBlob(bytes, `${weekLabel}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 async function generatePlanPdf(explicitSnapshotId = "") {
@@ -12870,6 +12988,30 @@ function buildXlsxBytes(headers, rows, sheetName) {
     ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
     ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
     ["xl/worksheets/sheet1.xml", sheetXml],
+  ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
+  return buildZipBytes(entries);
+}
+
+// MEDIDO 2026-10-31: "Exportar" del Plan de la semana necesita UN XLSX CON VARIAS HOJAS
+// (Resumen, OT que inician, OT que terminan). `buildXlsxBytes` tiene una hoja fija; este
+// constructor es aditivo y deja `buildXlsxBytes` intacto para las exportaciones existentes
+// (backlog, cola, liberacion...). Cada hoja: { name, headers, rows }.
+function buildMultiSheetXlsxBytes(sheets) {
+  const encoder = new TextEncoder();
+  const lista = Array.isArray(sheets) ? sheets : [];
+  const sheetXmls = lista.map((sheet) => buildSheetXml(sheet.headers, sheet.rows));
+  const contentTypesOverrides = lista.map((sheet, index) =>
+    `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
+  const workbookSheets = lista.map((sheet, index) =>
+    `<sheet name="${xmlEscape(String(sheet.name || `Hoja${index + 1}`))}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("");
+  const workbookRels = lista.map((sheet, index) =>
+    `<Relationship Id="rId${index + 1}" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("");
+  const entries = [
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${contentTypesOverrides}</Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets>${workbookSheets}</sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}">${workbookRels}</Relationships>`],
+    ...lista.map((sheet, index) => [`xl/worksheets/sheet${index + 1}.xml`, sheetXmls[index]]),
   ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
   return buildZipBytes(entries);
 }

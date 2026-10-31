@@ -777,8 +777,9 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /if \(!commercial\.needsType && !commercial\.needsPlanningType && !commercial\.needsManualPrice\) continue/);
   assert.doesNotMatch(pagesIndex, /function balanceOperators\(\)/);
   assert.match(pagesIndex, /pdfBtn\.setAttribute\("aria-busy", "true"\)/);
-  // RULE-REP-026: el clic no pasa el evento como id de snapshot (rompia Generar PDF).
-  assert.match(pagesIndex, /pdfBtn\.addEventListener\("click", \(\) => generatePlanPdf\(\)\)/);
+  // MEDIDO 2026-10-31 (pedido del usuario): el boton paso a llamarse "Exportar" y el clic
+  // entra por handleExportPlan (que pide fuente y luego formato PDF o Excel).
+  assert.match(pagesIndex, /pdfBtn\.addEventListener\("click", \(\) => handleExportPlan\(\)\)/);
   assert.match(pagesIndex, /async function choosePdfSource\(\)/);
   assert.match(pagesIndex, /@page \{ size: 210mm 297mm/);
   assert.match(pagesIndex, /@media print[\s\S]*html,[\s\S]*body \{ width: 210mm; min-height: 0/);
@@ -3683,9 +3684,11 @@ test("el aviso de credenciales dice que hay portapapeles y que el texto de ejemp
   assert.match(bloqueDelAviso, /no (se )?(copie|copie|tome|tomes) tal cual/i);
 });
 
-test("RULE-REP-026: Generar PDF elige entre Borrador y los planes guardados", async () => {
-  // El clic en Generar PDF ya no pasa el evento como id de snapshot: la fuente la resuelve
+test("RULE-REP-026: Exportar elige entre Borrador y los planes guardados, siempre con dialogo", async () => {
+  // El clic en Exportar ya no pasa el evento como id de snapshot: la fuente la resuelve
   // choosePdfSource con un dialogo que ofrece el borrador en edicion y los planes guardados.
+  // MEDIDO 2026-10-31 (pedido del usuario): el dialogo se muestra SIEMPRE, aunque solo haya
+  // borrador; antes con una sola opcion devolvia "draft" sin preguntar.
   const app = await readFile(path.join(process.cwd(), "src", "web", "planning", "app.js"), "utf8");
   const source = app.slice(app.indexOf("function pdfSourceOptions("), app.indexOf("async function generatePlanPdf("));
   const snapshots = [
@@ -3707,10 +3710,11 @@ test("RULE-REP-026: Generar PDF elige entre Borrador y los planes guardados", as
   assert.equal(await conPlanes.choosePdfSource(), "snap-2");
   assert.match(conPlanes.dialog.body, /<option value="draft"/);
   assert.match(conPlanes.dialog.body, /name="snapshot_id"/);
-  assert.match(conPlanes.dialog.confirmLabel, /Generar PDF/);
 
-  const sinPlanes = helpersWith([], [], async () => { throw new Error("no debe abrir dialogo sin planes"); });
+  // SIN PLANES el dialogo ya no se salta: se muestra con la unica opcion (Borrador).
+  const sinPlanes = helpersWith([], [], async (config) => { sinPlanes.dialog = config; return { snapshot_id: "draft" }; });
   assert.equal(await sinPlanes.choosePdfSource(), "draft");
+  assert.ok(sinPlanes.dialog, "con una sola opcion si se abre el dialogo");
 
   const cancelado = helpersWith(snapshots, ["snap-1"], async () => null);
   assert.equal(await cancelado.choosePdfSource(), null);
