@@ -10068,18 +10068,31 @@ function faltantesRows() {
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: Math.max(0, falta), ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
-  // filas de hijos planas
+  // filas de hijos planas, agregadas por componente (sin duplicados)
+  var hijosPorArt = {};
   for (var g = 0; g < grupos.length; g++) {
     for (var h2 = 0; h2 < grupos[g].hijos.length; h2++) {
       var hInfo = grupos[g].hijos[h2];
       proc.add(hInfo.c);
       var hd = hInfo.hi;
+      var hKey = hInfo.c;
       var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
-      var faltaH = demH - (existencia[hInfo.c] || 0);
+      var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
       if (faltaH <= 0) continue;
-      hijos.push({ articulo: hInfo.c, padre: grupos[g].articulo, existencia: Number(existencia[hInfo.c]) || 0, ots: (otPorArt[hInfo.c] || {}).ots || [], pendiente: (otPorArt[hInfo.c] || {}).cat || 0, heredado: hInfo.he, faltante: faltaH, ovs: (demandaOV[hInfo.c] || {}).ovs || [] });
+      if (!hijosPorArt[hKey]) {
+        hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] || {}).ots.slice(), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] || {}).ovs.slice() };
+      }
+      hijosPorArt[hKey].heredado += hInfo.he;
+      hijosPorArt[hKey].faltante += faltaH;
+      if (otPorArt[hKey]) {
+        for (var oi = 0; oi < otPorArt[hKey].ots.length; oi++) {
+          var ya = hijosPorArt[hKey].ots.some(function(x) { return x.ot === otPorArt[hKey].ots[oi].ot; });
+          if (!ya) hijosPorArt[hKey].ots.push(otPorArt[hKey].ots[oi]);
+        }
+      }
     }
   }
+  var hijos = Object.keys(hijosPorArt).sort().map(function(k) { return hijosPorArt[k]; });
   grupos.sort(function(a,b) { return b.faltante - a.faltante || a.articulo.localeCompare(b.articulo, "es"); });
   hijos.sort(function(a,b) { return b.faltante - a.faltante; });
   return { grupos: grupos, hijos: hijos };
@@ -10110,7 +10123,7 @@ function renderFaltantesReport() {
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
     var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    rowsHtml += "<tr style=\"opacity:.7\"><td>" + escapeHtml(f.articulo) + "<br><span class=\"report-aux-note\">de " + escapeHtml(f.padre) + "</span></td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    rowsHtml += "<tr style=\"opacity:.7\"><td>" + escapeHtml(f.articulo) + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
     rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.</td></tr>";
