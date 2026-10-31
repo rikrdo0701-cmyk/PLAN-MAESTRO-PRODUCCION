@@ -24,6 +24,27 @@ define(['N/query'], (query) => {
     body = body || {};
     const accion = String(body.accion || 'todas').toLowerCase();
 
+    // MEDIDO 2026-10-31 (HALLAZGO CRITICO 2, parcial): el cuerpo puede traer
+    // `acciones` como lista. Es la forma de pedir SOLO las tablas que el reporte
+    // Faltantes necesita (work_orders, materials, items, inventory, sales_orders)
+    // SIN que la ingesta toque operations ni machines. Con `todas` se pide de
+    // una vez, como siempre; con una lista se pide cada una (una llamada por
+    // accion) y se devuelven en el mismo shape que `todas`, para que el lado de
+    // Apps Script (PP_ingesta_) no tenga que saber la diferencia.
+    if (Array.isArray(body.acciones) && body.acciones.length) {
+      const pedidas = body.acciones
+        .map(function (a) { return String(a || '').trim().toLowerCase(); })
+        .filter(function (a) { return !!a; });
+      const out = {};
+      let todasOk = true;
+      for (const a of pedidas) {
+        const r = ejecutar_(a);
+        out[a] = r;
+        if (!r || r.ok !== true) todasOk = false;
+      }
+      return { ok: todasOk, acciones: out, pedidas: pedidas };
+    }
+
     if (accion === 'todas') {
       const out = {};
       // `ensambles` va en un try/catch PROPIO y no en esta lista: es la accion nueva
@@ -611,7 +632,11 @@ define(['N/query'], (query) => {
   }
 
   // ===========================================================================
-  // 1767 — SO_EXPORT: search en sales order lines con summaries
+  // 1767 — SO_EXPORT: sales orders con lineas (item, cantidad, precio, unidad)
+  // MEDIDO 2026-10-31 (HALLAZGO CRITICO 1): sales_orders.lineas estaba VACIA []
+  // porque el SQL no traia transactionline. El report Faltantes NO puede saber
+  // qué artículo pide cada OV sin esto. El RESTlet debe redeployarse en NetSuite
+  // y luego re-ingestarse (fuera de CI). Se deja verificación con SELECT folio,lineas.
   // ===========================================================================
   function ordenesVenta_() {
     const sql = [
@@ -631,11 +656,40 @@ define(['N/query'], (query) => {
       "  AND UPPER(BUILTIN.DF(t.status)) NOT LIKE '%FACTURAD%'",
       'ORDER BY t.tranid'
     ].join('\n');
-    const rows = runSuiteQL_(sql);
-    return {
-      ok: true,
-      headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar'],
-      rows: rows.map(r => ({
+    const ordersRows = runSuiteQL_(sql);
+
+    // Lineas de orden de venta: transactionline tipo SalesOrd
+    const sqlLineas = [
+      'SELECT',
+      '  tl.transaction AS orden_internal_id,',
+      '  BUILTIN.DF(tl.item) AS item,',
+      '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
+      '  tl.rate AS precio,',
+      '  BUILTIN.DF(tl.units) AS unidad',
+      'FROM transactionline tl',
+      "WHERE tl.transaction IN (SELECT id FROM transaction WHERE type = 'SalesOrd' AND UPPER(BUILTIN.DF(status)) NOT LIKE '%CERRAD%' AND UPPER(BUILTIN.DF(status)) NOT LIKE '%CLOSED%' AND UPPER(BUILTIN.DF(status)) NOT LIKE '%FACTURAD%')",
+      "  AND tl.item IS NOT NULL",
+      'ORDER BY tl.transaction, tl.id'
+    ].join('\n');
+    const lineasRaw = runSuiteQL_(sqlLineas) || [];
+
+    // Agrupar lineas por orden (folio)
+    const grupoLineas = {};
+    for (const l of lineasRaw) {
+      const id = String(l.orden_internal_id || '').trim();
+      if (!id) continue;
+      if (!grupoLineas[id]) grupoLineas[id] = [];
+      grupoLineas[id].push({
+        item: String(l.item || ''),
+        cantidad: Number(l.cantidad) || 0,
+        precio: Number(l.precio) || 0,
+        unidad: String(l.unidad || '')
+      });
+    }
+
+    const rows = ordersRows.map(function (r) {
+      const id = String(r.internalid || '').trim();
+      return {
         sales_order_id: String(r.internalid || ''),
         fecha: isoFecha_(r.fecha_captura),
         folio: String(r.orden || ''),
@@ -645,9 +699,16 @@ define(['N/query'], (query) => {
         aprobacion: '',
         total: Number(r.monto_pendiente_facturar) || 0,
         moneda: 1,
-        memo: String(r.comentarios || '')
-      })),
-      totalRows: rows.length
+        memo: String(r.comentarios || ''),
+        lineas: (grupoLineas[id] || [])
+      };
+    });
+    return {
+      ok: true,
+      headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar', 'lineas'],
+      rows: rows,
+      totalRows: rows.length,
+      nota: 'lineas incluidas (ver HALLAZGO CRITICO 1; redeploy 2246 + re-ingesta requerido fuera de CI)'
     };
   }
 
