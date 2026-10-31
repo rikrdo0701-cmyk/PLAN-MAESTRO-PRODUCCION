@@ -1702,7 +1702,14 @@
   // presenta y el que la pagina ya usa al agrupar (`sequenceSort`). Mapear y agrupar son
   // insensibles al orden de las filas, asi que esto no cambia lo que se ve; lo que evita es que
   // el `offset` de la segunda vuelta se coma operaciones del principio.
-  const ORDEN_PAGINADO = { operations: "ot.asc,secuencia.asc" };
+  // MEDIDO 2026-10-31 (reporte Faltantes): inventory (1975 filas) e items (2536 filas)
+  // REBASAN el default de 1000 y el corte de PostgREST es silencioso (HTTP 200 con menos
+  // filas). Sin paginacion, COMP-GOSS y otros articulos se pierden en la segunda vuelta.
+  const ORDEN_PAGINADO = {
+    operations: "ot.asc,secuencia.asc",
+    inventory: "item.asc",
+    items: "codigo.asc",
+  };
 
   // LA TABLA DE LA QUE SALE CADA REBANADA DE `catalogs`. La clave de la rebanada NO es el
   // nombre de la tabla (`toolCatalog` es `tools`, `otTypes` es `ot_types`, `machines` es
