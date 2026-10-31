@@ -1431,7 +1431,8 @@ function bindEvents() {
   });
   // MEDIDO 2026-10-31 (reporte Faltantes): sincroniza solo las 5 tablas del reporte sin
   // tocar operations ni machines (RULE-SUP-048 excepcion, parcial). Despues de la ingesta
-  // se releen las 5 tablas de Supabase para que el estado se actualice sin recargar la pagina.
+  // se recarga el estado completo desde Supabase (getAppState -> aplicarEstadoDesdeSupabase)
+  // para que el reporte vea los datos frescos de inventario, OVs, items, materiales y OTs.
   document.getElementById("syncFaltantesBtn")?.addEventListener("click", async () => {
     const btn = document.getElementById("syncFaltantesBtn");
     if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
@@ -1445,23 +1446,14 @@ function bindEvents() {
     } catch (e) {
       console.warn("Error en sincronizacion de faltantes:", e);
     }
-    // Releer las 5 tablas de la ingesta para que el estado refleje los datos nuevos
+    // Recargar el estado completo de las tablas de catalogo desde Supabase
     try {
-      const r = window.PPSupabaseReader;
-      if (r) {
-        const inv = await r.readTable("inventory");
-        const sos = await r.readTable("sales_orders", { order: "folio.asc" });
-        const its = await r.readTable("items", { order: "codigo.asc" });
-        const mats = await r.readTable("materials", { order: "ot.asc" });
-        const wos = await r.readTable("work_orders", { order: "ot.asc" });
-        state.inventory = r.mapInventory(inv);
-        state.salesOrders = r.mapSalesOrders(sos);
-        state.items = r.mapItems(its);
-        state.materials = r.mapMaterials(mats);
-        state.workOrders = r.soloWorkOrdersAbiertas(wos);
+      const imported = await PPSupabaseBridgeReplacement.getAppState();
+      if (imported && typeof aplicarEstadoDesdeSupabase === "function") {
+        await aplicarEstadoDesdeSupabase(imported);
       }
     } catch (e) {
-      console.warn("Error al recargar datos de faltantes:", e);
+      console.warn("Error al recargar estado tras ingesta:", e);
     }
     if (btn) { btn.disabled = false; btn.textContent = "Sincronizar"; }
     renderFaltantesReport();

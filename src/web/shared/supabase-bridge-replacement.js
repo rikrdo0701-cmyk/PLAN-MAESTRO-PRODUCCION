@@ -1190,8 +1190,19 @@
     const rows = await r.readTable("app_state", { limit: 1 });
     const appState = r.mapAppState(rows);
     const catalogs = await r.readCatalogs();
+    // MEDIDO 2026-10-31: aplanar las slices de catalogo al top level para que
+    // aplicarEstadoDesdeSupabase pueda asignarlas directamente (inventory, items,
+    // salesOrders, etc.). Sin esto, estas slices viven solo dentro de `catalogs`
+    // y nunca llegan a state a través de applyImported.
+    const flatCatalogs = {};
+    if (catalogs.catalogs && typeof catalogs.catalogs === "object") {
+      for (const key of Object.keys(catalogs.catalogs)) {
+        flatCatalogs[key] = catalogs.catalogs[key];
+      }
+    }
     return {
       ...catalogs,
+      ...flatCatalogs,
       revision: Number(appState?.revision || 0),
       savedAt: appState?.savedAt || "",
       source: "supabase",
