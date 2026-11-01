@@ -1121,8 +1121,16 @@ expandedOts: without(state?.expandedOts),
       const current = workOrderByOt.get(ot) || { ot };
       const existingKey = Object.keys(summaries).find((key) => normalize(key) === ot);
       if (!existingKey) {
+        // MEDIDO 2026-11-01 (OT 3300): una OT cerrada sin ficha (no esta en `source.workOrders`)
+        // y sin operaciones quedaba como `{ ot }` y `compactClosedWorkOrder` guardaba un resumen
+        // sin articulo ni cantidad (item:'' , quantity:0), que despues el reporte inyectaba como
+        // fila fantasma. Ese resumen no describe ningun ensamble real: no se debe persistir.
         const relatedOperations = (source.operations || []).filter((operation) => normalize(operation?.ot) === ot);
-        summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
+        const tieneArticulo = !!String(current.item || current.article || current.parte || "").trim();
+        const tieneCantidad = (Number(current.quantity) || Number(current.cantidad) || 0) >= 1;
+        if (tieneArticulo || tieneCantidad || relatedOperations.length) {
+          summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
+        }
       }
     }
     const operations = (source.operations || []).filter(keepRow).map((operation) => ({ ...operation }));

@@ -8483,6 +8483,16 @@ function closedWorkOrderOperation(summary) {
   const start = closedSummarySchedule(summary.scheduledStart);
   const end = closedSummarySchedule(summary.scheduledEnd);
   if (!start && !end) return null;
+  // MEDIDO 2026-11-01 (OT 3300): resumen compacto de una OT que NO esta en el espejo de
+  // `work_orders` ni tiene articulo ni cantidad. Se inyectaba como fila fantasma (PARTE
+  // vacio, 0 pzs) en "Acabado / OT que terminan". Es un resumen huerfano, no una OT que se
+  // ensamblo en la semana (como la 4111, que SI estaba en work_orders). La ficha aqui solo
+  // puede salvarlo si el espejo o el resumen tienen un articulo con cantidad; si ni aun asi
+  // hay articulo y piezas >= 1, la OT no tiene dato valido y no debe mostrarse.
+  const fichaAntes = closedSummaryFichaForOt(summary, ot);
+  const tieneArticulo = !!String(fichaAntes.item || summary.item || "").trim();
+  const tieneCantidad = (Number(summary.quantity) || Number(fichaAntes.quantity) || 0) >= 1;
+  if (!tieneArticulo && !tieneCantidad) return null;
   const pending = Number(summary.pendingQuantity);
   // MEDIDO 2026-10-30 (OT 4111, DECISION DEL USUARIO): una OT cerrada SE RESCATA SIEMPRE, con
   // su articulo y su cantidad reales. Antes la 4111 salia como fila fantasma (PARTE vacio,
@@ -8769,7 +8779,20 @@ function mergeClosedWorkOrderSummaries(local, remote) {
     if (value.item && !existing.item) merged[existingKey].item = value.item;
     if (value.quantity && !Number(existing.quantity)) merged[existingKey].quantity = value.quantity;
   }
-  return merged;
+  // LIMPIEZA DE RESÚMENES HUÉRFANOS (MEDIDO 2026-11-01, OT 3300): un resumen compacto sin
+  // articulo y sin cantidad (item:'' , quantity 0) no describe ningún ensamble real. Se
+  // generaba cuando una OT se cerraba sin ficha en `work_orders`; el reporte lo inyectaba
+  // como fila fantasma en "Acabado / OT que terminan". Aqui se poda en cada recarga/aplicacion
+  // para no arrastrarlo ni conservarlo.
+  const podado = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (!value || typeof value !== "object") continue;
+    const tieneArticulo = !!String(value.item || "").trim();
+    const tieneCantidad = (Number(value.quantity) || 0) >= 1;
+    if (!tieneArticulo && !tieneCantidad) continue; // huerfano: se descarta
+    podado[key] = value;
+  }
+  return podado;
 }
 
 // Union de las marcas de "por confirmar" (RULE-OT-051 capa 2) entre la sesion local y la que
