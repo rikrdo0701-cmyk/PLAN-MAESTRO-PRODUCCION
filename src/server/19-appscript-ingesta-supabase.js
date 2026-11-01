@@ -86,7 +86,7 @@
 // usa nada sin declarar.
 const RESTLET_URL = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
 const RESTLET_SCRIPT = '2246';
-const RESTLET_DEPLOY = '1';
+const RESTLET_DEPLOY = '2';
 
 // =============================================================================
 // Configuracion — NS_* de las Script Properties + Supabase del archivo aparte
@@ -142,7 +142,7 @@ function PP_verificaConfigIngesta_(config) {
 function PP_restletUnificadoParcial_(acciones, config) {
   const url = config.supabaseUrl; // placeholder; se usa endpoint de la llamada normal
   const endpoint = 'https://11103874.restlets.api.netsuite.com/app/site/hosting/restlet.nl';
-  const query = { script: '2246', deploy: '1' };
+  const query = { script: '2246', deploy: '2' };
   const res = UrlFetchApp.fetch(endpoint + '?' + Object.keys(query).map(function(key) {
     return PP_oauthEncode_(key) + '=' + PP_oauthEncode_(query[key]);
   }).join('&'), {
