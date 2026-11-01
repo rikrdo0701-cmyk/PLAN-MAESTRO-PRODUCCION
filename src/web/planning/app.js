@@ -10071,7 +10071,7 @@ function faltantesRows() {
     // (la OT es produccion interna, no carencia para el cliente).
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
-    if (faltaOV > 0 || d.ov > 0 || (otPorArt[key] || {}).cat > 0) {
+    if (faltaOV > 0) {
       if (!ensambles.has(key)) continue; // solo articulos tipo Assembly
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
