@@ -71,7 +71,7 @@ test("faltantesRows toma subensambles de las OTs ABIERTAS (pendiente - existenci
     // MEDIDO 2026-11-01: los padres del reporte no tienen BOM, asi que la herencia por padre
     // daba siempre 0. La demanda del componente viene de lo que la OT todavia debe consumir.
     materials: [
-      { ot: "3972", assembly: "C 590 UADE", component: "M66-2417", required: 2, issued: 0, pending: 32 },
+      { ot: "3972", assembly: "C 590 UADE", component: "M66-2417", required: 32, issued: 0, pending: 40 },
     ],
     inventory: [
       { item: "C 590 UADE", location: "PLANTA MM DEL LLANO", physical: 4 },
@@ -93,8 +93,26 @@ test("faltantesRows toma subensambles de las OTs ABIERTAS (pendiente - existenci
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
   assert.equal(comp.articulo, "M66-2417");
-  assert.equal(comp.heredado, 32); // pendiente de la OT abierta
+  assert.equal(comp.heredado, 32); // requerido 32 - emitido 0 (NO `pendiente` 40)
   assert.equal(comp.faltante, 24); // 32 - 8 = 24
+});
+
+test("faltantesRows usa requerido - emitido y NO pendiente (COMP-4017 en OT 4056)", () => {
+  const fuente = sliceDesde("function faltantesRows() {", "function renderFaltantesReport() {");
+  const faltantesRows = Function("state", `${fuente}; return faltantesRows;`)({
+    workOrders: [{ ot: "4056", item: "AM M66-4017", quantity: 15, builtQuantity: 0, cerrada: false }],
+    // MEDIDO 2026-11-01: `materials.pendiente` venia en 20 para una fila de 15 y el reporte
+    // pintaba "OT 4056 (15)" con "Pend. 20". La cantidad de la fila es requerido - emitido.
+    materials: [{ ot: "4056", component: "COMP-4017", required: 15, issued: 0, pending: 20 }],
+    inventory: [],
+    salesOrders: [],
+    items: [{ code: "AM M66-4017", type: "ASSEMBLY" }],
+  });
+  const res = faltantesRows();
+  assert.equal(res.hijos.length, 1);
+  assert.equal(res.hijos[0].articulo, "COMP-4017");
+  assert.equal(res.hijos[0].heredado, 15, "la demanda es requerido - emitido, no pendiente");
+  assert.equal(res.hijos[0].faltante, 15);
 });
 
 test("faltantesRows ignora materiales de OTs cerradas y omite PROTOTIPO", () => {

@@ -10153,10 +10153,16 @@ function faltantesRows() {
     if (comp === "PROTOTIPO") continue;
     var req = Math.max(0, Number(filaMat.required) || 0);
     var emitido = Math.max(0, Number(filaMat.issued) || 0);
-    var pendComplemento = Number(filaMat.pending);
-    var demandaComp = Number.isFinite(pendComplemento) && pendComplemento > 0
-      ? pendComplemento
-      : Math.max(0, req - emitido);
+    var pendCampo = Number(filaMat.pending);
+    // MEDIDO 2026-11-01 (reporte del usuario, COMP-4017 en la OT 4056): `materials.pendiente`
+    // NO es confiable como cantidad a consumir. Venia en 20 para una OT cuya fila dice 15, y
+    // esa diferencia se propagaba al "Pend." del reporte: la persona ve 15 en OT (cant.) y 20
+    // en Pend. La cantidad de la fila es `requerido - emitido`, que es el dato del BOM de la OT
+    // y el que la propia columna OT (cant.) muestra. Solo si `requerido` no viene (0) se usa
+    // `pendiente` como respaldo, para no perder filas que solo traen ese campo.
+    var demandaComp = req > 0
+      ? Math.max(0, req - emitido)
+      : (Number.isFinite(pendCampo) ? Math.max(0, pendCampo) : 0);
     if (demandaComp <= 0) continue;
     if (!hijosPorArt[comp]) {
       hijosPorArt[comp] = {
@@ -10215,6 +10221,10 @@ function renderFaltantesReport() {
   window._faltantesData = data;
   var query = (searchEl.value || "").trim().toUpperCase();
   var rowsHtml = "";
+  // COLUMNAS DE LA TABLA (DECISION DEL USUARIO 2026-11-01). "Cant." se quita y la cantidad
+  // viaja junto a la referencia en el mismo formato que las OTs: `OV SO2650 (200)`. Asi la
+  // columna OV/OT se lee con una sola regla para padres y para subensambles, y el ancho de la
+  // tabla baja de 9 a 8 columnas.
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
     if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
@@ -10223,14 +10233,12 @@ function renderFaltantesReport() {
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
       var first = ovi === 0;
       var ovRow = "";
-      var ovCant = "";
       var ovFec = "";
       if (ovsOrdenados.length) {
-        ovRow = escapeHtml(ovsOrdenados[ovi].folio);
-        ovCant = formatMaterialQuantity(ovsOrdenados[ovi].cantidad);
+        ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
@@ -10251,12 +10259,12 @@ function renderFaltantesReport() {
     // `otsStr` va escapado solo en el ultimo render y aqui conviene el escape por pieza.
     origenStr += f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     var otCell = f.ots.length ? "" : escapeHtml(otsStr);
-    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td></td><td>" + otCell + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCell + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"9\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
@@ -10276,7 +10284,7 @@ function filterFaltantesRows() {
   var empty = table.querySelector("tbody tr.report-empty-state");
   if (!any && !empty) {
     var td = document.createElement("td");
-    td.colSpan = 9;
+    td.colSpan = 8;
     td.className = "report-empty-state";
     td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
     var tr = document.createElement("tr");
