@@ -10290,10 +10290,9 @@ function renderFaltantesReport() {
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
     if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
-    // OV/OT DEL PADRE (DECISION DEL USUARIO 2026-11-01): aqui van las OVs que CONSUMEN el
-    // articulo, y tambien las OTs que lo consumen como subensamble. Si el articulo es a la vez
-    // subensamble de otra OT, su demanda no esta solo en las OVs y hay que poder verla.
-    // OT (cant.) queda para lo otro: las OTs que FABRICAN el articulo para cubrir la demanda.
+    // OV/OT DEL PADRE: las OVs que consumen el articulo MAS las OTs que lo consumen como
+    // subensamble, en la MISMA columna (DECISION DEL USUARIO 2026-11-01). La columna aparte
+    // "Consume (OT)" fue un error mio y se quita: no se establecio asi.
     var consumidoras = (g.otsConsumo || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; });
     // OT (cant.): SOLO las OTs que FABRICAN el articulo (cobertura de la demanda). MEDIDO
     // 2026-11-01 (reporte del usuario): en los padres salia siempre vacia porque el render
@@ -10308,36 +10307,42 @@ function renderFaltantesReport() {
       if (ovsOrdenados.length) {
         ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
         ovFec = ovsOrdenados[ovi].fecha || "";
+      } else if (first) {
+        // Sin OV: la fila unica de la columna lleva las OTs que lo consumen como subensamble.
+        ovRow = consumidoras.join(", ");
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? consumidoras.join(", ") : "") + "</td><td>" + (first ? fabricantesStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? fabricantesStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
     if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
-    // OV/OT DEL SUBENSAMBLE: las OVs que lo consumen y las OTs que lo consumen como
-    // subensamble (de ahi sale su demanda). OT (cant.) lleva las OTs que lo FABRICAN, con su
-    // numero, que es lo que cubre la demanda.
-    var origenStr = "";
-    if (f.ovs && f.ovs.length) {
-      var ovsHijo = f.ovs.slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
-      origenStr += ovsHijo.map(function(o) { return "OV " + escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    // OV/OT DEL SUBENSAMBLE (DECISION DEL USUARIO 2026-11-01): la MISMA columna lleva las OVs
+    // que consumen el articulo y las OTs que lo consumen como subensamble. De aqui sale su
+    // demanda. OT (cant.) lleva aparte las OTs que lo FABRICAN, que es lo que le da cobertura.
+    var ovsHijo = (f.ovs || []).slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+    for (var ovi2 = 0; ovi2 < Math.max(1, ovsHijo.length); ovi2++) {
+      var firstH = ovi2 === 0;
+      var ovCell = "";
+      var ovFecha = "";
+      if (ovsHijo.length) {
+        ovCell = "OV " + escapeHtml(ovsHijo[ovi2].folio) + " (" + formatMaterialQuantity(ovsHijo[ovi2].cantidad) + ")";
+        ovFecha = ovsHijo[ovi2].fecha || "";
+      } else if (firstH) {
+        ovCell = f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+      }
+      // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado, con folio y
+      // cantidad: `OT 3050 (15)`. MEDIDO 2026-11-01: antes salia `OT 15`, sin folio.
+      var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
+        ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
+        : "";
+      rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + (firstH ? escapeHtml(f.articulo) : "") + "</td><td>" + (firstH ? escapeHtml(f.descripcion || "") : "") + "</td><td>" + (firstH ? formatMaterialQuantity(f.existencia) : "") + "</td><td>" + ovCell + "</td><td>" + ovFecha + "</td><td>" + (firstH ? otCantStr : "") + "</td><td>" + (firstH ? "<strong>" + formatMaterialQuantity(f.faltante) + "</strong>" : "") + "</td></tr>";
     }
-    var consumoStr = f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    if (consumoStr && origenStr) origenStr += " · ";
-    origenStr += consumoStr;
-    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado. Todas ellas, con
-    // su folio y su cantidad: `OT 4165 (15)`. MEDIDO 2026-11-01: salia `OT 15`, con la
-    // cantidad en el lugar del folio y sin numero de OT, que es un dato que no se puede usar.
-    var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
-      ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
-      : "";
-    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+    rowsHtml = "<tr><td colspan=\"7\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-fabricantes\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>Consume (OT)</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-fabricantes\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
@@ -10357,7 +10362,7 @@ function filterFaltantesRows() {
   var empty = table.querySelector("tbody tr.report-empty-state");
   if (!any && !empty) {
     var td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 7;
     td.className = "report-empty-state";
     td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
     var tr = document.createElement("tr");
