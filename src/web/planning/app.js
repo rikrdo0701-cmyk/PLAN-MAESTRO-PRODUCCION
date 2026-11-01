@@ -10177,6 +10177,17 @@ function faltantesRows() {
     }
   }
   // El faltante se decide al final, con la demanda de OT ya agregada por componente.
+  //
+  // MEDIDO 2026-11-01 (reporte del usuario, CKW-7): la fila salia con `OT (cant.) 4144 (30)`,
+  // `Pend. 0` y `Faltante 20`, que se lee como contradiccion: si la OT 4144 pide 30 piezas,
+  // parecia que la OT ya cubria el faltante. NO ES ASI, y hay dos cosas distintas que se
+  // llamaban igual:
+  //   - `materials` de una OT abierta = lo que esa OT TODAVIA DEBE CONSUMIR. ES la demanda,
+  //     no una cobertura. La OT 4144 no produce CKW-7: se lo come.
+  //   - `otPorArt` = OTs que PRODUCEN el articulo (work_orders del articulo). Para CKW-7 no
+  //     hay ninguna abierta, y por eso `Pend.` sale 0.
+  // Restar `otPorArt` aqui seria contar como cobertura una OT que en realidad consume mas.
+  // La resta correcta ya esta hecha: demanda de OTs abiertas (30) menos existencia (10) = 20.
   var hijos = Object.keys(hijosPorArt).map(function (k) {
     var f = hijosPorArt[k];
     f.faltante = Math.max(0, f.heredado - f.existencia);
@@ -10226,12 +10237,24 @@ function renderFaltantesReport() {
     var f = data.hijos[ci];
     if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
     var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    // MEDIDO 2026-11-01 (pedido del usuario): en un SUBENSAMBLE la columna OV/OT muestra las
+    // OTs QUE LO REQUIEREN, que es de donde sale su demanda. Asi se ve el origen del faltante
+    // en la misma fila, sin tener que buscar la OT a mano. Si ademas tiene OV propia, se pone
+    // arriba de su lista de OTs. La columna de la OT no se repite abajo: ya esta aqui.
+    var origenStr = "";
+    if (f.ovs && f.ovs.length) {
+      var ovsHijo = f.ovs.slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+      origenStr += ovsHijo.map(function(o) { return escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    }
+    if (otsStr && origenStr) origenStr += " · ";
+    origenStr += escapeHtml(otsStr);
+    var otCell = f.ots.length ? "" : otsStr;
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td></td><td>" + otCell + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
     rowsHtml = "<tr><td colspan=\"9\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
