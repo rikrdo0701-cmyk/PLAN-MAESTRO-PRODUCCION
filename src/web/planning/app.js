@@ -10046,13 +10046,14 @@ function faltantesRows() {
     var propOt = (otPorArt[art] || {}).cat || 0;
     var res = { ov: propOv, ot: propOt, he: 0, hi: [] };
     var falta = Math.max(propOv, propOt) - (existencia[art] || 0);
+    var faltaOV_loc = Math.max(0, propOv - (existencia[art] || 0) - (otPorArt[art] || {}).cat || 0);
     if (falta > 0 && grafo[art]) {
       for (var i2 = 0; i2 < grafo[art].length; i2++) {
         var h = grafo[art][i2];
         if (visitando.has(h.c)) continue;
         var hijo = demRec(h.c);
         if (falta > 0) {
-          var heredado = falta * h.req;
+          var heredado = faltaOV_loc * h.req;
           res.hi.push({ c: h.c, he: heredado, hi: hijo });
         }
       }
