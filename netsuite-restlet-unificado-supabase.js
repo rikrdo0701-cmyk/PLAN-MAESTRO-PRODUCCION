@@ -544,7 +544,6 @@ define(['N/query'], (query) => {
       '  i.itemid AS codigo,',
       '  i.itemtype AS tipo,',
       '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
-      '  i.location AS ubicacion,',
       '  i.isinactive AS inactivo,',
       '  i.lastmodifieddate AS ultima_modificacion',
       'FROM item i',
@@ -554,12 +553,11 @@ define(['N/query'], (query) => {
     const rows = runSuiteQL_(sql);
     return {
       ok: true,
-      headers: ['item_id', 'codigo', 'tipo', 'descripcion', 'ubicacion', 'inactivo', 'ultima_modificacion'],
+      headers: ['item_id', 'codigo', 'tipo', 'descripcion', 'inactivo', 'ultima_modificacion'],
       rows: rows.map(r => ({
         codigo: String(r.codigo || ''),
         tipo: String(r.tipo || ''),
         descripcion: String(r.descripcion || ''),
-        ubicacion: String(r.ubicacion || ''),
         inactivo: r.inactivo === 'T',
         ultima_modificacion: isoFecha_(r.ultima_modificacion)
       })),

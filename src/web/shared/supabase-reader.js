@@ -1508,7 +1508,6 @@
         isAssembly: Boolean(row.es_ensamblaje),
         inactive: Boolean(row.inactivo),
         lastModified: String(row.ultima_modificacion || ""),
-        location: number(row.ubicacion),
       };
     });
   }

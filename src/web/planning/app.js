@@ -9978,12 +9978,19 @@ function faltantesRows() {
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
   var arts = state.items || [];
-  // MEDIDO 2026-10-31: solo articulos tipo Assembly de Planta MM del Llano (location=1).
-  // Items de otras plantas (location=2 V.Guerrero, etc.) se excluyen.
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly que tengan inventario
+  // fisico > 0 en Planta MM del Llano. Items de otras plantas con stock 0
+  // (como BA 400/600/700 SMNE) se excluyen automaticamente.
   var ensamblesMM = new Set();
   for (var ai = 0; ai < arts.length; ai++) {
     if (arts[ai].type !== "ASSEMBLY") continue;
-    if (Number(arts[ai].location) === 1) ensamblesMM.add(arts[ai].code.toUpperCase());
+    ensamblesMM.add(arts[ai].code.toUpperCase());
+  }
+  var itemsConInvMM = new Set();
+  for (var i = 0; i < inv.length; i++) {
+    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
+      itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
+    }
   }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
@@ -10073,7 +10080,7 @@ function faltantesRows() {
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
-      if (!ensamblesMM.has(key)) continue; // solo tipo Assembly de MM del Llano (items.location)
+      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue; // solo Assembly con inventario fisico > 0 en MM
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
@@ -10090,8 +10097,8 @@ function faltantesRows() {
       // faltante para hijos tambien solo contra OVs
       var faltaHOV = Math.max(0, (hd.ov || 0) - (existencia[hKey] || 0));
       if (faltaHOV <= 0) continue;
-      // MEDIDO 2026-10-31: solo componentes tipo Assembly de MM del Llano
-      if (!ensamblesMM.has(hKey)) continue;
+      // MEDIDO 2026-10-31: solo componentes Assembly con inventario en MM del Llano
+      if (!ensamblesMM.has(hKey) || !itemsConInvMM.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
