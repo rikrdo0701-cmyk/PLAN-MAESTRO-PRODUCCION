@@ -7490,7 +7490,7 @@ function weeklyResumenRowsForXlsx(summary) {
 }
 
 async function exportPlanWeeklyXlsx(sourceId) {
-  const usingDraft = sourceId === "draft";
+  let usingDraft = sourceId === "draft";
   const snapshotId = usingDraft ? "" : sourceId;
   // Mismo camino que el PDF: se resuelve la fuente sobre `reportSnapshot` para que las
   // funciones del reporte (reportOperationsSource, weeklyJobSummary) lean de ahi.
@@ -7507,7 +7507,28 @@ async function exportPlanWeeklyXlsx(sourceId) {
     }
     const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
     reportSnapshot = { operations: scheduled.map((op, index) => ({ ...op, num: index + 1 })) };
-    if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para exportar"); return; }
+    if (!reportSnapshot.operations.length) {
+      // MEDIDO 2026-11-01 (pedido del usuario): el Borrador esta vacio porque el plan se
+      // publico y sus OTs quedaron solo en el snapshot. En vez de exportar vacio, se busca
+      // el snapshot mas reciente con datos y se usa ese. El orden es `publishedAt` o
+      // `generatedAt` descendente, asi que el primer snapshot con operations > 0 es el
+      // ultimo que se publico/guardo. Si no hay ninguno, se avisa y se sale.
+      const saved = Array.isArray(planSnapshots) ? planSnapshots : [];
+      const sorted = saved
+        .filter((s) => s.snapshotId && s.snapshotId !== "draft" && Number(s.operations || 0) > 0)
+        .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+      if (sorted.length) {
+        await loadPlanSnapshotById(sorted[0].snapshotId, { render: false, silent: true });
+        if (reportSnapshot?.operations?.length) {
+          usingDraft = false; // ahora la fuente es el snapshot, no el borrador
+        }
+      }
+    }
+    // Si tras el fallback todavia no hay operaciones, se sale con aviso.
+    if (!reportSnapshot?.operations?.length) {
+      showToast("No hay operaciones programadas para exportar");
+      return;
+    }
   }
   const reportStart = usingDraft
     ? (state.planStart || state.reportWeekStart)
