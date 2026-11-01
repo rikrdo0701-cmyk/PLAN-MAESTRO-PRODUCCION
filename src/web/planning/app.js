@@ -10094,8 +10094,8 @@ function faltantesRows() {
       var hKey = hInfo.c;
       var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
       var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
-      // faltante para hijos tambien solo contra OVs
-      var faltaHOV = Math.max(0, (hd.ov || 0) - (existencia[hKey] || 0));
+      // faltante para hijos: considera heredado (demanda del padre) + OV propio
+      var faltaHOV = Math.max(0, (hd.ov || 0) + hInfo.he - (existencia[hKey] || 0));
       if (faltaHOV <= 0) continue;
       // MEDIDO 2026-10-31: solo componentes Assembly con inventario en MM del Llano
       if (!ensamblesMM.has(hKey) || !itemsConInvMM.has(hKey)) continue;

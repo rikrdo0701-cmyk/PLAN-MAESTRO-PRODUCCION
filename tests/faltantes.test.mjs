@@ -87,10 +87,9 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
   const g = res.grupos[0];
   assert.equal(g.articulo, "C 590 UADE");
   assert.equal(g.faltante, 16); // max(0, OV 40 - inv 4 - OT pend 20) = 16
-  // debe haber un componente M66-2417 en hijos
+  // debe haber un componente M66-2417 en hijos (heredado del padre 16*2=32)
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
-  // articulo agrupado, ya no tiene .padre (se cambio a agrupacion por componente)
   assert.equal(comp.articulo, "M66-2417");
   assert.equal(comp.heredado, 32); // 16 * 2
   assert.equal(comp.faltante, 24); // (0+32) - 8 = 24
