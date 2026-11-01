@@ -10125,6 +10125,31 @@ function faltantesRows() {
   var grupos = [];
   var hijos = [];
   var proc = new Set();
+  // CONSUMIDORES POR ARTICULO: las OTs abiertas que usan el articulo como subensamble, con la
+  // cantidad que todavia deben surtirle (`requerido - emitido`). Alimenta la columna OV/OT
+  // (DECISION DEL USUARIO 2026-11-01): esa columna muestra lo que CONSUME el articulo; las OTs
+  // que lo FABRICAN van en OT (cant.).
+  var consumidoresPorArt = {};
+  var otsAbiertasSet = new Set();
+  for (var wc = 0; wc < wo.length; wc++) {
+    if (wo[wc].cerrada) continue;
+    var otConsumo = String(wo[wc].ot || "").trim().toUpperCase();
+    if (otConsumo) otsAbiertasSet.add(otConsumo);
+  }
+  for (var mc = 0; mc < mats.length; mc++) {
+    var fm = mats[mc];
+    if (!otsAbiertasSet.has(String(fm.ot || "").trim().toUpperCase())) continue;
+    var cmp = String(fm.component || "").trim().toUpperCase();
+    if (!cmp) continue;
+    var reqC = Math.max(0, Number(fm.required) || 0);
+    var emiC = Math.max(0, Number(fm.issued) || 0);
+    var demC = reqC > 0 ? Math.max(0, reqC - emiC) : Math.max(0, Number(fm.pending) || 0);
+    if (demC <= 0) continue;
+    if (!consumidoresPorArt[cmp]) consumidoresPorArt[cmp] = [];
+    var yaConsumo = consumidoresPorArt[cmp].filter(function (x) { return x.ot === String(fm.ot).trim(); })[0];
+    if (yaConsumo) yaConsumo.cantidad += demC;
+    else consumidoresPorArt[cmp].push({ ot: String(fm.ot).trim(), cantidad: demC });
+  }
   var keys = Object.keys(demCache);
   for (var k = 0; k < keys.length; k++) {
     var key = keys[k];
@@ -10145,7 +10170,7 @@ function faltantesRows() {
     // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
     // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
     if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
-    grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: coberturaOt, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
+    grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], otsConsumo: consumidoresPorArt[key] || [], pendiente: coberturaOt, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
   }
   // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).
   //
@@ -10226,6 +10251,9 @@ function faltantesRows() {
   // produce CKW-7: se lo come. La cobertura son las OTs que lo fabrican, que es la otra fuente.
   var hijos = Object.keys(hijosPorArt).map(function (k) {
     var f = hijosPorArt[k];
+    // f.ots = OTs que lo CONSUMEN (van en OV/OT). f.otsFabricantes = OTs que lo FABRICAN
+    // (van en OT (cant.), con su numero, sin repetir la cantidad).
+    f.otsFabricantes = ((otPorArt[k] || {}).ots || []).map(function (o) { return { ot: o.ot, cantidad: o.cantidad }; });
     f.pendiente = (otPorArt[k] || {}).cat || 0;
     f.faltante = f.heredado - f.existencia - f.pendiente;
     return f;
@@ -10259,7 +10287,11 @@ function renderFaltantesReport() {
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
     if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
-    var otsStr = g.ots.map(function(o) { return "OT " + o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    // OV/OT DEL PADRE (DECISION DEL USUARIO 2026-11-01): aqui van las OVs que CONSUMEN el
+    // articulo, y tambien las OTs que lo consumen como subensamble. Si el articulo es a la vez
+    // subensamble de otra OT, su demanda no esta solo en las OVs y hay que poder verla.
+    // OT (cant.) queda para lo otro: las OTs que FABRICAN el articulo para cubrir la demanda.
+    var consumidoras = (g.otsConsumo || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; });
     var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
       var first = ovi === 0;
@@ -10269,29 +10301,27 @@ function renderFaltantesReport() {
         ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? consumidoras.join(", ") : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
     if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
-    // MEDIDO 2026-11-01 (pedido del usuario): en un SUBENSAMBLE la columna OV/OT muestra las
-    // OTs QUE LO REQUIEREN, que es de donde sale su demanda. Si ademas tiene OV propia, se
-    // pone arriba de su lista de OTs originadas por OTs.
+    // OV/OT DEL SUBENSAMBLE: las OVs que lo consumen y las OTs que lo consumen como
+    // subensamble (de ahi sale su demanda). OT (cant.) lleva las OTs que lo FABRICAN, con su
+    // numero, que es lo que cubre la demanda.
     var origenStr = "";
     if (f.ovs && f.ovs.length) {
       var ovsHijo = f.ovs.slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
       origenStr += ovsHijo.map(function(o) { return "OV " + escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     }
-    if (f.ots.length && origenStr) origenStr += " · ";
-    // Las OTs del origen llevan su prefijo y se escapan por pieza.
-    origenStr += f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    // OT (cant.) = OTs abiertas que FABRICAN el componente, ya netas de lo ensamblado.
-    var otCantStr = f.ots.length
-      ? ""
-      : f.pendiente > 0
-        ? "OT " + formatMaterialQuantity(f.pendiente)
-        : "";
+    var consumoStr = f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    if (consumoStr && origenStr) origenStr += " · ";
+    origenStr += consumoStr;
+    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado.
+    var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
+      ? f.otsFabricantes.map(function(o) { return "OT " + formatMaterialQuantity(o.cantidad); }).join(", ")
+      : "";
     rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
