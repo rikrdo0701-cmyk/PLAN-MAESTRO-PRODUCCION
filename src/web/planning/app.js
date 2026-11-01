@@ -10292,6 +10292,10 @@ function renderFaltantesReport() {
     // subensamble de otra OT, su demanda no esta solo en las OVs y hay que poder verla.
     // OT (cant.) queda para lo otro: las OTs que FABRICAN el articulo para cubrir la demanda.
     var consumidoras = (g.otsConsumo || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; });
+    // OT (cant.): las OTs que FABRICAN el articulo (cobertura de la demanda). MEDIDO
+    // 2026-11-01 (reporte del usuario): en los padres salia siempre vacia porque el render
+    // usaba la lista de consumo; y en los subensambles salia `OT 15` sin folio.
+    var fabricantesStr = (g.ots || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
       var first = ovi === 0;
@@ -10301,7 +10305,7 @@ function renderFaltantesReport() {
         ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? consumidoras.join(", ") : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? consumidoras.join(", ") : "") + "</td><td>" + (first ? fabricantesStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
@@ -10318,16 +10322,18 @@ function renderFaltantesReport() {
     var consumoStr = f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     if (consumoStr && origenStr) origenStr += " · ";
     origenStr += consumoStr;
-    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado.
+    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado. Todas ellas, con
+    // su folio y su cantidad: `OT 4165 (15)`. MEDIDO 2026-11-01: salia `OT 15`, con la
+    // cantidad en el lugar del folio y sin numero de OT, que es un dato que no se puede usar.
     var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
-      ? f.otsFabricantes.map(function(o) { return "OT " + formatMaterialQuantity(o.cantidad); }).join(", ")
+      ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
       : "";
     rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"7\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-fabricantes\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>Consume (OT)</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
@@ -10347,7 +10353,7 @@ function filterFaltantesRows() {
   var empty = table.querySelector("tbody tr.report-empty-state");
   if (!any && !empty) {
     var td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.className = "report-empty-state";
     td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
     var tr = document.createElement("tr");
