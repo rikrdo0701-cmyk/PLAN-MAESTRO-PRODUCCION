@@ -21,7 +21,7 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
     `${fuente}; return faltantesRows;`,
   )({
     workOrders: [
-      { ot: "3970", item: "C 590 UAD", quantity: 70, builtQuantity: 0, cerrada: false },
+      { ot: "3970", item: "C 590 UAD", quantity: 70, builtQuantity: 40, cerrada: false },
     ],
     materials: [],
     inventory: [
@@ -29,7 +29,7 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
     ],
     salesOrders: [
       {
-        folio: "SO1350", date: "2026-10-30", status: "", lines: [{ item: "C 590 UAD", cantidad: 40 }],
+        folio: "SO1350", date: "2026-10-30", status: "", lines: [{ item: "C 590 UAD", cantidad: 80 }],
       },
     ],
     items: [
@@ -41,8 +41,8 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
   const g = res.grupos[0];
   assert.equal(g.articulo, "C 590 UAD");
   assert.equal(g.existencia, 25);
-  assert.equal(g.pendiente, 70);
-  assert.equal(g.faltante, 15); // max(0, OV 40 - inv 25) = 15 (OT no cuenta)
+  assert.equal(g.pendiente, 30); // OT pend = 70-40
+  assert.equal(g.faltante, 25); // max(0, OV 80 - inv 25 - OT pend 30) = 25
   assert.equal(g.ovs.length, 1);
   assert.equal(g.ovs[0].folio, "SO1350");
 });
