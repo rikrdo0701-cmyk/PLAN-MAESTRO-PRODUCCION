@@ -9978,14 +9978,12 @@ function faltantesRows() {
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
   var arts = state.items || [];
-  // MEDIDO 2026-10-31: solo articulos tipo Assembly de Planta MM del Llano.
-  // La ubicacion se toma de items.location (el campo del RESTlet, no del inventario).
-  // Items como BA 1200 (Location=Planta V.Guerrero) se excluyen aunque tengan inventario aqui.
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly de Planta MM del Llano (location=1).
+  // Items de otras plantas (location=2 V.Guerrero, etc.) se excluyen.
   var ensamblesMM = new Set();
   for (var ai = 0; ai < arts.length; ai++) {
     if (arts[ai].type !== "ASSEMBLY") continue;
-    var ubi = String(arts[ai].location || "").toUpperCase();
-    if (ubi.indexOf("MM DEL LLANO") >= 0) ensamblesMM.add(arts[ai].code.toUpperCase());
+    if (Number(arts[ai].location) === 1) ensamblesMM.add(arts[ai].code.toUpperCase());
   }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {

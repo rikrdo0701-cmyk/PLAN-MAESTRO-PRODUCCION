@@ -543,11 +543,8 @@ define(['N/query'], (query) => {
       '  i.id AS item_id,',
       '  i.itemid AS codigo,',
       '  i.itemtype AS tipo,',
-      // Mismo fix que workorders_ (2026-09-29): la descripcion real del producto esta en
-      // i.description; purchasedescription esta vacia en casi todos (2/282 en OTs abiertas)
-      // y antes la mayoria caia al displayname (= codigo).
       '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
-      '  NVL(BUILTIN.DF(i.location), \'\') AS ubicacion,',
+      '  i.location AS ubicacion,',
       '  i.isinactive AS inactivo,',
       '  i.lastmodifieddate AS ultima_modificacion',
       'FROM item i',
