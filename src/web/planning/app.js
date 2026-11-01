@@ -10042,9 +10042,21 @@ function faltantesRows() {
       if (/^IVA\b/.test(item) || /\bIVA\b/.test(item)) continue;
       if (/^IMPUESTO\b/.test(item) || /\bFLETE\b/.test(item) || /\bSERVICIO\b/.test(item)) continue;
       if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
-      var pend = so.lines[l].pendiente !== undefined ? Number(so.lines[l].pendiente) : Number(so.lines[l].cantidad);
+      // DECISION DEL USUARIO 2026-11-01: en la OV se descuenta lo YA ENVIADO. La demanda es
+      // `cantidad - enviado` (el RESTlet ya la manda como `pendiente`, y se usa
+      // `cantidad - enviado` cuando esa columna no viene). Un pendiente <= 0 no es demanda.
+      var linea = so.lines[l];
+      var enviadoLinea = Number(linea.enviado);
+      var pend;
+      if (Number.isFinite(Number(linea.pendiente))) {
+        pend = Number(linea.pendiente);
+      } else if (Number.isFinite(Number(linea.cantidad)) && Number.isFinite(enviadoLinea)) {
+        pend = Number(linea.cantidad) - enviadoLinea;
+      } else {
+        pend = Number(linea.cantidad);
+      }
       var absPend = Math.abs(pend) || 0;
-      if (absPend <= 0) continue; // solo lineas con pendiente > 0
+      if (absPend <= 0) continue; // ya enviado por completo: no es demanda
       demandaOV[item].cat += absPend;
       demandaOV[item].ovs.push({ folio: so.folio, cantidad: absPend, fecha: so.date });
     }
@@ -10055,12 +10067,15 @@ function faltantesRows() {
     if (orow.cerrada) continue;
     var art = String(orow.item || "").trim().toUpperCase();
     if (!art) continue;
-    var pend = Math.max(0, Number(orow.quantity || 0) - Number(orow.builtQuantity || 0));
+    // DECISION DEL USUARIO 2026-11-01: en la OT se descuenta lo YA ENSAMBLADO. Es lo que
+    // queda por fabricar, y es la cifra que la columna "OT (cant.)" muestra, para que la
+    // cuenta del Faltante sea exactamente lo que se ve en pantalla.
+    var cantidadOt = Number(orow.quantity || 0);
+    var ensambladaOt = Number(orow.builtQuantity || 0);
+    var pend = Math.max(0, cantidadOt - ensambladaOt);
     if (!otPorArt[art]) { otPorArt[art] = { cat: 0, ots: [] }; }
     otPorArt[art].cat += pend;
-    // MEDIDO 2026-10-31: solo mostrar OTs con pendiente > 0 (las ya ensambladas
-    // son existencia de inventario, no demanda pendiente).
-    if (pend > 0) otPorArt[art].ots.push({ ot: orow.ot, cantidad: Number(orow.quantity || 0) });
+    if (pend > 0) otPorArt[art].ots.push({ ot: orow.ot, cantidad: pend });
   }
   var grafo = {};
   for (var m = 0; m < mats.length; m++) {
@@ -10108,18 +10123,22 @@ function faltantesRows() {
     var key = keys[k];
     proc.add(key);
     var d = demCache[key];
-    var dem = Math.max(d.ov, d.ot + d.he);
-    var falta = dem - (existencia[key] || 0);
-    // MEDIDO 2026-10-31: el faltante que muestra la lista es SOLO contra OVs
-    // (la OT es produccion interna, no carencia para el cliente).
-    var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
-    if (faltaOV <= 0 && !d.hi.length) continue;
-    if (faltaOV > 0) {
-      // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
-      // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
-      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
-      grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
-    }
+    // FORMULA DEL FALTANTE (DECISION DEL USUARIO 2026-11-01):
+    //     faltante = OV/OT - existencia - OT (cant.)
+    // o, leido como lo dicto: existencia MENOS la demanda OV/OT MAS lo que las OTs abiertas
+    // todavia van a fabricar, cambiado de signo.
+    //   - OV/OT = demanda (OV pendiente = cantidad - enviado; o lo que las OTs abiertas deben
+    //     consumir del componente).
+    //   - OT (cant.) = cobertura (OTs abiertas que fabrican el articulo = cantidad - ensamblada).
+    // Solo entra a la lista el que queda POSITIVO: con 0 o negativo esta cubierto.
+    var demandaTotal = d.ov;
+    var coberturaOt = (otPorArt[key] || {}).cat || 0;
+    var faltaOV = demandaTotal - (existencia[key] || 0) - coberturaOt;
+    if (faltaOV <= 0) continue;
+    // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
+    // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
+    if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
+    grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: coberturaOt, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
   }
   // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).
   //
@@ -10178,25 +10197,28 @@ function faltantesRows() {
     }
     hijosPorArt[comp].heredado += demandaComp;
     var otDeLaFila = String(filaMat.ot || "").trim();
-    if (otDeLaFila && !hijosPorArt[comp].ots.some(function (x) { return String(x.ot) === otDeLaFila; })) {
+    var acumulada = hijosPorArt[comp].ots.filter(function (x) { return String(x.ot) === otDeLaFila; })[0];
+    if (!acumulada && otDeLaFila) {
       hijosPorArt[comp].ots.push({ ot: otDeLaFila, cantidad: demandaComp });
+    } else if (acumulada) {
+      // Una OT puede pedir el mismo componente en varias lineas: la columna muestra la suma,
+      // que es lo que esa OT de verdad va a consumir.
+      acumulada.cantidad += demandaComp;
     }
   }
-  // El faltante se decide al final, con la demanda de OT ya agregada por componente.
+  // El faltante se decide al final, con la demanda de OT ya agregada por componente y con la
+  // MISMA formula que los padres (DECISION DEL USUARIO 2026-11-01):
+  //     faltante = OV/OT - existencia - OT (cant.)
+  // Aqui OV/OT son las OTs abiertas que lo CONSUMEN (`materials`) y OT (cant.) son las OTs
+  // abiertas que lo FABRICAN (`work_orders`), ya netas de lo ensamblado. Solo entra a la lista
+  // el que queda POSITIVO: con 0 o negativo esta cubierto.
   //
-  // MEDIDO 2026-11-01 (reporte del usuario, CKW-7): la fila salia con `OT (cant.) 4144 (30)`,
-  // `Pend. 0` y `Faltante 20`, que se lee como contradiccion: si la OT 4144 pide 30 piezas,
-  // parecia que la OT ya cubria el faltante. NO ES ASI, y hay dos cosas distintas que se
-  // llamaban igual:
-  //   - `materials` de una OT abierta = lo que esa OT TODAVIA DEBE CONSUMIR. ES la demanda,
-  //     no una cobertura. La OT 4144 no produce CKW-7: se lo come.
-  //   - `otPorArt` = OTs que PRODUCEN el articulo (work_orders del articulo). Para CKW-7 no
-  //     hay ninguna abierta, y por eso `Pend.` sale 0.
-  // Restar `otPorArt` aqui seria contar como cobertura una OT que en realidad consume mas.
-  // La resta correcta ya esta hecha: demanda de OTs abiertas (30) menos existencia (10) = 20.
+  // MEDIDO 2026-11-01 (CKW-7): la demanda de `materials` NO es cobertura. La OT 4144 no
+  // produce CKW-7: se lo come. La cobertura son las OTs que lo fabrican, que es la otra fuente.
   var hijos = Object.keys(hijosPorArt).map(function (k) {
     var f = hijosPorArt[k];
-    f.faltante = Math.max(0, f.heredado - f.existencia);
+    f.pendiente = (otPorArt[k] || {}).cat || 0;
+    f.faltante = f.heredado - f.existencia - f.pendiente;
     return f;
   }).filter(function (f) { return f.faltante > 0; });
   grupos.sort(function(a,b) { return b.faltante - a.faltante || a.articulo.localeCompare(b.articulo, "es"); });
@@ -10238,33 +10260,35 @@ function renderFaltantesReport() {
         ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
     if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
-    var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     // MEDIDO 2026-11-01 (pedido del usuario): en un SUBENSAMBLE la columna OV/OT muestra las
-    // OTs QUE LO REQUIEREN, que es de donde sale su demanda. Asi se ve el origen del faltante
-    // en la misma fila, sin tener que buscar la OT a mano. Si ademas tiene OV propia, se pone
-    // arriba de su lista de OTs. La columna de la OT no se repite abajo: ya esta aqui.
+    // OTs QUE LO REQUIEREN, que es de donde sale su demanda. Si ademas tiene OV propia, se
+    // pone arriba de su lista de OTs originadas por OTs.
     var origenStr = "";
     if (f.ovs && f.ovs.length) {
       var ovsHijo = f.ovs.slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
       origenStr += ovsHijo.map(function(o) { return "OV " + escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     }
-    if (otsStr && origenStr) origenStr += " · ";
-    // Las OTs del origen llevan su prefijo. Se arma aqui y no reusando `otsStr` porque
-    // `otsStr` va escapado solo en el ultimo render y aqui conviene el escape por pieza.
+    if (f.ots.length && origenStr) origenStr += " · ";
+    // Las OTs del origen llevan su prefijo y se escapan por pieza.
     origenStr += f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    var otCell = f.ots.length ? "" : escapeHtml(otsStr);
-    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCell + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    // OT (cant.) = OTs abiertas que FABRICAN el componente, ya netas de lo ensamblado.
+    var otCantStr = f.ots.length
+      ? ""
+      : f.pendiente > 0
+        ? "OT " + formatMaterialQuantity(f.pendiente)
+        : "";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+    rowsHtml = "<tr><td colspan=\"7\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
@@ -10284,7 +10308,7 @@ function filterFaltantesRows() {
   var empty = table.querySelector("tbody tr.report-empty-state");
   if (!any && !empty) {
     var td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 7;
     td.className = "report-empty-state";
     td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
     var tr = document.createElement("tr");
