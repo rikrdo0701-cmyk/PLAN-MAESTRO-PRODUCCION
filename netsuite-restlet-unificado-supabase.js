@@ -561,7 +561,6 @@ define(['N/query'], (query) => {
         codigo: String(r.codigo || ''),
         tipo: String(r.tipo || ''),
         descripcion: String(r.descripcion || ''),
-        ubicacion: String(r.ubicacion || ''),
         inactivo: r.inactivo === 'T',
         ultima_modificacion: isoFecha_(r.ultima_modificacion)
       })),
