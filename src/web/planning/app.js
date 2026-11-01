@@ -10218,7 +10218,7 @@ function renderFaltantesReport() {
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
     if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
-    var otsStr = g.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    var otsStr = g.ots.map(function(o) { return "OT " + o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
       var first = ovi === 0;
@@ -10244,11 +10244,13 @@ function renderFaltantesReport() {
     var origenStr = "";
     if (f.ovs && f.ovs.length) {
       var ovsHijo = f.ovs.slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
-      origenStr += ovsHijo.map(function(o) { return escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+      origenStr += ovsHijo.map(function(o) { return "OV " + escapeHtml(o.folio) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     }
     if (otsStr && origenStr) origenStr += " · ";
-    origenStr += escapeHtml(otsStr);
-    var otCell = f.ots.length ? "" : otsStr;
+    // Las OTs del origen llevan su prefijo. Se arma aqui y no reusando `otsStr` porque
+    // `otsStr` va escapado solo en el ultimo render y aqui conviene el escape por pieza.
+    origenStr += f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    var otCell = f.ots.length ? "" : escapeHtml(otsStr);
     rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + origenStr + "</td><td></td><td></td><td>" + otCell + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
