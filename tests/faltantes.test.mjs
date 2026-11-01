@@ -75,7 +75,7 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
       { item: "M66-2417", location: "PLANTA MM DEL LLANO", physical: 8 },
     ],
     salesOrders: [
-      { folio: "SO1450", date: "2026-10-30", status: "", lines: [{ item: "C 590 UADE", cantidad: 20 }] },
+      { folio: "SO1450", date: "2026-10-30", status: "", lines: [{ item: "C 590 UADE", cantidad: 40 }] },
     ],
     items: [
       { code: "C 590 UADE", type: "ASSEMBLY" },
@@ -86,7 +86,7 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
   assert.equal(res.grupos.length, 1);
   const g = res.grupos[0];
   assert.equal(g.articulo, "C 590 UADE");
-  assert.equal(g.faltante, 16); // max(0, OV 20 - inv 4) = 16
+  assert.equal(g.faltante, 16); // max(0, OV 40 - inv 4 - OT pend 20) = 16
   // debe haber un componente M66-2417 en hijos
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
