@@ -10069,7 +10069,7 @@ function faltantesRows() {
     var falta = dem - (existencia[key] || 0);
     // MEDIDO 2026-10-31: el faltante que muestra la lista es SOLO contra OVs
     // (la OT es produccion interna, no carencia para el cliente).
-    var faltaOV = Math.max(0, d.ov - (existencia[key] || 0));
+    var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
       if (!ensambles.has(key)) continue; // solo articulos tipo Assembly
@@ -10114,9 +10114,22 @@ function renderFaltantesReport() {
   var el = document.getElementById("faltantesReport");
   if (!el) return;
   var data = faltantesRows();
+  var wrapper = el.closest(".table-wrap") || el.parentElement;
+  var searchEl = wrapper ? wrapper.querySelector(".faltantes-search") : null;
+  if (!searchEl) {
+    searchEl = document.createElement("input");
+    searchEl.className = "faltantes-search search-input";
+    searchEl.type = "search";
+    searchEl.placeholder = "Buscar artículo...";
+    searchEl.oninput = function() { filterFaltantesRows(); };
+    if (wrapper) wrapper.insertBefore(searchEl, el);
+  }
+  window._faltantesData = data;
+  var query = (searchEl.value || "").trim().toUpperCase();
   var rowsHtml = "";
   for (var gi = 0; gi < data.grupos.length; gi++) {
     var g = data.grupos[gi];
+    if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
     var otsStr = g.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
@@ -10129,18 +10142,45 @@ function renderFaltantesReport() {
         ovCant = formatMaterialQuantity(ovsOrdenados[ovi].cantidad);
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + "><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
+    if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
     var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    rowsHtml += "<tr style=\"opacity:.7\"><td>" + escapeHtml(f.articulo) + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.</td></tr>";
+    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<thead><tr><th>Articulo</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+}
+
+function filterFaltantesRows() {
+  var searchEl = document.querySelector(".faltantes-search");
+  if (!searchEl) return;
+  var query = (searchEl.value || "").trim().toUpperCase();
+  var table = document.getElementById("faltantesReport");
+  if (!table) return renderFaltantesReport();
+  var rows = Array.from(table.querySelectorAll("tbody tr"));
+  var any = false;
+  for (var ri = 0; ri < rows.length; ri++) {
+    var art = (rows[ri].getAttribute("data-articulo") || "").toUpperCase();
+    var match = !query || art.indexOf(query) >= 0;
+    rows[ri].style.display = match ? "" : "none";
+    if (match) any = true;
+  }
+  var empty = table.querySelector("tbody tr.report-empty-state");
+  if (!any && !empty) {
+    var td = document.createElement("td");
+    td.colSpan = 8;
+    td.className = "report-empty-state";
+    td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
+    var tr = document.createElement("tr");
+    tr.appendChild(td);
+    table.querySelector("tbody").appendChild(tr);
+  }
 }
 
 function toolChangeReportData(op) {
