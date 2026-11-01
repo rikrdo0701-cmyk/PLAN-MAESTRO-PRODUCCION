@@ -10002,6 +10002,18 @@ function faltantesRows() {
     if (arts[ai].type !== "ASSEMBLY") continue;
     ensamblesMM.add(arts[ai].code.toUpperCase());
   }
+  // Ubicacion del maestro (NetSuite) para decidir si el artículo padre debe mostrarse.
+  // Los subensambles/hijos se muestran por herencia aunque su maestro esté en otra planta.
+  var ubicacionItem = {};
+  for (var ai2 = 0; ai2 < arts.length; ai2++) {
+    var c2 = String(arts[ai2].code || "").trim().toUpperCase();
+    if (!c2) continue;
+    ubicacionItem[c2] = String(arts[ai2].location || arts[ai2].ubicacion || "").toUpperCase();
+  }
+  function esDeMMLLano(code) {
+    var u = ubicacionItem[code] || "";
+    return u.indexOf("MM") >= 0 && u.indexOf("LLANO") >= 0;
+  }
   var itemsConInvMM = new Set();
   for (var i = 0; i < inv.length; i++) {
     if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
@@ -10097,7 +10109,10 @@ function faltantesRows() {
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
-      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue; // solo Assembly con inventario fisico > 0 en MM
+      // MEDIDO 2026-11-01: para artículos PADRE, respetar ubicación del maestro (NetSuite).
+      // BA 350 está en Planta V.Guerrero según el maestro, aunque tenga inventario en MM del Llano.
+      if (!ensamblesMM.has(key)) continue;
+      if (!esDeMMLLano(key)) continue;
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
@@ -10114,8 +10129,11 @@ function faltantesRows() {
       // faltante para hijos: considera heredado (demanda del padre) + OV propio
       var faltaHOV = Math.max(0, (hd.ov || 0) + hInfo.he - (existencia[hKey] || 0));
       if (faltaHOV <= 0) continue;
-      // MEDIDO 2026-10-31: solo componentes Assembly con inventario en MM del Llano
-      if (!ensamblesMM.has(hKey) || !itemsConInvMM.has(hKey)) continue;
+      // MEDIDO 2026-10-31: solo componentes Assembly (aunque no tengan inventario propio
+  // en MM del Llano — su demanda viene heredada del padre).
+      // MEDIDO 2026-11-01: para SUBENSAMBLES/HIJOS se DESPRECIA la ubicación del maestro;
+      // solo se requiere que sean Assembly para mostrar su faltante por herencia.
+      if (!ensamblesMM.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
