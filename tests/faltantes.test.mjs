@@ -25,7 +25,7 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
     ],
     materials: [],
     inventory: [
-      { item: "C 590 UAD", location: "PLANTA MM DEL LLANO", available: 25 },
+      { item: "C 590 UAD", location: "PLANTA MM DEL LLANO", physical: 25 },
     ],
     salesOrders: [
       {
@@ -49,7 +49,7 @@ test("faltantesRows excluye artículos con faltante <= 0", () => {
   const faltantesRows = Function("state", `${fuente}; return faltantesRows;`)({
     workOrders: [{ ot: "3975", item: "CM 250", quantity: 50, builtQuantity: 0, cerrada: false }],
     materials: [],
-    inventory: [{ item: "CM 250", location: "PLANTA MM DEL LLANO", available: 60 }],
+    inventory: [{ item: "CM 250", location: "PLANTA MM DEL LLANO", physical: 60 }],
     salesOrders: [{ folio: "SO1400", date: "2026-11-05", status: "", lines: [{ item: "CM 250", cantidad: 30 }] }],
   });
   assert.equal(faltantesRows().grupos.length, 0, "la existencia (60) >= max(30,50) no da falta");
@@ -65,8 +65,8 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
       { assembly: "C 590 UADE", component: "M66-2417", required: 2 },
     ],
     inventory: [
-      { item: "C 590 UADE", location: "PLANTA MM DEL LLANO", available: 4 },
-      { item: "M66-2417", location: "PLANTA MM DEL LLANO", available: 8 },
+      { item: "C 590 UADE", location: "PLANTA MM DEL LLANO", physical: 4 },
+      { item: "M66-2417", location: "PLANTA MM DEL LLANO", physical: 8 },
     ],
     salesOrders: [
       { folio: "SO1450", date: "2026-10-30", status: "", lines: [{ item: "C 590 UADE", cantidad: 20 }] },
@@ -80,8 +80,8 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
   // debe haber un componente M66-2417 en hijos
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
+  // articulo agrupado, ya no tiene .padre (se cambio a agrupacion por componente)
   assert.equal(comp.articulo, "M66-2417");
-  assert.equal(comp.padre, "C 590 UADE");
   assert.equal(comp.heredado, 32); // 16 * 2
   assert.equal(comp.faltante, 24); // (0+32) - 8 = 24
 });
