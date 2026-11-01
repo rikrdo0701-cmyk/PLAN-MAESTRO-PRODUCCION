@@ -9978,20 +9978,14 @@ function faltantesRows() {
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
   var arts = state.items || [];
-  // MEDIDO 2026-10-31: solo articulos tipo Assembly con existencia en
-  // Planta MM del Llano (según inventario). IVA 16 % y otros servicios
-  // se descartan; artículos de otras plantas no tienen inventario aquí.
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly de Planta MM del Llano.
+  // La ubicacion se toma de items.location (el campo del RESTlet, no del inventario).
+  // Items como BA 1200 (Location=Planta V.Guerrero) se excluyen aunque tengan inventario aqui.
   var ensamblesMM = new Set();
   for (var ai = 0; ai < arts.length; ai++) {
     if (arts[ai].type !== "ASSEMBLY") continue;
-    ensamblesMM.add(arts[ai].code.toUpperCase());
-  }
-  // Set de articulos que SÍ tienen inventario físico > 0 en MM del Llano
-  var itemsConInvMM = new Set();
-  for (var i = 0; i < inv.length; i++) {
-    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
-      itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
-    }
+    var ubi = String(arts[ai].location || "").toUpperCase();
+    if (ubi.indexOf("MM DEL LLANO") >= 0) ensamblesMM.add(arts[ai].code.toUpperCase());
   }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
@@ -10081,7 +10075,7 @@ function faltantesRows() {
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
-      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue; // solo tipo Assembly CON inventario en MM del Llano
+      if (!ensamblesMM.has(key)) continue; // solo tipo Assembly de MM del Llano (items.location)
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
@@ -10098,8 +10092,8 @@ function faltantesRows() {
       // faltante para hijos tambien solo contra OVs
       var faltaHOV = Math.max(0, (hd.ov || 0) - (existencia[hKey] || 0));
       if (faltaHOV <= 0) continue;
-      // MEDIDO 2026-10-31: solo componentes tipo Assembly con inventario en MM del Llano
-      if (!ensamblesMM.has(hKey) || !itemsConInvMM.has(hKey)) continue;
+      // MEDIDO 2026-10-31: solo componentes tipo Assembly de MM del Llano
+      if (!ensamblesMM.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
