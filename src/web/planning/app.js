@@ -11582,8 +11582,9 @@ function preserveImportedOperationPrices(localOperations, importedOperations) {
   for (const operation of localOperations || []) {
     const unitPrice = Number(operation?.unitPrice);
     const amount = Number(operation?.amount);
-    if (!(unitPrice > 0) && !(amount > 0)) continue;
-    const record = { unitPrice, amount };
+    const operador = String(operation?.operador || "").trim();
+    if (!(unitPrice > 0) && !(amount > 0) && !operador) continue;
+    const record = { unitPrice, amount, operador };
     if (operation.id) byId.set(String(operation.id), record);
     const sequenceKey = `${materialOtKey(operation.ot)}|${operation.secuencia}|${operation.ct}`;
     if (!bySequence.has(sequenceKey)) bySequence.set(sequenceKey, record);
@@ -11599,6 +11600,10 @@ function preserveImportedOperationPrices(localOperations, importedOperations) {
     const merged = { ...operation };
     if (!(Number(merged.unitPrice) > 0) && source.unitPrice > 0) merged.unitPrice = source.unitPrice;
     if (!(Number(merged.amount) > 0) && source.amount > 0) merged.amount = source.amount;
+    // MEDIDO 2026-10-31: el operador se asigna desde la matriz de habilidades al generar
+    // plan. La ingesta escribe operations con operador='' (NetSuite no lo trae), asi que
+    // sin preservarlo cada sincronizacion perderia las asignaciones del plan.
+    if (source.operador && !String(merged.operador || "").trim()) merged.operador = source.operador;
     return merged;
   });
 }
