@@ -9978,11 +9978,20 @@ function faltantesRows() {
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
   var arts = state.items || [];
-  // MEDIDO 2026-10-31: solo articulos tipo Assembly (ensamble). IVA 16 % y otros
-  // servicios/partes no-ensamble se descartan: no son productos que la planta fabrique.
-  var ensambles = new Set();
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly con existencia en
+  // Planta MM del Llano (según inventario). IVA 16 % y otros servicios
+  // se descartan; artículos de otras plantas no tienen inventario aquí.
+  var ensamblesMM = new Set();
   for (var ai = 0; ai < arts.length; ai++) {
-    if (arts[ai].type === "ASSEMBLY" && String(arts[ai].location || "").toUpperCase().indexOf("MM DEL LLANO") >= 0) ensambles.add(arts[ai].code.toUpperCase());
+    if (arts[ai].type !== "ASSEMBLY") continue;
+    ensamblesMM.add(arts[ai].code.toUpperCase());
+  }
+  // Set de artículos que SÍ tienen inventario físico en MM del Llano
+  var itemsConInvMM = new Set();
+  for (var i = 0; i < inv.length; i++) {
+    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO") {
+      itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
+    }
   }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
@@ -10072,7 +10081,7 @@ function faltantesRows() {
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
-      if (!ensambles.has(key)) continue; // solo articulos tipo Assembly
+      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue; // solo tipo Assembly CON inventario en MM del Llano
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
@@ -10089,8 +10098,8 @@ function faltantesRows() {
       // faltante para hijos tambien solo contra OVs
       var faltaHOV = Math.max(0, (hd.ov || 0) - (existencia[hKey] || 0));
       if (faltaHOV <= 0) continue;
-      // MEDIDO 2026-10-31: solo componentes tipo Assembly
-      if (!ensambles.has(hKey)) continue;
+      // MEDIDO 2026-10-31: solo componentes tipo Assembly con inventario en MM del Llano
+      if (!ensamblesMM.has(hKey) || !itemsConInvMM.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
