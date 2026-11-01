@@ -5514,18 +5514,8 @@ function renderSaturation() {
 
   const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
   const saturated = loads.filter((item) => item.percent > 100);
-  els.bottleneckOperators.innerHTML = `
-    <thead><tr><th>ID</th><th>Nombre</th><th>Recurso</th><th>Carga</th></tr></thead>
-    <tbody>${saturated.length ? saturated.map((item, rowNumber) => {
-      const profile = state.operatorProfiles[item.operator] || { name: item.operator, category: resourceCategoryFor(item.operator) };
-      return `<tr class="resource-row">
-        <td>${rowNumber + 1}</td>
-        <td>${escapeHtml(profile.name || item.operator)}</td>
-        <td><div class="resource-cell"><strong>${escapeHtml(item.operator)}</strong><span>${escapeHtml(formatResourceCategoryLabel(resourceCategoryFor(item.operator)))}</span></div></td>
-        <td class="load-percent danger"><strong>${Math.round(item.percent)}%</strong><span>${formatHours(item.minutes)} / ${formatHours(item.available)}</span></td>
-      </tr>`;
-    }).join("") : `<tr><td colspan="4" class="bottleneck-empty">Sin operadores saturados en la semana</td></tr>`}</tbody>
-  `;
+  // MEDIDO 2026-11-01, DECISION DEL USUARIO: se quita la tabla de "Cuello de botella operador".
+  if (els.bottleneckOperators) els.bottleneckOperators.innerHTML = "";
 
   const weekOperations = operationsForWeekSource(source, "", state.loadWeekStart)
     .filter((op) => !isToolChangeReportOperation(op) && !isSubcontractAppOperation(op) && op.operador !== "SUBCONTRATO");
@@ -5534,19 +5524,22 @@ function renderSaturation() {
     .sort((a, b) => b.minutes - a.minutes)
     .slice(0, 10);
   els.bottleneckOperations.innerHTML = `
-    <thead><tr><th>OT</th><th>Operacion</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
+    <thead><tr><th>OT</th><th>Operacion</th><th>Articulo</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
     <tbody>${top.length ? top.map(({ op, minutes }) => {
       const start = opStart(op);
       const description = op.descripcion || `CT ${op.ct}`;
+      const workOrder = workOrderForOt(op.ot);
+      const articulo = op.parte || workOrder?.item || "";
       return `<tr>
         <td>${escapeHtml(op.ot)}</td>
         <td>${escapeHtml(description)}</td>
+        <td>${escapeHtml(articulo)}</td>
         <td>${escapeHtml(op.operador || "")}</td>
         <td>${escapeHtml(op.maquina || "")}</td>
         <td>${start ? `${escapeHtml(formatShortDate(start))} ${escapeHtml(op.horaInicio || "")}` : "-"}</td>
         <td class="load-percent danger"><strong>${formatHours(minutes)}</strong><span>${formatMinutes(minutes)}</span></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
+    }).join("") : `<tr><td colspan="7" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
   `;
   planningPerfMeasure("saturation-render", perfMark);
 }
