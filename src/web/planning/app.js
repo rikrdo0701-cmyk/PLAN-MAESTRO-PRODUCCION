@@ -10067,10 +10067,13 @@ function faltantesRows() {
     var d = demCache[key];
     var dem = Math.max(d.ov, d.ot + d.he);
     var falta = dem - (existencia[key] || 0);
-    if (falta <= 0 && !d.hi.length) continue;
-    if (falta > 0 || (otPorArt[key] || {}).cat > 0 || (demandaOV[key] || {}).cat > 0) {
+    // MEDIDO 2026-10-31: el faltante que muestra la lista es SOLO contra OVs
+    // (la OT es produccion interna, no carencia para el cliente).
+    var faltaOV = Math.max(0, d.ov - (existencia[key] || 0));
+    if (faltaOV <= 0 && !d.hi.length) continue;
+    if (faltaOV > 0 || d.ov > 0 || (otPorArt[key] || {}).cat > 0) {
       if (!ensambles.has(key)) continue; // solo articulos tipo Assembly
-      grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: Math.max(0, falta), ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
+      grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
   // filas de hijos planas, agregadas por componente (sin duplicados)
@@ -10083,14 +10086,16 @@ function faltantesRows() {
       var hKey = hInfo.c;
       var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
       var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
-      if (faltaH <= 0) continue;
+      // faltante para hijos tambien solo contra OVs
+      var faltaHOV = Math.max(0, (hd.ov || 0) - (existencia[hKey] || 0));
+      if (faltaHOV <= 0) continue;
       // MEDIDO 2026-10-31: solo componentes tipo Assembly
       if (!ensambles.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
       hijosPorArt[hKey].heredado += hInfo.he;
-      hijosPorArt[hKey].faltante += faltaH;
+      hijosPorArt[hKey].faltante += faltaHOV;
       if (otPorArt[hKey]) {
         for (var oi = 0; oi < otPorArt[hKey].ots.length; oi++) {
           var ya = hijosPorArt[hKey].ots.some(function(x) { return x.ot === otPorArt[hKey].ots[oi].ot; });
