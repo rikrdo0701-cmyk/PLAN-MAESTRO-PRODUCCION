@@ -10002,18 +10002,10 @@ function faltantesRows() {
     if (arts[ai].type !== "ASSEMBLY") continue;
     ensamblesMM.add(arts[ai].code.toUpperCase());
   }
-  // Ubicacion del maestro (NetSuite) para decidir si el artículo padre debe mostrarse.
-  // Los subensambles/hijos se muestran por herencia aunque su maestro esté en otra planta.
-  var ubicacionItem = {};
-  for (var ai2 = 0; ai2 < arts.length; ai2++) {
-    var c2 = String(arts[ai2].code || "").trim().toUpperCase();
-    if (!c2) continue;
-    ubicacionItem[c2] = String(arts[ai2].location || arts[ai2].ubicacion || "").toUpperCase();
-  }
-  function esDeMMLLano(code) {
-    var u = ubicacionItem[code] || "";
-    return u.indexOf("MM") >= 0 && u.indexOf("LLANO") >= 0;
-  }
+  // Ubicacion del maestro: MEDIDO 2026-11-01 contra Supabase (`items.ubicacion` esta en el
+  // esquema pero la ingesta la deja NULL en las 2536 filas). Por eso NO se puede filtrar por
+  // ella: hacerlo deja el reporte en 0 padres. El criterio real es el inventario fisico en
+  // Planta MM del Llano (`existencia`), que es el dato que si llega.
   var itemsConInvMM = new Set();
   for (var i = 0; i < inv.length; i++) {
     if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
@@ -10035,6 +10027,12 @@ function faltantesRows() {
     for (var l = 0; l < (so.lines || []).length; l++) {
       var item = String(so.lines[l].item || "").trim().toUpperCase();
       if (!item) continue;
+      // MEDIDO 2026-11-01 contra Supabase: las OVs traen lineas de impuesto y servicio
+      // ("IVA 16 %" pendiente 93, "IVA 0 %" pendiente 36). No son articulos: no tienen
+      // existencia, no tienen OT y no se producen, asi que aparecian como los mayores
+      // "faltantes" del reporte. Se descartan por nombre y por tasa.
+      if (/^IVA\b/.test(item) || /\bIVA\b/.test(item)) continue;
+      if (/^IMPUESTO\b/.test(item) || /\bFLETE\b/.test(item) || /\bSERVICIO\b/.test(item)) continue;
       if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
       var pend = so.lines[l].pendiente !== undefined ? Number(so.lines[l].pendiente) : Number(so.lines[l].cantidad);
       var absPend = Math.abs(pend) || 0;
@@ -10109,45 +10107,72 @@ function faltantesRows() {
     var faltaOV = Math.max(0, d.ov - (existencia[key] || 0) - ((otPorArt[key] || {}).cat || 0));
     if (faltaOV <= 0 && !d.hi.length) continue;
     if (faltaOV > 0) {
-      // MEDIDO 2026-11-01: para artículos PADRE, respetar ubicación del maestro (NetSuite).
-      // BA 350 está en Planta V.Guerrero según el maestro, aunque tenga inventario en MM del Llano.
-      if (!ensamblesMM.has(key)) continue;
-      if (!esDeMMLLano(key)) continue;
+      // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
+      // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
+      if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
-  // filas de hijos planas, agregadas por componente (sin duplicados)
+  // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).
+  //
+  // POR QUE NO POR HERENCIA DEL PADRE. Antes el hijo se calculaba heredando el faltante del
+  // padre (`faltaOV_loc * requerido`) recorriendo el BOM del padre. MEDIDO: los 8 padres del
+  // reporte (BA 350, BA 1200, CP 548 CD, 9295, AAML 419 CCE, 3111684, SSC 300 GT-800,
+  // 700-640) NO tienen una sola fila en `materials`, o sea que el resultado era siempre 0
+  // subensambles. `materials` no es el BOM del articulo: es la lista de materiales DE CADA OT
+  // (286 filas, todas de OTs abiertas de las 173 que hay).
+  //
+  // POR QUE LAS OTs ABIERTAS SI SIRVEN. La demanda de un componente es lo que las OTs abiertas
+  // todavia tienen que consumir: `pendiente` de la fila (o `requerido - emitido` si no viene).
+  // Se resta la existencia fisica en MM del Llano; lo que sobra es el faltante del subensamble.
+  // No depende del BOM maestro, que la ingesta no trae. MEDIDO con los datos reales: pasa de 0
+  // a 41 componentes con faltante (29 Assembly + 12 INVTPART).
+  //
+  // PROTOTIPO SE OMITE (DECISION DEL USUARIO 2026-11-01): la OT 4037 pide 1000 piezas de
+  // `PROTOTIPO` y acapara el primer lugar de la lista con un articulo de prueba.
   var hijosPorArt = {};
-  for (var g = 0; g < grupos.length; g++) {
-    for (var h2 = 0; h2 < grupos[g].hijos.length; h2++) {
-      var hInfo = grupos[g].hijos[h2];
-      proc.add(hInfo.c);
-      var hd = hInfo.hi;
-      var hKey = hInfo.c;
-      var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
-      var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
-      // faltante para hijos: considera heredado (demanda del padre) + OV propio
-      var faltaHOV = Math.max(0, (hd.ov || 0) + hInfo.he - (existencia[hKey] || 0));
-      if (faltaHOV <= 0) continue;
-      // MEDIDO 2026-10-31: solo componentes Assembly (aunque no tengan inventario propio
-  // en MM del Llano — su demanda viene heredada del padre).
-      // MEDIDO 2026-11-01: para SUBENSAMBLES/HIJOS se DESPRECIA la ubicación del maestro;
-      // solo se requiere que sean Assembly para mostrar su faltante por herencia.
-      if (!ensamblesMM.has(hKey)) continue;
-      if (!hijosPorArt[hKey]) {
-        hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
-      }
-      hijosPorArt[hKey].heredado += hInfo.he;
-      hijosPorArt[hKey].faltante += faltaHOV;
-      if (otPorArt[hKey]) {
-        for (var oi = 0; oi < otPorArt[hKey].ots.length; oi++) {
-          var ya = hijosPorArt[hKey].ots.some(function(x) { return x.ot === otPorArt[hKey].ots[oi].ot; });
-          if (!ya) hijosPorArt[hKey].ots.push(otPorArt[hKey].ots[oi]);
-        }
-      }
+  var OTS_ABIERTAS = new Set();
+  for (var wa = 0; wa < wo.length; wa++) {
+    if (wo[wa].cerrada) continue;
+    var otAb = String(wo[wa].ot || "").trim().toUpperCase();
+    if (otAb) OTS_ABIERTAS.add(otAb);
+  }
+  for (var m3 = 0; m3 < mats.length; m3++) {
+    var filaMat = mats[m3];
+    if (!OTS_ABIERTAS.has(String(filaMat.ot || "").trim().toUpperCase())) continue;
+    var comp = String(filaMat.component || "").trim().toUpperCase();
+    if (!comp) continue;
+    if (comp === "PROTOTIPO") continue;
+    var req = Math.max(0, Number(filaMat.required) || 0);
+    var emitido = Math.max(0, Number(filaMat.issued) || 0);
+    var pendComplemento = Number(filaMat.pending);
+    var demandaComp = Number.isFinite(pendComplemento) && pendComplemento > 0
+      ? pendComplemento
+      : Math.max(0, req - emitido);
+    if (demandaComp <= 0) continue;
+    if (!hijosPorArt[comp]) {
+      hijosPorArt[comp] = {
+        articulo: comp,
+        existencia: Number(existencia[comp]) || 0,
+        ots: [],
+        pendiente: (otPorArt[comp] || {}).cat || 0,
+        heredado: 0,
+        faltante: 0,
+        ovs: (demandaOV[comp] ? demandaOV[comp].ovs.slice() : []),
+      };
+    }
+    hijosPorArt[comp].heredado += demandaComp;
+    var otDeLaFila = String(filaMat.ot || "").trim();
+    if (otDeLaFila && !hijosPorArt[comp].ots.some(function (x) { return String(x.ot) === otDeLaFila; })) {
+      hijosPorArt[comp].ots.push({ ot: otDeLaFila, cantidad: demandaComp });
     }
   }
-  var hijos = Object.keys(hijosPorArt).sort().map(function(k) { return hijosPorArt[k]; });
+  // El faltante se decide al final, con la demanda de OT ya agregada por componente.
+  var hijos = Object.keys(hijosPorArt).map(function (k) {
+    var f = hijosPorArt[k];
+    f.faltante = Math.max(0, f.heredado - f.existencia);
+    return f;
+  }).filter(function (f) { return f.faltante > 0; });
   grupos.sort(function(a,b) { return b.faltante - a.faltante || a.articulo.localeCompare(b.articulo, "es"); });
   hijos.sort(function(a,b) { return b.faltante - a.faltante; });
   return { grupos: grupos, hijos: hijos };

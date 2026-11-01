@@ -61,14 +61,17 @@ test("faltantesRows excluye artículos con faltante <= 0", () => {
   assert.equal(faltantesRows().grupos.length, 0, "la existencia (60) >= max(30,50) no da falta");
 });
 
-test("faltantesRows agrega componentes como filas planas con herencia", () => {
+test("faltantesRows toma subensambles de las OTs ABIERTAS (pendiente - existencia)", () => {
   const fuente = sliceDesde("function faltantesRows() {", "function renderFaltantesReport() {");
   const faltantesRows = Function("state", `${fuente}; return faltantesRows;`)({
     workOrders: [
       { ot: "3972", item: "C 590 UADE", quantity: 20, builtQuantity: 0, cerrada: false },
     ],
+    // materials NO es el BOM del articulo: es la lista de materiales de CADA OT.
+    // MEDIDO 2026-11-01: los padres del reporte no tienen BOM, asi que la herencia por padre
+    // daba siempre 0. La demanda del componente viene de lo que la OT todavia debe consumir.
     materials: [
-      { assembly: "C 590 UADE", component: "M66-2417", required: 2 },
+      { ot: "3972", assembly: "C 590 UADE", component: "M66-2417", required: 2, issued: 0, pending: 32 },
     ],
     inventory: [
       { item: "C 590 UADE", location: "PLANTA MM DEL LLANO", physical: 4 },
@@ -87,12 +90,34 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
   const g = res.grupos[0];
   assert.equal(g.articulo, "C 590 UADE");
   assert.equal(g.faltante, 16); // max(0, OV 40 - inv 4 - OT pend 20) = 16
-  // debe haber un componente M66-2417 en hijos (heredado del padre 16*2=32)
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
   assert.equal(comp.articulo, "M66-2417");
-  assert.equal(comp.heredado, 32); // 16 * 2
-  assert.equal(comp.faltante, 24); // (0+32) - 8 = 24
+  assert.equal(comp.heredado, 32); // pendiente de la OT abierta
+  assert.equal(comp.faltante, 24); // 32 - 8 = 24
+});
+
+test("faltantesRows ignora materiales de OTs cerradas y omite PROTOTIPO", () => {
+  const fuente = sliceDesde("function faltantesRows() {", "function renderFaltantesReport() {");
+  const faltantesRows = Function("state", `${fuente}; return faltantesRows;`)({
+    workOrders: [
+      { ot: "4100", item: "X 100", quantity: 10, builtQuantity: 0, cerrada: false },
+      { ot: "4101", item: "X 200", quantity: 5, builtQuantity: 5, cerrada: true },
+    ],
+    materials: [
+      { ot: "4100", component: "COMP-A", required: 5, issued: 0, pending: 5 },
+      { ot: "4101", component: "COMP-CERRADA", required: 9, issued: 0, pending: 9 },
+      { ot: "4100", component: "PROTOTIPO", required: 1000, issued: 0, pending: 1000 },
+    ],
+    inventory: [],
+    salesOrders: [],
+    items: [{ code: "X 100", type: "ASSEMBLY" }],
+  });
+  const res = faltantesRows();
+  const arts = res.hijos.map((h) => h.articulo);
+  assert.ok(arts.includes("COMP-A"), "el componente de la OT abierta si sale");
+  assert.ok(!arts.includes("COMP-CERRADA"), "la OT cerrada no aporta demanda");
+  assert.ok(!arts.includes("PROTOTIPO"), "PROTOTIPO se omite (decision del usuario)");
 });
 
 test("faltantesRows sin datos devuelve arrays vacios", () => {
