@@ -7520,9 +7520,24 @@ async function exportPlanWeeklyXlsx(sourceId) {
     sourceState: usingDraft ? state : (reportSnapshot || state),
   });
   const sheets = [
-    { name: "Resumen", headers: ["Indicador", "Valor"], rows: weeklyResumenRowsForXlsx(execSummary) },
-    { name: "OT que inician", headers: ["Dia", "No.", "ORD", "PARTE", "PZAS"], rows: weeklyDayRowsForXlsx(summary.starts, false) },
-    { name: "OT que terminan", headers: ["Dia", "No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"], rows: weeklyDayRowsForXlsx(summary.finishes, true) },
+    {
+      name: "Resumen",
+      headers: ["Indicador", "Valor"],
+      rows: weeklyResumenRowsForXlsx(execSummary),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT],
+    },
+    {
+      name: "OT que inician",
+      headers: ["Dia", "No.", "ORD", "PARTE", "PZAS"],
+      rows: weeklyDayRowsForXlsx(summary.starts, false),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.NUMBER],
+    },
+    {
+      name: "OT que terminan",
+      headers: ["Dia", "No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"],
+      rows: weeklyDayRowsForXlsx(summary.finishes, true),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.NUMBER, XLSX_COL_TYPE.CURRENCY, XLSX_COL_TYPE.TEXT],
+    },
   ];
   const bytes = buildMultiSheetXlsxBytes(sheets);
   const weekLabel = `plan-semana-${reportStart || "sin-fecha"}`;
@@ -13446,7 +13461,7 @@ function buildXlsxBytes(headers, rows, sheetName) {
 function buildMultiSheetXlsxBytes(sheets) {
   const encoder = new TextEncoder();
   const lista = Array.isArray(sheets) ? sheets : [];
-  const sheetXmls = lista.map((sheet) => buildSheetXml(sheet.headers, sheet.rows));
+  const sheetXmls = lista.map((sheet) => buildSheetXml(sheet.headers, sheet.rows, sheet.colTypes));
   const contentTypesOverrides = lista.map((sheet, index) =>
     `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
   const workbookSheets = lista.map((sheet, index) =>
@@ -13454,20 +13469,64 @@ function buildMultiSheetXlsxBytes(sheets) {
   const workbookRels = lista.map((sheet, index) =>
     `<Relationship Id="rId${index + 1}" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("");
   const entries = [
-    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${contentTypesOverrides}</Types>`],
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${contentTypesOverrides}</Types>`],
     ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
     ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets>${workbookSheets}</sheets></workbook>`],
     ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}">${workbookRels}</Relationships>`],
+    ["xl/styles.xml", buildStylesXml()],
     ...lista.map((sheet, index) => [`xl/worksheets/sheet${index + 1}.xml`, sheetXmls[index]]),
   ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
   return buildZipBytes(entries);
 }
 
-function buildSheetXml(headers, rows) {
-  const writeRow = (values, rowNumber) => values.map((value, colIndex) => {
+function buildStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="${XLSX_NS_MAIN}">
+  <numFmts count="2">
+    <numFmt numFmtId="164" formatCode="#,##0"/>
+    <numFmt numFmtId="165" formatCode="$#,##0.00"/>
+  </numFmts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1">
+    <border><left/><right/><top/><bottom/></border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>`;
+}
+
+const XLSX_COL_TYPE = {
+  TEXT: 0,     // plain text (inlineStr)
+  NUMBER: 1,   // quantity format (#,##0)
+  CURRENCY: 2, // currency format ($#,##0.00)
+};
+
+function buildSheetXml(headers, rows, colTypes) {
+  const cellForValue = (value, colIndex, rowNumber) => {
     const ref = `${xlsxColumnLetter(colIndex)}${rowNumber}`;
+    const type = Array.isArray(colTypes) ? (colTypes[colIndex] || 0) : 0;
+    if (type === XLSX_COL_TYPE.NUMBER || type === XLSX_COL_TYPE.CURRENCY) {
+      const num = Number(String(value ?? "").replace(/[$,]/g, ""));
+      return Number.isFinite(num) && num >= 0
+        ? `<c r="${ref}" s="${type}" t="n"><v>${num}</v></c>`
+        : `<c r="${ref}"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
+    }
     return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
-  }).join("");
+  };
+  const writeRow = (values, rowNumber) => values.map((value, colIndex) => cellForValue(value, colIndex, rowNumber)).join("");
   const body = [headers, ...rows].map((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
     return `<row r="${rowNumber}">${writeRow(row, rowNumber)}</row>`;

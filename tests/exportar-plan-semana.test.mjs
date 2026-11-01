@@ -40,7 +40,7 @@ test("handleExportPlan ofrece PDF y Excel, y Excel llama a exportPlanWeeklyXlsx"
 
 test("buildMultiSheetXlsxBytes genera un zip con una worksheet por hoja", () => {
   const fuente = sliceDesde("function buildMultiSheetXlsxBytes(sheets) {", "function buildSheetXml(");
-  assert.match(fuente, /buildSheetXml\(sheet\.headers, sheet\.rows\)/, "reutiliza el constructor de hojas");
+  assert.match(fuente, /buildSheetXml\s*\(/, "reutiliza el constructor de hojas");
   assert.match(fuente, /worksheets\/sheet\$\{index \+ 1\}\.xml/, "una worksheet xml por hoja");
   const xlsx = sliceDesde("function buildXlsxBytes(headers, rows, sheetName) {", "function buildMultiSheetXlsxBytes(sheets) {");
   assert.ok(xlsx.includes("sheets><sheet name=\"${xmlEscape(sheetName)}\""), "buildXlsxBytes intacto (una hoja)");
