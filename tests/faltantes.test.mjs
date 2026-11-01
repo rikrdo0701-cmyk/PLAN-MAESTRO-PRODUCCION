@@ -32,6 +32,9 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
         folio: "SO1350", date: "2026-10-30", status: "", lines: [{ item: "C 590 UAD", cantidad: 40 }],
       },
     ],
+    items: [
+      { code: "C 590 UAD", type: "ASSEMBLY" },
+    ],
   });
   const res = faltantesRows();
   assert.equal(res.grupos.length, 1);
@@ -39,7 +42,7 @@ test("faltantesRows calcula faltante = max(OV, pend OTs) - existencia", () => {
   assert.equal(g.articulo, "C 590 UAD");
   assert.equal(g.existencia, 25);
   assert.equal(g.pendiente, 70);
-  assert.equal(g.faltante, 45); // max(40, 70) - 25 = 45
+  assert.equal(g.faltante, 15); // max(0, OV 40 - inv 25) = 15 (OT no cuenta)
   assert.equal(g.ovs.length, 1);
   assert.equal(g.ovs[0].folio, "SO1350");
 });
@@ -51,6 +54,9 @@ test("faltantesRows excluye artículos con faltante <= 0", () => {
     materials: [],
     inventory: [{ item: "CM 250", location: "PLANTA MM DEL LLANO", physical: 60 }],
     salesOrders: [{ folio: "SO1400", date: "2026-11-05", status: "", lines: [{ item: "CM 250", cantidad: 30 }] }],
+    items: [
+      { code: "CM 250", type: "ASSEMBLY" },
+    ],
   });
   assert.equal(faltantesRows().grupos.length, 0, "la existencia (60) >= max(30,50) no da falta");
 });
@@ -71,12 +77,16 @@ test("faltantesRows agrega componentes como filas planas con herencia", () => {
     salesOrders: [
       { folio: "SO1450", date: "2026-10-30", status: "", lines: [{ item: "C 590 UADE", cantidad: 20 }] },
     ],
+    items: [
+      { code: "C 590 UADE", type: "ASSEMBLY" },
+      { code: "M66-2417", type: "ASSEMBLY" },
+    ],
   });
   const res = faltantesRows();
   assert.equal(res.grupos.length, 1);
   const g = res.grupos[0];
   assert.equal(g.articulo, "C 590 UADE");
-  assert.equal(g.faltante, 16); // max(20, 20) - 4 = 16
+  assert.equal(g.faltante, 16); // max(0, OV 20 - inv 4) = 16
   // debe haber un componente M66-2417 en hijos
   assert.ok(res.hijos.length >= 1, "hay al menos un subensamble");
   const comp = res.hijos[0];
