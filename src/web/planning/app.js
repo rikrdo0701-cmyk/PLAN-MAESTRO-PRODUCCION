@@ -9977,6 +9977,13 @@ function faltantesRows() {
   var mats = state.materials || [];
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
+  var arts = state.items || [];
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly (ensamble). IVA 16 % y otros
+  // servicios/partes no-ensamble se descartan: no son productos que la planta fabrique.
+  var ensambles = new Set();
+  for (var ai = 0; ai < arts.length; ai++) {
+    if (arts[ai].type === "ASSEMBLY") ensambles.add(arts[ai].code.toUpperCase());
+  }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
     var row = inv[i];
@@ -10060,6 +10067,7 @@ function faltantesRows() {
     var falta = dem - (existencia[key] || 0);
     if (falta <= 0 && !d.hi.length) continue;
     if (falta > 0 || (otPorArt[key] || {}).cat > 0 || (demandaOV[key] || {}).cat > 0) {
+      if (!ensambles.has(key)) continue; // solo articulos tipo Assembly
       grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: Math.max(0, falta), ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
@@ -10074,6 +10082,8 @@ function faltantesRows() {
       var demH = Math.max(hd.ov || 0, (hd.ot || 0) + hInfo.he);
       var faltaH = Math.max(0, demH - (existencia[hKey] || 0));
       if (faltaH <= 0) continue;
+      // MEDIDO 2026-10-31: solo componentes tipo Assembly
+      if (!ensambles.has(hKey)) continue;
       if (!hijosPorArt[hKey]) {
         hijosPorArt[hKey] = { articulo: hKey, existencia: Number(existencia[hKey]) || 0, ots: (otPorArt[hKey] ? otPorArt[hKey].ots.slice() : []), pendiente: (otPorArt[hKey] || {}).cat || 0, heredado: 0, faltante: 0, ovs: (demandaOV[hKey] ? demandaOV[hKey].ovs.slice() : []) };
       }
