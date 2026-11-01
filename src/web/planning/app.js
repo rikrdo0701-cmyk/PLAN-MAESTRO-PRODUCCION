@@ -10252,8 +10252,11 @@ function faltantesRows() {
   var hijos = Object.keys(hijosPorArt).map(function (k) {
     var f = hijosPorArt[k];
     // f.ots = OTs que lo CONSUMEN (van en OV/OT). f.otsFabricantes = OTs que lo FABRICAN
-    // (van en OT (cant.), con su numero, sin repetir la cantidad).
+    // (van en OT (cant.), con su folio y su cantidad pendiente).
     f.otsFabricantes = ((otPorArt[k] || {}).ots || []).map(function (o) { return { ot: o.ot, cantidad: o.cantidad }; });
+    // La columna OT (cant.) SOLO lleva OTs que FABRICAN el articulo: `otPorArt[art].ots`.
+    // Si no hay ninguna (materia comprada, o ninguna OT abierta lo produce) la celda queda
+    // VACIA. No se rellena con la demanda de `materials`: esa es lo que CONSUME el articulo.
     f.pendiente = (otPorArt[k] || {}).cat || 0;
     f.faltante = f.heredado - f.existencia - f.pendiente;
     return f;
@@ -10292,9 +10295,10 @@ function renderFaltantesReport() {
     // subensamble de otra OT, su demanda no esta solo en las OVs y hay que poder verla.
     // OT (cant.) queda para lo otro: las OTs que FABRICAN el articulo para cubrir la demanda.
     var consumidoras = (g.otsConsumo || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; });
-    // OT (cant.): las OTs que FABRICAN el articulo (cobertura de la demanda). MEDIDO
+    // OT (cant.): SOLO las OTs que FABRICAN el articulo (cobertura de la demanda). MEDIDO
     // 2026-11-01 (reporte del usuario): en los padres salia siempre vacia porque el render
-    // usaba la lista de consumo; y en los subensambles salia `OT 15` sin folio.
+    // usaba la lista de consumo; y en los subensambles salia `OT 15` sin folio. Es `g.ots`,
+    // que se arma con `otPorArt` (work_orders del articulo), no con la demanda.
     var fabricantesStr = (g.ots || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
     var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
     for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
