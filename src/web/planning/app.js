@@ -9986,10 +9986,10 @@ function faltantesRows() {
     if (arts[ai].type !== "ASSEMBLY") continue;
     ensamblesMM.add(arts[ai].code.toUpperCase());
   }
-  // Set de artículos que SÍ tienen inventario físico en MM del Llano
+  // Set de articulos que SÍ tienen inventario físico > 0 en MM del Llano
   var itemsConInvMM = new Set();
   for (var i = 0; i < inv.length; i++) {
-    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO") {
+    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
       itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
     }
   }
