@@ -9993,8 +9993,8 @@ function faltantesRows() {
       var item = String(so.lines[l].item || "").trim().toUpperCase();
       if (!item) continue;
       if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
-      demandaOV[item].cat += Math.abs(Number(so.lines[l].cantidad)) || 0;
-      demandaOV[item].ovs.push({ folio: so.folio, cantidad: Math.abs(Number(so.lines[l].cantidad)) || 0, fecha: so.date });
+      demandaOV[item].cat += Math.abs(Number(so.lines[l].pendiente || so.lines[l].cantidad)) || 0;
+      demandaOV[item].ovs.push({ folio: so.folio, cantidad: Math.abs(Number(so.lines[l].pendiente || so.lines[l].cantidad)) || 0, fecha: so.date });
     }
   }
   var otPorArt = {};
@@ -10006,7 +10006,9 @@ function faltantesRows() {
     var pend = Math.max(0, Number(orow.quantity || 0) - Number(orow.builtQuantity || 0));
     if (!otPorArt[art]) { otPorArt[art] = { cat: 0, ots: [] }; }
     otPorArt[art].cat += pend;
-    otPorArt[art].ots.push({ ot: orow.ot, cantidad: Number(orow.quantity || 0) });
+    // MEDIDO 2026-10-31: solo mostrar OTs con pendiente > 0 (las ya ensambladas
+    // son existencia de inventario, no demanda pendiente).
+    if (pend > 0) otPorArt[art].ots.push({ ot: orow.ot, cantidad: Number(orow.quantity || 0) });
   }
   var grafo = {};
   for (var m = 0; m < mats.length; m++) {

@@ -664,6 +664,7 @@ define(['N/query'], (query) => {
       '  tl.transaction AS orden_internal_id,',
       '  BUILTIN.DF(tl.item) AS item,',
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
+      '  ABS(NVL(tl.quantityremaining, 0)) AS pendiente,',
       '  tl.rate AS precio,',
       '  BUILTIN.DF(tl.units) AS unidad',
       'FROM transactionline tl',
@@ -682,6 +683,7 @@ define(['N/query'], (query) => {
       grupoLineas[id].push({
         item: String(l.item || ''),
         cantidad: Number(l.cantidad) || 0,
+        pendiente: Number(l.pendiente) || 0,
         precio: Number(l.precio) || 0,
         unidad: String(l.unidad || '')
       });
