@@ -10067,9 +10067,16 @@ function faltantesRows() {
     if (orow.cerrada) continue;
     var art = String(orow.item || "").trim().toUpperCase();
     if (!art) continue;
-    // DECISION DEL USUARIO 2026-11-01: en la OT se descuenta lo YA ENSAMBLADO. Es lo que
-    // queda por fabricar, y es la cifra que la columna "OT (cant.)" muestra, para que la
-    // cuenta del Faltante sea exactamente lo que se ve en pantalla.
+    // DECISION DEL USUARIO 2026-11-01: en la OT se descuenta lo YA ENSAMBLADO.
+    //   cantidad     = lo que la OT pide fabricar (no cambia al avanzar).
+    //   ensamblada   = lo que ya se ensamblo (work_orders.cant_ensamblada del espejo).
+    //   pendiente    = cantidad - ensamblada: lo que TODAVIA se va a fabricar, que es lo unico
+    //                  que puede cubrir una demanda. Lo ya ensamblado no se cuenta dos veces:
+    //                  esa pieza existe, y si esta en el almacen ya la suma `existencia`.
+    // Se calcula aqui y no se lee `pendingQuantity` del lector a proposito: ese campo trae la
+    // heuristica "un 0 sin avance no es evidencia" (supabase-reader mapWorkOrders), que en una
+    // OT planificada devuelve la cantidad completa. Para cubrir demanda, la resta directa es la
+    // cuenta que la persona puede verificar en pantalla.
     var cantidadOt = Number(orow.quantity || 0);
     var ensambladaOt = Number(orow.builtQuantity || 0);
     var pend = Math.max(0, cantidadOt - ensambladaOt);
@@ -10170,15 +10177,17 @@ function faltantesRows() {
     var comp = String(filaMat.component || "").trim().toUpperCase();
     if (!comp) continue;
     if (comp === "PROTOTIPO") continue;
+    // LA CANTIDAD ES LO QUE FALTA CONSUMIR, NO LO REQUERIDO EN BRUTO.
+    //   requerido  = lo que la OT pide del componente, tal como viene en su BOM.
+    //   emitido    = lo que YA SE ENTREGO/surtio a la OT (materials.emitido).
+    //   pendiente  = requerido - emitido: lo que TODAVIA falta surtir.
+    // Restar lo emitido es lo que evita contar como falta algo que ya salio del almacen.
+    // Se calcula con `requerido - emitido` (no con `materials.pendiente`, que MEDIDO
+    // 2026-11-01 traia valores que no cuadraban con la fila) y solo se usa `pendiente` del
+    // espejo como respaldo cuando `requerido` viene en 0, para no perder la fila.
     var req = Math.max(0, Number(filaMat.required) || 0);
     var emitido = Math.max(0, Number(filaMat.issued) || 0);
     var pendCampo = Number(filaMat.pending);
-    // MEDIDO 2026-11-01 (reporte del usuario, COMP-4017 en la OT 4056): `materials.pendiente`
-    // NO es confiable como cantidad a consumir. Venia en 20 para una OT cuya fila dice 15, y
-    // esa diferencia se propagaba al "Pend." del reporte: la persona ve 15 en OT (cant.) y 20
-    // en Pend. La cantidad de la fila es `requerido - emitido`, que es el dato del BOM de la OT
-    // y el que la propia columna OT (cant.) muestra. Solo si `requerido` no viene (0) se usa
-    // `pendiente` como respaldo, para no perder filas que solo traen ese campo.
     var demandaComp = req > 0
       ? Math.max(0, req - emitido)
       : (Number.isFinite(pendCampo) ? Math.max(0, pendCampo) : 0);
