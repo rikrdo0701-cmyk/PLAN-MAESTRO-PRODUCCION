@@ -9994,6 +9994,14 @@ function faltantesRows() {
   var inv = state.inventory || [];
   var sos = state.salesOrders || [];
   var arts = state.items || [];
+  // DESCRIPCION DEL ARTICULO (pedido del usuario 2026-11-01): la columna va despues de
+  // "Articulo" y sale de `items.descripcion` (la ingesta si la trae: 2536 filas).
+  var descripcionItem = {};
+  for (var ad = 0; ad < arts.length; ad++) {
+    var cod = String(arts[ad].code || "").trim().toUpperCase();
+    if (!cod) continue;
+    descripcionItem[cod] = String(arts[ad].description || "").trim();
+  }
   // MEDIDO 2026-10-31: solo articulos tipo Assembly que tengan inventario
   // fisico > 0 en Planta MM del Llano. Items de otras plantas con stock 0
   // (como BA 400/600/700 SMNE) se excluyen automaticamente.
@@ -10110,7 +10118,7 @@ function faltantesRows() {
       // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
       // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
       if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
-      grupos.push({ articulo: key, existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
+      grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], pendiente: (otPorArt[key] || {}).cat || 0, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
     }
   }
   // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).
@@ -10153,6 +10161,7 @@ function faltantesRows() {
     if (!hijosPorArt[comp]) {
       hijosPorArt[comp] = {
         articulo: comp,
+        descripcion: descripcionItem[comp] || "",
         existencia: Number(existencia[comp]) || 0,
         ots: [],
         pendiente: (otPorArt[comp] || {}).cat || 0,
@@ -10210,19 +10219,19 @@ function renderFaltantesReport() {
         ovCant = formatMaterialQuantity(ovsOrdenados[ovi].cantidad);
         ovFec = ovsOrdenados[ovi].fecha || "";
       }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
+      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovCant + "</td><td>" + ovFec + "</td><td>" + (first ? otsStr : "") + "</td><td>" + (first ? formatMaterialQuantity(g.pendiente) : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
     }
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
     if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
     var otsStr = f.ots.map(function(o) { return o.ot + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td></td><td></td><td></td><td>" + otsStr + "</td><td>" + formatMaterialQuantity(f.pendiente) + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
-    rowsHtml = "<tr><td colspan=\"8\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+    rowsHtml = "<tr><td colspan=\"9\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
   }
-  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-cant\"><col class=\"col-fecha\"><col class=\"col-ot\"><col class=\"col-pend\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV</th><th>Cant.</th><th>Fecha</th><th>OT (cant.)</th><th>Pend.</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
 }
 
 function filterFaltantesRows() {
@@ -10242,7 +10251,7 @@ function filterFaltantesRows() {
   var empty = table.querySelector("tbody tr.report-empty-state");
   if (!any && !empty) {
     var td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 9;
     td.className = "report-empty-state";
     td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
     var tr = document.createElement("tr");
