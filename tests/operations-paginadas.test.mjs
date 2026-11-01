@@ -153,8 +153,11 @@ test("`ORDEN_PAGINADO` declara `operations`, que es la tabla que rebasa `db-max-
   const { reader } = lectorConDbMaxRows({});
   // La lista es manual a proposito: cuando otra tabla crezca de 1000 hay que AGREGARLA aqui, y una
   // prueba que la leyera sola no dejaria ver el olvido.
-  assert.deepEqual(Object.keys(reader.ORDEN_PAGINADO), ["operations"]);
+  // MEDIDO 2026-10-31: inventory e items tambien rebasan db-max-rows (1975 y 2536 filas).
+  assert.deepEqual(Object.keys(reader.ORDEN_PAGINADO).sort(), ["operations", "inventory", "items"]);
   assert.match(reader.ORDEN_PAGINADO.operations, /^ot\.asc/);
+  assert.match(reader.ORDEN_PAGINADO.inventory, /^item\.asc/);
+  assert.match(reader.ORDEN_PAGINADO.items, /^codigo\.asc/);
 });
 
 test("el sync del plan (syncNetSuitePlanningData) pagina `operations`: 2275 filas enteras, sin recorte", async () => {
