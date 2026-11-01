@@ -10001,8 +10001,10 @@ function faltantesRows() {
       if (!item) continue;
       if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
       var pend = so.lines[l].pendiente !== undefined ? Number(so.lines[l].pendiente) : Number(so.lines[l].cantidad);
-      demandaOV[item].cat += Math.abs(pend) || 0;
-      demandaOV[item].ovs.push({ folio: so.folio, cantidad: Math.abs(pend) || 0, fecha: so.date });
+      var absPend = Math.abs(pend) || 0;
+      if (absPend <= 0) continue; // solo lineas con pendiente > 0
+      demandaOV[item].cat += absPend;
+      demandaOV[item].ovs.push({ folio: so.folio, cantidad: absPend, fecha: so.date });
     }
   }
   var otPorArt = {};
