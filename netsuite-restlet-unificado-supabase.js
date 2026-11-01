@@ -547,6 +547,7 @@ define(['N/query'], (query) => {
       // i.description; purchasedescription esta vacia en casi todos (2/282 en OTs abiertas)
       // y antes la mayoria caia al displayname (= codigo).
       '  COALESCE(i.description, i.purchasedescription, i.displayname, i.itemid) AS descripcion,',
+      '  BUILTIN.DF(i.location) AS ubicacion,',
       '  i.isinactive AS inactivo,',
       '  i.lastmodifieddate AS ultima_modificacion',
       'FROM item i',
@@ -556,11 +557,12 @@ define(['N/query'], (query) => {
     const rows = runSuiteQL_(sql);
     return {
       ok: true,
-      headers: ['item_id', 'codigo', 'tipo', 'descripcion', 'inactivo', 'ultima_modificacion'],
+      headers: ['item_id', 'codigo', 'tipo', 'descripcion', 'ubicacion', 'inactivo', 'ultima_modificacion'],
       rows: rows.map(r => ({
         codigo: String(r.codigo || ''),
         tipo: String(r.tipo || ''),
         descripcion: String(r.descripcion || ''),
+        ubicacion: String(r.ubicacion || ''),
         inactivo: r.inactivo === 'T',
         ultima_modificacion: isoFecha_(r.ultima_modificacion)
       })),
@@ -664,7 +666,7 @@ define(['N/query'], (query) => {
       '  tl.transaction AS orden_internal_id,',
       '  BUILTIN.DF(tl.item) AS item,',
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
-      '  ABS(NVL(tl.quantityremaining, 0)) AS pendiente,',
+      '  GREATEST(0, ABS(NVL(tl.quantity, 0)) - ABS(NVL(tl.quantityshiprecv, 0))) AS pendiente,',
       '  tl.rate AS precio,',
       '  BUILTIN.DF(tl.units) AS unidad',
       'FROM transactionline tl',
@@ -710,6 +712,7 @@ define(['N/query'], (query) => {
       headers: ['internalid', 'fecha_captura', 'orden', 'clave_cliente', 'nombre_cliente', 'fecha_embarque', 'comentarios', 'monto_pendiente_facturar', 'lineas'],
       rows: rows,
       totalRows: rows.length,
+      _v: 'da3aedd+p',
       nota: 'lineas incluidas (ver HALLAZGO CRITICO 1; redeploy 2246 + re-ingesta requerido fuera de CI)'
     };
   }

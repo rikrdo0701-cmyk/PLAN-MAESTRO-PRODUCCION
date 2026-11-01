@@ -9982,7 +9982,7 @@ function faltantesRows() {
   // servicios/partes no-ensamble se descartan: no son productos que la planta fabrique.
   var ensambles = new Set();
   for (var ai = 0; ai < arts.length; ai++) {
-    if (arts[ai].type === "ASSEMBLY") ensambles.add(arts[ai].code.toUpperCase());
+    if (arts[ai].type === "ASSEMBLY" && String(arts[ai].location || "").toUpperCase().indexOf("MM DEL LLANO") >= 0) ensambles.add(arts[ai].code.toUpperCase());
   }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
