@@ -570,7 +570,12 @@ const COLUMNAS_POR_OMISION_ = {
   work_orders: {
     wo_internal_id: '', articulo: '', descripcion: '', foto_url: '', cantidad: 0,
     estatus: '', cliente: '', cant_ensamblada: 0, cant_pendiente: 0,
-    precio_promedio_venta: 0, precio_ultima_venta: 0, revision: 0
+    precio_promedio_venta: 0, precio_ultima_venta: 0, revision: 0,
+    // `revision_bom` (docs/schema-work-orders-revision-bom.sql): la REV del BOM que imprime
+    // la hoja de inspeccion. `not null default ''` en el DDL, o sea que va en esta tabla por
+    // la misma razon que foto_url: si alguna fila no la trae, el RPC la pondria NULL y
+    // Postgres la rechaza con 23502. Ver el comentario de arriba de esta constante.
+    revision_bom: ''
   },
   operations: {
     secuencia: 0, ct: '', descripcion: '', operador: '', maquina: '', herramental: '', kit: '',

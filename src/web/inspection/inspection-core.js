@@ -384,12 +384,13 @@
    * `result.data.detail.workOrder.drawing` de un objeto que no lo tiene, o sea que el
    * boton de dibujo de la OT tampoco abriria. MEDIDO 2026-10-01.
    *
-   * `revision` VIENE VACIA A PROPOSITO. La celda REV de la hoja quiere la revision del
-   * BOM de NetSuite ('Revision'/'bomRevision'), y `work_orders.revision` NO la guarda:
-   * la pagina escribe ahi la REVISION DEL PLAN (filasWorkOrders,
-   * supabase-writer.js:1645), que es un contador de guardado. Meter ese numero en una
-   * celda REV seria un dato que no es. Se deja "" y la hoja imprime "A", que es lo que
-   * imprimia cuando NetSuite no traia revision. Esta en MAPPING_GAPS.work_orders.
+   * `revision` VIENE DE `revision_bom` (CORREGIDO 2026-11-04). La celda REV de la hoja
+   * quiere la revision del BOM de NetSuite, y eso ahora esta en `work_orders.revision_bom`
+   * que la INGESTA llena desde `billofmaterialsrevision` del RESTlet 2246. `work_orders.revision`
+   * (integer) sigue siendo el CONTADOR DE GUARDADO del plan (filasWorkOrders,
+   * supabase-writer.js:1645) y el lector ya no lo usa para la celda REV: la nueva columna
+   * revision_bom la reemplaza. Si la OT no trae "REV <letra>" en el BOM, la columna esta
+   * vacia y la hoja imprime "A" como siempre. Ver MAPPING_GAPS.work_orders.
    *
    * `workOrder` VACIO SI NO HAY FILA, Y NO ES LO MISMO QUE UN ERROR. La pagina pide el
    * detalle de una OT que eligio de una lista que venia de la misma tabla, asi que el

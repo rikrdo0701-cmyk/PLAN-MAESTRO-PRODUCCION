@@ -189,7 +189,8 @@ create table public.work_orders (
   cant_pendiente integer not null default 0,
   precio_promedio_venta numeric not null default 0,
   precio_ultima_venta numeric not null default 0,
-  revision    integer not null default 0,
+  revision    integer not null default 0,   -- contador de guardado del plan (NO es la revision de ingenieria)
+  revision_bom text not null default '',     -- la REV del BOM/enrutamiento de NetSuite (2246): lo que imprime la hoja
   synced_at   timestamptz,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()

@@ -108,9 +108,16 @@ define(['N/query'], (query) => {
   // vaciaria `work_orders` entera (RULE-SUP-048).
   const DIAS_OT_CERRADAS = 90;
   const MAX_OT_CERRADAS = 300;
+  // `revision_bom` ES LA REVISION QUE IMPRIME LA HOJA DE INSPECCION (celda REV). Sale de
+  // `billofmaterialsrevision`, o sea del BOM/enrutamiento de la OT en NetSuite, que siempre
+  // viene como "<nombre del BOM> REV <letra>": la OT 2752 trae "CCA 519 C REV C" y la hoja
+  // tiene que imprimir C. NO es `work_orders.revision`, que es el contador de guardado del
+  // plan (lo escribe el navegador, ver MAPPING_GAPS.work_orders del lector). Se guarda ya
+  // recortada a la letra (revisionDesdeBom_) para que la columna diga una revision y no un
+  // nombre, igual que hace el RESTlet 2244 con el mismo campo.
   const COLUMNAS_WORKORDERS = [
     'wo_internal_id', 'ot', 'articulo', 'descripcion', 'cantidad', 'estatus', 'cliente', 'fecha_vencimiento',
-    'cant_ensamblada', 'cant_pendiente'
+    'cant_ensamblada', 'cant_pendiente', 'revision_bom'
   ];
 
   function workorders_() {
@@ -254,6 +261,15 @@ define(['N/query'], (query) => {
     ].join('\n');
   }
 
+  // "CCA 519 C REV C" -> "C". MISMA REGLA que `parseRevisionFromBom` del RESTlet 2244
+  // (netsuite-restlet-wo-inspeccion.js): si el texto no trae "REV <algo>", no hay revision
+  // que imprimir y la columna queda vacia; la hoja cae entonces a su valor por omision "A",
+  // que es lo que imprimia hasta hoy.
+  function revisionDesdeBom_(value) {
+    const match = String(value || '').trim().match(/\bREV\s+(\S+)/i);
+    return match ? String(match[1] || '').trim() : '';
+  }
+
   function filaWorkOrder_(r) {
     return {
       wo_internal_id: String(r.wo_internal_id || ''),
@@ -263,6 +279,7 @@ define(['N/query'], (query) => {
       cantidad: Number(r.cantidad) || 0,
       estatus: String(r.estatus || ''),
       cliente: String(r.cliente || ''),
+      revision_bom: revisionDesdeBom_(r.bomrevision),
       fecha_vencimiento: isoFecha_(r.fecha_vencimiento),
       // Las llena `enriquecerEnsamblada_`; si esa consulta no corre quedan en 0, que es lo
       // que Supabase tiene hoy. No se inventa el pendiente: se deja que `mapWorkOrders` del
@@ -285,6 +302,9 @@ define(['N/query'], (query) => {
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
       '  BUILTIN.DF(t.status) AS estatus,',
       '  BUILTIN.DF(t.entity) AS cliente,',
+      // La revision del BOM/enrutamiento ("CCA 519 C REV C"): la celda REV de la hoja de
+      // inspeccion. Ver COLUMNAS_WORKORDERS para por que no se usa work_orders.revision.
+      '  BUILTIN.DF(t.billofmaterialsrevision) AS bomrevision,',
       '  t.enddate AS fecha_vencimiento',
       'FROM transaction t',
       "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",
@@ -314,6 +334,9 @@ define(['N/query'], (query) => {
       '  ABS(NVL(tl.quantity, 0)) AS cantidad,',
       '  BUILTIN.DF(t.status) AS estatus,',
       '  BUILTIN.DF(t.entity) AS cliente,',
+      // La revision del BOM/enrutamiento ("CCA 519 C REV C"): la celda REV de la hoja de
+      // inspeccion. Ver COLUMNAS_WORKORDERS para por que no se usa work_orders.revision.
+      '  BUILTIN.DF(t.billofmaterialsrevision) AS bomrevision,',
       '  t.enddate AS fecha_vencimiento',
       'FROM transaction t',
       "JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'",

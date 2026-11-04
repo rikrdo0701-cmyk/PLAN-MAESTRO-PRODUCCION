@@ -218,7 +218,7 @@
       // transacciones `Build` de la OT, el mismo dato que `record:built` del 2244). La regla de
       // `mapWorkOrders` se queda como estaba: es la que cubre las filas del espejo viejo y una
       // corrida sin la consulta nueva.
-      "workOrders[].revision | falta la FORMA de la columna revision | MEDIDO 2026-10-01: la columna existe y esta bien tipada, pero lo que guarda NO es lo que el estado pide. filasWorkOrders (supabase-writer.js:1645) escribe ahi la REVISION DEL PLAN, que es un contador de guardado, mientras que la hoja de inspeccion usa este campo en la celda REV, que quiere la revision del BOM de NetSuite ('Revision'/'bomRevision' en PP_getInspectionWorkOrder, 16-inspection-service.js:181). Son dos cosas distintas en la misma columna y no hay forma de saber cual esta sin preguntar a quien la escribio. Se deja '' y la hoja imprime 'A', que es lo que se imprimia cuando NetSuite no traia revision. Poner el numero del plan en una celda REV seria affirmar una revision de ingenieria que nadie dio.",
+      "workOrders[].revision | CORREGIDO el 2026-11-04: la hoja de inspeccion ahora lee `revision_bom`, no `revision`. La columna nueva (`revision_bom text not null default ''`, docs/schema-work-orders-revision-bom.sql) la llena la INGESTA desde `billofmaterialsrevision` del RESTlet 2246 y ya lleva la letra correcta (OT 2752 -> C). `work_orders.revision` sigue siendo el CONTADOR DE GUARDADO del plan (filasWorkOrders, supabase-writer.js) y el lector deja de usarlo para la celda REV. Si la OT no trae 'REV <letra>' en el BOM, la hoja imprime 'A' como antes.",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -1624,13 +1624,15 @@
           : Math.max(0, quantity),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
         lastSalePrice: number(row.precio_ultima_venta),
-        // `revision` NO es la revision del BOM. MEDIDO 2026-10-01: la columna existe
-        // pero `filasWorkOrders` (supabase-writer.js:1645) escribe ahi la REVISION DEL
-        // PLAN, un contador de guardado. La hoja de inspeccion pinta esta celda en un
-        // cuadrito rotulado REV y quiere la revision del BOM de NetSuite. Se deja ""
-        // y no se copia `row.revision`: un numero de guardado en una celda de revision
-        // de ingenieria es peor que una celda vacia. Ver MAPPING_GAPS.work_orders.
-        revision: "",
+        // `revision` ES LA CELDA REV DE LA HOJA DE INSPECCION y sale de `revision_bom`, NO de
+        // `row.revision`. MEDIDO 2026-10-01: `work_orders.revision` (integer) la escribe
+        // filasWorkOrders (supabase-writer.js) con la REVISION DEL PLAN, un contador de
+        // guardado; ponerla en el cuadrito REV seria afirmar una revision de ingenieria que
+        // nadie dio. Desde el 2026-11-04 el dato correcto SI llega a la base: la ingesta lo
+        // manda desde `billofmaterialsrevision` del 2246, ya recortado a la letra
+        // (docs/schema-work-orders-revision-bom.sql). Si la OT no trae "REV <letra>", la
+        // columna esta vacia y la hoja imprime su valor por omision "A", como hasta hoy.
+        revision: String(row.revision_bom == null ? "" : row.revision_bom).trim(),
       };
     });
   }
