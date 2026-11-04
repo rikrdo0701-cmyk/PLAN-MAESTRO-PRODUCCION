@@ -209,10 +209,6 @@ function patchPlanningApp(app) {
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
-  void snapshotsRequest.then(() => {
-    if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
-    return null;
-  });
 }`;
   const startupReplacement = `async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
@@ -248,9 +244,6 @@ function patchPlanningApp(app) {
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
-  if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") {
-    void maybeLoadDefaultPublishedReportSnapshot();
-  }
 }
 
 function planningStateHasDemoOnly() {

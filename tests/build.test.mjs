@@ -994,7 +994,12 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /const activeCalls = new Map\(\)/);
   assert.match(pagesIndex, /loadSnapshotsOnce = function optimizedLoadSnapshotsOnce\(showMessage, options = \{\}\)[\s\S]*requestPlanSnapshots\(showMessage, options\)/);
   assert.match(pagesIndex, /async function openRestoreDraftDialog\(\)[\s\S]*await loadSnapshotsOnce\(false\)/);
-  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = \(options\.deferPublishedLoad !== true \|\| !hasDraftReport\)[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  // RULE-REP-004 (actualizada 2026-11-04): el reporte abre en el borrador y su semana es el lunes
+  // de la semana actual. El arranque ya no encadena el ultimo publicado a la lista de instantaneas
+  // (esa carga automatica era la que cambiaba sola la pestaña a los segundos de abrir).
+  assert.match(pagesIndex, /async function loadPlanSnapshots\(showMessage, options = \{\}\)[\s\S]*const draftReport = currentDraftReportSnapshot\(\);[\s\S]*const hasDraftReport = draftReport\.operations\.length > 0;[\s\S]*const preferPublished = options\.deferPublishedLoad !== true &&[\s\S]*!reportSnapshot && !hasDraftReport;[\s\S]*for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*const loaded = await loadPlanSnapshotById\(snapshot\.snapshotId, \{ render: false, silent: true \}\);[\s\S]*if \(loaded\) break;[\s\S]*if \(!reportSnapshot\) \{[\s\S]*reportSnapshot = draftReport;[\s\S]*return \{ ok: true, count: planSnapshots\.length \}/);
+  assert.doesNotMatch(pagesIndex, /maybeLoadDefaultPublishedReportSnapshot/, "el arranque no puede volver a cargar el ultimo publicado solo");
+  assert.match(pagesIndex, /function syncReportFiltersToPlanWeekOrToday\(\) \{[\s\S]*state\.reportWeekStart = normalizeWeekStartValue\(formatDate\(new Date\(\)\)\);/);
   assert.match(pagesIndex, /catch \(error\)[\s\S]*return \{ ok: false, count: 0, error:/);
   assert.match(pagesIndex, /inspection-print-page-size/);
   // MEDIDO 2026-10-22: la hoja de inspección ya NO mide el ancho/alto con scrollWidth ni
@@ -1187,7 +1192,8 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /status: isPublishedSnapshotOption\(snapshot, publishedIds\) \? "PUBLICADO"/);
   const snapshotsLoad = pagesIndex.slice(pagesIndex.indexOf("async function loadPlanSnapshots"), pagesIndex.indexOf("async function loadSelectedPlanSnapshot"));
   assert.match(snapshotsLoad, /for \(const snapshot of publishedPlanSnapshots\(\)\) \{[\s\S]*loadPlanSnapshotById\(snapshot\.snapshotId/);
-  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*syncDraftReportWeek\(\);[\s\S]*reportSnapshot = draftReport;/);
+  assert.match(snapshotsLoad, /if \(!reportSnapshot\) \{[^}]*reportSnapshot = draftReport;/);
+  assert.doesNotMatch(snapshotsLoad, /syncDraftReportWeek\(\);[^}]*reportSnapshot = draftReport;/, "la lista de instantaneas no puede mover la semana de los reportes al resolver");
 assert.match(snapshotsLoad, /renderReports\(\);/);
   assert.match(pagesIndex, /let planSourceLoadVersion = 0;/);
   assert.match(pagesIndex, /async function loadSelectedPlanSnapshot\(selectedSnapshotId\)[\s\S]*planSourceLoadVersion \+= 1/);

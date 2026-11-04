@@ -790,6 +790,13 @@ else initializePlanningApp();
 // NOTA PARA QUIEN TOQUE ESTA LINEA: scripts/build-appscript.mjs parchea este bloque por TEXTO
 // exacto, asi que el cuerpo tiene que quedar igual que el startupMarker de ahi, sin comentarios
 // en medio. La explicacion de arriba va aqui arriba, no entre las lineas del bloque.
+//
+// RULE-REP-004 ACTUALIZADA 2026-11-04 (decision del usuario): el reporte abre en el BORRADOR.
+// Hasta hoy, en cuanto llegaba la lista de instantaneas, este arranque cargaba el ultimo plan
+// publicado y TODA la pestaña "Plan de la semana" cambiaba sola unos segundos despues de abrir
+// (sintoma reportado: "muestra la informacion correcta y a los segundos muestra otra"). La
+// fuente publicada ya sigue disponible a mano en el desplegable "Plan" de los reportes; lo que
+// se quito es la carga automatica, no la opcion.
 async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
     console.warn("No se pudieron cargar los historicos:", error);
@@ -819,10 +826,6 @@ async function loadAppStateInBackground() {
   ]).then(([bootResult]) => {
     void Promise.resolve(bootResult);
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
-    return null;
-  });
-  void snapshotsRequest.then(() => {
-    if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
     return null;
   });
 }
@@ -8126,8 +8129,12 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
     savePlanSnapshotsCache(planSnapshots);
     const draftReport = currentDraftReportSnapshot();
     const hasDraftReport = draftReport.operations.length > 0;
-    const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
-      (!reportSnapshot || (reportSnapshot.snapshotId === "draft" && !hasDraftReport));
+    // RULE-REP-004 (actualizada 2026-11-04): el reporte abre SIEMPRE en el borrador. Antes, esta
+    // rama cargaba el ultimo plan publicado cuando la lista de instantaneas resolvia, y la pestaña
+    // "Plan de la semana" cambiaba sola a los segundos de abrir. El publicado sigue disponible en
+    // el desplegable "Plan"; lo unico que se quito es la carga automatica en el arranque.
+    const preferPublished = options.deferPublishedLoad !== true &&
+      !reportSnapshot && !hasDraftReport;
     if (preferPublished) {
       const bootSourceVersion = planSourceLoadVersion;
       for (const snapshot of publishedPlanSnapshots()) {
@@ -8137,7 +8144,10 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
       }
     }
     if (!reportSnapshot) {
-      syncDraftReportWeek();
+      // RULE-REP-004 (actualizada 2026-11-04): NO se llama a syncDraftReportWeek() aqui. Esa llamada
+      // movia la semana de los reportes a la de `state.planStart` (el ultimo plan guardado) justo
+      // cuando resolvia la lista de instantaneas, o sea despues del primer pintado. La semana ya la
+      // fijo el arranque en el lunes de la semana actual con syncReportFiltersToPlanWeekOrToday().
       reportSnapshot = draftReport;
     }
     planSnapshotsLoading = false;
@@ -8156,12 +8166,6 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
 function loadSnapshotsOnce(showMessage) {
   if (planSnapshots.length && showMessage !== true) return Promise.resolve({ ok: true, count: planSnapshots.length });
   return loadPlanSnapshots(showMessage);
-}
-
-function maybeLoadDefaultPublishedReportSnapshot() {
-  if (reportSnapshot && reportSnapshot.snapshotId !== "draft") return null;
-  const activeId = activePublishedSnapshotId();
-  return activeId ? loadPlanSnapshotById(activeId, { silent: true }) : null;
 }
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
@@ -14292,8 +14296,12 @@ function resetDailyReportFiltersToToday() {
 }
 
 function syncReportFiltersToPlanWeekOrToday() {
-  const reportStart = state.planStart || state.reportWeekStart;
-  if (reportStart) state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  // RULE-REP-004 (actualizada 2026-11-04): la semana de los reportes arranca en el LUNES DE LA
+  // SEMANA ACTUAL (hoy 2026-11-04 -> 2026-11-02), no en la semana del plan que este cargado.
+  // Antes tomaba `state.planStart`; con la carga automatica del ultimo publicado eso cambiaba la
+  // semana solo, unos segundos despues de abrir. `normalizeWeekStartValue` ya lleva cualquier
+  // fecha a su lunes, asi que pasarle hoy es exactamente la regla.
+  state.reportWeekStart = normalizeWeekStartValue(formatDate(new Date()));
   resetDailyReportFiltersToToday();
 }
 

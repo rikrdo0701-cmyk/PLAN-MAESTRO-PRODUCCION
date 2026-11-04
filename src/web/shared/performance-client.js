@@ -919,6 +919,12 @@
       initialStateLoadPending = false;
       if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
       if (selectedOperationId) state.selectedOperationId = selectedOperationId;
+      // RULE-REP-004 (actualizada 2026-11-04): los reportes abren en el borrador y su semana es el
+      // lunes de la semana actual. Este arranque optimizado reemplaza al de app.js y no llamaba a
+      // syncReportFiltersToPlanWeekOrToday(), asi que la semana quedaba en la que traia app_state
+      // (la del ultimo plan guardado). El typeof es porque el arnes de pruebas evalua este archivo
+      // sin el resto de app.js en scope.
+      if (typeof syncReportFiltersToPlanWeekOrToday === "function") syncReportFiltersToPlanWeekOrToday();
       saveState("ui");
       render({ save: false });
       applyInitialWorkspaceView({ scrollToTop: false });
@@ -936,10 +942,6 @@
       void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
         void Promise.resolve(bootResult);
         if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
-        return null;
-      });
-      void snapshotsRequest?.then(() => {
-        if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
         return null;
       });
     });
