@@ -58,6 +58,15 @@
 --    podria vaciar una tabla entera. Medido el 2026-10-01: execute anon=NO,
 --    authenticated=NO, service_role=SI.
 --
+-- 6. LAS COLUMNAS DE PLAN NO SE PISAN. `operations` y `work_orders` guardan, ademas de
+--    lo que manda NetSuite, lo que decide la persona (operador, maquina, fechas, candado,
+--    retirada...). El espejo borra y reinserta cada 15 minutos, asi que sin la
+--    conservacion de la seccion 2 el plan se perdia en cada corrida. Medido el
+--    2026-11-05 en produccion: las 1642 filas de `operations` quedaron con el id interno
+--    de NetSuite en `operador` ("1"), `hora_inicio` NULL y fechas de julio, y el reporte
+--    "Plan por operador" salio "Sin operaciones programadas en esta semana". La lista de
+--    columnas conservadas vive en public.ingesta_mirror_preserva, no en este cuerpo.
+--
 -- -----------------------------------------------------------------------------
 -- COMO APLICAR
 -- -----------------------------------------------------------------------------
@@ -86,7 +95,61 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
--- 2. El RPC.
+-- 2. LO QUE LA INGESTA NO PISA: LAS COLUMNAS DE PLAN.
+--
+-- MEDIDO 2026-11-05 en produccion. El espejo borra y reinserta cada 15 minutos.
+-- Eso es correcto para lo que viene de NetSuite, pero `operations` y `work_orders`
+-- TAMBIEN guardan decisiones de la pagina (quien, cuando, con que maquina, el
+-- candado, la marca de retirada). Como el espejo reinserta solo lo que manda el
+-- RESTlet 2246, cada corrida dejaba esas columnas en su default y el plan se
+-- perdia: ese dia las 1642 filas de `operations` quedaron con `operador = '1'`
+-- (el id interno del ERP), `hora_inicio` NULL y fechas de julio.
+--
+-- La lista es explicita y NO es la de plan_tabla_escritura completa: alli tambien
+-- estan los ecos del ERP (`secuencia`, `ct`, `estatus`, `cant_ensamblada`,
+-- `cant_pendiente`, `fecha_vencimiento`) que SI tienen que refrescarse desde
+-- NetSuite. Lo que se conserva es solo lo que decide la persona.
+--
+-- La clave es la misma con la que plan_guardar encuentra la fila: `operation_id`
+-- en operations, `ot` en work_orders, `ot,line_id` en materials. Si la fila ya no
+-- viene del origen, no se reinserta: no hay a quien devolverle nada.
+--
+-- `work_orders.revision_bom` TAMPOCO se conserva: es la REV del BOM de NetSuite y
+-- el 2246 la trae en cada corrida (RULE-REV-025).
+-- -----------------------------------------------------------------------------
+create table if not exists public.ingesta_mirror_preserva (
+  tabla    text primary key,
+  clave    text[] not null,      -- columnas que identifican la fila (las de plan_guardar)
+  columnas text[] not null,      -- columnas que la ingesta NO debe pisar
+  nota     text
+);
+comment on table public.ingesta_mirror_preserva is
+  'Columnas que la ingesta de NetSuite NO debe pisar al espejar: son decisiones de la pagina (plan). ingesta_mirror las copia antes del delete y las vuelve a aplicar despues del insert, emparejando por la clave.';
+
+insert into public.ingesta_mirror_preserva (tabla, clave, columnas, nota) values
+  ('operations', array['operation_id'],
+   array['operador','maquina','herramental','kit',
+         'fecha_inicio','hora_inicio','fecha_fin','hora_fin',
+         'locked','auto_frozen','subcontract_type','subcontract_days',
+         'num','parte','contenido','prioridad','fecha_req','comentario',
+         'tiempo_fallback','kit_pending','completado','tipo','precio','clasificacion',
+         'retirada_en','retirada_por','revision'],
+   'Cuando, donde, con que, en que orden y si la operacion esta retirada. NO incluye secuencia/ct/estatus/cantidades/tiempos: esos son del ERP y el espejo tiene que refrescarlos.'),
+  ('work_orders', array['ot'],
+   array['due_date_override','precio_desde','precio_hasta','revision'],
+   'Solo lo que decide la pagina en la OT. fecha_inicio_ns, fecha_vencimiento, estatus, cantidades y revision_bom son del ERP.'),
+  ('materials', array['ot','line_id'], array['emitido'],
+   'Lo unico que decide la pagina de un componente es si ya se emitio.')
+on conflict (tabla) do update
+  set clave = excluded.clave, columnas = excluded.columnas, nota = excluded.nota;
+
+-- Solo service_role: es configuracion de la ingesta, no se lee desde la pagina.
+revoke all on table public.ingesta_mirror_preserva from anon;
+revoke all on table public.ingesta_mirror_preserva from authenticated;
+grant select on table public.ingesta_mirror_preserva to service_role;
+
+-- -----------------------------------------------------------------------------
+-- 3. El RPC.
 -- -----------------------------------------------------------------------------
 create or replace function public.ingesta_mirror(p_tabla text, p_filas jsonb)
   returns jsonb
@@ -103,6 +166,12 @@ declare
   v_borradas    bigint;
   v_insertadas  int;
   v_sql         text;
+  v_previas     jsonb := '[]'::jsonb;  -- copia de las columnas de plan, antes del delete
+  v_clave       text[];
+  v_preserva    text[];
+  v_restauradas int := 0;
+  v_lista       text;
+  v_llave       text;
 begin
   -- LA WHITELIST ES LA TABLA, NO ESTA LISTA. MEDIDO 2026-10-01: por 30 años de
   -- este proyecto la lista vivio en este cuerpo, y agregar una tabla obligaba a
@@ -119,6 +188,22 @@ begin
     raise exception 'ingesta_mirror: p_filas debe ser un arreglo jsonb';
   end if;
   v_tabla := format('public.%I', p_tabla)::regclass;
+
+  -- LO QUE DECIDE LA PAGINA SE COPIA ANTES DEL DELETE (seccion 2). Si la tabla no
+  -- esta en public.ingesta_mirror_preserva no se copia nada y el espejo se comporta
+  -- igual que siempre.
+  select p.clave, p.columnas into v_clave, v_preserva
+    from public.ingesta_mirror_preserva p
+   where p.tabla = p_tabla;
+
+  if v_clave is not null then
+    select string_agg(format('%I', c), ',') into v_lista
+      from (select distinct unnest(v_clave || v_preserva) as c) s;
+    execute format(
+      'select coalesce(jsonb_agg(to_jsonb(x)), ''[]''::jsonb) from (select %s from %s) x',
+      v_lista, v_tabla)
+      into v_previas;
+  end if;
 
   execute format('delete from %s where id <> ''00000000-0000-0000-0000-000000000000''', v_tabla);
   get diagnostics v_borradas = row_count;
@@ -163,13 +248,30 @@ begin
     v_insertadas := 0;
   end if;
 
+  -- DEVOLVER LO QUE DECIDE LA PAGINA. El update no crea filas: si la operacion ya
+  -- no viene de NetSuite, su fila no existe y no hay nada que devolver. Se empareja
+  -- por la clave declarada (operation_id / ot / ot,line_id) y solo se escriben las
+  -- columnas de la lista; el resto queda como lo acaba de escribir la ingesta.
+  if v_clave is not null and jsonb_array_length(v_previas) > 0 then
+    select string_agg(format('%1$I = r.%1$I', c), ',') into v_lista
+      from unnest(v_preserva) as c;
+    select string_agg(format('t.%1$I = r.%1$I', c), ' and ') into v_llave
+      from unnest(v_clave) as c;
+    execute format(
+      'update %s t set %s from jsonb_populate_recordset(null::%s, $1) as r where %s',
+      v_tabla, v_lista, v_tabla, v_llave)
+      using v_previas;
+    get diagnostics v_restauradas = row_count;
+  end if;
+
   return jsonb_build_object('ok', true, 'tabla', p_tabla,
-                            'borradas', v_borradas, 'insertadas', v_insertadas);
+                            'borradas', v_borradas, 'insertadas', v_insertadas,
+                            'restauradas', v_restauradas);
 end;
 $$;
 
 -- -----------------------------------------------------------------------------
--- 3. Solo service_role. Ver el punto 5 de la cabecera: esto borra la tabla entera.
+-- 4. Solo service_role. Ver el punto 5 de la cabecera: esto borra la tabla entera.
 --    Medido el 2026-10-01, ya estaba asi en la base; se repite aqui para que el
 --    archivo sea por si solo suficiente.
 -- -----------------------------------------------------------------------------
@@ -183,6 +285,6 @@ grant execute on function public.ingesta_mirror(text, jsonb) to service_role;
 grant execute on function public.ingesta_mirror_v1(text, jsonb) to service_role;
 
 comment on function public.ingesta_mirror(text, jsonb) is
-  'Espejo atomico: borra la tabla y reinserta lo que llega, en una sola transaccion. Admite las filas de public.ingesta_mirror_whitelist y solo service_role puede ejecutarla.';
+  'Espejo atomico: borra la tabla y reinserta lo que llega, en una sola transaccion, y despues devuelve las columnas de plan de public.ingesta_mirror_preserva. Admite las filas de public.ingesta_mirror_whitelist y solo service_role puede ejecutarla.';
 comment on function public.ingesta_mirror_v1(text, jsonb) is
   'Tombstone. La v1 (lista de 7 tablas en el cuerpo) ya no se usa; ingesta_mirror lee public.ingesta_mirror_whitelist. Se conserva para que quien la llame reciba un raise que dice a donde ir.';

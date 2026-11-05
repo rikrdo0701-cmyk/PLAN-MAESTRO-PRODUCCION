@@ -67,7 +67,9 @@ const CANONICO = "rpc-ingesta-mirror.sql";
  *  test falla por su propia explicacion (por eso el punto 3 tiene que mirar el cuerpo de
  *  la funcion, no su prosa). */
 function sqlSinComentarios(texto) {
-  return texto.split("\n").map((l) => l.replace(/--.*$/, "")).join("\n");
+  // Se normalizan los finales de linea ANTES de cortar: con CRLF, `.` no come el
+  // `\r` y `$` no casa antes de el, asi que `--.*$` dejaba los comentarios puestos.
+  return texto.replace(/\r\n/g, "\n").split("\n").map((l) => l.replace(/--.*$/, "")).join("\n");
 }
 
 const crudos = Object.fromEntries(
@@ -216,4 +218,49 @@ test("9. la v1 queda como tombstone que dice a donde ir", () => {
   const v1 = cuerpoDeLaFuncion(canonico, "ingesta_mirror_v1");
   assert.match(v1, /raise exception/i, "la v1 no debe hacer nada quietly: si alguien la llama tiene que saber que use ingesta_mirror");
   assert.match(v1, /ingesta_mirror_whitelist/, "el mensaje de la v1 tiene que decir donde esta la lista buena");
+});
+
+// MEDIDO 2026-11-05 en produccion: el espejo borra y reinserta cada 15 minutos, y
+// `operations` guarda tambien lo que decide la pagina. Sin esta conservacion, cada
+// corrida dejaba `operador = '1'` (id interno del ERP), `hora_inicio` en NULL y las
+// fechas viejas, y "Plan por operador" salia "Sin operaciones programadas".
+test("10. las columnas de plan se copian ANTES del delete y se devuelven DESPUES del insert", () => {
+  const cuerpo = cuerpoDeLaFuncion(canonico, "ingesta_mirror");
+
+  assert.match(
+    canonico,
+    /create table if not exists public\.ingesta_mirror_preserva\s*\(\s*tabla\s+text primary key,\s*clave\s+text\[\] not null,\s*columnas\s+text\[\] not null/s,
+    "falta la tabla que declara que columnas de plan no se pisan"
+  );
+  for (const fila of [
+    /'operations',\s*array\['operation_id'\]/,
+    /'work_orders',\s*array\['ot'\]/,
+    /'materials',\s*array\['ot','line_id'\]/,
+  ]) {
+    assert.match(canonico, fila, "cada tabla con columnas de plan tiene que tener su fila con la clave de plan_guardar");
+  }
+  assert.match(
+    canonico,
+    /'work_orders',\s*array\['ot'\],\s*array\['due_date_override','precio_desde','precio_hasta','revision'\]/,
+    "de la OT solo se conserva lo que decide la pagina; revision_bom es del ERP (RULE-REV-025) y la trae el 2246 en cada corrida"
+  );
+
+  assert.match(
+    cuerpo,
+    /from public\.ingesta_mirror_preserva p\s+where p\.tabla\s*=\s*p_tabla/,
+    "el RPC tiene que leer la lista de la tabla, no llevarla en el cuerpo"
+  );
+  assert.match(
+    cuerpo,
+    /execute format\(\s*'update %s t set %s from jsonb_populate_recordset\(null::%s, \$1\) as r where %s'/s,
+    "despues del insert tiene que devolver las columnas conservadas por la clave"
+  );
+  assert.match(cuerpo, /'restauradas',\s*v_restauradas/, "el resultado tiene que decir cuantas filas se restauraron");
+
+  const iCopia = cuerpo.indexOf("ingesta_mirror_preserva p");
+  const iDelete = cuerpo.indexOf("'delete from %s");
+  assert.ok(
+    iCopia > 0 && iDelete > iCopia,
+    "la copia tiene que ir ANTES del delete: despues ya no hay nada que copiar"
+  );
 });

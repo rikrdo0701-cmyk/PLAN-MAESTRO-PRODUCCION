@@ -3022,6 +3022,24 @@
         "tests/ingesta-shape-restlet.test.mjs",
         "tests/disparar-ingesta.test.mjs"
       ]
+    },
+    {
+      "rule_id": "RULE-SUP-079",
+      "name": "La ingesta de NetSuite NO pisa las columnas de plan: ingesta_mirror las copia antes del delete y las devuelve despues del insert",
+      "status": "implementada",
+      "category": "supabase",
+      "rule": "QUE PASABA. El espejo de NetSuite (public.ingesta_mirror, docs/rpc-ingesta-mirror.sql) borra la tabla entera y reinserta lo que manda el RESTlet 2246 cada 15 minutos. Eso es correcto para las columnas del ERP, pero `operations` y `work_orders` guardan TAMBIEN lo que decide la persona (operador, maquina, fechas, candado, retirada) y el espejo lo reinsertaba en su default. MEDIDO el 2026-11-05 en produccion: las 1642 filas de `operations` quedaron con operador = '1' y maquina = '1' (ids internos que manda el 2246 desde mot.laborresources/machineresources, netsuite-restlet-unificado-supabase.js:390-391), hora_inicio NULL, fecha_inicio de julio y created_at/updated_at identicos a las 13:16:05. Consecuencia visible: 'Plan por operador' imprimia 'Sin operaciones programadas en esta semana' porque la semana se filtra con opStart/opEnd (fecha_inicio + hora_inicio).\n\nNO ERA LA PLANIFICACION. plan_snapshots del 2026-11-03 conserva los nombres correctos (FORMADOR 2 228, FORMADO 1 221, LIBERACION 210, DOBLADOR 1 84...), o sea que el planificador asigna bien; el que borraba las asignaciones era el espejo. La fila de `operations` tambien se crea al reves: la pagina nunca crea operaciones, solo actualiza las que ya vienen de NetSuite.\n\nEL ARREGLO. Tabla nueva public.ingesta_mirror_preserva (tabla text primary key, clave text[] not null, columnas text[] not null, nota text), SOLO service_role. Declara, por tabla, la clave con la que plan_guardar encuentra la fila y las columnas que la ingesta no debe pisar: operations -> clave operation_id, columnas operador, maquina, herramental, kit, fecha_inicio, hora_inicio, fecha_fin, hora_fin, locked, auto_frozen, subcontract_type, subcontract_days, num, parte, contenido, prioridad, fecha_req, comentario, tiempo_fallback, kit_pending, completado, tipo, precio, clasificacion, retirada_en, retirada_por, revision; work_orders -> clave ot, columnas due_date_override, precio_desde, precio_hasta, revision; materials -> clave ot,line_id, columna emitido.\n\nNO SE CONSERVAN LOS ECOS DEL ERP: ni secuencia, ni ct, ni estatus, ni cant_total/cant_pendiente/cant_ensamblada, ni tiempo_ciclo/setup/prod, ni tipo_insercion, ni fecha_vencimiento, ni revision_bom. Esos son de NetSuite y el espejo tiene que refrescarlos; conservarlos dejaria datos viejos disfrazados de actuales. En work_orders el unico dato de ingenieria que se refresca es revision_bom (RULE-REV-025).\n\nCOMO FUNCIONA. Antes del delete, si la tabla tiene fila en ingesta_mirror_preserva, el RPC guarda un jsonb con clave+columnas de las filas que existen. Despues del insert hace `update <tabla> t set <columnas> from jsonb_populate_recordset(null::<tabla>, $1) as r where t.<clave> = r.<clave>`: solo toca filas que siguen existiendo (si la operacion ya no viene de NetSuite no se resucita) y solo las columnas declaradas. El resultado del RPC suma 'restauradas'.\n\nAPLICADO el 2026-11-05 por la Management API (18 de 18 sentencias, docs/rpc-ingesta-mirror.sql) y VERIFICADO contra la base real: se puso un operador sentinela en ns-19590 y un espejo completo de las 1642 filas devolvio {borradas:1642, insertadas:1642, restauradas:1642} y el sentinela sobrevivio; con work_orders el sentinela de due_date_override sobrevivio y OT 2752 siguio con revision_bom 'C'. El guardian es tests/rpc-ingesta-mirror.test.mjs #10.\n\nPENDIENTE DEL LADO HUMANO: las asignaciones que el espejo ya habia borrado a las 13:16 NO se recuperan solas. Hay que abrir la pagina y pulsar 'Generar plan' UNA vez despues del arreglo; desde ahi plan_guardar las escribe y el espejo las conserva.",
+      "source": "docs/rpc-ingesta-mirror.sql (seccion 2 y cuerpo del RPC); tests/rpc-ingesta-mirror.test.mjs #10; netsuite-restlet-unificado-supabase.js:390-391; src/server/19-appscript-ingesta-supabase.js; src/web/shared/supabase-writer.js (filasOperations/filasWorkOrders/filasMaterials y plan_guardar)",
+      "domain": "supabase",
+      "updated_at": "2026-11-05",
+      "applies_to": [
+        "docs/rpc-ingesta-mirror.sql",
+        "tests/rpc-ingesta-mirror.test.mjs",
+        "netsuite-restlet-unificado-supabase.js",
+        "src/server/19-appscript-ingesta-supabase.js",
+        "src/web/shared/supabase-writer.js",
+        "src/web/planning/app.js"
+      ]
     }
   ]
 }
