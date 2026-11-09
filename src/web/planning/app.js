@@ -10084,21 +10084,27 @@ function faltantesRows() {
       if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
       // DECISION DEL USUARIO 2026-11-01: en la OV se descuenta lo YA ENVIADO. La demanda es
       // `cantidad - enviado` (el RESTlet ya la manda como `pendiente`, y se usa
-      // `cantidad - enviado` cuando esa columna no viene). Un pendiente <= 0 no es demanda.
+      // `cantidad - enviado` cuando esa columna no viene).
       var linea = so.lines[l];
+      var cantidadLinea = Math.max(0, Number(linea.cantidad) || 0);
       var enviadoLinea = Number(linea.enviado);
       var pend;
       if (Number.isFinite(Number(linea.pendiente))) {
         pend = Number(linea.pendiente);
-      } else if (Number.isFinite(Number(linea.cantidad)) && Number.isFinite(enviadoLinea)) {
-        pend = Number(linea.cantidad) - enviadoLinea;
+      } else if (Number.isFinite(cantidadLinea) && Number.isFinite(enviadoLinea)) {
+        pend = cantidadLinea - enviadoLinea;
       } else {
-        pend = Number(linea.cantidad);
+        pend = cantidadLinea;
       }
       var absPend = Math.abs(pend) || 0;
-      if (absPend <= 0) continue; // ya enviado por completo: no es demanda
-      demandaOV[item].cat += absPend;
-      demandaOV[item].ovs.push({ folio: so.folio, cantidad: absPend, fecha: so.date });
+      // DECISION DEL USUARIO 2026-11-08: la OV se sigue viendo aunque ya este surtida o
+      // empacada, pero la parte ya cubierta NO es demanda. El RESTlet manda
+      // `pendiente = cantidad - quantityshiprecv`, asi que lo surtido es `cantidad - pendiente`.
+      //   - linea totalmente surtida: cantidad 0, surtido 5 -> se muestra tachada y no suma.
+      //   - linea parcial: surtido 5 + pendiente 5 -> se ven las dos, solo suma el pendiente.
+      var surtido = Math.max(0, cantidadLinea - absPend);
+      demandaOV[item].ovs.push({ folio: so.folio, cantidad: absPend, surtido: surtido, fecha: so.date });
+      if (absPend > 0) demandaOV[item].cat += absPend;
     }
   }
   var otPorArt = {};
@@ -10306,6 +10312,19 @@ function faltantesRows() {
   return { grupos: grupos, hijos: hijos };
 }
 
+// CELDA DE UNA OV (DECISION DEL USUARIO 2026-11-08): la cantidad ya surtida o empacada se
+// muestra TACHADA y no suma al faltante. Una sola regla visual, sin letras ni colores, para
+// que se lea igual al imprimir en blanco y negro. `5 + 5` = 5 surtidas + 5 pendientes.
+function faltanteOvCelda(ov) {
+  var pendiente = Math.max(0, Number(ov.cantidad) || 0);
+  var surtido = Math.max(0, Number(ov.surtido) || 0);
+  var cantidades = [];
+  if (surtido > 0) cantidades.push("<s>" + formatMaterialQuantity(surtido) + "</s>");
+  if (pendiente > 0) cantidades.push(formatMaterialQuantity(pendiente));
+  if (!cantidades.length) cantidades.push(formatMaterialQuantity(0));
+  return "OV " + escapeHtml(ov.folio) + " (" + cantidades.join(" + ") + ")";
+}
+
 function renderFaltantesReport() {
   var el = document.getElementById("faltantesReport");
   if (!el) return;
@@ -10339,20 +10358,20 @@ function renderFaltantesReport() {
     // usaba la lista de consumo; y en los subensambles salia `OT 15` sin folio. Es `g.ots`,
     // que se arma con `otPorArt` (work_orders del articulo), no con la demanda.
     var fabricantesStr = (g.ots || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-    var ovsOrdenados = g.ovs.sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
-    for (var ovi = 0; ovi < Math.max(1, ovsOrdenados.length); ovi++) {
-      var first = ovi === 0;
-      var ovRow = "";
-      var ovFec = "";
-      if (ovsOrdenados.length) {
-        ovRow = "OV " + escapeHtml(ovsOrdenados[ovi].folio) + " (" + formatMaterialQuantity(ovsOrdenados[ovi].cantidad) + ")";
-        ovFec = ovsOrdenados[ovi].fecha || "";
-      } else if (first) {
-        // Sin OV: la fila unica de la columna lleva las OTs que lo consumen como subensamble.
-        ovRow = consumidoras.join(", ");
-      }
-      rowsHtml += "<tr" + (first && g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + (first ? escapeHtml(g.articulo) : "") + "</td><td>" + (first ? escapeHtml(g.descripcion || "") : "") + "</td><td>" + (first ? formatMaterialQuantity(g.existencia) : "") + "</td><td>" + ovRow + "</td><td>" + ovFec + "</td><td>" + (first ? fabricantesStr : "") + "</td><td>" + (first ? "<strong>" + formatMaterialQuantity(g.faltante) + "</strong>" : "") + "</td></tr>";
-    }
+    // DECISION DEL USUARIO 2026-11-08: UNA SOLA FILA por articulo. Todas sus OVs van en la
+    // MISMA celda separadas por `·`, y sus fechas en la MISMA celda de Fecha, para que la
+    // persona vea de un golpe todo lo que demanda ese articulo. La cantidad ya surtida va
+    // tachada (no suma) y la pendiente normal.
+    var ovsOrdenados = (g.ovs || []).slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+    var ovTexto = ovsOrdenados.length
+      ? ovsOrdenados.map(faltanteOvCelda).join(" · ")
+      : consumidoras.join(" · ");
+    var fechaTexto = ovsOrdenados
+      .map(function(o) { return String(o.fecha || ""); })
+      .filter(function(x) { return x; })
+      .map(escapeHtml)
+      .join(" · ");
+    rowsHtml += "<tr" + (g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + escapeHtml(g.articulo) + "</td><td>" + escapeHtml(g.descripcion || "") + "</td><td>" + formatMaterialQuantity(g.existencia) + "</td><td>" + ovTexto + "</td><td>" + fechaTexto + "</td><td>" + fabricantesStr + "</td><td><strong>" + formatMaterialQuantity(g.faltante) + "</strong></td></tr>";
   }
   for (var ci = 0; ci < data.hijos.length; ci++) {
     var f = data.hijos[ci];
@@ -10360,24 +10379,22 @@ function renderFaltantesReport() {
     // OV/OT DEL SUBENSAMBLE (DECISION DEL USUARIO 2026-11-01): la MISMA columna lleva las OVs
     // que consumen el articulo y las OTs que lo consumen como subensamble. De aqui sale su
     // demanda. OT (cant.) lleva aparte las OTs que lo FABRICAN, que es lo que le da cobertura.
+    // Misma regla que los padres: una fila, todas las OVs y fechas juntas, surtido tachado.
     var ovsHijo = (f.ovs || []).slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
-    for (var ovi2 = 0; ovi2 < Math.max(1, ovsHijo.length); ovi2++) {
-      var firstH = ovi2 === 0;
-      var ovCell = "";
-      var ovFecha = "";
-      if (ovsHijo.length) {
-        ovCell = "OV " + escapeHtml(ovsHijo[ovi2].folio) + " (" + formatMaterialQuantity(ovsHijo[ovi2].cantidad) + ")";
-        ovFecha = ovsHijo[ovi2].fecha || "";
-      } else if (firstH) {
-        ovCell = f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
-      }
-      // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado, con folio y
-      // cantidad: `OT 3050 (15)`. MEDIDO 2026-11-01: antes salia `OT 15`, sin folio.
-      var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
-        ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
-        : "";
-      rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + (firstH ? escapeHtml(f.articulo) : "") + "</td><td>" + (firstH ? escapeHtml(f.descripcion || "") : "") + "</td><td>" + (firstH ? formatMaterialQuantity(f.existencia) : "") + "</td><td>" + ovCell + "</td><td>" + ovFecha + "</td><td>" + (firstH ? otCantStr : "") + "</td><td>" + (firstH ? "<strong>" + formatMaterialQuantity(f.faltante) + "</strong>" : "") + "</td></tr>";
-    }
+    var ovCell = ovsHijo.length
+      ? ovsHijo.map(faltanteOvCelda).join(" · ")
+      : f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(" · ");
+    var ovFecha = ovsHijo
+      .map(function(o) { return String(o.fecha || ""); })
+      .filter(function(x) { return x; })
+      .map(escapeHtml)
+      .join(" · ");
+    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado, con folio y
+    // cantidad: `OT 3050 (15)`. MEDIDO 2026-11-01: antes salia `OT 15`, sin folio.
+    var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
+      ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
+      : "";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + ovCell + "</td><td>" + ovFecha + "</td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
   }
   if (!rowsHtml) {
     rowsHtml = "<tr><td colspan=\"7\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";

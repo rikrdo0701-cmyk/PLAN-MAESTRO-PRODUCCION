@@ -4,6 +4,8 @@
 //   OV  = cantidad - enviado.
 //   OT (cant.) = cantidad - ensamblada.
 //   subensambles: demanda = `materials` de OTs ABIERTAS, neta de lo emitido.
+// 2026-11-08: la OV ya surtida/empacada se conserva para mostrarse TACHADA, pero no suma
+// demanda. surtido = cantidad - pendiente (el RESTlet manda pendiente = cantidad - surtido).
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -73,6 +75,61 @@ test("una OV totalmente enviada no es demanda", () => {
     items: [{ code: "X 2", type: "ASSEMBLY" }],
   });
   assert.equal(f().grupos.length, 0, "lo enviado por completo ya no falta");
+});
+
+test("una OV ya surtida se conserva para mostrarse tachada y no suma demanda", () => {
+  const f = construir({
+    workOrders: [{ ot: "4236", item: "K180-18308S", quantity: 5, builtQuantity: 0, cerrada: false }],
+    materials: [],
+    inventory: [{ item: "K180-18308S", location: "PLANTA MM DEL LLANO", physical: 2 }],
+    salesOrders: [
+      // Totalmente surtida: pendiente 0, cantidad 5 -> surtido 5, no demanda.
+      { folio: "SO2700", date: "2026-11-01", status: "", lines: [{ item: "K180-18308S", cantidad: 5, pendiente: 0 }] },
+      // Pendiente real: 10.
+      { folio: "SO2834", date: "2026-11-03", status: "", lines: [{ item: "K180-18308S", cantidad: 10, pendiente: 10 }] },
+    ],
+    items: [{ code: "K180-18308S", type: "ASSEMBLY" }],
+  });
+  const g = f().grupos[0];
+  assert.equal(g.faltante, 3); // solo SO2834: 10 - 2 existencia - 5 OT
+  assert.equal(g.ovs.length, 2, "las dos OVs del articulo siguen visibles");
+  const surtida = g.ovs.find((o) => o.folio === "SO2700");
+  const pendiente = g.ovs.find((o) => o.folio === "SO2834");
+  assert.equal(surtida.cantidad, 0, "la OV surtida no aporta pendiente");
+  assert.equal(surtida.surtido, 5, "lo surtido se conserva para tacharlo");
+  assert.equal(pendiente.cantidad, 10);
+  assert.equal(pendiente.surtido, 0);
+});
+
+test("una OV parcial muestra surtido + pendiente y solo suma el pendiente", () => {
+  const f = construir({
+    workOrders: [],
+    materials: [],
+    inventory: [{ item: "K180-18308S", location: "PLANTA MM DEL LLANO", physical: 1 }],
+    salesOrders: [
+      { folio: "SO3000", date: "2026-11-05", status: "", lines: [{ item: "K180-18308S", cantidad: 10, pendiente: 5 }] },
+    ],
+    items: [{ code: "K180-18308S", type: "ASSEMBLY" }],
+  });
+  const g = f().grupos[0];
+  assert.equal(g.ovs[0].surtido, 5);
+  assert.equal(g.ovs[0].cantidad, 5);
+  assert.equal(g.faltante, 4); // 5 pendientes - 1 existencia - 0 OT
+});
+
+test("la celda de la OV tacha solo la cantidad surtida", () => {
+  const fuente = sliceDesde("function faltanteOvCelda(", "function renderFaltantesReport() {");
+  const celda = Function(
+    "escapeHtml",
+    "formatMaterialQuantity",
+    `${fuente}; return faltanteOvCelda;`,
+  )(
+    (v) => String(v ?? ""),
+    (v) => String(Number(v || 0)),
+  );
+  assert.equal(celda({ folio: "SO2700", cantidad: 0, surtido: 5 }), "OV SO2700 (<s>5</s>)");
+  assert.equal(celda({ folio: "SO3000", cantidad: 5, surtido: 5 }), "OV SO3000 (<s>5</s> + 5)");
+  assert.equal(celda({ folio: "SO2834", cantidad: 10, surtido: 0 }), "OV SO2834 (10)");
 });
 
 test("un faltante de 0 o negativo no aparece en la lista", () => {

@@ -3040,6 +3040,21 @@
         "src/web/shared/supabase-writer.js",
         "src/web/planning/app.js"
       ]
+    },
+    {
+      "rule_id": "RULE-PLAN-017",
+      "name": "Faltantes: una fila por articulo, todas sus OVs juntas y lo ya surtido/empacado se tacha y no suma",
+      "status": "implementada",
+      "domain": "Planificacion",
+      "updated_at": "2026-11-09",
+      "rule": "DECISION DEL USUARIO 2026-11-08, tras ver el reporte con SO2700 desaparecida: la formula NO cambia (faltante = OV/OT - existencia - OT (cant.), solo filas con faltante > 0), pero una OV ya surtida o empacada deja de desaparecer. Antes `faltantesRows()` hacia `if (absPend <= 0) continue`, asi que la linea con pendiente 0 se descartaba de la celda OV/OT y del total. Ahora toda linea entra a `demandaOV[item].ovs` con `{ folio, cantidad, surtido, fecha }`, donde `cantidad` es el pendiente (lo que falta) y `surtido = max(0, cantidad de la linea - |pendiente|)`; SOLO el pendiente suma a `demandaOV[item].cat`. Por eso una OV totalmente surtida se sigue viendo, tachada, y no altera el faltante; una parcial se ve `5 + 5` (surtido tachado + pendiente normal).\n\nDE DONDE SALE. El RESTlet (`netsuite-restlet-unificado-supabase.js:687`) manda `pendiente = cantidad - quantityshiprecv`; la pagina (`src/web/shared/supabase-reader.js`, `mapSalesOrders`) pasa `sales_orders.lineas` sin transformar. No se usa `enviado` para esto: MEDIDO 2026-11-08, la ingesta no lo manda y `pendiente` siempre viene finito. `estatus` de la linea tampoco sirve (llega vacio).\n\nCOMO SE VE. `renderFaltantesReport()` emite UNA fila por articulo padre y UNA por subensamble (antes era una fila por OV). Las OVs de un articulo van en la MISMA celda OV/OT separadas por ` · ` y sus fechas en la MISMA celda Fecha con el mismo separador. El unico marcador es `<s>` alrededor de la cantidad surtida: ni letras (C/P/F), ni colores, ni columnas nuevas, para que sobreviva la impresion en blanco y negro. La tabla sigue con 7 columnas.\n\nNO SE TOCO: la formula, el filtro de planta (Assembly con inventario fisico > 0 en Planta MM del Llano), la herencia de subensambles desde `materials` de OTs abiertas neta de lo emitido, la cobertura de OT (`cantidad - ensamblada`), el buscador, ni `alignReportWeekStartToFirstScheduledOperation`.\n\nTESTS: tests/faltantes.test.mjs (OV surtida conservada con cantidad 0, OV parcial 5+5, celda tachada y total sin cambio).",
+      "source": "Decision del usuario 2026-11-08. Codigo: src/web/planning/app.js (faltantesRows, faltanteOvCelda, renderFaltantesReport), src/web/planning/styles.css (#faltantesReport s), src/web/planning/index.template.html (subtitulo del reporte). Datos: netsuite-restlet-unificado-supabase.js:687, src/web/shared/supabase-reader.js (mapSalesOrders). Tests: tests/faltantes.test.mjs.",
+      "applies_to": [
+        "src/web/planning/app.js",
+        "src/web/planning/styles.css",
+        "src/web/planning/index.template.html",
+        "tests/faltantes.test.mjs"
+      ]
     }
   ]
 }
