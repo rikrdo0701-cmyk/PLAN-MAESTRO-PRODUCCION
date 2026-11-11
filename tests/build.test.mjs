@@ -744,7 +744,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.doesNotMatch(pagesIndex, /Plan Maestro de Producción — GitHub Pages \+ Google Apps Script/);
   assert.match(pagesIndex, /<option value="draft">Borrador<\/option>/);
   assert.match(pagesIndex, /function isReportSnapshotEditable\(\)/);
-  assert.match(pagesIndex, /function isPlanCompletedOperation\(op, statusesOverride\)[\s\S]*const stored = \(statusesOverride \|\| draftViewStatuses\(\)\)\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return normalizeStatus\(op\.planStatus\) === "COMPLETADA_PLAN";/);
+  assert.match(pagesIndex, /function isPlanCompletedOperation\(op, statusesOverride\)[\s\S]*const stored = \(statusesOverride \|\| draftViewStatuses\(\)\)\[operationCompletionKey\(op\)\];[\s\S]*if \(stored\?\.status\) return stored\.status === "COMPLETADA_PLAN";[\s\S]*return precededByCompletedToolChange\(op, statusesOverride\);[\s\S]*function precededByCompletedToolChange\(/);
   assert.match(pagesIndex, /function reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /statusActions: reportSourceAllowsOperationTracking\(\)/);
   assert.match(pagesIndex, /if \(!isReportSnapshotEditable\(\)\) return escapeHtml/);
@@ -832,23 +832,20 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   assert.match(pagesIndex, /\.inspection-grid[^}]*grid-template-columns:\s*repeat\(24,\s*1fr\)/);
   assert.match(pagesIndex, /inspection-time-head/);
   assert.match(pagesIndex, /SETUP[\s\S]*INACTIVIDAD[\s\S]*PRODUCCI[^<]*/);
-  assert.match(pagesIndex, /--inspection-print-scale/);
-  // MEDIDO 2026-10-22: el print de la hoja de inspeccion dejo de usar transform:scale() y
-  // compacta las celdas en el CSS de impresion (min-height en mm) para que el alto de LAYOUT
-  // real quepa en una pagina A4 horizontal. El motor pagina por el alto de layout, sin
-  // transform, asi que escalar encogia lo visual pero el contenido se repartia en 2 paginas.
+  assert.match(pagesIndex, /--insp-second-row/);
+  // FIX 2026-10-31: la hoja de inspeccion ya no usa transform:scale() ni zoom. Los tamanos
+  // de fuente y las alturas de filas se ajustan mediante variables CSS (--insp-cell-font,
+  // --insp-op-row, --insp-second-row, --insp-sig-row). La hoja siempre mide 280 mm de ancho.
   assert.match(pagesIndex, /body\.printing-inspection \.inspection-cell\{min-height:2\.6mm/);
-  // MEDIDO 2026-10-23: para una OT con MUCHAS operaciones (mas de las que caben incluso
-  // compactas) la hoja se encoge con `zoom`, que SI reduce el alto de layout que usa el
-  // paginador (`transform:scale` no lo hacia). La clase de impresion aplica las medidas en
-  // pantalla para poder medir antes de `print()`, con hasta 3 pasadas y tope inferior 0.5.
-  // Verificado contra el sitio construido: 40 ops -> 1 pagina sin zoom; 60 -> 1 pagina con
-  // zoom 0.99; 100 -> 1 pagina con zoom 0.65.
-  assert.match(pagesIndex, /zoom:var\(--inspection-print-zoom,1\)/);
-  assert.match(pagesIndex, /const pageWidthPx = \(297 - 9 - 8\) \* mmToPx/);
-  assert.match(pagesIndex, /const next = Math\.max\(0\.5, zoom \* ratio\)/);
-  assert.match(pagesIndex, /setProperty\("--inspection-print-zoom", String\(zoom\)\)/);
-  assert.match(pagesIndex, /removeProperty\("--inspection-print-zoom"\)/);
+  // FIX 2026-10-31: se elimino el zoom (que encogia el ancho de la hoja) y se reemplazo
+  // por ajuste de tamanos de fuente y alturas de filas mediante variables CSS. La hoja
+  // siempre mantiene los 280 mm de ancho. El algoritmo reduce primero las filas de
+  // captura manual, luego las de firma, luego la letra, hasta 6.5 px.
+  assert.match(pagesIndex, /--insp-sig-row/);
+  assert.match(pagesIndex, /cuentaSigRows/);
+  assert.match(pagesIndex, /setMm\("--insp-op-row"/);
+  assert.match(pagesIndex, /setMm\("--insp-second-row"/);
+  assert.match(pagesIndex, /for \(const k of.*removeProperty\(k\)/);
   // MEDIDO 2026-10-24: el PDF salia horizontal pero con la hoja RECORTADA a 210 mm de sus
   // 280 mm: faltaba el lado derecho (Material, Descripcion, Tramo tubo, Tubo/pzas y las
   // ultimas columnas de la tabla). La causa no era el tamano de la hoja sino la regla global
@@ -866,23 +863,21 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // de operacion (se escriben a mano) y las filas de firma, en pasadas que vuelven a medir.
   // Se cuentan RENGLONES por `.inspection-op` (la primera celda de cada uno), no por
   // `.inspection-op-line`, que lo llevan las 18 celdas y repartia el hueco entre 400+ celdas.
-  assert.match(pagesIndex, /min-height:var\(--inspection-op-row,1\.7mm\)/);
-  assert.match(pagesIndex, /min-height:var\(--inspection-footer-row,3mm\)/);
-  assert.match(pagesIndex, /const renglones = sheet\.querySelectorAll\("\.inspection-op"\)\.length/);
-  assert.match(pagesIndex, /setProperty\("--inspection-op-row"/);
-  assert.match(pagesIndex, /setProperty\("--inspection-footer-row"/);
-  assert.match(pagesIndex, /removeProperty\("--inspection-op-row"\)/);
-  assert.match(pagesIndex, /removeProperty\("--inspection-footer-row"\)/);
-  // El zoom solo corrige cuando el CONTENIDO no cabe: si el reparto ya lleno la hoja, el
-  // `scrollHeight` (que incluye el min-height de 202mm y el padding) no debe encogerla.
-  assert.match(pagesIndex, /pass < 3 && sobra < -1/);
+  assert.match(pagesIndex, /min-height:var\(--insp-op-row,0\)/);
+  assert.match(pagesIndex, /min-height:var\(--insp-sig-row,6mm\)/);
+  assert.match(pagesIndex, /cuentaMainOps = \(\) => sheet\.querySelectorAll\("#inspectionSheetGrid \.inspection-op"\)\.length/);
+  assert.match(pagesIndex, /setMm\("--insp-op-row"/);
+  assert.match(pagesIndex, /setMm\("--insp-second-row"/);
+  assert.match(pagesIndex, /--insp-op-row"/);
+  assert.match(pagesIndex, /--insp-second-row"/);
+  // La hoja mantiene el ancho completo; no se usa zoom.
   // Pedido del usuario 2026-10-24: el numero de trabajo, el articulo y los codigos de
   // material se leen a mano en el piso, asi que van mas grandes que el resto del encabezado.
   assert.match(pagesIndex, /inspection-big inspection-job-number/);
   assert.match(pagesIndex, /inspection-big inspection-article/);
-  assert.match(pagesIndex, /body\.printing-inspection \.inspection-job-number\{font-size:15px\}/);
-  assert.match(pagesIndex, /body\.printing-inspection \.inspection-article\{font-size:13px\}/);
-  assert.match(pagesIndex, /body\.printing-inspection \.inspection-mat\{min-height:2\.6mm;padding:\.2mm \.6mm;font-size:9px\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-job-number\{font-size:var\(--insp-job-font,15px\)\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-article\{font-size:var\(--insp-article-font,13px\)\}/);
+  assert.match(pagesIndex, /body\.printing-inspection \.inspection-mat\{min-height:2\.6mm;padding:\.2mm \.6mm;font-size:var\(--insp-mat-font,9px\)\}/);
   assert.match(pagesIndex, /addEventListener\("afterprint"/);
   // MEDIDO 2026-10-01: antes estas cuatro lineas exigian que la hoja de inspeccion
   // pidiera su lista, su detalle y su historial por `call(...)`, o sea por el puente de
@@ -1007,7 +1002,7 @@ const planWindowSource = pagesIndex.slice(pagesIndex.indexOf("function getPlanWi
   // (sin transform), así que escalar encogía lo visual pero el contenido se repartía en 2
   // páginas. El tamaño se compacta en el propio CSS de impresión (celdas, fuentes y huecos
   // en mm) para que el alto real quepa en una A4 horizontal.
-  assert.match(pagesIndex, /El tamaño se compacta en el CSS de impresion \(celdas, fuentes y huecos en mm\)/);
+  assert.match(pagesIndex, /se reemplazo la estrategia de zoom/);
   assert.match(pagesIndex, /classList\.add\("printing-inspection"\)[\s\S]*setTimeout\(resolve, 50\)[\s\S]*root\.print\(\)/);
   assert.match(pagesIndex, /finally\s*\{[^}]*classList\.remove\("printing-inspection"\)[\s\S]*getElementById\("inspection-print-page-size"\)[\s\S]*removeChild/);
   assert.match(pagesIndex, /addEventListener\("afterprint",\s*clearInspectionPrintState\)/);

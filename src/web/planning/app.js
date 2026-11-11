@@ -2449,7 +2449,31 @@ function isPlanCompletedOperation(op, statusesOverride) {
   if (!op) return false;
   const stored = (statusesOverride || draftViewStatuses())[operationCompletionKey(op)];
   if (stored?.status) return stored.status === "COMPLETADA_PLAN";
-  return normalizeStatus(op.planStatus) === "COMPLETADA_PLAN";
+  if (normalizeStatus(op.planStatus) === "COMPLETADA_PLAN") return true;
+  // CASCADA (decision del usuario 2026-11-10): si la siguiente operacion de produccion tiene un
+  // CAMBIO_HERRAMENTAL completado, esta operacion se considera completada aunque no tenga su
+  // propio registro en operation_plan_statuses. No aplica a los propios cambios de herramental.
+  if (isToolChangeReportOperation(op)) return false;
+  return precededByCompletedToolChange(op, statusesOverride);
+}
+
+function precededByCompletedToolChange(op, statusesOverride) {
+  const next = nextProductionOperation(op?.ot || "", op?.secuencia || 0);
+  if (!next || !next.id) return false;
+  const statuses = statusesOverride || draftViewStatuses();
+  const needle = `TOOL_CHANGE|${normalizeStatus(String(next.id).trim())}`;
+  for (const rawKey of Object.keys(statuses)) {
+    if (rawKey.startsWith(needle) && statuses[rawKey]?.status === "COMPLETADA_PLAN") return true;
+  }
+  return false;
+}
+
+function nextProductionOperation(ot, secuencia) {
+  return (state.operations || []).find((other) =>
+    String(other.ot || "").trim() === String(ot || "").trim() &&
+    Number(other.secuencia || 0) > Number(secuencia || 0) &&
+    normalizeStatus(other.tipoInsercion) !== "CAMBIO_HERRAMENTAL"
+  );
 }
 
 function normalizeOtDate(value) {
