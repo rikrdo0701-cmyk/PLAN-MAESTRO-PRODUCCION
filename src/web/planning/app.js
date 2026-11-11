@@ -4732,6 +4732,11 @@ function renderSelectedJobPanel() {
     ? `<img loading="lazy" src="${escapeHtml(detalleFoto)}" alt="Foto del articulo ${escapeHtml(job.parte || "SIN ARTICULO")}" data-detail-photo />`
     : "";
 
+  // DECISION DEL USUARIO 2026-11-10 (OT 3608): la operacion completada sigue LISTADA en el panel.
+  // job.ops viene de currentPlanOperations() que excluye completadas (PlannerCore.filterExcludedOperations);
+  // para el listado de filas se usa el conjunto completo de operaciones de la OT (state.operations),
+  // asi la completada aparece con el label "Completada" y su tiempo no se suma en job.minutes.
+  const fullOpsForRow = (state.operations || []).filter((op) => String(op.ot || "").trim() === String(job.ot || "").trim());
   els.selectedJobPanel.innerHTML = `
     <article class="job-detail">
       <div class="job-detail-head">
@@ -4795,10 +4800,10 @@ function renderSelectedJobPanel() {
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
       </details>
       <div class="job-detail-operations-scroll">
-        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${job.ops.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
+        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${fullOpsForRow.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || detailOps.map((op) => {
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || fullOpsForRow.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
