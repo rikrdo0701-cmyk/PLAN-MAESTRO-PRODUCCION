@@ -942,11 +942,29 @@ async function maybeRestoreSavedDraftOnBoot() {
       if (id) emittedIds.add(id);
       merged.push(op);
     };
+    // EL RESCATE NO PUEDE HACER DESAPARECER UNA OPERACION DEL ESPEJO.
+    // MEDIDO 2026-11-10 en produccion con la OT 3608: el borrador guardado traia 12 de sus 13 filas
+    // (`ns-31209`, seq 1 "3OTD : CORTE DE TUBO", quedo marcada completada el 2026-11-04), y este
+    // bucle emitia SOLO las filas del borrador de esa OT, tirando la fila que Supabase si tenia. La
+    // operacion desaparecia de "Detalle de OT" y no habia forma de reabrirla desde el panel.
+    //
+    // LA REGLA (decision del usuario 2026-11-10):
+    //   - OT FIJA: sus filas completadas siguen en el plan, vengan del borrador o solo del espejo.
+    //     Se listan como "Completada" y no consumen tiempo.
+    //   - OT DESBLOQUEADA: una operacion completada sale del plan; no se resucita desde el espejo.
+    //   - PENDIENTE: siempre vuelve. Es la que el borrador pudo perder por secuencia/CT cambiados.
+    const otIsLocked = (ot) => {
+      const key = normalizeKey(ot);
+      return (state.lockedOts || []).some((item) => normalizeKey(item) === key);
+    };
     for (const op of (state.operations || [])) {
       const key = normalizeKey(op.ot);
-      if (!draftByOt.has(key)) { pushUnique(op); continue; }
-      for (const rop of draftByOt.get(key)) pushUnique(rop);
-      draftByOt.delete(key);
+      if (draftByOt.has(key)) {
+        for (const rop of draftByOt.get(key)) pushUnique(rop);
+        draftByOt.delete(key);
+      }
+      if (isPlanCompletedOperation(op) && !otIsLocked(op.ot)) continue;
+      pushUnique(op);
     }
     for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
     state.operations = merged;
@@ -4784,7 +4802,7 @@ function renderSelectedJobPanel() {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : `<span class="op-status${completed ? " completed-label" : ""}">${planStatusActionCell(op)}</span>`;
+            : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "<span class=\"op-status-text\">Completada</span>" : ""}${planStatusActionCell(op)}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
@@ -13715,9 +13733,16 @@ async function exportSourceOperations(sourceId) {
 }
 
 function operationToRow(op, generatedAt) {
+  // DECISION DEL USUARIO 2026-11-10: una operacion completada se exporta SIN CONSUMIR TIEMPO. Su
+  // fila sigue en el borrador cuando la OT esta fija (ver draftExportOperations), asi que el CSV
+  // tambien la trae, pero con 0 en TIEMPO_SETUP y en TIEMPO_PROD. Se lee el planStatus de la propia
+  // fila y no el mapa de estatus: este mismo operationToRow sirve para el borrador y para un plan
+  // publicado, y el mapa activo es de un solo origen.
+  const completed = String(op?.planStatus || "").trim().toUpperCase() === "COMPLETADA_PLAN";
   return PLAN_HEADERS.map((header) => {
     if (header === "GENERADO_EL") return generatedAt ?? "";
-    if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
+    if (header === "TIEMPO_PROD") return completed ? 0 : scheduledProductionMinutesForExport(op);
+    if (header === "TIEMPO_SETUP") return completed ? 0 : (op.tiempoSetup ?? "");
     if (header === "LOG") return scheduledLogForExport(op);
     if (header === "PRECIO") return Number(op.unitPrice) >= 1 ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
     if (header === "MONTO") return Number(op.amount) >= 1 ? op.amount : amountForOt(op.ot);
@@ -14661,7 +14686,10 @@ function getPriorityJobs() {
         locked: isJobLocked(job.ot),
         firstSequence: ops[0]?.secuencia ?? "",
         lastSequence: ops[ops.length - 1]?.secuencia ?? "",
-        minutes: ops.reduce((sum, op) => sum + operationDuration(op), 0),
+        // DECISION DEL USUARIO 2026-11-10: una operacion completada sigue LISTADA en "Detalle de OT"
+        // (y en el borrador de una OT fija) pero NO consume tiempo de plan. El motor ya la ignora
+        // (`filterExcludedOperations` usa isPlanCompletedOperation); esta suma es la que faltaba.
+        minutes: ops.reduce((sum, op) => sum + (isPlanCompletedOperation(op) ? 0 : operationDuration(op)), 0),
         firstStart: opStart(firstOp),
       };
     })

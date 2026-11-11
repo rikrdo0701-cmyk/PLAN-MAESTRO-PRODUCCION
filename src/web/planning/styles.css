@@ -1544,6 +1544,15 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .job-op-row input { width: 100%; min-height: 26px; padding: 0 4px; font-size: 9px; }
 .job-op-row .op-time { text-align: right; color: var(--muted); }
 
+/* ESTADO DE UNA OPERACION DEL PLAN EN "DETALLE DE OT". DECISION DEL USUARIO 2026-11-10: la
+   operacion completada se LISTA con su estado "Completada" (no desaparece del panel ni del
+   borrador de una OT fija); el boton que queda al lado es la accion de reabrir. Todo cabe en la
+   columna "Estado" (136px): la etiqueta en 8px y el boton reducido dentro de `.job-op-row`. */
+.job-op-row .op-status { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.job-op-row .op-status-text { color: #0b6e69; font-size: 8px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.job-op-row .op-status.completed-label .plan-status-action { min-width: 48px; padding: 0 6px; }
+.job-op-row.op-completed .op-name { color: #56666e; }
+
 .capacity-rail { margin: 8px; scroll-margin-top: 68px; }
 
 .operator-load-screen {

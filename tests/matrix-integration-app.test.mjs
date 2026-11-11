@@ -251,6 +251,7 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
     "pendingPiecesForWorkOrder", "uniq", "materialsForOt", "materialBaseForOt",
     "jobStatusForOt", "isMovablePlanningStatus", "isProgrammedJobStatus",
     "isClosedJobStatus", "isJobLocked", "operationDuration", "compareJobs",
+    "isPlanCompletedOperation",
     `const jobStatusParaTarjeta = (ot) => {
          const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
          const s = String(ficha?.status || "").trim();
@@ -282,6 +283,9 @@ test("tarjetas, estado y fin programado derivan solo de operaciones incluidas", 
     () => false,
     (op) => Number(op.tiempoProd || 0),
     () => 0,
+    // getPriorityJobs descuenta del tiempo del job una operacion completada (decision del usuario
+    // 2026-11-10): sigue listada en el plan pero no consume tiempo.
+    (op) => String((op && op.planStatus) || "").trim().toUpperCase() === "COMPLETADA_PLAN",
   );
 
   const jobs = getPriorityJobs();
@@ -336,6 +340,7 @@ test("una ficha abierta manda sobre una operacion 'Completado' (3583): el job se
     "pendingPiecesForWorkOrder", "uniq", "materialsForOt", "materialBaseForOt",
     "jobStatusForOt", "isMovablePlanningStatus", "isProgrammedJobStatus",
     "isClosedJobStatus", "isJobLocked", "operationDuration", "compareJobs",
+    "isPlanCompletedOperation",
     `const jobStatusParaTarjeta = (ot) => {
          const ficha = state.workOrders.find((item) => String(item.ot) === String(ot));
          const s = String(ficha?.status || "").trim();
@@ -367,6 +372,7 @@ test("una ficha abierta manda sobre una operacion 'Completado' (3583): el job se
     () => false,
     (op) => Number(op.tiempoProd || 0),
     () => 0,
+    (op) => String((op && op.planStatus) || "").trim().toUpperCase() === "COMPLETADA_PLAN",
   );
 
   const jobs = getPriorityJobs();
@@ -438,6 +444,7 @@ test("getPriorityJobs reutiliza indices y se invalida al cambiar los datos base"
     "jobPriority", "effectiveWorkOrderDueDate", "pendingPiecesForWorkOrder", "uniq", "jobStatusForOt",
     "isMovablePlanningStatus", "isProgrammedJobStatus", "isClosedJobStatus", "isJobLocked", "operationDuration",
     "compareJobs", "materialOtKey", "workOrderForOt", "materialsForOt", "materialBaseForOt",
+    "isPlanCompletedOperation",
     `let currentPlanOperationsCache = null;
      let priorityJobsCache = null;
      let planningStateIndexesCache = null;
@@ -477,6 +484,7 @@ test("getPriorityJobs reutiliza indices y se invalida al cambiar los datos base"
     (ot) => { workOrderScans += 1; return state.workOrders.find((item) => String(item.ot) === String(ot)); },
     (ot) => { materialScans += 1; return state.materials.filter((item) => String(item.ot) === String(ot)); },
     (ot) => state.materials.find((item) => String(item.ot) === String(ot))?.component || "",
+    (op) => String((op && op.planStatus) || "").trim().toUpperCase() === "COMPLETADA_PLAN",
   );
 
   const first = api.getPriorityJobs();

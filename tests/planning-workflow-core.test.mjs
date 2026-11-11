@@ -285,6 +285,27 @@ test("draftExportOperations excluye completadas aunque la fila aun tenga planSta
   assert.deepEqual(exported.map((operation) => operation.id), ["ns-16"]);
 });
 
+// MEDIDO 2026-11-10 EN PRODUCCION con la OT 3608: el borrador guardado tenia 12 de sus 13 filas
+// porque `draftExportOperations` borraba la seq 1 "3OTD : CORTE DE TUBO" (`ns-31209`) al quedar
+// completada. Con la OT fija, la operacion completada tiene que SEGUIR en el borrador (marcada
+// completada y sin consumir tiempo); si la OT se desbloquea, sale del plan.
+test("draftExportOperations conserva las completadas de una OT fija y las retira si la OT se desbloquea", () => {
+  const completed = { id: "ns-31209", ot: "3608", secuencia: 1, ct: "5458", planStatus: "COMPLETADA_PLAN", fechaInicio: "2026-11-04", horaInicio: "09:01", fechaFin: "2026-11-04", horaFin: "09:08" };
+  const pending = { id: "ns-31210", ot: "3608", secuencia: 3, ct: "5459", planStatus: "PENDIENTE", fechaInicio: "2026-11-09", horaInicio: "15:11", fechaFin: "2026-11-09", horaFin: "15:25" };
+  const base = {
+    selectedOts: ["3608"],
+    lastSchedule: { scheduledOts: ["3608"] },
+    operations: [completed, pending],
+  };
+
+  const locked = core.draftExportOperations({ ...base, lockedOts: ["3608"] });
+  assert.deepEqual(locked.map((operation) => operation.id), ["ns-31209", "ns-31210"]);
+  assert.equal(locked[0].planStatus, "COMPLETADA_PLAN", "la completada conserva su estado en el borrador");
+
+  const unlocked = core.draftExportOperations({ ...base, lockedOts: [] });
+  assert.deepEqual(unlocked.map((operation) => operation.id), ["ns-31210"]);
+});
+
 test("canRemoveSelectedOt rechaza retirar una OT bloqueada y permite una desbloqueada", () => {
   const state = { lockedOts: ["100"] };
   assert.deepEqual(structuredClone(core.canRemoveSelectedOt(state, 100)), {
@@ -1479,7 +1500,7 @@ test("planAnchoredAt: casos borde (vacio, sin planStart valido, array plano)", (
   assert.equal(core.planAnchoredAt([{ ot: "3143", fechaInicio: "2026-08-28" }], ""), false);
 });
 
-test("marcar completadas desde el borrador y generar plan no las reprograma y el export solo muestra pendientes", async () => {
+test("marcar completadas desde el borrador y generar plan no las reprograma y el export las conserva solo si la OT sigue fija", async () => {
   const base = { ot: "3177", estatus: "PLAN", operador: "OP 1", maquina: "M1", tiempoProd: 10, tiempoSetup: 5 };
   const ops = [
     { ...base, id: "3177-op-1", secuencia: 106, ct: "5458", descripcion: "3OTD CORTE",
@@ -1524,8 +1545,15 @@ test("marcar completadas desde el borrador y generar plan no las reprograma y el
   assert.equal(byId["3177-op-2"].fechaFin, "2026-09-13");
   assert.ok(byId["3177-op-3"].fechaInicio, "la pendiente debe reprogramarse");
 
+  // DECISION DEL USUARIO 2026-11-10 (OT 3608): una operacion completada NO desaparece del borrador
+  // mientras su OT este FIJA; sale del plan solo cuando la OT se desbloquea. Aqui la OT 3177 esta en
+  // `lockedOts`, asi que las dos completadas siguen en el borrador marcadas completadas, ademas de la
+  // pendiente. Sin `lockedOts`, solo queda la pendiente.
   const exported = core.draftExportOperations({ ...result, selectedOts: ["3177"] });
-  assert.deepEqual(structuredClone(exported.map((op) => op.id)), ["3177-op-3"]);
+  assert.deepEqual(structuredClone(exported.map((op) => op.id)), ["3177-op-1", "3177-op-2", "3177-op-3"]);
+
+  const exportedUnlocked = core.draftExportOperations({ ...result, lockedOts: [], selectedOts: ["3177"] });
+  assert.deepEqual(structuredClone(exportedUnlocked.map((op) => op.id)), ["3177-op-3"]);
 });
 
 test("reconcileOperationPlanStatuses migra claves legacy OP|<id> a la clave estable y poda huérfanos", () => {

@@ -219,6 +219,9 @@ function correrRescate(app, { state, snapshot, planSnapshots = [{ snapshotId: "d
     planningDraftDiffers: (a, b) => JSON.stringify((a.operations || []).map((op) => [op.ot, op.secuencia, op.fechaInicio, op.horaInicio, op.maquina]))
       !== JSON.stringify((b.operations || []).map((op) => [op.ot, op.secuencia, op.fechaInicio, op.horaInicio, op.maquina])),
     normalizeState: () => {},
+    // El rescate ahora distingue completadas (`isPlanCompletedOperation`) para devolver al plan la
+    // fila pendiente que el borrador no trae (bug OT 3608, 2026-11-10). El predicado es el de app.js.
+    isPlanCompletedOperation: (op) => String((op && op.planStatus) || "").trim().toUpperCase() === "COMPLETADA_PLAN",
     invalidateCurrentPlanOperationsCache: () => {},
     alignReportWeekStartToFirstScheduledOperation: () => {},
     saveState: (ambito) => { registro.guardados.push(ambito); registro.relojEnGuardado = state.lastSchedule && state.lastSchedule.generatedAt; },
@@ -323,6 +326,45 @@ test("el rescate entra aunque el borrador NO sea mas nuevo, si en pantalla no ha
   assert.deepEqual(estado.selectedOts, ["3750"]);
   assert.equal(estado.lastSchedule.generatedAt, "2026-10-04T18:59:00.001Z", "arreglo B: el reloj queda 1 ms por encima del del borrador, aunque savedIsNewer sea falso");
   assert.ok(registro.toasts.some((t) => /Borrador restaurado al iniciar/.test(t)));
+});
+
+// Bug OT 3608 (medido 2026-11-10 en produccion): el borrador guardado traia 12 de las 13 filas de
+// la OT porque la seq 1 "3OTD : CORTE DE TUBO" quedo completada y `draftExportOperations` la
+// excluia. Como el rescate emitia SOLO las filas del borrador de cada OT, la fila que Supabase SI
+// tenia se perdia al arrancar y la operacion no se podia ni ver ni reabrir.
+test("el rescate devuelve al plan la operacion que el borrador no trae: pendientes siempre, completadas solo con OT fija", async () => {
+  const app = await leerApp();
+  const state = {
+    selectedOts: ["3608", "9999"],
+    lockedOts: ["3608"],
+    planStart: "2026-11-09",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-11-06T23:00:16.922Z", scheduledOts: ["3608", "9999"] },
+    operations: [
+      operacion("3608", 1, { planStatus: "PENDIENTE" }),
+      operacion("3608", 3, { planStatus: "PENDIENTE" }),
+      operacion("3608", 5, { planStatus: "COMPLETADA_PLAN" }),
+      operacion("9999", 1, { planStatus: "COMPLETADA_PLAN" }),
+    ],
+  };
+  const snapshot = {
+    snapshotId: "draft",
+    generatedAt: "2026-11-06T23:00:16.922Z",
+    planStart: "2026-11-09",
+    horizonDays: 15,
+    lastSchedule: { generatedAt: "2026-11-06T23:00:16.922Z", scheduledOts: ["3608", "9999"] },
+    operations: [
+      operacion("3608", 3, { fechaInicio: "2026-11-09", horaInicio: "15:11", fechaFin: "2026-11-09", horaFin: "15:25" }),
+    ],
+  };
+
+  const { estado } = await correrRescate(app, { state, snapshot });
+
+  const filas = structuredClone(estado.operations)
+    .map((op) => `${op.ot}-${op.secuencia}`)
+    .sort();
+  assert.deepEqual(filas, ["3608-1", "3608-3", "3608-5"],
+    "la seq 1 pendiente vuelve aunque el borrador no la traiga; la completada de la OT fija se conserva; la completada de una OT desbloqueada sale del plan");
 });
 
 test("arreglo B: el sello del reloj queda solo en memoria; el rescate ya no guarda nada", async () => {

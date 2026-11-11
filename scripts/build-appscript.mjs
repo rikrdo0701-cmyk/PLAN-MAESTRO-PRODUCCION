@@ -260,6 +260,17 @@ function planningNormalizeKey(value) {
     .replace(/\s+/g, " ");
 }
 
+// Identidad de una operacion del plan: OT + secuencia + CT. Es la misma clave con la que el mapa de
+// estatus marca completadas (OP|ot|secuencia|ct), asi que sirve para cotejar la fila del borrador
+// contra la del espejo aunque hayan cambiado los ids al reprogramar.
+function planningOperationFingerprint(op) {
+  return [
+    planningNormalizeKey(op?.ot),
+    Number(op?.secuencia || 0),
+    planningNormalizeKey(op?.ct || "SIN_CT"),
+  ].join("|");
+}
+
 function planningLoadSnapshotIntoState(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.operations) || !snapshot.operations.length) return false;
   const snapshotOps = snapshot.operations.map((op, index) => normalizeOperation({
@@ -271,8 +282,31 @@ function planningLoadSnapshotIntoState(snapshot) {
   if (!ots.length) return false;
 
   const keys = new Set(ots.map(planningNormalizeKey));
+  // EL BORRADOR NO BORRA FILAS DEL ESPEJO QUE EL NO TRAE. MEDIDO 2026-11-10 EN PRODUCCION con la
+  // OT 3608: el borrador guardado tenia 12 de sus 13 operaciones (la seq 1 "3OTD : CORTE DE TUBO"
+  // quedo completada el 2026-11-04 y draftExportOperations la excluia), y este reemplazo tiraba
+  // TODAS las filas del espejo de esas OTs, asi que la fila que Supabase si tenia desaparecia al
+  // arrancar: no se veia en "Detalle de OT" ni se podia reabrir.
+  //
+  // LA REGLA (decision del usuario 2026-11-10):
+  //   - Pendiente: SIEMPRE vuelve, aunque el borrador no la traiga.
+  //   - Completada: sigue solo si su OT esta FIJA; en una OT desbloqueada sale del plan.
+  // El cotejo es por OT+secuencia+CT y no solo por id, porque al reprogramar cambian los ids y
+  // quedarian dos filas de la misma operacion.
+  const draftFingerprints = new Set(snapshotOps.map((op) => planningOperationFingerprint(op)));
+  const lockedKeys = new Set([
+    ...(state.lockedOts || []),
+    ...snapshotOps.filter((op) => op.locked === true).map((op) => op.ot),
+  ].map(planningNormalizeKey).filter(Boolean));
+  const mirrorRowSurvives = (op) => {
+    const key = planningNormalizeKey(op?.ot);
+    if (!keys.has(key)) return true;
+    if (draftFingerprints.has(planningOperationFingerprint(op))) return false;
+    const completed = planningNormalizeKey(op?.planStatus || op?.estatus) === "COMPLETADA_PLAN";
+    return completed ? lockedKeys.has(key) : true;
+  };
   state.operations = [
-    ...(state.operations || []).filter((op) => !keys.has(planningNormalizeKey(op.ot))),
+    ...(state.operations || []).filter(mirrorRowSurvives),
     ...snapshotOps,
   ];
   state.selectedOts = ots;

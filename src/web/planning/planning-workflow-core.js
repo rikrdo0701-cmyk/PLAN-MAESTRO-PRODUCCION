@@ -829,14 +829,31 @@ expandedOts: without(state?.expandedOts),
     return out;
   }
 
+  // DECISION DEL USUARIO 2026-11-10 (OT 3608, seq 1 "3OTD : CORTE DE TUBO"): una operacion
+  // COMPLETADA en el plan no desaparece del borrador mientras su OT este FIJA.
+  //
+  // MEDIDO 2026-11-10 en produccion: `draftExportOperations` excluia toda operacion completada, asi
+  // que el borrador guardado tenia 12 de las 13 filas de la OT 3608 (faltaba `ns-31209`) y el
+  // rescate de arranque borraba del espejo la fila que Supabase SI tenia. La operacion quedaba
+  // atrapada fuera del plan: no se veia en "Detalle de OT" ni se podia reabrir.
+  //
+  // LA REGLA, tal como la fijo el usuario:
+  //   - OT FIJA (`lockedOts`): la operacion completada SIGUE en el borrador, marcada completada y
+  //     sin consumir tiempo (el motor ya la ignora; ver planner-core filterExcludedOperations y
+  //     `minutes` en getPriorityJobs).
+  //   - OT DESBLOQUEADA: si la operacion ya estaba completada antes, sale del plan; no se arrastra.
   function draftExportOperations(state) {
     const scope = Array.isArray(state?.lastSchedule?.scheduledOts)
       ? state.lastSchedule.scheduledOts
       : state?.selectedOts;
     const selected = new Set((scope || []).map(normalize));
-    return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
-      !isCompletedDraftOperation(state, operation) && !isHistorical(operation) &&
-      Boolean(operation?.fechaInicio && operation?.fechaFin));
+    return (state?.operations || []).filter((operation) => {
+      if (!selected.has(normalize(operation?.ot))) return false;
+      if (isHistorical(operation)) return false;
+      if (!Boolean(operation?.fechaInicio && operation?.fechaFin)) return false;
+      if (isCompletedDraftOperation(state, operation)) return isOtLockedInState(state, operation?.ot);
+      return true;
+    });
   }
 
   function draftScheduledOperations(state) {
