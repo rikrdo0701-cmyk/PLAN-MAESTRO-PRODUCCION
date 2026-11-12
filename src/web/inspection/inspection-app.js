@@ -614,7 +614,7 @@
     // dentro. Sale cuando la ultima fila de materiales tiene un hueco (0 o 1 MP) y tambien
     // con exactamente 2, que es el caso en que el formato deja la linea de libre.
     if (materials.length <= 2) materialRows.push(materialRow({}, {}));
-    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb inspection-strong")}${cell(3, escape(job.wo), "inspection-big inspection-job-number inspection-bb inspection-strong")}${cell(7, escape(job.article), "inspection-big inspection-article inspection-br inspection-bb inspection-strong")}${cell(2, "REV", "inspection-big inspection-bb inspection-strong")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "Cantidad:", "inspection-label inspection-bb inspection-strong")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb inspection-strong")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb inspection-strong")}${cell(3, "Material", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(3, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Material", "inspection-head inspection-bb inspection-strong")}${cell(2, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb inspection-strong")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
+    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, root.InspectionCore.inspectionBarcodeSvg(job.wo), "inspection-barcode inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb inspection-strong")}${cell(3, escape(job.wo), "inspection-big inspection-job-number inspection-bb inspection-strong")}${cell(7, escape(job.article), "inspection-big inspection-article inspection-br inspection-bb inspection-strong")}${cell(2, "REV", "inspection-big inspection-bb inspection-strong")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "Cantidad:", "inspection-label inspection-bb inspection-strong")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb inspection-strong")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb inspection-strong")}${cell(3, "Material", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(3, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Material", "inspection-head inspection-bb inspection-strong")}${cell(2, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb inspection-strong")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
     byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${inspectionOperationLayout(3).replace(operationSubheader("OP"), operationSubheader("OPER."))}</div>`;
     const footerCell = (span, html, classes = "", rowSpan = 1) => `<div class="inspection-footer-cell ${classes}" style="grid-column:span ${span}${rowSpan > 1 ? `;grid-row:span ${rowSpan}` : ""}">${html}</div>`;
     let footer = footerCell(1, "Oper", "inspection-footer-head") + footerCell(1, "N°<br>OPER", "inspection-footer-head") + footerCell(2, "Cantidad NC", "inspection-footer-head") + footerCell(1, "Clave", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACION", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES:", "inspection-footer-head inspection-br") + footerCell(2, "ENTREGA", "inspection-footer-head inspection-br") + footerCell(1, "CANT.", "inspection-footer-head inspection-br") + footerCell(1, "RECIBE", "inspection-footer-head");
@@ -704,112 +704,130 @@
     // horizontal pero con la hoja recortada a 210 mm de 280 mm).
     document.documentElement.classList.add("printing-landscape");
     document.body.classList.add("printing-inspection");
-    // El tamaño se compacta en el CSS de impresion (celdas, fuentes y huecos en mm) para
-    // que el alto de LAYOUT real del documento quepa en la pagina A4 horizontal. NO se usa
-    // transform:scale() aqui: el motor de impresion pagina por el alto de layout (sin
-    // transform), asi que escalar encogia lo visual pero el contenido se repartia en 2
-    // paginas y la inferior quedaba cortada (medido 2026-10-22: 40 operaciones, PDF de 2
-    // paginas con transform; con celdas compactas cabe en 1).
+    // FIX 2026-10-31: se reemplazo la estrategia de zoom (que encogia el ancho de la hoja)
+    // por un ajuste de tamanos de fuente y alturas de filas mediante variables CSS.
+    // La hoja siempre mantiene los 280 mm de ancho. El algoritmo:
+    //   - Valores base: letra 8px en celdas, 9px en material, 6px en pie.
+    //   - Si sobra espacio, se distribuye primero entre renglones de operacion
+    //     (hasta 10 mm). Las filas de captura manual y firmas mantienen 6 mm.
+    //   - Si falta espacio, se reducen primero las filas de captura manual (hasta 4 mm),
+    //     luego las filas de firma (hasta 4 mm), luego la letra (hasta 6.5 px).
+    //   - Nunca se usa zoom; la hoja ocupa el ancho completo de impresion.
     const sheet = byId("inspectionDocument");
     try {
       await new Promise((resolve) => root.setTimeout(resolve, 50));
-      // La clase `printing-inspection` aplica las medidas de impresion tambien en pantalla, asi
-      // que aqui se puede MEDIR el alto/ancho de layout antes de imprimir. Si la hoja no cabe
-      // (una OT con muchas operaciones), se encoge con `zoom`, que SI reduce el layout que usa
-      // el paginador; `transform:scale` no lo reducia y partia la hoja en 2 paginas. Hasta 3
-      // pasadas y nunca por debajo de 0.5, para no volver ilegible la hoja (medido 2026-10-22:
-      // 60 operaciones -> zoom 0.91 y 1 pagina; 40 ya cabia sin zoom).
       if (sheet) {
         const mmToPx = 96 / 25.4;
-        const pageWidthPx = (297 - 9 - 8) * mmToPx;
-        const pageHeightPx = (210 - 3 - 5) * mmToPx;
-        // REPARTO VERTICAL (pedido del usuario 2026-10-24): con pocas operaciones la hoja
-        // quedaba comprimida arriba y medio folio en blanco abajo. El hueco se reparte entre
-        // los renglones EN BLANCO (que se llenan a mano) y las firmas, en vez de dejar celdas
-        // de 1.7mm ilegibles. Primero crecen los renglones de operacion (tope 10mm, que es un
-        // renglon comodo para escribir); si aun sobra, crecen las tres filas de firmas.
+        const pageHeightPx = (210 - 3 - 5) * mmToPx;  // 202 mm
+        // limpia viejas variables de la iteracion anterior
+        const oldVars = ["--inspection-op-row","--inspection-footer-row","--inspection-print-zoom",
+          "--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+          "--insp-second-row","--insp-sig-row","--insp-op-row",
+          "--insp-big-font","--insp-job-font","--insp-article-font",
+          "--insp-title-font","--insp-logo-font"
+        ];
+        for (const k of oldVars) sheet.style.removeProperty(k);
+        // variables base legibles con fallback en CSS
+        const defaults = {
+          "--insp-cell-font":"8px","--insp-mat-font":"11px","--insp-qty-font":"8px",
+          "--insp-footer-font":"6px","--insp-second-row":"6mm","--insp-sig-row":"6mm",
+          "--insp-op-row":"0","--insp-big-font":"12px","--insp-job-font":"15px",
+          "--insp-article-font":"15px","--insp-title-font":"13px","--insp-logo-font":"10px"
+        };
+        for (const [k, v] of Object.entries(defaults)) sheet.style.setProperty(k, v);
+
         const altoContenido = () => {
           const hoja = sheet.getBoundingClientRect();
           const footer = byId("inspectionReleaseFooter");
           const fondo = footer ? footer.getBoundingClientRect().bottom : hoja.bottom;
-          // La hoja lleva padding inferior (18px) y borde: si no se cuenta, el reparto
-          // llena hasta el borde del footer pero la hoja termina 5mm mas abajo y el motor
-          // la encoge (medido 2026-10-24: 20 operaciones -> zoom 0.951).
           const estilo = root.getComputedStyle(sheet);
           const cola = (parseFloat(estilo.paddingBottom) || 0) + (parseFloat(estilo.borderBottomWidth) || 0);
           return fondo - hoja.top + cola;
         };
-        // OJO: `.inspection-op-line` lo llevan las 18 CELDAS de cada renglon, no el renglon.
-        // Contar celdas repartia el hueco entre 400+ celdas y los renglones casi no crecian
-        // (medido 2026-10-24: 20 operaciones -> 1.89mm). El renglon se cuenta por su primera
-        // celda, que es la unica con la clase `inspection-op`.
-        const renglones = sheet.querySelectorAll(".inspection-op").length;
-        // El footer tiene CUATRO filas (encabezado + 3 de firma), no 3: repartir el hueco
-        // entre 3 hacia crecer 4 filas y se pasaba ~20% (medido 2026-10-24: 5 operaciones ->
-        // 9.7mm de sobra negativa y zoom 0.95 despues de haber estirado la hoja).
-        const filasFooter = (() => {
-          const footer = byId("inspectionReleaseFooter");
-          if (!footer) return 3;
-          const filas = root.getComputedStyle(footer).gridTemplateRows.split(" ").filter(Boolean).length;
-          return Math.max(1, filas);
-        })();
-        const varMm = (nombre, porDefecto) => {
-          const valor = parseFloat(sheet.style.getPropertyValue(nombre));
-          return Number.isFinite(valor) ? valor : porDefecto;
+        const cuentaMainOps = () => sheet.querySelectorAll("#inspectionSheetGrid .inspection-op").length;
+        const cuentaSecondOps = () => sheet.querySelectorAll("#inspectionSecondCapture .inspection-op").length;
+        const cuentaSigRows = () => {
+          const sig = sheet.querySelectorAll("#inspectionReleaseFooter .inspection-footer-cell:nth-child(n+11)").length;
+          return Math.max(1, sig / 10);
         };
-        // Se reparte en pasadas y se vuelve a medir: crecer los renglones cambia el alto del
-        // footer (las celdas del sello abarcan 3 filas) y una sola cuenta se pasaba 4-5mm,
-        // con lo que el zoom encogia la hoja justo despues de haberla estirado.
-        for (let pass = 0; pass < 4; pass++) {
-          const faltaMm = (pageHeightPx - altoContenido()) / mmToPx;
-          if (faltaMm <= 1) break;
-          let cambio = false;
-          const opActual = varMm("--inspection-op-row", 1.7);
-          if (renglones > 0 && opActual < 10) {
-            const add = Math.min(10 - opActual, (faltaMm * 0.7) / renglones);
-            if (add > 0.05) {
-              sheet.style.setProperty("--inspection-op-row", `${(opActual + add).toFixed(2)}mm`);
-              cambio = true;
+        const getMm = (nombre, fallback) => {
+          const valor = parseFloat(sheet.style.getPropertyValue(nombre));
+          return Number.isFinite(valor) ? valor : fallback;
+        };
+        const setMm = (nombre, valor) => sheet.style.setProperty(nombre, `${Number(valor).toFixed(2)}mm`);
+
+        const delay = (ms = 20) => new Promise((resolve) => root.setTimeout(resolve, ms));
+
+        for (let pass = 0; pass < 10; pass++) {
+          let h = altoContenido();
+          let falta = (pageHeightPx - h) / mmToPx;
+          if (Math.abs(falta) <= 0.5) break;
+
+          if (falta > 0) {
+            // SOBRA: medir el alto real del primer renglon de operacion y crecerlo
+            const nMain = cuentaMainOps();
+            if (nMain > 0) {
+              const firstOpCell = sheet.querySelector("#inspectionSheetGrid .inspection-op-line.inspection-op");
+              const rowPx = firstOpCell ? firstOpCell.getBoundingClientRect().height : 0;
+              const currentMm = Math.max(getMm("--insp-op-row", 0), rowPx / mmToPx);
+              if (currentMm < 10) {
+                const target = Math.min(10, currentMm + falta * 0.7 / nMain);
+                // redondear a centesimas para evitar bucle infinito
+                const redondeado = Math.round(target * 100) / 100;
+                if (redondeado > currentMm + 0.02) {
+                  setMm("--insp-op-row", redondeado);
+                  await delay(20);
+                  continue;
+                }
+              }
             }
-          }
-          const faltaTrasRenglonesMm = (pageHeightPx - altoContenido()) / mmToPx;
-          const firmaActual = varMm("--inspection-footer-row", 3);
-          if (faltaTrasRenglonesMm > 1 && firmaActual < 22) {
-            const add = Math.min(22 - firmaActual, (faltaTrasRenglonesMm * 0.9) / filasFooter);
-            if (add > 0.05) {
-              sheet.style.setProperty("--inspection-footer-row", `${(firmaActual + add).toFixed(2)}mm`);
-              cambio = true;
+            break;  // no se puede crecer mas → sobrante queda como margen inferior
+          } else {
+            // FALTA: reducir en escalones fijos: captura manual → firmas → letra
+
+            // a) filas de captura manual del segundo bloque → minimo 4mm de golpe
+            if (getMm("--insp-second-row", 6) > 4) {
+              setMm("--insp-second-row", 4);
+              await delay(20);
+              continue;
             }
+
+            // b) filas de firma del pie → minimo 4mm de golpe
+            if (getMm("--insp-sig-row", 6) > 4) {
+              setMm("--insp-sig-row", 4);
+              await delay(20);
+              continue;
+            }
+
+            // c) reducir letra 0.5px por pasada
+            const fontActual = parseFloat(sheet.style.getPropertyValue("--insp-cell-font")) || 8;
+            if (fontActual > 6.5) {
+              const nuevo = Math.max(6.5, fontActual - 0.5);
+              sheet.style.setProperty("--insp-cell-font", `${nuevo}px`);
+              const mat = Math.max(7, (parseFloat(sheet.style.getPropertyValue("--insp-mat-font")) || 9) - 0.5);
+              sheet.style.setProperty("--insp-mat-font", `${mat}px`);
+              const qty = Math.max(6.5, (parseFloat(sheet.style.getPropertyValue("--insp-qty-font")) || 8) - 0.5);
+              sheet.style.setProperty("--insp-qty-font", `${qty}px`);
+              const fFont = Math.max(5, (parseFloat(sheet.style.getPropertyValue("--insp-footer-font")) || 6) - 0.5);
+              sheet.style.setProperty("--insp-footer-font", `${fFont}px`);
+              await delay(20);
+              continue;
+            }
+
+            break;  // ya no se puede reducir mas
           }
-          if (!cambio) break;
-          await new Promise((resolve) => root.setTimeout(resolve, 30));
-        }
-        let sobra = pageHeightPx - altoContenido();
-        let zoom = 1;
-        // El zoom SOLO corrige cuando el CONTENIDO no cabe. `scrollHeight` incluye el
-        // `min-height:202mm` de la hoja y su padding, asi que una hoja que ya cabia se
-        // encogia igual (medido 2026-10-24: 20 operaciones -> zoom 0.951 sin necesidad,
-        // justo lo contrario del reparto pedido).
-        for (let pass = 0; pass < 3 && sobra < -1; pass++) {
-          const width = sheet.scrollWidth;
-          const height = sheet.scrollHeight;
-          if (width * zoom <= pageWidthPx + 1 && height * zoom <= pageHeightPx + 1) break;
-          const ratio = Math.min(
-            width > 0 ? (pageWidthPx * 0.995) / (width * zoom) : 1,
-            height > 0 ? (pageHeightPx * 0.995) / (height * zoom) : 1,
-          );
-          const next = Math.max(0.5, zoom * ratio);
-          if (next >= zoom - 0.001) break;
-          zoom = Math.round(next * 1000) / 1000;
-          sheet.style.setProperty("--inspection-print-zoom", String(zoom));
-          await new Promise((resolve) => root.setTimeout(resolve, 30));
         }
       }
       root.print();
     } finally {
-      sheet?.style.removeProperty("--inspection-print-zoom");
+      for (const k of ["--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+          "--insp-second-row","--insp-sig-row","--insp-op-row",
+          "--insp-big-font","--insp-job-font","--insp-article-font",
+          "--insp-title-font","--insp-logo-font"
+      ]) sheet?.style.removeProperty(k);
       sheet?.style.removeProperty("--inspection-op-row");
       sheet?.style.removeProperty("--inspection-footer-row");
+      sheet?.style.removeProperty("--inspection-print-zoom");
       document.documentElement.classList.remove("printing-landscape");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
@@ -817,9 +835,14 @@
   }
   function clearInspectionPrintState() {
     const sheet = byId("inspectionDocument");
-    sheet?.style.removeProperty("--inspection-print-zoom");
+    for (const k of ["--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+        "--insp-second-row","--insp-sig-row","--insp-op-row",
+        "--insp-big-font","--insp-job-font","--insp-article-font",
+        "--insp-title-font","--insp-logo-font"
+    ]) sheet?.style.removeProperty(k);
     sheet?.style.removeProperty("--inspection-op-row");
     sheet?.style.removeProperty("--inspection-footer-row");
+    sheet?.style.removeProperty("--inspection-print-zoom");
     document.documentElement.classList.remove("printing-landscape");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");

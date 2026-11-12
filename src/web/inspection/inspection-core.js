@@ -517,7 +517,89 @@
     };
   }
 
-  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionMaterialsUnicos, inspectionLineaDelBom, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail };
+  // CODIGO DE BARRAS DE LA HOJA (decision del usuario 2026-11-11): la hoja de inspeccion
+  // lleva el numero de OT en Code 128 dentro del cuadro de 4 columnas que esta a la
+  // izquierda de "Trabajo:". El codigo NO abarca el cuadro completo: los bordes negros de
+  // la celda se confundirian con las barras, asi que se respeta la zona blanca obligatoria
+  // del estandar (10 X) a cada lado del simbolo, mas aire hasta el borde.
+  //
+  // MEDIDAS (medidas sobre la hoja real de la OT 3608, 2026-11-11):
+  //   - celda de 4 columnas: 46,57 mm; borde derecho negro de 1,2 px (0,32 mm).
+  //   - fila de 7,32 mm al imprimir = 7 mm utiles + el borde inferior de 1,2 px.
+  //   - X por omision 0,42 mm; barras de 5 mm de alto con 1 mm blanco arriba y abajo.
+  //   - "3608" en Set C son 57 modulos: 23,94 mm de barras y 4,2 mm de zona blanca por lado.
+  //
+  // VERIFICADO 2026-11-11 rasterizando el codigo a 600 dpi: un lector ZXing devuelve "3608"
+  // con X de 0,25 / 0,33 / 0,42 y 0,48 mm y alto de barra de 4 a 5 mm.
+  //
+  // La tabla son los 107 simbolos de Code 128: cada patron son los anchos de
+  // barra/espacio/barra/espacio/barra/espacio (el Stop, indice 106, lleva 7 anchos).
+  const BARCODE_CODE128 = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+
+  // El xmlns NO puede quedar escrito dentro de una plantilla: el HTML service de Apps Script
+  // recorta la linea en el "//" y el bundle deja de parsear (lo vigila
+  // tests/web-url-templates.test.mjs). Se arma con comillas, como manda la regla del repo.
+  const SVG_NAMESPACE = 'xmlns="http' + '://www.w3.org/2000/svg"';
+
+  /** Anchos de modulo (barras y espacios) del texto en Code 128. Sin texto, sin anchos. */
+  function inspectionBarcodeModuleWidths(value) {
+    const texto = String(value == null ? "" : value);
+    if (!texto) return [];
+    const valores = [];
+    if (/^[0-9]+$/.test(texto) && texto.length % 2 === 0) {
+      // Set C: dos digitos por simbolo. Es el caso real de la OT y deja el simbolo a la
+      // mitad de largo (57 modulos en vez de 79), que es lo que permite el aire a los lados.
+      valores.push(105);
+      for (let i = 0; i < texto.length; i += 2) valores.push(Number(texto.slice(i, i + 2)));
+    } else {
+      // Set B: un caracter por simbolo. Cubre una OT con cantidad impar de digitos sin
+      // inventar ni recortar nada, y tambien el texto con letras.
+      valores.push(104);
+      for (const caracter of texto) {
+        const codigo = caracter.charCodeAt(0) - 32;
+        if (!(codigo >= 0 && codigo <= 95)) return [];
+        valores.push(codigo);
+      }
+    }
+    const checksum = valores.reduce((total, valor, indice) => total + valor * (indice === 0 ? 1 : indice), 0) % 103;
+    valores.push(checksum, 106);
+    return valores.flatMap((valor) => BARCODE_CODE128[valor].split("").map(Number));
+  }
+
+  /** SVG del codigo (listo para incrustar) o "" cuando no se debe imprimir codigo. */
+  function inspectionBarcodeSvg(value) {
+    const anchos = inspectionBarcodeModuleWidths(value);
+    if (!anchos.length) return "";
+    const CAJA_ANCHO = 46.57;    // ancho de la celda de 4 columnas
+    const CAJA_ALTO = 7;         // alto util de la fila, arriba del borde inferior
+    const BORDE_DERECHO = 0.32;  // borde negro de la celda, dentro de la caja
+    const AIRE_MINIMO = 0.6;     // blanco minimo entre la zona blanca y el borde
+    const BARRA_Y = 1;
+    const BARRA_ALTO = 5;
+    const X_MAX = 0.42;
+    const X_MIN = 0.25;
+    const modulos = anchos.reduce((total, ancho) => total + ancho, 0);
+    const util = CAJA_ANCHO - BORDE_DERECHO;
+    // 20 modulos = la zona blanca obligatoria (10 X) de cada lado del simbolo.
+    const x = Math.min(X_MAX, (util - 2 * AIRE_MINIMO) / (modulos + 20));
+    if (!(x >= X_MIN)) return "";
+    const anchoBarras = modulos * x;
+    const zonaBlanca = 10 * x;
+    const aire = Math.max(AIRE_MINIMO, (util - anchoBarras - 2 * zonaBlanca) / 2);
+    let cursor = aire + zonaBlanca;
+    let esBarra = true;
+    const barras = [];
+    for (const ancho of anchos) {
+      const anchoMm = ancho * x;
+      if (esBarra) barras.push(`<rect x="${cursor.toFixed(3)}" y="${BARRA_Y}" width="${anchoMm.toFixed(3)}" height="${BARRA_ALTO}"/>`);
+      cursor += anchoMm;
+      esBarra = !esBarra;
+    }
+    const etiqueta = String(value).replace(/[&<>"]/g, (caracter) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[caracter]);
+    return `<svg class="inspection-barcode-svg" viewBox="0 0 ${CAJA_ANCHO} ${CAJA_ALTO}" preserveAspectRatio="none" shape-rendering="crispEdges" role="img" aria-label="Código de barras de la OT ${etiqueta}" ${SVG_NAMESPACE}><rect width="${CAJA_ANCHO}" height="${CAJA_ALTO}" fill="#fff"/><g fill="#000">${barras.join("")}</g></svg>`;
+  }
+
+  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionMaterialsUnicos, inspectionLineaDelBom, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail, inspectionBarcodeModuleWidths, inspectionBarcodeSvg };
 
   function inspectionRouteSavedValue(saved, field, fallback) {
     const aliases = {

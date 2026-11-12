@@ -92,6 +92,9 @@ function createHarness(callBackend, now = { value: 0 }) {
       inspectionMaterials: (materials) => materials,
       // La deduplicacion de verdad, no una de mentira (ver la nota de `coreReal` arriba).
       inspectionMaterialsUnicos: (materials) => coreReal.inspectionMaterialsUnicos(materials),
+      // El codigo de barras tambien se delega al core real: el arnes no tiene por que
+      // reimplementarlo, y sin esta linea `renderDetail` fallaba con "not a function".
+      inspectionBarcodeSvg: (value) => coreReal.inspectionBarcodeSvg(value),
       inspectionRows: () => [],
       inspectionPrintDiagnostic: () => ({ status: "ok", label: "Listo", missingRoutes: [], deficit: [], pending: [], alerts: [], materials: [] }),
       operationKey: (operation, index) => operation.id || operation.code || String(index),
