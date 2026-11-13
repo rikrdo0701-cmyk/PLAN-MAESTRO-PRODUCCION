@@ -1289,7 +1289,7 @@ function consultarReporte() {
   const desde = document.getElementById("repDesde").value || haceDias(30);
   const hasta = document.getElementById("repHasta").value || hoyLocalISO();
   const ot = document.getElementById("repOt").value.trim();
-  const cfg = window.PPSupabaseReader?.config?.();
+  const cfg = window.PPSupabaseReader?.configure?.();
   if (!cfg || !cfg.configured) {
     document.getElementById("reporteWrap").innerHTML = '<p class="reporte-vacio" style="color:var(--red)">Sin conexi&oacute;n con la base de datos. Recarga la p&aacute;gina.</p>';
     return;

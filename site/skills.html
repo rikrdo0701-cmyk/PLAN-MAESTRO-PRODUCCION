@@ -613,8 +613,8 @@ tr:last-child td { border-bottom: 0; }
 (function (root) {
   "use strict";
 
-  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_URL = "";
+  const DEFAULT_ANON_KEY = "";
 
   const CLAVE_ALMACEN = "pp_supabase_session";
   const REFRESCO_MARGEN_MS = 60 * 1000;
@@ -1009,8 +1009,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   "use strict";
 
   // El build reemplaza estos dos marcadores. Si quedan asi, el lector esta apagado.
-  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_URL = "";
+  const DEFAULT_ANON_KEY = "";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -3200,8 +3200,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
 
   // El build reemplaza estos dos marcadores (scripts/build-appscript.mjs). Si
   // quedan asi, este modulo esta apagado, igual que el lector.
-  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_URL = "";
+  const DEFAULT_ANON_KEY = "";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -11679,7 +11679,7 @@ function consultarReporte() {
   const desde = document.getElementById("repDesde").value || haceDias(30);
   const hasta = document.getElementById("repHasta").value || hoyLocalISO();
   const ot = document.getElementById("repOt").value.trim();
-  const cfg = window.PPSupabaseReader?.config?.();
+  const cfg = window.PPSupabaseReader?.configure?.();
   if (!cfg || !cfg.configured) {
     document.getElementById("reporteWrap").innerHTML = '<p class="reporte-vacio" style="color:var(--red)">Sin conexi&oacute;n con la base de datos. Recarga la p&aacute;gina.</p>';
     return;
