@@ -220,6 +220,7 @@
 - **RULE-PRD-006** - Cantidad entera > 0; pasarse de la cantidad de la OT avisa y no bloquea (IMPLEMENTADA): decisión del usuario, no se valida en la base. Fuente: `docs/schema-prdtiempo.sql:78-79,87-88,421-423`; `src/web/prd/prd-core.js`.
 - **RULE-PRD-007** - Sin red no se guarda ni se encola, y sin cámara no hay captura manual de la OT (IMPLEMENTADA): las tres escrituras pasan por `rpc()`, que es donde entrará la cola local. Fuente: `src/web/prd/prd-app.js`.
 - **RULE-PRD-008** - La página se publica como PWA propia y el service worker devuelve la página pedida (IMPLEMENTADA): `site/prd.html` + `site/prd.webmanifest` + iconos 192/512 generados en el build; fuera de `dist/`. Fuente: `scripts/build-appscript.mjs`; `tests/build.test.mjs`.
+- **RULE-PRD-009** - Leída la OT, la cámara desaparece: las pantallas de datos son de pantalla completa y con letra grande (IMPLEMENTADA): hoja opaca que ocupa la pantalla (el video sigue encendido detrás, sin volver a pedir permiso), OT y datos con `clamp()` (OT hasta 4rem), una columna para que la descripción use todo el ancho, botones de 64 px pegados al pie. Decisión del usuario 2026-11-12 con captura del teléfono. Fuente: `src/web/prd/prd.css`; `src/web/prd/index.template.html`; `tests/build.test.mjs`.
 
 ## Contradicciones y ambigüedades
 

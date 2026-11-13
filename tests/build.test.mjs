@@ -1251,6 +1251,21 @@ test("la pagina de piso sale montada, con manifiesto, iconos y su ruta en el ser
 
   assert.match(serviceWorker, /"\.\/prd\.html"/, "el service worker no guarda la pagina de piso en el shell");
   assert.match(serviceWorker, /endsWith\("\/prd\.html"\) \? "\.\/prd\.html" : "\.\/index\.html"/, "la navegacion sin red tiene que devolver la pagina que se pidio, no index.html");
+
+  // LA PANTALLA DE DATOS ES DE PANTALLA COMPLETA Y CON LETRA GRANDE (decision del usuario
+  // 2026-11-12, RULE-PRD-009). El sintoma que lo motivo: con la hoja al pie del video, el
+  // numero de OT y los datos quedaban a 0.9rem y no se leian de pie. Se afirma sobre el CSS
+  // montado porque el error no rompe nada: la pagina sigue funcionando, solo vuelve a quedar
+  // chica, y eso no lo nota ninguna otra prueba.
+  const estilos = prd.slice(prd.indexOf("<style>"), prd.indexOf("</style>"));
+  assert.match(estilos, /\.pantalla-hoja\s*\{[^}]*background:\s*var\(--fondo\)/, "la hoja de datos tiene que tapar el video");
+  assert.doesNotMatch(estilos, /backdrop-filter/, "la hoja ya no es translucida: se lee el dato, no el video");
+  assert.match(estilos, /\.hoja\s*\{[^}]*flex:\s*1 1 auto/, "la hoja tiene que ocupar la pantalla, no una tarjeta al pie");
+  assert.match(estilos, /\.hoja > \*\s*\{[^}]*flex:\s*0 0 auto/, "con el aviso de cantidad los bloques se aplastaban en vez de desplazarse");
+  assert.match(estilos, /\.ot\s*\{[^}]*font-size:\s*clamp\(/, "el numero de OT tiene que crecer con la pantalla");
+  assert.match(estilos, /\.datos dd\s*\{[^}]*font-size:\s*clamp\(/, "los datos tienen que crecer con la pantalla");
+  assert.match(estilos, /\.datos > div\s*\{[^}]*display:\s*grid/, "la descripcion va a todo el ancho, no en dos columnas");
+  assert.match(estilos, /\.acciones\s*\{[^}]*position:\s*sticky/, "los botones se quedan al alcance aunque la lista no quepa");
 });
 
 test("un import o cache stale no pisa un borrador mas reciente; el restore de boot respeta frescura", async () => {

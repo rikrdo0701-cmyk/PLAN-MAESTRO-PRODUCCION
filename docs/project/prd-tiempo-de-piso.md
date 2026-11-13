@@ -12,8 +12,8 @@ Supabase. Habla con la base por tres funciones RPC y nada más.
 | Pantalla | Qué pasa |
 |---|---|
 | **Escanear** | Video a pantalla completa y marco de lectura. Un solo `BarcodeDetector` con `code_128`, una lectura cada 140 ms, enfriamiento de 5 s para el mismo código. El video **nunca se apaga**: las otras pantallas son hojas encima. |
-| **Verificar** | OT, artículo, descripción y cantidad tal como los devolvió la base. Desplegable de operaciones (obligatorio) con su ciclo objetivo. `Iniciar` guarda la corrida; `Cancelar` cierra la hoja sin tocar la base. |
-| **Finalizar** | Aparece al volver a escanear una OT que ya tiene corrida abierta. Operación, reloj desde el inicio, campo de piezas, aviso si la cantidad supera la de la OT (no bloquea), ciclo por pieza en vivo con semáforo. `Finalizar` guarda hora de fin, cantidad y ciclo. |
+| **Verificar** | **Pantalla completa, sin video** (RULE-PRD-009). OT a lo grande, artículo, descripción y cantidad en una columna para que la descripción use todo el ancho. Desplegable de operaciones (obligatorio) con su ciclo objetivo. `Iniciar` guarda la corrida; `Cancelar` cierra la pantalla sin tocar la base. |
+| **Finalizar** | También a pantalla completa. Aparece al volver a escanear una OT que ya tiene corrida abierta. Operación, reloj desde el inicio, campo de piezas, aviso si la cantidad supera la de la OT (no bloquea), ciclo por pieza en vivo con semáforo. `Finalizar` guarda hora de fin, cantidad y ciclo. |
 
 Después de iniciar o finalizar se vuelve a la cámara con un aviso breve (`OT iniciada`,
 `Guardado: 2.50 min/pza`). Una OT cerrada, inexistente o con un código que no es una OT se
@@ -54,6 +54,12 @@ avisa y la página se queda en la cámara: no hay captura manual del folio.
 8. **El plan no se toca todavía**: `operacion_id`, `operacion_secuencia` y `cantidad` quedan
    guardados para que la etapa siguiente marque la operación como completada sin volver a
    capturar.
+9. **Leída la OT, la cámara desaparece** (RULE-PRD-009, decisión del usuario 2026-11-12 con
+   captura del teléfono). Las pantallas de verificar y finalizar ocupan toda la pantalla con
+   fondo opaco, el video sigue encendido detrás (no se vuelve a pedir permiso ni se corta la
+   lectura) y la letra crece con `clamp()`: OT hasta 4rem, datos hasta 1.5rem, ciclo hasta
+   4rem. Los datos van en una columna (etiqueta arriba, valor abajo) para que la descripción
+   use todo el ancho, y la barra de botones se queda pegada al pie aunque la lista no quepa.
 
 ## Archivos
 

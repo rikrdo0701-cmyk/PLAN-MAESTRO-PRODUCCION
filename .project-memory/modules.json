@@ -276,7 +276,8 @@
         "RULE-PRD-005",
         "RULE-PRD-006",
         "RULE-PRD-007",
-        "RULE-PRD-008"
+        "RULE-PRD-008",
+        "RULE-PRD-009"
       ],
       "data_sources": [
         "SUPABASE-TABLE-PRDTIEMPO-REGISTROS",

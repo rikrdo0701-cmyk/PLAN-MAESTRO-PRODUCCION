@@ -45,7 +45,7 @@ frontend (`src/web/`), build (raíz/scripts), tests y pipeline legacy.
 | `shared/performance-client.js` | Cliente de endpoints optimizados (revisiones/delta) |
 | `prd/prd-core.js` | Lógica pura de la página de piso: leer el código de la OT, armar los cuerpos de las tres RPC, ciclo por pieza, semáforo y mensajes (sin DOM ni red; probada con `node --test`) |
 | `prd/prd-app.js` | Página de piso `/prd.html`: cámara (`BarcodeDetector`, code_128), tres pantallas en un documento, llamadas `prdtiempo_*`, reloj y ciclo en vivo |
-| `prd/prd.css` + `prd/index.template.html` | Estilos del teléfono (áreas seguras, objetivos de 56 px) y plantilla con los marcadores `{{PRD_STYLES}}`, `{{PRD_CORE}}`, `{{PRD_APP}}` |
+| `prd/prd.css` + `prd/index.template.html` | Estilos del teléfono (áreas seguras, objetivos táctiles de 64 px, pantallas de datos a pantalla completa con letra escalada) y plantilla con los marcadores `{{PRD_STYLES}}`, `{{PRD_CORE}}`, `{{PRD_APP}}` |
 
 ## Build y herramientas
 

@@ -60,11 +60,12 @@
           </select>
           <p class="objetivo" id="verificar-objetivo"></p>
 
+          <p class="error" id="error-verificar" role="alert"></p>
+
           <div class="acciones">
             <button class="boton secundario" id="boton-cancelar-verificar" type="button">Cancelar</button>
             <button class="boton primario" id="boton-iniciar" type="button" disabled>Iniciar</button>
           </div>
-          <p class="error" id="error-verificar" role="alert"></p>
         </div>
       </section>
 
@@ -104,13 +105,14 @@
             <div class="barra" aria-hidden="true"><span id="ciclo-barra"></span></div>
           </div>
 
+          <p class="error" id="error-finalizar" role="alert"></p>
+
+          <button class="enlace" id="boton-otra-operacion" type="button" hidden>Iniciar otra operación de esta OT</button>
+
           <div class="acciones">
             <button class="boton secundario" id="boton-cancelar-finalizar" type="button">Cancelar</button>
             <button class="boton primario" id="boton-finalizar" type="button" disabled>Finalizar</button>
           </div>
-          <p class="error" id="error-finalizar" role="alert"></p>
-
-          <button class="enlace" id="boton-otra-operacion" type="button" hidden>Iniciar otra operación de esta OT</button>
         </div>
       </section>
 

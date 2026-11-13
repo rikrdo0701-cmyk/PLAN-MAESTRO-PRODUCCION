@@ -4,8 +4,9 @@
  * - Todo se mide en `dvh`, no en `vh`: con la barra de direcciones de Chrome, `100vh`
  *   deja el boton de abajo debajo del borde. Y con `env(safe-area-inset-bottom)` el
  *   boton no cae en la barra de gestos del telefono.
- * - El video NO se apaga al cambiar de pantalla: las hojas son translucidas y el video
- *   sigue detras. Por eso el fondo es oscuro y las hojas usan desenfoque.
+ * - El video NO se apaga al cambiar de pantalla: sigue encendido detras de la hoja. Las
+ *   pantallas de datos son opacas a proposito (ver "hojas"): ya leida la OT, lo que importa
+ *   es el dato, no el video, y no se vuelve a pedir permiso de camara.
  * - Objetivos tactiles de 56px minimo: se usa de pie, con prisa y a veces con guantes.
  * - El color del ciclo (verde / ambar / rojo / gris) sale de `data-tono`, que pone
  *   prd-app.js con la decision de prd-core.js. Aqui solo se elige el color.
@@ -105,15 +106,15 @@ body {
 .kicker {
   margin: 0;
   color: var(--acento);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 h1 {
-  margin: 4px 0 0;
-  font-size: 1.35rem;
+  margin: 6px 0 0;
+  font-size: clamp(1.5rem, 7vw, 1.9rem);
   line-height: 1.2;
   font-weight: 650;
 }
@@ -172,31 +173,32 @@ h1 {
 .pista {
   margin: 0;
   align-self: center;
-  max-width: 34ch;
+  max-width: 30ch;
   text-align: center;
   color: var(--texto-tenue);
-  font-size: 0.9rem;
-  line-height: 1.35;
+  font-size: 1.02rem;
+  line-height: 1.4;
 }
 
 .estado {
-  min-height: 1.4rem;
+  min-height: 1.5rem;
   align-self: center;
   text-align: center;
+  font-size: 1.05rem;
   font-weight: 600;
   color: var(--texto);
 }
 
 .sin-camara {
   align-self: center;
-  max-width: 36ch;
-  padding: 14px 16px;
+  max-width: 32ch;
+  padding: 16px 18px;
   border: 1px solid rgba(239, 68, 68, 0.5);
   border-radius: var(--radio-chico);
   background: rgba(127, 29, 29, 0.35);
   color: #fecaca;
-  font-size: 0.88rem;
-  line-height: 1.4;
+  font-size: 0.95rem;
+  line-height: 1.45;
 }
 
 .icono {
@@ -230,83 +232,103 @@ h1 {
 
 /* ------------------------------ hojas ------------------------------ */
 
+/* LA CAMARA DESAPARECE CUANDO YA LEYO. Decision del usuario (2026-11-12): al leer la OT
+ * no hace falta ver el video, hacen falta los DATOS. Antes la hoja era una tarjeta al pie
+ * del video y el texto quedaba en 0.9rem: de pie, con guantes y con la luz del piso, no se
+ * leia. Ahora la hoja ocupa toda la pantalla, el video queda detras (sigue encendido, no se
+ * vuelve a pedir permiso) y la letra crece con `clamp()`: el numero de OT manda y los datos
+ * se leen de un vistazo. El boton de abajo se queda pegado al borde: con la lista larga no
+ * hay que buscar el boton.
+ */
 .pantalla-hoja {
-  justify-content: flex-end;
+  justify-content: stretch;
   padding: 0;
-  background: linear-gradient(to bottom, rgba(4, 8, 14, 0.35), rgba(4, 8, 14, 0.72));
+  background: var(--fondo);
 }
 
 .hoja {
-  max-height: calc(100dvh - 24px);
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: calc(18px + env(safe-area-inset-top)) 20px 0;
   overflow-y: auto;
-  padding: 20px 18px calc(18px + env(safe-area-inset-bottom));
-  border-radius: var(--radio) var(--radio) 0 0;
-  border-top: 1px solid var(--borde);
-  background: var(--panel);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  box-shadow: var(--sombra);
-  animation: subir 0.2s ease-out;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--fondo);
+  animation: aparecer 0.18s ease-out;
 }
 
-@keyframes subir {
-  from { transform: translateY(18px); opacity: 0.4; }
-  to { transform: translateY(0); opacity: 1; }
+/* Ningun bloque de la hoja se encoge cuando el contenido no cabe: sin esto, con el aviso
+ * de cantidad o dos corridas abiertas, la fila de corridas se aplastaba y se veian solo
+ * las puntas de las pastillas. Lo que no cabe se desplaza; no se deforma. */
+.hoja > * {
+  flex: 0 0 auto;
+}
+
+@keyframes aparecer {
+  from { opacity: 0.35; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
 }
 
 .ot {
-  margin: 6px 0 2px;
-  font-size: 2.1rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  margin: 6px 0 6px;
+  font-size: clamp(3rem, 16vw, 4rem);
+  line-height: 1.05;
+  font-weight: 750;
+  letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
 }
 
 .operacion {
-  margin: 0;
-  color: var(--texto-tenue);
-  font-size: 0.95rem;
+  margin: 0 0 4px;
+  color: var(--texto);
+  font-size: clamp(1.05rem, 4.4vw, 1.25rem);
+  font-weight: 600;
   line-height: 1.35;
 }
 
+/* Etiqueta arriba y valor abajo, a todo el ancho: la descripcion es larga y en dos
+ * columnas se partia en tiras de dos palabras. */
 .datos {
   display: grid;
-  gap: 8px;
-  margin: 14px 0 4px;
-  padding: 12px 14px;
+  gap: 14px;
+  margin: 16px 0 6px;
+  padding: 16px 18px;
   border: 1px solid var(--borde);
-  border-radius: var(--radio-chico);
+  border-radius: var(--radio);
   background: var(--panel-suave);
 }
 
 .datos > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 14px;
+  display: grid;
+  gap: 2px;
 }
 
 .datos dt {
-  flex: 0 0 auto;
   color: var(--texto-tenue);
   font-size: 0.78rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .datos dd {
   margin: 0;
-  text-align: right;
-  font-size: 0.95rem;
-  font-weight: 600;
+  text-align: left;
+  font-size: clamp(1.2rem, 5vw, 1.5rem);
+  font-weight: 650;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
 .campo {
   display: block;
-  margin: 16px 0 6px;
+  margin: 20px 0 8px;
   color: var(--texto-tenue);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -315,13 +337,17 @@ h1 {
 .selector,
 .cantidad {
   width: 100%;
-  min-height: 56px;
-  padding: 12px 14px;
+  min-height: 64px;
+  padding: 12px 16px;
   border: 1px solid var(--borde);
   border-radius: var(--radio-chico);
   background: rgba(2, 6, 12, 0.6);
   color: var(--texto);
   font: inherit;
+}
+
+.selector {
+  font-size: 1.05rem;
 }
 
 .selector:focus-visible,
@@ -334,33 +360,50 @@ h1 {
 }
 
 .cantidad {
-  font-size: 2rem;
+  min-height: 76px;
+  font-size: clamp(2.4rem, 12vw, 3rem);
   font-weight: 700;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Las flechitas del input numerico no se usan (se teclea con el teclado del telefono) y
+ * en la captura se comen 40 px del campo. */
+.cantidad::-webkit-outer-spin-button,
+.cantidad::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .objetivo {
-  margin: 6px 0 0;
-  min-height: 1.2rem;
+  margin: 8px 0 0;
+  min-height: 1.3rem;
   color: var(--texto-tenue);
-  font-size: 0.85rem;
+  font-size: 0.95rem;
 }
 
 .acciones {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
-  gap: 10px;
-  margin-top: 18px;
+  gap: 12px;
+  margin: auto -20px 0;
+  padding: 12px 20px calc(16px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--borde);
+  background: var(--fondo);
 }
 
 .boton {
   flex: 1 1 0;
-  min-height: 56px;
-  padding: 0 16px;
+  min-height: 64px;
+  padding: 0 18px;
   border-radius: var(--radio-chico);
   border: 1px solid transparent;
   font: inherit;
-  font-size: 1rem;
+  font-size: 1.1rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -411,34 +454,35 @@ h1 {
 .enlace {
   display: block;
   width: 100%;
-  margin: 14px 0 0;
-  padding: 10px;
+  min-height: 52px;
+  margin: 12px 0 0;
+  padding: 12px;
   border: 0;
   background: none;
   color: var(--acento);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
 }
 
 .error {
   margin: 12px 0 0;
-  min-height: 1.2rem;
+  min-height: 1.3rem;
   color: #fca5a5;
-  font-size: 0.85rem;
-  line-height: 1.35;
+  font-size: 0.95rem;
+  line-height: 1.4;
 }
 
 .aviso {
-  margin: 10px 0 0;
-  padding: 10px 12px;
+  margin: 12px 0 0;
+  padding: 12px 14px;
   border: 1px solid rgba(245, 158, 11, 0.5);
   border-radius: var(--radio-chico);
   background: rgba(120, 53, 15, 0.35);
   color: #fde68a;
-  font-size: 0.85rem;
-  line-height: 1.35;
+  font-size: 0.95rem;
+  line-height: 1.4;
 }
 
 /* ------------------------------ reloj y ciclo ------------------------------ */
@@ -446,12 +490,12 @@ h1 {
 .reloj {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .reloj span {
-  font-size: 1.5rem;
+  font-size: clamp(2rem, 10vw, 2.6rem);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -459,7 +503,7 @@ h1 {
 
 .reloj small {
   color: var(--texto-tenue);
-  font-size: 0.78rem;
+  font-size: 0.85rem;
 }
 
 .ciclo {
@@ -468,15 +512,15 @@ h1 {
   grid-template-columns: auto 1fr;
   align-items: baseline;
   column-gap: 8px;
-  margin-top: 14px;
-  padding: 14px;
+  margin-top: 16px;
+  padding: 16px;
   border: 1px solid var(--borde);
   border-radius: var(--radio-chico);
   background: var(--panel-suave);
 }
 
 .ciclo-valor {
-  font-size: 2.4rem;
+  font-size: clamp(3rem, 15vw, 4rem);
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -485,22 +529,22 @@ h1 {
 
 .ciclo-unidad {
   color: var(--texto-tenue);
-  font-size: 0.85rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
 .ciclo-objetivo {
   grid-column: 1 / -1;
-  margin-top: 6px;
+  margin-top: 8px;
   color: var(--texto-tenue);
-  font-size: 0.82rem;
+  font-size: 0.9rem;
 }
 
 .ciclo-desviacion {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  font-size: 0.85rem;
+  top: 16px;
+  right: 16px;
+  font-size: 1rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--gris);
@@ -508,8 +552,8 @@ h1 {
 
 .ciclo .barra {
   grid-column: 1 / -1;
-  height: 6px;
-  margin-top: 10px;
+  height: 8px;
+  margin-top: 12px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.22);
   overflow: hidden;
@@ -556,13 +600,14 @@ h1 {
 
 .corrida {
   flex: 0 0 auto;
-  padding: 8px 12px;
+  min-height: 48px;
+  padding: 10px 16px;
   border: 1px solid var(--borde);
   border-radius: 999px;
   background: transparent;
   color: var(--texto-tenue);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -579,16 +624,18 @@ h1 {
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(24px + env(safe-area-inset-bottom));
+  bottom: calc(20px + env(safe-area-inset-bottom));
   z-index: 10;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--borde);
   border-radius: var(--radio-chico);
   background: rgba(15, 23, 32, 0.97);
   box-shadow: var(--sombra);
   text-align: center;
+  font-size: 1.05rem;
   font-weight: 700;
-  animation: subir 0.18s ease-out;
+  line-height: 1.35;
+  animation: aparecer 0.18s ease-out;
 }
 
 .toast[data-tono="verde"] { border-color: var(--verde); color: var(--verde); }
