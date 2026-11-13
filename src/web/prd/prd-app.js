@@ -461,6 +461,27 @@
       maquina: corrida.maquina,
     });
     $("ciclo-objetivo").textContent = CORE.etiquetaObjetivo(corrida.ciclo_objetivo_min);
+    pintarInicio(corrida.hora_inicio);
+  }
+
+  function pintarInicio(horaISO) {
+    const nodo = $("inicio");
+    if (!nodo) return;
+    if (!horaISO) { nodo.textContent = ""; return; }
+    try {
+      const instante = new Date(horaISO);
+      // Formato: dd/mm/aaaa hh:mm AM/PM
+      const dia = String(instante.getDate()).padStart(2, "0");
+      const mes = String(instante.getMonth() + 1).padStart(2, "0");
+      const anio = instante.getYear();
+      const horas = instante.getHours();
+      const minutos = String(instante.getMinutes()).padStart(2, "0");
+      const ampm = horas >= 12 ? "PM" : "AM";
+      const hh = horas % 12 || 12;
+      nodo.textContent = `Inicio: ${dia}/${mes}/${anio} ${hh}:${minutos} ${ampm}`;
+    } catch (error) {
+      nodo.textContent = "";
+    }
   }
 
   function pintarCorridas() {

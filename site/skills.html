@@ -91,6 +91,70 @@ body {
 .button.primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 
+/* ----- pestanas ----- */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  margin: 0 0 14px;
+  border-bottom: 2px solid var(--line);
+}
+.tab-button {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: color, border-color 0.12s linear;
+}
+.tab-button:hover { color: var(--text); border-bottom-color: var(--line-strong); }
+.tab-button.active {
+  color: var(--teal);
+  border-bottom-color: var(--teal);
+  font-weight: 700;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ----- reporte tiempos de piso ----- */
+.reporte-filtros {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.reporte-filtros label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.reporte-filtros input {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
+}
+.reporte-filtros input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.reporte-acciones {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reporte-tabla-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+}
+.reporte-tabla-wrap table { width: 100%; min-width: 900px; font-size: 11px; }
+.reporte-tabla-wrap th { font-size: 10px; }
+.reporte-vacio { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
+
 .matrix-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -471,22 +535,45 @@ tr:last-child td { border-bottom: 0; }
       </div>
     </header>
 
-    <div class="matrix-toolbar">
-      <div class="matrix-search">
-        <input id="matrixSearchInput" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" autocomplete="off">
-        <output id="matrixSearchCount" aria-live="polite"></output>
-        <button id="clearMatrixSearchBtn" class="button" type="button" disabled>Limpiar</button>
+    <nav class="tab-bar" id="tabBar" role="tablist">
+      <button class="tab-button active" id="tabMatrixBtn" data-tab="matrix" role="tab" aria-selected="true">Matriz de habilidades</button>
+      <button class="tab-button" id="tabReporteBtn" data-tab="reporte" role="tab" aria-selected="false">Tiempos de piso</button>
+    </nav>
+
+    <div id="tab-matrix" class="tab-content active" role="tabpanel">
+      <div class="matrix-toolbar">
+        <div class="matrix-search">
+          <input id="matrixSearchInput" type="search" placeholder="Buscar operación o CT…" aria-label="Buscar operación o CT" autocomplete="off">
+          <output id="matrixSearchCount" aria-live="polite"></output>
+          <button id="clearMatrixSearchBtn" class="button" type="button" disabled>Limpiar</button>
+        </div>
+        <div class="matrix-legend" aria-label="Leyenda">
+          <span><span class="swatch swatch-no-operator"></span>Sin operador habilitado</span>
+          <span><span class="swatch swatch-excluded"></span>Excluida del plan</span>
+        </div>
       </div>
-      <div class="matrix-legend" aria-label="Leyenda">
-        <span><span class="swatch swatch-no-operator"></span>Sin operador habilitado</span>
-        <span><span class="swatch swatch-excluded"></span>Excluida del plan</span>
+
+      <div id="matrixChips" class="matrix-chips" aria-live="polite"></div>
+
+      <div id="matrixWrap" class="matrix-wrap">
+        <div class="matrix-loading">Cargando operadores, operaciones y habilidades…</div>
       </div>
     </div>
 
-    <div id="matrixChips" class="matrix-chips" aria-live="polite"></div>
+    <div id="tab-reporte" class="tab-content" role="tabpanel" aria-label="Tiempos de piso">
+      <div class="reporte-filtros">
+        <label>Desde <input type="date" id="repDesde" value=""></label>
+        <label>Hasta <input type="date" id="repHasta" value=""></label>
+        <label>OT <input type="text" id="repOt" placeholder="Todas" style="width:120px"></label>
+        <div class="reporte-acciones">
+          <button id="repConsultar" class="button primary" type="button">Consultar</button>
+          <button id="repDescargar" class="button" type="button" disabled>Descargar CSV</button>
+        </div>
+      </div>
 
-    <div id="matrixWrap" class="matrix-wrap">
-      <div class="matrix-loading">Cargando operadores, operaciones y habilidades…</div>
+      <div id="reporteWrap" class="reporte-tabla-wrap" aria-live="polite">
+        <p class="reporte-vacio" id="reporteVacio">Selecciona un rango y presiona Consultar para ver los registros de tiempos de piso.</p>
+      </div>
     </div>
   </main>
 
@@ -11560,6 +11647,135 @@ window.addEventListener("beforeunload", (event) => {
 
 cacheHydrated = hydrateSkillsCache();
 void loadState({ silent: cacheHydrated });
+
+/* ---- cambio de pestaña ---- */
+function activarPestana(id) {
+  document.querySelectorAll(".tab-button").forEach((b) => {
+    const act = b.dataset.tab === id;
+    b.className = act ? "tab-button active" : "tab-button";
+    b.setAttribute("aria-selected", act ? "true" : "false");
+  });
+  document.querySelectorAll(".tab-content").forEach((c) => {
+    c.className = c.id === "tab-" + id ? "tab-content active" : "tab-content";
+  });
+}
+document.getElementById("tabMatrixBtn").addEventListener("click", () => activarPestana("matrix"));
+document.getElementById("tabReporteBtn").addEventListener("click", () => activarPestana("reporte"));
+
+/* ---- reporte tiempos de piso ---- */
+function hoyLocalISO() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+function haceDias(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
+var ultimosRegistros = [];
+
+function consultarReporte() {
+  const desde = document.getElementById("repDesde").value || haceDias(30);
+  const hasta = document.getElementById("repHasta").value || hoyLocalISO();
+  const ot = document.getElementById("repOt").value.trim();
+  const cfg = window.PPSupabaseReader?.config?.();
+  if (!cfg || !cfg.configured) {
+    document.getElementById("reporteWrap").innerHTML = '<p class="reporte-vacio" style="color:var(--red)">Sin conexi&oacute;n con la base de datos. Recarga la p&aacute;gina.</p>';
+    return;
+  }
+  const boton = document.getElementById("repConsultar");
+  const descargar = document.getElementById("repDescargar");
+  boton.disabled = true;
+  boton.textContent = "Consultando…";
+  document.getElementById("reporteWrap").innerHTML = '<p class="reporte-vacio">Consultando…</p>';
+  fetch(cfg.url + "/rest/v1/rpc/prdtiempo_listar", {
+    method: "POST",
+    headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ p_desde: desde, p_hasta: hasta, p_ot: ot }),
+    cache: "no-store",
+  }).then((r) => r.json()).then((j) => {
+    if (!j.ok) { throw new Error(j.motivo || "Error del servidor"); }
+    ultimosRegistros = Array.isArray(j.registros) ? j.registros : [];
+    pintarTabla(ultimosRegistros);
+    descargar.disabled = ultimosRegistros.length === 0;
+  }).catch((e) => {
+    document.getElementById("reporteWrap").innerHTML = '<p class="reporte-vacio" style="color:var(--red)">Error: ' + e.message + '. Intenta otra vez.</p>';
+    descargar.disabled = true;
+  }).finally(() => {
+    boton.disabled = false;
+    boton.textContent = "Consultar";
+  });
+}
+
+function formatearFecha(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    const dia = String(d.getDate()).padStart(2,"0");
+    const mes = String(d.getMonth()+1).padStart(2,"0");
+    const anio = d.getFullYear();
+    const h = d.getHours();
+    const m = String(d.getMinutes()).padStart(2,"0");
+    return dia + "/" + mes + "/" + anio + " " + (h % 12 || 12) + ":" + m + (h >= 12 ? "PM" : "AM");
+  } catch (e) { return iso; }
+}
+
+function pintarTabla(rows) {
+  const cont = document.getElementById("reporteWrap");
+  if (!rows.length) {
+    cont.innerHTML = '<p class="reporte-vacio">No hay registros en ese rango.</p>';
+    return;
+  }
+  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Inicio", "Fin", "Piezas", "Ciclo", "Objetivo", "Desv.", "Estatus"];
+  let h = '<div class="reporte-tabla-wrap"><table><thead><tr>';
+  cabeceras.forEach((c) => { h += "<th>" + c + "</th>"; });
+  h += "</tr></thead><tbody>";
+  rows.forEach((r) => {
+    const dif = r.tiempo_ciclo_min && r.ciclo_objetivo_min ? Math.round(((r.tiempo_ciclo_min - r.ciclo_objetivo_min) / r.ciclo_objetivo_min) * 100) + "%" : "—";
+    h += "<tr>"
+      + "<td>" + (r.ot || "—") + "</td>"
+      + "<td>" + (r.articulo || "—") + "</td>"
+      + "<td>" + (r.articulo_descripcion || "—") + "</td>"
+      + "<td>" + (r.operacion_secuencia || "") + " " + (r.operacion_descripcion || "—") + "</td>"
+      + "<td>" + formatearFecha(r.hora_inicio) + "</td>"
+      + "<td>" + formatearFecha(r.hora_fin) + "</td>"
+      + "<td>" + (r.cantidad || "—") + "</td>"
+      + "<td>" + (r.tiempo_ciclo_min || "—") + "</td>"
+      + "<td>" + (r.ciclo_objetivo_min || "—") + "</td>"
+      + "<td>" + dif + "</td>"
+      + "<td>" + (r.estatus || "—") + "</td>"
+      + "</tr>";
+  });
+  h += "</tbody></table><p style='padding:6px 12px;margin:0;color:var(--muted);font-size:11px'>" + rows.length + " registros</p></div>";
+  cont.innerHTML = h;
+}
+
+function descargarCSV() {
+  if (!ultimosRegistros.length) return;
+  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Inicio", "Fin", "Piezas", "Ciclo min/pza", "Objetivo min/pza", "Desviación", "Estatus", "Máquina", "Dispositivo"];
+  const escape = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  let csv = cabeceras.join(",") + "\r\n";
+  ultimosRegistros.forEach((r) => {
+    const dif = r.tiempo_ciclo_min && r.ciclo_objetivo_min ? Math.round(((r.tiempo_ciclo_min - r.ciclo_objetivo_min) / r.ciclo_objetivo_min) * 100) + "%" : "";
+    csv += escape(r.ot) + "," + escape(r.articulo) + "," + escape(r.articulo_descripcion) + ","
+      + escape(r.operacion_descripcion) + "," + formatearFecha(r.hora_inicio) + "," + formatearFecha(r.hora_fin) + ","
+      + (r.cantidad || "") + "," + (r.tiempo_ciclo_min || "") + "," + (r.ciclo_objetivo_min || "") + "," + dif + ","
+      + (r.estatus || "") + "," + escape(r.maquina) + "," + escape(r.dispositivo) + "\r\n";
+  });
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "prdtiempo_" + hoyLocalISO() + ".csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById("repConsultar").addEventListener("click", consultarReporte);
+document.getElementById("repDescargar").addEventListener("click", descargarCSV);
+// Ponemos las fechas por defecto al cargar
+document.getElementById("repDesde").value = haceDias(7);
+document.getElementById("repHasta").value = hoyLocalISO();
   </script>
 </body>
 </html>

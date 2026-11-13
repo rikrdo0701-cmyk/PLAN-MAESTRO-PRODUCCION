@@ -494,6 +494,73 @@ revoke all on function public.prdtiempo_finalizar(uuid, integer, timestamptz) fr
 grant execute on function public.prdtiempo_finalizar(uuid, integer, timestamptz) to anon, authenticated;
 
 -- -----------------------------------------------------------------------------
+-- 7b. RPC DE REPORTE: prdtiempo_listar
+--
+-- Devuelve las corridas registradas en un rango de fechas, opcionalmente filtradas
+-- por OT. La pagina skills.html la llama para mostrar y descargar el reporte.
+create or replace function public.prdtiempo_listar(
+  p_desde date default current_date - interval '7 days',
+  p_hasta date default current_date,
+  p_ot text default ''
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  v_result jsonb;
+begin
+  if p_desde > p_hasta then
+    return jsonb_build_object('ok', false, 'motivo', 'rango_invalido');
+  end if;
+
+  select coalesce(jsonb_agg(
+    row_to_json(r) order by r.hora_inicio desc
+  ), '[]'::jsonb)
+  into v_result
+  from (
+    select
+      id,
+      ot,
+      articulo,
+      articulo_descripcion,
+      cantidad_ot,
+      operacion_id,
+      operacion_secuencia,
+      operacion_descripcion,
+      maquina,
+      hora_inicio,
+      hora_fin,
+      cantidad,
+      tiempo_ciclo_min,
+      ciclo_objetivo_min,
+      dispositivo,
+      -- Ya que estamos calculamos la diferencia en minutos por pieza para que la
+      -- pagina no tenga que repetir la formula.
+      case
+        when hora_fin is not null and hora_inicio is not null and cantidad > 0
+          then round((extract(epoch from hora_fin - hora_inicio) / 60 / cantidad)::numeric, 2)
+        else null
+      end as tiempo_ciclo_min_calc,
+      -- El estatus de la corrida: abierta o cerrada.
+      case when hora_fin is null then 'abierta' else 'cerrada' end as estatus
+    from prdtiempo_registros
+    where hora_inicio >= p_desde::timestamptz
+      and hora_inicio < (p_hasta + 1)::timestamptz
+      and (p_ot = '' or ot = p_ot)
+    order by hora_inicio desc
+    limit 5000
+  ) r;
+
+  return jsonb_build_object('ok', true, 'registros', v_result);
+end;
+$fn$;
+
+revoke all on function public.prdtiempo_listar(date, date, text) from public;
+grant execute on function public.prdtiempo_listar(date, date, text) to anon, authenticated;
+
+-- -----------------------------------------------------------------------------
 -- 8. LO QUE ESTE ARCHIVO NO HACE, DICHO.
 --
 -- No toca `operations` ni `work_orders`: siguen siendo de la ingesta de NetSuite.
