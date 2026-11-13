@@ -1261,6 +1261,7 @@ test("la pagina de piso sale montada, con manifiesto, iconos y su ruta en el ser
   assert.match(estilos, /\.pantalla-hoja\s*\{[^}]*background:\s*var\(--fondo\)/, "la hoja de datos tiene que tapar el video");
   assert.doesNotMatch(estilos, /backdrop-filter/, "la hoja ya no es translucida: se lee el dato, no el video");
   assert.match(estilos, /\.hoja\s*\{[^}]*flex:\s*1 1 auto/, "la hoja tiene que ocupar la pantalla, no una tarjeta al pie");
+  assert.doesNotMatch(estilos, /\.hoja\s*\{[^}]*max-width/, "sin max-width: en tablet el contenido se extiende al borde");
   assert.match(estilos, /\.hoja > \*\s*\{[^}]*flex:\s*0 0 auto/, "con el aviso de cantidad los bloques se aplastaban en vez de desplazarse");
   assert.match(estilos, /\.ot\s*\{[^}]*font-size:\s*clamp\(/, "el numero de OT tiene que crecer con la pantalla");
   assert.match(estilos, /\.datos dd\s*\{[^}]*font-size:\s*clamp\(/, "los datos tienen que crecer con la pantalla");

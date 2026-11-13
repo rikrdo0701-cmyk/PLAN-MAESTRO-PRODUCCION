@@ -62,6 +62,8 @@ avisa y la página se queda en la cámara: no hay captura manual del folio.
    (`flex: 1 1 auto; grid-auto-rows: minmax(0, 1fr)`) y las filas se distribuyen; en
    finalizar el espacio libre lo toma el campo de piezas (lo único que se teclea — un campo
    alto se acierta con el pulgar). El marco de escaneo también crece.
+   **Sin límite de ancho**: en una tablet o en horizontal el contenido se extiende al borde
+   (la hoja ya no tiene `max-width`).
 
 ## Archivos
 
