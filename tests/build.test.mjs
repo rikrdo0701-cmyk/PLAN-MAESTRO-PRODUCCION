@@ -1271,6 +1271,7 @@ test("la pagina de piso sale montada, con manifiesto, iconos y su ruta en el ser
   assert.match(estilos, /#pantalla-verificar \.datos\s*\{[^}]*grid-auto-rows:\s*minmax\(0, 1fr\)/, "las tres filas del dato se reparten a lo alto");
   assert.match(estilos, /#pantalla-finalizar \.cantidad\s*\{[^}]*flex:\s*1 1 auto/, "el campo de piezas ocupa el alto que sobra en su pantalla");
   assert.match(estilos, /\.acciones\s*\{[^}]*position:\s*sticky/, "los botones se quedan al alcance aunque la lista no quepa");
+  assert.match(estilos, /\.boton\s*\{[^}]*min-height:\s*clamp\(76px/, "botones de 76px minimo: la vista reducida los necesita mas grandes");
 });
 
 test("un import o cache stale no pisa un borrador mas reciente; el restore de boot respeta frescura", async () => {
