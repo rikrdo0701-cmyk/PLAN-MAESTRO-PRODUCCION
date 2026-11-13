@@ -11727,7 +11727,7 @@ function fechaCorta(iso) {
 }
 function horaCorta(iso) {
   if (!iso) return "—";
-  try { const d = new Date(iso); const h = d.getHours(); return (h % 12 || 12) + ":" + String(d.getMinutes()).padStart(2,"0") + (h >= 12 ? "PM" : "AM"); }
+  try { const d = new Date(iso); const h = d.getHours(); return (h % 12 || 12) + ":" + String(d.getMinutes()).padStart(2,"0") + ":" + String(d.getSeconds()).padStart(2,"0") + (h >= 12 ? "PM" : "AM"); }
   catch (e) { return iso; }
 }
 
