@@ -383,6 +383,7 @@ test("el bundle montado NO hace ninguna llamada al puente de Apps Script", async
     path.join(result.siteDir, "index.html"),
     path.join(result.siteDir, "skills.html"),
     path.join(result.siteDir, "operator.html"),
+    path.join(result.siteDir, "prd.html"),
   ];
 
   for (const archivo of destinos) {
@@ -470,7 +471,7 @@ test("el puente no monta NINGUN iframe: no se descarga el script de Google", asy
 test("el build genera Apps Script y GitHub Pages", async () => {
   const result = await buildProject(SIN_PORTAPAPELES);
   assert.deepEqual(result.htmlFiles, ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"]);
-  assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"]);
+  assert.deepEqual(result.pagesFiles, ["index.html", "operator.html", "skills.html", "prd.html", "manifest.webmanifest", "prd.webmanifest", "prd-icon-192.png", "prd-icon-512.png", "sw.js"]);
   const index = await readFile(path.join(result.distDir, "Index.html"), "utf8");
   const performanceService = await readFile(path.join(result.distDir, "15-performance-service.js"), "utf8");
   const inspectionService = await readFile(path.join(result.distDir, "16-inspection-service.js"), "utf8");
@@ -1200,6 +1201,56 @@ assert.match(snapshotsLoad, /renderReports\(\);/);
   assert.match(pagesIndex, /Sincronizando operaciones/);
   assert.match(performanceService, /selectedOts: Array\.isArray\(config\.selectedOts\) \? config\.selectedOts : \[\]/);
   assert.match(storageService, /BORRADOR_PLAN/);
+});
+
+// /prd.html SE PUBLICA COMO PAGINA PROPIA, y esta prueba mira el archivo MONTADO, no las
+// fuentes. Lo que se rompe sin hacer ruido es: un marcador que queda sin reemplazar (la
+// pagina abre pero sin estilos o sin credencial), un manifiesto que apunta a un icono que
+// no existe (Android no ofrece instalarla y no dice por que), o la ruta del service worker
+// que contesta index.html cuando se pide la pagina de piso (sin senal, el telefono abre la
+// pagina de planeacion y la camara nunca arranca).
+test("la pagina de piso sale montada, con manifiesto, iconos y su ruta en el service worker", async () => {
+  const result = await buildProject(SIN_PORTAPAPELES);
+  const prd = await readFile(path.join(result.siteDir, "prd.html"), "utf8");
+  const manifest = JSON.parse(await readFile(path.join(result.siteDir, "prd.webmanifest"), "utf8"));
+  const serviceWorker = await readFile(path.join(result.siteDir, "sw.js"), "utf8");
+
+  // No viaja a Apps Script: sus tres funciones viven en Supabase y alli no hay tabla
+  // `operations` ni `work_orders` que consultar por el puente.
+  assert.equal(result.htmlFiles.includes("prd.html"), false);
+  assert.equal(result.pagesFiles.includes("prd.html"), true);
+
+  assert.match(prd, /<title>Tiempos de piso<\/title>/);
+  assert.match(prd, /<link rel="manifest" href="\.\/prd\.webmanifest" \/>/);
+  assert.match(prd, /PrdCore/);
+  assert.match(prd, /BarcodeDetector/);
+  assert.match(prd, /"code_128"/);
+  // Las tres llamadas, por nombre. Si una se escribe distinto, PostgREST contesta 404 y en
+  // el telefono se ve igual que "no hay red".
+  for (const rpc of ["prdtiempo_escanear", "prdtiempo_iniciar", "prdtiempo_finalizar"]) {
+    assert.match(prd, new RegExp('rpc\\("' + rpc + '",'), `prd.html no llama a ${rpc}`);
+  }
+  // La pagina se abre sin sesion: no monta los clientes de la aplicacion de planeacion.
+  assert.doesNotMatch(prd, /PPSupabaseReader|PPSupabaseAuth|PPSupabaseWriter/);
+  assert.doesNotMatch(prd, /{{[A-Z0-9_]+}}|__PP_SUPABASE_(URL|ANON_KEY)__/);
+  assert.match(prd, /serviceWorker\.register\("\.\/sw\.js"\)/);
+
+  assert.equal(manifest.start_url, "./prd.html");
+  assert.equal(manifest.display, "standalone");
+  assert.equal(manifest.icons.length, 2);
+  const tamanos = manifest.icons.map((icono) => icono.sizes).sort();
+  assert.deepEqual(tamanos, ["192x192", "512x512"]);
+  for (const icono of manifest.icons) {
+    // El archivo tiene que existir y ser un PNG del tamano que el manifiesto declara: un
+    // icono que falta o que mide otra cosa hace que Chrome no ofrezca instalar la pagina.
+    const bytes = await readFile(path.join(result.siteDir, path.basename(icono.src)));
+    assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG", `${icono.src} no es un PNG`);
+    assert.equal(bytes.readUInt32BE(16), Number(icono.sizes.split("x")[0]), `${icono.src} mide otra cosa que la declarada`);
+    assert.equal(bytes.readUInt32BE(20), Number(icono.sizes.split("x")[1]));
+  }
+
+  assert.match(serviceWorker, /"\.\/prd\.html"/, "el service worker no guarda la pagina de piso en el shell");
+  assert.match(serviceWorker, /endsWith\("\/prd\.html"\) \? "\.\/prd\.html" : "\.\/index\.html"/, "la navegacion sin red tiene que devolver la pagina que se pidio, no index.html");
 });
 
 test("un import o cache stale no pisa un borrador mas reciente; el restore de boot respeta frescura", async () => {
@@ -3619,6 +3670,7 @@ test("el bundle sale con la credencial del portapapeles en los TRES modulos que 
       path.join(result.distDir, "Index.html"),
       path.join(result.siteDir, "index.html"),
       path.join(result.siteDir, "skills.html"),
+      path.join(result.siteDir, "prd.html"),
       path.join(result.siteDir, "operator.html"),
     ];
     // MEDIDO 2026-10-07: TRES de esos cuatro archivos montan los clientes. `skills.html`
@@ -3644,6 +3696,15 @@ test("el bundle sale con la credencial del portapapeles en los TRES modulos que 
       assert.equal(urls.length, 3, `${path.basename(archivo)}: la URL debe aparecer en lector, auth y escritor (3 veces), aparecio ${urls.length}`);
       assert.equal(claves.length, 3, `${path.basename(archivo)}: la clave debe aparecer en lector, auth y escritor (3 veces), aparecio ${claves.length}`);
       assert.doesNotMatch(txt, /__PP_SUPABASE_(URL|ANON_KEY)__/);
+    }
+    // La pagina de piso NO monta los clientes: habla por RPC y lleva la credencial UNA
+    // vez. Se afirma el conteo para que nadie la "arregle" montandole el lector: ahi no
+    // hay sesion ni tabla que leer, solo tres funciones.
+    {
+      const txt = await readFile(path.join(result.siteDir, "prd.html"), "utf8");
+      assert.equal((txt.match(/https:\/\/xtgtfjcwxcoxvixholpj\.supabase\.co/g) || []).length, 1, "prd.html debe llevar la URL una sola vez");
+      assert.equal((txt.match(/sb_publishable_abcdef0123456789abcdef/g) || []).length, 1, "prd.html debe llevar la clave una sola vez");
+      assert.doesNotMatch(txt, /PPSupabaseReader|PPSupabaseAuth|PPSupabaseWriter/);
     }
     // catalog-boot tiene que seguir TOMANDO la config del lector. Si algum dia le ponen su
     // propio marcador, el conteo de arriba no lo nota, pero esta linea si: seria una quinta

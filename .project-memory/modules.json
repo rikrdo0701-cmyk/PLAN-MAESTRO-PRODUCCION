@@ -253,7 +253,37 @@
         "SHEET-HISTORIAL_IMPRESION_INSPEC"
       ],
       "updated_at": "2026-10-01"
+    },
+    {
+      "module_id": "MODULE-PRD",
+      "path": "src/web/prd",
+      "files_sample": [
+        "src/web/prd/index.template.html",
+        "src/web/prd/prd.css",
+        "src/web/prd/prd-core.js",
+        "src/web/prd/prd-app.js",
+        "docs/schema-prdtiempo.sql",
+        "tests/prd-core.test.mjs",
+        "tests/ddl-prdtiempo.test.mjs",
+        "tests/build.test.mjs"
+      ],
+      "purpose": "Pagina de piso /prd.html (telefono Android con Chrome, instalable como PWA): lee el codigo Code 128 de la OT con la camara (BarcodeDetector nativo, sin librerias), muestra OT/articulo/descripcion/cantidad, pide la operacion, registra inicio y fin en Supabase por tres RPC (prdtiempo_escanear/iniciar/finalizar) y ensena el ciclo por pieza EN VIVO con semaforo contra operations.tiempo_ciclo. Una sola pagina con tres pantallas y el video siempre encendido (solo se pausa el reconocimiento); sin sesion y sin captura manual de la OT. prd-core.js es la logica pura (probada sin navegador) y prd-app.js lo que toca camara, DOM y red. El build arma site/prd.html, site/prd.webmanifest y los iconos; no viaja a dist/ (Apps Script).",
+      "rules": [
+        "RULE-PRD-001",
+        "RULE-PRD-002",
+        "RULE-PRD-003",
+        "RULE-PRD-004",
+        "RULE-PRD-005",
+        "RULE-PRD-006",
+        "RULE-PRD-007",
+        "RULE-PRD-008"
+      ],
+      "data_sources": [
+        "SUPABASE-TABLE-PRDTIEMPO-REGISTROS",
+        "SUPABASE-RPC-PRDTIEMPO"
+      ],
+      "updated_at": "2026-11-12"
     }
   ],
-  "updated_at": "2026-10-01T21:00:00-06:00"
+  "updated_at": "2026-11-12T00:00:00-06:00"
 }

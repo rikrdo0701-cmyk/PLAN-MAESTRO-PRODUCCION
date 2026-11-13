@@ -825,6 +825,43 @@ Detalle del arranque en vivo en `docs/integrations/netsuite-supabase-sync.md`.
 
 ---
 
+## Tiempos de piso — `prdtiempo_registros` (2026-11-12)
+
+Tabla propia de la captura de tiempos del piso (`/prd.html`), **no** una columna de
+`operations`: esa tabla la borra e inserta la ingesta de NetSuite y el dato se perdería en la
+siguiente sincronización (RULE-PRD-001).
+
+- **Origen exacto**: proyecto `xtgtfjcwxcoxvixholpj`, schema `public`, tabla
+  `prdtiempo_registros`. DDL canónico `docs/schema-prdtiempo.sql`, aplicado a producción el
+  2026-11-12 con `scripts/aplicar-ddl.mjs` (24/24 sentencias, dos veces, idempotente).
+- **Columnas (17)**: `id` uuid pk; `ot` text (solo dígitos, 1-20); `articulo`,
+  `articulo_descripcion`; `cantidad_ot`; `operacion_id` (id estable `ns-<id>`),
+  `operacion_secuencia`, `operacion_descripcion`, `maquina`; `ciclo_objetivo_min` (copia de
+  `operations.tiempo_ciclo` al iniciar); `hora_inicio` (hora del **teléfono**); `hora_fin`
+  (NULL = corrida abierta); `cantidad` (piezas de **esta** corrida); `tiempo_ciclo_min`
+  (min/pza); `dispositivo` (uuid aleatorio del teléfono, **no** identifica a la persona);
+  `created_at`, `updated_at` (trigger `pp_set_updated_at`).
+- **Restricciones**: `cantidad is null or cantidad > 0`; `hora_fin is null or hora_fin >=
+  hora_inicio`; `tiempo_ciclo_min is null or >= 0`; `ot ~ '^[0-9]{1,20}$'`.
+- **Índices**: `prdtiempo_abierta_unica` UNIQUE **parcial** `(ot, operacion_id) where hora_fin
+  is null` (una sola corrida abierta por par); `prdtiempo_ot_idx` `(ot, hora_inicio desc)`.
+- **Lectores**: solo las funciones `SECURITY DEFINER` de la misma migración (`SELECT` dentro
+  de `prdtiempo_escanear` y del reintento de iniciar/finalizar). Ninguna página lee la tabla:
+  RLS activo con **cero** políticas y grants de tabla revocados (`anon`/`authenticated`); la
+  Data API responde 401 (medido 2026-11-12 con la clave publishable).
+- **Escritores**: **un solo escritor**, `prdtiempo_iniciar` (INSERT) y `prdtiempo_finalizar`
+  (UPDATE). No está en `public.ingesta_mirror_whitelist`: el espejo la borraría.
+- **RPC asociadas**: `prdtiempo_escanear(text)`, `prdtiempo_iniciar(text,text,timestamptz,text)`
+  y `prdtiempo_finalizar(uuid,integer,timestamptz)`, `execute` para `anon` y `authenticated`,
+  `revoke all ... from public`; la auxiliar `prdtiempo_estatus_cerrado(text)` sin ningún
+  grant. Contrato de salida y motivos en `.project-memory/data-sources.json`
+  `SUPABASE-RPC-PRDTIEMPO`.
+- **Reglas**: RULE-PRD-001 a RULE-PRD-008.
+- **Registros estructurados**: `.project-memory/data-sources.json`
+  `SUPABASE-TABLE-PRDTIEMPO-REGISTROS` y `SUPABASE-RPC-PRDTIEMPO`.
+
+---
+
 # Conflictos y pendientes (documentados, sin corregir)
 
 1. `Operaciones Programadas` vs `Operaciones programadas` (mayúscula en la "p").

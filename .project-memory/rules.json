@@ -3055,6 +3055,70 @@
         "src/web/planning/index.template.html",
         "tests/faltantes.test.mjs"
       ]
+    },
+    {
+      "rule_id": "RULE-PRD-001",
+      "name": "La captura de tiempos del piso vive en su propia tabla y su propio escritor: NO en operations ni en work_orders",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "DECISION DEL USUARIO (2026-11-11/12): registrar el inicio y el fin de una operacion desde el telefono del piso, leyendo el codigo Code 128 de la OT con la camara. El registro NO se guarda en `operations` ni en `work_orders`: esas tablas las escribe la ingesta de NetSuite (RESTlet 2246, cada 15 minutos) y `public.ingesta_mirror` BORRA e INSERTA la tabla entera, asi que cualquier dato capturado ahi se pierde en la siguiente sincronizacion. Tabla propia `public.prdtiempo_registros` (DDL canonico `docs/schema-prdtiempo.sql`, aplicado a produccion el 2026-11-12 con `scripts/aplicar-ddl.mjs`: 24/24 sentencias, dos veces, idempotente). Una fila por CORRIDA, no por OT: la misma OT puede tener dos operaciones abiertas a la vez (dos maquinas, dos personas). El registro guarda `operacion_id`, `operacion_secuencia` y `cantidad` para que una etapa posterior pueda marcar la operacion como completada en el plan sin volver a capturar nada; en esta etapa el plan NO se toca. La tabla NO esta en `public.ingesta_mirror_whitelist` a proposito: el espejo la borraria. Fuente: `docs/schema-prdtiempo.sql:1-50,496-510`."
+    },
+    {
+      "rule_id": "RULE-PRD-002",
+      "name": "La tabla de tiempos no se expone: RLS sin politicas, grants de tabla revocados y solo tres RPC SECURITY DEFINER para anon",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "DECISION DEL USUARIO 2026-11-11 (todavia sin login): la pagina escribe con la clave publishable que viaja en el bundle publico. Si la tabla tuviera una politica para `anon`, cualquiera con el enlace podria leer y escribir CUALQUIER fila, incluido borrar. Por eso: `alter table ... enable row level security` con CERO politicas, `revoke all ... from anon, authenticated`, y el unico camino son tres funciones `security definer` con `set search_path = public, pg_temp`: `prdtiempo_escanear(text)`, `prdtiempo_iniciar(text,text,timestamptz,text)` y `prdtiempo_finalizar(uuid,integer,timestamptz)`, con `execute` para `anon` y `authenticated` y `revoke ... from public`. La funcion auxiliar `prdtiempo_estatus_cerrado(text)` NO se concede: MEDIDO 2026-11-11, Supabase deja privilegios por omision sobre funciones de `public` y `revoke ... from public` no los quita; sin las dos lineas explicitas salia con `anon=X` en su ACL. Verificado en vivo el 2026-11-12 con la clave publishable: lectura directa de la tabla -> 401, RLS activo con 0 politicas, 17 columnas, indice unico parcial presente. CONSECUENCIA DECLARADA, no un olvido: el enlace es publico, asi que quien lo abra puede iniciar o finalizar corridas de OTs reales. Las funciones acotan el dano (solo OTs existentes, sin borrados, una corrida abierta por par y una operacion que debe pertenecer a la OT) pero NO identifican a la persona; eso lo cierra la etapa del login por codigo de barras. La pagina NO monta los clientes de la aplicacion (auth, lector, escritor): habla solo por esas tres funciones. Fuente: `docs/schema-prdtiempo.sql:17-27,132-181,279-280,388-389,493-494`; `tests/ddl-prdtiempo.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-003",
+      "name": "Una sola corrida abierta por OT + operacion, e iniciar es idempotente",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "El indice unico PARCIAL `prdtiempo_abierta_unica on public.prdtiempo_registros (ot, operacion_id) where hora_fin is null` permite una corrida abierta por par y deja iniciar otra cuando la anterior ya se finalizo (retrabajo o segunda tanda: decision del usuario). `prdtiempo_iniciar` inserta con `on conflict (ot, operacion_id) where hora_fin is null do nothing`; si el conflicto ocurre, selecciona y devuelve la fila ya abierta con `ya_iniciada: true`, sin crear una segunda fila ni cambiar la hora de inicio. Caso real que lo motiva: dos telefonos escanean la misma OT y eligen la misma operacion casi al mismo tiempo. La operacion TIENE que pertenecer a la OT (se busca en `operations` por `ot` + `operation_id`); si no, `operacion_invalida`, o sea que no se puede iniciar una operacion de otra orden escribiendo el id a mano. `prdtiempo_finalizar` se guarda con `where id = p_id and hora_fin is null`: si otro telefono cerro la corrida entre el select y el update, devuelve `ya_finalizada` con los datos del primero y no sobrescribe nada. Fuente: `docs/schema-prdtiempo.sql:115-130,282-389,391-494`; `tests/ddl-prdtiempo.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-004",
+      "name": "La hora de la corrida es la del telefono y viaja como instante ISO; no se guarda una copia de la hora del servidor",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "DECISION DEL USUARIO: el telefono es el reloj. `prd-core.js` arma `p_hora_inicio` / `p_hora_fin` con `new Date().toISOString()` (instante con zona, nunca hora de pared recortada) y la base las recibe como `timestamptz`; el ciclo sale de la DIFERENCIA de instantes, no de la hora que se muestra en pantalla. La fila no guarda una hora del servidor, pero `prdtiempo_escanear` devuelve `servidor_ahora` para que la pagina pueda avisar de un reloj desfasado sin cambiar el esquema. Un reloj mal puesto produce un ciclo falso y la base no puede detectarlo: por eso el dato viaja con zona y la validacion unica es `hora_fin >= hora_inicio` (constraint `prdtiempo_fin_coherente`, y `hora_invalida` si el fin es anterior al inicio). Fuente: `src/web/prd/prd-core.js` (`horaISO`, `cuerpoIniciar`, `cuerpoFinalizar`); `docs/schema-prdtiempo.sql:29-32,74-77,87-95,107-113`; `tests/prd-core.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-005",
+      "name": "El ciclo por pieza y su semaforo: misma formula en la base y en la pagina, verde <= objetivo, ambar <= +10 %, rojo arriba, gris sin objetivo",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "CICLO: `round((hora_fin - hora_inicio) en segundos / 60 / cantidad, 2)` minutos por pieza. Se calcula en `prdtiempo_finalizar` y se guarda en `tiempo_ciclo_min`; la pagina usa LA MISMA formula (`cicloPorPiezaMin`) solo para ensenar el numero EN VIVO mientras se teclea la cantidad, y despues de guardar muestra el numero que devuelve la funcion, no el suyo (puede diferir en el ultimo centesimo por el redondeo de punto flotante). Caso medido contra produccion: 10 minutos y 4 piezas -> 2.50. OBJETIVO: `operations.tiempo_ciclo`, en MINUTOS POR PIEZA (el plan hace ciclo x piezas), copiado a `ciclo_objetivo_min` al iniciar (`nullif(...,0)`): se copia porque el catalogo puede cambiar y la corrida conserva contra que se comparo. SEMAFORO (decision del usuario): verde cuando el real es igual o menor al objetivo, ambar hasta 10 % arriba, rojo arriba de eso; gris con la leyenda 'sin ciclo de referencia' cuando el objetivo es 0 o null, en vez de comparar contra 0 y salir siempre rojo. El 10 % es deliberado: un 2 % arriba pintaria todo de rojo y el color dejaria de decir algo. Un ciclo que todavia no existe se pinta gris, no verde (`Number(null)` es 0 y saldria '0 min/pza', el mejor tiempo posible). Fuente: `docs/schema-prdtiempo.sql:70-73,80-81,451-454`; `src/web/prd/prd-core.js` (`cicloPorPiezaMin`, `colorCiclo`, `MARGEN_AMBAR`); `tests/prd-core.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-006",
+      "name": "La cantidad es entera y mayor que cero; pasarse de la cantidad de la OT avisa y NO bloquea",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "La cantidad es de ESTA corrida, no el acumulado de la OT (decision del usuario). Tiene que ser un entero mayor que cero: constraint `prdtiempo_cantidad_positiva check (cantidad is null or cantidad > 0)`, validacion explicita en `prdtiempo_finalizar` (`cantidad_invalida`) y en la pagina, que mantiene Finalizar deshabilitado hasta que el campo tenga un entero valido (`esCantidadValida`). DECISION DEL USUARIO: si la cantidad capturada supera la de la OT se AVISA ('Capturaste N piezas y la OT pide M. Se puede guardar igual.') y NO se bloquea ni se valida en la base: la merma, el retrabajo y las piezas extra existen, y frenar la captura obligaria a mentir. Fuente: `docs/schema-prdtiempo.sql:78-79,87-88,398-400,421-423`; `src/web/prd/prd-core.js` (`avisoCantidad`); `tests/prd-core.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-007",
+      "name": "Sin red no se guarda ni se encola, y sin camara no hay captura manual de la OT",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "DOS DECISIONES DEL USUARIO, las dos sobre no inventar datos. (1) OFFLINE: si `navigator.onLine === false` o la llamada falla, la pagina avisa 'Sin conexion. No se guardo nada.' y NO guarda nada en el telefono. La cola local es una etapa posterior y por eso todas las escrituras pasan por una sola funcion `rpc()` de `prd-app.js`: ahi se mete la cola sin tocar las pantallas. Lo unico que el service worker guarda es la PAGINA, para poder abrirla sin senal y leer la OT; guardar el registro no. (2) SIN CAMARA NO HAY TECLADO: si el navegador no trae `BarcodeDetector`, no soporta `code_128`, o el permiso de camara se niega, la pagina lo dice y NO ofrece escribir el folio a mano; una OT tecleada con prisa es una OT equivocada con los datos de otra orden. Requisito declarado: Chrome en Android (el lector nativo es de ese navegador). Fuente: `src/web/prd/prd-app.js` (`rpc`, `mensajeCamara`, `sinCamara`, `iniciarCamara`); `tests/prd-core.test.mjs`; `tests/build.test.mjs`."
+    },
+    {
+      "rule_id": "RULE-PRD-008",
+      "name": "La pagina de piso se publica como PWA propia y el service worker devuelve la pagina pedida, no siempre index.html",
+      "status": "implementada",
+      "domain": "tiempo-de-piso",
+      "updated_at": "2026-11-12",
+      "rule": "`/prd.html` se arma en el build desde `src/web/prd/` (plantilla + `prd.css` + `prd-core.js` + `prd-app.js`) y se escribe SOLO en `site/` (GitHub Pages), nunca en `dist/` (Apps Script): es una pagina independiente, sin sesion y sin los clientes de la aplicacion de planeacion, que lleva la URL y la clave publicable UNA vez cada una, no tres. Tiene manifiesto propio `site/prd.webmanifest` (`start_url: './prd.html'`, `display: standalone`, `orientation: portrait`, tema oscuro) con iconos PNG 192 y 512 generados en el build (`iconoPrdPng`, sin dependencias): Android exige al menos 192 px para ofrecer 'Instalar aplicacion' y un manifiesto sin ese icono se abre igual pero nunca se instala. El service worker incluye `./prd.html` y `./prd.webmanifest` en `APP_SHELL` y, en una navegacion, cachea y responde con LA PAGINA QUE SE PIDIO (`prd.html` o `index.html`): antes todo se guardaba como `./index.html` y abrir la pagina de piso sin senal entregaba la de planeacion, con lo que la camara nunca arrancaba y parecia que la pagina estaba rota. La pagina registra el service worker solo en `*.github.io` (en local un service worker viejo sirve la version anterior). Fuente: `scripts/build-appscript.mjs` (`iconoPrdPng`, montaje de `prd.html`, `APP_SHELL`, fallback de navegacion, `pagesFiles`); `src/web/prd/prd-app.js` (`registrarServiceWorker`); `tests/build.test.mjs`."
     }
   ]
 }

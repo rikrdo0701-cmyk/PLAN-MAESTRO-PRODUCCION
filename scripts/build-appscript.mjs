@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import { execFileSync } from "node:child_process";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -565,6 +566,104 @@ function patchPerformanceClient(performanceClient) {
   return unchangedPatched;
 }
 
+// EL ICONO DE LA PAGINA DE PISO SE GENERA AQUI, SIN DEPENDENCIAS.
+//
+// Por que un PNG y no un SVG con `sizes: "any"`: Android exige un icono de 192x192 como
+// minimo para ofrecer "Instalar aplicacion", y la comprobacion de Chrome mira el tamano
+// declarado, no lo que el archivo pueda escalar. Un manifiesto sin ese icono se abre
+// igual en el navegador pero NUNCA se instala, que es justo lo que se pidio. Se emite el
+// PNG de verdad (192 y 512) con zlib, que ya viene con Node.
+//
+// El dibujo es un codigo de barras: el mismo gesto que hace el operador al abrir la
+// pagina. Fondo del acento y barras oscuras para que se lea a 48 px en la pantalla de
+// inicio.
+const CRC_TABLA = (() => {
+  const tabla = new Int32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    tabla[n] = c;
+  }
+  return tabla;
+})();
+
+function crc32(buffer) {
+  let c = -1;
+  for (const byte of buffer) c = CRC_TABLA[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function bloquePng(tipo, datos) {
+  const largo = Buffer.alloc(4);
+  largo.writeUInt32BE(datos.length);
+  const cuerpo = Buffer.concat([Buffer.from(tipo, "ascii"), datos]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(cuerpo));
+  return Buffer.concat([largo, cuerpo, crc]);
+}
+
+function iconoPrdPng(tamano) {
+  // Anchos relativos de barra y espacio (modulos de un codigo de barras cualquiera).
+  // No codifican nada: es el dibujo, no un codigo que alguien vaya a leer.
+  const modulos = [3, 1, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 2, 1, 1, 3, 2, 1, 2, 1, 3];
+  const totalModulos = modulos.reduce((suma, m) => suma + m, 0);
+  const anchoBarras = tamano * 0.62;
+  const unidad = anchoBarras / totalModulos;
+  const x0 = (tamano - anchoBarras) / 2;
+  const y0 = Math.round(tamano * 0.3);
+  const y1 = Math.round(tamano * 0.7);
+
+  const fondo = [20, 184, 166, 255]; // --acento de prd.css
+  const tinta = [4, 33, 29, 255];
+  const fila = Buffer.alloc(1 + tamano * 4);
+  fila[0] = 0; // filtro "none" de PNG
+  for (let px = 0; px < tamano; px += 1) {
+    fila[1 + px * 4] = fondo[0];
+    fila[1 + px * 4 + 1] = fondo[1];
+    fila[1 + px * 4 + 2] = fondo[2];
+    fila[1 + px * 4 + 3] = fondo[3];
+  }
+
+  // La fila con barras se arma una sola vez: las barras son verticales, asi que todas
+  // las filas de en medio son la misma.
+  const filaBarras = Buffer.from(fila);
+  let cursor = 0;
+  for (let i = 0; i < modulos.length; i += 1) {
+    const desde = Math.round(x0 + unidad * cursor);
+    cursor += modulos[i];
+    const hasta = Math.round(x0 + unidad * cursor);
+    // Los modulos pares son barra; los impares, el espacio entre barras.
+    if (i % 2 !== 0) continue;
+    for (let px = Math.max(0, desde); px < Math.min(tamano, hasta); px += 1) {
+      filaBarras[1 + px * 4] = tinta[0];
+      filaBarras[1 + px * 4 + 1] = tinta[1];
+      filaBarras[1 + px * 4 + 2] = tinta[2];
+      filaBarras[1 + px * 4 + 3] = tinta[3];
+    }
+  }
+
+  const crudo = Buffer.alloc(fila.length * tamano);
+  for (let y = 0; y < tamano; y += 1) {
+    (y >= y0 && y < y1 ? filaBarras : fila).copy(crudo, y * fila.length);
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(tamano, 0);
+  ihdr.writeUInt32BE(tamano, 4);
+  ihdr[8] = 8; // 8 bits por canal
+  ihdr[9] = 6; // RGBA
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    bloquePng("IHDR", ihdr),
+    bloquePng("IDAT", deflateSync(crudo, { level: 9 })),
+    bloquePng("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 // MEDIDO 2026-10-02: `opciones.portapapeles` existe para que las pruebas no dependan del
 // portapapeles de quien las corre. Ver `resolverCredencialesSupabase`.
 export async function buildProject(opciones = {}) {
@@ -577,7 +676,7 @@ export async function buildProject(opciones = {}) {
     mkdir(siteDir, { recursive: true }),
   ]);
 
-  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw, supabaseBridgeReplacementRaw, ingestaTriggerRaw] = await Promise.all([
+  const [template, styles, bridgeSource, plannerCore, workflowCore, inspectionCore, appSource, inspectionApp, performanceClient, fluidClient, inspectionStyles, skillsSource, supabaseReaderRaw, supabaseAuthRaw, catalogBootRaw, catalogApplyRaw, supabaseWriterRaw, eventLogRaw, supabaseBridgeReplacementRaw, ingestaTriggerRaw, prdTemplate, prdStyles, prdCore, prdAppSource] = await Promise.all([
     read("src/web/planning/index.template.html"),
     read("src/web/planning/styles.css"),
     read("src/web/shared/apps-script-bridge-client.js"),
@@ -598,6 +697,10 @@ export async function buildProject(opciones = {}) {
     read("src/web/shared/supabase-event-log.js"),
     read("src/web/shared/supabase-bridge-replacement.js"),
     read("src/web/shared/apps-script-ingesta-trigger.js"),
+    read("src/web/prd/index.template.html"),
+    read("src/web/prd/prd.css"),
+    read("src/web/prd/prd-core.js"),
+    read("src/web/prd/prd-app.js"),
   ]);
   const backendBridge = bridgeSource.replace("__PP_APPS_SCRIPT_WEB_APP_URL__", appsScriptWebAppUrl);
   // La URL y la clave PUBLICABLE (cliente) de Supabase nunca estan en el repo. Se resuelven UNA sola
@@ -707,6 +810,25 @@ export async function buildProject(opciones = {}) {
   );
   const pagesBuildId = createHash("sha256").update(pagesIndex).digest("hex").slice(0, 12);
 
+  // ---- /prd.html: la pagina de piso, con sus propias credenciales y su manifiesto ----
+  //
+  // Es una pagina INDEPENDIENTE de index.html a proposito: se abre desde el icono del
+  // telefono, sin sesion y sin la aplicacion de planeacion cargada. Por eso no monta
+  // ninguno de los runtime clients (auth, reader, writer, puente): habla con Supabase
+  // por tres funciones RPC y nada mas. Lleva la URL y la clave UNA vez cada una, no tres.
+  //
+  // Los reemplazos usan funcion en vez de cadena: el JavaScript de la pagina trae
+  // secuencias con `$` y `String.replace` las interpretaria como patrones.
+  const prdHtml = prdTemplate
+    .replace("{{PRD_STYLES}}", () => prdStyles.trimEnd())
+    .replace("{{PRD_CORE}}", () => prdCore.trimEnd())
+    .replace("{{PRD_APP}}", () => prdAppSource.trimEnd())
+    .replaceAll("__PP_SUPABASE_URL__", () => supabaseUrl.valor)
+    .replaceAll("__PP_SUPABASE_ANON_KEY__", () => supabaseAnonKey.valor);
+  if (/{{[A-Z0-9_]+}}|__PP_SUPABASE_(URL|ANON_KEY)__/.test(prdHtml)) {
+    throw new Error("Quedaron marcadores sin reemplazar en src/web/prd/index.template.html");
+  }
+
   // ---- generar version.json para detección de actualizaciones ----
 await writeFile(path.join(siteDir, "version.json"), JSON.stringify({
   commit: process.env.GIT_SHA || "dev",
@@ -727,8 +849,31 @@ await Promise.all([
       theme_color: "#087f7a",
       lang: "es-MX"
     }, null, 2), "utf8"),
+    // Manifiesto propio de la pagina de piso. `start_url` es la pagina misma, y
+    // `display: standalone` quita la barra de direcciones: se abre desde el icono y
+    // entra directo a la camara. Los dos iconos son obligatorios para que Android
+    // ofrezca instalarla; ver `iconoPrdPng`.
+    writeFile(path.join(siteDir, "prd.webmanifest"), JSON.stringify({
+      name: "Tiempos de piso",
+      short_name: "Tiempos",
+      description: "Inicio y fin de operaciones por lectura de OT",
+      start_url: "./prd.html",
+      scope: "./",
+      display: "standalone",
+      orientation: "portrait",
+      background_color: "#070d13",
+      theme_color: "#070d13",
+      lang: "es-MX",
+      icons: [
+        { src: "./prd-icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+        { src: "./prd-icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      ],
+    }, null, 2), "utf8"),
+    writeFile(path.join(siteDir, "prd-icon-192.png"), iconoPrdPng(192)),
+    writeFile(path.join(siteDir, "prd-icon-512.png"), iconoPrdPng(512)),
+    writeFile(path.join(siteDir, "prd.html"), prdHtml, "utf8"),
     writeFile(path.join(siteDir, "sw.js"), `const CACHE_NAME = "plan-maestro-${pagesBuildId}-sheets-ot-v2";
-const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./manifest.webmanifest"];
+const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./prd.html", "./manifest.webmanifest", "./prd.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
 });
@@ -738,12 +883,17 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  const navigation = event.request.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("/index.html");
+  const navigation = event.request.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("/index.html") || url.pathname.endsWith("/prd.html");
   if (navigation) {
+    // Cada navegacion se guarda bajo SU pagina y se responde desde ahi si no hay red.
+    // Antes todo se guardaba como "./index.html", asi que abrir /prd.html sin senal
+    // entregaba la pagina de planeacion (o fallaba por falta de datos): la camara
+    // nunca arrancaba y el operador creia que la pagina estaba rota.
+    const destino = url.pathname.endsWith("/prd.html") ? "./prd.html" : "./index.html";
     event.respondWith(fetch(event.request, { cache: "no-store" }).then((response) => {
-      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", response.clone()));
+      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(destino, response.clone()));
       return response;
-    }).catch(() => caches.match("./index.html").then((cached) => cached || caches.match("./"))));
+    }).catch(() => caches.match(destino).then((cached) => cached || caches.match("./"))));
     return;
   }
   event.respondWith(caches.match(event.request).then((cached) => {
@@ -772,7 +922,7 @@ self.addEventListener("fetch", (event) => {
     siteDir,
     serverFiles,
     htmlFiles: ["Index.html", "IndexOperator.html", "IndexSkills.html", "Bridge.html"],
-    pagesFiles: ["index.html", "operator.html", "skills.html", "manifest.webmanifest", "sw.js"],
+    pagesFiles: ["index.html", "operator.html", "skills.html", "prd.html", "manifest.webmanifest", "prd.webmanifest", "prd-icon-192.png", "prd-icon-512.png", "sw.js"],
     // MEDIDO 2026-10-02: el build dice DE DONDE salio cada credencial al terminar, porque el aviso
     // de check-project.mjs dice si falto una, y sin esto la unica forma de saber si el bundle va
     // con la clave del portapapeles o con una variable vieja de otra consola es abrir el HTML.

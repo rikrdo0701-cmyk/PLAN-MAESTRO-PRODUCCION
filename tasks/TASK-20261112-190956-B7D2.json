@@ -1,0 +1,104 @@
+{
+  "id": "TASK-20261112-190956-B7D2",
+  "objective": "Construir la pagina de piso /prd.html: leer el codigo Code 128 de la OT con la camara del telefono, registrar inicio y fin de operacion en Supabase (tabla nueva prdtiempo_registros), mostrar el ciclo por pieza en vivo y publicarla como PWA en GitHub Pages.",
+  "allowed_files": [
+    "docs/schema-prdtiempo.sql",
+    "src/web/prd/index.template.html",
+    "src/web/prd/prd.css",
+    "src/web/prd/prd-core.js",
+    "src/web/prd/prd-app.js",
+    "scripts/build-appscript.mjs",
+    "tests/ddl-prdtiempo.test.mjs",
+    "tests/prd-core.test.mjs",
+    "tests/build.test.mjs",
+    ".project-memory/rules.json",
+    ".project-memory/data-sources.json",
+    ".project-memory/modules.json",
+    ".project-memory/indexes.json",
+    "docs/REGLAS.md",
+    "docs/data/sources.md",
+    "docs/project/module-map.md",
+    "docs/project/prd-tiempo-de-piso.md",
+    "docs/changes/TASK-20261112-190956-B7D2.md",
+    "CHANGELOG.md"
+  ],
+  "requirements": [
+    "La captura de tiempos NO se guarda en operations ni en work_orders: la ingesta de NetSuite las borra e inserta.",
+    "La tabla prdtiempo_registros no se expone: RLS sin politicas, grants de tabla revocados y solo tres RPC SECURITY DEFINER con execute para anon.",
+    "El codigo de la OT se lee con BarcodeDetector nativo (code_128), sin librerias nuevas y sin captura manual.",
+    "Una sola corrida abierta por OT + operacion; iniciar es idempotente.",
+    "El ciclo por pieza usa la misma formula que la base y el semaforo compara contra operations.tiempo_ciclo (min/pza).",
+    "La pagina se publica solo en site/ (GitHub Pages) con su propio manifiesto e iconos; no viaja a dist/.",
+    "El service worker devuelve la pagina pedida en una navegacion, no siempre index.html.",
+    "Documentar reglas, fuente de datos, modulo y pagina en Project Memory y docs."
+  ],
+  "acceptance_criteria": [
+    "El DDL aplica dos veces sin error en produccion y deja 17 columnas, RLS con 0 politicas, indice unico parcial y la auxiliar sin execute para anon.",
+    "Las tres RPC responden con la clave publishable: escanear OT valida/no encontrada/codigo invalido, iniciar+finalizar con ciclo 2.50 para 10 min / 4 piezas, segundo finalizar = ya_finalizada, lectura directa de la tabla = 401.",
+    "tests/ddl-prdtiempo.test.mjs y tests/prd-core.test.mjs en verde.",
+    "La prueba de navegador (camara falsa, BarcodeDetector falso, fetch simulado) recorre escanear, verificar, iniciar, finalizar, aviso de cantidad y OT cerrada sin errores de JavaScript.",
+    "El build escribe site/prd.html, site/prd.webmanifest y los iconos 192/512, y deja fuera dist/.",
+    "La suite completa no agrega fallos nuevos a los 11 preexistentes."
+  ],
+  "plan_review": {
+    "required": false
+  },
+  "validation_plan": {
+    "syntax": {
+      "required": true,
+      "commands": [
+        "node --check src/web/prd/prd-core.js",
+        "node --check src/web/prd/prd-app.js",
+        "node --check scripts/build-appscript.mjs"
+      ]
+    },
+    "functional_tests": {
+      "required": true,
+      "commands": [
+        "node --test tests/ddl-prdtiempo.test.mjs tests/prd-core.test.mjs",
+        "node --test tests/build.test.mjs",
+        "npm test"
+      ]
+    },
+    "technical_review": {
+      "required": false
+    },
+    "visual_review": {
+      "required": true,
+      "reviewer": "usuario",
+      "files": [
+        "site/prd.html"
+      ]
+    }
+  },
+  "documentation_plan": {
+    "rules_affected": [
+      "RULE-PRD-001",
+      "RULE-PRD-002",
+      "RULE-PRD-003",
+      "RULE-PRD-004",
+      "RULE-PRD-005",
+      "RULE-PRD-006",
+      "RULE-PRD-007",
+      "RULE-PRD-008"
+    ],
+    "data_sources_affected": [
+      "SUPABASE-TABLE-PRDTIEMPO-REGISTROS",
+      "SUPABASE-RPC-PRDTIEMPO"
+    ],
+    "module_docs": [
+      "docs/project/prd-tiempo-de-piso.md",
+      "docs/project/module-map.md",
+      "docs/data/sources.md",
+      "docs/REGLAS.md",
+      ".project-memory/modules.json",
+      ".project-memory/data-sources.json",
+      ".project-memory/rules.json"
+    ],
+    "adr_required": false,
+    "changelog_required": true,
+    "task_journal_required": true
+  },
+  "commit_message": "feat(prd): pagina de piso con lectura de OT y registro de tiempos",
+  "cloud_allowed": true
+}

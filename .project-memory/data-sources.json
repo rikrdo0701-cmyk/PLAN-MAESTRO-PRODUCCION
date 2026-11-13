@@ -1576,7 +1576,58 @@
         "tests/rpc-ingesta-mirror.test.mjs"
       ],
       "updated_at": "2026-10-05"
+    },
+    {
+      "source_id": "SUPABASE-TABLE-PRDTIEMPO-REGISTROS",
+      "type": "supabase_table",
+      "name": "prdtiempo_registros: inicio y fin de operacion por OT, capturados desde el telefono de piso (/prd.html)",
+      "location/origin": "Proyecto ref xtgtfjcwxcoxvixholpj, schema public, tabla public.prdtiempo_registros. DDL canonico docs/schema-prdtiempo.sql, aplicado a produccion el 2026-11-12 con scripts/aplicar-ddl.mjs (24/24 sentencias, dos veces, idempotente). No es una hoja, no la escribe NetSuite y no esta en public.ingesta_mirror_whitelist: el espejo borra e inserta y estas corridas se acumulan.",
+      "columns": "17 columnas. id uuid pk default gen_random_uuid(); ot text not null (folio del codigo, solo digitos, constraint prdtiempo_ot_formato '^[0-9]{1,20}$'); articulo text not null default ''; articulo_descripcion text not null default ''; cantidad_ot integer not null default 0; operacion_id text not null (operations.operation_id, 'ns-<id>'); operacion_secuencia integer not null default 0; operacion_descripcion text not null default ''; maquina text not null default ''; ciclo_objetivo_min numeric (copia de operations.tiempo_ciclo, min/pza, nullif(...,0)); hora_inicio timestamptz not null (hora del TELEFONO); hora_fin timestamptz (NULL = corrida abierta); cantidad integer (piezas de ESTA corrida, no el acumulado); tiempo_ciclo_min numeric (min/pza, NULL mientras esta abierta); dispositivo text not null default '' (uuid aleatorio del telefono en localStorage, NO identifica a la persona); created_at timestamptz not null default now(); updated_at timestamptz not null default now() (trigger prdtiempo_set_updated_at -> pp_set_updated_at). Constraints: prdtiempo_cantidad_positiva (cantidad is null or cantidad > 0), prdtiempo_fin_coherente (hora_fin is null or hora_fin >= hora_inicio), prdtiempo_ciclo_coherente (tiempo_ciclo_min is null or >= 0). Indices: prdtiempo_abierta_unica UNIQUE PARCIAL (ot, operacion_id) where hora_fin is null; prdtiempo_ot_idx (ot, hora_inicio desc).",
+      "readers": "Solo las funciones SECURITY DEFINER de docs/schema-prdtiempo.sql (SELECT dentro de prdtiempo_escanear y del reintento de iniciar/finalizar). Ninguna pagina, ningun lector del navegador y ningun servicio de Apps Script la lee: la tabla no tiene politicas de RLS ni grants de tabla (revocados para anon y authenticated), asi que la Data API responde 401, medido el 2026-11-12 con la clave publishable.",
+      "writers": "UN SOLO ESCRITOR: las funciones public.prdtiempo_iniciar (INSERT de la corrida) y public.prdtiempo_finalizar (UPDATE de hora_fin, cantidad y tiempo_ciclo_min). No hay otro escritor en el repo ni en NetSuite. Esto cumple la regla de un escritor por repositorio y es la razon de que la tabla sea aparte: `operations` y `work_orders` las borra e inserta la ingesta, y un dato capturado ahi se perderia en 15 minutos.",
+      "rules": [
+        "RULE-PRD-001",
+        "RULE-PRD-002",
+        "RULE-PRD-003",
+        "RULE-PRD-005",
+        "RULE-PRD-006"
+      ],
+      "status": "documented",
+      "references": [
+        "docs/schema-prdtiempo.sql:52-144 (tabla, indices, permisos, trigger)",
+        "docs/schema-prdtiempo.sql:496-510 (lo que el DDL no hace)",
+        "tests/ddl-prdtiempo.test.mjs",
+        "src/web/prd/prd-app.js"
+      ],
+      "updated_at": "2026-11-12"
+    },
+    {
+      "source_id": "SUPABASE-RPC-PRDTIEMPO",
+      "type": "supabase_rpc",
+      "name": "RPC public.prdtiempo_escanear / prdtiempo_iniciar / prdtiempo_finalizar: el unico camino de la pagina de piso (/prd.html)",
+      "location/origin": "Proyecto ref xtgtfjcwxcoxvixholpj, schema public. Tres funciones plpgsql SECURITY DEFINER con `set search_path = public, pg_temp`, definidas y aplicadas desde docs/schema-prdtiempo.sql. Se llaman por POST /rest/v1/rpc/<nombre> con la clave publicable (anon), sin sesion. Verificadas en vivo el 2026-11-12 con la clave publishable: escanear 2151 (5 operaciones ordenadas, abiertas []), 0000 -> no_encontrada, 36A8 -> ot_invalida, iniciar+finalizar (10 min / 4 piezas) -> 2.50, segundo finalizar -> ya_finalizada, estatus con acentos ('Cancelacion' -> cerrada, 'En curso' -> abierta).",
+      "columns": "No son tablas, no tienen columnas. Firmas y contrato de salida, todas jsonb: (1) prdtiempo_escanear(p_ot text) -> {ok:true, ot, articulo, descripcion, cantidad, estatus, operaciones:[{operation_id, secuencia, descripcion, maquina, ciclo_objetivo_min}], abiertas:[{id, operacion_id, secuencia, descripcion, maquina, hora_inicio, cantidad_ot, ciclo_objetivo_min}], servidor_ahora} o {ok:false, motivo} con motivo ot_invalida | no_encontrada | cerrada (+ estatus). Una sola llamada y no tres: el telefono no puede leer tablas y encadenar consultas con mala senal se siente lento. (2) prdtiempo_iniciar(p_ot text, p_operacion_id text, p_hora_inicio timestamptz, p_dispositivo text default '') -> {ok:true, ya_iniciada, id, hora_inicio, ciclo_objetivo_min} o {ok:false, motivo} con motivo ot_invalida | operacion_invalida | hora_invalida | no_encontrada | cerrada. (3) prdtiempo_finalizar(p_id uuid, p_cantidad integer, p_hora_fin timestamptz) -> {ok:true, id, ot, operacion_id, cantidad, hora_inicio, hora_fin, tiempo_ciclo_min, ciclo_objetivo_min} o {ok:false, motivo} con motivo id_invalida | cantidad_invalida | hora_invalida | no_encontrada | ya_finalizada (+ cantidad, hora_fin, tiempo_ciclo_min del primero).",
+      "readers": "/prd.html unicamente (src/web/prd/prd-app.js, funcion `rpc()`): no hay otra pagina, boton ni servicio que las llame, y no se pueden llamar desde la consola de Apps Script. La pagina traduce cada `motivo` a un mensaje en espanol; el conjunto de motivos esta en `MOTIVOS` de src/web/prd/prd-core.js y la prueba lo compara contra el SQL para que un renombre no deje al operador con el mensaje generico.",
+      "writers": "Las tres escriben solo a traves de prdtiempo_registros (iniciar INSERT, finalizar UPDATE) o leen work_orders/operations para validar. NUNCA tocan operations ni work_orders: la marca de operacion completada en el plan es una etapa posterior (decision del usuario). `prdtiempo_estatus_cerrado(text)` es auxiliar, SECURITY INVOKER, y no se concede a anon ni a authenticated.",
+      "restrictions": "PERMISOS: `execute` para anon y authenticated, `revoke all ... from public` en cada funcion; la auxiliar sin ningun grant (MEDIDO 2026-11-11: Supabase deja EXECUTE por omision y `revoke ... from public` no lo quita). La tabla no se expone (RLS sin politicas, grants de tabla revocados). VALIDACIONES que hace la base, no la pagina: formato de OT, OT existente, estatus abierto (misma regla que workOrderCerrada: CERRAD/CLOSED/COMPLET/CANCEL), operacion que pertenece a la OT, hora no nula y fin >= inicio, cantidad entera > 0. NO valida que la cantidad no supere la de la OT: es un aviso de la pagina (RULE-PRD-006). NO identifica a la persona: el enlace es publico y el login por codigo de barras es la etapa que lo cierra (RULE-PRD-002).",
+      "rules": [
+        "RULE-PRD-002",
+        "RULE-PRD-003",
+        "RULE-PRD-004",
+        "RULE-PRD-005"
+      ],
+      "status": "documented",
+      "references": [
+        "docs/schema-prdtiempo.sql:183-277 (escanear)",
+        "docs/schema-prdtiempo.sql:282-389 (iniciar)",
+        "docs/schema-prdtiempo.sql:391-494 (finalizar)",
+        "src/web/prd/prd-core.js (cuerpos y motivos)",
+        "src/web/prd/prd-app.js (rpc)",
+        "tests/ddl-prdtiempo.test.mjs",
+        "tests/prd-core.test.mjs"
+      ],
+      "updated_at": "2026-11-12"
     }
   ],
-  "updated_at": "2026-11-05"
+  "updated_at": "2026-11-12"
 }

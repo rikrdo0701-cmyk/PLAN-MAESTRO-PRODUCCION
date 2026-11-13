@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <!-- Fuente de la pagina de piso. Edita src/web/prd y ejecuta npm run build. -->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#070d13" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="./prd.webmanifest" />
+    <link rel="icon" href="data:," />
+    <title>Tiempos de piso</title>
+    <style>
+{{PRD_STYLES}}
+    </style>
+  </head>
+  <body>
+    <div class="prd-app" id="app">
+      <!-- El video vive fuera de las pantallas: al pasar de escanear a verificar o a
+           finalizar NO se apaga. Solo se pausa el reconocimiento. -->
+      <video id="video" playsinline muted autoplay aria-hidden="true"></video>
+      <div class="velo" aria-hidden="true"></div>
+
+      <!-- ------------------------------ escanear ------------------------------ -->
+      <section class="pantalla pantalla-escanear" id="pantalla-escanear" aria-label="Escanear OT">
+        <header class="barra">
+          <div>
+            <p class="kicker">Tiempos de piso</p>
+            <h1>Escanea la OT</h1>
+          </div>
+          <button class="icono" id="boton-linterna" type="button" aria-label="Linterna" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 5-2 3v9h-4v-9L8 8z" /></svg>
+          </button>
+        </header>
+
+        <div class="marco" aria-hidden="true"><span class="linea"></span></div>
+
+        <p class="pista" id="pista">Apunta al código de barras de la hoja, en horizontal.</p>
+        <div class="estado" id="estado-escanear" role="status" aria-live="polite"></div>
+        <div class="sin-camara" id="sin-camara" hidden></div>
+      </section>
+
+      <!-- ------------------------------ verificar ------------------------------ -->
+      <section class="pantalla pantalla-hoja" id="pantalla-verificar" hidden aria-label="Verificar OT">
+        <div class="hoja" role="dialog" aria-modal="true" aria-labelledby="verificar-titulo">
+          <p class="kicker" id="verificar-titulo">OT escaneada</p>
+          <p class="ot" id="verificar-ot">—</p>
+
+          <dl class="datos">
+            <div><dt>Artículo</dt><dd id="verificar-articulo">—</dd></div>
+            <div><dt>Descripción</dt><dd id="verificar-descripcion">—</dd></div>
+            <div><dt>Cantidad</dt><dd id="verificar-cantidad">—</dd></div>
+          </dl>
+
+          <label class="campo" for="selector-operacion">Operación a iniciar</label>
+          <select id="selector-operacion" class="selector">
+            <option value="">Elegir operación…</option>
+          </select>
+          <p class="objetivo" id="verificar-objetivo"></p>
+
+          <div class="acciones">
+            <button class="boton secundario" id="boton-cancelar-verificar" type="button">Cancelar</button>
+            <button class="boton primario" id="boton-iniciar" type="button" disabled>Iniciar</button>
+          </div>
+          <p class="error" id="error-verificar" role="alert"></p>
+        </div>
+      </section>
+
+      <!-- ------------------------------ finalizar ------------------------------ -->
+      <section class="pantalla pantalla-hoja" id="pantalla-finalizar" hidden aria-label="Finalizar corrida">
+        <div class="hoja" role="dialog" aria-modal="true" aria-labelledby="finalizar-ot">
+          <p class="kicker">Corrida abierta</p>
+          <p class="ot" id="finalizar-ot">—</p>
+          <p class="operacion" id="finalizar-operacion">—</p>
+
+          <div class="corridas" id="corridas" role="group" aria-label="Corridas abiertas de esta OT"></div>
+
+          <div class="reloj">
+            <span id="reloj">00:00</span>
+            <small>desde el inicio</small>
+          </div>
+
+          <label class="campo" for="cantidad">Piezas de esta corrida</label>
+          <input
+            id="cantidad"
+            class="cantidad"
+            type="number"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            min="1"
+            step="1"
+            placeholder="0"
+            autocomplete="off"
+          />
+          <p class="aviso" id="aviso-cantidad" hidden></p>
+
+          <div class="ciclo" id="ciclo" data-tono="sin-referencia">
+            <span class="ciclo-valor" id="ciclo-valor">—</span>
+            <span class="ciclo-unidad">min/pza</span>
+            <span class="ciclo-desviacion" id="ciclo-desviacion"></span>
+            <span class="ciclo-objetivo" id="ciclo-objetivo">sin ciclo de referencia</span>
+            <div class="barra" aria-hidden="true"><span id="ciclo-barra"></span></div>
+          </div>
+
+          <div class="acciones">
+            <button class="boton secundario" id="boton-cancelar-finalizar" type="button">Cancelar</button>
+            <button class="boton primario" id="boton-finalizar" type="button" disabled>Finalizar</button>
+          </div>
+          <p class="error" id="error-finalizar" role="alert"></p>
+
+          <button class="enlace" id="boton-otra-operacion" type="button" hidden>Iniciar otra operación de esta OT</button>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </div>
+
+    <script>
+{{PRD_CORE}}
+    </script>
+    <script>
+{{PRD_APP}}
+    </script>
+  </body>
+</html>
