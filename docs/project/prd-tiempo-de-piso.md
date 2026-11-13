@@ -57,9 +57,11 @@ avisa y la página se queda en la cámara: no hay captura manual del folio.
 9. **Leída la OT, la cámara desaparece** (RULE-PRD-009, decisión del usuario 2026-11-12 con
    captura del teléfono). Las pantallas de verificar y finalizar ocupan toda la pantalla con
    fondo opaco, el video sigue encendido detrás (no se vuelve a pedir permiso ni se corta la
-   lectura) y la letra crece con `clamp()`: OT hasta 4rem, datos hasta 1.5rem, ciclo hasta
-   4rem. Los datos van en una columna (etiqueta arriba, valor abajo) para que la descripción
-   use todo el ancho, y la barra de botones se queda pegada al pie aunque la lista no quepa.
+   lectura) y la letra crece con `clamp()` que también usa la altura de la pantalla (`vh`).
+   Los datos se **reparten a lo largo** de la pantalla: en verificar el bloque crece
+   (`flex: 1 1 auto; grid-auto-rows: minmax(0, 1fr)`) y las filas se distribuyen; en
+   finalizar el espacio libre lo toma el campo de piezas (lo único que se teclea — un campo
+   alto se acierta con el pulgar). El marco de escaneo también crece.
 
 ## Archivos
 

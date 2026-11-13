@@ -1554,6 +1554,15 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .job-op-row input { width: 100%; min-height: 26px; padding: 0 4px; font-size: 9px; }
 .job-op-row .op-time { text-align: right; color: var(--muted); }
 
+/* ESTADO DE UNA OPERACION DEL PLAN EN "DETALLE DE OT". DECISION DEL USUARIO 2026-11-10: la
+   operacion completada se LISTA con su estado "Completada" (no desaparece del panel ni del
+   borrador de una OT fija); el boton que queda al lado es la accion de reabrir. Todo cabe en la
+   columna "Estado" (136px): la etiqueta en 8px y el boton reducido dentro de `.job-op-row`. */
+.job-op-row .op-status { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.job-op-row .op-status-text { color: #0b6e69; font-size: 8px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.job-op-row .op-status.completed-label .plan-status-action { min-width: 48px; padding: 0 6px; }
+.job-op-row.op-completed .op-name { color: #56666e; }
+
 .capacity-rail { margin: 8px; scroll-margin-top: 68px; }
 
 .operator-load-screen {
@@ -1650,6 +1659,18 @@ body.gantt-fullscreen-active { overflow: hidden; }
 .report-show-all { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: #334149; font-size: 10px; font-weight: 650; }
 .report-show-all input { width: 15px; min-height: 15px; margin: 0; }
 .report-row-count { min-width: 82px; color: var(--muted); font-size: 9px; font-weight: 650; text-align: center; }
+/* Filtro EN VIVO del reporte "Liberacion real": busca mientras se escribe, sin boton. */
+.report-search input {
+  width: min(240px, 30vw);
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: #101820;
+  font-size: 11px;
+}
+.report-search input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .inline-form { display: flex; align-items: center; gap: 7px; }
 
 .matrix-wrap,
@@ -1673,6 +1694,10 @@ tr:last-child td { border-bottom: 0; }
 .production-report-table td:nth-child(5) { min-width: 110px; }
 .production-report-table th:last-child,
 .production-report-table td:last-child { min-width: 220px; white-space: normal; }
+/* DECISION DEL USUARIO 2026-11-08: en Faltantes lo YA surtido/empacado se tacha y no suma al
+   faltante. El tachado es la unica marca (sin letras ni colores) para que se lea igual en la
+   impresion en blanco y negro. */
+#faltantesReport s { color: var(--muted); text-decoration-thickness: 1px; }
 .specialized-report-table { min-width: 1120px; }
 .specialized-report-table th:last-child,
 .specialized-report-table td:last-child { min-width: 280px; white-space: normal; }
@@ -1685,7 +1710,6 @@ tr:last-child td { border-bottom: 0; }
 .release-real-table th.report-number,
 .release-real-table td.report-number { text-align: right; font-variant-numeric: tabular-nums; }
 .release-real-table tfoot td { font-weight: 700; background: #edf1f3; }
-.release-real-partial { color: var(--muted); font-size: .85em; font-weight: 650; }
 .report-plan-selector select { min-width: 250px; max-width: 320px; }
 .report-print-header {
   display: flex;
@@ -1802,7 +1826,7 @@ tr:last-child td { border-bottom: 0; }
 .resource-cell { display: block; min-width: 120px; }
 .resource-cell strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.bottleneck-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 14px; align-items: start; padding: 4px 16px 20px; }
+.bottleneck-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; padding: 4px 16px 20px; }
 .bottleneck-panel { min-width: 0; }
 .bottleneck-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 2px 0; }
 .bottleneck-panel header h3 { margin: 0; font-size: 13px; }
@@ -2356,7 +2380,13 @@ tr:last-child td { border-bottom: 0; }
 .inspection-document-wrap{min-width:0;padding:12px;overflow:auto}.inspection-sheet{--inspection-print-scale:1;--inspection-border:#000;--inspection-paper:#fff;--inspection-gray:#d9d9d9;--inspection-footer-gray:#f2f2f2;position:relative;width:1280px;min-height:760px;margin:0 auto;padding-bottom:18px;background:var(--inspection-paper);color:#000;font:12px Arial,Helvetica,sans-serif;box-shadow:0 10px 30px #0f172a1f}.inspection-grid{display:grid;grid-template-columns:repeat(24,1fr);background:var(--inspection-paper);border-top:2px solid var(--inspection-border);border-left:2px solid var(--inspection-border)}.inspection-cell{min-height:30px;display:flex;align-items:center;justify-content:center;padding:4px 6px;overflow:hidden;background:var(--inspection-paper);border-right:1px solid var(--inspection-border);border-bottom:1px solid var(--inspection-border);text-align:center;line-height:1.2;overflow-wrap:anywhere}.inspection-br{border-right:3px solid var(--inspection-border)!important}.inspection-bb{border-bottom:3px solid var(--inspection-border)!important}.inspection-title{grid-column:1/25;position:relative;min-height:54px;background:var(--inspection-paper);border-bottom:3px solid var(--inspection-border)!important;font-size:23px;font-weight:900}.inspection-logo{position:absolute;left:10px;top:8px;width:190px;height:36px;display:flex;align-items:center;justify-content:center;background:#fff;border:3px solid #e23b31;border-radius:8px;color:#1167b1;font-size:24px;font-weight:900}.inspection-title-text{margin-left:220px;padding-right:78px;white-space:nowrap}.inspection-doc-code{position:absolute;right:8px;top:4px;z-index:2;font-size:10px;font-weight:700}.inspection-label,.inspection-head{font-weight:800}.inspection-big{font-size:20px;font-weight:900}.inspection-gray{background:var(--inspection-gray);font-weight:800}.inspection-head-tight{padding:0 2px;font-size:10px;line-height:1.05}.inspection-section-title{grid-column:1/25;min-height:22px;border-top:3px solid var(--inspection-border);border-right:1px solid var(--inspection-border);border-bottom:3px solid var(--inspection-border);background:var(--inspection-gray)}.inspection-time-head{display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;align-items:center;font-size:10px}.inspection-time-head b{grid-column:1/3;font-size:13px}.inspection-op-line{min-height:22px}.inspection-op{font-size:11px;font-weight:900;white-space:nowrap}.inspection-mat{display:inline-flex;align-items:center;justify-content:center;max-width:100%;min-height:20px;padding:2px 7px;border-radius:2px;font-weight:900;line-height:1.1;white-space:normal;print-color-adjust:exact;-webkit-print-color-adjust:exact}.inspection-mat--red{background:#fff5f5;color:#c00000;box-shadow:inset 0 0 0 2px #ff2a2a}.inspection-mat--orange{background:#fff7ed;color:#c2410c;box-shadow:inset 0 0 0 2px #f97316}.inspection-mat--ok{background:transparent;color:inherit}.inspection-document-footer{display:grid;grid-template-columns:repeat(24,1fr);background:var(--inspection-paper);border-top:3px solid var(--inspection-border);border-left:2px solid var(--inspection-border)}.inspection-footer-cell{min-height:24px;display:flex;align-items:center;justify-content:center;padding:3px 5px;background:var(--inspection-paper);border-right:1px solid var(--inspection-border);border-bottom:1px solid var(--inspection-border);text-align:center;font-size:10px}.inspection-footer-head{background:var(--inspection-footer-gray);font-weight:800}
 .inspection-link-dialog{width:min(1100px,calc(100vw - 32px));max-height:min(840px,calc(100dvh - 32px));padding:0;overflow:hidden;border:1px solid #c8d5e1;border-radius:14px;background:#fff;color:#17324d;box-shadow:0 22px 60px #0f172a38;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.inspection-link-dialog::backdrop{background:#10283d99;backdrop-filter:blur(2px)}.inspection-link-form{display:grid;grid-template-rows:auto minmax(0,1fr) auto;max-height:inherit;overflow:hidden;background:#fff}.inspection-link-title{z-index:2;display:grid;grid-template-columns:minmax(210px,1fr) auto 38px;align-items:center;gap:22px;padding:15px 18px;border-bottom:1px solid #dbe5ee;background:#fff}.inspection-link-heading h2{display:block;margin:0;color:#17324d;font-size:17px;line-height:1.2}.inspection-link-heading span{display:block;margin-top:3px;color:#6b7d90;font-size:11px}.inspection-link-context{display:flex;align-items:center;gap:0;border:1px solid #dbe5ee;background:#f7fafc}.inspection-link-context>span{display:grid;gap:2px;min-width:118px;padding:7px 12px}.inspection-link-context>span+span{border-left:1px solid #dbe5ee}.inspection-link-context small{color:#718397;font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}.inspection-link-context strong{max-width:220px;overflow:hidden;color:#17324d;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.inspection-link-close{display:grid;width:36px;height:36px;min-height:36px;padding:0;place-items:center;border:0;border-radius:50%;background:#edf3f7;color:#28455f;font-family:inherit;font-size:24px;line-height:1;cursor:pointer}.inspection-link-close:hover{background:#dce8ef}.inspection-link-body{display:grid;align-content:start;gap:12px;min-height:0;padding:14px 18px 16px;overflow:auto;overscroll-behavior:contain;background:#f4f7fa}.inspection-link-rule{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:start;gap:10px;padding:9px 12px;border-left:3px solid #16858b;background:#eaf7f7;color:#28455f}.inspection-link-rule-icon{display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:#16858b;color:#fff;font-size:11px;font-weight:900}.inspection-link-rule p{display:grid;gap:2px;margin:0;font-size:11px;line-height:1.4}.inspection-link-rule p strong{color:#12666b;font-size:10px;letter-spacing:.04em;text-transform:uppercase}.inspection-link-section{padding:12px 14px;border:1px solid #cfe0e8;border-left:3px solid #16858b;background:#fff}.inspection-link-section header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}.inspection-link-section header strong{font-size:13px}.inspection-link-section header span{color:#526b80;font-size:11px;font-weight:800}.inspection-link-section label>span,.inspection-link-route-field>span{display:block;margin-bottom:5px;color:#526b80;font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}.inspection-link-section input,.inspection-link-route-field input{box-sizing:border-box;width:100%;min-height:37px;padding:7px 10px;border:1px solid #afc5d5;border-radius:6px;background:#fff;color:#17324d;font-family:inherit;font-size:12px;line-height:1.3}.inspection-link-section small{display:block;margin-top:6px;color:#6b7d90;font-size:10px;line-height:1.35}.inspection-link-materials{border:1px solid #d5e0e8;background:#fff}.inspection-link-material-note{margin:0;padding:8px 14px;border-bottom:1px solid #dbe5ee;color:#64788b;font-size:10px;line-height:1.35}.inspection-link-material-head,.inspection-link-material-row{display:grid;grid-template-columns:minmax(240px,1.65fr) minmax(115px,.55fr) minmax(190px,1fr) minmax(115px,.55fr);align-items:center;column-gap:14px}.inspection-link-material-head{min-height:34px;padding:0 14px;border-bottom:1px solid #cddbe5;background:#e9eff4;color:#526b80;font-size:9px;font-weight:900;letter-spacing:.05em;text-transform:uppercase}.inspection-link-material-row{min-height:59px;padding:8px 14px;border-bottom:1px solid #e1e8ee}.inspection-link-material-row:last-child{border-bottom:0}.inspection-link-material-copy{display:grid;gap:3px;min-width:0}.inspection-link-material-copy strong{overflow:hidden;color:#17324d;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.inspection-link-material-copy span{overflow:hidden;color:#6b7d90;font-size:10px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}.inspection-link-material-quantity span{display:none}.inspection-link-material-quantity strong{color:#28455f;font-size:12px}.inspection-link-route-field{min-width:0}.inspection-link-material-status{font-size:10px;font-weight:800}.inspection-link-material-status::before{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;content:"";vertical-align:1px}.inspection-link-material-status.is-pending{color:#b45309}.inspection-link-material-status.is-pending::before{background:#f59e0b}.inspection-link-material-status.is-ready{color:#16706a}.inspection-link-material-status.is-ready::before{background:#14b8a6}.inspection-link-dialog-message{min-height:16px;margin:0;color:#64748b;font-size:11px;font-weight:800;line-height:1.35}.inspection-link-dialog-message.ok{color:#047857}.inspection-link-dialog-message.error{color:#b91c1c}.inspection-link-actions{z-index:2;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:16px;min-height:62px;padding:10px 18px;border-top:1px solid #dbe5ee;background:#fff;box-shadow:0 -5px 16px #17324d0a}.inspection-link-action-buttons{display:flex;gap:8px}.inspection-link-actions .button{width:auto;min-width:138px;margin:0;font-family:inherit}.inspection-link-actions .primary{min-width:210px}.inspection-link-dialog input:focus-visible,.inspection-link-dialog button:focus-visible{outline:3px solid #0f766e;outline-offset:2px;border-color:#0f766e}.inspection-link-dialog button:disabled,.inspection-link-dialog input:disabled{cursor:not-allowed;opacity:.58}
 @media (max-width:820px){.inspection-link-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}.inspection-link-title{grid-template-columns:minmax(0,1fr) 36px;gap:10px;padding:12px}.inspection-link-heading span{display:none}.inspection-link-context{grid-column:1/3;grid-row:2;width:100%}.inspection-link-context>span{min-width:0;flex:1;padding:6px 9px}.inspection-link-context strong{max-width:100%;font-size:11px}.inspection-link-close{grid-column:2;grid-row:1}.inspection-link-body{gap:10px;padding:10px;overflow-x:hidden}.inspection-link-rule{padding:8px 10px}.inspection-link-section{padding:10px}.inspection-link-section header{align-items:flex-start}.inspection-link-material-head{display:none}.inspection-link-material-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;min-height:0;padding:11px 10px}.inspection-link-material-copy{grid-column:1}.inspection-link-material-copy span{white-space:normal}.inspection-link-material-quantity{grid-column:2;text-align:right}.inspection-link-material-quantity span{display:block;margin-bottom:2px;color:#718397;font-size:8px;font-weight:800;text-transform:uppercase}.inspection-link-route-field{grid-column:1/3}.inspection-link-material-status{grid-column:1/3}.inspection-link-actions{grid-template-columns:1fr;gap:7px;min-height:0;padding:9px 10px}.inspection-link-action-buttons{display:grid;grid-template-columns:1fr 1.5fr}.inspection-link-actions .button,.inspection-link-actions .primary{width:100%;min-width:0;padding-inline:8px}.inspection-link-dialog-message:empty{display:none}}
-body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing-inspection .inspection-controls{display:none!important}body.printing-inspection .workspace,body.printing-inspection .inspection-screen{display:block!important}body.printing-inspection .inspection-document-wrap{padding:0;overflow:visible}body.printing-inspection .inspection-sheet{display:block;width:280mm;min-height:202mm;margin:0;zoom:var(--inspection-print-zoom,1);box-shadow:none}body.printing-inspection #pp-login,body.printing-inspection #pp-salir,body.printing-inspection #pp-login *{display:none!important}body.printing-inspection .inspection-cell{min-height:2.6mm;padding:.15mm .6mm;font-size:6.5px;line-height:1.05}body.printing-inspection .inspection-title{min-height:7.5mm;font-size:13px}body.printing-inspection .inspection-logo{left:2mm;top:1.2mm;width:30mm;height:5mm;border-width:1.2px;font-size:10px}body.printing-inspection .inspection-title-text{margin-left:34mm;padding-right:15mm}body.printing-inspection .inspection-op-line{min-height:var(--inspection-op-row,1.7mm)}body.printing-inspection .inspection-mat{min-height:2.6mm;padding:.2mm .6mm;font-size:9px}body.printing-inspection .inspection-qty{font-size:8px;font-weight:900}body.printing-inspection .inspection-big{font-size:10px;font-weight:900}body.printing-inspection .inspection-job-number{font-size:15px}body.printing-inspection .inspection-article{font-size:13px}body.printing-inspection .inspection-label{font-weight:900}body.printing-inspection .inspection-head{font-weight:900}body.printing-inspection .inspection-strong,body.printing-inspection .inspection-big,body.printing-inspection .inspection-label{font-weight:900}body.printing-inspection .inspection-br{border-right-width:1.5px!important}body.printing-inspection .inspection-bb{border-bottom-width:1.5px!important}body.printing-inspection .inspection-section-title{border-top-width:1.5px!important}body.printing-inspection .inspection-footer-cell{min-height:var(--inspection-footer-row,3mm);font-size:4.5px;line-height:1}body.printing-inspection .inspection-grid{grid-auto-rows:min-content}body.printing-inspection #inspectionSecondCapture{margin-top:1.5mm}body.printing-inspection .inspection-br,body.printing-inspection .inspection-bb,body.printing-inspection .inspection-section-title{border-width:1.2px!important}
+body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing-inspection .inspection-controls{display:none!important}body.printing-inspection .workspace,body.printing-inspection .inspection-screen{display:block!important}body.printing-inspection .inspection-document-wrap{padding:0;overflow:visible}body.printing-inspection .inspection-sheet{display:block;width:280mm;min-height:202mm;margin:0;box-shadow:none}body.printing-inspection #pp-login,body.printing-inspection #pp-salir,body.printing-inspection #pp-login *{display:none!important}body.printing-inspection .inspection-cell{min-height:2.6mm;padding:.15mm .6mm;font-size:var(--insp-cell-font,8px);line-height:1.05}body.printing-inspection .inspection-title{min-height:7.5mm;font-size:var(--insp-title-font,13px)}body.printing-inspection .inspection-logo{left:2mm;top:1.2mm;width:30mm;height:5mm;border-width:1.2px;font-size:var(--insp-logo-font,10px)}body.printing-inspection .inspection-title-text{margin-left:34mm;padding-right:15mm}body.printing-inspection .inspection-op-line{min-height:var(--insp-op-row,0)}body.printing-inspection .inspection-mat{min-height:2.6mm;padding:.2mm .6mm;font-size:var(--insp-mat-font,9px)}body.printing-inspection .inspection-qty{font-size:var(--insp-qty-font,8px);font-weight:900}body.printing-inspection .inspection-big{font-size:var(--insp-big-font,10px);font-weight:900}body.printing-inspection .inspection-job-number{font-size:var(--insp-job-font,15px)}body.printing-inspection .inspection-article{font-size:var(--insp-article-font,13px)}body.printing-inspection .inspection-label{font-weight:900}body.printing-inspection .inspection-head{font-weight:900}body.printing-inspection .inspection-strong,body.printing-inspection .inspection-big,body.printing-inspection .inspection-label{font-weight:900}body.printing-inspection .inspection-br{border-right-width:1.5px!important}body.printing-inspection .inspection-bb{border-bottom-width:1.5px!important}body.printing-inspection .inspection-section-title{border-top-width:1.5px!important}body.printing-inspection .inspection-footer-cell{padding:.15mm .6mm;font-size:var(--insp-footer-font,6px);line-height:1}body.printing-inspection #inspectionReleaseFooter .inspection-footer-cell:nth-child(n+11){min-height:var(--insp-sig-row,6mm)}body.printing-inspection #inspectionSecondCapture .inspection-op-line{min-height:var(--insp-second-row,6mm)}body.printing-inspection .inspection-grid{grid-auto-rows:min-content}body.printing-inspection #inspectionSecondCapture{margin-top:1.5mm}body.printing-inspection .inspection-br,body.printing-inspection .inspection-bb,body.printing-inspection .inspection-section-title{border-width:1.2px!important}
+.inspection-cell.inspection-barcode{padding:0}.inspection-cell.inspection-barcode .inspection-barcode-svg{display:block;width:100%;height:100%}body.printing-inspection .inspection-cell.inspection-barcode{min-height:7.32mm;padding:0}
+/* El CSS global de planning/styles.css pone `svg{stroke:currentColor;stroke-width:1.8}` para
+   los iconos de la app. En el codigo de barras ese contorno se hereda a cada barra, mide 1,8
+   unidades del viewBox (0,76 mm) y tapa el hueco de 1 modulo: las 16 barras se pintaban como
+   una sola mancha negra. Aqui se apaga el contorno para que queden los huecos reales. */
+.inspection-cell.inspection-barcode .inspection-barcode-svg,.inspection-cell.inspection-barcode .inspection-barcode-svg *{stroke:none}
 </style>
   </head>
   <body>
@@ -2451,7 +2481,7 @@ body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing
             </button>
             <button id="pdfBtn" class="button" type="button">
               <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h10v6h2a2 2 0 0 1 2 2v5h-4v5H7v-5H3v-5a2 2 0 0 1 2-2h2zM9 17h6M9 13h6"/></svg></span>
-              Generar PDF
+              Exportar
             </button>
             <label class="compact-control report-plan-selector"><span>Exportar</span><select id="exportSnapshotSelect"><option value="draft">Borrador</option><option value="">Ultima publicada</option></select></label>
             <button id="exportCsvBtn" class="button" type="button">
@@ -2608,10 +2638,6 @@ body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing
             </div>
           </div>
           <div class="bottleneck-grid">
-            <section class="bottleneck-panel" aria-labelledby="bottleneckOperatorsTitle">
-              <header><h3 id="bottleneckOperatorsTitle">Cuello de botella operador</h3><span>Operadores con carga mayor a 100%</span></header>
-              <div class="operator-load-wrap"><table id="bottleneckOperators" class="operator-load-table"></table></div>
-            </section>
             <section class="bottleneck-panel" aria-labelledby="bottleneckOperationsTitle">
               <header><h3 id="bottleneckOperationsTitle">Cuello de botella operación</h3><span>Top 10 operaciones de mayor tiempo</span></header>
               <div class="operator-load-wrap"><table id="bottleneckOperations" class="operator-load-table"></table></div>
@@ -2760,6 +2786,7 @@ body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing
             <button data-tab="subcontractReport" type="button">Subcontratos</button>
             <button data-tab="release" type="button">Liberación final</button>
             <button data-tab="releaseReal" type="button">Liberación real</button>
+            <button data-tab="faltantes" type="button">Faltantes</button>
           </div>
           <section id="weekTab" class="tab-panel">
 <div class="report-toolbar">
@@ -2849,6 +2876,8 @@ body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing
             <div class="report-toolbar">
               <div><h2>Liberación real</h2><span>Lo que realmente se ensambló, por fecha de ensamble · planta MM del Llano · últimos 2 meses</span></div>
               <div class="report-actions">
+                <label class="report-search" role="search"><input id="releaseRealSearchInput" type="search" placeholder="Buscar OT o artículo…" aria-label="Buscar OT o artículo en liberación real" autocomplete="off" /></label>
+                <output id="releaseRealFilterCount" class="report-row-count" aria-live="polite"></output>
                 <output id="releaseRealReportCount" class="report-row-count"></output>
                 <button id="exportReleaseRealXlsxBtn" class="button small" type="button" title="Descargar lo ensamblado real en Excel (.xlsx)">Exportar</button>
                 <button id="printReleaseRealBtn" class="button small" type="button"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4V9h16v9h-2M6 14h12v7H6z"/></svg></span>Imprimir</button>
@@ -2857,6 +2886,16 @@ body.printing-inspection .sidebar,body.printing-inspection .topbar,body.printing
             </div>
             <header class="individual-print-header"><strong class="individual-print-logo">MALDONADO</strong><h2>LIBERACIÓN REAL</h2><div class="individual-print-meta"><small class="individual-print-code">MP CD 28-02 V02</small><strong id="releaseRealPrintContext" class="individual-print-date"></strong></div></header>
             <div class="table-wrap"><table id="releaseRealReport" class="release-real-table report-page-table"></table></div>
+          </section>
+
+          <section id="faltantesTab" class="tab-panel">
+            <div class="report-toolbar">
+              <div><h2>Faltantes</h2><span>Artículos con faltante > 0 · planta MM del Llano · tachado: ya surtido o empacado, no suma al faltante</span></div>
+              <div class="report-actions">
+                <button id="syncFaltantesBtn" class="button small" type="button" title="Sincroniza solo las tablas que alimentan el reporte (inventario, OV, artículos, OTs, materiales)"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 18 15"/></svg></span>Sincronizar</button>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="faltantesReport" class="production-report-table report-page-table"></table></div>
           </section>
         </section>
 
@@ -7476,14 +7515,31 @@ expandedOts: without(state?.expandedOts),
     return out;
   }
 
+  // DECISION DEL USUARIO 2026-11-10 (OT 3608, seq 1 "3OTD : CORTE DE TUBO"): una operacion
+  // COMPLETADA en el plan no desaparece del borrador mientras su OT este FIJA.
+  //
+  // MEDIDO 2026-11-10 en produccion: `draftExportOperations` excluia toda operacion completada, asi
+  // que el borrador guardado tenia 12 de las 13 filas de la OT 3608 (faltaba `ns-31209`) y el
+  // rescate de arranque borraba del espejo la fila que Supabase SI tenia. La operacion quedaba
+  // atrapada fuera del plan: no se veia en "Detalle de OT" ni se podia reabrir.
+  //
+  // LA REGLA, tal como la fijo el usuario:
+  //   - OT FIJA (`lockedOts`): la operacion completada SIGUE en el borrador, marcada completada y
+  //     sin consumir tiempo (el motor ya la ignora; ver planner-core filterExcludedOperations y
+  //     `minutes` en getPriorityJobs).
+  //   - OT DESBLOQUEADA: si la operacion ya estaba completada antes, sale del plan; no se arrastra.
   function draftExportOperations(state) {
     const scope = Array.isArray(state?.lastSchedule?.scheduledOts)
       ? state.lastSchedule.scheduledOts
       : state?.selectedOts;
     const selected = new Set((scope || []).map(normalize));
-    return (state?.operations || []).filter((operation) => selected.has(normalize(operation?.ot)) &&
-      !isCompletedDraftOperation(state, operation) && !isHistorical(operation) &&
-      Boolean(operation?.fechaInicio && operation?.fechaFin));
+    return (state?.operations || []).filter((operation) => {
+      if (!selected.has(normalize(operation?.ot))) return false;
+      if (isHistorical(operation)) return false;
+      if (!Boolean(operation?.fechaInicio && operation?.fechaFin)) return false;
+      if (isCompletedDraftOperation(state, operation)) return isOtLockedInState(state, operation?.ot);
+      return true;
+    });
   }
 
   function draftScheduledOperations(state) {
@@ -7768,8 +7824,16 @@ expandedOts: without(state?.expandedOts),
       const current = workOrderByOt.get(ot) || { ot };
       const existingKey = Object.keys(summaries).find((key) => normalize(key) === ot);
       if (!existingKey) {
+        // MEDIDO 2026-11-01 (OT 3300): una OT cerrada sin ficha (no esta en `source.workOrders`)
+        // y sin operaciones quedaba como `{ ot }` y `compactClosedWorkOrder` guardaba un resumen
+        // sin articulo ni cantidad (item:'' , quantity:0), que despues el reporte inyectaba como
+        // fila fantasma. Ese resumen no describe ningun ensamble real: no se debe persistir.
         const relatedOperations = (source.operations || []).filter((operation) => normalize(operation?.ot) === ot);
-        summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
+        const tieneArticulo = !!String(current.item || current.article || current.parte || "").trim();
+        const tieneCantidad = (Number(current.quantity) || Number(current.cantidad) || 0) >= 1;
+        if (tieneArticulo || tieneCantidad || relatedOperations.length) {
+          summaries[String(current.ot || ot).trim()] = compactClosedWorkOrder(current, relatedOperations, nowIso);
+        }
       }
     }
     const operations = (source.operations || []).filter(keepRow).map((operation) => ({ ...operation }));
@@ -8758,12 +8822,13 @@ expandedOts: without(state?.expandedOts),
    * `result.data.detail.workOrder.drawing` de un objeto que no lo tiene, o sea que el
    * boton de dibujo de la OT tampoco abriria. MEDIDO 2026-10-01.
    *
-   * `revision` VIENE VACIA A PROPOSITO. La celda REV de la hoja quiere la revision del
-   * BOM de NetSuite ('Revision'/'bomRevision'), y `work_orders.revision` NO la guarda:
-   * la pagina escribe ahi la REVISION DEL PLAN (filasWorkOrders,
-   * supabase-writer.js:1645), que es un contador de guardado. Meter ese numero en una
-   * celda REV seria un dato que no es. Se deja "" y la hoja imprime "A", que es lo que
-   * imprimia cuando NetSuite no traia revision. Esta en MAPPING_GAPS.work_orders.
+   * `revision` VIENE DE `revision_bom` (CORREGIDO 2026-11-04). La celda REV de la hoja
+   * quiere la revision del BOM de NetSuite, y eso ahora esta en `work_orders.revision_bom`
+   * que la INGESTA llena desde `billofmaterialsrevision` del RESTlet 2246. `work_orders.revision`
+   * (integer) sigue siendo el CONTADOR DE GUARDADO del plan (filasWorkOrders,
+   * supabase-writer.js:1645) y el lector ya no lo usa para la celda REV: la nueva columna
+   * revision_bom la reemplaza. Si la OT no trae "REV <letra>" en el BOM, la columna esta
+   * vacia y la hoja imprime "A" como siempre. Ver MAPPING_GAPS.work_orders.
    *
    * `workOrder` VACIO SI NO HAY FILA, Y NO ES LO MISMO QUE UN ERROR. La pagina pide el
    * detalle de una OT que eligio de una lista que venia de la misma tabla, asi que el
@@ -8890,7 +8955,89 @@ expandedOts: without(state?.expandedOts),
     };
   }
 
-  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionMaterialsUnicos, inspectionLineaDelBom, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail };
+  // CODIGO DE BARRAS DE LA HOJA (decision del usuario 2026-11-11): la hoja de inspeccion
+  // lleva el numero de OT en Code 128 dentro del cuadro de 4 columnas que esta a la
+  // izquierda de "Trabajo:". El codigo NO abarca el cuadro completo: los bordes negros de
+  // la celda se confundirian con las barras, asi que se respeta la zona blanca obligatoria
+  // del estandar (10 X) a cada lado del simbolo, mas aire hasta el borde.
+  //
+  // MEDIDAS (medidas sobre la hoja real de la OT 3608, 2026-11-11):
+  //   - celda de 4 columnas: 46,57 mm; borde derecho negro de 1,2 px (0,32 mm).
+  //   - fila de 7,32 mm al imprimir = 7 mm utiles + el borde inferior de 1,2 px.
+  //   - X por omision 0,42 mm; barras de 5 mm de alto con 1 mm blanco arriba y abajo.
+  //   - "3608" en Set C son 57 modulos: 23,94 mm de barras y 4,2 mm de zona blanca por lado.
+  //
+  // VERIFICADO 2026-11-11 rasterizando el codigo a 600 dpi: un lector ZXing devuelve "3608"
+  // con X de 0,25 / 0,33 / 0,42 y 0,48 mm y alto de barra de 4 a 5 mm.
+  //
+  // La tabla son los 107 simbolos de Code 128: cada patron son los anchos de
+  // barra/espacio/barra/espacio/barra/espacio (el Stop, indice 106, lleva 7 anchos).
+  const BARCODE_CODE128 = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+
+  // El xmlns NO puede quedar escrito dentro de una plantilla: el HTML service de Apps Script
+  // recorta la linea en el "//" y el bundle deja de parsear (lo vigila
+  // tests/web-url-templates.test.mjs). Se arma con comillas, como manda la regla del repo.
+  const SVG_NAMESPACE = 'xmlns="http' + '://www.w3.org/2000/svg"';
+
+  /** Anchos de modulo (barras y espacios) del texto en Code 128. Sin texto, sin anchos. */
+  function inspectionBarcodeModuleWidths(value) {
+    const texto = String(value == null ? "" : value);
+    if (!texto) return [];
+    const valores = [];
+    if (/^[0-9]+$/.test(texto) && texto.length % 2 === 0) {
+      // Set C: dos digitos por simbolo. Es el caso real de la OT y deja el simbolo a la
+      // mitad de largo (57 modulos en vez de 79), que es lo que permite el aire a los lados.
+      valores.push(105);
+      for (let i = 0; i < texto.length; i += 2) valores.push(Number(texto.slice(i, i + 2)));
+    } else {
+      // Set B: un caracter por simbolo. Cubre una OT con cantidad impar de digitos sin
+      // inventar ni recortar nada, y tambien el texto con letras.
+      valores.push(104);
+      for (const caracter of texto) {
+        const codigo = caracter.charCodeAt(0) - 32;
+        if (!(codigo >= 0 && codigo <= 95)) return [];
+        valores.push(codigo);
+      }
+    }
+    const checksum = valores.reduce((total, valor, indice) => total + valor * (indice === 0 ? 1 : indice), 0) % 103;
+    valores.push(checksum, 106);
+    return valores.flatMap((valor) => BARCODE_CODE128[valor].split("").map(Number));
+  }
+
+  /** SVG del codigo (listo para incrustar) o "" cuando no se debe imprimir codigo. */
+  function inspectionBarcodeSvg(value) {
+    const anchos = inspectionBarcodeModuleWidths(value);
+    if (!anchos.length) return "";
+    const CAJA_ANCHO = 46.57;    // ancho de la celda de 4 columnas
+    const CAJA_ALTO = 7;         // alto util de la fila, arriba del borde inferior
+    const BORDE_DERECHO = 0.32;  // borde negro de la celda, dentro de la caja
+    const AIRE_MINIMO = 0.6;     // blanco minimo entre la zona blanca y el borde
+    const BARRA_Y = 1;
+    const BARRA_ALTO = 5;
+    const X_MAX = 0.42;
+    const X_MIN = 0.25;
+    const modulos = anchos.reduce((total, ancho) => total + ancho, 0);
+    const util = CAJA_ANCHO - BORDE_DERECHO;
+    // 20 modulos = la zona blanca obligatoria (10 X) de cada lado del simbolo.
+    const x = Math.min(X_MAX, (util - 2 * AIRE_MINIMO) / (modulos + 20));
+    if (!(x >= X_MIN)) return "";
+    const anchoBarras = modulos * x;
+    const zonaBlanca = 10 * x;
+    const aire = Math.max(AIRE_MINIMO, (util - anchoBarras - 2 * zonaBlanca) / 2);
+    let cursor = aire + zonaBlanca;
+    let esBarra = true;
+    const barras = [];
+    for (const ancho of anchos) {
+      const anchoMm = ancho * x;
+      if (esBarra) barras.push(`<rect x="${cursor.toFixed(3)}" y="${BARRA_Y}" width="${anchoMm.toFixed(3)}" height="${BARRA_ALTO}"/>`);
+      cursor += anchoMm;
+      esBarra = !esBarra;
+    }
+    const etiqueta = String(value).replace(/[&<>"]/g, (caracter) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[caracter]);
+    return `<svg class="inspection-barcode-svg" viewBox="0 0 ${CAJA_ANCHO} ${CAJA_ALTO}" preserveAspectRatio="none" shape-rendering="crispEdges" role="img" aria-label="Código de barras de la OT ${etiqueta}" ${SVG_NAMESPACE}><rect width="${CAJA_ANCHO}" height="${CAJA_ALTO}" fill="#fff"/><g fill="#000">${barras.join("")}</g></svg>`;
+  }
+
+  root.InspectionCore = { operationKey, initialOperationSelection, printableOperations, inspectionRows, inspectionMaterials, inspectionMaterialsUnicos, inspectionLineaDelBom, inspectionPrintDiagnostic, inspectionRouteRows, filterInspectionRouteRows, inspectionRouteSavePayload, applyInspectionRouteSave, inspectionRouteNormalize, inspectionRouteLooseKey, inspectionCleanDrawing, inspectionRoutesIndex, inspectionRouteMatch, inspectionArticleDrawingMatch, inspectionMaterialDrawingMatch, inspectionLongDate, inspectionDetail, inspectionBarcodeModuleWidths, inspectionBarcodeSvg };
 
   function inspectionRouteSavedValue(saved, field, fallback) {
     const aliases = {
@@ -9519,6 +9666,13 @@ else initializePlanningApp();
 // NOTA PARA QUIEN TOQUE ESTA LINEA: scripts/build-appscript.mjs parchea este bloque por TEXTO
 // exacto, asi que el cuerpo tiene que quedar igual que el startupMarker de ahi, sin comentarios
 // en medio. La explicacion de arriba va aqui arriba, no entre las lineas del bloque.
+//
+// RULE-REP-004 ACTUALIZADA 2026-11-04 (decision del usuario): el reporte abre en el BORRADOR.
+// Hasta hoy, en cuanto llegaba la lista de instantaneas, este arranque cargaba el ultimo plan
+// publicado y TODA la pestaña "Plan de la semana" cambiaba sola unos segundos despues de abrir
+// (sintoma reportado: "muestra la informacion correcta y a los segundos muestra otra"). La
+// fuente publicada ya sigue disponible a mano en el desplegable "Plan" de los reportes; lo que
+// se quito es la carga automatica, no la opcion.
 async function loadAppStateInBackground() {
   const snapshotsRequest = loadPlanSnapshots(false, { deferPublishedLoad: true }).catch((error) => {
     console.warn("No se pudieron cargar los historicos:", error);
@@ -9553,9 +9707,6 @@ async function loadAppStateInBackground() {
     if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
     return null;
   });
-  if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") {
-    void maybeLoadDefaultPublishedReportSnapshot();
-  }
 }
 
 function planningStateHasDemoOnly() {
@@ -9572,6 +9723,17 @@ function planningNormalizeKey(value) {
     .replace(/s+/g, " ");
 }
 
+// Identidad de una operacion del plan: OT + secuencia + CT. Es la misma clave con la que el mapa de
+// estatus marca completadas (OP|ot|secuencia|ct), asi que sirve para cotejar la fila del borrador
+// contra la del espejo aunque hayan cambiado los ids al reprogramar.
+function planningOperationFingerprint(op) {
+  return [
+    planningNormalizeKey(op?.ot),
+    Number(op?.secuencia || 0),
+    planningNormalizeKey(op?.ct || "SIN_CT"),
+  ].join("|");
+}
+
 function planningLoadSnapshotIntoState(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.operations) || !snapshot.operations.length) return false;
   const snapshotOps = snapshot.operations.map((op, index) => normalizeOperation({
@@ -9583,8 +9745,31 @@ function planningLoadSnapshotIntoState(snapshot) {
   if (!ots.length) return false;
 
   const keys = new Set(ots.map(planningNormalizeKey));
+  // EL BORRADOR NO BORRA FILAS DEL ESPEJO QUE EL NO TRAE. MEDIDO 2026-11-10 EN PRODUCCION con la
+  // OT 3608: el borrador guardado tenia 12 de sus 13 operaciones (la seq 1 "3OTD : CORTE DE TUBO"
+  // quedo completada el 2026-11-04 y draftExportOperations la excluia), y este reemplazo tiraba
+  // TODAS las filas del espejo de esas OTs, asi que la fila que Supabase si tenia desaparecia al
+  // arrancar: no se veia en "Detalle de OT" ni se podia reabrir.
+  //
+  // LA REGLA (decision del usuario 2026-11-10):
+  //   - Pendiente: SIEMPRE vuelve, aunque el borrador no la traiga.
+  //   - Completada: sigue solo si su OT esta FIJA; en una OT desbloqueada sale del plan.
+  // El cotejo es por OT+secuencia+CT y no solo por id, porque al reprogramar cambian los ids y
+  // quedarian dos filas de la misma operacion.
+  const draftFingerprints = new Set(snapshotOps.map((op) => planningOperationFingerprint(op)));
+  const lockedKeys = new Set([
+    ...(state.lockedOts || []),
+    ...snapshotOps.filter((op) => op.locked === true).map((op) => op.ot),
+  ].map(planningNormalizeKey).filter(Boolean));
+  const mirrorRowSurvives = (op) => {
+    const key = planningNormalizeKey(op?.ot);
+    if (!keys.has(key)) return true;
+    if (draftFingerprints.has(planningOperationFingerprint(op))) return false;
+    const completed = planningNormalizeKey(op?.planStatus || op?.estatus) === "COMPLETADA_PLAN";
+    return completed ? lockedKeys.has(key) : true;
+  };
   state.operations = [
-    ...(state.operations || []).filter((op) => !keys.has(planningNormalizeKey(op.ot))),
+    ...(state.operations || []).filter(mirrorRowSurvives),
     ...snapshotOps,
   ];
   state.selectedOts = ots;
@@ -9826,11 +10011,29 @@ async function maybeRestoreSavedDraftOnBoot() {
       if (id) emittedIds.add(id);
       merged.push(op);
     };
+    // EL RESCATE NO PUEDE HACER DESAPARECER UNA OPERACION DEL ESPEJO.
+    // MEDIDO 2026-11-10 en produccion con la OT 3608: el borrador guardado traia 12 de sus 13 filas
+    // (`ns-31209`, seq 1 "3OTD : CORTE DE TUBO", quedo marcada completada el 2026-11-04), y este
+    // bucle emitia SOLO las filas del borrador de esa OT, tirando la fila que Supabase si tenia. La
+    // operacion desaparecia de "Detalle de OT" y no habia forma de reabrirla desde el panel.
+    //
+    // LA REGLA (decision del usuario 2026-11-10):
+    //   - OT FIJA: sus filas completadas siguen en el plan, vengan del borrador o solo del espejo.
+    //     Se listan como "Completada" y no consumen tiempo.
+    //   - OT DESBLOQUEADA: una operacion completada sale del plan; no se resucita desde el espejo.
+    //   - PENDIENTE: siempre vuelve. Es la que el borrador pudo perder por secuencia/CT cambiados.
+    const otIsLocked = (ot) => {
+      const key = normalizeKey(ot);
+      return (state.lockedOts || []).some((item) => normalizeKey(item) === key);
+    };
     for (const op of (state.operations || [])) {
       const key = normalizeKey(op.ot);
-      if (!draftByOt.has(key)) { pushUnique(op); continue; }
-      for (const rop of draftByOt.get(key)) pushUnique(rop);
-      draftByOt.delete(key);
+      if (draftByOt.has(key)) {
+        for (const rop of draftByOt.get(key)) pushUnique(rop);
+        draftByOt.delete(key);
+      }
+      if (isPlanCompletedOperation(op) && !otIsLocked(op.ot)) continue;
+      pushUnique(op);
     }
     for (const ops of draftByOt.values()) for (const rop of ops) pushUnique(rop);
     state.operations = merged;
@@ -10017,6 +10220,8 @@ function bindElements() {
     // RULE-SUP-078: el reporte "Liberacion real".
     "releaseRealReport",
     "releaseRealReportCount",
+    "releaseRealFilterCount",
+    "releaseRealSearchInput",
     "exportReleaseRealXlsxBtn",
     "printReleaseRealBtn",
     "releaseRealPrintContext",
@@ -10196,9 +10401,10 @@ function bindEvents() {
   els.generatePlanBtn.addEventListener("click", scheduleCurrentPlan);
   els.publishPlanBtn.addEventListener("click", publishCurrentPlan);
   els.restoreDraftBtn.addEventListener("click", openRestoreDraftDialog);
-  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. generatePlanPdf
-  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado).
-  els.pdfBtn.addEventListener("click", () => generatePlanPdf());
+  // RULE-REP-026: el clic no debe pasar el PointerEvent como id de snapshot. handleExportPlan
+  // resuelve la fuente en su propio dialogo (Borrador en edicion o un plan guardado) y luego el
+  // formato (PDF o Excel). MEDIDO 2026-10-31: el boton "Generar PDF" paso a llamarse "Exportar".
+  els.pdfBtn.addEventListener("click", () => handleExportPlan());
   els.undoBtn.addEventListener("click", undoLastChange);
   els.planStartInput.addEventListener("change", () => {
     checkpointState();
@@ -10262,31 +10468,40 @@ function bindEvents() {
   // RULE-SUP-078: el reporte "Liberacion real". Exportar e imprimir; el render se dispara al
   // abrir la pestana (showTab) y con el boton de exportar si aun no hay datos.
   els.exportReleaseRealXlsxBtn?.addEventListener("click", () => exportReleaseRealXlsx());
+  // FILTRO EN VIVO (pedido del usuario 2026-10-30): no hay boton "Buscar"; cada tecla filtra.
+  // Se limita a re-pintar la tabla sobre lo ya leido: no vuelve a consultar Supabase. El nombre
+  // y el aria-label del campo ya anuncian que se pueden buscar OT y articulo; escribir una
+  // palabra que no aparezca en ninguna fila solo deja la tabla vacia con el aviso.
+  els.releaseRealSearchInput?.addEventListener("input", () => {
+    releaseRealFilter = els.releaseRealSearchInput.value;
+    if (releaseRealCache.loaded) renderReleaseRealReport();
+  });
+  els.releaseRealSearchInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && els.releaseRealSearchInput.value) {
+      event.preventDefault();
+      els.releaseRealSearchInput.value = "";
+      releaseRealFilter = "";
+      if (releaseRealCache.loaded) renderReleaseRealReport();
+    }
+  });
   els.printReleaseRealBtn?.addEventListener("click", async () => {
     await renderReleaseRealReport();
     prepareIndividualPrint(els.releaseRealReport.closest(".tab-panel"), "landscape");
   });
-  // RULE-SUP-078: al pulsar "Sincronizar datos" dispara la ingesta SOLO con accion: ensambles
+  // RULE-SUP-078: al pulsar "Sincronizar datos" se ORDENA la ingesta completa por la puerta de
+  // Apps Script (la misma que usa "Sincronizar OTs") y luego se relee `ensambles_ot` de Supabase.
+  // No se manda `accion: 'ensambles'` porque doPost solo acepta `accion: 'ingesta'`
+  // (19-appscript-ingesta-supabase.js:1143-1148 rechaza cualquier otra DICHO, sin correr nada), y
+  // el navegador tampoco puede escribir la tabla: su RLS solo deja SELECT y `ingesta_mirror`
+  // esta revocado para anon/authenticated. La escribe la ingesta con la service key.
   document.getElementById("syncReleaseRealBtn")?.addEventListener("click", async () => {
     const btn = document.getElementById("syncReleaseRealBtn");
     if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
     try {
-      // Ingesta directa por Supabase: el puente Apps Script está deshabilitado (RULE-SUP-030)
-      // y `google.script.run` no funciona en GitHub Pages. La ingesta debe ser directa.
-      const supabaseUrl = window.__SUPABASE_URL || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getUrl?.() : null);
-      const supabaseKey = window.__SUPABASE_ANON_KEY || (typeof PPSupabaseBridgeReplacement !== "undefined" ? PPSupabaseBridgeReplacement.getKey?.() : null);
-      if (supabaseUrl && supabaseKey) {
-        const resp = await fetch(supabaseUrl + "/rest/v1/rpc/plan_guardar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "apikey": supabaseKey },
-          body: JSON.stringify({ accion: "ensambles", sync_release_real: true })
-        });
-        if (resp.ok) console.log("Ingesta ensambles iniciada vía Supabase");
-        else console.warn("Ingesta ensambles falló:", resp.status);
-      } else {
-        console.warn("No se pudo disparar ingesta ensambles: faltan credenciales de Supabase");
+      const ingesta = await correrIngestaPorBoton();
+      if (ingesta && ingesta.seguir) {
+        await new Promise(r => setTimeout(r, 1500));
       }
-      await new Promise(r => setTimeout(r, 4000));
     } catch (e) {
       console.warn("Error al forzar ingesta de ensambles:", e);
     } finally {
@@ -10303,6 +10518,35 @@ function bindEvents() {
     } else {
       alert("Datos cargados: " + releaseRealCache.rows.length + " ensambles encontrados.");
     }
+  });
+  // MEDIDO 2026-10-31 (reporte Faltantes): sincroniza solo las 5 tablas del reporte sin
+  // tocar operations ni machines (RULE-SUP-048 excepcion, parcial). Despues de la ingesta
+  // se recarga el estado completo desde Supabase (getAppState -> aplicarEstadoDesdeSupabase)
+  // para que el reporte vea los datos frescos de inventario, OVs, items, materiales y OTs.
+  document.getElementById("syncFaltantesBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("syncFaltantesBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Sincronizando..."; }
+    try {
+      const ingesta = await window.PPIngestaTrigger.dispararIngesta({
+        solo: ['workorders','materiales','items','inventario','ordenes_venta'],
+      });
+      if (ingesta && ingesta.ok !== true) {
+        showToast("Sincronizacion parcial: " + (ingesta.motivo || "ver resultado"), 6000);
+      }
+    } catch (e) {
+      console.warn("Error en sincronizacion de faltantes:", e);
+    }
+    // Recargar el estado completo de las tablas de catalogo desde Supabase
+    try {
+      const imported = await PPSupabaseBridgeReplacement.getAppState();
+      if (imported && typeof aplicarEstadoDesdeSupabase === "function") {
+        await aplicarEstadoDesdeSupabase(imported);
+      }
+    } catch (e) {
+      console.warn("Error al recargar estado tras ingesta:", e);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "Sincronizar"; }
+    renderFaltantesReport();
   });
   els.addOperatorBtn.addEventListener("click", addOperator);
   els.addCtBtn.addEventListener("click", addCt);
@@ -11274,7 +11518,31 @@ function isPlanCompletedOperation(op, statusesOverride) {
   if (!op) return false;
   const stored = (statusesOverride || draftViewStatuses())[operationCompletionKey(op)];
   if (stored?.status) return stored.status === "COMPLETADA_PLAN";
-  return normalizeStatus(op.planStatus) === "COMPLETADA_PLAN";
+  if (normalizeStatus(op.planStatus) === "COMPLETADA_PLAN") return true;
+  // CASCADA (decision del usuario 2026-11-10): si la siguiente operacion de produccion tiene un
+  // CAMBIO_HERRAMENTAL completado, esta operacion se considera completada aunque no tenga su
+  // propio registro en operation_plan_statuses. No aplica a los propios cambios de herramental.
+  if (isToolChangeReportOperation(op)) return false;
+  return precededByCompletedToolChange(op, statusesOverride);
+}
+
+function precededByCompletedToolChange(op, statusesOverride) {
+  const next = nextProductionOperation(op?.ot || "", op?.secuencia || 0);
+  if (!next || !next.id) return false;
+  const statuses = statusesOverride || draftViewStatuses();
+  const needle = `TOOL_CHANGE|${normalizeStatus(String(next.id).trim())}`;
+  for (const rawKey of Object.keys(statuses)) {
+    if (rawKey.startsWith(needle) && statuses[rawKey]?.status === "COMPLETADA_PLAN") return true;
+  }
+  return false;
+}
+
+function nextProductionOperation(ot, secuencia) {
+  return (state.operations || []).find((other) =>
+    String(other.ot || "").trim() === String(ot || "").trim() &&
+    Number(other.secuencia || 0) > Number(secuencia || 0) &&
+    normalizeStatus(other.tipoInsercion) !== "CAMBIO_HERRAMENTAL"
+  );
 }
 
 function normalizeOtDate(value) {
@@ -13557,6 +13825,11 @@ function renderSelectedJobPanel() {
     ? `<img loading="lazy" src="${escapeHtml(detalleFoto)}" alt="Foto del articulo ${escapeHtml(job.parte || "SIN ARTICULO")}" data-detail-photo />`
     : "";
 
+  // DECISION DEL USUARIO 2026-11-10 (OT 3608): la operacion completada sigue LISTADA en el panel.
+  // job.ops viene de currentPlanOperations() que excluye completadas (PlannerCore.filterExcludedOperations);
+  // para el listado de filas se usa el conjunto completo de operaciones de la OT (state.operations),
+  // asi la completada aparece con el label "Completada" y su tiempo no se suma en job.minutes.
+  const fullOpsForRow = (state.operations || []).filter((op) => String(op.ot || "").trim() === String(job.ot || "").trim());
   els.selectedJobPanel.innerHTML = `
     <article class="job-detail">
       <div class="job-detail-head">
@@ -13620,14 +13893,14 @@ function renderSelectedJobPanel() {
         ` : `<div class="job-material-empty">Sin materiales reportados por NetSuite</div>`}
       </details>
       <div class="job-detail-operations-scroll">
-        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${job.ops.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
+        <div class="job-operations-title"><span>Operaciones</span><span>${completedOperationsNotice ? "OT completada" : `${fullOpsForRow.length} filas - ${formatMinutes(job.minutes)}`}</span></div>
         <div class="job-op-header"><span>Sec.</span><span>Operacion</span><span>CT</span><span>Tiempo</span><span>Estado</span></div>
         <div class="job-op-list">
-        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || detailOps.map((op) => {
+        ${loadingOperations ? `<div class="job-op-empty">Cargando operaciones...</div>` : completedOperationsNotice || fullOpsForRow.map((op) => {
           const isToolChangeOp = normalizeStatus(op.tipoInsercion) === "CAMBIO_HERRAMENTAL" || /CAMBIO\s+(?:DE\s+)?HERRAMENTAL/.test(normalizeStatus(op.descripcion || op.log));
           const completed = isPlanCompletedOperation(op, activePlanReportStatuses());
           const statusCell = isToolChangeOp ? "<span class=\"op-status\">-</span>"
-            : `<span class="op-status${completed ? " completed-label" : ""}">${planStatusActionCell(op)}</span>`;
+            : `<span class="op-status${completed ? " completed-label" : ""}">${completed ? "<span class=\"op-status-text\">Completada</span>" : ""}${planStatusActionCell(op)}</span>`;
           return `
           <div class="job-op-row${completed && !isToolChangeOp ? " op-completed" : ""}" title="${escapeHtml(toolLabel(op))}">
             <span>${escapeHtml(op.secuencia)}</span>
@@ -14360,18 +14633,8 @@ function renderSaturation() {
 
   const loads = operatorLoadsSourceMemoized(source, state.loadWeekStart, 7);
   const saturated = loads.filter((item) => item.percent > 100);
-  els.bottleneckOperators.innerHTML = `
-    <thead><tr><th>ID</th><th>Nombre</th><th>Recurso</th><th>Carga</th></tr></thead>
-    <tbody>${saturated.length ? saturated.map((item, rowNumber) => {
-      const profile = state.operatorProfiles[item.operator] || { name: item.operator, category: resourceCategoryFor(item.operator) };
-      return `<tr class="resource-row">
-        <td>${rowNumber + 1}</td>
-        <td>${escapeHtml(profile.name || item.operator)}</td>
-        <td><div class="resource-cell"><strong>${escapeHtml(item.operator)}</strong><span>${escapeHtml(formatResourceCategoryLabel(resourceCategoryFor(item.operator)))}</span></div></td>
-        <td class="load-percent danger"><strong>${Math.round(item.percent)}%</strong><span>${formatHours(item.minutes)} / ${formatHours(item.available)}</span></td>
-      </tr>`;
-    }).join("") : `<tr><td colspan="4" class="bottleneck-empty">Sin operadores saturados en la semana</td></tr>`}</tbody>
-  `;
+  // MEDIDO 2026-11-01, DECISION DEL USUARIO: se quita la tabla de "Cuello de botella operador".
+  if (els.bottleneckOperators) els.bottleneckOperators.innerHTML = "";
 
   const weekOperations = operationsForWeekSource(source, "", state.loadWeekStart)
     .filter((op) => !isToolChangeReportOperation(op) && !isSubcontractAppOperation(op) && op.operador !== "SUBCONTRATO");
@@ -14380,19 +14643,22 @@ function renderSaturation() {
     .sort((a, b) => b.minutes - a.minutes)
     .slice(0, 10);
   els.bottleneckOperations.innerHTML = `
-    <thead><tr><th>OT</th><th>Operacion</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
+    <thead><tr><th>OT</th><th>Operacion</th><th>Articulo</th><th>Operador</th><th>Maquina</th><th>Inicio</th><th>Duracion</th></tr></thead>
     <tbody>${top.length ? top.map(({ op, minutes }) => {
       const start = opStart(op);
       const description = op.descripcion || `CT ${op.ct}`;
+      const workOrder = workOrderForOt(op.ot);
+      const articulo = op.parte || workOrder?.item || "";
       return `<tr>
         <td>${escapeHtml(op.ot)}</td>
         <td>${escapeHtml(description)}</td>
+        <td>${escapeHtml(articulo)}</td>
         <td>${escapeHtml(op.operador || "")}</td>
         <td>${escapeHtml(op.maquina || "")}</td>
         <td>${start ? `${escapeHtml(formatShortDate(start))} ${escapeHtml(op.horaInicio || "")}` : "-"}</td>
         <td class="load-percent danger"><strong>${formatHours(minutes)}</strong><span>${formatMinutes(minutes)}</span></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
+    }).join("") : `<tr><td colspan="7" class="bottleneck-empty">Sin operaciones en la semana</td></tr>`}</tbody>
   `;
   planningPerfMeasure("saturation-render", perfMark);
 }
@@ -16249,20 +16515,173 @@ function pdfSourceOptions() {
 
 async function choosePdfSource() {
   const options = pdfSourceOptions();
-  if (options.length <= 1) return "draft";
+  // MEDIDO 2026-10-31 (pedido del usuario): el flujo de Exportar SIEMPRE pregunta la fuente,
+  // aunque haya una sola opcion (Borrador). Antes este atajo devolvia "draft" sin dialogar.
   const current = reportSnapshot?.snapshotId || "draft";
   const dialogOptions = options
     .map((option) => `<option value="${escapeHtml(option.id)}"${option.id === current ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
     .join("");
   const result = await openPlanningDialog({
-    title: "Generar PDF del plan",
-    summary: "Elige la fuente del PDF: el borrador en edicion o un plan guardado.",
-    body: `<label>Fuente del PDF<select name="snapshot_id" required>${dialogOptions}</select></label>`,
-    confirmLabel: "Generar PDF",
+    title: "Exportar el plan",
+    summary: "Elige la fuente del reporte: el borrador en edicion o un plan guardado.",
+    body: `<label>Fuente<select name="snapshot_id" required>${dialogOptions}</select></label>`,
+    confirmLabel: "Continuar",
     cancelVisible: true,
   });
   if (!result) return null;
   return String(result.snapshot_id || "");
+}
+
+// MEDIDO 2026-10-31 (pedido del usuario): el boton "Generar PDF" paso a llamarse "Exportar" y
+// exporta el Plan de la semana en PDF o Excel. Paso 1 = fuente (choosePdfSource), paso 2 =
+// formato. PDF usa window.print() (sin libreria); Excel descarga directa con 3 hojas.
+async function handleExportPlan() {
+  const sourceId = await choosePdfSource();
+  if (!sourceId) return;
+  const result = await openPlanningDialog({
+    title: "Exportar el plan",
+    summary: "Elige el formato de salida del Plan de la semana.",
+    body: `
+      <label class="restore-draft-option"><input type="radio" name="export_format" value="pdf" checked><span><strong>PDF</strong><small>Se abrira el dialogo de impresion; elige "Guardar como PDF".</small></span></label>
+      <label class="restore-draft-option"><input type="radio" name="export_format" value="xlsx"><span><strong>Excel (.xlsx)</strong><small>Descarga directa con hojas: Resumen, OT que inician y OT que terminan.</small></span></label>`.trim(),
+    confirmLabel: "Exportar",
+    cancelVisible: true,
+  });
+  if (!result) return;
+  if (result.export_format === "xlsx") {
+    return exportPlanWeeklyXlsx(sourceId);
+  }
+  return generatePlanPdf(sourceId);
+}
+
+// MEDIDO 2026-10-31 (pedido del usuario): exportacion EXCEL del Plan de la semana. Resuelve la
+// misma fuente que el PDF (borrador o plan guardado), calcula el resumen semanal con las MISMA
+// funciones del reporte en pantalla y arma un .xlsx de 3 hojas:
+//   Resumen                indicadores (meta, monto, brecha, costos, promedios) + desglose por tipo
+//   OT que inician         agrupadas por dia, igual que renderWeeklyJobDays(..., false)
+//   OT que terminan        agrupadas por dia, igual que renderWeeklyJobDays(..., true)
+function weeklyDayRowsForXlsx(rows, finishing) {
+  const byDate = new Map();
+  for (const row of rows) {
+    const dateKey = formatDate(row.date);
+    if (!byDate.has(dateKey)) byDate.set(dateKey, []);
+    byDate.get(dateKey).push(row);
+  }
+  const out = [];
+  for (const [dateKey, dayRows] of byDate) {
+    const date = parseDateOnlyValue(dateKey);
+    out.push([formatReportDate(date)]);
+    dayRows.forEach((row, index) => {
+      const cells = [formatReportDate(date), String(index + 1), row.ot, row.part, formatMaterialQuantity(row.pendingPieces)];
+      if (finishing) {
+        cells.push(formatCurrency(window.PlanningWorkflowCore.effectiveFinishingAmount(row)), String(row.jobType || "").trim());
+      }
+      out.push(cells);
+    });
+    const pieces = dayRows.reduce((sum, row) => sum + Number(row.pendingPieces || 0), 0);
+    const dayTotal = [`Total ${dayRows.length}`, "", "", "", formatMaterialQuantity(pieces)];
+    if (finishing) {
+      dayTotal.push(formatCurrency(window.PlanningWorkflowCore.weeklyFinishingCost(dayRows).totalCost), "");
+    }
+    out.push(dayTotal);
+  }
+  return out;
+}
+
+function weeklyResumenRowsForXlsx(summary) {
+  const indicadores = [
+    ["Meta semanal", formatCurrency(summary.releaseTarget)],
+    ["Monto de liberacion", formatCurrency(summary.releaseAmount)],
+    ["Brecha", formatCurrency(summary.releaseGap)],
+    ["Costo p/p", formatCurrency(summary.costPerPiece)],
+    ["Personas con carga", String(summary.peopleWithLoad)],
+    ["Monto por persona", formatCurrency(summary.releasePerPerson)],
+    ["Prom diario corte inicial", formatMaterialQuantity(summary.dailyInitialCutPieces)],
+    ["Prom diario acabado", formatMaterialQuantity(summary.dailyFinishingPieces)],
+    ["Ineficiencia corte inicial", formatMaterialQuantity(summary.staleInitialCutPieces)],
+    ["Ineficiencia acabado", formatMaterialQuantity(summary.staleFinishingPieces)],
+  ];
+  return indicadores.concat(summary.finishingByType.map((row) => [
+    `Tipo ${row.type}: piezas`, formatMaterialQuantity(row.pieces),
+    `Tipo ${row.type}: monto`, formatCurrency(row.amount),
+    `Tipo ${row.type}: costo p/p`, formatCurrency(row.costPerPiece),
+  ]));
+}
+
+async function exportPlanWeeklyXlsx(sourceId) {
+  let usingDraft = sourceId === "draft";
+  const snapshotId = usingDraft ? "" : sourceId;
+  // Mismo camino que el PDF: se resuelve la fuente sobre `reportSnapshot` para que las
+  // funciones del reporte (reportOperationsSource, weeklyJobSummary) lean de ahi.
+  if (usingDraft) {
+    syncDraftReportWeek();
+    reportSnapshot = currentDraftReportSnapshot();
+  } else {
+    await loadPlanSnapshotById(snapshotId, { render: false, silent: true });
+  }
+  if (!reportSnapshot?.operations?.length) {
+    if (!usingDraft) {
+      showToast("El plan seleccionado no tiene operaciones programadas");
+      return;
+    }
+    const scheduled = currentPlanOperations().filter((op) => isJobScheduled(op.ot) && !isPlanCompletedOperation(op));
+    reportSnapshot = { operations: scheduled.map((op, index) => ({ ...op, num: index + 1 })) };
+    if (!reportSnapshot.operations.length) {
+      // MEDIDO 2026-11-01 (pedido del usuario): el Borrador esta vacio porque el plan se
+      // publico y sus OTs quedaron solo en el snapshot. En vez de exportar vacio, se busca
+      // el snapshot mas reciente con datos y se usa ese. El orden es `publishedAt` o
+      // `generatedAt` descendente, asi que el primer snapshot con operations > 0 es el
+      // ultimo que se publico/guardo. Si no hay ninguno, se avisa y se sale.
+      const saved = Array.isArray(planSnapshots) ? planSnapshots : [];
+      const sorted = saved
+        .filter((s) => s.snapshotId && s.snapshotId !== "draft" && Number(s.operations || 0) > 0)
+        .sort((a, b) => String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+      if (sorted.length) {
+        await loadPlanSnapshotById(sorted[0].snapshotId, { render: false, silent: true });
+        if (reportSnapshot?.operations?.length) {
+          usingDraft = false; // ahora la fuente es el snapshot, no el borrador
+        }
+      }
+    }
+    // Si tras el fallback todavia no hay operaciones, se sale con aviso.
+    if (!reportSnapshot?.operations?.length) {
+      showToast("No hay operaciones programadas para exportar");
+      return;
+    }
+  }
+  const reportStart = usingDraft
+    ? (state.planStart || state.reportWeekStart)
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+  state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  const reportOps = reportOperationsSource();
+  const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
+  const execSummary = weeklyExecutiveSummary(summary, state.reportWeekStart, {
+    operations: reportOps,
+    sourceState: usingDraft ? state : (reportSnapshot || state),
+  });
+  const sheets = [
+    {
+      name: "Resumen",
+      headers: ["Indicador", "Valor"],
+      rows: weeklyResumenRowsForXlsx(execSummary),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT],
+    },
+    {
+      name: "OT que inician",
+      headers: ["Dia", "No.", "ORD", "PARTE", "PZAS"],
+      rows: weeklyDayRowsForXlsx(summary.starts, false),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.NUMBER],
+    },
+    {
+      name: "OT que terminan",
+      headers: ["Dia", "No.", "ORD", "PARTE", "PZAS", "MONTO", "TIPO"],
+      rows: weeklyDayRowsForXlsx(summary.finishes, true),
+      colTypes: [XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.TEXT, XLSX_COL_TYPE.NUMBER, XLSX_COL_TYPE.CURRENCY, XLSX_COL_TYPE.TEXT],
+    },
+  ];
+  const bytes = buildMultiSheetXlsxBytes(sheets);
+  const weekLabel = `plan-semana-${reportStart || "sin-fecha"}`;
+  downloadBlob(bytes, `${weekLabel}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 async function generatePlanPdf(explicitSnapshotId = "") {
@@ -16826,8 +17245,12 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
     savePlanSnapshotsCache(planSnapshots);
     const draftReport = currentDraftReportSnapshot();
     const hasDraftReport = draftReport.operations.length > 0;
-    const preferPublished = (options.deferPublishedLoad !== true || !hasDraftReport) &&
-      (!reportSnapshot || (reportSnapshot.snapshotId === "draft" && !hasDraftReport));
+    // RULE-REP-004 (actualizada 2026-11-04): el reporte abre SIEMPRE en el borrador. Antes, esta
+    // rama cargaba el ultimo plan publicado cuando la lista de instantaneas resolvia, y la pestaña
+    // "Plan de la semana" cambiaba sola a los segundos de abrir. El publicado sigue disponible en
+    // el desplegable "Plan"; lo unico que se quito es la carga automatica en el arranque.
+    const preferPublished = options.deferPublishedLoad !== true &&
+      !reportSnapshot && !hasDraftReport;
     if (preferPublished) {
       const bootSourceVersion = planSourceLoadVersion;
       for (const snapshot of publishedPlanSnapshots()) {
@@ -16837,7 +17260,10 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
       }
     }
     if (!reportSnapshot) {
-      syncDraftReportWeek();
+      // RULE-REP-004 (actualizada 2026-11-04): NO se llama a syncDraftReportWeek() aqui. Esa llamada
+      // movia la semana de los reportes a la de `state.planStart` (el ultimo plan guardado) justo
+      // cuando resolvia la lista de instantaneas, o sea despues del primer pintado. La semana ya la
+      // fijo el arranque en el lunes de la semana actual con syncReportFiltersToPlanWeekOrToday().
       reportSnapshot = draftReport;
     }
     planSnapshotsLoading = false;
@@ -16856,12 +17282,6 @@ async function loadPlanSnapshotsImpl(showMessage, options = {}) {
 function loadSnapshotsOnce(showMessage) {
   if (planSnapshots.length && showMessage !== true) return Promise.resolve({ ok: true, count: planSnapshots.length });
   return loadPlanSnapshots(showMessage);
-}
-
-function maybeLoadDefaultPublishedReportSnapshot() {
-  if (reportSnapshot && reportSnapshot.snapshotId !== "draft") return null;
-  const activeId = activePublishedSnapshotId();
-  return activeId ? loadPlanSnapshotById(activeId, { silent: true }) : null;
 }
 
 async function loadSelectedPlanSnapshot(selectedSnapshotId) {
@@ -17212,11 +17632,37 @@ function closedWorkOrderOperation(summary) {
   const start = closedSummarySchedule(summary.scheduledStart);
   const end = closedSummarySchedule(summary.scheduledEnd);
   if (!start && !end) return null;
+  // MEDIDO 2026-11-01 (OT 3300): resumen compacto de una OT que NO esta en el espejo de
+  // `work_orders` ni tiene articulo ni cantidad. Se inyectaba como fila fantasma (PARTE
+  // vacio, 0 pzs) en "Acabado / OT que terminan". Es un resumen huerfano, no una OT que se
+  // ensamblo en la semana (como la 4111, que SI estaba en work_orders). La ficha aqui solo
+  // puede salvarlo si el espejo o el resumen tienen un articulo con cantidad; si ni aun asi
+  // hay articulo y piezas >= 1, la OT no tiene dato valido y no debe mostrarse.
+  const fichaAntes = closedSummaryFichaForOt(summary, ot);
+  const tieneArticulo = !!String(fichaAntes.item || summary.item || "").trim();
+  const tieneCantidad = (Number(summary.quantity) || Number(fichaAntes.quantity) || 0) >= 1;
+  if (!tieneArticulo && !tieneCantidad) return null;
   const pending = Number(summary.pendingQuantity);
-  const pieces = Number.isFinite(pending) && pending > 0 ? pending : Number(summary.quantity) || 0;
+  // MEDIDO 2026-10-30 (OT 4111, DECISION DEL USUARIO): una OT cerrada SE RESCATA SIEMPRE, con
+  // su articulo y su cantidad reales. Antes la 4111 salia como fila fantasma (PARTE vacio,
+  // 0 pzs, $0.00) porque su resumen compacto llego con `item` y cantidades en 0; ocultarla no
+  // era la respuesta: la OT se ensamblo en la semana y el dato existe en `work_orders`.
+  // Por eso, si el resumen viene incompleto, se completan articulo y piezas con el espejo
+  // (`work_orders`, que si trae las cerradas: ver confirmWorkOrderClosures) y, si tampoco
+  // esta ahi, con lo ultimo que se recuerda en `state.workOrders`.
+  const ficha = closedSummaryFichaForOt(summary, ot);
+  // PZAS del reporte semanal = piezas NO ensambladas (es lo que falta por terminar en la
+  // semana). Si el resumen no las trae, se calculan de la ficha con la MISMA formula de
+  // `compactClosedWorkOrder`: cantidad - ensamblada.
+  const pendingValue = Number(summary.pendingQuantity);
+  const quantityValue = Number(summary.quantity) || Number(ficha.quantity) || 0;
+  const builtValue = Number(summary.builtQuantity) || Number(ficha.builtQuantity) || 0;
+  const pieces = Number.isFinite(pendingValue) && pendingValue > 0
+    ? pendingValue
+    : (quantityValue > 0 ? Math.max(0, quantityValue - builtValue) : Number(summary.quantity) || 0);
   return {
     ot,
-    parte: String(summary.item || "").trim(),
+    parte: String(summary.item || "").trim() || String(ficha.item || "").trim(),
     descripcion: "",
     ct: "",
     secuencia: 0,
@@ -17226,7 +17672,12 @@ function closedWorkOrderOperation(summary) {
     horaFin: end ? end.hora : (start ? start.hora : ""),
     cantPendiente: pieces,
     pendingPieces: pieces,
-    cantTotal: Number(summary.quantity) || 0,
+    cantTotal: quantityValue,
+    // DECISION DEL USUARIO 2026-10-30: una OT cerrada se muestra con la CANTIDAD DE LA OT (10
+    // pzs en la 4111), no con las pendientes, que en una OT cerrada completa son 0. `cantidadOt`
+    // es la cantidad de la ficha (cantidad total de la OT); `pendingPieces` se queda como esta
+    // porque es la cuenta real de lo que falta por ensamblar y otras vistas la usan.
+    cantidadOt: quantityValue,
     tipoInsercion: "",
     jobType: "",
     planningType: "",
@@ -17234,6 +17685,75 @@ function closedWorkOrderOperation(summary) {
     amount: null,
     _closedSummary: true,
   };
+}
+
+// La ficha (`work_orders`) de una OT cerrada, para completar un resumen compacto que vino
+// incompleto. El espejo de Supabase SI trae las OTs cerradas y es la fuente que confirma el
+// cierre (confirmWorkOrderClosures); `state.workOrders` es el ultimo recurso, porque la OT se
+// retira del borrador al cerrarse (RULE-OT-049) y puede ya no estar ahi.
+const closedWorkOrderFichaCache = new Map();
+
+// FICHA EFECTIVA DE UNA OT CERRADA, para los reportes que pintan fila por operacion. La OT ya
+// no esta en `state.workOrders` (se retiro al cerrarse, RULE-OT-049), asi que `workOrderForOt`
+// devuelve null y el "Plan por operador" mostraba la fila con Parte y Piezas vacios (MEDIDO
+// 2026-10-30, OT 4111). Se resuelve del resumen compacto y, si este vino sin articulo, de la
+// ficha del espejo (`closedSummaryFichaForOt`, que tambien pide el dato vivo una vez). El
+// shape es el minimo que necesita `renderProductionReportRow`: item y la cantidad para PZAS.
+function closedWorkOrderFichaForOt(ot) {
+  const summary = closedWorkOrderSummaryForOt(ot);
+  if (!summary) return null;
+  const ficha = closedSummaryFichaForOt(summary, ot);
+  const pending = Number(summary.pendingQuantity);
+  const quantity = Number(ficha.quantity) || Number(summary.quantity) || 0;
+  return {
+    item: String(ficha.item || summary.item || "").trim(),
+    quantity: quantity,
+    // Piezas para el reporte: las pendientes si el resumen las conoce; si no, la cantidad de
+    // la OT, que es la unica pieza real que queda asociada a una OT cerrada.
+    pendingQuantity: Number.isFinite(pending) && pending > 0 ? pending : quantity,
+  };
+}
+
+function closedSummaryFichaForOt(summary, ot) {
+  const key = materialOtKey(ot);
+  if (!key) return {};
+  const cached = closedWorkOrderFichaCache.get(key);
+  if (cached) return cached;
+  const live = (state.workOrders || []).find((workOrder) => materialOtKey(workOrder?.ot) === key);
+  const local = {
+    item: String(live?.item || "").trim() || String(summary?.item || "").trim(),
+    quantity: Number(live?.quantity) || Number(summary?.quantity) || 0,
+    builtQuantity: Number(live?.builtQuantity) || Number(summary?.builtQuantity) || 0,
+  };
+  if (live?.item) {
+    closedWorkOrderFichaCache.set(key, local);
+    return local;
+  }
+  // Se pide UNA vez por OT y sesion; al llegar se re-renderiza solo (sin tocar el estado).
+  if (!closedWorkOrderFichaCache.has(key)) {
+    closedWorkOrderFichaCache.set(key, local);
+    refreshClosedWorkOrderFicha(key);
+  }
+  return local;
+}
+
+function refreshClosedWorkOrderFicha(key) {
+  const bridge = window.PPSupabaseBridgeReplacement;
+  if (!bridge || typeof bridge.getInspectionWorkOrder !== "function") return;
+  Promise.resolve(bridge.getInspectionWorkOrder(key))
+    .then((answer) => {
+      const data = answer && answer.ok ? (answer.data && answer.data.workOrder) || null : null;
+      const item = String(data?.item || data?.article || "").trim();
+      if (!item) return;
+      const previous = closedWorkOrderFichaCache.get(key) || {};
+      closedWorkOrderFichaCache.set(key, {
+        item: item,
+        quantity: Number(data.quantity) || Number(previous.quantity) || 0,
+        builtQuantity: Number(data.builtQuantity) || Number(previous.builtQuantity) || 0,
+      });
+      if (typeof renderReports === "function") renderReports();
+    })
+    .catch(() => {});
 }
 
 const inspectionWorkOrderCache = new Map();
@@ -17408,7 +17928,20 @@ function mergeClosedWorkOrderSummaries(local, remote) {
     if (value.item && !existing.item) merged[existingKey].item = value.item;
     if (value.quantity && !Number(existing.quantity)) merged[existingKey].quantity = value.quantity;
   }
-  return merged;
+  // LIMPIEZA DE RESÚMENES HUÉRFANOS (MEDIDO 2026-11-01, OT 3300): un resumen compacto sin
+  // articulo y sin cantidad (item:'' , quantity 0) no describe ningún ensamble real. Se
+  // generaba cuando una OT se cerraba sin ficha en `work_orders`; el reporte lo inyectaba
+  // como fila fantasma en "Acabado / OT que terminan". Aqui se poda en cada recarga/aplicacion
+  // para no arrastrarlo ni conservarlo.
+  const podado = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (!value || typeof value !== "object") continue;
+    const tieneArticulo = !!String(value.item || "").trim();
+    const tieneCantidad = (Number(value.quantity) || 0) >= 1;
+    if (!tieneArticulo && !tieneCantidad) continue; // huerfano: se descarta
+    podado[key] = value;
+  }
+  return podado;
 }
 
 // Union de las marcas de "por confirmar" (RULE-OT-051 capa 2) entre la sesion local y la que
@@ -17891,6 +18424,20 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
       unitPrice,
       amount,
     };
+    // DECISION DEL USUARIO 2026-10-30 (OT 4111): en el "Plan de la semana" una OT CERRADA se
+    // muestra con la CANTIDAD DE LA OT, no con las piezas pendientes. Una OT cerrada completa
+    // tiene pendientes 0, y el reporte la mostraba en 0 pzs y $0.00 como si no hubiera
+    // liberado nada. El monto se recalcula con esa cantidad y el MISMO precio (el mayor de las
+    // fuentes de RULE-REP-021): 10 pzs x $133.75 = $1,337.50. Las OTs abiertas no cambian.
+    const closedQuantity = Number(first.cantidadOt);
+    if (first._closedSummary === true && Number.isFinite(closedQuantity) && closedQuantity > 0) {
+      row.piecesOfOt = true;
+      row.pendingPieces = closedQuantity;
+      if (unitPrice != null) {
+        const closedAmount = unitPrice * closedQuantity;
+        row.amount = amounts.length ? Math.max(...amounts, closedAmount) : closedAmount;
+      }
+    }
     if (start && start >= range.start && start < range.end) starts.push({ ...row, date: start });
     if (finish && finish >= range.start && finish < range.end) finishes.push({ ...row, date: finish });
   }
@@ -18065,7 +18612,10 @@ function adjusterReportSelection() {
 function renderAdjusterReportRow(op, index, options = {}) {
   const start = opStart(op);
   const end = opEnd(op);
-  const workOrder = workOrderForOt(op.ot);
+  // Misma caida que el Plan por operador (MEDIDO 2026-10-30, OT 4111): una OT cerrada ya no
+  // esta en state.workOrders y el articulo salia en blanco. Se resuelve del resumen de la
+  // OT cerrada cuando no hay ficha viva.
+  const workOrder = workOrderForOt(op.ot) || closedWorkOrderFichaForOt(op.ot);
   const change = toolChangeReportData(op);
   const destinationHerramental = change.toHerramental || cleanToolValue(op.herramental);
   const destinationKit = change.toKit || cleanToolValue(op.kitHerramental);
@@ -18221,17 +18771,24 @@ function releaseReportRows() {
     // resumen compacto de la OT cerrada, ambos en la fuente del reporte.
     const workOrder = workOrderForSource(sourceState, ot);
     const closed = closedSummaryForSource(sourceState, ot);
+    // MEDIDO 2026-10-30 (OT 4111): el resumen compacto puede venir incompleto (item vacio).
+    // Mismo rescate que en el Plan de la semana: primero la ficha viva, despues el espejo.
+    const fichaCierre = closed ? closedSummaryFichaForOt(closed, ot) : {};
     const part = sequenced.find((operation) => String(operation.parte || "").trim())?.parte
-      || workOrder?.item || closed?.item || "";
+      || workOrder?.item || closed?.item || String(fichaCierre.item || "") || "";
     const inspectionTotal = inspectionQuantityForOt(ot);
     const workOrderTotal = Number(workOrder?.quantity);
     const totalValue = inspectionTotal ?? (Number.isFinite(workOrderTotal) && workOrderTotal > 0 ? workOrderTotal : null);
     // `pendingPiecesForWorkOrder` devuelve 0 cuando no hay ficha (OT cerrada retirada del
     // borrador). Ese 0 no debe tapar el resumen compacto que sí se conserva, así que la
-    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha.
+    // cantidad pendiente de la OT cerrada va ANTES del fallback a la ficha. Si el resumen vino
+    // incompleto, sale de la ficha de cierre: pendientes si los hay, si no la cantidad total.
     const closedPending = closed
       ? (Number(closed.pendingQuantity) > 0 ? Number(closed.pendingQuantity)
-          : (Number(closed.quantity) > 0 ? Number(closed.quantity) : null))
+          : (Number(closed.quantity) > 0 ? Number(closed.quantity)
+            : (Number(fichaCierre.quantity) > 0
+              ? Math.max(0, Number(fichaCierre.quantity) - (Number(fichaCierre.builtQuantity) || 0))
+              : null)))
       : null;
     const livePending = Number(pendingPiecesForWorkOrder(workOrder));
     const quantityValue = totalValue
@@ -18253,6 +18810,10 @@ function releaseReportRows() {
       ?? workOrder?.builtQuantity
       ?? 0
     ));
+    // El precio unitario es el MISMO con el que se valora la OT en el plan y en "Liberacion
+    // real" (RULE-REP-021): precio manual de la OT -> ultima venta -> promedio -> precio de
+    // referencia del catalogo.
+    const unitPrice = releaseRealUnitPrice(ot, part);
     rows.push({
       ot,
       article: part,
@@ -18262,6 +18823,12 @@ function releaseReportRows() {
       ct: releaseMatch?.ct || "",
       label: releaseMatch?.label || "16OC",
       releaseOp: release,
+      // MEDIDO 2026-10-30 (pedido del usuario): "Liberacion final" muestra PRECIO UNITARIO y
+      // PRECIO TOTAL despues de Ensamblado. DECIDIDO 2026-10-30: el total se calcula sobre el
+      // ENSAMBLADO (lo que de verdad se libero), no sobre la cantidad de la OT: el reporte se
+      // llama "Liberacion" y su columna de avance es Ensamblado.
+      unitPrice,
+      amount: unitPrice > 0 ? unitPrice * built : null,
     });
   }
   return rows.sort((a, b) => {
@@ -18277,23 +18844,25 @@ function renderReleaseReport() {
   ensureInspectionWorkOrders(rows.map((row) => row.ot));
   if (els.releaseReportCount) els.releaseReportCount.textContent = `${rows.length} OT`;
   const statusActions = reportSourceAllowsOperationTracking();
-  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "P. unitario", "P. total", "Fecha"];
   if (statusActions) headers.push("Completar");
   const body = rows.map((row) => `<tr>
     <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
-    <td>${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
-    <td>${escapeHtml(formatMaterialQuantity(row.built))}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
+    <td class="report-number">${escapeHtml(formatMaterialQuantity(row.built))}</td>
+    <td class="report-number">${row.unitPrice > 0 ? escapeHtml(formatCurrency(row.unitPrice)) : ""}</td>
+    <td class="report-number">${row.amount > 0 ? escapeHtml(formatCurrency(row.amount)) : ""}</td>
     <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
     ${statusActions ? `<td class="report-status-action-column">${planStatusActionCell(row.releaseOp)}</td>` : ""}
   </tr>`).join("");
-  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
+  els.releaseReport.innerHTML = `<thead><tr>${headers.map((header) => `<th class="${header === "Completar" ? "report-status-action-column" : (header === "P. unitario" || header === "P. total" || header === "Cantidad" || header === "Ensamblado") ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead><tbody>${body || emptyTableRow(headers.length, "No hay OTs con operacion 16OC / 39OTD en el plan seleccionado")}</tbody>`;
   if (statusActions) bindPlanStatusActions(els.releaseReport);
 }
 
 function exportReleaseXlsx() {
   const statusActions = reportSourceAllowsOperationTracking();
-  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "Fecha"];
+  const headers = ["OT", "Articulo", "Cantidad", "Ensamblado", "P. unitario", "P. total", "Fecha"];
   if (statusActions) headers.push("Completar");
   const rows = releaseReportRows().map((row) => {
     const cells = [
@@ -18301,6 +18870,8 @@ function exportReleaseXlsx() {
       row.article,
       row.quantity,
       row.built,
+      row.unitPrice > 0 ? Number(row.unitPrice.toFixed(2)) : "",
+      row.amount > 0 ? Number(row.amount.toFixed(2)) : "",
       row.date ? formatReportDate(row.date) : "SIN FECHA",
     ];
     if (statusActions) {
@@ -18331,13 +18902,49 @@ function exportReleaseXlsx() {
 // NetSuite ensambla algo nuevo, se ve al recargar, no en el siguiente render.
 // =============================================================================
 let releaseRealCache = { rows: [], error: "", loading: false, loaded: false, pending: null };
+// MEDIDO 2026-10-30 (pedido del usuario): filtro EN VIVO del reporte "Liberacion real" por OT
+// o articulo, mientras se escribe y sin pulsar nada. Vive en memoria de la pagina: es una vista
+// del listado ya leido, no cambia `releaseRealCache.rows` ni lo que se exporta.
+let releaseRealFilter = "";
+
+/**
+ * Normaliza un texto para comparar como lo espera quien escribe: sin acentos, sin distinguir
+ * mayusculas y sin espacios repetidos. "C 590 UADE" encuentra "c590uade" y "C  590".
+ */
+function releaseRealSearchKey(value) {
+  return String(value == null ? "" : value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+/**
+ * Las filas de `rows` que contienen TODAS las palabras del filtro en la OT o en el articulo.
+ * Cada palabra se busca suelta (asi "590 uad" encuentra "C 590 UADE"), y el comparador ignora
+ * acentos y espacios internos, que es como la gente teclea folios y partes.
+ */
+function filterReleaseRealRows(rows, text) {
+  const words = String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.toUpperCase());
+  if (!words.length) return Array.isArray(rows) ? rows.slice() : [];
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const haystack = releaseRealSearchKey(`${row.ot} ${row.article}`);
+    return words.every((word) => haystack.includes(word));
+  });
+}
 
 /**
  * Las filas del reporte, a partir de los eventos crudos de `ensambles_ot`.
  *
  * UNA FILA POR EVENTO, y por eso una OT puede aparecer varias veces (ensambles parciales
- * en fechas distintas, confirmado por el usuario el 2026-10-25). El `eventIndex`/`eventCount`
- * solo sirven para marcar en pantalla "2.º de 3" y que se vea que no es un duplicado.
+ * en fechas distintas, confirmado por el usuario el 2026-10-25). Desde el 2026-10-30 la OT
+ * se muestra SOLA (sin "2.º de 3"): el usuario pidio que la numeracion parcial no aparezca,
+ * y las filas con 0 piezas se omiten (ver releaseRealRows).
  *
  * ORDEN: de lo mas nuevo a lo mas viejo. Un evento sin fecha va al final (no se inventa una
  * fecha para ordenarlo). El desempate es por OT y luego por build_id, los dos descendentes,
@@ -18399,33 +19006,14 @@ function releaseRealRows(events) {
       quantity: quantity,
       unitPrice: unitPrice,
       amount: unitPrice * quantity,
-      eventIndex: 0,
-      eventCount: 1,
     };
   });
-  // LA NUMERACION ES CRONOLOGICA, no la del orden en que llegan. Si la OT 4057 se ensamblo
-  // el 23 y el 24, el 23 es "1.º de 2" y el 24 es "2.º de 2": numerar al reves (por el orden
-  // de la lectura, que viene de lo mas nuevo a lo mas viejo) haria que el reporte llamara
-  // "primero" al ultimo ensamble, que es justo lo contrario de lo que paso en el piso.
-  const porOt = new Map();
-  for (const row of rows) {
-    const key = materialOtKey(row.ot);
-    if (!porOt.has(key)) porOt.set(key, []);
-    porOt.get(key).push(row);
-  }
-  for (const grupo of porOt.values()) {
-    grupo.sort((a, b) => {
-      const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
-      const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
-      if (at !== bt) return at - bt;
-      return String(a.buildId).localeCompare(String(b.buildId), "es", { numeric: true });
-    });
-    grupo.forEach((row, index) => {
-      row.eventIndex = index + 1;
-      row.eventCount = grupo.length;
-    });
-  }
-  return rows.sort((a, b) => {
+  // MEDIDO 2026-10-30, DECISION DEL USUARIO: se omiten los eventos con piezas en 0.
+  // En la tabla `ensambles_ot` hay filas con `cantidad = 0` (una OT que se "ensamblo"
+  // pero la linea quedo en cero), y el reporte las mostraba con monto $0.00: ruido que
+  // no representa una liberacion.
+  const visibles = rows.filter((row) => row.quantity > 0);
+  return visibles.sort((a, b) => {
     const at = a.date ? a.date.getTime() : Number.NEGATIVE_INFINITY;
     const bt = b.date ? b.date.getTime() : Number.NEGATIVE_INFINITY;
     if (at !== bt) return bt - at;
@@ -18497,19 +19085,24 @@ async function renderReleaseRealReport(force) {
     els.releaseRealReport.innerHTML = `<tbody>${emptyTableRow(RELEASE_REAL_HEADERS.length, "Leyendo ensambles...")}</tbody>`;
     await loadReleaseRealEvents(force);
   }
-  const rows = releaseRealCache.rows;
+  const allRows = releaseRealCache.rows;
+  // El filtro en vivo se aplica sobre lo ya leido: PZAS, montos, el conteo y el pie se
+  // recalculan sobre lo que se ve, para que el total coincida con las filas de la pantalla.
+  const rows = filterReleaseRealRows(allRows, releaseRealFilter);
   const totals = releaseRealTotals(rows);
+  if (els.releaseRealFilterCount) {
+    els.releaseRealFilterCount.textContent = releaseRealFilter.trim()
+      ? `${rows.length} de ${allRows.length} ensambles`
+      : `${allRows.length} ensamble${allRows.length === 1 ? "" : "s"}`;
+  }
   if (els.releaseRealReportCount) {
     els.releaseRealReportCount.textContent = `${rows.length} ensamble${rows.length === 1 ? "" : "s"} · ${formatMaterialQuantity(totals.quantity)} pzs`;
   }
   const head = `<thead><tr>${RELEASE_REAL_HEADERS.map((header) => `<th class="${releaseRealIsNumericColumn(header) ? "report-number" : ""}">${header}</th>`).join("")}</tr></thead>`;
   const body = rows.map((row) => {
-    const parcial = row.eventCount > 1
-      ? ` <span class="release-real-partial" title="Evento ${row.eventIndex} de ${row.eventCount} de esta OT">${row.eventIndex}.º</span>`
-      : "";
     return `<tr>
     <td>${escapeHtml(row.date ? formatReportDate(row.date) : "SIN FECHA")}</td>
-    <td>${escapeHtml(row.ot)}${parcial}</td>
+    <td>${escapeHtml(row.ot)}</td>
     <td>${escapeHtml(row.article)}</td>
     <td class="report-number">${escapeHtml(formatMaterialQuantity(row.quantity))}</td>
     <td class="report-number">${escapeHtml(formatCurrency(row.unitPrice))}</td>
@@ -18519,7 +19112,10 @@ async function renderReleaseRealReport(force) {
   const foot = rows.length
     ? `<tfoot><tr><td colspan="3">Total</td><td class="report-number">${escapeHtml(formatMaterialQuantity(totals.quantity))}</td><td></td><td class="report-number">${escapeHtml(formatCurrency(totals.amount))}</td></tr></tfoot>`
     : "";
-  const vacio = releaseRealCache.error || "No hay ensambles en los ultimos 2 meses para la planta MM del Llano";
+  const vacio = releaseRealCache.error
+    || (releaseRealFilter.trim() && allRows.length
+      ? `Ningun ensamble coincide con "${releaseRealFilter.trim()}"`
+      : "No hay ensambles en los ultimos 2 meses para la planta MM del Llano");
   els.releaseRealReport.innerHTML = `${head}<tbody>${body || emptyTableRow(RELEASE_REAL_HEADERS.length, vacio)}</tbody>${foot}`;
 }
 
@@ -18538,6 +19134,414 @@ function exportReleaseRealXlsx() {
   ]);
   const bytes = buildXlsxBytes(RELEASE_REAL_HEADERS, rows, "Liberacion real");
   downloadBlob(bytes, "liberacion-real.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+// =============================================================================
+// REPORTE FALTANTES (MEDIDO 2026-10-31, pedido del usuario)
+// Demanda: OV abiertas + OTs activas. Faltante = max(OV, pend_OTs) - existencia.
+// Solo artículos de planta MM del Llano con Faltante > 0.
+// Subensambles recursivos: padre solo su demanda, componente = fila plana.
+// Tabla: artículo una vez, una fila por OV debajo.
+// =============================================================================
+
+function faltantesRows() {
+  var wo = state.workOrders || [];
+  var mats = state.materials || [];
+  var inv = state.inventory || [];
+  var sos = state.salesOrders || [];
+  var arts = state.items || [];
+  // DESCRIPCION DEL ARTICULO (pedido del usuario 2026-11-01): la columna va despues de
+  // "Articulo" y sale de `items.descripcion` (la ingesta si la trae: 2536 filas).
+  var descripcionItem = {};
+  for (var ad = 0; ad < arts.length; ad++) {
+    var cod = String(arts[ad].code || "").trim().toUpperCase();
+    if (!cod) continue;
+    descripcionItem[cod] = String(arts[ad].description || "").trim();
+  }
+  // MEDIDO 2026-10-31: solo articulos tipo Assembly que tengan inventario
+  // fisico > 0 en Planta MM del Llano. Items de otras plantas con stock 0
+  // (como BA 400/600/700 SMNE) se excluyen automaticamente.
+  var ensamblesMM = new Set();
+  for (var ai = 0; ai < arts.length; ai++) {
+    if (arts[ai].type !== "ASSEMBLY") continue;
+    ensamblesMM.add(arts[ai].code.toUpperCase());
+  }
+  // Ubicacion del maestro: MEDIDO 2026-11-01 contra Supabase (`items.ubicacion` esta en el
+  // esquema pero la ingesta la deja NULL en las 2536 filas). Por eso NO se puede filtrar por
+  // ella: hacerlo deja el reporte en 0 padres. El criterio real es el inventario fisico en
+  // Planta MM del Llano (`existencia`), que es el dato que si llega.
+  var itemsConInvMM = new Set();
+  for (var i = 0; i < inv.length; i++) {
+    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
+      itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
+    }
+  }
+  var existencia = {};
+  for (var i = 0; i < inv.length; i++) {
+    var row = inv[i];
+    if (String(row.location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(row.physical) > 0) {
+      existencia[String(row.item).trim().toUpperCase()] = (existencia[String(row.item).trim().toUpperCase()] || 0) + Number(row.physical);
+    }
+  }
+  var demandaOV = {};
+  for (var s = 0; s < sos.length; s++) {
+    var so = sos[s];
+    var est = String(so.status || "").toUpperCase();
+    if (est.indexOf("CERRAD") >= 0 || est.indexOf("CLOSED") >= 0 || est.indexOf("FACTURAD") >= 0) continue;
+    for (var l = 0; l < (so.lines || []).length; l++) {
+      var item = String(so.lines[l].item || "").trim().toUpperCase();
+      if (!item) continue;
+      // MEDIDO 2026-11-01 contra Supabase: las OVs traen lineas de impuesto y servicio
+      // ("IVA 16 %" pendiente 93, "IVA 0 %" pendiente 36). No son articulos: no tienen
+      // existencia, no tienen OT y no se producen, asi que aparecian como los mayores
+      // "faltantes" del reporte. Se descartan por nombre y por tasa.
+      if (/^IVA\b/.test(item) || /\bIVA\b/.test(item)) continue;
+      if (/^IMPUESTO\b/.test(item) || /\bFLETE\b/.test(item) || /\bSERVICIO\b/.test(item)) continue;
+      if (!demandaOV[item]) { demandaOV[item] = { cat: 0, ovs: [] }; }
+      // DECISION DEL USUARIO 2026-11-01: en la OV se descuenta lo YA ENVIADO. La demanda es
+      // `cantidad - enviado` (el RESTlet ya la manda como `pendiente`, y se usa
+      // `cantidad - enviado` cuando esa columna no viene).
+      var linea = so.lines[l];
+      var cantidadLinea = Math.max(0, Number(linea.cantidad) || 0);
+      var enviadoLinea = Number(linea.enviado);
+      var pend;
+      if (Number.isFinite(Number(linea.pendiente))) {
+        pend = Number(linea.pendiente);
+      } else if (Number.isFinite(cantidadLinea) && Number.isFinite(enviadoLinea)) {
+        pend = cantidadLinea - enviadoLinea;
+      } else {
+        pend = cantidadLinea;
+      }
+      var absPend = Math.abs(pend) || 0;
+      // DECISION DEL USUARIO 2026-11-08: la OV se sigue viendo aunque ya este surtida o
+      // empacada, pero la parte ya cubierta NO es demanda. El RESTlet manda
+      // `pendiente = cantidad - quantityshiprecv`, asi que lo surtido es `cantidad - pendiente`.
+      //   - linea totalmente surtida: cantidad 0, surtido 5 -> se muestra tachada y no suma.
+      //   - linea parcial: surtido 5 + pendiente 5 -> se ven las dos, solo suma el pendiente.
+      var surtido = Math.max(0, cantidadLinea - absPend);
+      demandaOV[item].ovs.push({ folio: so.folio, cantidad: absPend, surtido: surtido, fecha: so.date });
+      if (absPend > 0) demandaOV[item].cat += absPend;
+    }
+  }
+  var otPorArt = {};
+  for (var w = 0; w < wo.length; w++) {
+    var orow = wo[w];
+    if (orow.cerrada) continue;
+    var art = String(orow.item || "").trim().toUpperCase();
+    if (!art) continue;
+    // DECISION DEL USUARIO 2026-11-01: en la OT se descuenta lo YA ENSAMBLADO.
+    //   cantidad     = lo que la OT pide fabricar (no cambia al avanzar).
+    //   ensamblada   = lo que ya se ensamblo (work_orders.cant_ensamblada del espejo).
+    //   pendiente    = cantidad - ensamblada: lo que TODAVIA se va a fabricar, que es lo unico
+    //                  que puede cubrir una demanda. Lo ya ensamblado no se cuenta dos veces:
+    //                  esa pieza existe, y si esta en el almacen ya la suma `existencia`.
+    // Se calcula aqui y no se lee `pendingQuantity` del lector a proposito: ese campo trae la
+    // heuristica "un 0 sin avance no es evidencia" (supabase-reader mapWorkOrders), que en una
+    // OT planificada devuelve la cantidad completa. Para cubrir demanda, la resta directa es la
+    // cuenta que la persona puede verificar en pantalla.
+    var cantidadOt = Number(orow.quantity || 0);
+    var ensambladaOt = Number(orow.builtQuantity || 0);
+    var pend = Math.max(0, cantidadOt - ensambladaOt);
+    if (!otPorArt[art]) { otPorArt[art] = { cat: 0, ots: [] }; }
+    otPorArt[art].cat += pend;
+    if (pend > 0) otPorArt[art].ots.push({ ot: orow.ot, cantidad: pend });
+  }
+  var grafo = {};
+  for (var m = 0; m < mats.length; m++) {
+    var padre = String(mats[m].assembly || "").trim().toUpperCase();
+    var hijo = String(mats[m].component || "").trim().toUpperCase();
+    if (!padre || !hijo) continue;
+    if (!grafo[padre]) grafo[padre] = [];
+    grafo[padre].push({ c: hijo, req: Math.max(0, Number(mats[m].required) || 0) });
+  }
+  var demCache = {};
+  var visitando = new Set();
+  function demRec(art) {
+    if (demCache[art]) return demCache[art];
+    if (visitando.has(art)) return { ov: 0, ot: 0, he: 0, hi: [] };
+    visitando.add(art);
+    var propOv = (demandaOV[art] || {}).cat || 0;
+    var propOt = (otPorArt[art] || {}).cat || 0;
+    var res = { ov: propOv, ot: propOt, he: 0, hi: [] };
+    var falta = Math.max(propOv, propOt) - (existencia[art] || 0);
+    var faltaOV_loc = Math.max(0, propOv - (existencia[art] || 0) - (otPorArt[art] || {}).cat || 0);
+    if (falta > 0 && grafo[art]) {
+      for (var i2 = 0; i2 < grafo[art].length; i2++) {
+        var h = grafo[art][i2];
+        if (visitando.has(h.c)) continue;
+        var hijo = demRec(h.c);
+        if (falta > 0) {
+          var heredado = faltaOV_loc * h.req;
+          res.hi.push({ c: h.c, he: heredado, hi: hijo });
+        }
+      }
+    }
+    demCache[art] = res;
+    visitando.delete(art);
+    return res;
+  }
+  var todasClaves = new Set(Object.keys(grafo));
+  Object.keys(demandaOV).forEach(function(k) { todasClaves.add(k); });
+  Object.keys(otPorArt).forEach(function(k) { todasClaves.add(k); });
+  todasClaves.forEach(function(k) { demRec(k); });
+  var grupos = [];
+  var hijos = [];
+  var proc = new Set();
+  // CONSUMIDORES POR ARTICULO: las OTs abiertas que usan el articulo como subensamble, con la
+  // cantidad que todavia deben surtirle (`requerido - emitido`). Alimenta la columna OV/OT
+  // (DECISION DEL USUARIO 2026-11-01): esa columna muestra lo que CONSUME el articulo; las OTs
+  // que lo FABRICAN van en OT (cant.).
+  var consumidoresPorArt = {};
+  var otsAbiertasSet = new Set();
+  for (var wc = 0; wc < wo.length; wc++) {
+    if (wo[wc].cerrada) continue;
+    var otConsumo = String(wo[wc].ot || "").trim().toUpperCase();
+    if (otConsumo) otsAbiertasSet.add(otConsumo);
+  }
+  for (var mc = 0; mc < mats.length; mc++) {
+    var fm = mats[mc];
+    if (!otsAbiertasSet.has(String(fm.ot || "").trim().toUpperCase())) continue;
+    var cmp = String(fm.component || "").trim().toUpperCase();
+    if (!cmp) continue;
+    var reqC = Math.max(0, Number(fm.required) || 0);
+    var emiC = Math.max(0, Number(fm.issued) || 0);
+    var demC = reqC > 0 ? Math.max(0, reqC - emiC) : Math.max(0, Number(fm.pending) || 0);
+    if (demC <= 0) continue;
+    if (!consumidoresPorArt[cmp]) consumidoresPorArt[cmp] = [];
+    var yaConsumo = consumidoresPorArt[cmp].filter(function (x) { return x.ot === String(fm.ot).trim(); })[0];
+    if (yaConsumo) yaConsumo.cantidad += demC;
+    else consumidoresPorArt[cmp].push({ ot: String(fm.ot).trim(), cantidad: demC });
+  }
+  var keys = Object.keys(demCache);
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    proc.add(key);
+    var d = demCache[key];
+    // FORMULA DEL FALTANTE (DECISION DEL USUARIO 2026-11-01):
+    //     faltante = OV/OT - existencia - OT (cant.)
+    // o, leido como lo dicto: existencia MENOS la demanda OV/OT MAS lo que las OTs abiertas
+    // todavia van a fabricar, cambiado de signo.
+    //   - OV/OT = demanda (OV pendiente = cantidad - enviado; o lo que las OTs abiertas deben
+    //     consumir del componente).
+    //   - OT (cant.) = cobertura (OTs abiertas que fabrican el articulo = cantidad - ensamblada).
+    // Solo entra a la lista el que queda POSITIVO: con 0 o negativo esta cubierto.
+    var demandaTotal = d.ov;
+    var coberturaOt = (otPorArt[key] || {}).cat || 0;
+    var faltaOV = demandaTotal - (existencia[key] || 0) - coberturaOt;
+    if (faltaOV <= 0) continue;
+    // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
+    // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
+    if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
+    grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], otsConsumo: consumidoresPorArt[key] || [], pendiente: coberturaOt, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
+  }
+  // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).
+  //
+  // POR QUE NO POR HERENCIA DEL PADRE. Antes el hijo se calculaba heredando el faltante del
+  // padre (`faltaOV_loc * requerido`) recorriendo el BOM del padre. MEDIDO: los 8 padres del
+  // reporte (BA 350, BA 1200, CP 548 CD, 9295, AAML 419 CCE, 3111684, SSC 300 GT-800,
+  // 700-640) NO tienen una sola fila en `materials`, o sea que el resultado era siempre 0
+  // subensambles. `materials` no es el BOM del articulo: es la lista de materiales DE CADA OT
+  // (286 filas, todas de OTs abiertas de las 173 que hay).
+  //
+  // POR QUE LAS OTs ABIERTAS SI SIRVEN. La demanda de un componente es lo que las OTs abiertas
+  // todavia tienen que consumir: `pendiente` de la fila (o `requerido - emitido` si no viene).
+  // Se resta la existencia fisica en MM del Llano; lo que sobra es el faltante del subensamble.
+  // No depende del BOM maestro, que la ingesta no trae. MEDIDO con los datos reales: pasa de 0
+  // a 41 componentes con faltante (29 Assembly + 12 INVTPART).
+  //
+  // PROTOTIPO SE OMITE (DECISION DEL USUARIO 2026-11-01): la OT 4037 pide 1000 piezas de
+  // `PROTOTIPO` y acapara el primer lugar de la lista con un articulo de prueba.
+  var hijosPorArt = {};
+  var OTS_ABIERTAS = new Set();
+  for (var wa = 0; wa < wo.length; wa++) {
+    if (wo[wa].cerrada) continue;
+    var otAb = String(wo[wa].ot || "").trim().toUpperCase();
+    if (otAb) OTS_ABIERTAS.add(otAb);
+  }
+  for (var m3 = 0; m3 < mats.length; m3++) {
+    var filaMat = mats[m3];
+    if (!OTS_ABIERTAS.has(String(filaMat.ot || "").trim().toUpperCase())) continue;
+    var comp = String(filaMat.component || "").trim().toUpperCase();
+    if (!comp) continue;
+    if (comp === "PROTOTIPO") continue;
+    // LA CANTIDAD ES LO QUE FALTA CONSUMIR, NO LO REQUERIDO EN BRUTO.
+    //   requerido  = lo que la OT pide del componente, tal como viene en su BOM.
+    //   emitido    = lo que YA SE ENTREGO/surtio a la OT (materials.emitido).
+    //   pendiente  = requerido - emitido: lo que TODAVIA falta surtir.
+    // Restar lo emitido es lo que evita contar como falta algo que ya salio del almacen.
+    // Se calcula con `requerido - emitido` (no con `materials.pendiente`, que MEDIDO
+    // 2026-11-01 traia valores que no cuadraban con la fila) y solo se usa `pendiente` del
+    // espejo como respaldo cuando `requerido` viene en 0, para no perder la fila.
+    var req = Math.max(0, Number(filaMat.required) || 0);
+    var emitido = Math.max(0, Number(filaMat.issued) || 0);
+    var pendCampo = Number(filaMat.pending);
+    var demandaComp = req > 0
+      ? Math.max(0, req - emitido)
+      : (Number.isFinite(pendCampo) ? Math.max(0, pendCampo) : 0);
+    if (demandaComp <= 0) continue;
+    if (!hijosPorArt[comp]) {
+      hijosPorArt[comp] = {
+        articulo: comp,
+        descripcion: descripcionItem[comp] || "",
+        existencia: Number(existencia[comp]) || 0,
+        ots: [],
+        pendiente: (otPorArt[comp] || {}).cat || 0,
+        heredado: 0,
+        faltante: 0,
+        ovs: (demandaOV[comp] ? demandaOV[comp].ovs.slice() : []),
+      };
+    }
+    hijosPorArt[comp].heredado += demandaComp;
+    var otDeLaFila = String(filaMat.ot || "").trim();
+    var acumulada = hijosPorArt[comp].ots.filter(function (x) { return String(x.ot) === otDeLaFila; })[0];
+    if (!acumulada && otDeLaFila) {
+      hijosPorArt[comp].ots.push({ ot: otDeLaFila, cantidad: demandaComp });
+    } else if (acumulada) {
+      // Una OT puede pedir el mismo componente en varias lineas: la columna muestra la suma,
+      // que es lo que esa OT de verdad va a consumir.
+      acumulada.cantidad += demandaComp;
+    }
+  }
+  // El faltante se decide al final, con la demanda de OT ya agregada por componente y con la
+  // MISMA formula que los padres (DECISION DEL USUARIO 2026-11-01):
+  //     faltante = OV/OT - existencia - OT (cant.)
+  // Aqui OV/OT son las OTs abiertas que lo CONSUMEN (`materials`) y OT (cant.) son las OTs
+  // abiertas que lo FABRICAN (`work_orders`), ya netas de lo ensamblado. Solo entra a la lista
+  // el que queda POSITIVO: con 0 o negativo esta cubierto.
+  //
+  // MEDIDO 2026-11-01 (CKW-7): la demanda de `materials` NO es cobertura. La OT 4144 no
+  // produce CKW-7: se lo come. La cobertura son las OTs que lo fabrican, que es la otra fuente.
+  var hijos = Object.keys(hijosPorArt).map(function (k) {
+    var f = hijosPorArt[k];
+    // f.ots = OTs que lo CONSUMEN (van en OV/OT). f.otsFabricantes = OTs que lo FABRICAN
+    // (van en OT (cant.), con su folio y su cantidad pendiente).
+    f.otsFabricantes = ((otPorArt[k] || {}).ots || []).map(function (o) { return { ot: o.ot, cantidad: o.cantidad }; });
+    // La columna OT (cant.) SOLO lleva OTs que FABRICAN el articulo: `otPorArt[art].ots`.
+    // Si no hay ninguna (materia comprada, o ninguna OT abierta lo produce) la celda queda
+    // VACIA. No se rellena con la demanda de `materials`: esa es lo que CONSUME el articulo.
+    f.pendiente = (otPorArt[k] || {}).cat || 0;
+    f.faltante = f.heredado - f.existencia - f.pendiente;
+    return f;
+  }).filter(function (f) { return f.faltante > 0; });
+  grupos.sort(function(a,b) { return b.faltante - a.faltante || a.articulo.localeCompare(b.articulo, "es"); });
+  hijos.sort(function(a,b) { return b.faltante - a.faltante; });
+  return { grupos: grupos, hijos: hijos };
+}
+
+// CELDA DE UNA OV (DECISION DEL USUARIO 2026-11-08): la cantidad ya surtida o empacada se
+// muestra TACHADA y no suma al faltante. Una sola regla visual, sin letras ni colores, para
+// que se lea igual al imprimir en blanco y negro. `5 + 5` = 5 surtidas + 5 pendientes.
+function faltanteOvCelda(ov) {
+  var pendiente = Math.max(0, Number(ov.cantidad) || 0);
+  var surtido = Math.max(0, Number(ov.surtido) || 0);
+  var cantidades = [];
+  if (surtido > 0) cantidades.push("<s>" + formatMaterialQuantity(surtido) + "</s>");
+  if (pendiente > 0) cantidades.push(formatMaterialQuantity(pendiente));
+  if (!cantidades.length) cantidades.push(formatMaterialQuantity(0));
+  return "OV " + escapeHtml(ov.folio) + " (" + cantidades.join(" + ") + ")";
+}
+
+function renderFaltantesReport() {
+  var el = document.getElementById("faltantesReport");
+  if (!el) return;
+  var data = faltantesRows();
+  var wrapper = el.closest(".table-wrap") || el.parentElement;
+  var searchEl = wrapper ? wrapper.querySelector(".faltantes-search") : null;
+  if (!searchEl) {
+    searchEl = document.createElement("input");
+    searchEl.className = "faltantes-search search-input";
+    searchEl.type = "search";
+    searchEl.placeholder = "Buscar artículo...";
+    searchEl.oninput = function() { filterFaltantesRows(); };
+    if (wrapper) wrapper.insertBefore(searchEl, el);
+  }
+  window._faltantesData = data;
+  var query = (searchEl.value || "").trim().toUpperCase();
+  var rowsHtml = "";
+  // COLUMNAS DE LA TABLA (DECISION DEL USUARIO 2026-11-01). "Cant." se quita y la cantidad
+  // viaja junto a la referencia en el mismo formato que las OTs: `OV SO2650 (200)`. Asi la
+  // columna OV/OT se lee con una sola regla para padres y para subensambles, y el ancho de la
+  // tabla baja de 9 a 8 columnas.
+  for (var gi = 0; gi < data.grupos.length; gi++) {
+    var g = data.grupos[gi];
+    if (query && g.articulo.toUpperCase().indexOf(query) < 0) continue;
+    // OV/OT DEL PADRE: las OVs que consumen el articulo MAS las OTs que lo consumen como
+    // subensamble, en la MISMA columna (DECISION DEL USUARIO 2026-11-01). La columna aparte
+    // "Consume (OT)" fue un error mio y se quita: no se establecio asi.
+    var consumidoras = (g.otsConsumo || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; });
+    // OT (cant.): SOLO las OTs que FABRICAN el articulo (cobertura de la demanda). MEDIDO
+    // 2026-11-01 (reporte del usuario): en los padres salia siempre vacia porque el render
+    // usaba la lista de consumo; y en los subensambles salia `OT 15` sin folio. Es `g.ots`,
+    // que se arma con `otPorArt` (work_orders del articulo), no con la demanda.
+    var fabricantesStr = (g.ots || []).map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ");
+    // DECISION DEL USUARIO 2026-11-08: UNA SOLA FILA por articulo. Todas sus OVs van en la
+    // MISMA celda separadas por `·`, y sus fechas en la MISMA celda de Fecha, para que la
+    // persona vea de un golpe todo lo que demanda ese articulo. La cantidad ya surtida va
+    // tachada (no suma) y la pendiente normal.
+    var ovsOrdenados = (g.ovs || []).slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+    var ovTexto = ovsOrdenados.length
+      ? ovsOrdenados.map(faltanteOvCelda).join(" · ")
+      : consumidoras.join(" · ");
+    var fechaTexto = ovsOrdenados
+      .map(function(o) { return String(o.fecha || ""); })
+      .filter(function(x) { return x; })
+      .map(escapeHtml)
+      .join(" · ");
+    rowsHtml += "<tr" + (g.hijos.length ? " data-comp-padre=\"" + escapeHtml(g.articulo) + "\"" : "") + " data-articulo=\"" + escapeHtml(g.articulo) + "\"><td>" + escapeHtml(g.articulo) + "</td><td>" + escapeHtml(g.descripcion || "") + "</td><td>" + formatMaterialQuantity(g.existencia) + "</td><td>" + ovTexto + "</td><td>" + fechaTexto + "</td><td>" + fabricantesStr + "</td><td><strong>" + formatMaterialQuantity(g.faltante) + "</strong></td></tr>";
+  }
+  for (var ci = 0; ci < data.hijos.length; ci++) {
+    var f = data.hijos[ci];
+    if (query && f.articulo.toUpperCase().indexOf(query) < 0) continue;
+    // OV/OT DEL SUBENSAMBLE (DECISION DEL USUARIO 2026-11-01): la MISMA columna lleva las OVs
+    // que consumen el articulo y las OTs que lo consumen como subensamble. De aqui sale su
+    // demanda. OT (cant.) lleva aparte las OTs que lo FABRICAN, que es lo que le da cobertura.
+    // Misma regla que los padres: una fila, todas las OVs y fechas juntas, surtido tachado.
+    var ovsHijo = (f.ovs || []).slice().sort(function(a,b) { return String(b.fecha).localeCompare(String(a.fecha), "es", { numeric: true }); });
+    var ovCell = ovsHijo.length
+      ? ovsHijo.map(faltanteOvCelda).join(" · ")
+      : f.ots.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(" · ");
+    var ovFecha = ovsHijo
+      .map(function(o) { return String(o.fecha || ""); })
+      .filter(function(x) { return x; })
+      .map(escapeHtml)
+      .join(" · ");
+    // OT (cant.): las OTs que FABRICAN el articulo, netas de lo ensamblado, con folio y
+    // cantidad: `OT 3050 (15)`. MEDIDO 2026-11-01: antes salia `OT 15`, sin folio.
+    var otCantStr = (f.otsFabricantes && f.otsFabricantes.length)
+      ? f.otsFabricantes.map(function(o) { return "OT " + escapeHtml(o.ot) + " (" + formatMaterialQuantity(o.cantidad) + ")"; }).join(", ")
+      : "";
+    rowsHtml += "<tr style=\"opacity:.7\" data-articulo=\"" + escapeHtml(f.articulo) + "\"><td>" + escapeHtml(f.articulo) + "</td><td>" + escapeHtml(f.descripcion || "") + "</td><td>" + formatMaterialQuantity(f.existencia) + "</td><td>" + ovCell + "</td><td>" + ovFecha + "</td><td>" + otCantStr + "</td><td><strong>" + formatMaterialQuantity(f.faltante) + "</strong></td></tr>";
+  }
+  if (!rowsHtml) {
+    rowsHtml = "<tr><td colspan=\"7\" class=\"report-empty-state\">" + (query ? "Sin resultados para \"" + escapeHtml(searchEl.value) + "\"" : "Sin articulos con faltante. Pulsa Sincronizar para traer datos actualizados.") + "</td></tr>";
+  }
+  el.innerHTML = "<colgroup><col class=\"col-articulo\"><col class=\"col-descripcion\"><col class=\"col-existencia\"><col class=\"col-ov\"><col class=\"col-fecha\"><col class=\"col-fabricantes\"><col class=\"col-faltante\"></colgroup><thead><tr><th>Artículo</th><th>Descripción</th><th>Existencia</th><th>OV/OT</th><th>Fecha</th><th>OT (cant.)</th><th>Faltante</th></tr></thead><tbody>" + rowsHtml + "</tbody>";
+}
+
+function filterFaltantesRows() {
+  var searchEl = document.querySelector(".faltantes-search");
+  if (!searchEl) return;
+  var query = (searchEl.value || "").trim().toUpperCase();
+  var table = document.getElementById("faltantesReport");
+  if (!table) return renderFaltantesReport();
+  var rows = Array.from(table.querySelectorAll("tbody tr"));
+  var any = false;
+  for (var ri = 0; ri < rows.length; ri++) {
+    var art = (rows[ri].getAttribute("data-articulo") || "").toUpperCase();
+    var match = !query || art.indexOf(query) >= 0;
+    rows[ri].style.display = match ? "" : "none";
+    if (match) any = true;
+  }
+  var empty = table.querySelector("tbody tr.report-empty-state");
+  if (!any && !empty) {
+    var td = document.createElement("td");
+    td.colSpan = 7;
+    td.className = "report-empty-state";
+    td.textContent = "Sin resultados para \"" + searchEl.value + "\"";
+    var tr = document.createElement("tr");
+    tr.appendChild(td);
+    table.querySelector("tbody").appendChild(tr);
+  }
 }
 
 function toolChangeReportData(op) {
@@ -19082,7 +20086,11 @@ async function persistOptimisticPlanStatus(key, operation, previousStatus, previ
 function renderProductionReportRow(op, index, options = {}) {
   const start = opStart(op);
   const end = opEnd(op);
-  const workOrder = workOrderForOt(op.ot);
+  // MEDIDO 2026-10-30 (OT 4111, "Plan por operador"): la OT cerrada ya no esta en
+  // `state.workOrders`, asi que `workOrderForOt` daba null y la fila salia con Parte y Piezas
+  // vacios. Se cae a la ficha efectiva de la OT cerrada (resumen compacto + espejo), que si
+  // conserva el articulo y la cantidad.
+  const workOrder = workOrderForOt(op.ot) || closedWorkOrderFichaForOt(op.ot);
   const machineArea = cleanResourceValue(op.maquina);
   const effectiveReportTool = isToolChangeReportOperation(op)
     ? cleanToolValue(op.toolChangeToHerramental || op.herramental)
@@ -19151,6 +20159,7 @@ function showTab(tab) {
   // RULE-SUP-078: "Liberacion real" lee `ensambles_ot` al abrirse (no viaja en el estado del
   // plan). El render es idempotente y usa la cache de la sesion.
   if (tab === "releaseReal") renderReleaseRealReport();
+  if (tab === "faltantes") renderFaltantesReport();
 }
 
 function addOperator() {
@@ -19991,8 +21000,9 @@ function preserveImportedOperationPrices(localOperations, importedOperations) {
   for (const operation of localOperations || []) {
     const unitPrice = Number(operation?.unitPrice);
     const amount = Number(operation?.amount);
-    if (!(unitPrice > 0) && !(amount > 0)) continue;
-    const record = { unitPrice, amount };
+    const operador = String(operation?.operador || "").trim();
+    if (!(unitPrice > 0) && !(amount > 0) && !operador) continue;
+    const record = { unitPrice, amount, operador };
     if (operation.id) byId.set(String(operation.id), record);
     const sequenceKey = `${materialOtKey(operation.ot)}|${operation.secuencia}|${operation.ct}`;
     if (!bySequence.has(sequenceKey)) bySequence.set(sequenceKey, record);
@@ -20008,6 +21018,10 @@ function preserveImportedOperationPrices(localOperations, importedOperations) {
     const merged = { ...operation };
     if (!(Number(merged.unitPrice) > 0) && source.unitPrice > 0) merged.unitPrice = source.unitPrice;
     if (!(Number(merged.amount) > 0) && source.amount > 0) merged.amount = source.amount;
+    // MEDIDO 2026-10-31: el operador se asigna desde la matriz de habilidades al generar
+    // plan. La ingesta escribe operations con operador='' (NetSuite no lo trae), asi que
+    // sin preservarlo cada sincronizacion perderia las asignaciones del plan.
+    if (source.operador && !String(merged.operador || "").trim()) merged.operador = source.operador;
     return merged;
   });
 }
@@ -20091,6 +21105,18 @@ function persistReferencePricesFromSync() {
     recordSalePrice(workOrder.item, price);
     const otArticle = articleForOt(workOrder?.ot);
     if (articleKeyForPart(otArticle) !== articleKeyForPart(workOrder.item)) recordSalePrice(otArticle, price);
+  }
+  // MEDIDO 2026-10-30: los precios de las OTs CERRADAS. `state.workOrders` solo trae las
+  // abiertas (soloWorkOrdersAbiertas), asi que los precios que la ingesta dejo en las cerradas
+  // (work_orders.precio_* del 1766, dentro de la ventana RULE-SUP-050) nunca llegaban al
+  // catalogo. El lector los expone aparte en `state.workOrderSalePrices` (mapa articulo ->
+  // max(ultima, promedio)) y aqui se copian al catalogo con la MISMA regla que las abiertas
+  // (precio >= 1, solo si cambia, campo propio vs manual).
+  const preciosDeCerradas = state.workOrderSalePrices && typeof state.workOrderSalePrices === "object"
+    ? state.workOrderSalePrices
+    : {};
+  for (const [articulo, precio] of Object.entries(preciosDeCerradas)) {
+    recordSalePrice(articulo, Number(precio) || 0);
   }
   if (changed) queueAppSheetSave("catalogs");
   return changed;
@@ -21059,6 +22085,20 @@ async function applyImported(imported, options = {}) {
   if (imported.operatorProfiles) state.operatorProfiles = imported.operatorProfiles;
   if (imported.otConfigurations) state.otConfigurations = imported.otConfigurations;
   if (imported.articleConfigurations) state.articleConfigurations = imported.articleConfigurations;
+  // MEDIDO 2026-10-31 (reporte Faltantes): items, inventory y salesOrders llegan mapeados
+  // desde readCatalogs. El reporte los necesita para el cálculo de faltantes.
+  if (Array.isArray(imported.items)) state.items = imported.items;
+  if (Array.isArray(imported.inventory)) state.inventory = imported.inventory;
+  if (Array.isArray(imported.salesOrders)) state.salesOrders = imported.salesOrders;
+  // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs (abiertas y cerradas) por articulo.
+  // El lector los expone como `workOrderSalePrices` (supabase-reader.js, salePricesByArticle).
+  // `articleConfigurations` solo trae las filas del catalogo; este mapa trae ademas los precios
+  // de los articulos cuyas OTs ya se cerraron, para que persistReferencePricesFromSync los
+  // copie al catalogo y la columna "Ultimo precio de venta (sync)" no diga "sin precio"
+  // cuando el precio de verdad existe en work_orders.
+  if (imported.workOrderSalePrices && typeof imported.workOrderSalePrices === "object") {
+    state.workOrderSalePrices = imported.workOrderSalePrices;
+  }
   if (imported.preparedPlanningByOt) state.preparedPlanningByOt = imported.preparedPlanningByOt;
   if (imported.cts) state.cts = imported.cts;
   if (imported.plant) state.plant = imported.plant;
@@ -21574,11 +22614,79 @@ function buildXlsxBytes(headers, rows, sheetName) {
   return buildZipBytes(entries);
 }
 
-function buildSheetXml(headers, rows) {
-  const writeRow = (values, rowNumber) => values.map((value, colIndex) => {
+// MEDIDO 2026-10-31: "Exportar" del Plan de la semana necesita UN XLSX CON VARIAS HOJAS
+// (Resumen, OT que inician, OT que terminan). `buildXlsxBytes` tiene una hoja fija; este
+// constructor es aditivo y deja `buildXlsxBytes` intacto para las exportaciones existentes
+// (backlog, cola, liberacion...). Cada hoja: { name, headers, rows }.
+function buildMultiSheetXlsxBytes(sheets) {
+  const encoder = new TextEncoder();
+  const lista = Array.isArray(sheets) ? sheets : [];
+  const sheetXmls = lista.map((sheet) => buildSheetXml(sheet.headers, sheet.rows, sheet.colTypes));
+  const contentTypesOverrides = lista.map((sheet, index) =>
+    `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
+  const workbookSheets = lista.map((sheet, index) =>
+    `<sheet name="${xmlEscape(String(sheet.name || `Hoja${index + 1}`))}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("");
+  const workbookRels = lista.map((sheet, index) =>
+    `<Relationship Id="rId${index + 1}" Type="${XLSX_NS_OFFICE}/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("");
+  const entries = [
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${XLSX_NS_PACKAGE}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${contentTypesOverrides}</Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}"><Relationship Id="rId1" Type="${XLSX_NS_OFFICE}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${XLSX_NS_MAIN}" xmlns:r="${XLSX_NS_OFFICE}"><sheets>${workbookSheets}</sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${XLSX_NS_PACKAGE_RELS}">${workbookRels}</Relationships>`],
+    ["xl/styles.xml", buildStylesXml()],
+    ...lista.map((sheet, index) => [`xl/worksheets/sheet${index + 1}.xml`, sheetXmls[index]]),
+  ].map(([name, content]) => ({ name, data: encoder.encode(content) }));
+  return buildZipBytes(entries);
+}
+
+function buildStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="${XLSX_NS_MAIN}">
+  <numFmts count="2">
+    <numFmt numFmtId="164" formatCode="#,##0"/>
+    <numFmt numFmtId="165" formatCode="$#,##0.00"/>
+  </numFmts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1">
+    <border><left/><right/><top/><bottom/></border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>`;
+}
+
+const XLSX_COL_TYPE = {
+  TEXT: 0,     // plain text (inlineStr)
+  NUMBER: 1,   // quantity format (#,##0)
+  CURRENCY: 2, // currency format ($#,##0.00)
+};
+
+function buildSheetXml(headers, rows, colTypes) {
+  const cellForValue = (value, colIndex, rowNumber) => {
     const ref = `${xlsxColumnLetter(colIndex)}${rowNumber}`;
+    const type = Array.isArray(colTypes) ? (colTypes[colIndex] || 0) : 0;
+    if (type === XLSX_COL_TYPE.NUMBER || type === XLSX_COL_TYPE.CURRENCY) {
+      const num = Number(String(value ?? "").replace(/[$,]/g, ""));
+      return Number.isFinite(num) && num >= 0
+        ? `<c r="${ref}" s="${type}" t="n"><v>${num}</v></c>`
+        : `<c r="${ref}"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
+    }
     return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(value ?? ""))}</t></is></c>`;
-  }).join("");
+  };
+  const writeRow = (values, rowNumber) => values.map((value, colIndex) => cellForValue(value, colIndex, rowNumber)).join("");
   const body = [headers, ...rows].map((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
     return `<row r="${rowNumber}">${writeRow(row, rowNumber)}</row>`;
@@ -21725,9 +22833,16 @@ async function exportSourceOperations(sourceId) {
 }
 
 function operationToRow(op, generatedAt) {
+  // DECISION DEL USUARIO 2026-11-10: una operacion completada se exporta SIN CONSUMIR TIEMPO. Su
+  // fila sigue en el borrador cuando la OT esta fija (ver draftExportOperations), asi que el CSV
+  // tambien la trae, pero con 0 en TIEMPO_SETUP y en TIEMPO_PROD. Se lee el planStatus de la propia
+  // fila y no el mapa de estatus: este mismo operationToRow sirve para el borrador y para un plan
+  // publicado, y el mapa activo es de un solo origen.
+  const completed = String(op?.planStatus || "").trim().toUpperCase() === "COMPLETADA_PLAN";
   return PLAN_HEADERS.map((header) => {
     if (header === "GENERADO_EL") return generatedAt ?? "";
-    if (header === "TIEMPO_PROD") return scheduledProductionMinutesForExport(op);
+    if (header === "TIEMPO_PROD") return completed ? 0 : scheduledProductionMinutesForExport(op);
+    if (header === "TIEMPO_SETUP") return completed ? 0 : (op.tiempoSetup ?? "");
     if (header === "LOG") return scheduledLogForExport(op);
     if (header === "PRECIO") return Number(op.unitPrice) >= 1 ? op.unitPrice : effectiveUnitPriceForOt(op.ot);
     if (header === "MONTO") return Number(op.amount) >= 1 ? op.amount : amountForOt(op.ot);
@@ -22323,8 +23438,12 @@ function resetDailyReportFiltersToToday() {
 }
 
 function syncReportFiltersToPlanWeekOrToday() {
-  const reportStart = state.planStart || state.reportWeekStart;
-  if (reportStart) state.reportWeekStart = normalizeWeekStartValue(reportStart);
+  // RULE-REP-004 (actualizada 2026-11-04): la semana de los reportes arranca en el LUNES DE LA
+  // SEMANA ACTUAL (hoy 2026-11-04 -> 2026-11-02), no en la semana del plan que este cargado.
+  // Antes tomaba `state.planStart`; con la carga automatica del ultimo publicado eso cambiaba la
+  // semana solo, unos segundos despues de abrir. `normalizeWeekStartValue` ya lleva cualquier
+  // fecha a su lunes, asi que pasarle hoy es exactamente la regla.
+  state.reportWeekStart = normalizeWeekStartValue(formatDate(new Date()));
   resetDailyReportFiltersToToday();
 }
 
@@ -22667,7 +23786,10 @@ function getPriorityJobs() {
         locked: isJobLocked(job.ot),
         firstSequence: ops[0]?.secuencia ?? "",
         lastSequence: ops[ops.length - 1]?.secuencia ?? "",
-        minutes: ops.reduce((sum, op) => sum + operationDuration(op), 0),
+        // DECISION DEL USUARIO 2026-11-10: una operacion completada sigue LISTADA en "Detalle de OT"
+        // (y en el borrador de una OT fija) pero NO consume tiempo de plan. El motor ya la ignora
+        // (`filterExcludedOperations` usa isPlanCompletedOperation); esta suma es la que faltaba.
+        minutes: ops.reduce((sum, op) => sum + (isPlanCompletedOperation(op) ? 0 : operationDuration(op)), 0),
         firstStart: opStart(firstOp),
       };
     })
@@ -23127,7 +24249,12 @@ function effectiveUnitPriceForOt(ot) {
   const invoicePrice = invoiceUnitPriceForOt(ot);
   if (invoicePrice >= 1) return invoicePrice;
   const manualPrice = Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).manualUnitPrice || 0));
-  return manualPrice >= 1 ? manualPrice : 0;
+  if (manualPrice >= 1) return manualPrice;
+  // MEDIDO 2026-10-30: las OTs cerradas no estan en state.workOrders, asi que invoicePrice
+  // da 0 aunque el 1766 tenga su precio, y la exportacion del plan quedaba en 0 aunque el
+  // catalogo ya traia el precio de venta (referenceSalePrice). Se cae ahi como ultima fuente,
+  // lo mismo que hace weeklyJobSummary (RULE-REP-021) y releaseRealUnitPrice.
+  return Math.max(0, Number(articleConfigurationValue(articleForOt(ot)).referenceSalePrice || 0));
 }
 
 function amountForOt(ot) {
@@ -24546,8 +25673,8 @@ function escapeHtml(value) {
 (function (root) {
   "use strict";
 
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const CLAVE_ALMACEN = "pp_supabase_session";
   const REFRESCO_MARGEN_MS = 60 * 1000;
@@ -24942,8 +26069,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   "use strict";
 
   // El build reemplaza estos dos marcadores. Si quedan asi, el lector esta apagado.
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -25075,6 +26202,25 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     return mapWorkOrders(rows).filter(function (wo) { return !wo.cerrada; });
   }
 
+  // PRECIOS DE VENTA POR ARTICULO, de TODAS las OTs (abiertas y cerradas). Devuelve
+  // `{ [articulo en mayusculas]: precio }` con el maximo entre ultima y promedio venta por
+  // articulo. Solo entra un precio >= 1: un 0 o residual (< 1) significa "no hay precio
+  // de venta conocido", no un dato. MEDIDO 2026-10-30: ver `workOrderSalePrices`.
+  function salePricesByArticle(rows) {
+    const precios = {};
+    (rows || []).forEach(function (row) {
+      const articulo = String(row && row.articulo || "").trim().toUpperCase();
+      if (!articulo) return;
+      const ultima = Number(row && row.precio_ultima_venta) || 0;
+      const promedio = Number(row && row.precio_promedio_venta) || 0;
+      const precio = Math.max(ultima, promedio);
+      if (!(precio >= 1)) return;
+      const actual = Number(precios[articulo]) || 0;
+      if (precio > actual) precios[articulo] = precio;
+    });
+    return precios;
+  }
+
   // HUECOS DE MAPEO Supabase -> shape del estado, MEDIDOS 2026-09-29 contra el esquema REAL
   // desplegado (.openchamber/esquema-supabase.json, el OpenAPI que sirve PostgREST), tabla por
   // tabla y columna por columna. No contra el DDL objetivo: si algo solo existe en un DDL sin
@@ -25117,7 +26263,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       // transacciones `Build` de la OT, el mismo dato que `record:built` del 2244). La regla de
       // `mapWorkOrders` se queda como estaba: es la que cubre las filas del espejo viejo y una
       // corrida sin la consulta nueva.
-      "workOrders[].revision | falta la FORMA de la columna revision | MEDIDO 2026-10-01: la columna existe y esta bien tipada, pero lo que guarda NO es lo que el estado pide. filasWorkOrders (supabase-writer.js:1645) escribe ahi la REVISION DEL PLAN, que es un contador de guardado, mientras que la hoja de inspeccion usa este campo en la celda REV, que quiere la revision del BOM de NetSuite ('Revision'/'bomRevision' en PP_getInspectionWorkOrder, 16-inspection-service.js:181). Son dos cosas distintas en la misma columna y no hay forma de saber cual esta sin preguntar a quien la escribio. Se deja '' y la hoja imprime 'A', que es lo que se imprimia cuando NetSuite no traia revision. Poner el numero del plan en una celda REV seria affirmar una revision de ingenieria que nadie dio.",
+      "workOrders[].revision | CORREGIDO el 2026-11-04: la hoja de inspeccion ahora lee `revision_bom`, no `revision`. La columna nueva (`revision_bom text not null default ''`, docs/schema-work-orders-revision-bom.sql) la llena la INGESTA desde `billofmaterialsrevision` del RESTlet 2246 y ya lleva la letra correcta (OT 2752 -> C). `work_orders.revision` sigue siendo el CONTADOR DE GUARDADO del plan (filasWorkOrders, supabase-writer.js) y el lector deja de usarlo para la celda REV. Si la OT no trae 'REV <letra>' en el BOM, la hoja imprime 'A' como antes.",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -26385,16 +27531,55 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
         componentId: row.componente_id, component: row.componente, description: row.descripcion,
         unit: row.unidad, required: number(row.requerido), issued: number(row.emitido),
         pending: number(row.pendiente),
-        // MEDIDO 2026-10-04: `lineId` es la clave natural de la fila y la pagina la
-        // necesita para poder GUARDAR sin crear una fila nueva por cada guardado. `line_id`
-        // lo escribe la ingesta (RESTlet 2246) con el id de renglon de NetSuite (`comp.id`),
-        // y con el UNIQUE (ot, line_id) es la unica clave con la que un UPSERT actualiza la
-        // fila del ERP en vez de insertar una copia. Sin exponerla, `filasMaterials`
-        // (supabase-writer.js) no tiene mas que `id`, que es el UUID de la fila, y escribia
-        // ESO como `line_id`: medido 348 (ot, componente) con dos filas cada uno (697 filas
-        // para 348 materiales) y una MP saliendo dos veces en la hoja de inspeccion. Se
-        // escribe aqui, no en el escritor, porque el escritor no tiene la fila cruda.
         lineId: String(row.line_id == null ? "" : row.line_id).trim(),
+      };
+    });
+  }
+
+  // MEDIDO 2026-10-31 (pedido del usuario, reporte Faltantes): mapeo de items (catalogo de
+  // articulos), inventory (existencias por item+ubicacion) y sales_orders (ordenes de venta
+  // con lineas). La ingesta las escribe (TABLAS en 19-appscript-ingesta-supabase.js) y la
+  // pagina las recibe por readCatalogs pero hasta hoy solo quedaban en operationalRaw sin
+  // mapear al estado. El reporte Faltantes necesita estos datos limpios.
+  function mapItems(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, code: String(row.codigo || "").trim(),
+        description: String(row.descripcion || ""),
+        purchaseDescription: String(row.descripcion_compra || ""),
+        displayName: String(row.nombre_mostrado || ""),
+        type: String(row.tipo || "").trim().toUpperCase(),
+        typeClass: number(row.clase),
+        isAssembly: Boolean(row.es_ensamblaje),
+        inactive: Boolean(row.inactivo),
+        lastModified: String(row.ultima_modificacion || ""),
+      };
+    });
+  }
+
+  function mapInventory(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, item: String(row.item || "").trim(), location: String(row.ubicacion || ""),
+        available: number(row.disponible), physical: number(row.fisico),
+        committed: number(row.comprometido), picked: number(row.pickeado),
+        inTransit: number(row.en_transito),
+      };
+    });
+  }
+
+  function mapSalesOrders(rows) {
+    return (rows || []).map(function (row) {
+      var lineas = [];
+      if (row.lineas && Array.isArray(row.lineas)) lineas = row.lineas;
+      return {
+        id: row.id, folio: String(row.folio || "").trim(),
+        salesOrderId: String(row.sales_order_id || "").trim(),
+        customer: String(row.cliente || ""), customerId: number(row.cliente_id),
+        date: String(row.fecha || ""), status: String(row.estatus || ""),
+        approval: String(row.aprobacion || ""), total: number(row.total),
+        currency: number(row.moneda), memo: String(row.memo || ""),
+        lines: lineas,
       };
     });
   }
@@ -26484,13 +27669,15 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
           : Math.max(0, quantity),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
         lastSalePrice: number(row.precio_ultima_venta),
-        // `revision` NO es la revision del BOM. MEDIDO 2026-10-01: la columna existe
-        // pero `filasWorkOrders` (supabase-writer.js:1645) escribe ahi la REVISION DEL
-        // PLAN, un contador de guardado. La hoja de inspeccion pinta esta celda en un
-        // cuadrito rotulado REV y quiere la revision del BOM de NetSuite. Se deja ""
-        // y no se copia `row.revision`: un numero de guardado en una celda de revision
-        // de ingenieria es peor que una celda vacia. Ver MAPPING_GAPS.work_orders.
-        revision: "",
+        // `revision` ES LA CELDA REV DE LA HOJA DE INSPECCION y sale de `revision_bom`, NO de
+        // `row.revision`. MEDIDO 2026-10-01: `work_orders.revision` (integer) la escribe
+        // filasWorkOrders (supabase-writer.js) con la REVISION DEL PLAN, un contador de
+        // guardado; ponerla en el cuadrito REV seria afirmar una revision de ingenieria que
+        // nadie dio. Desde el 2026-11-04 el dato correcto SI llega a la base: la ingesta lo
+        // manda desde `billofmaterialsrevision` del 2246, ya recortado a la letra
+        // (docs/schema-work-orders-revision-bom.sql). Si la OT no trae "REV <letra>", la
+        // columna esta vacia y la hoja imprime su valor por omision "A", como hasta hoy.
+        revision: String(row.revision_bom == null ? "" : row.revision_bom).trim(),
       };
     });
   }
@@ -26562,7 +27749,14 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   // presenta y el que la pagina ya usa al agrupar (`sequenceSort`). Mapear y agrupar son
   // insensibles al orden de las filas, asi que esto no cambia lo que se ve; lo que evita es que
   // el `offset` de la segunda vuelta se coma operaciones del principio.
-  const ORDEN_PAGINADO = { operations: "ot.asc,secuencia.asc" };
+  // MEDIDO 2026-10-31 (reporte Faltantes): inventory (1975 filas) e items (2536 filas)
+  // REBASAN el default de 1000 y el corte de PostgREST es silencioso (HTTP 200 con menos
+  // filas). Sin paginacion, COMP-GOSS y otros articulos se pierden en la segunda vuelta.
+  const ORDEN_PAGINADO = {
+    operations: "ot.asc,secuencia.asc",
+    inventory: "item.asc",
+    items: "codigo.asc",
+  };
 
   // LA TABLA DE LA QUE SALE CADA REBANADA DE `catalogs`. La clave de la rebanada NO es el
   // nombre de la tabla (`toolCatalog` es `tools`, `otTypes` es `ot_types`, `machines` es
@@ -26594,6 +27788,15 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     otConfigurations: "ot_configurations",
     articleConfigurations: "article_configurations",
     machinePlanningOverrides: "machine_planning_overrides",
+    // MEDIDO 2026-10-30: el mapa de precios de venta por articulo sale de trabajo_orders, la
+    // misma tabla que alimenta workOrders (pero SIN el filtro solo-abiertas: conserva los
+    // precios de las cerradas, que el catalogo tambien necesita).
+    workOrderSalePrices: "work_orders",
+    // MEDIDO 2026-10-31: items, inventory y sales_orders se leen en readCatalogs y entran al
+    // estado mapeados (mapItems, mapInventory, mapSalesOrders). El reporte Faltantes los consume.
+    items: "items",
+    inventory: "inventory",
+    salesOrders: "sales_orders",
   };
 
   async function readCatalogs(options) {
@@ -26704,6 +27907,21 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       // soloWorkOrdersAbiertas): el catalogo de OTs del arranque es el conjunto de las que se
       // pueden_planear, y una OT cerrada en esa lista se planaria.
       workOrders: soloWorkOrdersAbiertas(rows.work_orders),
+      // LOS PRECIOS DE VENTA DE TODAS LAS OTs (ABIERTAS Y CERRADAS), por articulo.
+      //
+      // MEDIDO 2026-10-30: el catalogo de articulos decia "sin precio de venta" para 109
+      // articulos, y 29 de ellos SI tenian precio en `work_orders` pero solo en OTs CERRADAS.
+      // `state.workOrders` es solo-open y `persistReferencePricesFromSync` no los veia, asi que
+      // esos precios morian ahi. La ingesta deja en `precio_ultima_venta`/`precio_promedio_venta`
+      // los precios del 1766 para las cerradas de la ventana (RULE-SUP-050); el espejo las trae
+      // y aqui se conservan en un mapa articulo -> max(lastSalePrice, averageSalePrice) para que
+      // el catálogo los copie igual que los de las abiertas.
+      workOrderSalePrices: siSePudoLeer(rows, "work_orders", salePricesByArticle(rows.work_orders)),
+      // MEDIDO 2026-10-31 (reporte Faltantes): items, inventory y sales_orders se leen pero
+      // quedaban en operationalRaw sin mapear. El reporte los necesita estructurados.
+      items: siSePudoLeer(rows, "items", mapItems(rows.items)),
+      inventory: siSePudoLeer(rows, "inventory", mapInventory(rows.inventory)),
+      salesOrders: siSePudoLeer(rows, "sales_orders", mapSalesOrders(rows.sales_orders)),
       materials: mapMaterials(rows.materials),
       operationalRaw: {
         operations: rows.operations || null,
@@ -26765,6 +27983,9 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // distintas se contradecirian entre si. Ver PALABRAS_OT_CERRADA mas arriba.
     workOrderCerrada: workOrderCerrada,
     soloWorkOrdersAbiertas: soloWorkOrdersAbiertas,
+    // MEDIDO 2026-10-30: el mapa de precios de venta de TODAS las OTs (abiertas y cerradas) por
+    // articulo. Se publica para poder probarlo sobre filas sueltas sin red.
+    salePricesByArticle: salePricesByArticle,
     // MEDIDO 2026-10-01: esta NO estaba exportada y el reemplazo la pide. mapMaterials existia
     // (esta misma linea 851) y se usaba internamente en readCatalogs (linea ~1039), o sea que
     // estaba escrita, probada por dentro y solo faltaba publicarla. El efecto fue que
@@ -26801,6 +28022,11 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // Los inversos de las dos tablas que se agregaron para el sync (DECIDIDO 2026-09-30).
     mapUnconfirmedWorkOrders: mapUnconfirmedWorkOrders,
     mapClosedWorkOrderSummaries: mapClosedWorkOrderSummaries,
+    // MEDIDO 2026-10-31 (reporte Faltantes): mapeos de las tablas de catalogo de articulos,
+    // existencias y ordenes de venta, que antes solo llegaban por operationalRaw.
+    mapItems: mapItems,
+    mapInventory: mapInventory,
+    mapSalesOrders: mapSalesOrders,
     // La regla de las fechas se exporta para que se pueda probar SOLA, sobre un valor, sin
     // montar una lectura: es la parte del lector que mas dano hace si se cambia por error.
     partirFechaTexto: partirFechaTexto,
@@ -27313,6 +28539,13 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     informe.operations = resultado.operations;
     informe.workOrders = resultado.workOrders;
     informe.materials = resultado.materials;
+    // MEDIDO 2026-10-31 (reporte Faltantes): inventory, items y salesOrders los
+    // necesita el reporte para calcular existencia y demanda de OVs. El lector ya los
+    // mapea (mapInventory, mapItems, mapSalesOrders). Se pasan para que apply los
+    // ponga en state y el reporte los vea desde el primer arranque.
+    informe.inventory = resultado.inventory;
+    informe.items = resultado.items;
+    informe.salesOrders = resultado.salesOrders;
     return informe;
   }
 
@@ -27540,6 +28773,11 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     entrada.operations = informe.operations;
     entrada.workOrders = informe.workOrders;
     entrada.materials = informe.materials;
+    // MEDIDO 2026-10-31 (reporte Faltantes): inventory, items y salesOrders los
+    // necesita el reporte. El lector los mapea y el boot los pasa en el informe.
+    if (informe.inventory !== undefined) entrada.inventory = informe.inventory;
+    if (informe.items !== undefined) entrada.items = informe.items;
+    if (informe.salesOrders !== undefined) entrada.salesOrders = informe.salesOrders;
     for (const clave of CLAVES_PERSONA) {
       // SIN RESPALDO AL PUENTE. Si el lector no trajo la tabla, la clave NO se pone:
       // la pagina se muestra sin cola, sin bloqueos o sin historial, y el aviso del
@@ -27862,8 +29100,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
 
   // El build reemplaza estos dos marcadores (scripts/build-appscript.mjs). Si
   // quedan asi, este modulo esta apagado, igual que el lector.
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -28444,9 +29682,17 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
             tipo_ot: texto(item.jobType).toUpperCase(),
             tipo_trabajo: texto(item.planningType).toUpperCase(),
             precio_manual: numero(item.manualUnitPrice, 0),
-            // precio_ref_venta NO se escribe: lo baja el sync con el precio de venta de
-            // NetSuite (RULE-REP-021) y es distinto del PRECIO_MANUAL que escribe una
-            // persona. Mandarlo seria pisar el dato del ERP con el de la pagina.
+            // precio_ref_venta se escribe DESDE referenciaSalePrice, que es el precio de
+            // venta de NetSuite que persistReferencePricesFromSync (app.js:11171) llena
+            // desde work_orders.precio_* (que a su vez baja la ingesta del RESTlet 1766).
+            // MEDIDO 2026-10-30: el comentario anterior decia "NO se escribe: lo baja el
+            // sync", y era cierto cuando ese sync corria en el puente de Apps Script
+            // (hoja -> 16-supabase-catalogo.js:237). En el flujo actual la pagina escribe
+            // directo a Supabase y nada mas llena la columna, asi que quedaba en 0 y el
+            // catalogo decia "sin precio de venta" aunque el 1766 si lo bajaba.
+            // referenciaSalePrice != manualUnitPrice a proposito (RULE-REP-021): el sync
+            // no toca el precio que escribe una persona.
+            precio_ref_venta: numero(item.referenceSalePrice, 0),
             actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
           });
         });
@@ -30781,9 +32027,16 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     const r = getReader();
     const rows = await r.readTable("work_orders", { order: "ot.asc" });
     const workOrders = r.soloWorkOrdersAbiertas(rows);
+    // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs por articulo (abiertas y
+    // cerradas). `soloWorkOrdersAbiertas` deja fuera las cerradas porque se planan, pero sus
+    // precios (del 1766, en la ventana de RULE-SUP-050) tienen que llegar al catalogo. Sin
+    // esto, un articulo cuyas OTs ya se cerraron quedaba "sin precio de venta" en el catalogo
+    // pese a que work_orders si lo tiene.
+    const workOrderSalePrices = r.salePricesByArticle(rows);
     const now = new Date().toISOString();
     return {
       workOrders,
+      workOrderSalePrices,
       syncedAt: now,
       savedAt: now,
       previewComplete: true,
@@ -31856,8 +33109,19 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     const rows = await r.readTable("app_state", { limit: 1 });
     const appState = r.mapAppState(rows);
     const catalogs = await r.readCatalogs();
+    // MEDIDO 2026-10-31: aplanar las slices de catalogo al top level para que
+    // aplicarEstadoDesdeSupabase pueda asignarlas directamente (inventory, items,
+    // salesOrders, etc.). Sin esto, estas slices viven solo dentro de `catalogs`
+    // y nunca llegan a state a través de applyImported.
+    const flatCatalogs = {};
+    if (catalogs.catalogs && typeof catalogs.catalogs === "object") {
+      for (const key of Object.keys(catalogs.catalogs)) {
+        flatCatalogs[key] = catalogs.catalogs[key];
+      }
+    }
     return {
       ...catalogs,
+      ...flatCatalogs,
       revision: Number(appState?.revision || 0),
       savedAt: appState?.savedAt || "",
       source: "supabase",
@@ -32112,7 +33376,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
         // Ver el punto 1 de la cabecera. Este comentario es el unico sitio donde se puede
         // cambiar a application/json, y ese cambio es el que rompe la pagina.
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ accion: "ingesta", forzado: opciones.forzado !== false }),
+        body: JSON.stringify({ accion: "ingesta", forzado: opciones.forzado !== false, solo: Array.isArray(opciones.solo) ? opciones.solo : undefined }),
         cache: "no-store",
         credentials: "omit",
         signal: control.signal,
@@ -33782,6 +35046,12 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       initialStateLoadPending = false;
       if (selectedDetailOt) state.selectedDetailOt = selectedDetailOt;
       if (selectedOperationId) state.selectedOperationId = selectedOperationId;
+      // RULE-REP-004 (actualizada 2026-11-04): los reportes abren en el borrador y su semana es el
+      // lunes de la semana actual. Este arranque optimizado reemplaza al de app.js y no llamaba a
+      // syncReportFiltersToPlanWeekOrToday(), asi que la semana quedaba en la que traia app_state
+      // (la del ultimo plan guardado). El typeof es porque el arnes de pruebas evalua este archivo
+      // sin el resto de app.js en scope.
+      if (typeof syncReportFiltersToPlanWeekOrToday === "function") syncReportFiltersToPlanWeekOrToday();
       saveState("ui");
       render({ save: false });
       applyInitialWorkspaceView({ scrollToTop: false });
@@ -33799,10 +35069,6 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       void Promise.all([Promise.resolve(bootSync), Promise.resolve(snapshotsRequest)]).then(([bootResult]) => {
         void Promise.resolve(bootResult);
         if (typeof maybeRestoreSavedDraftOnBoot === "function") return maybeRestoreSavedDraftOnBoot();
-        return null;
-      });
-      void snapshotsRequest?.then(() => {
-        if (typeof maybeLoadDefaultPublishedReportSnapshot === "function") return maybeLoadDefaultPublishedReportSnapshot();
         return null;
       });
     });
@@ -34798,7 +36064,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // dentro. Sale cuando la ultima fila de materiales tiene un hueco (0 o 1 MP) y tambien
     // con exactamente 2, que es el caso en que el formato deja la linea de libre.
     if (materials.length <= 2) materialRows.push(materialRow({}, {}));
-    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, "", "inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb inspection-strong")}${cell(3, escape(job.wo), "inspection-big inspection-job-number inspection-bb inspection-strong")}${cell(7, escape(job.article), "inspection-big inspection-article inspection-br inspection-bb inspection-strong")}${cell(2, "REV", "inspection-big inspection-bb inspection-strong")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "Cantidad:", "inspection-label inspection-bb inspection-strong")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb inspection-strong")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb inspection-strong")}${cell(3, "Material", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(3, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Material", "inspection-head inspection-bb inspection-strong")}${cell(2, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb inspection-strong")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
+    byId("inspectionSheetGrid").innerHTML = `<div class="inspection-doc-code">MP FO 08 V23</div>${cell(24, '<strong class="inspection-logo">MALDONADO</strong><span class="inspection-title-text">HOJA DE INSPECCION Y ESTADISTICAS DE TUBERIA DOBLADA</span>', "inspection-title")}${cell(4, root.InspectionCore.inspectionBarcodeSvg(job.wo), "inspection-barcode inspection-br inspection-bb")}${cell(2, "Trabajo:", "inspection-label inspection-bb inspection-strong")}${cell(3, escape(job.wo), "inspection-big inspection-job-number inspection-bb inspection-strong")}${cell(7, escape(job.article), "inspection-big inspection-article inspection-br inspection-bb inspection-strong")}${cell(2, "REV", "inspection-big inspection-bb inspection-strong")}${cell(1, escape(job.revision || "A"), "inspection-big inspection-br inspection-bb inspection-strong")}${cell(2, "Cantidad:", "inspection-label inspection-bb inspection-strong")}${cell(3, `${escape(job.quantity)} Piezas`, "inspection-big inspection-bb inspection-strong")}${cell(7, "ORDEN DE VENTA", "inspection-label inspection-br inspection-bb inspection-strong")}${cell(3, "Material", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(3, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Tubo/pzas", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(2, "Material", "inspection-head inspection-bb inspection-strong")}${cell(2, "Descripcion", "inspection-head inspection-bb inspection-strong")}${cell(2, "Tramo tubo", "inspection-head inspection-br inspection-bb inspection-strong")}${cell(1, "Tubo/pzas", "inspection-head inspection-bb inspection-strong")}${materialRows.join("")}<div class="inspection-section-title"></div>${operationHeader()}${operationSubheader("OP")}${rows.map((row) => operationRow(row.operation)).join("")}`;
     byId("inspectionSecondCapture").innerHTML = `<div class="inspection-grid"><div class="inspection-section-title"></div>${inspectionOperationLayout(3).replace(operationSubheader("OP"), operationSubheader("OPER."))}</div>`;
     const footerCell = (span, html, classes = "", rowSpan = 1) => `<div class="inspection-footer-cell ${classes}" style="grid-column:span ${span}${rowSpan > 1 ? `;grid-row:span ${rowSpan}` : ""}">${html}</div>`;
     let footer = footerCell(1, "Oper", "inspection-footer-head") + footerCell(1, "N°<br>OPER", "inspection-footer-head") + footerCell(2, "Cantidad NC", "inspection-footer-head") + footerCell(1, "Clave", "inspection-footer-head inspection-br") + footerCell(4, "FTY", "inspection-footer-head inspection-br") + footerCell(6, "SELLO LIBERACION", "inspection-footer-head inspection-br") + footerCell(5, "OBSERVACIONES:", "inspection-footer-head inspection-br") + footerCell(2, "ENTREGA", "inspection-footer-head inspection-br") + footerCell(1, "CANT.", "inspection-footer-head inspection-br") + footerCell(1, "RECIBE", "inspection-footer-head");
@@ -34888,112 +36154,130 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // horizontal pero con la hoja recortada a 210 mm de 280 mm).
     document.documentElement.classList.add("printing-landscape");
     document.body.classList.add("printing-inspection");
-    // El tamaño se compacta en el CSS de impresion (celdas, fuentes y huecos en mm) para
-    // que el alto de LAYOUT real del documento quepa en la pagina A4 horizontal. NO se usa
-    // transform:scale() aqui: el motor de impresion pagina por el alto de layout (sin
-    // transform), asi que escalar encogia lo visual pero el contenido se repartia en 2
-    // paginas y la inferior quedaba cortada (medido 2026-10-22: 40 operaciones, PDF de 2
-    // paginas con transform; con celdas compactas cabe en 1).
+    // FIX 2026-10-31: se reemplazo la estrategia de zoom (que encogia el ancho de la hoja)
+    // por un ajuste de tamanos de fuente y alturas de filas mediante variables CSS.
+    // La hoja siempre mantiene los 280 mm de ancho. El algoritmo:
+    //   - Valores base: letra 8px en celdas, 9px en material, 6px en pie.
+    //   - Si sobra espacio, se distribuye primero entre renglones de operacion
+    //     (hasta 10 mm). Las filas de captura manual y firmas mantienen 6 mm.
+    //   - Si falta espacio, se reducen primero las filas de captura manual (hasta 4 mm),
+    //     luego las filas de firma (hasta 4 mm), luego la letra (hasta 6.5 px).
+    //   - Nunca se usa zoom; la hoja ocupa el ancho completo de impresion.
     const sheet = byId("inspectionDocument");
     try {
       await new Promise((resolve) => root.setTimeout(resolve, 50));
-      // La clase `printing-inspection` aplica las medidas de impresion tambien en pantalla, asi
-      // que aqui se puede MEDIR el alto/ancho de layout antes de imprimir. Si la hoja no cabe
-      // (una OT con muchas operaciones), se encoge con `zoom`, que SI reduce el layout que usa
-      // el paginador; `transform:scale` no lo reducia y partia la hoja en 2 paginas. Hasta 3
-      // pasadas y nunca por debajo de 0.5, para no volver ilegible la hoja (medido 2026-10-22:
-      // 60 operaciones -> zoom 0.91 y 1 pagina; 40 ya cabia sin zoom).
       if (sheet) {
         const mmToPx = 96 / 25.4;
-        const pageWidthPx = (297 - 9 - 8) * mmToPx;
-        const pageHeightPx = (210 - 3 - 5) * mmToPx;
-        // REPARTO VERTICAL (pedido del usuario 2026-10-24): con pocas operaciones la hoja
-        // quedaba comprimida arriba y medio folio en blanco abajo. El hueco se reparte entre
-        // los renglones EN BLANCO (que se llenan a mano) y las firmas, en vez de dejar celdas
-        // de 1.7mm ilegibles. Primero crecen los renglones de operacion (tope 10mm, que es un
-        // renglon comodo para escribir); si aun sobra, crecen las tres filas de firmas.
+        const pageHeightPx = (210 - 3 - 5) * mmToPx;  // 202 mm
+        // limpia viejas variables de la iteracion anterior
+        const oldVars = ["--inspection-op-row","--inspection-footer-row","--inspection-print-zoom",
+          "--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+          "--insp-second-row","--insp-sig-row","--insp-op-row",
+          "--insp-big-font","--insp-job-font","--insp-article-font",
+          "--insp-title-font","--insp-logo-font"
+        ];
+        for (const k of oldVars) sheet.style.removeProperty(k);
+        // variables base legibles con fallback en CSS
+        const defaults = {
+          "--insp-cell-font":"8px","--insp-mat-font":"11px","--insp-qty-font":"8px",
+          "--insp-footer-font":"6px","--insp-second-row":"6mm","--insp-sig-row":"6mm",
+          "--insp-op-row":"0","--insp-big-font":"12px","--insp-job-font":"15px",
+          "--insp-article-font":"15px","--insp-title-font":"13px","--insp-logo-font":"10px"
+        };
+        for (const [k, v] of Object.entries(defaults)) sheet.style.setProperty(k, v);
+
         const altoContenido = () => {
           const hoja = sheet.getBoundingClientRect();
           const footer = byId("inspectionReleaseFooter");
           const fondo = footer ? footer.getBoundingClientRect().bottom : hoja.bottom;
-          // La hoja lleva padding inferior (18px) y borde: si no se cuenta, el reparto
-          // llena hasta el borde del footer pero la hoja termina 5mm mas abajo y el motor
-          // la encoge (medido 2026-10-24: 20 operaciones -> zoom 0.951).
           const estilo = root.getComputedStyle(sheet);
           const cola = (parseFloat(estilo.paddingBottom) || 0) + (parseFloat(estilo.borderBottomWidth) || 0);
           return fondo - hoja.top + cola;
         };
-        // OJO: `.inspection-op-line` lo llevan las 18 CELDAS de cada renglon, no el renglon.
-        // Contar celdas repartia el hueco entre 400+ celdas y los renglones casi no crecian
-        // (medido 2026-10-24: 20 operaciones -> 1.89mm). El renglon se cuenta por su primera
-        // celda, que es la unica con la clase `inspection-op`.
-        const renglones = sheet.querySelectorAll(".inspection-op").length;
-        // El footer tiene CUATRO filas (encabezado + 3 de firma), no 3: repartir el hueco
-        // entre 3 hacia crecer 4 filas y se pasaba ~20% (medido 2026-10-24: 5 operaciones ->
-        // 9.7mm de sobra negativa y zoom 0.95 despues de haber estirado la hoja).
-        const filasFooter = (() => {
-          const footer = byId("inspectionReleaseFooter");
-          if (!footer) return 3;
-          const filas = root.getComputedStyle(footer).gridTemplateRows.split(" ").filter(Boolean).length;
-          return Math.max(1, filas);
-        })();
-        const varMm = (nombre, porDefecto) => {
-          const valor = parseFloat(sheet.style.getPropertyValue(nombre));
-          return Number.isFinite(valor) ? valor : porDefecto;
+        const cuentaMainOps = () => sheet.querySelectorAll("#inspectionSheetGrid .inspection-op").length;
+        const cuentaSecondOps = () => sheet.querySelectorAll("#inspectionSecondCapture .inspection-op").length;
+        const cuentaSigRows = () => {
+          const sig = sheet.querySelectorAll("#inspectionReleaseFooter .inspection-footer-cell:nth-child(n+11)").length;
+          return Math.max(1, sig / 10);
         };
-        // Se reparte en pasadas y se vuelve a medir: crecer los renglones cambia el alto del
-        // footer (las celdas del sello abarcan 3 filas) y una sola cuenta se pasaba 4-5mm,
-        // con lo que el zoom encogia la hoja justo despues de haberla estirado.
-        for (let pass = 0; pass < 4; pass++) {
-          const faltaMm = (pageHeightPx - altoContenido()) / mmToPx;
-          if (faltaMm <= 1) break;
-          let cambio = false;
-          const opActual = varMm("--inspection-op-row", 1.7);
-          if (renglones > 0 && opActual < 10) {
-            const add = Math.min(10 - opActual, (faltaMm * 0.7) / renglones);
-            if (add > 0.05) {
-              sheet.style.setProperty("--inspection-op-row", `${(opActual + add).toFixed(2)}mm`);
-              cambio = true;
+        const getMm = (nombre, fallback) => {
+          const valor = parseFloat(sheet.style.getPropertyValue(nombre));
+          return Number.isFinite(valor) ? valor : fallback;
+        };
+        const setMm = (nombre, valor) => sheet.style.setProperty(nombre, `${Number(valor).toFixed(2)}mm`);
+
+        const delay = (ms = 20) => new Promise((resolve) => root.setTimeout(resolve, ms));
+
+        for (let pass = 0; pass < 10; pass++) {
+          let h = altoContenido();
+          let falta = (pageHeightPx - h) / mmToPx;
+          if (Math.abs(falta) <= 0.5) break;
+
+          if (falta > 0) {
+            // SOBRA: medir el alto real del primer renglon de operacion y crecerlo
+            const nMain = cuentaMainOps();
+            if (nMain > 0) {
+              const firstOpCell = sheet.querySelector("#inspectionSheetGrid .inspection-op-line.inspection-op");
+              const rowPx = firstOpCell ? firstOpCell.getBoundingClientRect().height : 0;
+              const currentMm = Math.max(getMm("--insp-op-row", 0), rowPx / mmToPx);
+              if (currentMm < 10) {
+                const target = Math.min(10, currentMm + falta * 0.7 / nMain);
+                // redondear a centesimas para evitar bucle infinito
+                const redondeado = Math.round(target * 100) / 100;
+                if (redondeado > currentMm + 0.02) {
+                  setMm("--insp-op-row", redondeado);
+                  await delay(20);
+                  continue;
+                }
+              }
             }
-          }
-          const faltaTrasRenglonesMm = (pageHeightPx - altoContenido()) / mmToPx;
-          const firmaActual = varMm("--inspection-footer-row", 3);
-          if (faltaTrasRenglonesMm > 1 && firmaActual < 22) {
-            const add = Math.min(22 - firmaActual, (faltaTrasRenglonesMm * 0.9) / filasFooter);
-            if (add > 0.05) {
-              sheet.style.setProperty("--inspection-footer-row", `${(firmaActual + add).toFixed(2)}mm`);
-              cambio = true;
+            break;  // no se puede crecer mas → sobrante queda como margen inferior
+          } else {
+            // FALTA: reducir en escalones fijos: captura manual → firmas → letra
+
+            // a) filas de captura manual del segundo bloque → minimo 4mm de golpe
+            if (getMm("--insp-second-row", 6) > 4) {
+              setMm("--insp-second-row", 4);
+              await delay(20);
+              continue;
             }
+
+            // b) filas de firma del pie → minimo 4mm de golpe
+            if (getMm("--insp-sig-row", 6) > 4) {
+              setMm("--insp-sig-row", 4);
+              await delay(20);
+              continue;
+            }
+
+            // c) reducir letra 0.5px por pasada
+            const fontActual = parseFloat(sheet.style.getPropertyValue("--insp-cell-font")) || 8;
+            if (fontActual > 6.5) {
+              const nuevo = Math.max(6.5, fontActual - 0.5);
+              sheet.style.setProperty("--insp-cell-font", `${nuevo}px`);
+              const mat = Math.max(7, (parseFloat(sheet.style.getPropertyValue("--insp-mat-font")) || 9) - 0.5);
+              sheet.style.setProperty("--insp-mat-font", `${mat}px`);
+              const qty = Math.max(6.5, (parseFloat(sheet.style.getPropertyValue("--insp-qty-font")) || 8) - 0.5);
+              sheet.style.setProperty("--insp-qty-font", `${qty}px`);
+              const fFont = Math.max(5, (parseFloat(sheet.style.getPropertyValue("--insp-footer-font")) || 6) - 0.5);
+              sheet.style.setProperty("--insp-footer-font", `${fFont}px`);
+              await delay(20);
+              continue;
+            }
+
+            break;  // ya no se puede reducir mas
           }
-          if (!cambio) break;
-          await new Promise((resolve) => root.setTimeout(resolve, 30));
-        }
-        let sobra = pageHeightPx - altoContenido();
-        let zoom = 1;
-        // El zoom SOLO corrige cuando el CONTENIDO no cabe. `scrollHeight` incluye el
-        // `min-height:202mm` de la hoja y su padding, asi que una hoja que ya cabia se
-        // encogia igual (medido 2026-10-24: 20 operaciones -> zoom 0.951 sin necesidad,
-        // justo lo contrario del reparto pedido).
-        for (let pass = 0; pass < 3 && sobra < -1; pass++) {
-          const width = sheet.scrollWidth;
-          const height = sheet.scrollHeight;
-          if (width * zoom <= pageWidthPx + 1 && height * zoom <= pageHeightPx + 1) break;
-          const ratio = Math.min(
-            width > 0 ? (pageWidthPx * 0.995) / (width * zoom) : 1,
-            height > 0 ? (pageHeightPx * 0.995) / (height * zoom) : 1,
-          );
-          const next = Math.max(0.5, zoom * ratio);
-          if (next >= zoom - 0.001) break;
-          zoom = Math.round(next * 1000) / 1000;
-          sheet.style.setProperty("--inspection-print-zoom", String(zoom));
-          await new Promise((resolve) => root.setTimeout(resolve, 30));
         }
       }
       root.print();
     } finally {
-      sheet?.style.removeProperty("--inspection-print-zoom");
+      for (const k of ["--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+          "--insp-second-row","--insp-sig-row","--insp-op-row",
+          "--insp-big-font","--insp-job-font","--insp-article-font",
+          "--insp-title-font","--insp-logo-font"
+      ]) sheet?.style.removeProperty(k);
       sheet?.style.removeProperty("--inspection-op-row");
       sheet?.style.removeProperty("--inspection-footer-row");
+      sheet?.style.removeProperty("--inspection-print-zoom");
       document.documentElement.classList.remove("printing-landscape");
       document.body.classList.remove("printing-inspection");
       if (pageSizeStyle && pageSizeStyle.parentNode) pageSizeStyle.parentNode.removeChild(pageSizeStyle);
@@ -35001,9 +36285,14 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   }
   function clearInspectionPrintState() {
     const sheet = byId("inspectionDocument");
-    sheet?.style.removeProperty("--inspection-print-zoom");
+    for (const k of ["--insp-cell-font","--insp-mat-font","--insp-qty-font","--insp-footer-font",
+        "--insp-second-row","--insp-sig-row","--insp-op-row",
+        "--insp-big-font","--insp-job-font","--insp-article-font",
+        "--insp-title-font","--insp-logo-font"
+    ]) sheet?.style.removeProperty(k);
     sheet?.style.removeProperty("--inspection-op-row");
     sheet?.style.removeProperty("--inspection-footer-row");
+    sheet?.style.removeProperty("--inspection-print-zoom");
     document.documentElement.classList.remove("printing-landscape");
     document.body.classList.remove("printing-inspection");
     const pageSizeStyle = document.getElementById("inspection-print-page-size");

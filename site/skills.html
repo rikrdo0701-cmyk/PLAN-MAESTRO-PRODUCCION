@@ -526,8 +526,8 @@ tr:last-child td { border-bottom: 0; }
 (function (root) {
   "use strict";
 
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const CLAVE_ALMACEN = "pp_supabase_session";
   const REFRESCO_MARGEN_MS = 60 * 1000;
@@ -922,8 +922,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   "use strict";
 
   // El build reemplaza estos dos marcadores. Si quedan asi, el lector esta apagado.
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -1055,6 +1055,25 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     return mapWorkOrders(rows).filter(function (wo) { return !wo.cerrada; });
   }
 
+  // PRECIOS DE VENTA POR ARTICULO, de TODAS las OTs (abiertas y cerradas). Devuelve
+  // `{ [articulo en mayusculas]: precio }` con el maximo entre ultima y promedio venta por
+  // articulo. Solo entra un precio >= 1: un 0 o residual (< 1) significa "no hay precio
+  // de venta conocido", no un dato. MEDIDO 2026-10-30: ver `workOrderSalePrices`.
+  function salePricesByArticle(rows) {
+    const precios = {};
+    (rows || []).forEach(function (row) {
+      const articulo = String(row && row.articulo || "").trim().toUpperCase();
+      if (!articulo) return;
+      const ultima = Number(row && row.precio_ultima_venta) || 0;
+      const promedio = Number(row && row.precio_promedio_venta) || 0;
+      const precio = Math.max(ultima, promedio);
+      if (!(precio >= 1)) return;
+      const actual = Number(precios[articulo]) || 0;
+      if (precio > actual) precios[articulo] = precio;
+    });
+    return precios;
+  }
+
   // HUECOS DE MAPEO Supabase -> shape del estado, MEDIDOS 2026-09-29 contra el esquema REAL
   // desplegado (.openchamber/esquema-supabase.json, el OpenAPI que sirve PostgREST), tabla por
   // tabla y columna por columna. No contra el DDL objetivo: si algo solo existe en un DDL sin
@@ -1097,7 +1116,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       // transacciones `Build` de la OT, el mismo dato que `record:built` del 2244). La regla de
       // `mapWorkOrders` se queda como estaba: es la que cubre las filas del espejo viejo y una
       // corrida sin la consulta nueva.
-      "workOrders[].revision | falta la FORMA de la columna revision | MEDIDO 2026-10-01: la columna existe y esta bien tipada, pero lo que guarda NO es lo que el estado pide. filasWorkOrders (supabase-writer.js:1645) escribe ahi la REVISION DEL PLAN, que es un contador de guardado, mientras que la hoja de inspeccion usa este campo en la celda REV, que quiere la revision del BOM de NetSuite ('Revision'/'bomRevision' en PP_getInspectionWorkOrder, 16-inspection-service.js:181). Son dos cosas distintas en la misma columna y no hay forma de saber cual esta sin preguntar a quien la escribio. Se deja '' y la hoja imprime 'A', que es lo que se imprimia cuando NetSuite no traia revision. Poner el numero del plan en una celda REV seria affirmar una revision de ingenieria que nadie dio.",
+      "workOrders[].revision | CORREGIDO el 2026-11-04: la hoja de inspeccion ahora lee `revision_bom`, no `revision`. La columna nueva (`revision_bom text not null default ''`, docs/schema-work-orders-revision-bom.sql) la llena la INGESTA desde `billofmaterialsrevision` del RESTlet 2246 y ya lleva la letra correcta (OT 2752 -> C). `work_orders.revision` sigue siendo el CONTADOR DE GUARDADO del plan (filasWorkOrders, supabase-writer.js) y el lector deja de usarlo para la celda REV. Si la OT no trae 'REV <letra>' en el BOM, la hoja imprime 'A' como antes.",
     ],
     operations: [
       "operations[].num | falta la columna num | la hoja OPERACIONES tiene NUM y la tabla no. La agrega docs/schema-supabase-plan.sql (integer), que SIGUE SIN APLICAR, asi que hoy la fila no trae el numero con el que la app identifica la operacion.",
@@ -2365,16 +2384,55 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
         componentId: row.componente_id, component: row.componente, description: row.descripcion,
         unit: row.unidad, required: number(row.requerido), issued: number(row.emitido),
         pending: number(row.pendiente),
-        // MEDIDO 2026-10-04: `lineId` es la clave natural de la fila y la pagina la
-        // necesita para poder GUARDAR sin crear una fila nueva por cada guardado. `line_id`
-        // lo escribe la ingesta (RESTlet 2246) con el id de renglon de NetSuite (`comp.id`),
-        // y con el UNIQUE (ot, line_id) es la unica clave con la que un UPSERT actualiza la
-        // fila del ERP en vez de insertar una copia. Sin exponerla, `filasMaterials`
-        // (supabase-writer.js) no tiene mas que `id`, que es el UUID de la fila, y escribia
-        // ESO como `line_id`: medido 348 (ot, componente) con dos filas cada uno (697 filas
-        // para 348 materiales) y una MP saliendo dos veces en la hoja de inspeccion. Se
-        // escribe aqui, no en el escritor, porque el escritor no tiene la fila cruda.
         lineId: String(row.line_id == null ? "" : row.line_id).trim(),
+      };
+    });
+  }
+
+  // MEDIDO 2026-10-31 (pedido del usuario, reporte Faltantes): mapeo de items (catalogo de
+  // articulos), inventory (existencias por item+ubicacion) y sales_orders (ordenes de venta
+  // con lineas). La ingesta las escribe (TABLAS en 19-appscript-ingesta-supabase.js) y la
+  // pagina las recibe por readCatalogs pero hasta hoy solo quedaban en operationalRaw sin
+  // mapear al estado. El reporte Faltantes necesita estos datos limpios.
+  function mapItems(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, code: String(row.codigo || "").trim(),
+        description: String(row.descripcion || ""),
+        purchaseDescription: String(row.descripcion_compra || ""),
+        displayName: String(row.nombre_mostrado || ""),
+        type: String(row.tipo || "").trim().toUpperCase(),
+        typeClass: number(row.clase),
+        isAssembly: Boolean(row.es_ensamblaje),
+        inactive: Boolean(row.inactivo),
+        lastModified: String(row.ultima_modificacion || ""),
+      };
+    });
+  }
+
+  function mapInventory(rows) {
+    return (rows || []).map(function (row) {
+      return {
+        id: row.id, item: String(row.item || "").trim(), location: String(row.ubicacion || ""),
+        available: number(row.disponible), physical: number(row.fisico),
+        committed: number(row.comprometido), picked: number(row.pickeado),
+        inTransit: number(row.en_transito),
+      };
+    });
+  }
+
+  function mapSalesOrders(rows) {
+    return (rows || []).map(function (row) {
+      var lineas = [];
+      if (row.lineas && Array.isArray(row.lineas)) lineas = row.lineas;
+      return {
+        id: row.id, folio: String(row.folio || "").trim(),
+        salesOrderId: String(row.sales_order_id || "").trim(),
+        customer: String(row.cliente || ""), customerId: number(row.cliente_id),
+        date: String(row.fecha || ""), status: String(row.estatus || ""),
+        approval: String(row.aprobacion || ""), total: number(row.total),
+        currency: number(row.moneda), memo: String(row.memo || ""),
+        lines: lineas,
       };
     });
   }
@@ -2464,13 +2522,15 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
           : Math.max(0, quantity),
         averageSalePrice: number(row.precio_promedio_venta), averageSalePriceFrom: "", averageSalePriceTo: "",
         lastSalePrice: number(row.precio_ultima_venta),
-        // `revision` NO es la revision del BOM. MEDIDO 2026-10-01: la columna existe
-        // pero `filasWorkOrders` (supabase-writer.js:1645) escribe ahi la REVISION DEL
-        // PLAN, un contador de guardado. La hoja de inspeccion pinta esta celda en un
-        // cuadrito rotulado REV y quiere la revision del BOM de NetSuite. Se deja ""
-        // y no se copia `row.revision`: un numero de guardado en una celda de revision
-        // de ingenieria es peor que una celda vacia. Ver MAPPING_GAPS.work_orders.
-        revision: "",
+        // `revision` ES LA CELDA REV DE LA HOJA DE INSPECCION y sale de `revision_bom`, NO de
+        // `row.revision`. MEDIDO 2026-10-01: `work_orders.revision` (integer) la escribe
+        // filasWorkOrders (supabase-writer.js) con la REVISION DEL PLAN, un contador de
+        // guardado; ponerla en el cuadrito REV seria afirmar una revision de ingenieria que
+        // nadie dio. Desde el 2026-11-04 el dato correcto SI llega a la base: la ingesta lo
+        // manda desde `billofmaterialsrevision` del 2246, ya recortado a la letra
+        // (docs/schema-work-orders-revision-bom.sql). Si la OT no trae "REV <letra>", la
+        // columna esta vacia y la hoja imprime su valor por omision "A", como hasta hoy.
+        revision: String(row.revision_bom == null ? "" : row.revision_bom).trim(),
       };
     });
   }
@@ -2542,7 +2602,14 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   // presenta y el que la pagina ya usa al agrupar (`sequenceSort`). Mapear y agrupar son
   // insensibles al orden de las filas, asi que esto no cambia lo que se ve; lo que evita es que
   // el `offset` de la segunda vuelta se coma operaciones del principio.
-  const ORDEN_PAGINADO = { operations: "ot.asc,secuencia.asc" };
+  // MEDIDO 2026-10-31 (reporte Faltantes): inventory (1975 filas) e items (2536 filas)
+  // REBASAN el default de 1000 y el corte de PostgREST es silencioso (HTTP 200 con menos
+  // filas). Sin paginacion, COMP-GOSS y otros articulos se pierden en la segunda vuelta.
+  const ORDEN_PAGINADO = {
+    operations: "ot.asc,secuencia.asc",
+    inventory: "item.asc",
+    items: "codigo.asc",
+  };
 
   // LA TABLA DE LA QUE SALE CADA REBANADA DE `catalogs`. La clave de la rebanada NO es el
   // nombre de la tabla (`toolCatalog` es `tools`, `otTypes` es `ot_types`, `machines` es
@@ -2574,6 +2641,15 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     otConfigurations: "ot_configurations",
     articleConfigurations: "article_configurations",
     machinePlanningOverrides: "machine_planning_overrides",
+    // MEDIDO 2026-10-30: el mapa de precios de venta por articulo sale de trabajo_orders, la
+    // misma tabla que alimenta workOrders (pero SIN el filtro solo-abiertas: conserva los
+    // precios de las cerradas, que el catalogo tambien necesita).
+    workOrderSalePrices: "work_orders",
+    // MEDIDO 2026-10-31: items, inventory y sales_orders se leen en readCatalogs y entran al
+    // estado mapeados (mapItems, mapInventory, mapSalesOrders). El reporte Faltantes los consume.
+    items: "items",
+    inventory: "inventory",
+    salesOrders: "sales_orders",
   };
 
   async function readCatalogs(options) {
@@ -2684,6 +2760,21 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       // soloWorkOrdersAbiertas): el catalogo de OTs del arranque es el conjunto de las que se
       // pueden_planear, y una OT cerrada en esa lista se planaria.
       workOrders: soloWorkOrdersAbiertas(rows.work_orders),
+      // LOS PRECIOS DE VENTA DE TODAS LAS OTs (ABIERTAS Y CERRADAS), por articulo.
+      //
+      // MEDIDO 2026-10-30: el catalogo de articulos decia "sin precio de venta" para 109
+      // articulos, y 29 de ellos SI tenian precio en `work_orders` pero solo en OTs CERRADAS.
+      // `state.workOrders` es solo-open y `persistReferencePricesFromSync` no los veia, asi que
+      // esos precios morian ahi. La ingesta deja en `precio_ultima_venta`/`precio_promedio_venta`
+      // los precios del 1766 para las cerradas de la ventana (RULE-SUP-050); el espejo las trae
+      // y aqui se conservan en un mapa articulo -> max(lastSalePrice, averageSalePrice) para que
+      // el catálogo los copie igual que los de las abiertas.
+      workOrderSalePrices: siSePudoLeer(rows, "work_orders", salePricesByArticle(rows.work_orders)),
+      // MEDIDO 2026-10-31 (reporte Faltantes): items, inventory y sales_orders se leen pero
+      // quedaban en operationalRaw sin mapear. El reporte los necesita estructurados.
+      items: siSePudoLeer(rows, "items", mapItems(rows.items)),
+      inventory: siSePudoLeer(rows, "inventory", mapInventory(rows.inventory)),
+      salesOrders: siSePudoLeer(rows, "sales_orders", mapSalesOrders(rows.sales_orders)),
       materials: mapMaterials(rows.materials),
       operationalRaw: {
         operations: rows.operations || null,
@@ -2745,6 +2836,9 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // distintas se contradecirian entre si. Ver PALABRAS_OT_CERRADA mas arriba.
     workOrderCerrada: workOrderCerrada,
     soloWorkOrdersAbiertas: soloWorkOrdersAbiertas,
+    // MEDIDO 2026-10-30: el mapa de precios de venta de TODAS las OTs (abiertas y cerradas) por
+    // articulo. Se publica para poder probarlo sobre filas sueltas sin red.
+    salePricesByArticle: salePricesByArticle,
     // MEDIDO 2026-10-01: esta NO estaba exportada y el reemplazo la pide. mapMaterials existia
     // (esta misma linea 851) y se usaba internamente en readCatalogs (linea ~1039), o sea que
     // estaba escrita, probada por dentro y solo faltaba publicarla. El efecto fue que
@@ -2781,6 +2875,11 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     // Los inversos de las dos tablas que se agregaron para el sync (DECIDIDO 2026-09-30).
     mapUnconfirmedWorkOrders: mapUnconfirmedWorkOrders,
     mapClosedWorkOrderSummaries: mapClosedWorkOrderSummaries,
+    // MEDIDO 2026-10-31 (reporte Faltantes): mapeos de las tablas de catalogo de articulos,
+    // existencias y ordenes de venta, que antes solo llegaban por operationalRaw.
+    mapItems: mapItems,
+    mapInventory: mapInventory,
+    mapSalesOrders: mapSalesOrders,
     // La regla de las fechas se exporta para que se pueda probar SOLA, sobre un valor, sin
     // montar una lectura: es la parte del lector que mas dano hace si se cambia por error.
     partirFechaTexto: partirFechaTexto,
@@ -3014,8 +3113,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
 
   // El build reemplaza estos dos marcadores (scripts/build-appscript.mjs). Si
   // quedan asi, este modulo esta apagado, igual que el lector.
-  const DEFAULT_URL = "";
-  const DEFAULT_ANON_KEY = "";
+  const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
+  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -3596,9 +3695,17 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
             tipo_ot: texto(item.jobType).toUpperCase(),
             tipo_trabajo: texto(item.planningType).toUpperCase(),
             precio_manual: numero(item.manualUnitPrice, 0),
-            // precio_ref_venta NO se escribe: lo baja el sync con el precio de venta de
-            // NetSuite (RULE-REP-021) y es distinto del PRECIO_MANUAL que escribe una
-            // persona. Mandarlo seria pisar el dato del ERP con el de la pagina.
+            // precio_ref_venta se escribe DESDE referenciaSalePrice, que es el precio de
+            // venta de NetSuite que persistReferencePricesFromSync (app.js:11171) llena
+            // desde work_orders.precio_* (que a su vez baja la ingesta del RESTlet 1766).
+            // MEDIDO 2026-10-30: el comentario anterior decia "NO se escribe: lo baja el
+            // sync", y era cierto cuando ese sync corria en el puente de Apps Script
+            // (hoja -> 16-supabase-catalogo.js:237). En el flujo actual la pagina escribe
+            // directo a Supabase y nada mas llena la columna, asi que quedaba en 0 y el
+            // catalogo decia "sin precio de venta" aunque el 1766 si lo bajaba.
+            // referenciaSalePrice != manualUnitPrice a proposito (RULE-REP-021): el sync
+            // no toca el precio que escribe una persona.
+            precio_ref_venta: numero(item.referenceSalePrice, 0),
             actualizado: instante(texto(item.updatedAt) || new Date().toISOString()),
           });
         });
@@ -5933,9 +6040,16 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     const r = getReader();
     const rows = await r.readTable("work_orders", { order: "ot.asc" });
     const workOrders = r.soloWorkOrdersAbiertas(rows);
+    // MEDIDO 2026-10-30: los precios de venta de TODAS las OTs por articulo (abiertas y
+    // cerradas). `soloWorkOrdersAbiertas` deja fuera las cerradas porque se planan, pero sus
+    // precios (del 1766, en la ventana de RULE-SUP-050) tienen que llegar al catalogo. Sin
+    // esto, un articulo cuyas OTs ya se cerraron quedaba "sin precio de venta" en el catalogo
+    // pese a que work_orders si lo tiene.
+    const workOrderSalePrices = r.salePricesByArticle(rows);
     const now = new Date().toISOString();
     return {
       workOrders,
+      workOrderSalePrices,
       syncedAt: now,
       savedAt: now,
       previewComplete: true,
@@ -7008,8 +7122,19 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     const rows = await r.readTable("app_state", { limit: 1 });
     const appState = r.mapAppState(rows);
     const catalogs = await r.readCatalogs();
+    // MEDIDO 2026-10-31: aplanar las slices de catalogo al top level para que
+    // aplicarEstadoDesdeSupabase pueda asignarlas directamente (inventory, items,
+    // salesOrders, etc.). Sin esto, estas slices viven solo dentro de `catalogs`
+    // y nunca llegan a state a través de applyImported.
+    const flatCatalogs = {};
+    if (catalogs.catalogs && typeof catalogs.catalogs === "object") {
+      for (const key of Object.keys(catalogs.catalogs)) {
+        flatCatalogs[key] = catalogs.catalogs[key];
+      }
+    }
     return {
       ...catalogs,
+      ...flatCatalogs,
       revision: Number(appState?.revision || 0),
       savedAt: appState?.savedAt || "",
       source: "supabase",

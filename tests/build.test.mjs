@@ -1265,6 +1265,10 @@ test("la pagina de piso sale montada, con manifiesto, iconos y su ruta en el ser
   assert.match(estilos, /\.ot\s*\{[^}]*font-size:\s*clamp\(/, "el numero de OT tiene que crecer con la pantalla");
   assert.match(estilos, /\.datos dd\s*\{[^}]*font-size:\s*clamp\(/, "los datos tienen que crecer con la pantalla");
   assert.match(estilos, /\.datos > div\s*\{[^}]*display:\s*grid/, "la descripcion va a todo el ancho, no en dos columnas");
+  // Y el alto: en un telefono alto el dato no se apila arriba; crece y se reparte.
+  assert.match(estilos, /#pantalla-verificar \.datos\s*\{[^}]*flex:\s*1 1 auto/, "el bloque de datos tiene que ocupar el alto disponible, no dejar media pantalla en blanco");
+  assert.match(estilos, /#pantalla-verificar \.datos\s*\{[^}]*grid-auto-rows:\s*minmax\(0, 1fr\)/, "las tres filas del dato se reparten a lo alto");
+  assert.match(estilos, /#pantalla-finalizar \.cantidad\s*\{[^}]*flex:\s*1 1 auto/, "el campo de piezas ocupa el alto que sobra en su pantalla");
   assert.match(estilos, /\.acciones\s*\{[^}]*position:\s*sticky/, "los botones se quedan al alcance aunque la lista no quepa");
 });
 
