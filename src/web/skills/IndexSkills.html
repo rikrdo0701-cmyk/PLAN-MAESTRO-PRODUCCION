@@ -151,7 +151,7 @@ body {
   border-radius: 3px;
   background: var(--surface);
 }
-.reporte-tabla-wrap table { width: 100%; min-width: 900px; font-size: 11px; }
+.reporte-tabla-wrap table { width: 100%; min-width: 1200px; font-size: 11px; }
 .reporte-tabla-wrap th { font-size: 10px; }
 .reporte-vacio { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
 
@@ -1330,6 +1330,16 @@ function formatearFecha(iso) {
     return dia + "/" + mes + "/" + anio + " " + (h % 12 || 12) + ":" + m + (h >= 12 ? "PM" : "AM");
   } catch (e) { return iso; }
 }
+function fechaCorta(iso) {
+  if (!iso) return "—";
+  try { const d = new Date(iso); return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear(); }
+  catch (e) { return iso; }
+}
+function horaCorta(iso) {
+  if (!iso) return "—";
+  try { const d = new Date(iso); const h = d.getHours(); return (h % 12 || 12) + ":" + String(d.getMinutes()).padStart(2,"0") + (h >= 12 ? "PM" : "AM"); }
+  catch (e) { return iso; }
+}
 
 function pintarTabla(rows) {
   const cont = document.getElementById("reporteWrap");
@@ -1337,7 +1347,7 @@ function pintarTabla(rows) {
     cont.innerHTML = '<p class="reporte-vacio">No hay registros en ese rango.</p>';
     return;
   }
-  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Inicio", "Fin", "Piezas", "Ciclo", "Objetivo", "Desv.", "Estatus"];
+  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Piezas", "Ciclo", "Objetivo", "Desv.", "Estatus"];
   let h = '<div class="reporte-tabla-wrap"><table><thead><tr>';
   cabeceras.forEach((c) => { h += "<th>" + c + "</th>"; });
   h += "</tr></thead><tbody>";
@@ -1347,9 +1357,11 @@ function pintarTabla(rows) {
       + "<td>" + (r.ot || "—") + "</td>"
       + "<td>" + (r.articulo || "—") + "</td>"
       + "<td>" + (r.articulo_descripcion || "—") + "</td>"
-      + "<td>" + (r.operacion_secuencia || "") + " " + (r.operacion_descripcion || "—") + "</td>"
-      + "<td>" + formatearFecha(r.hora_inicio) + "</td>"
-      + "<td>" + formatearFecha(r.hora_fin) + "</td>"
+      + "<td>" + (r.operacion_descripcion || "—") + "</td>"
+      + "<td>" + fechaCorta(r.hora_inicio) + "</td>"
+      + "<td>" + horaCorta(r.hora_inicio) + "</td>"
+      + "<td>" + fechaCorta(r.hora_fin) + "</td>"
+      + "<td>" + horaCorta(r.hora_fin) + "</td>"
       + "<td>" + (r.cantidad || "—") + "</td>"
       + "<td>" + (r.tiempo_ciclo_min || "—") + "</td>"
       + "<td>" + (r.ciclo_objetivo_min || "—") + "</td>"
@@ -1363,13 +1375,14 @@ function pintarTabla(rows) {
 
 function descargarCSV() {
   if (!ultimosRegistros.length) return;
-  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Inicio", "Fin", "Piezas", "Ciclo min/pza", "Objetivo min/pza", "Desviación", "Estatus", "Máquina", "Dispositivo"];
+  const cabeceras = ["OT", "Artículo", "Descripción", "Operación", "Fecha inicio", "Hora inicio", "Fecha fin", "Hora fin", "Piezas", "Ciclo min/pza", "Objetivo min/pza", "Desviación", "Estatus", "Máquina", "Dispositivo"];
   const escape = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
   let csv = cabeceras.join(",") + "\r\n";
   ultimosRegistros.forEach((r) => {
     const dif = r.tiempo_ciclo_min && r.ciclo_objetivo_min ? Math.round(((r.tiempo_ciclo_min - r.ciclo_objetivo_min) / r.ciclo_objetivo_min) * 100) + "%" : "";
     csv += escape(r.ot) + "," + escape(r.articulo) + "," + escape(r.articulo_descripcion) + ","
-      + escape(r.operacion_descripcion) + "," + formatearFecha(r.hora_inicio) + "," + formatearFecha(r.hora_fin) + ","
+      + escape(r.operacion_descripcion) + "," + fechaCorta(r.hora_inicio) + "," + horaCorta(r.hora_inicio) + ","
+      + fechaCorta(r.hora_fin) + "," + horaCorta(r.hora_fin) + ","
       + (r.cantidad || "") + "," + (r.tiempo_ciclo_min || "") + "," + (r.ciclo_objetivo_min || "") + "," + dif + ","
       + (r.estatus || "") + "," + escape(r.maquina) + "," + escape(r.dispositivo) + "\r\n";
   });
