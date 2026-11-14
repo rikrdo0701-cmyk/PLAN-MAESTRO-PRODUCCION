@@ -15634,12 +15634,22 @@ onProgress: (event) => {
     }
     const preservedQueueOrder = [...state.selectedOts];
     state = { ...result, selectedOts: preservedQueueOrder };
-    // PRECIO CONGELADO (RULE-REP-031): al programar, se captura el precio de cada
-    // artículo desde las tablas vivas y se guarda en las operaciones. Así el reporte
-    // del Borrador usa este precio y no el que cambie en NetSuite después.
+    // PRECIO, PARTE Y CANTIDAD CONGELADOS (RULE-REP-031): al programar se capturan
+    // de las tablas vivas y se guardan en cada operación. El reporte los usa sin
+    // volver a consultar work_orders/article_configurations.
     for (const op of state.operations) {
       if (op.unitPrice == null || Number(op.unitPrice) < 1) {
         op.unitPrice = effectiveUnitPriceForOt(op.ot);
+      }
+      if (op.parte == null || String(op.parte).trim() === "") {
+        const wo = workOrderForOt(op.ot);
+        if (wo?.item) op.parte = String(wo.item).trim();
+      }
+      if (op.cantPendiente == null || String(op.cantPendiente).trim() === "") {
+        const wo = workOrderForOt(op.ot);
+        if (wo?.pendingQuantity !== undefined && wo.pendingQuantity !== null) {
+          op.cantPendiente = wo.pendingQuantity;
+        }
       }
     }
     invalidateCurrentPlanOperationsCache();
@@ -18392,8 +18402,15 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     const finish = opEnd(release);
     const workOrder = workOrderForOt(ot);
     const configuration = articleConfigurationValue(first.parte || workOrder?.item || "");
-    const opPieces = [first.pendingPieces, first.cantPendiente, last.pendingPieces, last.cantPendiente]
-      .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
+    // Si la operación guardó cantPendiente al programar, usar ese (aunque sea 0).
+    // Solo si no hay dato guardado se cae a la búsqueda en múltiples fuentes.
+    const tieneStored = (v) => v !== null && v !== undefined && String(v).trim() !== "";
+    const storedPieces = tieneStored(first.cantPendiente) ? Number(first.cantPendiente)
+      : tieneStored(last.cantPendiente) ? Number(last.cantPendiente)
+      : null;
+    const opPieces = storedPieces !== null ? storedPieces
+      : [first.pendingPieces, first.cantPendiente, last.pendingPieces, last.cantPendiente]
+        .find((value) => value !== null && value !== undefined && String(value).trim() !== "" && Number(value) > 0);
     const workOrderPieces = Number(pendingPiecesForWorkOrder(workOrder));
     const closedPieces = Number(closedPendingPiecesForOt(ot));
     const inspectionPieces = inspectionPendingPiecesForOt(ot);
