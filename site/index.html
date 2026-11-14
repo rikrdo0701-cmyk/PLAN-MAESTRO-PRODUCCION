@@ -15465,12 +15465,27 @@ async function scheduleCurrentPlanImpl() {
   state.planStart = state.planStart || formatDate(weekStart(new Date()));
   const affected = new Set(state.selectedOts.map(normalizeStatus));
 // Procesar todas las OTs en la lista de planeado/no planeado (incluye bloqueadas; el motor reprograma incompletas)
-const replannableOts = state.selectedOts.filter((ot) =>
+// OTs cuya cantidad pendiente es 0 y ya se ensamblaron todas: no se reprograman.
+  const yaEnsambladas = (ot) => {
+    const wo = workOrderForOt(ot);
+    return wo && Number(wo.pendingQuantity) <= 0 && Number(wo.builtQuantity) > 0;
+  };
+  const pendientes = state.selectedOts.filter((ot) => !yaEnsambladas(ot));
+  const excluidas = state.selectedOts.length - pendientes.length;
+  if (excluidas > 0) {
+    const detalles = state.selectedOts.filter(yaEnsambladas).slice(0, 5);
+    const preview = detalles.join(", ") + (excluidas > 5 ? ` y ${excluidas - 5} mas` : "");
+    showToast(`${excluidas} OT(s) ya estan completamente ensambladas y no se programaran: ${preview}`, 7000);
+  }
+  if (!pendientes.length) {
+    showToast("No hay OTs para programar");
+    return;
+  }
+  const replannableOts = pendientes.filter((ot) =>
     affected.has(normalizeStatus(ot)) &&
     isMovablePlanningStatus(jobStatusParaTarjeta(ot)) &&
     !hasClosedWorkOrderSyncWarning(ot)
   );
-
   if (!replannableOts.length) {
     showToast("No hay OTs para programar");
     return;
