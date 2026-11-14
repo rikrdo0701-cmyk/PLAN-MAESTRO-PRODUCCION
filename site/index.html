@@ -16534,24 +16534,31 @@ async function choosePdfSource() {
 
 // MEDIDO 2026-10-31 (pedido del usuario): el boton "Generar PDF" paso a llamarse "Exportar" y
 // exporta el Plan de la semana en PDF o Excel. Paso 1 = fuente (choosePdfSource), paso 2 =
-// formato. PDF usa window.print() (sin libreria); Excel descarga directa con 3 hojas.
+// formato + semana de inicio. PDF usa window.print() (sin libreria); Excel descarga directa
+// con 3 hojas.
+// RULE-REP-029 (2026-11-13, pedido del usuario): el paso 2 pregunta TAMBIEN la semana en la
+// que empieza el reporte. Antes no habia campo y las dos exportaciones imponian la semana del
+// plan, asi que no se podia sacar la semana siguiente ni una anterior.
 async function handleExportPlan() {
   const sourceId = await choosePdfSource();
   if (!sourceId) return;
+  const semanaSugerida = normalizeWeekStartValue(state.reportWeekStart || state.planStart || formatDate(new Date()));
   const result = await openPlanningDialog({
     title: "Exportar el plan",
-    summary: "Elige el formato de salida del Plan de la semana.",
+    summary: "Elige la semana de inicio y el formato de salida del Plan de la semana.",
     body: `
+      <label>Semana de inicio del reporte<input type="date" name="report_week" required value="${escapeHtml(semanaSugerida)}"><small>El reporte arranca en esta semana, aunque el plan guardado sea de otra.</small></label>
       <label class="restore-draft-option"><input type="radio" name="export_format" value="pdf" checked><span><strong>PDF</strong><small>Se abrira el dialogo de impresion; elige "Guardar como PDF".</small></span></label>
       <label class="restore-draft-option"><input type="radio" name="export_format" value="xlsx"><span><strong>Excel (.xlsx)</strong><small>Descarga directa con hojas: Resumen, OT que inician y OT que terminan.</small></span></label>`.trim(),
     confirmLabel: "Exportar",
     cancelVisible: true,
   });
   if (!result) return;
+  const weekStart = String(result.report_week || "").trim();
   if (result.export_format === "xlsx") {
-    return exportPlanWeeklyXlsx(sourceId);
+    return exportPlanWeeklyXlsx(sourceId, weekStart);
   }
-  return generatePlanPdf(sourceId);
+  return generatePlanPdf(sourceId, { weekStart });
 }
 
 // MEDIDO 2026-10-31 (pedido del usuario): exportacion EXCEL del Plan de la semana. Resuelve la
@@ -16608,7 +16615,7 @@ function weeklyResumenRowsForXlsx(summary) {
   ]));
 }
 
-async function exportPlanWeeklyXlsx(sourceId) {
+async function exportPlanWeeklyXlsx(sourceId, weekStart) {
   let usingDraft = sourceId === "draft";
   const snapshotId = usingDraft ? "" : sourceId;
   // Mismo camino que el PDF: se resuelve la fuente sobre `reportSnapshot` para que las
@@ -16649,9 +16656,10 @@ async function exportPlanWeeklyXlsx(sourceId) {
       return;
     }
   }
-  const reportStart = usingDraft
+  const semanaElegida = String(weekStart || "").trim();
+  const reportStart = semanaElegida || (usingDraft
     ? (state.planStart || state.reportWeekStart)
-    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart));
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
@@ -16680,11 +16688,11 @@ async function exportPlanWeeklyXlsx(sourceId) {
     },
   ];
   const bytes = buildMultiSheetXlsxBytes(sheets);
-  const weekLabel = `plan-semana-${reportStart || "sin-fecha"}`;
+  const weekLabel = `plan-semana-${state.reportWeekStart || "sin-fecha"}`;
   downloadBlob(bytes, `${weekLabel}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
-async function generatePlanPdf(explicitSnapshotId = "") {
+async function generatePlanPdf(explicitSnapshotId = "", options = {}) {
   const originalLabel = els.pdfBtn.innerHTML;
   els.pdfBtn.disabled = true;
   els.pdfBtn.setAttribute("aria-busy", "true");
@@ -16722,9 +16730,13 @@ async function generatePlanPdf(explicitSnapshotId = "") {
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
   showWorkspaceView("reportes", "week", { scrollToTop: true });
-  const reportStart = usingDraft
+  // RULE-REP-029: la semana del reporte es la que se eligio en el dialogo de Exportar; la
+  // del plan es solo el respaldo cuando la llamada no trae ninguna (por ejemplo, un boton
+  // que exporte directo).
+  const semanaElegida = String(options?.weekStart || "").trim();
+  const reportStart = semanaElegida || (usingDraft
     ? (state.planStart || state.reportWeekStart)
-    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart));
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
   renderReports();
   document.body.dataset.printContext = "plan";
@@ -25674,7 +25686,7 @@ function escapeHtml(value) {
   "use strict";
 
   const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_ANON_KEY = "sb_publishable_oq0sGsj-Wwe60ZElujJ3Cg_4a7aycuU";
 
   const CLAVE_ALMACEN = "pp_supabase_session";
   const REFRESCO_MARGEN_MS = 60 * 1000;
@@ -26070,7 +26082,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
 
   // El build reemplaza estos dos marcadores. Si quedan asi, el lector esta apagado.
   const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_ANON_KEY = "sb_publishable_oq0sGsj-Wwe60ZElujJ3Cg_4a7aycuU";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -29101,7 +29113,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   // El build reemplaza estos dos marcadores (scripts/build-appscript.mjs). Si
   // quedan asi, este modulo esta apagado, igual que el lector.
   const DEFAULT_URL = "https://xtgtfjcwxcoxvixholpj.supabase.co";
-  const DEFAULT_ANON_KEY = "sb_publishable_abcdef0123456789abcdef";
+  const DEFAULT_ANON_KEY = "sb_publishable_oq0sGsj-Wwe60ZElujJ3Cg_4a7aycuU";
 
   const config = { url: DEFAULT_URL, anonKey: DEFAULT_ANON_KEY };
 
@@ -30598,11 +30610,24 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       return sinEscribir(informe, t0,
         "la instantanea necesita su snapshot_id: es la unica NOT NULL sin default, y sin ella no hay clave ni UPSERT posible");
     }
-    const cuerpo = { snapshot_id: snapshotId, payload: cuerpoDePayload(data) };
+    const payload = cuerpoDePayload(data);
+    const cuerpo = { snapshot_id: snapshotId, payload: payload };
     const createdAt = instante(data.created_at || data.createdAt || data.generatedAt || data.publishedAt, "");
     if (createdAt) cuerpo.created_at = createdAt;
     const publishedAt = instante(data.publishedAt || data.published_at, "");
     if (publishedAt) cuerpo.published_at = publishedAt;
+    // `plan_start` y `version` se mandan como COLUMNAS, no solo dentro del payload. La
+    // lista de instantaneas ya no lee el payload (son 50 MB: ver
+    // supabase-bridge-replacement.js, `listPlanSnapshots`), asi que si la semana y la
+    // version viven solo en el jsonb, la lista las pierde. MEDIDO 2026-11-13: las 13
+    // filas publicadas tenian `plan_start` vacio y las 14 `version` vacio, porque ningun
+    // escritor las mandaba; el delta de ese dia las relleno una vez desde `payload`.
+    // Se leen de la fila y, si no vienen, del payload: el puente manda el estado entero
+    // dentro de `payload` y no repite esas claves arriba.
+    const planStart = texto(data.plan_start || data.planStart || payload.planStart || payload.weekStart);
+    if (planStart) cuerpo.plan_start = planStart;
+    const version = texto(data.version || payload.version);
+    if (version) cuerpo.version = version;
     const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
     // `snapshot_id text not null unique` (docs/schema-supabase.sql:305). Sin `on_conflict`,
     // PostgREST usaria la primary key, que es el uuid que la pagina nunca manda, y cada
@@ -32948,6 +32973,74 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
   }
 
   /**
+   * LAS COLUMNAS QUE ALCANZAN PARA LA LISTA. `operations_count` es una columna GENERADA
+   * en la base (`jsonb_array_length(payload->'operations')`, ver
+   * docs/schema-supabase-plan-delta-2026-11-13.sql), asi que el conteo no obliga a leer el
+   * payload. `plan_start`, `version` y `usuario` las escribe el escritor desde este mismo
+   * cambio (antes quedaban vacias porque nadie las mandaba) y las filas viejas se
+   * rellenaron una vez en el delta.
+   */
+  const COLUMNAS_LISTA_SNAPSHOTS = [
+    "snapshot_id",
+    "created_at",
+    "generated_at",
+    "plan_start",
+    "version",
+    "usuario",
+    "change_summary",
+    "published_at",
+    "publication_reason",
+    "operations_count",
+  ].join(",");
+
+  /**
+   * El estado de una instantanea SIN leer el payload: `published_at` lo escribe solo la
+   * publicacion y el id `draft` es el borrador en edicion. Es lo mismo que decide
+   * `isPublishedPlanSnapshot` en planning-workflow-core.js.
+   */
+  function estadoSnapshotDesdeFila(fila, snapshotId) {
+    const row = fila || {};
+    const id = planSnapshotTexto(snapshotId, row.snapshot_id);
+    if (id === "draft") return "BORRADOR";
+    return planSnapshotTexto(row.published_at) ? "PUBLICADO" : "RESPALDO";
+  }
+
+  /**
+   * planSnapshotDesdeColumnas -> la MISMA forma que `planSnapshotFromRow`, pero armada con
+   * columnas y sin payload.
+   *
+   * POR QUE NO SE REUSA `planSnapshotFromRow`. Esa funcion lee `payload.status`,
+   * `payload.planStart` y `payload.operations`, y en la lista el payload ya NO se pide.
+   * Aqui el estado sale de `estadoSnapshotDesdeFila` y el conteo de la columna generada
+   * `operations_count`. `operations` va como NUMERO y no como arreglo, que es lo que la
+   * pagina ya esperaba de la lista (`pdfSourceOptions`, `restoreDraftCandidateSnapshots`,
+   * `draftMeta.operations > 0`): el arreglo llega con `getPlanSnapshotLight`, que es la
+   * lectura de UNA.
+   */
+  function planSnapshotDesdeColumnas(fila) {
+    const row = fila || {};
+    const snapshotId = planSnapshotTexto(row.snapshot_id);
+    const publishedAt = planSnapshotTexto(row.published_at);
+    const planStart = planSnapshotTexto(row.plan_start);
+    const estado = estadoSnapshotDesdeFila(row, snapshotId);
+    const contador = Number(row.operations_count);
+    return {
+      snapshotId: snapshotId,
+      status: estado,
+      planStatus: estado,
+      generatedAt: planSnapshotTexto(row.generated_at, row.created_at),
+      planStart: planStart,
+      weekStart: planStart,
+      publishedAt: publishedAt,
+      publicationReason: planSnapshotTexto(row.publication_reason),
+      changeSummary: row.change_summary != null ? row.change_summary : null,
+      usuario: planSnapshotTexto(row.usuario),
+      version: planSnapshotTexto(row.version),
+      operations: Number.isFinite(contador) ? contador : 0,
+    };
+  }
+
+  /**
    * getPlanSnapshot -> lee de plan_snapshots, con el estado ENTERO (lo usa
    * restorePublishedPlanAsDraft, que lo devuelve como `state`).
    */
@@ -32994,25 +33087,48 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
    */
   async function listPlanSnapshots() {
     const r = getReader();
+    // `select` EXPLICITO, SIN `payload`. MEDIDO 2026-11-13: sin `select` el lector pide
+    // `select=*`, y con 14 instantaneas eso eran 50.443.992 bytes de JSON y 5.8-7 s por
+    // peticion. El rol `authenticated` tiene `statement_timeout = 8 s`, asi que el
+    // arranque de la pagina (que lanza esta lista junto con los catalogos y el borrador)
+    // cruzaba el limite y PostgREST devolvia 500 con 57014: el plan no cargaba. Con las
+    // columnas de abajo la misma peticion devuelve ~1 KB en menos de 100 ms.
     const rows = await r.readTable("plan_snapshots", {
+      select: COLUMNAS_LISTA_SNAPSHOTS,
       order: "created_at.desc",
     });
-    return (rows || []).map((row) => planSnapshotFromRow(row));
+    return (rows || []).map((row) => planSnapshotDesdeColumnas(row));
   }
 
   /**
    * getPlanSnapshotLight -> lee UNA instantanea con su lista de operaciones, que es lo
    * que necesita `loadPlanSnapshotById` para pintar el plan de esa semana.
+   *
+   * PIDE `payload->operations` Y NO `payload`. MEDIDO 2026-11-13: el payload completo de
+   * una instantanea son 4.7 MB de JSON y la lista de operaciones es 2.7 MB. La pagina
+   * solo usa las operaciones; el resto del estado (OTs, materiales, estados) lo lee
+   * `getPlanSnapshot`, que es el camino de "restaurar como borrador". El resto de los
+   * metadatos (fecha, semana, estado) ya viaja en columnas.
    */
   async function getPlanSnapshotLight(snapshotId) {
     const r = getReader();
     const id = String(snapshotId || "").trim();
     if (!id) return null;
     const rows = await r.readTable("plan_snapshots", {
+      select: `${COLUMNAS_LISTA_SNAPSHOTS},ops:payload->operations`,
       filters: { snapshot_id: id },
     });
     if (!rows.length) return null;
-    return planSnapshotFromRow(rows[0], { snapshotId: id, operacionesComoNumero: false });
+    const fila = rows[0] || {};
+    // `planSnapshotFromRow` sigue siendo el que arma la fila con nombres de la pagina (y
+    // el que respeta `operacionesComoNumero`), asi que se le pasa un payload SINTETICO
+    // con lo unico que esta lectura trae del jsonb.
+    const operaciones = Array.isArray(fila.ops) ? fila.ops : [];
+    const estado = estadoSnapshotDesdeFila(fila, id);
+    return planSnapshotFromRow(
+      Object.assign({}, fila, { payload: { operations: operaciones, status: estado, planStatus: estado } }),
+      { snapshotId: id, operacionesComoNumero: false }
+    );
   }
 
   /**

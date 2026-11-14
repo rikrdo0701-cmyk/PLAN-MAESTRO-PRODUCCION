@@ -51,13 +51,14 @@ test("el DDL se divide en SQL de verdad", () => {
 test("ningun bloque dollar-quoted queda partido", () => {
   // MEDIDO 2026-09-29: el divisor perdia un '$' del cierre $$ y la sentencia llegaba
   // a Postgres como 'unterminated dollar-quoted string'. Con el DDL del plan hay
-  // seis bloques y se comprueba cada uno: las dos funciones del espejo, la nueva
-  // plan_guardar, y tres comprobaciones que abortan. El numero esta fijado a
-  // proposito: si al anadir una comprobacion sube, el que lo cambia tiene que
+  // siete bloques y se comprueba cada uno: las dos funciones del espejo, la nueva
+  // plan_guardar, tres comprobaciones que abortan, y desde el 2026-11-13 la funcion de
+  // trigger de la retencion de plan_snapshots (plan_snapshots_conservar). El numero esta
+  // fijado a proposito: si al anadir una comprobacion sube, el que lo cambia tiene que
   // venir aqui y confirmar que el bloque nuevo abre y cierra.
   const partes = dividir(ddl);
   const conD = partes.filter((p) => p.includes("$$"));
-  assert.equal(conD.length, 6, `deberian ser 6 bloques $$ y hay ${conD.length}`);
+  assert.equal(conD.length, 7, `deberian ser 7 bloques $$ y hay ${conD.length}`);
   for (const p of conD) {
     const abiertos = (p.match(/\$\$/g) || []).length;
     assert.equal(abiertos % 2, 0, `bloque con un numero impar de $$: quedaria sin cerrar\n${p.slice(0, 120)}`);

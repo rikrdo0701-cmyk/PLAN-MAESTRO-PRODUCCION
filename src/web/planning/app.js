@@ -7465,24 +7465,31 @@ async function choosePdfSource() {
 
 // MEDIDO 2026-10-31 (pedido del usuario): el boton "Generar PDF" paso a llamarse "Exportar" y
 // exporta el Plan de la semana en PDF o Excel. Paso 1 = fuente (choosePdfSource), paso 2 =
-// formato. PDF usa window.print() (sin libreria); Excel descarga directa con 3 hojas.
+// formato + semana de inicio. PDF usa window.print() (sin libreria); Excel descarga directa
+// con 3 hojas.
+// RULE-REP-029 (2026-11-13, pedido del usuario): el paso 2 pregunta TAMBIEN la semana en la
+// que empieza el reporte. Antes no habia campo y las dos exportaciones imponian la semana del
+// plan, asi que no se podia sacar la semana siguiente ni una anterior.
 async function handleExportPlan() {
   const sourceId = await choosePdfSource();
   if (!sourceId) return;
+  const semanaSugerida = normalizeWeekStartValue(state.reportWeekStart || state.planStart || formatDate(new Date()));
   const result = await openPlanningDialog({
     title: "Exportar el plan",
-    summary: "Elige el formato de salida del Plan de la semana.",
+    summary: "Elige la semana de inicio y el formato de salida del Plan de la semana.",
     body: `
+      <label>Semana de inicio del reporte<input type="date" name="report_week" required value="${escapeHtml(semanaSugerida)}"><small>El reporte arranca en esta semana, aunque el plan guardado sea de otra.</small></label>
       <label class="restore-draft-option"><input type="radio" name="export_format" value="pdf" checked><span><strong>PDF</strong><small>Se abrira el dialogo de impresion; elige "Guardar como PDF".</small></span></label>
       <label class="restore-draft-option"><input type="radio" name="export_format" value="xlsx"><span><strong>Excel (.xlsx)</strong><small>Descarga directa con hojas: Resumen, OT que inician y OT que terminan.</small></span></label>`.trim(),
     confirmLabel: "Exportar",
     cancelVisible: true,
   });
   if (!result) return;
+  const weekStart = String(result.report_week || "").trim();
   if (result.export_format === "xlsx") {
-    return exportPlanWeeklyXlsx(sourceId);
+    return exportPlanWeeklyXlsx(sourceId, weekStart);
   }
-  return generatePlanPdf(sourceId);
+  return generatePlanPdf(sourceId, { weekStart });
 }
 
 // MEDIDO 2026-10-31 (pedido del usuario): exportacion EXCEL del Plan de la semana. Resuelve la
@@ -7539,7 +7546,7 @@ function weeklyResumenRowsForXlsx(summary) {
   ]));
 }
 
-async function exportPlanWeeklyXlsx(sourceId) {
+async function exportPlanWeeklyXlsx(sourceId, weekStart) {
   let usingDraft = sourceId === "draft";
   const snapshotId = usingDraft ? "" : sourceId;
   // Mismo camino que el PDF: se resuelve la fuente sobre `reportSnapshot` para que las
@@ -7580,9 +7587,10 @@ async function exportPlanWeeklyXlsx(sourceId) {
       return;
     }
   }
-  const reportStart = usingDraft
+  const semanaElegida = String(weekStart || "").trim();
+  const reportStart = semanaElegida || (usingDraft
     ? (state.planStart || state.reportWeekStart)
-    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart));
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
   const reportOps = reportOperationsSource();
   const summary = weeklyJobSummary(state.reportWeekStart, { operations: reportOps });
@@ -7611,11 +7619,11 @@ async function exportPlanWeeklyXlsx(sourceId) {
     },
   ];
   const bytes = buildMultiSheetXlsxBytes(sheets);
-  const weekLabel = `plan-semana-${reportStart || "sin-fecha"}`;
+  const weekLabel = `plan-semana-${state.reportWeekStart || "sin-fecha"}`;
   downloadBlob(bytes, `${weekLabel}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
-async function generatePlanPdf(explicitSnapshotId = "") {
+async function generatePlanPdf(explicitSnapshotId = "", options = {}) {
   const originalLabel = els.pdfBtn.innerHTML;
   els.pdfBtn.disabled = true;
   els.pdfBtn.setAttribute("aria-busy", "true");
@@ -7653,9 +7661,13 @@ async function generatePlanPdf(explicitSnapshotId = "") {
     if (!reportSnapshot.operations.length) { showToast("No hay operaciones programadas para el PDF"); return; }
   }
   showWorkspaceView("reportes", "week", { scrollToTop: true });
-  const reportStart = usingDraft
+  // RULE-REP-029: la semana del reporte es la que se eligio en el dialogo de Exportar; la
+  // del plan es solo el respaldo cuando la llamada no trae ninguna (por ejemplo, un boton
+  // que exporte directo).
+  const semanaElegida = String(options?.weekStart || "").trim();
+  const reportStart = semanaElegida || (usingDraft
     ? (state.planStart || state.reportWeekStart)
-    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart);
+    : (reportSnapshot?.weekStart || reportSnapshot?.planStart || state.reportWeekStart));
   state.reportWeekStart = normalizeWeekStartValue(reportStart);
   renderReports();
   document.body.dataset.printContext = "plan";

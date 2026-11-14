@@ -1029,6 +1029,74 @@
   }
 
   /**
+   * LAS COLUMNAS QUE ALCANZAN PARA LA LISTA. `operations_count` es una columna GENERADA
+   * en la base (`jsonb_array_length(payload->'operations')`, ver
+   * docs/schema-supabase-plan-delta-2026-11-13.sql), asi que el conteo no obliga a leer el
+   * payload. `plan_start`, `version` y `usuario` las escribe el escritor desde este mismo
+   * cambio (antes quedaban vacias porque nadie las mandaba) y las filas viejas se
+   * rellenaron una vez en el delta.
+   */
+  const COLUMNAS_LISTA_SNAPSHOTS = [
+    "snapshot_id",
+    "created_at",
+    "generated_at",
+    "plan_start",
+    "version",
+    "usuario",
+    "change_summary",
+    "published_at",
+    "publication_reason",
+    "operations_count",
+  ].join(",");
+
+  /**
+   * El estado de una instantanea SIN leer el payload: `published_at` lo escribe solo la
+   * publicacion y el id `draft` es el borrador en edicion. Es lo mismo que decide
+   * `isPublishedPlanSnapshot` en planning-workflow-core.js.
+   */
+  function estadoSnapshotDesdeFila(fila, snapshotId) {
+    const row = fila || {};
+    const id = planSnapshotTexto(snapshotId, row.snapshot_id);
+    if (id === "draft") return "BORRADOR";
+    return planSnapshotTexto(row.published_at) ? "PUBLICADO" : "RESPALDO";
+  }
+
+  /**
+   * planSnapshotDesdeColumnas -> la MISMA forma que `planSnapshotFromRow`, pero armada con
+   * columnas y sin payload.
+   *
+   * POR QUE NO SE REUSA `planSnapshotFromRow`. Esa funcion lee `payload.status`,
+   * `payload.planStart` y `payload.operations`, y en la lista el payload ya NO se pide.
+   * Aqui el estado sale de `estadoSnapshotDesdeFila` y el conteo de la columna generada
+   * `operations_count`. `operations` va como NUMERO y no como arreglo, que es lo que la
+   * pagina ya esperaba de la lista (`pdfSourceOptions`, `restoreDraftCandidateSnapshots`,
+   * `draftMeta.operations > 0`): el arreglo llega con `getPlanSnapshotLight`, que es la
+   * lectura de UNA.
+   */
+  function planSnapshotDesdeColumnas(fila) {
+    const row = fila || {};
+    const snapshotId = planSnapshotTexto(row.snapshot_id);
+    const publishedAt = planSnapshotTexto(row.published_at);
+    const planStart = planSnapshotTexto(row.plan_start);
+    const estado = estadoSnapshotDesdeFila(row, snapshotId);
+    const contador = Number(row.operations_count);
+    return {
+      snapshotId: snapshotId,
+      status: estado,
+      planStatus: estado,
+      generatedAt: planSnapshotTexto(row.generated_at, row.created_at),
+      planStart: planStart,
+      weekStart: planStart,
+      publishedAt: publishedAt,
+      publicationReason: planSnapshotTexto(row.publication_reason),
+      changeSummary: row.change_summary != null ? row.change_summary : null,
+      usuario: planSnapshotTexto(row.usuario),
+      version: planSnapshotTexto(row.version),
+      operations: Number.isFinite(contador) ? contador : 0,
+    };
+  }
+
+  /**
    * getPlanSnapshot -> lee de plan_snapshots, con el estado ENTERO (lo usa
    * restorePublishedPlanAsDraft, que lo devuelve como `state`).
    */
@@ -1075,25 +1143,48 @@
    */
   async function listPlanSnapshots() {
     const r = getReader();
+    // `select` EXPLICITO, SIN `payload`. MEDIDO 2026-11-13: sin `select` el lector pide
+    // `select=*`, y con 14 instantaneas eso eran 50.443.992 bytes de JSON y 5.8-7 s por
+    // peticion. El rol `authenticated` tiene `statement_timeout = 8 s`, asi que el
+    // arranque de la pagina (que lanza esta lista junto con los catalogos y el borrador)
+    // cruzaba el limite y PostgREST devolvia 500 con 57014: el plan no cargaba. Con las
+    // columnas de abajo la misma peticion devuelve ~1 KB en menos de 100 ms.
     const rows = await r.readTable("plan_snapshots", {
+      select: COLUMNAS_LISTA_SNAPSHOTS,
       order: "created_at.desc",
     });
-    return (rows || []).map((row) => planSnapshotFromRow(row));
+    return (rows || []).map((row) => planSnapshotDesdeColumnas(row));
   }
 
   /**
    * getPlanSnapshotLight -> lee UNA instantanea con su lista de operaciones, que es lo
    * que necesita `loadPlanSnapshotById` para pintar el plan de esa semana.
+   *
+   * PIDE `payload->operations` Y NO `payload`. MEDIDO 2026-11-13: el payload completo de
+   * una instantanea son 4.7 MB de JSON y la lista de operaciones es 2.7 MB. La pagina
+   * solo usa las operaciones; el resto del estado (OTs, materiales, estados) lo lee
+   * `getPlanSnapshot`, que es el camino de "restaurar como borrador". El resto de los
+   * metadatos (fecha, semana, estado) ya viaja en columnas.
    */
   async function getPlanSnapshotLight(snapshotId) {
     const r = getReader();
     const id = String(snapshotId || "").trim();
     if (!id) return null;
     const rows = await r.readTable("plan_snapshots", {
+      select: `${COLUMNAS_LISTA_SNAPSHOTS},ops:payload->operations`,
       filters: { snapshot_id: id },
     });
     if (!rows.length) return null;
-    return planSnapshotFromRow(rows[0], { snapshotId: id, operacionesComoNumero: false });
+    const fila = rows[0] || {};
+    // `planSnapshotFromRow` sigue siendo el que arma la fila con nombres de la pagina (y
+    // el que respeta `operacionesComoNumero`), asi que se le pasa un payload SINTETICO
+    // con lo unico que esta lectura trae del jsonb.
+    const operaciones = Array.isArray(fila.ops) ? fila.ops : [];
+    const estado = estadoSnapshotDesdeFila(fila, id);
+    return planSnapshotFromRow(
+      Object.assign({}, fila, { payload: { operations: operaciones, status: estado, planStatus: estado } }),
+      { snapshotId: id, operacionesComoNumero: false }
+    );
   }
 
   /**

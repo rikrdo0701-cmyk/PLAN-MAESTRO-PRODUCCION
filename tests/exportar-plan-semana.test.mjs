@@ -29,13 +29,17 @@ test("choosePdfSource SIEMPRE pregunta la fuente (sin atajo de una sola opcion)"
   assert.doesNotMatch(fuente, /if \(options\.length <= 1\) return "draft"/, "no debe saltarse el dialogo");
 });
 
-test("handleExportPlan ofrece PDF y Excel, y Excel llama a exportPlanWeeklyXlsx", () => {
+test("handleExportPlan ofrece semana, PDF y Excel, y Excel llama a exportPlanWeeklyXlsx", () => {
   const fuente = sliceDesde("async function handleExportPlan()", "async function generatePlanPdf(");
+  // RULE-REP-029 (2026-11-13): el dialogo pregunta la semana de inicio y se usa como
+  // semana del reporte; antes no habia campo y las dos salidas imponian la del plan.
+  assert.match(fuente, /name="report_week"/, "el dialogo tiene que preguntar la semana de inicio");
+  assert.match(fuente, /const weekStart = String\(result\.report_week \|\| ""\)\.trim\(\)/);
   assert.match(fuente, /name="export_format" value="pdf"/);
   assert.match(fuente, /name="export_format" value="xlsx"/);
   assert.match(fuente, /if \(result\.export_format === "xlsx"\)/);
-  assert.match(fuente, /return exportPlanWeeklyXlsx\(sourceId\)/);
-  assert.match(fuente, /return generatePlanPdf\(sourceId\)/);
+  assert.match(fuente, /return exportPlanWeeklyXlsx\(sourceId, weekStart\)/);
+  assert.match(fuente, /return generatePlanPdf\(sourceId, \{ weekStart \}\)/);
 });
 
 test("buildMultiSheetXlsxBytes genera un zip con una worksheet por hoja", () => {

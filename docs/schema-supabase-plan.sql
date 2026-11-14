@@ -559,6 +559,59 @@ alter table public.plan_snapshots add column if not exists payload jsonb;
 comment on column public.plan_snapshots.payload is
   'El estado completo del plan en el momento del borrador, para restaurarlo entero: operaciones, ordenes de trabajo, materiales, estados y OTs. La columna `operations` que ya existia es solo la lista de operaciones y no alcanza para restaurar.';
 
+-- plan_snapshots LIGERO Y CON RETENCION (2026-11-13). El porque medido esta en
+-- docs/schema-supabase-plan-delta-2026-11-13.sql; aca va lo que un esquema nuevo necesita
+-- para que la pagina funcione: la lista de instantaneas pide `operations_count` y NUNCA el
+-- payload (50.443.992 bytes y HTTP 500 por `statement_timeout` de 8 s, medido con la pagina
+-- real), y la tabla no crece sin limite porque conserva `draft` + las 5 mas nuevas.
+alter table public.plan_snapshots
+  add column if not exists operations_count integer
+  generated always as (
+    case when jsonb_typeof(payload -> 'operations') = 'array'
+         then jsonb_array_length(payload -> 'operations')
+         else 0 end
+  ) stored;
+
+comment on column public.plan_snapshots.operations_count is
+  'Cuantas operaciones trae payload->operations. GENERADA por Postgres (no se escribe a mano): la lista de instantaneas la lee para no traerse el payload.';
+
+create index if not exists plan_snapshots_created_at_desc_idx
+  on public.plan_snapshots (created_at desc nulls last);
+
+create or replace function public.plan_snapshots_conservar()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_conservar constant integer := 5;
+begin
+  delete from public.plan_snapshots
+   where id in (
+     select ranking.id
+       from (
+         select id,
+                row_number() over (order by created_at desc nulls last, id desc) as posicion
+           from public.plan_snapshots
+          where snapshot_id <> 'draft'
+       ) ranking
+      where ranking.posicion > v_conservar
+   );
+  return null;
+end;
+$$;
+
+comment on function public.plan_snapshots_conservar() is
+  'Retencion de plan_snapshots (2026-11-13): conserva la fila draft y las 5 instantaneas mas nuevas, y borra el resto. La fila draft NUNCA se borra: es el plan de trabajo (RULE-PLAN-013).';
+
+drop trigger if exists plan_snapshots_conservar on public.plan_snapshots;
+
+create trigger plan_snapshots_conservar
+after insert on public.plan_snapshots
+for each row execute function public.plan_snapshots_conservar();
+
+
 comment on column public.operations.retirada_en is
   'Cuando esta operacion salio del plan por decision de una persona, no por NetSuite. MEDIDO 2026-09-29: no existe en el estado ninguna lista de operaciones retiradas (operationPlanStatuses es un objeto y removedOperations solo se calcula para el preview de restaurar, planning-workflow-core.js:1315), asi que la fuente real y persistida es selected_ots: si la OT sale de ahi, sus operaciones salen del plan, y eso la base lo sabe sola. Al volver la OT, la marca se borra.';
 comment on column public.operations.retirada_por is

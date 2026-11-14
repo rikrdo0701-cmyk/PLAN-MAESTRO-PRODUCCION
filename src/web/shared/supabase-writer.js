@@ -1720,11 +1720,24 @@
       return sinEscribir(informe, t0,
         "la instantanea necesita su snapshot_id: es la unica NOT NULL sin default, y sin ella no hay clave ni UPSERT posible");
     }
-    const cuerpo = { snapshot_id: snapshotId, payload: cuerpoDePayload(data) };
+    const payload = cuerpoDePayload(data);
+    const cuerpo = { snapshot_id: snapshotId, payload: payload };
     const createdAt = instante(data.created_at || data.createdAt || data.generatedAt || data.publishedAt, "");
     if (createdAt) cuerpo.created_at = createdAt;
     const publishedAt = instante(data.publishedAt || data.published_at, "");
     if (publishedAt) cuerpo.published_at = publishedAt;
+    // `plan_start` y `version` se mandan como COLUMNAS, no solo dentro del payload. La
+    // lista de instantaneas ya no lee el payload (son 50 MB: ver
+    // supabase-bridge-replacement.js, `listPlanSnapshots`), asi que si la semana y la
+    // version viven solo en el jsonb, la lista las pierde. MEDIDO 2026-11-13: las 13
+    // filas publicadas tenian `plan_start` vacio y las 14 `version` vacio, porque ningun
+    // escritor las mandaba; el delta de ese dia las relleno una vez desde `payload`.
+    // Se leen de la fila y, si no vienen, del payload: el puente manda el estado entero
+    // dentro de `payload` y no repite esas claves arriba.
+    const planStart = texto(data.plan_start || data.planStart || payload.planStart || payload.weekStart);
+    if (planStart) cuerpo.plan_start = planStart;
+    const version = texto(data.version || payload.version);
+    if (version) cuerpo.version = version;
     const ctx = { token: token, secretos: [token, config.anonKey].filter(Boolean), t0: t0, avisos: [] };
     // `snapshot_id text not null unique` (docs/schema-supabase.sql:305). Sin `on_conflict`,
     // PostgREST usaria la primary key, que es el uuid que la pagina nunca manda, y cada
