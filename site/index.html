@@ -15634,6 +15634,14 @@ onProgress: (event) => {
     }
     const preservedQueueOrder = [...state.selectedOts];
     state = { ...result, selectedOts: preservedQueueOrder };
+    // PRECIO CONGELADO (RULE-REP-031): al programar, se captura el precio de cada
+    // artículo desde las tablas vivas y se guarda en las operaciones. Así el reporte
+    // del Borrador usa este precio y no el que cambie en NetSuite después.
+    for (const op of state.operations) {
+      if (op.unitPrice == null || Number(op.unitPrice) < 1) {
+        op.unitPrice = effectiveUnitPriceForOt(op.ot);
+      }
+    }
     invalidateCurrentPlanOperationsCache();
     const summary = state.lastSchedule || {};
     if (Number(summary.unscheduled || 0) > 0) {
@@ -18414,19 +18422,24 @@ function weeklyJobSummary(weekDate = state.reportWeekStart, options = {}) {
     // Lo que NO entra aquí es un máximo histórico acumulado: antes el sync escribía el precio
     // de venta en manualUnitPrice con un max que solo subía, así que un precio inflado quedó
     // pegado en CONFIG y se reportaba para siempre.
-    const livePrice = invoiceUnitPriceForOt(ot) || null;
-    const unitPrices = positiveValues([
-      first.unitPrice,
-      last.unitPrice,
-      livePrice,
-      livePrice ? null : configuration.referenceSalePrice,
-      configuration.manualUnitPrice,
-    ]);
-    const unitPrice = unitPrices.length ? Math.max(...unitPrices) : null;
-    const opAmounts = pendingPieces > 0 ? positiveValues([first.amount, last.amount]) : [];
+    // PRECIO CONGELADO (RULE-REP-031). Si la operación guarda un unitPrice ≥ $1
+    // (capturado al generar el plan), ese es el precio definitivo. Solo cuando no
+    // hay precio guardado se consultan las tablas vivas (article_configurations).
+    const storedPrices = positiveValues([first.unitPrice, last.unitPrice]);
+    let unitPrice;
+    if (storedPrices.length) {
+      unitPrice = Math.max(...storedPrices);
+    } else {
+      const livePrice = invoiceUnitPriceForOt(ot) || null;
+      const liveCandidates = positiveValues([
+        livePrice,
+        livePrice ? null : configuration.referenceSalePrice,
+        configuration.manualUnitPrice,
+      ]);
+      unitPrice = liveCandidates.length ? Math.max(...liveCandidates) : null;
+    }
     const derivedAmount = unitPrice != null && pendingPieces > 0 ? unitPrice * pendingPieces : null;
-    const amounts = derivedAmount != null && derivedAmount > 0 ? [...opAmounts, derivedAmount] : opAmounts;
-    const amount = amounts.length ? Math.max(...amounts) : null;
+    const amount = derivedAmount != null && derivedAmount > 0 ? derivedAmount : null;
     const row = {
       ot,
       part: first.parte || workOrder?.item || "",

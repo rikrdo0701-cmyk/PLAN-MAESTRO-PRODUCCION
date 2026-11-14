@@ -1,0 +1,25 @@
+IMPLEMENTACIÓN PARA REPORTE FALTANTES - C:\Users\plane\Downloads\plangit
+
+FASE 1: RESTlet 2246 - ordenesVenta_ con lineas
+- Archivo: netsuite-restlet-unificado-supabase.js
+- Cambio: Agregado SQL SELECT transactionline para traer item, cantidad, precio, unidad
+- Nota: Requiere redeploy en NetSuite + re-ingesta (fuera de CI)
+
+FASE 2: Ingesta parcial sin vaciar
+- Archivo: src/server/19-appscript-ingesta-supabase.js
+- Cambios: add PP_ingesta_(forzado, solo); add soloSet skip logic in TABLAS loop; add PP_restletUnificadoParcial_ function
+- Cambio: POST doPost now accepts {accion: 'ingesta', forzado, solo: [lista]}
+- RULE-SUP-048 excepcion: "tabla no pedida ≠ tabla que falló" evita vaciar operations/machines
+
+FASE 3 PENDIENTE: supabase-reader.js
+- AÑADIR mapItems, mapInventory, mapSalesOrders
+- Exponer en readCatalogs como slices
+- Agregar a FUENTES_DE_CATALOGO
+
+FASE 4 PENDIENTE: app.js + index.template.html
+- faltantesRows() motor cálculo máx(OV,OT)-existencia
+- renderFaltantesReport() formato TABLA opción B
+- Nueva pestaña report-tabs + tab-panel
+- Botón Sincronizar parcial (solo 5 tablas)
+
+RESUMEN: Backend lista para redeploy 2246 en NetSuite. Pendiente completar phases 3-4.
