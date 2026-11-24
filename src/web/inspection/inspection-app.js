@@ -660,10 +660,14 @@
     if (!state.detail) return;
     const diagnostic = printDiagnostic(state.detail);
     renderPrintChecks(state.detail);
-    if (diagnostic.missingRoutes.length) {
-      root.alert(`Falta tramo para materiales fraccionados antes de imprimir: ${diagnostic.missingRoutes.map((material) => material.material).join(", ")}`);
+    if (diagnostic.todosSinTramo) {
+      root.alert("Todos los materiales pendientes carecen de tramo. Captura al menos un tramo antes de imprimir.");
       const index = (state.detail.materials || []).indexOf(diagnostic.missingRoutes[0]);
       await editMaterialLink(index < 0 ? 0 : index);
+      return;
+    }
+    if (diagnostic.withoutDrawing) {
+      root.alert("No se puede imprimir sin una ruta de dibujo. Captura el dibujo primero.");
       return;
     }
     if (diagnostic.alerts.length && !root.confirm(`Antes de imprimir revisa: ${diagnostic.alerts.join(", ")}. ¿Quieres continuar y registrar la impresión?`)) return;

@@ -598,8 +598,8 @@
    * (RULE-SUP-009), y los otros tres no son lo que la hoja de inspeccion llamaba
    * `disponible`. Sumarlos seria cambiar la definicion del dato.
    *
-   * EL FILTRO. Va por `item=in.(...)`, que es lo que hace `restUrl` con el objeto de
-   * filtros. Con la lista vacia NO se llama a la red: `in.()` con un parentesis vacio es
+   * EL FILTRO. Va por `in: { item: tanda }`, que `restUrl` convierte a `item=in.(...)` con
+   * los valores escapados individualmente (RULE-SUP-084). Con la lista vacia NO se llama a la
    * un error de sintaxis de PostgREST, y una OT sin materiales es un caso normal (una OT
    * que no tiene lista de materiales), no un error.
    */
@@ -615,7 +615,7 @@
       const tanda = codigos.slice(i, i + 50);
       const filas = await r.readTable("inventory", {
         select: "item,disponible",
-        filters: { item: `in.(${tanda.join(",")})` },
+        in: { item: tanda },
       });
       (filas || []).forEach((fila) => {
         const item = String(fila.item == null ? "" : fila.item).trim();

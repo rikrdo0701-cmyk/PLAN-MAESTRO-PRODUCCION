@@ -8466,16 +8466,17 @@ expandedOts: without(state?.expandedOts),
     const pending = normalized.filter((material) => Number(material?.required) > 0);
     const missingRoutes = normalized.filter((material) => {
       const required = Number(material?.required);
-      return Number.isFinite(required) && required > 0 && Math.abs(required - Math.round(required)) > 0.00001 && !String(material?.route || "").trim();
+      return Number.isFinite(required) && required > 0 && !String(material?.route || "").trim();
     });
+    const todosSinTramo = pending.length > 0 && missingRoutes.length === pending.length;
     const deficit = normalized.filter((material) => Number(material?.deficitNeto || material?.netDeficit || material?.deficit || 0) > 0);
     const alerts = [];
     if (missingRoutes.length) alerts.push("Falta tramo");
     if (!hasDrawing) alerts.push("Sin dibujo");
     if (deficit.length) alerts.push("Déficit material");
     if (!pending.length) alerts.push("Sin materiales pendientes");
-    const status = missingRoutes.length ? "block" : (alerts.length ? "warn" : "ok");
-    return { status, label: status === "block" ? "Bloqueado" : (status === "warn" ? "Revisar" : "OK para imprimir"), alerts, materials: normalized, pending, missingRoutes, withoutDrawing: !hasDrawing, deficit };
+    const status = todosSinTramo ? "block" : (!hasDrawing ? "block" : (alerts.length ? "warn" : "ok"));
+    return { status, label: status === "block" ? "Bloqueado" : (status === "warn" ? "Revisar" : "OK para imprimir"), alerts, materials: normalized, pending, missingRoutes, todosSinTramo, withoutDrawing: !hasDrawing, deficit };
   }
   function inspectionRouteValue(row, field) {
     const aliases = {
@@ -32587,8 +32588,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
    * (RULE-SUP-009), y los otros tres no son lo que la hoja de inspeccion llamaba
    * `disponible`. Sumarlos seria cambiar la definicion del dato.
    *
-   * EL FILTRO. Va por `item=in.(...)`, que es lo que hace `restUrl` con el objeto de
-   * filtros. Con la lista vacia NO se llama a la red: `in.()` con un parentesis vacio es
+   * EL FILTRO. Va por `in: { item: tanda }`, que `restUrl` convierte a `item=in.(...)` con
+   * los valores escapados individualmente (RULE-SUP-084). Con la lista vacia NO se llama a la
    * un error de sintaxis de PostgREST, y una OT sin materiales es un caso normal (una OT
    * que no tiene lista de materiales), no un error.
    */
@@ -32604,7 +32605,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       const tanda = codigos.slice(i, i + 50);
       const filas = await r.readTable("inventory", {
         select: "item,disponible",
-        filters: { item: `in.(${tanda.join(",")})` },
+        in: { item: tanda },
       });
       (filas || []).forEach((fila) => {
         const item = String(fila.item == null ? "" : fila.item).trim();
@@ -36271,10 +36272,14 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
     if (!state.detail) return;
     const diagnostic = printDiagnostic(state.detail);
     renderPrintChecks(state.detail);
-    if (diagnostic.missingRoutes.length) {
-      root.alert(`Falta tramo para materiales fraccionados antes de imprimir: ${diagnostic.missingRoutes.map((material) => material.material).join(", ")}`);
+    if (diagnostic.todosSinTramo) {
+      root.alert("Todos los materiales pendientes carecen de tramo. Captura al menos un tramo antes de imprimir.");
       const index = (state.detail.materials || []).indexOf(diagnostic.missingRoutes[0]);
       await editMaterialLink(index < 0 ? 0 : index);
+      return;
+    }
+    if (diagnostic.withoutDrawing) {
+      root.alert("No se puede imprimir sin una ruta de dibujo. Captura el dibujo primero.");
       return;
     }
     if (diagnostic.alerts.length && !root.confirm(`Antes de imprimir revisa: ${diagnostic.alerts.join(", ")}. ¿Quieres continuar y registrar la impresión?`)) return;

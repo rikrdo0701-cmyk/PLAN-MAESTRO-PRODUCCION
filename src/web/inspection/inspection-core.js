@@ -28,16 +28,17 @@
     const pending = normalized.filter((material) => Number(material?.required) > 0);
     const missingRoutes = normalized.filter((material) => {
       const required = Number(material?.required);
-      return Number.isFinite(required) && required > 0 && Math.abs(required - Math.round(required)) > 0.00001 && !String(material?.route || "").trim();
+      return Number.isFinite(required) && required > 0 && !String(material?.route || "").trim();
     });
+    const todosSinTramo = pending.length > 0 && missingRoutes.length === pending.length;
     const deficit = normalized.filter((material) => Number(material?.deficitNeto || material?.netDeficit || material?.deficit || 0) > 0);
     const alerts = [];
     if (missingRoutes.length) alerts.push("Falta tramo");
     if (!hasDrawing) alerts.push("Sin dibujo");
     if (deficit.length) alerts.push("Déficit material");
     if (!pending.length) alerts.push("Sin materiales pendientes");
-    const status = missingRoutes.length ? "block" : (alerts.length ? "warn" : "ok");
-    return { status, label: status === "block" ? "Bloqueado" : (status === "warn" ? "Revisar" : "OK para imprimir"), alerts, materials: normalized, pending, missingRoutes, withoutDrawing: !hasDrawing, deficit };
+    const status = todosSinTramo ? "block" : (!hasDrawing ? "block" : (alerts.length ? "warn" : "ok"));
+    return { status, label: status === "block" ? "Bloqueado" : (status === "warn" ? "Revisar" : "OK para imprimir"), alerts, materials: normalized, pending, missingRoutes, todosSinTramo, withoutDrawing: !hasDrawing, deficit };
   }
   function inspectionRouteValue(row, field) {
     const aliases = {
