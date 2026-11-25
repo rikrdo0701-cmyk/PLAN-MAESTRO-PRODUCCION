@@ -172,7 +172,11 @@
     const filter = normalize(status);
     if (filter === "TODAS") return (rows || []).slice();
     const completed = filter === "COMPLETADAS";
-    return (rows || []).filter((row) => (normalize(row?.planStatus) === "COMPLETADA_PLAN") === completed);
+    return (rows || []).filter((row) => {
+      const stored = (typeof draftViewStatuses === "function" ? draftViewStatuses() : {})[operationCompletionKey(row)];
+      const rowCompleted = stored?.status === "COMPLETADA_PLAN" || normalize(row?.planStatus) === "COMPLETADA_PLAN";
+      return rowCompleted === completed;
+    });
   }
 
   const GANTT_VIEWS = ["job", "ct", "machine", "operator"];
