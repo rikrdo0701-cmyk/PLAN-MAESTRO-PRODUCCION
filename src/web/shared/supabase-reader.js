@@ -1709,6 +1709,10 @@
   // filas). Sin paginacion, COMP-GOSS y otros articulos se pierden en la segunda vuelta.
   const ORDEN_PAGINADO = {
     operations: "ot.asc,secuencia.asc",
+    // MEDIDO 2026-11-25: 1002 filas en produccion. Sin orden ni paginacion, el default de
+    // PostgREST (1000) corta las ultimas, que son justo las mas recientes. Las OTs 4487/4488
+    // completadas no llegaban al estado y la pagina mostraba su operacion como PENDIENTE.
+    operation_plan_statuses: "ot.asc,secuencia.asc",
     inventory: "item.asc",
     items: "codigo.asc",
   };
