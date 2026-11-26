@@ -19233,12 +19233,6 @@ function faltantesRows() {
   // esquema pero la ingesta la deja NULL en las 2536 filas). Por eso NO se puede filtrar por
   // ella: hacerlo deja el reporte en 0 padres. El criterio real es el inventario fisico en
   // Planta MM del Llano (`existencia`), que es el dato que si llega.
-  var itemsConInvMM = new Set();
-  for (var i = 0; i < inv.length; i++) {
-    if (String(inv[i].location || "").toUpperCase() === "PLANTA MM DEL LLANO" && Number(inv[i].physical) > 0) {
-      itemsConInvMM.add(String(inv[i].item).trim().toUpperCase());
-    }
-  }
   var existencia = {};
   for (var i = 0; i < inv.length; i++) {
     var row = inv[i];
@@ -19392,9 +19386,12 @@ function faltantesRows() {
     var coberturaOt = (otPorArt[key] || {}).cat || 0;
     var faltaOV = demandaTotal - (existencia[key] || 0) - coberturaOt;
     if (faltaOV <= 0) continue;
-    // MEDIDO 2026-11-01 (restaurado): el criterio de planta es el inventario fisico > 0 en
-    // Planta MM del Llano, NO `items.ubicacion` (viene NULL en las 2536 filas de Supabase).
-    if (!ensamblesMM.has(key) || !itemsConInvMM.has(key)) continue;
+    // MEDIDO 2026-11-26 (corregido): antes filtraba tambien por `itemsConInvMM`, que excluia
+    // articulos nuevos con demanda de OV pero sin inventario (AM K180-18308, SO3049). El filtro
+    // original (2026-11-01) pretendia limitar a Planta MM del Llano porque `items.ubicacion`
+    // viene NULL, pero dejar fuera articulos con demanda real era un falso negativo. Ahora solo
+    // se exige que sea Assembly en el catalogo; el que no tenga demanda cae solo por faltaOV <= 0.
+    if (!ensamblesMM.has(key)) continue;
     grupos.push({ articulo: key, descripcion: descripcionItem[key] || "", existencia: Number(existencia[key]) || 0, ots: (otPorArt[key] || {}).ots || [], otsConsumo: consumidoresPorArt[key] || [], pendiente: coberturaOt, faltante: faltaOV, ovs: (demandaOV[key] || {}).ovs || [], hijos: d.hi });
   }
   // SUBENSAMBLES DESDE LAS OTs ABIERTAS (MEDIDO 2026-11-01 contra Supabase).

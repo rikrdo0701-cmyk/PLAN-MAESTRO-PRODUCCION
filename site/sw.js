@@ -1,4 +1,4 @@
-const CACHE_NAME = "plan-maestro-911db649e2f9-sheets-ot-v2";
+const CACHE_NAME = "plan-maestro-8fc460eb83ac-sheets-ot-v2";
 const APP_SHELL = ["./", "./index.html", "./operator.html", "./skills.html", "./prd.html", "./manifest.webmanifest", "./prd.webmanifest"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

@@ -59,9 +59,14 @@ test("en la OV se descuenta lo enviado (cantidad - enviado)", () => {
     ],
     items: [{ code: "X 1", type: "ASSEMBLY" }],
   });
-  // Sin inventario propio en MM del Llano no entra al reporte; se mira la demanda calculada.
+  // CORREGIDO 2026-11-26: antes se necesitaba inventario > 0 en MM del Llano para aparecer,
+  // pero eso excluia articulos nuevos con demanda real (AM K180-18308, SO3049).
+  // Ahora un Assembly con demanda de OV aparece aunque existencias = 0.
   const g = f().grupos[0];
-  assert.equal(g, undefined, "sin inventario en MM del Llano no es padre");
+  assert.equal(g.articulo, "X 1");
+  assert.equal(g.faltante, 40); // 100 - 60 enviado - 0 existencia - 0 OT = 40
+  assert.equal(g.ovs.length, 1);
+  assert.equal(g.ovs[0].folio, "SO2000");
 });
 
 test("una OV totalmente enviada no es demanda", () => {
