@@ -235,10 +235,14 @@ test("10. las columnas de plan se copian ANTES del delete y se devuelven DESPUES
   for (const fila of [
     /'operations',\s*array\['operation_id'\]/,
     /'work_orders',\s*array\['ot'\]/,
-    /'materials',\s*array\['ot','line_id'\]/,
   ]) {
     assert.match(canonico, fila, "cada tabla con columnas de plan tiene que tener su fila con la clave de plan_guardar");
   }
+  assert.doesNotMatch(
+    canonico,
+    /'materials',\s*array\['ot','line_id'\]/,
+    "materials NO tiene columnas de plan que conservar: emitido es quantityshiprecv de NetSuite (RULE-SUP-080)"
+  );
   assert.match(
     canonico,
     /'work_orders',\s*array\['ot'\],\s*array\['due_date_override','precio_desde','precio_hasta','revision'\]/,
@@ -262,5 +266,31 @@ test("10. las columnas de plan se copian ANTES del delete y se devuelven DESPUES
   assert.ok(
     iCopia > 0 && iDelete > iCopia,
     "la copia tiene que ir ANTES del delete: despues ya no hay nada que copiar"
+  );
+});
+
+// MEDIDO 2026-11-26 en produccion: la fila ('materials', {ot,line_id}, {emitido})
+// del 2026-11-05 convertia el primer `emitido` en el definitivo. 49 filas de 30 OTs
+// siguieron en 0 despues de que NetSuite las emitiera, y Faltantes las contaba como
+// pendientes (requerido - 0). COPLE-3300 C y G de la OT 3942 son el caso reportado:
+// NetSuite devuelve emitido 19/19 y el espejo guardaba 0/0.
+test("11. materials.emitido NO se conserva: es del ERP, y la fila vieja se limpia al aplicar", () => {
+  assert.doesNotMatch(
+    canonico,
+    /array\['emitido'\]/,
+    "emitido no puede estar en la lista de columnas conservadas: el espejo tiene que refrescarlo desde quantityshiprecv"
+  );
+  assert.match(
+    canonico,
+    /delete from public\.ingesta_mirror_preserva where tabla = 'materials';/,
+    "aplicar el archivo tiene que quitar la fila vieja de materials en las bases que ya la tenian"
+  );
+  // La limpieza va DESPUES del INSERT ... ON CONFLICT: si fuera antes, el INSERT de
+  // una version futura podria volver a crear la fila y el DELETE no la veria.
+  const iInsert = canonico.indexOf("insert into public.ingesta_mirror_preserva");
+  const iLimpieza = canonico.indexOf("delete from public.ingesta_mirror_preserva where tabla = 'materials'");
+  assert.ok(
+    iInsert > 0 && iLimpieza > iInsert,
+    "el DELETE de la fila vieja va despues del INSERT de la lista vigente"
   );
 });

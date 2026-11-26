@@ -66,6 +66,8 @@
 --    de NetSuite en `operador` ("1"), `hora_inicio` NULL y fechas de julio, y el reporte
 --    "Plan por operador" salio "Sin operaciones programadas en esta semana". La lista de
 --    columnas conservadas vive en public.ingesta_mirror_preserva, no en este cuerpo.
+--    `materials` NO esta en esa lista (2026-11-26): `emitido` es del ERP, no de la
+--    persona; conservarlo dejaba 49 filas con emision en NetSuite y 0 en el espejo.
 --
 -- -----------------------------------------------------------------------------
 -- COMO APLICAR
@@ -111,8 +113,18 @@ $$;
 -- NetSuite. Lo que se conserva es solo lo que decide la persona.
 --
 -- La clave es la misma con la que plan_guardar encuentra la fila: `operation_id`
--- en operations, `ot` en work_orders, `ot,line_id` en materials. Si la fila ya no
--- viene del origen, no se reinserta: no hay a quien devolverle nada.
+-- en operations, `ot` en work_orders. Si la fila ya no viene del origen, no se
+-- reinserta: no hay a quien devolverle nada.
+--
+-- `materials` NO ESTA EN ESTA LISTA, Y NO ES UN OLVIDO (medido 2026-11-26). Su
+-- `emitido` es `quantityshiprecv` de NetSuite, no una decision manual: la pagina
+-- no tiene ningun control que lo edite. Conservarlo convertia el PRIMER valor en
+-- el definitivo. MEDIDO en produccion: 49 filas de 30 OTs se quedaron con
+-- `emitido = 0` despues de que NetSuite las emitiera (revision = 0, o sea que la
+-- pagina nunca las escribio), y Faltantes las seguia contando como pendientes
+-- (`requerido - 0`), entre ellas COPLE-3300 C y COPLE-3300 G de la OT 3942. Si
+-- algun dia la pagina necesita marcar una emision manual, va en OTRA columna, no
+-- en la del ERP.
 --
 -- `work_orders.revision_bom` TAMPOCO se conserva: es la REV del BOM de NetSuite y
 -- el 2246 la trae en cada corrida (RULE-REV-025).
@@ -137,11 +149,16 @@ insert into public.ingesta_mirror_preserva (tabla, clave, columnas, nota) values
    'Cuando, donde, con que, en que orden y si la operacion esta retirada. NO incluye secuencia/ct/estatus/cantidades/tiempos: esos son del ERP y el espejo tiene que refrescarlos.'),
   ('work_orders', array['ot'],
    array['due_date_override','precio_desde','precio_hasta','revision'],
-   'Solo lo que decide la pagina en la OT. fecha_inicio_ns, fecha_vencimiento, estatus, cantidades y revision_bom son del ERP.'),
-  ('materials', array['ot','line_id'], array['emitido'],
-   'Lo unico que decide la pagina de un componente es si ya se emitio.')
+   'Solo lo que decide la pagina en la OT. fecha_inicio_ns, fecha_vencimiento, estatus, cantidades y revision_bom son del ERP.')
 on conflict (tabla) do update
   set clave = excluded.clave, columnas = excluded.columnas, nota = excluded.nota;
+
+-- LIMPIEZA IDEMPOTENTE DE LA FILA VIEJA DE materials (medido 2026-11-26).
+-- Las instalaciones que aplicaron la version del 2026-11-05 tienen
+-- ('materials', {ot,line_id}, {emitido}) y el INSERT de arriba ya no la crea. Sin
+-- este DELETE, reaplicar el archivo dejaria la fila vieja y el espejo seguiria
+-- reponiendo el emitido de la corrida anterior: el 0 se vuelve permanente.
+delete from public.ingesta_mirror_preserva where tabla = 'materials';
 
 -- Solo service_role: es configuracion de la ingesta, no se lee desde la pagina.
 revoke all on table public.ingesta_mirror_preserva from anon;
