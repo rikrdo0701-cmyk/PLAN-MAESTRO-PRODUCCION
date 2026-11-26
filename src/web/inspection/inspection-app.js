@@ -660,12 +660,16 @@
    * Sincronizar la hoja: pedir la ingesta SOLO de las OTs y sus operaciones, y despues releer
    * la lista de OTs y la hoja de la OT seleccionada.
    *
-   * POR QUE SOLO `workorders` Y `operaciones`. Es lo que pidio el usuario (2026-11-25): este
-   * boton no tiene que reescribir el BOM, los articulos ni el inventario, que son las tablas
-   * caras de la corrida. `PP_ingesta_` acepta `solo` y, por RULE-SUP-048 (excepcion "tabla no
-   * pedida != tabla que fallo"), las tablas no pedidas NO se vacian ni se tocan. Con eso el
-   * boton responde en mucho menos tiempo y sigue cubriendo lo que la hoja necesita para
-   * aparecer y para saber que operaciones tiene: OT nueva, articulo, cantidad y operaciones.
+   * POR QUE ESTAS CUATRO Y NO TODAS. Es lo que pidio el usuario (2026-11-25): este boton no
+   * tiene que reescribir articulos ni ordenes de venta, que son las tablas caras de la corrida.
+   * `PP_ingesta_` acepta `solo` y, por RULE-SUP-048 (excepcion "tabla no pedida != tabla que
+   * fallo"), las tablas no pedidas NO se vacian ni se tocan.
+   *
+   * POR QUE `materiales` E `inventario` VAN JUNTOS. Un cambio de material en una OT
+   * (MP00072 -> MP00073) es una fila de `materials`: sin `materiales` el renglon no cambia.
+   * Y el disponible que pinta la hoja sale de `inventory` (leerDisponibles): sin `inventario`
+   * el codigo nuevo llegaria sin existencia y la hoja lo marcaria en rojo con un deficit
+   * falso. Las dos o ninguna.
    *
    * POR QUE NO BASTA CON RELEER SUPABASE. La pagina NUNCA habla con NetSuite (RULE-SUP-030):
    * todo lo que muestra sale del espejo en Supabase, y ese espejo solo cambia cuando corre la
@@ -685,12 +689,15 @@
     if (boton?.disabled) return;
     if (boton) boton.disabled = true;
     if (byId("inspectionWorkOrder")) byId("inspectionWorkOrder").disabled = true;
-    renderJobStatus("Sincronizando OTs y operaciones...", "Solo se piden las OTs y sus operaciones a NetSuite");
+    renderJobStatus("Sincronizando OTs, operaciones y materiales...", "Se piden OTs, operaciones, materiales e inventario a NetSuite");
     let aviso = "";
     try {
       const disparador = root.PPIngestaTrigger;
       if (disparador && typeof disparador.dispararIngesta === "function") {
-        const corrida = await disparador.dispararIngesta({ forzado: true, solo: ["workorders", "operaciones"] });
+        const corrida = await disparador.dispararIngesta({
+          forzado: true,
+          solo: ["workorders", "operaciones", "materiales", "inventario"],
+        });
         if (!corrida || corrida.ok !== true) {
           aviso = corrida?.mensaje || corrida?.motivo || "La ingesta no se completo";
         } else if (Number(corrida.totalFilas) > 0) {

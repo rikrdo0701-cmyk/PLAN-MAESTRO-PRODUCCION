@@ -6,20 +6,22 @@ La hoja de inspección mostraba datos viejos y la única forma de traer cambios 
 salir a Plan semanal y pulsar **Sincronizar**. Ahora hay un botón **Sincronizar OTs** dentro de la
 propia hoja que hace las dos cosas que hacían falta, en este orden:
 
-1. Dispara la ingesta forzada de Apps Script (`PPIngestaTrigger.dispararIngesta`), **solo** con las
-   acciones `workorders` y `operaciones`:
+1. Dispara la ingesta forzada de Apps Script (`PPIngestaTrigger.dispararIngesta`), **solo** con cuatro
+   acciones:
    ```js
-   { forzado: true, solo: ["workorders", "operaciones"] }
+   { forzado: true, solo: ["workorders", "operaciones", "materiales", "inventario"] }
    ```
    `PP_ingesta_` respeta esa lista y, por RULE-SUP-048 (excepción "tabla no pedida ≠ tabla que
-   falló"), no vacía ni toca `materials`, `items`, `inventory`, `sales_orders`, `machines` ni
-   `ensambles_ot`. Es la misma puerta que usan los botones del plan, acotada a las dos tablas.
+   falló"), no vacía ni toca `items`, `sales_orders`, `machines` ni `ensambles_ot`. Es la misma
+   puerta que usan los botones del plan, acotada a esas cuatro tablas.
 2. Limpia `bundleCache`, vuelve a leer `work_orders` (`getInspectionWorkOrders`) y recarga la hoja
-   de la OT seleccionada con `forceRefresh: true` (operaciones incluidas).
+   de la OT seleccionada con `forceRefresh: true` (materiales y operaciones incluidas).
 
-Alcance deliberado: este botón no actualiza el BOM (`materials`), artículos ni inventario. Para eso
-sigue estando el **Sincronizar** completo de Plan semanal. Lo que sí trae es OT nueva, artículo,
-cantidad y operaciones, que es lo que pedía la persona el 2026-11-25.
+Alcance deliberado: este botón cubre OT nueva, artículo, cantidad, operaciones y cambios de
+material del BOM (`MP00072` → `MP00073`). `inventario` va junto con `materiales` a propósito: el
+disponible se lee de `inventory`, y sin él un código nuevo llegaría sin existencia y la hoja lo
+marcaría en rojo con un déficit falso. No actualiza artículos ni órdenes de venta; para eso sigue
+estando el **Sincronizar** completo de Plan semanal.
 
 ## Por qué un botón que solo releyera no sirve
 
