@@ -656,6 +656,58 @@
     renderDetail();
     renderHistory(bundle.history, state.detail.workOrder);
   }
+  /**
+   * Sincronizar la hoja: pedir la ingesta a NetSuite y despues releer la lista de OTs y la
+   * hoja de la OT seleccionada.
+   *
+   * POR QUE NO BASTA CON RELEER SUPABASE. La pagina NUNCA habla con NetSuite (RULE-SUP-030):
+   * todo lo que muestra sale del espejo en Supabase, y ese espejo solo cambia cuando corre la
+   * ingesta de Apps Script. El activador de reloj corre cada 15 minutos y SOLO de lunes a
+   * viernes de 7:00 a 17:00 (19-appscript-ingesta-supabase.js, guard de PP_ingesta_). Un boton
+   * que solo releyera Supabase mostraria exactamente lo mismo: una OT nueva o un material
+   * corregido en NetSuite no existe en el espejo hasta que la ingesta lo escribe. Por eso este
+   * boton hace lo mismo que el Sincronizar del plan: `forzado: true`, que salta el filtro de
+   * horario, y despues una sola lectura de lo que acaba de entrar.
+   *
+   * QUE PASA SI LA INGESTA NO SE PUEDE PEDIR O FALLA. No se deja la pantalla mintiendo: se
+   * relee igual el espejo (es lo unico que hay) y el aviso dice que la corrida no se completo.
+   * "ocupada" es el caso normal de pulsar mientras otra ingesta corre; el candado del Apps
+   * Script lo devuelve como motivo, no como excepcion.
+   */
+  async function sincronizarHoja() {
+    const boton = byId("inspectionSync");
+    if (boton?.disabled) return;
+    if (boton) boton.disabled = true;
+    if (byId("inspectionWorkOrder")) byId("inspectionWorkOrder").disabled = true;
+    renderJobStatus("Sincronizando con NetSuite...", "La ingesta puede tardar uno o dos minutos");
+    let aviso = "";
+    try {
+      const disparador = root.PPIngestaTrigger;
+      if (disparador && typeof disparador.dispararIngesta === "function") {
+        const corrida = await disparador.dispararIngesta({ forzado: true });
+        if (!corrida || corrida.ok !== true) {
+          aviso = corrida?.mensaje || corrida?.motivo || "La ingesta no se completo";
+        } else if (Number(corrida.totalFilas) > 0) {
+          aviso = `${corrida.totalFilas} filas desde NetSuite`;
+        }
+      } else {
+        aviso = "Este build no puede pedir la ingesta: solo se releyo Supabase";
+      }
+      // El bundle de cada WO se guarda 5 minutos; tras una ingesta todos quedaron viejos.
+      bundleCache.clear();
+      await loadList();
+      if (byId("inspectionWorkOrder").value) await loadDetail({ forceRefresh: true });
+      if (aviso) {
+        if (typeof root.showToast === "function") root.showToast(aviso, 5000);
+        else renderJobStatus(`${state.list.length} WOs abiertas`, aviso);
+      }
+    } catch (error) {
+      reportError(error);
+    } finally {
+      if (byId("inspectionWorkOrder")) byId("inspectionWorkOrder").disabled = false;
+      if (boton) boton.disabled = false;
+    }
+  }
   async function printInspection() {
     if (!state.detail) return;
     const diagnostic = printDiagnostic(state.detail);
@@ -856,6 +908,8 @@
   function initialize() {
     if (!byId("inspectionWorkOrder")) return;
     byId("inspectionSearch").addEventListener("input", renderList);
+    const syncButton = byId("inspectionSync");
+    if (syncButton) syncButton.addEventListener("click", () => { void sincronizarHoja(); });
     byId("inspectionReload").addEventListener("click", () => loadDetail({ forceRefresh: true }).catch(reportError));
     byId("inspectionWorkOrder").addEventListener("change", () => loadDetail().catch(reportError));
     byId("inspectionSelectOps").addEventListener("click", () => { byId("inspectionOperationChoices").hidden = !byId("inspectionOperationChoices").hidden; });
@@ -867,7 +921,7 @@
     root.addEventListener("afterprint", clearInspectionPrintState);
     ensureLoaded();
   }
-  root.InspectionApp = { initialize, loadList, loadDetail };
+  root.InspectionApp = { initialize, loadList, loadDetail, sincronizarHoja };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true }); else initialize();
 })(window);
 
