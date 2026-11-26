@@ -657,17 +657,23 @@
     renderHistory(bundle.history, state.detail.workOrder);
   }
   /**
-   * Sincronizar la hoja: pedir la ingesta a NetSuite y despues releer la lista de OTs y la
-   * hoja de la OT seleccionada.
+   * Sincronizar la hoja: pedir la ingesta SOLO de las OTs y sus operaciones, y despues releer
+   * la lista de OTs y la hoja de la OT seleccionada.
+   *
+   * POR QUE SOLO `workorders` Y `operaciones`. Es lo que pidio el usuario (2026-11-25): este
+   * boton no tiene que reescribir el BOM, los articulos ni el inventario, que son las tablas
+   * caras de la corrida. `PP_ingesta_` acepta `solo` y, por RULE-SUP-048 (excepcion "tabla no
+   * pedida != tabla que fallo"), las tablas no pedidas NO se vacian ni se tocan. Con eso el
+   * boton responde en mucho menos tiempo y sigue cubriendo lo que la hoja necesita para
+   * aparecer y para saber que operaciones tiene: OT nueva, articulo, cantidad y operaciones.
    *
    * POR QUE NO BASTA CON RELEER SUPABASE. La pagina NUNCA habla con NetSuite (RULE-SUP-030):
    * todo lo que muestra sale del espejo en Supabase, y ese espejo solo cambia cuando corre la
    * ingesta de Apps Script. El activador de reloj corre cada 15 minutos y SOLO de lunes a
    * viernes de 7:00 a 17:00 (19-appscript-ingesta-supabase.js, guard de PP_ingesta_). Un boton
-   * que solo releyera Supabase mostraria exactamente lo mismo: una OT nueva o un material
-   * corregido en NetSuite no existe en el espejo hasta que la ingesta lo escribe. Por eso este
-   * boton hace lo mismo que el Sincronizar del plan: `forzado: true`, que salta el filtro de
-   * horario, y despues una sola lectura de lo que acaba de entrar.
+   * que solo releyera Supabase mostraria exactamente lo mismo: una OT nueva no existe en el
+   * espejo hasta que la ingesta la escribe. Por eso este boton manda `forzado: true`, que salta
+   * el filtro de horario, y despues hace una sola lectura de lo que acaba de entrar.
    *
    * QUE PASA SI LA INGESTA NO SE PUEDE PEDIR O FALLA. No se deja la pantalla mintiendo: se
    * relee igual el espejo (es lo unico que hay) y el aviso dice que la corrida no se completo.
@@ -679,12 +685,12 @@
     if (boton?.disabled) return;
     if (boton) boton.disabled = true;
     if (byId("inspectionWorkOrder")) byId("inspectionWorkOrder").disabled = true;
-    renderJobStatus("Sincronizando con NetSuite...", "La ingesta puede tardar uno o dos minutos");
+    renderJobStatus("Sincronizando OTs y operaciones...", "Solo se piden las OTs y sus operaciones a NetSuite");
     let aviso = "";
     try {
       const disparador = root.PPIngestaTrigger;
       if (disparador && typeof disparador.dispararIngesta === "function") {
-        const corrida = await disparador.dispararIngesta({ forzado: true });
+        const corrida = await disparador.dispararIngesta({ forzado: true, solo: ["workorders", "operaciones"] });
         if (!corrida || corrida.ok !== true) {
           aviso = corrida?.mensaje || corrida?.motivo || "La ingesta no se completo";
         } else if (Number(corrida.totalFilas) > 0) {

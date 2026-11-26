@@ -3,13 +3,23 @@
 ## Qué resuelve
 
 La hoja de inspección mostraba datos viejos y la única forma de traer cambios de NetSuite era
-salir a Plan semanal y pulsar **Sincronizar**. Ahora hay un botón **Sincronizar** dentro de la
+salir a Plan semanal y pulsar **Sincronizar**. Ahora hay un botón **Sincronizar OTs** dentro de la
 propia hoja que hace las dos cosas que hacían falta, en este orden:
 
-1. Dispara la ingesta forzada de Apps Script (`PPIngestaTrigger.dispararIngesta({ forzado: true })`),
-   que es la misma puerta que usa el botón del plan.
+1. Dispara la ingesta forzada de Apps Script (`PPIngestaTrigger.dispararIngesta`), **solo** con las
+   acciones `workorders` y `operaciones`:
+   ```js
+   { forzado: true, solo: ["workorders", "operaciones"] }
+   ```
+   `PP_ingesta_` respeta esa lista y, por RULE-SUP-048 (excepción "tabla no pedida ≠ tabla que
+   falló"), no vacía ni toca `materials`, `items`, `inventory`, `sales_orders`, `machines` ni
+   `ensambles_ot`. Es la misma puerta que usan los botones del plan, acotada a las dos tablas.
 2. Limpia `bundleCache`, vuelve a leer `work_orders` (`getInspectionWorkOrders`) y recarga la hoja
-   de la OT seleccionada con `forceRefresh: true` (materiales, tramos, operaciones y dibujo).
+   de la OT seleccionada con `forceRefresh: true` (operaciones incluidas).
+
+Alcance deliberado: este botón no actualiza el BOM (`materials`), artículos ni inventario. Para eso
+sigue estando el **Sincronizar** completo de Plan semanal. Lo que sí trae es OT nueva, artículo,
+cantidad y operaciones, que es lo que pedía la persona el 2026-11-25.
 
 ## Por qué un botón que solo releyera no sirve
 
