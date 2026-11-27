@@ -26331,7 +26331,7 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
       "operations[].contenido | falta la columna contenido | la hoja tiene CONTENIDO. La agrega docs/schema-supabase-plan.sql (text), sin aplicar.",
       "operations[].prioridad | falta la columna prioridad | la hoja tiene PRIORIDAD y la app la acepta como texto o como numero (normalizePriority). La agrega docs/schema-supabase-plan.sql (text), sin aplicar.",
       "operations[].fechaReq | falta la columna fecha_req | la hoja tiene FECHA_REQ. La agrega docs/schema-supabase-plan.sql (text), sin aplicar.",
-      "operations[].comentario | falta la columna comentario | la hoja tiene COMENTARIO. La agrega docs/schema-supabase-plan.sql (text), sin aplicar.",
+      "operations[].comentario | RESUELTO el 2026-11-27: la columna existe en Supabase, y mapOperations la lee.",
       "operations[].tiempoFallback | falta la columna tiempo_fallback | la hoja tiene TIEMPO_FALLBACK, en minutos, para cuando la capacidad no es finita. La agrega docs/schema-supabase-plan.sql (numeric), sin aplicar.",
       "operations[].kitPending | falta la columna kit_pending | la hoja tiene KIT_PENDIENTE. La agrega docs/schema-supabase-plan.sql (boolean), sin aplicar. Ojo con el nombre: en ot_configurations la columna SI existe y se llama kit_pendiente; en operations todavia no hay nada.",
       "operations[].log | falta la columna LOG | el log de cada operacion es un FLUJO, no un atributo, y por decision del usuario del 2026-09-29 se resuelve como tabla aparte (operation_events de docs/schema-supabase-plan.sql), que tampoco existe todavia. No es una columna pendiente de un ALTER TABLE.",
@@ -27443,6 +27443,8 @@ border:1px solid #2b3442;background:#171c24;color:#9aa7b6;font:12px system-ui,sa
         subcontractType: subcontractType,
         subcontractDays: number(row.subcontract_days),
         is_subcontract: Boolean(subcontractType),
+        // comentario es columna de plan, verificada en Supabase 2026-11-27: existe, text nullable
+        comentario: String(row.comentario == null ? "" : row.comentario).trim(),
       };
       // LAS MARCAS DE RETIRADA, que son columnas NUEVAS: las agrega
       // docs/schema-supabase-plan.sql:434-435 y MEDIDO 2026-09-29 NO estan en el esquema
